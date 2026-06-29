@@ -44,6 +44,14 @@ the project grows.
 - Before opening a PR, check whether the issue already has a linked PR and avoid
   duplicating active work.
 
+## Codex Code Review Guidelines
+
+- Write review comments in Japanese.
+- Review with extra care because some changes may include code written by
+  junior-level engineers or less capable AI models. Pay particular attention to:
+  - security risks
+  - whether tests cover edge cases
+
 ## Security
 
 - Never commit secrets, tokens, credentials, private keys, production webhook

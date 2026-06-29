@@ -32,4 +32,11 @@ describe('AGENTS.md development rules', () => {
     expect(agents).toContain('specs/');
     expect(agents).toContain('Japanese');
   });
+
+  it('documents Codex code review expectations', () => {
+    expect(agents).toContain('## Codex Code Review Guidelines');
+    expect(agents).toContain('Write review comments in Japanese');
+    expect(agents).toContain('security risks');
+    expect(agents).toContain('edge cases');
+  });
 });
