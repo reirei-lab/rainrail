@@ -1040,6 +1040,42 @@ describe('GitHub webhook source handling', () => {
 
     await expect(
       createGitHubWebhookEvent({
+        githubEvent: 'push',
+        deliveryId: 'delivery-push-delete-1',
+        payload: {
+          ref: 'refs/heads/old-branch',
+          before: 'def456',
+          after: '0000000000000000000000000000000000000000',
+          created: false,
+          deleted: true,
+          forced: false,
+          repository: { full_name: 'reirei-lab/rainrail' },
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.push',
+      subject: {
+        type: 'push',
+        id: 'refs/heads/old-branch',
+      },
+      payload: {
+        resource: {
+          type: 'push',
+          id: 'refs/heads/old-branch',
+          ref: 'refs/heads/old-branch',
+          beforeSha: 'def456',
+          headSha: '0000000000000000000000000000000000000000',
+          created: false,
+          deleted: true,
+          forced: false,
+        },
+      },
+    });
+
+    await expect(
+      createGitHubWebhookEvent({
         githubEvent: 'create',
         deliveryId: 'delivery-create-1',
         payload: {
@@ -2179,7 +2215,10 @@ describe('GitHub webhook source handling', () => {
           action: 'updated',
           repository: { full_name: 'reirei-lab/rainrail' },
           old_property_values: [{ property_name: 'Service', value: 'api' }],
-          new_property_values: [{ property_name: 'Service', value: 'worker' }],
+          new_property_values: [
+            { property_name: 'Service', value: 'worker' },
+            { property_name: 'Owner', value: null },
+          ],
         },
         rawBody: '{}',
         receivedAt: new Date('2026-06-29T13:00:44.000Z'),
@@ -2192,6 +2231,10 @@ describe('GitHub webhook source handling', () => {
             field: 'Service',
             from: 'api',
             to: 'worker',
+          },
+          {
+            field: 'Owner',
+            to: 'null',
           },
         ],
       },

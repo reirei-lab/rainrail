@@ -373,6 +373,9 @@ export interface NormalizedGitHubResource {
   number?: number;
   name?: string;
   title?: string;
+  description?: string;
+  color?: string;
+  dueOn?: string;
   state?: string;
   merged?: boolean;
   status?: string;
@@ -869,7 +872,7 @@ function subjectFromPush(payload: GitHubWebhookPayload): RainrailEventEnvelope['
 
   return {
     type: 'push',
-    id: after,
+    id: pushResourceId(payload, after),
     ...(typeof payload.head_commit?.url === 'string' ? { url: payload.head_commit.url } : {}),
   };
 }
@@ -1957,10 +1960,11 @@ function resourceFromRelease(release: GitHubWebhookRecord): NormalizedGitHubReso
 function resourceFromPush(payload: GitHubWebhookPayload): NormalizedGitHubResource {
   const headCommit = payload.head_commit;
   const after = stringField(payload, 'after') ?? 'unknown';
+  const id = pushResourceId(payload, after);
 
   return {
     type: 'push',
-    id: after,
+    id,
     ...optionalStringProperty('ref', stringField(payload, 'ref')),
     ...optionalStringProperty('beforeSha', stringField(payload, 'before')),
     ...optionalStringProperty('headSha', stringField(payload, 'after')),
@@ -1970,6 +1974,14 @@ function resourceFromPush(payload: GitHubWebhookPayload): NormalizedGitHubResour
     ...optionalStringProperty('headCommitMessage', stringField(headCommit, 'message')),
     ...optionalStringProperty('url', stringField(headCommit, 'url')),
   };
+}
+
+function pushResourceId(payload: GitHubWebhookPayload, after: string): string {
+  if (booleanField(payload, 'deleted')) {
+    return stringField(payload, 'ref') ?? stringField(payload, 'before') ?? after;
+  }
+
+  return after;
 }
 
 function resourceFromRef(payload: GitHubWebhookPayload): NormalizedGitHubResource {
@@ -2135,6 +2147,10 @@ function normalizedDispatch(
 }
 
 function normalizedChangeValue(value: unknown): string | undefined {
+  if (value === null) {
+    return 'null';
+  }
+
   if (Array.isArray(value)) {
     return JSON.stringify(value);
   }

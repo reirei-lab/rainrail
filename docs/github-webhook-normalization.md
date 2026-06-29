@@ -22,7 +22,7 @@ workflow plugin が受け取る `event.payload` は Rainrail 側で安定させ�
 - `projects_v2_item` では REST id だけでなく GraphQL の `node_id` / `project_node_id` も resource に残す。
 - classic `project` / `project_card` / `project_column` と `projects_v2` は project 系 resource として正規化する。
 - `projects_v2_status_update` は status update 本体と status/date metadata を `event.payload.resource` にする。
-- `push` は ref / before sha / head sha / created/deleted/forced / head commit summary を `event.payload.resource` に集約する。
+- `push` は ref / before sha / head sha / created/deleted/forced / head commit summary を `event.payload.resource` に集約する。削除 push ではゼロ SHA ではなく ref を resource/subject id にする。
 - `create` / `delete` は branch/tag の ref と ref type を `event.payload.resource` に集約する。
 - `release` は tag/name/url/draft/prerelease を release resource として正規化する。
 - `status` は status id を resource id とし、commit SHA / state / context / target URL を commit status resource として正規化する。
@@ -38,7 +38,7 @@ workflow plugin が受け取る `event.payload` は Rainrail 側で安定させ�
 - `repository_ruleset` / `fork` / `deploy_key` は対象 ruleset / fork repository / deploy key を resource として正規化する。
 - `personal_access_token_request` は request id/owner/permissions と対象 repositories を正規化する。
 - `member` / `membership` / `team` / `team_add` は対象 user/team principal を resource として正規化する。
-- `custom_property` / `custom_property_values` は property 定義と old/new values を正規化する。
+- `custom_property` / `custom_property_values` は property 定義と old/new values を正規化する。unset された custom property value は `null` として明示的に残す。
 - `org_block` / `organization` membership / `installation_target` / `meta` / `marketplace_purchase` / `sponsorship` は repository が無い delivery でも対象 principal/resource を正規化する。
 - `page_build` / `repository_import` / `secret_scanning_scan` は build/import/scan 結果を resource として正規化する。repository import は URL なしでも status を保持し、secret scan は空の secret types でも scan resource にする。
 - `package` / `registry_package` は package name/type/version/url を package resource として正規化する。
