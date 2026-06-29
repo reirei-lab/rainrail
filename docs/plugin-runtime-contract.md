@@ -1,7 +1,7 @@
-# 中立イベントモデルと plugin runtime contract
+# 中立イベントモデルと plugin contract
 
 Rainrail は Source plugin が外部イベントを中立 envelope に正規化し、
-Workflow plugin が provider/runtime capability を使って処理する境界を持つ。
+Workflow plugin が provider/runtime contract を使って処理する境界を持つ。
 GitHub webhook や Cloudflare tail の payload は Source plugin の入力であり、
 Workflow plugin の routing API には直接漏らさない。
 
@@ -34,15 +34,40 @@ plugin 名、raw payload reference、provider メタデータを渡す。
 `payload` に閉じ込め、dispatcher は `name`、`source`、`subject` だけで
 routing できる。
 
+## Task provider
+
+Task provider は forge/task system の操作面を表す。初期 contract は
+GitHub と Forgejo の issue 操作を同じ workflow から使えるように、
+`getIssue`、`createComment`、`addToProject`、`setStatus`、`createProposal`
+を持つ。
+
+`TaskIssueRef` は provider、repository、id、number、url を持てる。
+Workflow plugin は GitHub webhook payload ではなく、中立 event の
+`source` と `subject` から `TaskIssueRef` を作る。これにより、issue、
+project、comment、status、proposal の操作は provider 実装に閉じ込められる。
+
+## Runtime provider
+
+Runtime provider は OpenClaw、devteam、Codex などの実行基盤を表す。
+`startRun(request)` は workflow 名、event、任意の task、requestedBy、
+追加 input を受け取り、queued/running/succeeded/failed/canceled などの
+run status を返す。
+
+secret や provider 固有 token は runtime provider の実装が保持し、
+contract には含めない。
+
 ## Workflow plugin
 
 Workflow plugin は `accepts(event)` で対象イベントを絞り込み、
-`handle(event, context)` で処理する。`context` は runtime が持つ
-capability を含む。
+`handle(event, context)` で処理する。`context` は `providers.tasks` と
+`runtime` を必須で受け取り、必要なら既存の `capabilities` も使える。
 
-最初の capability contract は provider 名と任意 capability map だけを固定する。
-agent dispatch などの高レベル capability は `dispatchAgent` のように関数として
-差し込める。secret 値は contract に含めず、runtime 側で秘匿して扱う。
+Workflow plugin は event に反応し、Task provider と Runtime provider を
+組み合わせるだけにする。GitHub/Forgejo の API 呼び出しや OpenClaw/devteam/Codex
+の起動詳細は、それぞれの provider/runtime 実装に閉じ込める。
+
+mock task provider と mock runtime provider を `createRuntimeDispatcher` に渡せば、
+workflow test は外部 API なしで書ける。
 
 ## Dispatcher
 
