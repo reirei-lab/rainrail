@@ -58,7 +58,9 @@ mutate されても、その dispatch の権限境界は変えない。
 provider 名や agent dispatch などの低レベル runtime 情報は
 `context.capabilities` に残す。一方で merge、runtime start、secret access は
 `context.actions` の gated action として渡す。secret 値は audit log に含めず、
-runtime action の戻り値を handler 内だけで扱う。
+runtime action の戻り値を handler 内だけで扱う。互換 API の
+`context.capabilities.dispatchAgent` も runtime start と同等に扱い、
+`runtime:start` capability、audit、lifecycle signal を通す。
 
 ## Plugin loader と local handler
 
@@ -96,19 +98,29 @@ handler が fulfilled/rejected で settle した後も同じ signal を abort �
 残した timer や未awaitの処理から後続 action が実行されないようにする。
 さらに runtime 側の action implementation には第2引数で同じ `AbortSignal` を渡す。
 すでに開始済みの merge、runtime start、secret access も、この signal を見て中断や
-冪等化を行えるようにする。
+冪等化を行えるようにする。dispatcher は action implementation を runtime `actions`
+object を receiver として呼ぶため、`this.client` などに依存する object method も
+そのまま利用できる。
 `context.runtime.startRun` も handler へ直接 provider を渡さず gated wrapper にする。
 `runtime:start` capability がない handler は runtime provider 経由でも起動できない。
+互換 API の `context.capabilities.dispatchAgent` も同じ `runtime:start` gate を通し、
+未宣言 handler から agent/run 起動経路を迂回できないようにする。
 親 runtime signal が abort された場合は handler promise や timeout を待たず、
 plugin の rejected result として dispatch を完了する。dispatch 開始時点で親 signal が
 すでに abort 済みの場合は、handler を起動せずに rejected result として扱う。
 timeout 発火時は timeout result を先に確定してから signal を abort し、abort cleanup が
-handler を resolve/reject しても audit result は `timeout` のままにする。
+handler を resolve/reject しても audit result は `timeout` のままにする。親 abort 用の
+race promise は handler 起動前に登録し、handler 側の abort cleanup が先に settle しても
+shutdown/cancel の rejected result を維持する。
 
 `context.providers.tasks` も handler lifecycle の signal で guard する。timeout、親 abort、
 または handler settle 後に遅れて続行した handler が `createComment`、`setStatus`、
 `createProposal` などの task provider 操作を呼んでも、provider 実装は実行せず rejected
-side effect として拒否する。
+side effect として拒否する。開始済みの provider 操作にも第2引数で同じ
+`AbortSignal` を渡すため、network 待ちの `createComment`、`setStatus`、
+`createProposal` なども provider 実装側で中断や冪等化を行える。provider method も
+tasks object を receiver として呼ぶため、`this.name` や `this.client` を使う実装を
+壊さない。
 
 `audit.record(entry)` を渡すと、plugin id、event id、run id、action、
 result、発生時刻が記録される。action result は `fulfilled`、`rejected`、
@@ -117,7 +129,9 @@ result、発生時刻が記録される。action result は `fulfilled`、`rejec
 例外 message を audit に保存しない。ただし plugin へ返す例外は元の Error を維持し、
 recovery や retry 判断に使えるようにする。`secret:access` を持つ handler の
 `plugin.handle` 失敗 reason も固定文に redaction し、handler が secret 値を含む
-例外を投げても audit に保存しない。audit sink は observability dependency として扱い、
+例外を投げても audit に保存しない。さらに secret-capable handler の action failure
+reason も固定文に redaction し、secret を別 action の request に含めた後の失敗経路でも
+audit に secret 断片を保存しない。audit sink は observability dependency として扱い、
 書き込み失敗や長時間の未解決 Promise は plugin result や action result を変えず、
 dispatcher の結果返却も止めない。
 
@@ -127,6 +141,8 @@ dispatcher の結果返却も止めない。
 `dispatch(event)` は `accepts` が true の workflow だけを呼び、
 plugin ごとに fulfilled/rejected の結果を返す。`accepts` が例外を投げた場合も
 その plugin の rejected result として隔離し、後続 workflow の評価は続ける。
+capability metadata の読み取りや snapshot が失敗した場合も同じ plugin 単位の
+rejected result に隔離し、`Promise.all` 全体を reject しない。
 handler が `timeoutMs` または loader/dispatcher の `defaultTimeoutMs` を超えた場合も、
 その plugin の rejected result と audit result `timeout` に隔離する。
 最小 contract では retry や並列度制御は持たせない。これらは orchestration policy

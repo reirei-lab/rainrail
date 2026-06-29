@@ -53,11 +53,16 @@ export function createRuntimeDispatcher(options: RuntimeDispatcherOptions): Runt
     async dispatch(event): Promise<WorkflowPluginResult[]> {
       const results: Array<WorkflowPluginResult | undefined> = await Promise.all(
         options.workflows.map(async (workflow) => {
-          const policy = snapshotWorkflowPolicy(workflow);
+          let policy: WorkflowExecutionPolicy = {
+            name: readWorkflowName(workflow),
+            capabilities: new Set(),
+          };
           const audit = (action: WorkflowAuditEntry['action'], result: WorkflowAuditResult, reason?: unknown) =>
             recordAudit(options, policy, event, action, result, reason);
 
           try {
+            policy = snapshotWorkflowPolicy(workflow);
+
             if (workflow.accepts && !workflow.accepts(event)) {
               return undefined;
             }
@@ -103,6 +108,14 @@ function snapshotWorkflowPolicy(workflow: WorkflowPlugin): WorkflowExecutionPoli
   };
 }
 
+function readWorkflowName(workflow: WorkflowPlugin): string {
+  try {
+    return workflow.name;
+  } catch {
+    return 'unknown-workflow';
+  }
+}
+
 class PluginTimeoutError extends Error {
   constructor(timeoutMs: number) {
     super(`Plugin timed out after ${timeoutMs}ms`);
@@ -137,8 +150,12 @@ function createWorkflowContext(
   event: RainrailEventEnvelope,
   signal: AbortSignal,
 ): PluginRuntimeContext {
+  const { capabilities: _capabilities, ...runtime } = options.runtime;
+  const capabilities = createGatedRuntimeCapabilities(options, policy, event, signal);
+
   return {
-    ...options.runtime,
+    ...runtime,
+    ...(capabilities !== undefined ? { capabilities } : {}),
     providers: createGuardedProviders(options, policy, event, signal),
     runtime: createGatedRuntimeProvider(options, policy, event, signal),
     signal,
@@ -212,6 +229,65 @@ async function callRuntimeStartRun(
   }
 }
 
+function createGatedRuntimeCapabilities(
+  options: RuntimeDispatcherOptions,
+  policy: WorkflowExecutionPolicy,
+  event: RainrailEventEnvelope,
+  signal: AbortSignal,
+): PluginRuntimeContext['capabilities'] {
+  const capabilities = options.runtime.capabilities;
+  if (capabilities === undefined) {
+    return undefined;
+  }
+
+  if (capabilities.dispatchAgent === undefined) {
+    return capabilities;
+  }
+
+  return {
+    ...capabilities,
+    dispatchAgent: (request, context) => callDispatchAgent(options, policy, event, signal, request, context?.signal),
+  };
+}
+
+async function callDispatchAgent(
+  options: RuntimeDispatcherOptions,
+  policy: WorkflowExecutionPolicy,
+  event: RainrailEventEnvelope,
+  signal: AbortSignal,
+  request: Parameters<NonNullable<NonNullable<PluginRuntimeContext['capabilities']>['dispatchAgent']>>[0],
+  callerSignal: AbortSignal | undefined,
+): Promise<unknown> {
+  if (signal.aborted) {
+    const reason = new PluginActionAbortedError('startRuntime', policy.name);
+    await recordAudit(options, policy, event, 'startRuntime', 'denied', reason);
+    throw reason;
+  }
+
+  if (!policy.capabilities.has('runtime:start')) {
+    const reason = new CapabilityDeniedError('startRuntime', 'runtime:start', policy.name);
+    await recordAudit(options, policy, event, 'startRuntime', 'denied', reason);
+    throw reason;
+  }
+
+  const capabilities = options.runtime.capabilities;
+  const dispatchAgent = capabilities?.dispatchAgent;
+  if (dispatchAgent === undefined) {
+    const reason = new Error('Runtime capability dispatchAgent is not available');
+    await recordAudit(options, policy, event, 'startRuntime', 'rejected', reason);
+    throw reason;
+  }
+
+  try {
+    const value = await dispatchAgent.call(capabilities, request, { signal: callerSignal ?? signal });
+    await recordAudit(options, policy, event, 'startRuntime', 'fulfilled');
+    return value;
+  } catch (reason) {
+    await recordAudit(options, policy, event, 'startRuntime', 'rejected', reason);
+    throw reason;
+  }
+}
+
 function createGatedRuntimeActions(
   options: RuntimeDispatcherOptions,
   policy: WorkflowExecutionPolicy,
@@ -249,7 +325,8 @@ async function callGatedAction<TRequest>(
     throw reason;
   }
 
-  const implementation = options.runtime.actions?.[action];
+  const actions = options.runtime.actions;
+  const implementation = actions?.[action];
   if (!implementation) {
     const reason = new Error(`Runtime action ${action} is not available`);
     await recordAudit(options, policy, event, action, 'rejected', reason);
@@ -257,7 +334,7 @@ async function callGatedAction<TRequest>(
   }
 
   try {
-    const value = await implementation(request as never, { signal });
+    const value = await implementation.call(actions, request as never, { signal });
     await recordAudit(options, policy, event, action, 'fulfilled');
     return value;
   } catch (reason) {
@@ -279,11 +356,11 @@ function createGuardedProviders(
     kind: tasks.kind,
     getIssue: (ref) => {
       guardProviderCall(options, policy, event, signal, 'tasks.getIssue');
-      return tasks.getIssue(ref);
+      return tasks.getIssue.call(tasks, ref, { signal });
     },
     createComment: (input) => {
       guardProviderCall(options, policy, event, signal, 'tasks.createComment');
-      return tasks.createComment(input);
+      return tasks.createComment.call(tasks, input, { signal });
     },
   };
 
@@ -291,7 +368,7 @@ function createGuardedProviders(
     const addToProject = tasks.addToProject;
     guardedTasks.addToProject = (input) => {
       guardProviderCall(options, policy, event, signal, 'tasks.addToProject');
-      return addToProject(input);
+      return addToProject.call(tasks, input, { signal });
     };
   }
 
@@ -299,7 +376,7 @@ function createGuardedProviders(
     const setStatus = tasks.setStatus;
     guardedTasks.setStatus = (input) => {
       guardProviderCall(options, policy, event, signal, 'tasks.setStatus');
-      return setStatus(input);
+      return setStatus.call(tasks, input, { signal });
     };
   }
 
@@ -307,7 +384,7 @@ function createGuardedProviders(
     const createProposal = tasks.createProposal;
     guardedTasks.createProposal = (input) => {
       guardProviderCall(options, policy, event, signal, 'tasks.createProposal');
-      return createProposal(input);
+      return createProposal.call(tasks, input, { signal });
     };
   }
 
@@ -350,7 +427,7 @@ function recordAudit(
     occurredAt: options.runtime.now().toISOString(),
   };
 
-  const auditReason = formatAuditReason(policy, action, reason);
+  const auditReason = formatAuditReason(policy, action, result, reason);
   if (auditReason !== undefined) {
     entry.reason = auditReason;
   }
@@ -367,6 +444,7 @@ function recordAudit(
 function formatAuditReason(
   policy: WorkflowExecutionPolicy,
   action: WorkflowAuditEntry['action'],
+  result: WorkflowAuditResult,
   reason: unknown,
 ): string | undefined {
   if (!(reason instanceof Error)) {
@@ -379,6 +457,10 @@ function formatAuditReason(
 
   if (action === 'plugin.handle' && policy.capabilities.has('secret:access')) {
     return 'Error: redacted secret-capable plugin failure';
+  }
+
+  if (result === 'rejected' && action !== 'plugin.handle' && policy.capabilities.has('secret:access')) {
+    return 'Error: redacted secret-capable action failure';
   }
 
   return `${reason.name}: ${reason.message}`;
@@ -415,11 +497,6 @@ async function runWorkflow<T>(
   let timeout: NodeJS.Timeout | undefined;
   let removeAbortListener: (() => void) | undefined;
   try {
-    if (abort.controller.signal.aborted) {
-      throw abort.controller.signal.reason ?? new Error('Plugin runtime signal aborted');
-    }
-
-    const promise = start();
     const abortPromise = new Promise<never>((_resolve, reject) => {
       const rejectAbort = () => reject(abort.controller.signal.reason ?? new Error('Plugin runtime signal aborted'));
 
@@ -431,6 +508,12 @@ async function runWorkflow<T>(
       abort.controller.signal.addEventListener('abort', rejectAbort, { once: true });
       removeAbortListener = () => abort.controller.signal.removeEventListener('abort', rejectAbort);
     });
+
+    if (abort.controller.signal.aborted) {
+      return await abortPromise;
+    }
+
+    const promise = start();
 
     if (timeoutMs === undefined) {
       return await Promise.race([promise, abortPromise]);

@@ -8,6 +8,7 @@ import {
   defineWorkflowPlugin,
   type PluginRuntimeContext,
   type RainrailEventEnvelope,
+  type WorkflowPlugin,
 } from './index.js';
 
 function mockRuntimeContext(overrides: Partial<PluginRuntimeContext> = {}): PluginRuntimeContext {
@@ -385,11 +386,14 @@ describe('plugin runtime contract', () => {
         value: { issueId: 'issue:14', runId: 'run:14' },
       },
     ]);
-    expect(getIssue).toHaveBeenCalledWith({
-      provider: 'github',
-      repository: 'reirei-lab/rainrail',
-      number: 14,
-    });
+    expect(getIssue).toHaveBeenCalledWith(
+      {
+        provider: 'github',
+        repository: 'reirei-lab/rainrail',
+        number: 14,
+      },
+      { signal: expect.any(AbortSignal) },
+    );
     expect(startRun).toHaveBeenCalledWith(
       {
         workflow: 'issue-agent-workflow',
@@ -399,10 +403,13 @@ describe('plugin runtime contract', () => {
       },
       { signal: expect.any(AbortSignal) },
     );
-    expect(createComment).toHaveBeenCalledWith({
-      target: expect.objectContaining({ id: 'issue:14' }),
-      body: 'Queued run:14',
-    });
+    expect(createComment).toHaveBeenCalledWith(
+      {
+        target: expect.objectContaining({ id: 'issue:14' }),
+        body: 'Queued run:14',
+      },
+      { signal: expect.any(AbortSignal) },
+    );
   });
 
   it('loads packaged plugins and local handlers into the same event runtime', async () => {
@@ -1704,5 +1711,447 @@ describe('plugin runtime contract', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('keeps parent abort classification when handler abort cleanup resolves first', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: {
+        id: 'delivery-parent-abort-cleanup',
+        receivedAt: '2026-06-29T14:00:00.000Z',
+      },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'github://deliveries/delivery-parent-abort-cleanup',
+      },
+    });
+    const parentController = new AbortController();
+    const auditEntries: unknown[] = [];
+    const loader = createPluginLoader({
+      runtime: mockRuntimeContext({
+        runId: 'run-13',
+        now: () => new Date('2026-06-29T14:01:00.000Z'),
+        signal: parentController.signal,
+      }),
+      audit: {
+        record: (entry) => {
+          auditEntries.push(entry);
+        },
+      },
+    });
+
+    loader.on(
+      'github.issue',
+      async (_event, context) =>
+        new Promise((resolve) => {
+          context.signal.addEventListener('abort', () => resolve({ cleanedUp: true }), { once: true });
+        }),
+      { name: 'parent-abort-cleanup-handler' },
+    );
+
+    const dispatchPromise = loader.dispatch(event);
+    parentController.abort(new Error('daemon shutdown'));
+
+    await expect(dispatchPromise).resolves.toMatchObject([
+      {
+        pluginName: 'parent-abort-cleanup-handler',
+        eventId: 'github-webhook:delivery-parent-abort-cleanup:github.issue',
+        status: 'rejected',
+      },
+    ]);
+    expect(auditEntries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          pluginId: 'parent-abort-cleanup-handler',
+          eventId: 'github-webhook:delivery-parent-abort-cleanup:github.issue',
+          action: 'plugin.handle',
+          result: 'rejected',
+        }),
+      ]),
+    );
+  });
+
+  it('passes the plugin abort signal to an already running task provider side effect', async () => {
+    vi.useFakeTimers();
+    try {
+      const event = createEventEnvelope({
+        source: { type: 'github', name: 'github-webhook' },
+        name: 'github.issue',
+        delivery: {
+          id: 'delivery-running-task-provider',
+          receivedAt: '2026-06-29T14:00:00.000Z',
+        },
+        occurredAt: '2026-06-29T14:00:00.000Z',
+        subject: { type: 'issue', id: '13' },
+        payload: { action: 'opened' },
+        rawPayload: {
+          kind: 'external-reference',
+          reference: 'github://deliveries/delivery-running-task-provider',
+        },
+      });
+      let providerSignal: AbortSignal | undefined;
+      let providerAbortReason: unknown;
+      const createComment = vi.fn(
+        async (_input, context?: { signal: AbortSignal }) =>
+          new Promise<{ id: string }>((_resolve, reject) => {
+            providerSignal = context?.signal;
+            context?.signal.addEventListener(
+              'abort',
+              () => {
+                providerAbortReason = context.signal.reason;
+                reject(context.signal.reason);
+              },
+              { once: true },
+            );
+          }),
+      );
+      const loader = createPluginLoader({
+        runtime: mockRuntimeContext({
+          runId: 'run-13',
+          now: () => new Date('2026-06-29T14:01:00.000Z'),
+          providers: {
+            tasks: {
+              name: 'mock-tasks',
+              kind: 'task-provider',
+              getIssue: async () => ({
+                id: 'issue:13',
+                provider: 'github',
+                repository: 'reirei-lab/rainrail',
+                number: 13,
+                title: 'Mock issue',
+              }),
+              createComment,
+            },
+          },
+        }),
+        defaultTimeoutMs: 25,
+      });
+
+      loader.on(
+        'github.issue',
+        async (_event, context) =>
+          context.providers.tasks.createComment({
+            target: { provider: 'github', repository: 'reirei-lab/rainrail', number: 13 },
+            body: 'running comment',
+          }),
+        { name: 'running-task-provider-handler' },
+      );
+
+      const dispatchPromise = loader.dispatch(event);
+      await vi.advanceTimersByTimeAsync(25);
+
+      await expect(dispatchPromise).resolves.toMatchObject([
+        {
+          pluginName: 'running-task-provider-handler',
+          eventId: 'github-webhook:delivery-running-task-provider:github.issue',
+          status: 'rejected',
+        },
+      ]);
+      expect(createComment).toHaveBeenCalledOnce();
+      expect(providerSignal?.aborted).toBe(true);
+      expect(providerAbortReason).toBeInstanceOf(Error);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('gates legacy dispatchAgent behind runtime:start capability', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: {
+        id: 'delivery-dispatch-agent-gate',
+        receivedAt: '2026-06-29T14:00:00.000Z',
+      },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'github://deliveries/delivery-dispatch-agent-gate',
+      },
+    });
+    const dispatchAgent = vi.fn(async () => ({ sessionKey: 'agent:main:unsafe' }));
+    const auditEntries: unknown[] = [];
+    const loader = createPluginLoader({
+      runtime: mockRuntimeContext({
+        runId: 'run-13',
+        now: () => new Date('2026-06-29T14:01:00.000Z'),
+        capabilities: {
+          provider: 'codex',
+          dispatchAgent,
+        },
+      }),
+      audit: {
+        record: (entry) => {
+          auditEntries.push(entry);
+        },
+      },
+    });
+
+    loader.on(
+      'github.issue',
+      async (handledEvent, context) =>
+        context.capabilities?.dispatchAgent?.({
+          event: handledEvent,
+          workflow: 'unsafe-dispatch-agent-handler',
+          runId: context.runId,
+        }),
+      { name: 'unsafe-dispatch-agent-handler' },
+    );
+
+    const [result] = await loader.dispatch(event);
+
+    expect(result).toMatchObject({
+      pluginName: 'unsafe-dispatch-agent-handler',
+      eventId: 'github-webhook:delivery-dispatch-agent-gate:github.issue',
+      status: 'rejected',
+    });
+    expect(dispatchAgent).not.toHaveBeenCalled();
+    expect(auditEntries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          pluginId: 'unsafe-dispatch-agent-handler',
+          eventId: 'github-webhook:delivery-dispatch-agent-gate:github.issue',
+          action: 'startRuntime',
+          result: 'denied',
+        }),
+      ]),
+    );
+  });
+
+  it('preserves this when calling runtime action implementations', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.pull_request',
+      delivery: {
+        id: 'delivery-action-this',
+        receivedAt: '2026-06-29T14:00:00.000Z',
+      },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'pull_request', id: '44' },
+      payload: { action: 'closed' },
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'github://deliveries/delivery-action-this',
+      },
+    });
+    const actionImplementations = {
+      client: { merged: true },
+      async mergePullRequest() {
+        return this.client;
+      },
+    };
+    const loader = createPluginLoader({
+      runtime: {
+        runId: 'run-13',
+        now: () => new Date('2026-06-29T14:01:00.000Z'),
+        actions: actionImplementations,
+      },
+    });
+
+    loader.on(
+      'github.pull_request',
+      async (_event, context) => context.actions.mergePullRequest({ pullRequestId: '44' }),
+      { name: 'this-aware-action-handler', capabilities: ['merge'] },
+    );
+
+    await expect(loader.dispatch(event)).resolves.toEqual([
+      {
+        pluginName: 'this-aware-action-handler',
+        eventId: 'github-webhook:delivery-action-this:github.pull_request',
+        status: 'fulfilled',
+        value: { merged: true },
+      },
+    ]);
+  });
+
+  it('preserves this when calling optional task provider methods', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: {
+        id: 'delivery-task-this',
+        receivedAt: '2026-06-29T14:00:00.000Z',
+      },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'github://deliveries/delivery-task-this',
+      },
+    });
+    const taskProvider = {
+      name: 'this-aware-tasks',
+      kind: 'task-provider' as const,
+      async getIssue() {
+        return {
+          id: 'issue:13',
+          provider: 'github' as const,
+          repository: 'reirei-lab/rainrail',
+          number: 13,
+          title: 'Mock issue',
+        };
+      },
+      async createComment() {
+        return { id: 'comment:unused' };
+      },
+      async setStatus() {
+        return { providerName: this.name };
+      },
+    };
+    const loader = createPluginLoader({
+      runtime: mockRuntimeContext({
+        runId: 'run-13',
+        now: () => new Date('2026-06-29T14:01:00.000Z'),
+        providers: { tasks: taskProvider },
+      }),
+    });
+
+    loader.on(
+      'github.issue',
+      async (_event, context) =>
+        context.providers.tasks.setStatus?.({
+          target: { provider: 'github', repository: 'reirei-lab/rainrail', number: 13 },
+          state: 'pending',
+        }),
+      { name: 'this-aware-task-handler' },
+    );
+
+    await expect(loader.dispatch(event)).resolves.toEqual([
+      {
+        pluginName: 'this-aware-task-handler',
+        eventId: 'github-webhook:delivery-task-this:github.issue',
+        status: 'fulfilled',
+        value: { providerName: 'this-aware-tasks' },
+      },
+    ]);
+  });
+
+  it('redacts secret-capable action failure reasons in audit entries', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'system', name: 'local-runtime' },
+      name: 'system.secret-requested',
+      delivery: {
+        id: 'delivery-secret-action-error',
+        receivedAt: '2026-06-29T14:00:00.000Z',
+      },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'secret', id: 'api-token' },
+      payload: {},
+      rawPayload: {
+        kind: 'inline-redacted',
+        reference: 'redacted://delivery-secret-action-error',
+      },
+    });
+    const auditEntries: unknown[] = [];
+    const loader = createPluginLoader({
+      runtime: {
+        runId: 'run-13',
+        now: () => new Date('2026-06-29T14:01:00.000Z'),
+        actions: {
+          readSecret: async () => 'super-secret-value',
+          startRuntime: async (request) => {
+            throw new Error(`failed for ${JSON.stringify(request)}`);
+          },
+        },
+      },
+      audit: {
+        record: (entry) => {
+          auditEntries.push(entry);
+        },
+      },
+    });
+
+    loader.on(
+      'system.secret-requested',
+      async (_event, context) => {
+        const token = await context.actions.readSecret({ name: 'api-token' });
+        return context.actions.startRuntime({ runtimeId: 'runtime-1', token });
+      },
+      { name: 'secret-action-error-handler', capabilities: ['secret:access', 'runtime:start'] },
+    );
+
+    const [result] = await loader.dispatch(event);
+
+    expect(result).toMatchObject({
+      pluginName: 'secret-action-error-handler',
+      eventId: 'local-runtime:delivery-secret-action-error:system.secret-requested',
+      status: 'rejected',
+    });
+    expect(JSON.stringify(auditEntries)).not.toContain('super-secret-value');
+    expect(auditEntries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          pluginId: 'secret-action-error-handler',
+          eventId: 'local-runtime:delivery-secret-action-error:system.secret-requested',
+          action: 'startRuntime',
+          result: 'rejected',
+          reason: 'Error: redacted secret-capable action failure',
+        }),
+      ]),
+    );
+  });
+
+  it('isolates capability metadata failures to the malformed workflow result', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: {
+        id: 'delivery-bad-capability-metadata',
+        receivedAt: '2026-06-29T14:00:00.000Z',
+      },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'github://deliveries/delivery-bad-capability-metadata',
+      },
+    });
+    const laterHandler = vi.fn(async () => ({ continued: true }));
+    const malformedWorkflow = {
+      name: 'malformed-capability-plugin',
+      accepts: () => true,
+      get capabilities(): never {
+        throw new Error('capabilities metadata is malformed');
+      },
+      handle: async () => ({ unreachable: true }),
+    } satisfies WorkflowPlugin;
+    const dispatcher = createRuntimeDispatcher({
+      workflows: [
+        malformedWorkflow,
+        defineWorkflowPlugin({
+          name: 'later-after-malformed-capability',
+          accepts: () => true,
+          handle: laterHandler,
+        }),
+      ],
+      runtime: {
+        runId: 'run-13',
+        now: () => new Date('2026-06-29T14:01:00.000Z'),
+      },
+    });
+
+    const results = await dispatcher.dispatch(event);
+
+    expect(results).toHaveLength(2);
+    expect(results[0]).toMatchObject({
+      pluginName: 'malformed-capability-plugin',
+      eventId: 'github-webhook:delivery-bad-capability-metadata:github.issue',
+      status: 'rejected',
+    });
+    expect(results[1]).toEqual({
+      pluginName: 'later-after-malformed-capability',
+      eventId: 'github-webhook:delivery-bad-capability-metadata:github.issue',
+      status: 'fulfilled',
+      value: { continued: true },
+    });
+    expect(laterHandler).toHaveBeenCalledOnce();
   });
 });

@@ -8,7 +8,7 @@ export interface RuntimeCapabilities {
     event: RainrailEventEnvelope;
     workflow: string;
     runId: string;
-  }) => Promise<unknown>;
+  }, context?: RuntimeActionContext) => Promise<unknown>;
   [capability: string]: unknown;
 }
 

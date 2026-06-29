@@ -52,14 +52,18 @@ export interface TaskProposal {
   url?: string;
 }
 
+export interface TaskProviderContext {
+  signal: AbortSignal;
+}
+
 export interface TaskProvider {
   name: string;
   kind: 'task-provider';
-  getIssue(ref: TaskIssueRef): TaskIssue | Promise<TaskIssue>;
-  createComment(input: TaskCommentInput): TaskComment | Promise<TaskComment>;
-  addToProject?: (input: TaskProjectItemInput) => unknown | Promise<unknown>;
-  setStatus?: (input: TaskStatusInput) => unknown | Promise<unknown>;
-  createProposal?: (input: TaskProposalInput) => TaskProposal | Promise<TaskProposal>;
+  getIssue(ref: TaskIssueRef, context?: TaskProviderContext): TaskIssue | Promise<TaskIssue>;
+  createComment(input: TaskCommentInput, context?: TaskProviderContext): TaskComment | Promise<TaskComment>;
+  addToProject?: (input: TaskProjectItemInput, context?: TaskProviderContext) => unknown | Promise<unknown>;
+  setStatus?: (input: TaskStatusInput, context?: TaskProviderContext) => unknown | Promise<unknown>;
+  createProposal?: (input: TaskProposalInput, context?: TaskProviderContext) => TaskProposal | Promise<TaskProposal>;
 }
 
 export interface TaskProviderRegistry {
