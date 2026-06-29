@@ -22,6 +22,8 @@ export class RainrailBridgeRoom {
   readonly #state: RainrailBridgeRoomState;
   readonly #bus: RainrailEventBus;
   readonly #keepAliveIntervalMs: number | undefined;
+  #loading: Promise<void> | undefined;
+  #publishQueue: Promise<void> = Promise.resolve();
   #loaded = false;
 
   constructor(state: RainrailBridgeRoomState, options: RainrailBridgeRoomOptions = {}) {
@@ -57,26 +59,39 @@ export class RainrailBridgeRoom {
   }
 
   async #publish(request: Request): Promise<Response> {
-    await this.#loadRecentEvents();
-
     const event = (await request.json()) as RainrailEventEnvelope;
-    this.#bus.publish(event);
-    await this.#state.storage.put(RECENT_EVENTS_KEY, this.#bus.recentEvents);
 
-    return Response.json({
-      ok: true,
-      id: event.id,
-      name: event.name,
-      clients: this.#bus.clientCount,
+    const publishResult = this.#publishQueue.then(async () => {
+      await this.#loadRecentEvents();
+
+      this.#bus.publish(event);
+      await this.#state.storage.put(RECENT_EVENTS_KEY, this.#bus.recentEvents);
+
+      return Response.json({
+        ok: true,
+        id: event.id,
+        name: event.name,
+        clients: this.#bus.clientCount,
+      });
     });
+
+    this.#publishQueue = publishResult.then(
+      () => undefined,
+      () => undefined,
+    );
+
+    return publishResult;
   }
 
   async #subscribe(request: Request): Promise<Response> {
     await this.#loadRecentEvents();
 
+    const lastEventId = request.headers.get('Last-Event-ID');
+
     return new Response(
       this.#bus.createReadableStream({
         signal: request.signal,
+        ...(lastEventId === null ? {} : { lastEventId }),
         ...(this.#keepAliveIntervalMs === undefined ? {} : { keepAliveIntervalMs: this.#keepAliveIntervalMs }),
       }),
       {
@@ -88,11 +103,17 @@ export class RainrailBridgeRoom {
   async #loadRecentEvents(): Promise<void> {
     if (this.#loaded) return;
 
-    const stored = await this.#state.storage.get(RECENT_EVENTS_KEY);
-    if (Array.isArray(stored)) {
-      this.#bus.loadReplay(stored as RainrailEventEnvelope[]);
-    }
+    this.#loading ??= (async () => {
+      const stored = await this.#state.storage.get(RECENT_EVENTS_KEY);
+      if (Array.isArray(stored)) {
+        this.#bus.loadReplay(stored as RainrailEventEnvelope[]);
+      }
 
-    this.#loaded = true;
+      this.#loaded = true;
+    })().finally(() => {
+      this.#loading = undefined;
+    });
+
+    return this.#loading;
   }
 }

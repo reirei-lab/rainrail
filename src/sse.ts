@@ -8,9 +8,20 @@ export const rainrailSseHeaders = {
 } as const;
 
 export function formatRainrailSseEvent(event: RainrailEventEnvelope): string {
-  return [`id: ${event.id}`, `event: ${event.name}`, `data: ${JSON.stringify(event)}`, '', ''].join('\n');
+  const id = formatSseFieldValue('id', event.id);
+  const name = formatSseFieldValue('event', event.name);
+
+  return [`id: ${id}`, `event: ${name}`, `data: ${JSON.stringify(event)}`, '', ''].join('\n');
 }
 
 export function formatRainrailSseComment(comment: string): string {
   return `: ${comment}\n\n`;
+}
+
+function formatSseFieldValue(field: string, value: string): string {
+  if (/[\r\n]/u.test(value)) {
+    throw new TypeError(`SSE field "${field}" must not contain CR or LF`);
+  }
+
+  return value;
 }

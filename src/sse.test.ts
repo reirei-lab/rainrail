@@ -47,4 +47,25 @@ describe('Rainrail SSE formatting', () => {
       'X-Accel-Buffering': 'no',
     });
   });
+
+  it('rejects CR/LF in SSE id and event fields', () => {
+    const event = createEventEnvelope({
+      id: 'delivery-17\nevent: forged',
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue\ndata: forged',
+      delivery: {
+        id: 'delivery-17',
+        receivedAt: '2026-06-29T18:18:21.000Z',
+      },
+      occurredAt: '2026-06-29T18:18:20.000Z',
+      subject: { type: 'issue', id: '17' },
+      payload: { action: 'opened' },
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'github://deliveries/delivery-17',
+      },
+    });
+
+    expect(() => formatRainrailSseEvent(event)).toThrow(/SSE field/);
+  });
 });

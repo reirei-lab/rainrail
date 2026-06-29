@@ -59,6 +59,78 @@ describe('Rainrail event bus', () => {
       vi.useRealTimers();
     }
   });
+
+  it('does not keep subscribers or timers when the signal is already aborted', async () => {
+    vi.useFakeTimers();
+    try {
+      const bus = createRainrailEventBus({ replayLimit: 10 });
+      const controller = new AbortController();
+      controller.abort();
+
+      const stream = bus.createReadableStream({
+        signal: controller.signal,
+        keepAliveIntervalMs: 1000,
+      });
+      const reader = stream.getReader();
+
+      expect(bus.clientCount).toBe(0);
+      await expect(reader.read()).resolves.toMatchObject({ done: true });
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(bus.clientCount).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('treats replayLimit 0 as no replay during cold-start restore', () => {
+    const bus = createRainrailEventBus({ replayLimit: 0 });
+    const writes: string[] = [];
+
+    bus.loadReplay([
+      fixtureEvent('github-webhook', 'delivery-1', 'github.issue', 'issue', '17'),
+      fixtureEvent('cloudflare-tail', 'delivery-2', 'cloudflare.tail', 'worker', 'api-worker'),
+    ]);
+    bus.subscribe({ write: (chunk) => writes.push(chunk) });
+
+    expect(bus.recentCount).toBe(0);
+    expect(writes.join('')).toBe(': connected\n\n');
+  });
+
+  it('replays only events after the supplied last event id', async () => {
+    const bus = createRainrailEventBus({ replayLimit: 10 });
+    const first = fixtureEvent('github-webhook', 'delivery-1', 'github.issue', 'issue', '17');
+    const second = fixtureEvent('cloudflare-tail', 'delivery-2', 'cloudflare.tail', 'worker', 'api-worker');
+    const third = fixtureEvent('github-webhook', 'delivery-3', 'github.review', 'review', 'review-1');
+
+    bus.publish(first);
+    bus.publish(second);
+    bus.publish(third);
+
+    const stream = bus.createReadableStream({ lastEventId: first.id });
+    const reader = stream.getReader();
+    const chunks = [await readNext(reader), await readNext(reader), await readNext(reader)].join('');
+    await reader.cancel();
+
+    expect(chunks).toContain(': connected\n\n');
+    expect(chunks).not.toContain('event: github.issue\n');
+    expect(chunks).toContain('event: cloudflare.tail\n');
+    expect(chunks).toContain('event: github.review\n');
+  });
+
+  it('does not pollute replay when an event cannot be serialized', () => {
+    const bus = createRainrailEventBus({ replayLimit: 10 });
+    const event = fixtureEvent('github-webhook', 'delivery-1', 'github.issue', 'issue', '17');
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    event.payload = circular;
+
+    expect(() => bus.publish(event)).toThrow();
+    expect(bus.recentCount).toBe(0);
+
+    const writes: string[] = [];
+    bus.subscribe({ write: (chunk) => writes.push(chunk) });
+    expect(writes.join('')).toBe(': connected\n\n');
+  });
 });
 
 function fixtureEvent(

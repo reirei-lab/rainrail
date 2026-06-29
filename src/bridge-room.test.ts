@@ -62,6 +62,68 @@ describe('Rainrail bridge room', () => {
       recent: 0,
     });
   });
+
+  it('serializes initial restore so concurrent publishes do not replay stale storage', async () => {
+    const storage = fakeControllableState();
+    const room = new RainrailBridgeRoom(storage.state, { replayLimit: 10 });
+    const first = fixtureEvent('delivery-1', 'github.issue');
+    const second = fixtureEvent('delivery-2', 'cloudflare.tail');
+
+    const firstPublish = room.fetch(publishRequest(first));
+    const secondPublish = room.fetch(publishRequest(second));
+    await flushMicrotasks();
+
+    expect(storage.getCalls).toBe(1);
+    storage.resolveGet([]);
+
+    await Promise.all([firstPublish, secondPublish]);
+
+    expect(storage.storedEvents().map((event) => event.id)).toEqual([first.id, second.id]);
+  });
+
+  it('serializes publish persistence so slow stale snapshots cannot overwrite newer events', async () => {
+    const storage = fakeControllableState();
+    const room = new RainrailBridgeRoom(storage.state, { replayLimit: 10 });
+    const health = room.fetch(new Request('https://rainrail.local/healthz'));
+    expect(storage.getCalls).toBe(1);
+    storage.resolveGet([]);
+    await health;
+
+    storage.pauseNextPut();
+    const first = fixtureEvent('delivery-1', 'github.issue');
+    const second = fixtureEvent('delivery-2', 'cloudflare.tail');
+    const firstPublish = room.fetch(publishRequest(first));
+    const secondPublish = room.fetch(publishRequest(second));
+    await flushMicrotasks();
+
+    expect(storage.pendingPutCount()).toBe(1);
+    storage.resolveNextPut();
+    await Promise.all([firstPublish, secondPublish]);
+
+    expect(storage.storedEvents().map((event) => event.id)).toEqual([first.id, second.id]);
+  });
+
+  it('passes Last-Event-ID to the SSE replay policy', async () => {
+    const room = new RainrailBridgeRoom(fakeState(), { replayLimit: 10 });
+    const first = fixtureEvent('delivery-1', 'github.issue');
+    const second = fixtureEvent('delivery-2', 'cloudflare.tail');
+
+    await room.fetch(publishRequest(first));
+    await room.fetch(publishRequest(second));
+
+    const response = await room.fetch(
+      new Request('https://rainrail.local/events', {
+        headers: { 'Last-Event-ID': first.id },
+      }),
+    );
+    const reader = response.body?.getReader();
+    expect(reader).toBeDefined();
+    const chunk = await readUntil(reader!, 'cloudflare.tail');
+    await reader?.cancel();
+
+    expect(chunk).not.toContain('event: github.issue\n');
+    expect(chunk).toContain('event: cloudflare.tail\n');
+  });
 });
 
 function fakeState() {
@@ -89,4 +151,77 @@ async function readUntil(reader: ReadableStreamDefaultReader<Uint8Array>, expect
   }
 
   return text;
+}
+
+function fixtureEvent(deliveryId: string, name: 'github.issue' | 'cloudflare.tail') {
+  return createEventEnvelope({
+    source: { type: name.startsWith('cloudflare') ? 'cloudflare' : 'github', name: `${name}-source` },
+    name,
+    delivery: {
+      id: deliveryId,
+      receivedAt: '2026-06-29T18:18:21.000Z',
+    },
+    occurredAt: '2026-06-29T18:18:20.000Z',
+    subject: { type: name.startsWith('cloudflare') ? 'worker' : 'issue', id: deliveryId },
+    payload: { deliveryId },
+    rawPayload: {
+      kind: 'external-reference',
+      reference: `test://${deliveryId}`,
+    },
+  });
+}
+
+function publishRequest(event: unknown): Request {
+  return new Request('https://rainrail.local/publish', {
+    method: 'POST',
+    body: JSON.stringify(event),
+  });
+}
+
+async function flushMicrotasks(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+function fakeControllableState() {
+  let getCalls = 0;
+  let stored: unknown = undefined;
+  let resolveGet: ((value: unknown) => void) | undefined;
+  let getPromise: Promise<unknown> | undefined;
+  const pendingPuts: Array<() => void> = [];
+  let shouldPauseNextPut = false;
+
+  return {
+    get getCalls() {
+      return getCalls;
+    },
+    state: {
+      storage: {
+        get: async () => {
+          getCalls += 1;
+          getPromise ??= new Promise((resolve) => {
+            resolveGet = resolve;
+          });
+          return getPromise;
+        },
+        put: async (_key: string, value: unknown) => {
+          if (shouldPauseNextPut) {
+            shouldPauseNextPut = false;
+            await new Promise<void>((resolve) => pendingPuts.push(resolve));
+          }
+          stored = value;
+        },
+      },
+    },
+    resolveGet: (value: unknown) => {
+      resolveGet?.(value);
+    },
+    pauseNextPut: () => {
+      shouldPauseNextPut = true;
+    },
+    pendingPutCount: () => pendingPuts.length,
+    resolveNextPut: () => {
+      pendingPuts.shift()?.();
+    },
+    storedEvents: () => stored as ReturnType<typeof fixtureEvent>[],
+  };
 }

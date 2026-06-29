@@ -14,13 +14,14 @@ export interface RainrailEventBusSubscriber {
 
 export interface RainrailReadableStreamOptions {
   replay?: boolean;
+  lastEventId?: string;
   signal?: AbortSignal;
   keepAliveIntervalMs?: number;
 }
 
 export interface RainrailEventBus {
   publish(event: RainrailEventEnvelope): void;
-  subscribe(subscriber: RainrailEventBusSubscriber, options?: { replay?: boolean }): () => void;
+  subscribe(subscriber: RainrailEventBusSubscriber, options?: { replay?: boolean; lastEventId?: string }): () => void;
   createReadableStream(options?: RainrailReadableStreamOptions): ReadableStream<Uint8Array>;
   loadReplay(events: RainrailEventEnvelope[]): void;
   readonly clientCount: number;
@@ -42,10 +43,11 @@ class InMemoryRainrailEventBus implements RainrailEventBus {
   }
 
   publish(event: RainrailEventEnvelope): void {
+    const chunk = formatRainrailSseEvent(event);
+
     this.#recent.push(event);
     this.#trimRecent();
 
-    const chunk = formatRainrailSseEvent(event);
     for (const client of this.#clients) {
       try {
         client.write(chunk);
@@ -55,11 +57,11 @@ class InMemoryRainrailEventBus implements RainrailEventBus {
     }
   }
 
-  subscribe(subscriber: RainrailEventBusSubscriber, options: { replay?: boolean } = {}): () => void {
+  subscribe(subscriber: RainrailEventBusSubscriber, options: { replay?: boolean; lastEventId?: string } = {}): () => void {
     subscriber.write(formatRainrailSseComment('connected'));
 
     if (options.replay ?? true) {
-      for (const event of this.#recent) {
+      for (const event of this.#replayEventsAfter(options.lastEventId)) {
         subscriber.write(formatRainrailSseEvent(event));
       }
     }
@@ -88,6 +90,11 @@ class InMemoryRainrailEventBus implements RainrailEventBus {
 
     const stream = new ReadableStream<Uint8Array>({
       start: (controller) => {
+        if (options.signal?.aborted) {
+          controller.close();
+          return;
+        }
+
         let closed = false;
         const subscriber: RainrailEventBusSubscriber = {
           write: (chunk) => {
@@ -107,7 +114,10 @@ class InMemoryRainrailEventBus implements RainrailEventBus {
 
         unsubscribe = this.subscribe(
           subscriber,
-          options.replay === undefined ? {} : { replay: options.replay },
+          {
+            ...(options.replay === undefined ? {} : { replay: options.replay }),
+            ...(options.lastEventId === undefined ? {} : { lastEventId: options.lastEventId }),
+          },
         );
 
         if (options.keepAliveIntervalMs !== undefined) {
@@ -122,6 +132,9 @@ class InMemoryRainrailEventBus implements RainrailEventBus {
         }
 
         options.signal?.addEventListener('abort', close, { once: true });
+        if (options.signal?.aborted) {
+          close();
+        }
       },
       cancel: close,
     });
@@ -130,7 +143,7 @@ class InMemoryRainrailEventBus implements RainrailEventBus {
   }
 
   loadReplay(events: RainrailEventEnvelope[]): void {
-    this.#recent = events.slice(-this.#replayLimit);
+    this.#recent = this.#replayLimit <= 0 ? [] : events.slice(-this.#replayLimit);
   }
 
   get clientCount(): number {
@@ -149,6 +162,15 @@ class InMemoryRainrailEventBus implements RainrailEventBus {
     if (this.#recent.length > this.#replayLimit) {
       this.#recent.splice(0, this.#recent.length - this.#replayLimit);
     }
+  }
+
+  #replayEventsAfter(lastEventId: string | undefined): RainrailEventEnvelope[] {
+    if (lastEventId === undefined) {
+      return this.#recent;
+    }
+
+    const lastIndex = this.#recent.findIndex((event) => event.id === lastEventId);
+    return lastIndex === -1 ? this.#recent : this.#recent.slice(lastIndex + 1);
   }
 }
 
