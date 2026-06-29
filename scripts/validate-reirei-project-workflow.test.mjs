@@ -13,8 +13,8 @@ describe('add issue to Reirei project workflow', () => {
     expect(workflow).not.toContain('pull_request_target');
   });
 
-  it('uses the organization self-hosted runner for issue intake', () => {
-    expect(workflow).toMatch(/^ {4}runs-on: self-hosted$/m);
+  it('uses a GitHub-hosted runner for public repository issue intake', () => {
+    expect(workflow).toMatch(/^ {4}runs-on: ubuntu-latest$/m);
   });
 
   it('adds the opened issue to the Reirei organization project', () => {
