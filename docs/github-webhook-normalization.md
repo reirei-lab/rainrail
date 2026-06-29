@@ -25,6 +25,7 @@ workflow plugin が受け取る `event.payload` は Rainrail 側で安定させ�
 - `create` / `delete` は branch/tag の ref と ref type を `event.payload.resource` に集約する。
 - `release` は tag/name/url/draft/prerelease を release resource として正規化する。
 - `status` は commit SHA / state / context / target URL を commit status resource として正規化する。
+- `status` は branches と description も commit status resource に残す。
 - `deployment` / `deployment_status` は deployment id/ref/environment と status state を deployment resource として正規化する。
 - `deployment_protection_rule` は environment/ref/sha/callback URL を deployment protection rule resource として正規化し、関連 PR は `event.payload.pullRequests` に残す。
 - `deployment_review` は environment / nested reviewers / approver / string comment を deployment review resource として正規化する。
@@ -36,6 +37,8 @@ workflow plugin が受け取る `event.payload` は Rainrail 側で安定させ�
 - `repository_ruleset` / `fork` / `deploy_key` は対象 ruleset / fork repository / deploy key を resource として正規化する。
 - `personal_access_token_request` は request id/owner/permissions と対象 repositories を正規化する。
 - `member` / `membership` / `team` / `team_add` は対象 user/team principal を resource として正規化する。
+- `custom_property` / `custom_property_values` は property 定義と old/new values を正規化する。
+- `org_block` / `organization` membership / `installation_target` / `meta` / `marketplace_purchase` / `sponsorship` は repository が無い delivery でも対象 principal/resource を正規化する。
 - `page_build` / `repository_import` / `secret_scanning_scan` は build/import/scan 結果を resource として正規化する。repository import は URL なしでも status を保持し、secret scan は空の secret types でも scan resource にする。
 - `package` / `registry_package` は package name/type/version/url を package resource として正規化する。
 - `installation` / `installation_repositories` の対象 repository 配列は `event.payload.repositories` に残す。

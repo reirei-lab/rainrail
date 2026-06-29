@@ -238,6 +238,14 @@ export interface GitHubWebhookPayload {
   member?: GitHubWebhookRecord;
   team?: GitHubWebhookRecord;
   build?: GitHubWebhookRecord;
+  blocked_user?: GitHubWebhookRecord;
+  definition?: GitHubWebhookRecord;
+  membership?: GitHubWebhookRecord;
+  account?: GitHubWebhookRecord;
+  hook?: GitHubWebhookRecord;
+  marketplace_purchase?: GitHubWebhookRecord;
+  previous_marketplace_purchase?: GitHubWebhookRecord;
+  sponsorship?: GitHubWebhookRecord;
   blocked_issue?: GitHubWebhookRecord;
   blocking_issue?: GitHubWebhookRecord;
   parent_issue?: GitHubWebhookRecord;
@@ -246,6 +254,8 @@ export interface GitHubWebhookPayload {
   repositories_added?: GitHubWebhookRecord[];
   repositories_removed?: GitHubWebhookRecord[];
   pages?: GitHubWebhookRecord[];
+  old_property_values?: GitHubWebhookRecord[];
+  new_property_values?: GitHubWebhookRecord[];
   changes?: GitHubWebhookRecord;
   head_commit?: GitHubWebhookRecord;
   [key: string]: unknown;
@@ -418,6 +428,18 @@ export interface NormalizedGitHubResource {
   login?: string;
   teamSlug?: string;
   teamName?: string;
+  role?: string;
+  targetType?: string;
+  valueType?: string;
+  required?: boolean;
+  hookType?: string;
+  account?: string;
+  planName?: string;
+  previousPlanName?: string;
+  effectiveDate?: string;
+  sponsorLogin?: string;
+  sponsorableLogin?: string;
+  tierName?: string;
   readOnly?: boolean;
   created?: boolean;
   deleted?: boolean;
@@ -429,6 +451,7 @@ export interface NormalizedGitHubResource {
   source?: string;
   completedAt?: string;
   secretTypes?: string[];
+  branches?: string[];
   isResolved?: boolean;
   path?: string;
   line?: number;
@@ -536,6 +559,34 @@ function findGitHubSubject(payload: GitHubWebhookPayload, name: RainrailEventNam
 
   if (payload.build) {
     return subjectFromResource(resourceFromPageBuild(payload.build));
+  }
+
+  if (payload.blocked_user) {
+    return subjectFromResource(resourceFromOrgBlock(payload.blocked_user));
+  }
+
+  if (payload.definition) {
+    return subjectFromResource(resourceFromCustomProperty(payload.definition));
+  }
+
+  if (payload.membership) {
+    return subjectFromResource(resourceFromOrganizationMembership(payload.membership));
+  }
+
+  if (isInstallationTargetPayload(payload)) {
+    return subjectFromResource(resourceFromInstallationTarget(payload));
+  }
+
+  if (payload.hook || payload.hook_id !== undefined) {
+    return subjectFromResource(resourceFromMetaHook(payload));
+  }
+
+  if (payload.marketplace_purchase) {
+    return subjectFromResource(resourceFromMarketplacePurchase(payload));
+  }
+
+  if (payload.sponsorship) {
+    return subjectFromResource(resourceFromSponsorship(payload.sponsorship));
   }
 
   if (isRepositoryImportPayload(payload)) {
@@ -894,7 +945,10 @@ function normalizeGitHubWebhookPayload(
   const pullRequests = normalizedRelatedPullRequests(payload);
   const repositories = normalizedInstallationRepositories(payload);
   const pages = normalizedWikiPages(payload);
-  const changes = normalizedChanges(payload.changes);
+  const changes = [
+    ...normalizedChanges(payload.changes),
+    ...normalizedCustomPropertyChanges(payload),
+  ];
   const comment = normalizedComment(payload.comment);
   const dispatch = normalizedDispatch(githubEvent, payload);
   const requestedAction = normalizedRequestedAction(payload.requested_action);
@@ -1090,6 +1144,34 @@ function normalizedResource(payload: GitHubWebhookPayload): NormalizedGitHubReso
 
   if (payload.build) {
     return resourceFromPageBuild(payload.build);
+  }
+
+  if (payload.blocked_user) {
+    return resourceFromOrgBlock(payload.blocked_user);
+  }
+
+  if (payload.definition) {
+    return resourceFromCustomProperty(payload.definition);
+  }
+
+  if (payload.membership) {
+    return resourceFromOrganizationMembership(payload.membership);
+  }
+
+  if (isInstallationTargetPayload(payload)) {
+    return resourceFromInstallationTarget(payload);
+  }
+
+  if (payload.hook || payload.hook_id !== undefined) {
+    return resourceFromMetaHook(payload);
+  }
+
+  if (payload.marketplace_purchase) {
+    return resourceFromMarketplacePurchase(payload);
+  }
+
+  if (payload.sponsorship) {
+    return resourceFromSponsorship(payload.sponsorship);
   }
 
   if (isRepositoryImportPayload(payload)) {
@@ -1315,6 +1397,9 @@ function resourceFromCheckSuite(checkSuite: GitHubWebhookRecord): NormalizedGitH
 
 function resourceFromCommitStatus(payload: GitHubWebhookPayload): NormalizedGitHubResource {
   const sha = stringField(payload, 'sha') ?? 'unknown';
+  const branches = arrayField(payload, 'branches')
+    .map((branch) => stringField(branch, 'name'))
+    .filter((branch): branch is string => branch !== undefined);
 
   return {
     type: 'commit_status',
@@ -1322,6 +1407,8 @@ function resourceFromCommitStatus(payload: GitHubWebhookPayload): NormalizedGitH
     ...optionalStringProperty('headSha', stringField(payload, 'sha')),
     ...optionalStringProperty('state', stringField(payload, 'state')),
     ...optionalStringProperty('context', stringField(payload, 'context')),
+    ...optionalStringProperty('description', stringField(payload, 'description')),
+    ...optionalStringArrayProperty('branches', branches),
     ...optionalStringProperty('url', stringField(payload, 'target_url')),
   };
 }
@@ -1550,6 +1637,86 @@ function resourceFromMemberTeam(payload: GitHubWebhookPayload): NormalizedGitHub
     ...optionalStringProperty('teamSlug', stringField(team, 'slug')),
     ...optionalStringProperty('teamName', stringField(team, 'name')),
     ...optionalStringProperty('url', stringField(team, 'html_url')),
+  };
+}
+
+function resourceFromOrgBlock(blockedUser: GitHubWebhookRecord): NormalizedGitHubResource {
+  return {
+    type: 'org_block',
+    id: idField(blockedUser, 'id') ?? stringField(blockedUser, 'login') ?? 'unknown',
+    ...optionalStringProperty('login', stringField(blockedUser, 'login')),
+    ...optionalStringProperty('url', stringField(blockedUser, 'html_url')),
+  };
+}
+
+function resourceFromCustomProperty(definition: GitHubWebhookRecord): NormalizedGitHubResource {
+  const name = stringField(definition, 'property_name') ?? stringField(definition, 'name');
+
+  return {
+    type: 'custom_property',
+    id: name ?? 'unknown',
+    ...optionalStringProperty('name', name),
+    ...optionalStringProperty('valueType', stringField(definition, 'value_type')),
+    ...optionalBooleanProperty('required', booleanField(definition, 'required')),
+  };
+}
+
+function resourceFromOrganizationMembership(membership: GitHubWebhookRecord): NormalizedGitHubResource {
+  const user = recordField(membership, 'user');
+
+  return {
+    type: 'organization_membership',
+    id: idField(user, 'id') ?? stringField(user, 'login') ?? 'unknown',
+    ...optionalStringProperty('login', stringField(user, 'login')),
+    ...optionalStringProperty('role', stringField(membership, 'role')),
+    ...optionalStringProperty('url', stringField(user, 'html_url')),
+  };
+}
+
+function resourceFromInstallationTarget(payload: GitHubWebhookPayload): NormalizedGitHubResource {
+  const account = payload.account;
+
+  return {
+    type: 'installation_target',
+    id: idField(account, 'id') ?? stringField(account, 'login') ?? 'unknown',
+    ...optionalStringProperty('login', stringField(account, 'login')),
+    ...optionalStringProperty('targetType', stringField(payload, 'target_type')),
+    ...optionalStringProperty('url', stringField(account, 'html_url')),
+  };
+}
+
+function resourceFromMetaHook(payload: GitHubWebhookPayload): NormalizedGitHubResource {
+  return {
+    type: 'webhook',
+    id: idField(payload, 'hook_id') ?? idField(payload.hook, 'id') ?? 'unknown',
+    ...optionalStringProperty('hookType', stringField(payload.hook, 'type')),
+  };
+}
+
+function resourceFromMarketplacePurchase(payload: GitHubWebhookPayload): NormalizedGitHubResource {
+  const purchase = payload.marketplace_purchase ?? {};
+  const previousPurchase = payload.previous_marketplace_purchase;
+  const account = recordField(purchase, 'account');
+  const plan = recordField(purchase, 'plan');
+  const previousPlan = recordField(previousPurchase, 'plan');
+
+  return {
+    type: 'marketplace_purchase',
+    id: stringField(account, 'login') ?? idField(account, 'id') ?? 'unknown',
+    ...optionalStringProperty('account', stringField(account, 'login')),
+    ...optionalStringProperty('planName', stringField(plan, 'name')),
+    ...optionalStringProperty('previousPlanName', stringField(previousPlan, 'name')),
+    ...optionalStringProperty('effectiveDate', stringField(payload, 'effective_date')),
+  };
+}
+
+function resourceFromSponsorship(sponsorship: GitHubWebhookRecord): NormalizedGitHubResource {
+  return {
+    type: 'sponsorship',
+    id: idField(sponsorship, 'id') ?? 'unknown',
+    ...optionalStringProperty('sponsorLogin', stringField(recordField(sponsorship, 'sponsor'), 'login')),
+    ...optionalStringProperty('sponsorableLogin', stringField(recordField(sponsorship, 'sponsorable'), 'login')),
+    ...optionalStringProperty('tierName', stringField(recordField(sponsorship, 'tier'), 'name')),
   };
 }
 
@@ -1867,6 +2034,32 @@ function normalizedChanges(changes: GitHubWebhookRecord | undefined): Normalized
   });
 }
 
+function normalizedCustomPropertyChanges(payload: GitHubWebhookPayload): NormalizedGitHubChange[] {
+  const oldValues = new Map(
+    arrayField(payload, 'old_property_values')
+      .map((property) => [
+        stringField(property, 'property_name') ?? stringField(property, 'name'),
+        normalizedChangeValue(property.value),
+      ] as const)
+      .filter((entry): entry is readonly [string, string | undefined] => entry[0] !== undefined),
+  );
+
+  return arrayField(payload, 'new_property_values')
+    .map((property) => {
+      const field = stringField(property, 'property_name') ?? stringField(property, 'name');
+      if (!field) {
+        return undefined;
+      }
+
+      return {
+        field,
+        ...optionalStringProperty('from', oldValues.get(field)),
+        ...optionalStringProperty('to', normalizedChangeValue(property.value)),
+      };
+    })
+    .filter((change): change is NormalizedGitHubChange => change !== undefined);
+}
+
 function normalizedDispatch(
   githubEvent: string,
   payload: GitHubWebhookPayload,
@@ -2078,6 +2271,10 @@ function isInstallationRepositoriesPayload(payload: GitHubWebhookPayload): boole
 
 function isMemberTeamPayload(payload: GitHubWebhookPayload): boolean {
   return payload.member !== undefined || payload.team !== undefined;
+}
+
+function isInstallationTargetPayload(payload: GitHubWebhookPayload): boolean {
+  return payload.account !== undefined && stringField(payload, 'target_type') !== undefined;
 }
 
 function isRepositoryImportPayload(payload: GitHubWebhookPayload): boolean {

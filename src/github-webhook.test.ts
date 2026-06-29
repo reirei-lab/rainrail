@@ -1042,7 +1042,9 @@ describe('GitHub webhook source handling', () => {
           sha: 'abc123',
           state: 'success',
           context: 'ci/test',
+          description: 'Tests passed',
           target_url: 'https://github.com/reirei-lab/rainrail/actions/runs/1',
+          branches: [{ name: 'main' }],
           repository: { full_name: 'reirei-lab/rainrail' },
         },
         rawBody: '{}',
@@ -1062,6 +1064,8 @@ describe('GitHub webhook source handling', () => {
           headSha: 'abc123',
           state: 'success',
           context: 'ci/test',
+          description: 'Tests passed',
+          branches: ['main'],
           url: 'https://github.com/reirei-lab/rainrail/actions/runs/1',
         },
       },
@@ -2078,6 +2082,226 @@ describe('GitHub webhook source handling', () => {
   });
 
   it('normalizes access, membership, pages, import, and scan resources', async () => {
+    await expect(
+      createGitHubWebhookEvent({
+        githubEvent: 'custom_property_values',
+        deliveryId: 'delivery-custom-property-values-1',
+        payload: {
+          action: 'updated',
+          repository: { full_name: 'reirei-lab/rainrail' },
+          old_property_values: [{ property_name: 'Service', value: 'api' }],
+          new_property_values: [{ property_name: 'Service', value: 'worker' }],
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.custom_property_values',
+      payload: {
+        changes: [
+          {
+            field: 'Service',
+            from: 'api',
+            to: 'worker',
+          },
+        ],
+      },
+    });
+
+    await expect(
+      createGitHubWebhookEvent({
+        githubEvent: 'org_block',
+        deliveryId: 'delivery-org-block-1',
+        payload: {
+          action: 'blocked',
+          organization: { login: 'reirei-lab' },
+          blocked_user: {
+            id: 110,
+            login: 'bad-actor',
+            html_url: 'https://github.com/bad-actor',
+          },
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.org_block',
+      payload: {
+        resource: {
+          type: 'org_block',
+          id: '110',
+          login: 'bad-actor',
+          url: 'https://github.com/bad-actor',
+        },
+      },
+    });
+
+    await expect(
+      createGitHubWebhookEvent({
+        githubEvent: 'custom_property',
+        deliveryId: 'delivery-custom-property-1',
+        payload: {
+          action: 'created',
+          organization: { login: 'reirei-lab' },
+          definition: {
+            property_name: 'Service',
+            value_type: 'single_select',
+            required: true,
+          },
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.custom_property',
+      payload: {
+        resource: {
+          type: 'custom_property',
+          id: 'Service',
+          name: 'Service',
+          valueType: 'single_select',
+          required: true,
+        },
+      },
+    });
+
+    await expect(
+      createGitHubWebhookEvent({
+        githubEvent: 'organization',
+        deliveryId: 'delivery-organization-membership-1',
+        payload: {
+          action: 'member_added',
+          organization: { login: 'reirei-lab' },
+          membership: {
+            role: 'member',
+            user: { id: 111, login: 'octocat', html_url: 'https://github.com/octocat' },
+          },
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.organization',
+      payload: {
+        resource: {
+          type: 'organization_membership',
+          id: '111',
+          login: 'octocat',
+          role: 'member',
+        },
+      },
+    });
+
+    await expect(
+      createGitHubWebhookEvent({
+        githubEvent: 'installation_target',
+        deliveryId: 'delivery-installation-target-1',
+        payload: {
+          action: 'renamed',
+          target_type: 'Organization',
+          account: { id: 112, login: 'new-org', html_url: 'https://github.com/new-org' },
+          changes: { login: { from: 'old-org' } },
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.installation_target',
+      payload: {
+        resource: {
+          type: 'installation_target',
+          id: '112',
+          login: 'new-org',
+          targetType: 'Organization',
+        },
+        changes: [{ field: 'login', from: 'old-org' }],
+      },
+    });
+
+    await expect(
+      createGitHubWebhookEvent({
+        githubEvent: 'meta',
+        deliveryId: 'delivery-meta-1',
+        payload: {
+          action: 'deleted',
+          hook_id: 113,
+          hook: { type: 'Organization' },
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.meta',
+      payload: {
+        resource: {
+          type: 'webhook',
+          id: '113',
+          hookType: 'Organization',
+        },
+      },
+    });
+
+    await expect(
+      createGitHubWebhookEvent({
+        githubEvent: 'marketplace_purchase',
+        deliveryId: 'delivery-marketplace-purchase-1',
+        payload: {
+          action: 'changed',
+          effective_date: '2026-07-01T00:00:00Z',
+          marketplace_purchase: {
+            account: { login: 'customer' },
+            plan: { name: 'Pro' },
+          },
+          previous_marketplace_purchase: {
+            plan: { name: 'Free' },
+          },
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.marketplace_purchase',
+      payload: {
+        resource: {
+          type: 'marketplace_purchase',
+          id: 'customer',
+          account: 'customer',
+          planName: 'Pro',
+          previousPlanName: 'Free',
+          effectiveDate: '2026-07-01T00:00:00Z',
+        },
+      },
+    });
+
+    await expect(
+      createGitHubWebhookEvent({
+        githubEvent: 'sponsorship',
+        deliveryId: 'delivery-sponsorship-1',
+        payload: {
+          action: 'created',
+          sponsorship: {
+            id: 114,
+            sponsor: { login: 'sponsor' },
+            sponsorable: { login: 'maintainer' },
+            tier: { name: 'Gold' },
+          },
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.sponsorship',
+      payload: {
+        resource: {
+          type: 'sponsorship',
+          id: '114',
+          sponsorLogin: 'sponsor',
+          sponsorableLogin: 'maintainer',
+          tierName: 'Gold',
+        },
+      },
+    });
+
     await expect(
       createGitHubWebhookEvent({
         githubEvent: 'project_card',
