@@ -144,8 +144,25 @@ describe('GitHub webhook source handling', () => {
           url: 'https://github.com/reirei-lab/rainrail/issues/15',
         },
         payload: {
+          provider: 'github',
+          event: 'issues',
           action: 'opened',
-          issue: { number: 15, title: 'GitHub webhook signature' },
+          repository: {
+            fullName: 'reirei-lab/rainrail',
+            url: 'https://github.com/reirei-lab/rainrail',
+            owner: 'reirei-lab',
+            name: 'rainrail',
+          },
+          actor: {
+            login: 'octocat',
+          },
+          resource: {
+            type: 'issue',
+            id: '15',
+            number: 15,
+            title: 'GitHub webhook signature',
+            url: 'https://github.com/reirei-lab/rainrail/issues/15',
+          },
         },
         rawPayload: {
           kind: 'inline-redacted',
@@ -218,9 +235,256 @@ describe('GitHub webhook source handling', () => {
           id: '15',
           url: 'https://github.com/reirei-lab/rainrail/issues/15',
         },
-        payload,
+        payload: {
+          provider: 'github',
+          event: 'issues',
+          action: 'opened',
+          repository: {
+            fullName: 'reirei-lab/rainrail',
+            owner: 'reirei-lab',
+            name: 'rainrail',
+          },
+          resource: {
+            type: 'issue',
+            id: '15',
+            number: 15,
+            url: 'https://github.com/reirei-lab/rainrail/issues/15',
+          },
+        },
         rawPayload: {
           contentType: 'application/x-www-form-urlencoded',
+        },
+      },
+    });
+  });
+
+  it('normalizes issue_comment and pull request deliveries without passing through raw GitHub payloads', async () => {
+    await expect(
+      createGitHubWebhookEvent({
+        githubEvent: 'issue_comment',
+        deliveryId: 'delivery-comment-1',
+        payload: {
+          action: 'created',
+          repository: {
+            id: 100,
+            full_name: 'reirei-lab/rainrail',
+            html_url: 'https://github.com/reirei-lab/rainrail',
+          },
+          sender: {
+            id: 1,
+            login: 'octocat',
+            type: 'User',
+            html_url: 'https://github.com/octocat',
+          },
+          issue: {
+            id: 200,
+            number: 16,
+            title: 'Normalize GitHub payloads',
+            html_url: 'https://github.com/reirei-lab/rainrail/issues/16',
+          },
+          comment: {
+            id: 300,
+            body: 'Please route this',
+            html_url: 'https://github.com/reirei-lab/rainrail/issues/16#issuecomment-300',
+            user: { login: 'octocat' },
+          },
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.issue',
+      subject: {
+        type: 'issue',
+        id: '16',
+        url: 'https://github.com/reirei-lab/rainrail/issues/16',
+      },
+      payload: {
+        provider: 'github',
+        event: 'issue_comment',
+        action: 'created',
+        repository: {
+          id: '100',
+          fullName: 'reirei-lab/rainrail',
+          url: 'https://github.com/reirei-lab/rainrail',
+          owner: 'reirei-lab',
+          name: 'rainrail',
+        },
+        actor: {
+          id: '1',
+          login: 'octocat',
+          type: 'User',
+          url: 'https://github.com/octocat',
+        },
+        resource: {
+          type: 'issue',
+          id: '16',
+          number: 16,
+          title: 'Normalize GitHub payloads',
+          url: 'https://github.com/reirei-lab/rainrail/issues/16',
+        },
+        comment: {
+          id: '300',
+          body: 'Please route this',
+          url: 'https://github.com/reirei-lab/rainrail/issues/16#issuecomment-300',
+          author: 'octocat',
+        },
+      },
+    });
+
+    const event = await createGitHubWebhookEvent({
+      githubEvent: 'pull_request',
+      deliveryId: 'delivery-pr-2',
+      payload: {
+        action: 'reopened',
+        repository: { full_name: 'reirei-lab/rainrail' },
+        pull_request: {
+          id: 400,
+          number: 17,
+          title: 'Bridge Rainrail events',
+          state: 'open',
+          html_url: 'https://github.com/reirei-lab/rainrail/pull/17',
+          head: { ref: 'feature', sha: 'abc123' },
+          base: { ref: 'main', sha: 'def456' },
+        },
+      },
+      rawBody: '{}',
+      receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+    });
+
+    expect(event.payload).toMatchObject({
+      provider: 'github',
+      event: 'pull_request',
+      action: 'reopened',
+      resource: {
+        type: 'pull_request',
+        id: '17',
+        number: 17,
+        title: 'Bridge Rainrail events',
+        state: 'open',
+        url: 'https://github.com/reirei-lab/rainrail/pull/17',
+        headRef: 'feature',
+        headSha: 'abc123',
+        baseRef: 'main',
+        baseSha: 'def456',
+      },
+    });
+    expect(event.payload).not.toHaveProperty('pull_request');
+  });
+
+  it('normalizes review, check, workflow, and project item payload families', async () => {
+    await expect(
+      createGitHubWebhookEvent({
+        githubEvent: 'pull_request_review_comment',
+        deliveryId: 'delivery-review-comment-1',
+        payload: {
+          action: 'created',
+          repository: { full_name: 'reirei-lab/rainrail' },
+          pull_request: {
+            number: 39,
+            html_url: 'https://github.com/reirei-lab/rainrail/pull/39',
+          },
+          comment: {
+            id: 500,
+            body: 'nit',
+            html_url: 'https://github.com/reirei-lab/rainrail/pull/39#discussion_r500',
+            pull_request_review_id: 4594627585,
+            user: { login: 'reviewer' },
+          },
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.review',
+      payload: {
+        provider: 'github',
+        event: 'pull_request_review_comment',
+        action: 'created',
+        resource: {
+          type: 'pull_request',
+          id: '39',
+          number: 39,
+          url: 'https://github.com/reirei-lab/rainrail/pull/39',
+        },
+        comment: {
+          id: '500',
+          body: 'nit',
+          url: 'https://github.com/reirei-lab/rainrail/pull/39#discussion_r500',
+          author: 'reviewer',
+          reviewId: '4594627585',
+        },
+      },
+    });
+
+    await expect(
+      createGitHubWebhookEvent({
+        githubEvent: 'check_run',
+        deliveryId: 'delivery-check-run-1',
+        payload: {
+          action: 'completed',
+          repository: { full_name: 'reirei-lab/rainrail' },
+          check_run: {
+            id: 600,
+            name: 'test',
+            status: 'completed',
+            conclusion: 'success',
+            head_sha: 'abc123',
+            html_url: 'https://github.com/reirei-lab/rainrail/runs/600',
+          },
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.check_run',
+      payload: {
+        provider: 'github',
+        event: 'check_run',
+        action: 'completed',
+        resource: {
+          type: 'check_run',
+          id: '600',
+          name: 'test',
+          status: 'completed',
+          conclusion: 'success',
+          headSha: 'abc123',
+          url: 'https://github.com/reirei-lab/rainrail/runs/600',
+        },
+      },
+    });
+
+    await expect(
+      createGitHubWebhookEvent({
+        githubEvent: 'projects_v2_item',
+        deliveryId: 'delivery-project-item-1',
+        payload: {
+          action: 'edited',
+          repository: { full_name: 'reirei-lab/rainrail' },
+          projects_v2_item: {
+            id: 'PVTI_lADOExample',
+            content_type: 'Issue',
+            content_node_id: 'I_kwDOExample',
+          },
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.projects_v2_item',
+      subject: {
+        type: 'project_item',
+        id: 'PVTI_lADOExample',
+      },
+      payload: {
+        provider: 'github',
+        event: 'projects_v2_item',
+        action: 'edited',
+        resource: {
+          type: 'project_item',
+          id: 'PVTI_lADOExample',
+          contentType: 'Issue',
+          contentNodeId: 'I_kwDOExample',
         },
       },
     });
