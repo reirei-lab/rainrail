@@ -53,8 +53,9 @@ export async function assignNextProjectIssueToAgent(
   }
 
   const task = agentTaskForIssue(nextIssue, options.runtime);
+  let claim: ProjectIssueClaim | undefined;
   try {
-    const claim = await options.queue.claimProjectIssue({
+    claim = await options.queue.claimProjectIssue({
       issue: nextIssue,
       agentSessionId: task.agentSessionId,
       branchName: task.branchName,
@@ -74,13 +75,24 @@ export async function assignNextProjectIssueToAgent(
       task: { ...task, claim, dispatchResult },
     };
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (claim !== undefined && options.queue.releaseProjectIssue !== undefined) {
+      await options.queue.releaseProjectIssue({
+        issue: nextIssue,
+        claim,
+        agentSessionId: task.agentSessionId,
+        branchName: task.branchName,
+        reason: message,
+      });
+    }
     return {
       assigned: false,
       reason: 'failed_to_start_agent',
       issues,
       task: {
         ...task,
-        error: error instanceof Error ? error.message : String(error),
+        ...(claim === undefined ? {} : { claim }),
+        error: message,
       },
     };
   }

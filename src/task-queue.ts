@@ -7,6 +7,14 @@ export interface ProjectIssueClaimInput {
   commentBody: string;
 }
 
+export interface ProjectIssueReleaseInput {
+  issue: ProjectIssue;
+  claim: ProjectIssueClaim;
+  agentSessionId: string;
+  branchName: string;
+  reason: string;
+}
+
 export interface ProjectIssueClaim {
   projectId?: string;
   projectItemId: string;
@@ -22,5 +30,6 @@ export interface TaskQueueProvider {
   kind: 'task-queue-provider';
   listProjectIssues(): Promise<ProjectIssue[]> | ProjectIssue[];
   claimProjectIssue(input: ProjectIssueClaimInput): Promise<ProjectIssueClaim> | ProjectIssueClaim;
+  releaseProjectIssue?: (input: ProjectIssueReleaseInput) => Promise<void> | void;
   selection?: ProjectIssueSelectionOptions;
 }

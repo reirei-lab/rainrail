@@ -67,33 +67,45 @@ describe('createGitHubProjectTaskQueueProvider', () => {
     expect(requests[0]?.variables).toMatchObject({ organization: 'reirei-lab', projectNumber: 1 });
   });
 
+  it('fails when the configured Project cannot be loaded', async () => {
+    const provider = createGitHubProjectTaskQueueProvider({
+      config: projectConfig(),
+      auth: { getAuthToken: async () => ({ token: 'project-token', provider: 'configured-token', fallback: false }) },
+      fetch: (async () => jsonResponse({ data: { organization: { projectV2: null } } })) as typeof fetch,
+    });
+
+    await expect(provider.listProjectIssues()).rejects.toThrow('GitHub Project items response is missing project items');
+  });
+
   it('claims a project issue with status, agent session, branch fields, and an issue comment', async () => {
     const calls: Array<{ query?: string; variables?: Record<string, unknown> }> = [];
     const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       const request = JSON.parse(String(init?.body)) as { query?: string; variables?: Record<string, unknown> };
       calls.push(request);
-      if (request.query?.includes('RainrailProjectMetadata')) {
+      if (request.query?.includes('RainrailProjectItemStatus')) {
         return jsonResponse({
           data: {
-            organization: {
-              projectV2: {
-                id: 'PVT_project',
-                fields: {
-                  nodes: [
-                    {
-                      __typename: 'ProjectV2SingleSelectField',
-                      id: 'PVTSSF_status',
-                      name: 'Status',
-                      options: [{ id: 'status_in_progress', name: 'In Progress' }],
-                    },
-                    { __typename: 'ProjectV2Field', id: 'PVTF_session', name: 'Agent session ID', dataType: 'TEXT' },
-                    { __typename: 'ProjectV2Field', id: 'PVTF_branch', name: 'Branch', dataType: 'TEXT' },
-                  ],
-                },
-              },
-            },
+            node: projectItem({
+              id: 'item_21',
+              contentId: 'issue_node_21',
+              number: 21,
+              title: 'Project issue selection',
+              status: calls.filter((call) => call.query?.includes('updateProjectV2ItemFieldValue')).length === 0
+                ? 'Todo'
+                : 'In Progress',
+              assignees: ['reirei-agent'],
+              agentSessionId: calls.filter((call) => call.query?.includes('updateProjectV2ItemFieldValue')).length === 0
+                ? ''
+                : 'agent:main:rainrail-21',
+              branchName: calls.filter((call) => call.query?.includes('updateProjectV2ItemFieldValue')).length === 0
+                ? ''
+                : 'agent/reirei-lab-rainrail-21-project-issue-selection',
+            }),
           },
         });
+      }
+      if (request.query?.includes('RainrailProjectMetadata')) {
+        return projectMetadataResponse();
       }
       if (request.query?.includes('addComment')) {
         return jsonResponse({
@@ -132,10 +144,125 @@ describe('createGitHubProjectTaskQueueProvider', () => {
       commentUrl: 'https://github.com/reirei-lab/rainrail/issues/21#issuecomment-1',
     });
     expect(calls.filter((call) => call.query?.includes('updateProjectV2ItemFieldValue'))).toHaveLength(3);
+    expect(calls.filter((call) => call.query?.includes('RainrailProjectItemStatus'))).toHaveLength(2);
     expect(calls.find((call) => call.query?.includes('addComment'))?.variables).toMatchObject({
       subjectId: 'issue_node_21',
       body: 'started',
     });
+  });
+
+  it('rejects stale claims when the item is no longer todo or already has an agent session', async () => {
+    const provider = createGitHubProjectTaskQueueProvider({
+      config: projectConfig(),
+      auth: { getAuthToken: async () => ({ token: 'project-token', provider: 'configured-token', fallback: false }) },
+      fetch: (async (_url, init) => {
+        const request = JSON.parse(String(init?.body)) as { query?: string };
+        if (request.query?.includes('RainrailProjectItemStatus')) {
+          return jsonResponse({
+            data: {
+              node: projectItem({
+                id: 'item_21',
+                contentId: 'issue_node_21',
+                number: 21,
+                title: 'Project issue selection',
+                status: 'In Progress',
+                assignees: ['reirei-agent'],
+                agentSessionId: 'agent:main:other',
+              }),
+            },
+          });
+        }
+        return jsonResponse({ data: { organization: { projectV2: { id: 'PVT_project', fields: { nodes: [] } } } } });
+      }) as typeof fetch,
+    });
+
+    await expect(provider.claimProjectIssue({
+      issue: {
+        id: 'item_21',
+        contentId: 'issue_node_21',
+        contentType: 'Issue',
+        title: 'Project issue selection',
+        status: 'Todo',
+        assigneeLogins: ['reirei-agent'],
+      },
+      agentSessionId: 'agent:main:rainrail-21',
+      branchName: 'agent/reirei-lab-rainrail-21-project-issue-selection',
+      commentBody: 'started',
+    })).rejects.toThrow('GitHub Project item is no longer claimable');
+  });
+
+  it('releases a claimed issue back to todo status', async () => {
+    const calls: Array<{ query?: string; variables?: Record<string, unknown> }> = [];
+    const provider = createGitHubProjectTaskQueueProvider({
+      config: projectConfig(),
+      auth: { getAuthToken: async () => ({ token: 'project-token', provider: 'configured-token', fallback: false }) },
+      fetch: (async (_url, init) => {
+        const request = JSON.parse(String(init?.body)) as { query?: string; variables?: Record<string, unknown> };
+        calls.push(request);
+        if (request.query?.includes('RainrailProjectMetadata')) {
+          return projectMetadataResponse();
+        }
+        return jsonResponse({ data: { updateProjectV2ItemFieldValue: { projectV2Item: { id: 'item_21' } } } });
+      }) as typeof fetch,
+    });
+
+    await provider.releaseProjectIssue?.({
+      issue: {
+        id: 'item_21',
+        contentId: 'issue_node_21',
+        contentType: 'Issue',
+        title: 'Project issue selection',
+        status: 'Todo',
+        assigneeLogins: ['reirei-agent'],
+      },
+      claim: { projectItemId: 'item_21' },
+      agentSessionId: 'agent:main:rainrail-21',
+      branchName: 'agent/reirei-lab-rainrail-21-project-issue-selection',
+      reason: 'runtime unavailable',
+    });
+
+    expect(calls.filter((call) => call.query?.includes('updateProjectV2ItemFieldValue'))).toHaveLength(3);
+    expect(calls.find((call) =>
+      call.query?.includes('updateProjectV2ItemFieldValue')
+      && JSON.stringify(call.variables?.value).includes('status_todo')
+    )).toBeDefined();
+  });
+
+  it('uses fieldValueByName and open blocker totals for queue-critical fields', async () => {
+    const provider = createGitHubProjectTaskQueueProvider({
+      config: projectConfig(),
+      auth: { getAuthToken: async () => ({ token: 'project-token', provider: 'configured-token', fallback: false }) },
+      fetch: (async () => jsonResponse({
+        data: {
+          organization: {
+            projectV2: {
+              items: {
+                nodes: [
+                  projectItem({
+                    id: 'item_21',
+                    contentId: 'issue_node_21',
+                    number: 21,
+                    title: 'Project issue selection',
+                    status: 'Todo',
+                    assignees: ['reirei-agent'],
+                    blockedByOpenTotal: 1,
+                  }),
+                ],
+                pageInfo: { hasNextPage: false, endCursor: null },
+              },
+            },
+          },
+        },
+      })) as typeof fetch,
+    });
+
+    await expect(provider.listProjectIssues()).resolves.toMatchObject([
+      {
+        id: 'item_21',
+        status: 'Todo',
+        blockedBy: [{ state: 'OPEN' }],
+      },
+    ]);
   });
 
   it('loads paginated Project field metadata before claiming an issue', async () => {
@@ -145,6 +272,22 @@ describe('createGitHubProjectTaskQueueProvider', () => {
       auth: { getAuthToken: async () => ({ token: 'project-token', provider: 'configured-token', fallback: false }) },
       fetch: (async (_url, init) => {
         const request = JSON.parse(String(init?.body)) as { query?: string; variables?: Record<string, unknown> };
+        if (request.query?.includes('RainrailProjectItemStatus')) {
+          return jsonResponse({
+            data: {
+              node: projectItem({
+                id: 'item_21',
+                contentId: 'issue_node_21',
+                number: 21,
+                title: 'Project issue selection',
+                status: metadataRequests.length === 0 ? 'Todo' : 'In Progress',
+                assignees: ['reirei-agent'],
+                agentSessionId: metadataRequests.length === 0 ? '' : 'agent:main:rainrail-21',
+                branchName: metadataRequests.length === 0 ? '' : 'agent/reirei-lab-rainrail-21-project-issue-selection',
+              }),
+            },
+          });
+        }
         if (request.query?.includes('RainrailProjectMetadata')) {
           metadataRequests.push(request.variables);
           if (request.variables?.fieldsAfter === undefined) {
@@ -173,7 +316,10 @@ describe('createGitHubProjectTaskQueueProvider', () => {
                         __typename: 'ProjectV2SingleSelectField',
                         id: 'PVTSSF_status',
                         name: 'Status',
-                        options: [{ id: 'status_in_progress', name: 'In Progress' }],
+                        options: [
+                          { id: 'status_todo', name: 'Todo' },
+                          { id: 'status_in_progress', name: 'In Progress' },
+                        ],
                       },
                       { __typename: 'ProjectV2Field', id: 'PVTF_session', name: 'Agent session ID', dataType: 'TEXT' },
                       { __typename: 'ProjectV2Field', id: 'PVTF_branch', name: 'Branch', dataType: 'TEXT' },
@@ -232,6 +378,33 @@ function jsonResponse(payload: unknown): Response {
   });
 }
 
+function projectMetadataResponse(): Response {
+  return jsonResponse({
+    data: {
+      organization: {
+        projectV2: {
+          id: 'PVT_project',
+          fields: {
+            nodes: [
+              {
+                __typename: 'ProjectV2SingleSelectField',
+                id: 'PVTSSF_status',
+                name: 'Status',
+                options: [
+                  { id: 'status_todo', name: 'Todo' },
+                  { id: 'status_in_progress', name: 'In Progress' },
+                ],
+              },
+              { __typename: 'ProjectV2Field', id: 'PVTF_session', name: 'Agent session ID', dataType: 'TEXT' },
+              { __typename: 'ProjectV2Field', id: 'PVTF_branch', name: 'Branch', dataType: 'TEXT' },
+            ],
+          },
+        },
+      },
+    },
+  });
+}
+
 function projectItem(input: {
   id: string;
   contentId: string;
@@ -239,6 +412,9 @@ function projectItem(input: {
   title: string;
   status: string;
   assignees: string[];
+  agentSessionId?: string;
+  branchName?: string;
+  blockedByOpenTotal?: number;
 }): unknown {
   return {
     id: input.id,
@@ -249,13 +425,23 @@ function projectItem(input: {
       state: 'OPEN',
       number: input.number,
       url: `https://github.com/reirei-lab/rainrail/issues/${input.number}`,
-      repository: { nameWithOwner: 'reirei-lab/rainrail' },
+                repository: { nameWithOwner: 'reirei-lab/rainrail' },
       assignees: { nodes: input.assignees.map((login) => ({ login })) },
+      blockedBy: {
+        totalCount: input.blockedByOpenTotal ?? 0,
+        nodes: [],
+      },
     },
     fieldValues: {
       nodes: [
         { __typename: 'ProjectV2ItemFieldSingleSelectValue', field: { name: 'Status' }, name: input.status },
+        { __typename: 'ProjectV2ItemFieldTextValue', field: { name: 'Agent session ID' }, text: input.agentSessionId ?? '' },
+        { __typename: 'ProjectV2ItemFieldTextValue', field: { name: 'Branch' }, text: input.branchName ?? '' },
       ],
     },
+    status: { name: input.status },
+    agentSessionId: { text: input.agentSessionId ?? '' },
+    branch: { text: input.branchName ?? '' },
+    branchName: { text: input.branchName ?? '' },
   };
 }

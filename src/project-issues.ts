@@ -70,6 +70,7 @@ export function getUpcomingProjectIssueCandidate(
       }
       const child = issues.find((candidate) =>
         isChildOf(candidate, issue)
+        && (candidate.assigneeLogins.length === 0 || isProjectIssueAssignedTo(candidate, resolved.assigneeLogin))
         && !isClosedProjectIssue(candidate)
         && !hasUnfinishedBlocker(candidate)
         && normalizeToken(candidate.status) === normalizeToken(resolved.backlogStatus)

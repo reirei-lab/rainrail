@@ -7,7 +7,12 @@ import {
 } from './github-auth.js';
 import { recordGitHubRateLimit } from './github-rate-limit.js';
 import type { ProjectIssue, ProjectIssueReference } from './project-issues.js';
-import type { ProjectIssueClaim, ProjectIssueClaimInput, TaskQueueProvider } from './task-queue.js';
+import type {
+  ProjectIssueClaim,
+  ProjectIssueClaimInput,
+  ProjectIssueReleaseInput,
+  TaskQueueProvider,
+} from './task-queue.js';
 
 export interface GitHubProjectTaskQueueConfig {
   organization: string;
@@ -56,8 +61,15 @@ interface ProjectMetadata {
   projectId: string;
   statusFieldId: string;
   statusOptionId: string;
+  todoStatusOptionId: string;
   agentSessionIdFieldId: string;
   branchFieldId: string;
+}
+
+interface ProjectItemStatus {
+  status?: string;
+  agentSessionId?: string;
+  branchName?: string;
 }
 
 interface ProjectMetadataData {
@@ -98,6 +110,7 @@ export function createGitHubProjectTaskQueueProvider(
     selection,
     listProjectIssues: async () => fetchProjectIssues(options.config, fetchImpl, auth),
     claimProjectIssue: async (input) => claimProjectIssue(options.config, input, fetchImpl, auth),
+    releaseProjectIssue: async (input) => releaseProjectIssue(options.config, input, fetchImpl, auth),
   };
 }
 
@@ -114,9 +127,13 @@ async function fetchProjectIssues(
       organization: config.organization,
       projectNumber: config.projectNumber,
       after,
+      statusFieldName: config.statusFieldName,
     });
     const items = payload.organization?.projectV2?.items;
-    issues.push(...(items?.nodes ?? []).flatMap((item) => mapProjectIssueItem(item, config)));
+    if (items === undefined || !Array.isArray(items.nodes)) {
+      throw new Error('GitHub Project items response is missing project items');
+    }
+    issues.push(...items.nodes.flatMap((item) => mapProjectIssueItem(item, config)));
     after = items?.pageInfo?.hasNextPage === true && typeof items.pageInfo.endCursor === 'string'
       ? items.pageInfo.endCursor
       : undefined;
@@ -135,6 +152,8 @@ async function claimProjectIssue(
     throw new Error('GitHub Project issue claim requires a content id');
   }
 
+  const before = await loadProjectItemStatus(input.issue.id, fetchImpl, auth, config);
+  assertClaimable(before, config);
   const metadata = await loadProjectMetadata(config, fetchImpl, auth);
   await updateProjectField(fetchImpl, auth, metadata.projectId, input.issue.id, metadata.statusFieldId, {
     singleSelectOptionId: metadata.statusOptionId,
@@ -145,6 +164,8 @@ async function claimProjectIssue(
   await updateProjectField(fetchImpl, auth, metadata.projectId, input.issue.id, metadata.branchFieldId, {
     text: input.branchName,
   });
+  const after = await loadProjectItemStatus(input.issue.id, fetchImpl, auth, config);
+  assertClaimMatches(after, input, config);
 
   const comment = await runGraphql<{ addComment?: { commentEdge?: { node?: { url?: unknown } } } }>(
     fetchImpl,
@@ -164,6 +185,24 @@ async function claimProjectIssue(
       ? { commentUrl: comment.addComment.commentEdge.node.url }
       : {}),
   };
+}
+
+async function releaseProjectIssue(
+  config: GitHubProjectTaskQueueConfig,
+  input: ProjectIssueReleaseInput,
+  fetchImpl: typeof fetch,
+  auth: GitHubProjectAuthTokenProvider,
+): Promise<void> {
+  const metadata = await loadProjectMetadata(config, fetchImpl, auth);
+  await updateProjectField(fetchImpl, auth, metadata.projectId, input.issue.id, metadata.statusFieldId, {
+    singleSelectOptionId: metadata.todoStatusOptionId,
+  });
+  await updateProjectField(fetchImpl, auth, metadata.projectId, input.issue.id, metadata.agentSessionIdFieldId, {
+    text: '',
+  });
+  await updateProjectField(fetchImpl, auth, metadata.projectId, input.issue.id, metadata.branchFieldId, {
+    text: '',
+  });
 }
 
 async function loadProjectMetadata(
@@ -197,15 +236,66 @@ async function loadProjectMetadata(
   const agentSessionIdField = fields.find((field) => fieldName(field) === config.agentSessionIdFieldName);
   const branchField = fields.find((field) => fieldName(field) === config.branchFieldName);
   const statusOptionId = singleSelectOptionId(statusField, config.inProgressStatus);
+  const todoStatusOptionId = singleSelectOptionId(statusField, config.todoStatus);
   const statusFieldId = fieldId(statusField, config.statusFieldName);
 
   return {
     projectId,
     statusFieldId,
     statusOptionId,
+    todoStatusOptionId,
     agentSessionIdFieldId: fieldId(agentSessionIdField, config.agentSessionIdFieldName),
     branchFieldId: fieldId(branchField, config.branchFieldName),
   };
+}
+
+async function loadProjectItemStatus(
+  itemId: string,
+  fetchImpl: typeof fetch,
+  auth: GitHubProjectAuthTokenProvider,
+  config: GitHubProjectTaskQueueConfig,
+): Promise<ProjectItemStatus> {
+  const payload = await runGraphql<{ node?: unknown }>(fetchImpl, auth, projectItemStatusQuery, {
+    itemId,
+    statusFieldName: config.statusFieldName,
+    agentSessionIdFieldName: config.agentSessionIdFieldName,
+    branchFieldName: config.branchFieldName,
+  });
+  if (!isRecord(payload.node)) {
+    throw new Error('GitHub Project item status response is missing project item');
+  }
+  const status = fieldValueByName(payload.node, config.statusFieldName);
+  const agentSessionId = fieldValueByName(payload.node, config.agentSessionIdFieldName);
+  const branchName = fieldValueByName(payload.node, config.branchFieldName);
+  return {
+    ...(status === undefined ? {} : { status }),
+    ...(agentSessionId === undefined ? {} : { agentSessionId }),
+    ...(branchName === undefined ? {} : { branchName }),
+  };
+}
+
+function assertClaimable(status: ProjectItemStatus, config: GitHubProjectTaskQueueConfig): void {
+  if (
+    normalizeToken(status.status ?? '') !== normalizeToken(config.todoStatus)
+    || hasText(status.agentSessionId)
+    || hasText(status.branchName)
+  ) {
+    throw new Error('GitHub Project item is no longer claimable');
+  }
+}
+
+function assertClaimMatches(
+  status: ProjectItemStatus,
+  input: ProjectIssueClaimInput,
+  config: GitHubProjectTaskQueueConfig,
+): void {
+  if (
+    normalizeToken(status.status ?? '') !== normalizeToken(config.inProgressStatus)
+    || status.agentSessionId !== input.agentSessionId
+    || status.branchName !== input.branchName
+  ) {
+    throw new Error('GitHub Project item claim was overwritten by another assignment');
+  }
 }
 
 async function updateProjectField(
@@ -315,6 +405,10 @@ function assigneeLogins(content: Record<string, unknown>): string[] {
 }
 
 function fieldValue(item: Record<string, unknown>, name: string): string | undefined {
+  const directValue = fieldValueByName(item, name);
+  if (directValue !== undefined) {
+    return directValue;
+  }
   const fieldValues = item.fieldValues;
   if (!isRecord(fieldValues) || !Array.isArray(fieldValues.nodes)) {
     return undefined;
@@ -329,6 +423,20 @@ function fieldValue(item: Record<string, unknown>, name: string): string | undef
     if (typeof value.text === 'string') {
       return value.text;
     }
+  }
+  return undefined;
+}
+
+function fieldValueByName(item: Record<string, unknown>, name: string): string | undefined {
+  const direct = item[camelCaseFieldName(name)];
+  if (!isRecord(direct)) {
+    return undefined;
+  }
+  if (typeof direct.name === 'string') {
+    return direct.name;
+  }
+  if (typeof direct.text === 'string') {
+    return direct.text;
   }
   return undefined;
 }
@@ -352,13 +460,21 @@ function blockedBy(content: Record<string, unknown>): ProjectIssueReference[] {
   if (!isRecord(blockedByIssues) || !Array.isArray(blockedByIssues.nodes)) {
     return [];
   }
-  return blockedByIssues.nodes.flatMap((node) => {
+  const blockers = blockedByIssues.nodes.flatMap((node) => {
     if (!isRecord(node)) {
       return [];
     }
     const reference = issueReference(node);
     return reference === undefined ? [] : [reference];
   });
+  if (
+    typeof blockedByIssues.totalCount === 'number'
+    && blockedByIssues.totalCount > blockers.length
+    && !blockers.some((blocker) => blocker.state?.trim().toLowerCase() !== 'closed')
+  ) {
+    blockers.push({ state: 'OPEN' });
+  }
+  return blockers;
 }
 
 function issueReference(issue: Record<string, unknown>): ProjectIssueReference | undefined {
@@ -432,12 +548,24 @@ function normalizeToken(value: string): string {
   return value.trim().toLowerCase().replace(/[\s_-]+/gu, '');
 }
 
+function hasText(value: string | undefined): boolean {
+  return value !== undefined && value.trim().length > 0;
+}
+
+function camelCaseFieldName(name: string): string {
+  const words = name.trim().split(/[\s_-]+/u).filter((word) => word.length > 0);
+  return words.map((word, index) => {
+    const lower = word.toLowerCase();
+    return index === 0 ? lower : `${lower[0]?.toUpperCase() ?? ''}${lower.slice(1)}`;
+  }).join('');
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 const projectIssuesQuery = `
-  query RainrailProjectIssues($organization: String!, $projectNumber: Int!, $after: String) {
+  query RainrailProjectIssues($organization: String!, $projectNumber: Int!, $after: String, $statusFieldName: String!) {
     organization(login: $organization) {
       projectV2(number: $projectNumber) {
         items(first: 100, after: $after) {
@@ -455,7 +583,7 @@ const projectIssuesQuery = `
                 assignees(first: 20) { nodes { login } }
                 parent { number title state url repository { nameWithOwner } }
                 subIssuesSummary { total }
-                blockedBy(first: 20) { nodes { number title state url repository { nameWithOwner } } }
+                blockedBy(first: 100) { totalCount nodes { number title state url repository { nameWithOwner } } }
               }
               ... on DraftIssue {
                 id
@@ -468,6 +596,10 @@ const projectIssuesQuery = `
                 ... on ProjectV2ItemFieldSingleSelectValue { name field { ... on ProjectV2FieldCommon { name } } }
                 ... on ProjectV2ItemFieldTextValue { text field { ... on ProjectV2FieldCommon { name } } }
               }
+            }
+            status: fieldValueByName(name: $statusFieldName) {
+              ... on ProjectV2ItemFieldSingleSelectValue { name }
+              ... on ProjectV2ItemFieldTextValue { text }
             }
           }
           pageInfo { hasNextPage endCursor }
@@ -489,6 +621,33 @@ const projectMetadataQuery = `
             ... on ProjectV2SingleSelectField { id name options { id name } }
           }
           pageInfo { hasNextPage endCursor }
+        }
+      }
+    }
+  }
+`;
+
+const projectItemStatusQuery = `
+  query RainrailProjectItemStatus(
+    $itemId: ID!
+    $statusFieldName: String!
+    $agentSessionIdFieldName: String!
+    $branchFieldName: String!
+  ) {
+    node(id: $itemId) {
+      __typename
+      ... on ProjectV2Item {
+        status: fieldValueByName(name: $statusFieldName) {
+          ... on ProjectV2ItemFieldSingleSelectValue { name }
+          ... on ProjectV2ItemFieldTextValue { text }
+        }
+        agentSessionId: fieldValueByName(name: $agentSessionIdFieldName) {
+          ... on ProjectV2ItemFieldTextValue { text }
+          ... on ProjectV2ItemFieldSingleSelectValue { name }
+        }
+        branch: fieldValueByName(name: $branchFieldName) {
+          ... on ProjectV2ItemFieldTextValue { text }
+          ... on ProjectV2ItemFieldSingleSelectValue { name }
         }
       }
     }

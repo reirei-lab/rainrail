@@ -82,6 +82,34 @@ describe('project issue selection', () => {
     ])).toEqual(child);
   });
 
+  it('does not select children assigned to another agent', () => {
+    const unassignedChild = issue('child_2', {
+      status: 'Backlog',
+      assigneeLogins: [],
+      repository: 'reirei-lab/rainrail',
+      number: 23,
+      parent: { repository: 'reirei-lab/rainrail', number: 21 },
+    });
+
+    expect(getNextProjectIssueToStart([
+      issue('parent', {
+        status: 'Todo',
+        assigneeLogins: ['reirei-agent'],
+        repository: 'reirei-lab/rainrail',
+        number: 21,
+        subIssueCount: 2,
+      }),
+      issue('child_1', {
+        status: 'Backlog',
+        assigneeLogins: ['other-agent'],
+        repository: 'reirei-lab/rainrail',
+        number: 22,
+        parent: { repository: 'reirei-lab/rainrail', number: 21 },
+      }),
+      unassignedChild,
+    ])).toEqual(unassignedChild);
+  });
+
   it('normalizes status spellings and assignee login case', () => {
     const next = issue('issue_1', {
       status: ' To Do ',
