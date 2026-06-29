@@ -59,12 +59,17 @@ class InMemoryRainrailEventBus implements RainrailEventBus {
   }
 
   subscribe(subscriber: RainrailEventBusSubscriber, options: { replay?: boolean; lastEventId?: string } = {}): () => void {
-    subscriber.write(formatRainrailSseComment('connected'));
+    try {
+      subscriber.write(formatRainrailSseComment('connected'));
 
-    if (options.replay ?? true) {
-      for (const event of this.#replayEventsAfter(options.lastEventId)) {
-        subscriber.write(formatRainrailSseEvent(event));
+      if (options.replay ?? true) {
+        for (const event of this.#replayEventsAfter(options.lastEventId)) {
+          subscriber.write(formatRainrailSseEvent(event));
+        }
       }
+    } catch (error) {
+      closeSubscriber(subscriber);
+      throw error;
     }
 
     this.#clients.add(subscriber);
@@ -183,16 +188,20 @@ class InMemoryRainrailEventBus implements RainrailEventBus {
   #disconnect(subscriber: RainrailEventBusSubscriber): void {
     if (!this.#clients.delete(subscriber)) return;
 
-    try {
-      subscriber.close?.();
-    } catch {
-      // Cleanup should not break publish or cancel paths for other subscribers.
-    }
+    closeSubscriber(subscriber);
   }
 }
 
 function cloneEvent(event: RainrailEventEnvelope): RainrailEventEnvelope {
   return JSON.parse(JSON.stringify(event)) as RainrailEventEnvelope;
+}
+
+function closeSubscriber(subscriber: RainrailEventBusSubscriber): void {
+  try {
+    subscriber.close?.();
+  } catch {
+    // Cleanup should not break publish, subscribe, or cancel paths for other subscribers.
+  }
 }
 
 function unrefTimer(timer: ReturnType<typeof setInterval>): void {

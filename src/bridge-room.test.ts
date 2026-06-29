@@ -206,6 +206,51 @@ describe('Rainrail bridge room', () => {
     expect(storage.storedEvents().map((event) => event.id)).toEqual([first.id]);
   });
 
+  it('does not broadcast when publish aborts during persistence', async () => {
+    const storage = fakeControllableState();
+    const room = new RainrailBridgeRoom(storage.state, { replayLimit: 10 });
+    const health = room.fetch(new Request('https://rainrail.local/healthz'));
+    expect(storage.getCalls).toBe(1);
+    storage.resolveGet([]);
+    await health;
+
+    const eventsResponse = await room.fetch(new Request('https://rainrail.local/events'));
+    const reader = eventsResponse.body?.getReader();
+    expect(reader).toBeDefined();
+    expect(await readNext(reader!)).toBe(': connected\n\n');
+
+    storage.pauseNextPut();
+    const controller = new AbortController();
+    const publish = room.fetch(publishRequest(fixtureEvent('delivery-1', 'github.issue'), controller.signal));
+    await flushMicrotasks();
+
+    controller.abort();
+    storage.resolveNextPut();
+
+    expect((await publish).status).toBe(499);
+    await expect(readNextOrTimeout(reader!)).resolves.toBe('timeout');
+    await reader?.cancel();
+  });
+
+  it('ignores invalid stored replay entries during restore', async () => {
+    const valid = fixtureEvent('delivery-1', 'github.issue');
+    const room = new RainrailBridgeRoom(storedReplayState([valid, {}, { ...valid, id: 'bad\nid' }]), { replayLimit: 10 });
+
+    const health = await room.fetch(new Request('https://rainrail.local/healthz'));
+
+    expect(health.status).toBe(200);
+    await expect(health.json()).resolves.toMatchObject({ recent: 1 });
+
+    const eventsResponse = await room.fetch(new Request('https://rainrail.local/events'));
+    const reader = eventsResponse.body?.getReader();
+    expect(reader).toBeDefined();
+    const chunk = await readUntil(reader!, 'github.issue');
+    await reader?.cancel();
+
+    expect(chunk).toContain(valid.id);
+    expect(chunk).not.toContain('bad\\nid');
+  });
+
   it('passes Last-Event-ID to the SSE replay policy', async () => {
     const room = new RainrailBridgeRoom(fakeState(), { replayLimit: 10 });
     const first = fixtureEvent('delivery-1', 'github.issue');
@@ -335,6 +380,15 @@ function failingPutState() {
       put: async () => {
         throw new Error('storage unavailable');
       },
+    },
+  };
+}
+
+function storedReplayState(events: unknown[]) {
+  return {
+    storage: {
+      get: async () => events,
+      put: async () => undefined,
     },
   };
 }

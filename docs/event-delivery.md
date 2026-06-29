@@ -19,7 +19,9 @@ Rainrail core のイベント配信は Source plugin が作った `RainrailEvent
 
 subscriber は Node `ServerResponse` のような `{ write, close }` でも、
 Worker/Fetch API の `ReadableStream` でも扱える。これにより Node server と
-Cloudflare Worker entrypoint は同じ core contract を共有する。
+Cloudflare Worker entrypoint は同じ core contract を共有する。接続時 comment や
+初期 replay の write が失敗した場合も `close` cleanup を呼び、購読開始に失敗した
+connection のリソースを残さない。
 
 ## SSE
 
@@ -59,7 +61,9 @@ event だけを再送する。指定 id が buffer に無い場合は、consumer
 - `GET /events`: storage から replay buffer を復元し、SSE stream を返す。
 
 storage の key は `rainrail:recent-events`。保存するのは正規化済み envelope だけで、
-secret、token、credential、生 webhook payload は core 側では保持しない。
+secret、token、credential、生 webhook payload は core 側では保持しない。storage から
+復元する replay 要素も `RainrailEventEnvelope` と SSE field として検証し、壊れた要素や
+古い schema の要素は replay buffer に入れない。
 
 `POST /publish` は request body の読み込み開始直後に publish queue の枠を確保する。
 これにより、大きい body や streaming body の parse 完了順に左右されず、`fetch`
@@ -72,6 +76,6 @@ secret、token、credential、生 webhook payload は core 側では保持しな
 HTTP 結果と live 配信済み副作用が食い違わないようにする。500 応答は generic な
 文言にし、storage backend の接続文字列や内部 endpoint などを呼び出し元へ返さない。
 
-queue 待機中に `request.signal` が abort 済みになった publish は、storage 永続化と
-live broadcast の前に 499 として破棄する。送信元が成功応答を受け取れない状態で
-副作用だけが進み、再試行時に agent workflow が重複起動することを避けるため。
+queue 待機中または storage 永続化中に `request.signal` が abort 済みになった publish
+は、live broadcast の前に 499 として破棄する。送信元が成功応答を受け取れない状態で
+配信だけが進み、再試行時に agent workflow が重複起動することを避けるため。

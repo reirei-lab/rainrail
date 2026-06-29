@@ -92,6 +92,10 @@ export class RainrailBridgeRoom {
 
         const { event } = eventResult;
         await this.#state.storage.put(RECENT_EVENTS_KEY, this.#nextRecentEvents(event));
+        if (request.signal.aborted) {
+          return abortedPublishResponse();
+        }
+
         this.#bus.publish(event);
       } catch {
         return new Response('publish failed\n', { status: 500 });
@@ -136,7 +140,7 @@ export class RainrailBridgeRoom {
     this.#loading ??= (async () => {
       const stored = await this.#state.storage.get(RECENT_EVENTS_KEY);
       if (Array.isArray(stored)) {
-        this.#bus.loadReplay(stored as RainrailEventEnvelope[]);
+        this.#bus.loadReplay(stored.flatMap(validateStoredReplayEvent));
       }
 
       this.#loaded = true;
@@ -188,6 +192,14 @@ function validatePublishEnvelope(value: unknown): RainrailEventEnvelope {
   const event = value as unknown as RainrailEventEnvelope;
   formatRainrailSseEvent(event);
   return event;
+}
+
+function validateStoredReplayEvent(value: unknown): RainrailEventEnvelope[] {
+  try {
+    return [validatePublishEnvelope(value)];
+  } catch {
+    return [];
+  }
 }
 
 function expectString(record: Record<string, unknown>, key: string): string {

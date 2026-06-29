@@ -194,6 +194,28 @@ describe('Rainrail event bus', () => {
     expect(bus.clientCount).toBe(0);
     expect(closed).toBe(1);
   });
+
+  it('runs subscriber cleanup when initial replay write fails', () => {
+    const bus = createRainrailEventBus({ replayLimit: 10 });
+    let closed = 0;
+    bus.publish(fixtureEvent('github-webhook', 'delivery-1', 'github.issue', 'issue', '17'));
+
+    expect(() =>
+      bus.subscribe({
+        write: (chunk) => {
+          if (chunk.includes('event: github.issue\n')) {
+            throw new Error('replay writer closed');
+          }
+        },
+        close: () => {
+          closed += 1;
+        },
+      }),
+    ).toThrow('replay writer closed');
+
+    expect(bus.clientCount).toBe(0);
+    expect(closed).toBe(1);
+  });
 });
 
 function fixtureEvent(
