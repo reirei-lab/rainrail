@@ -9,6 +9,7 @@ import {
   type PluginRuntimeContext,
   type RainrailEventEnvelope,
   type RuntimeCapabilities,
+  type RuntimeDispatcherContext,
   type WorkflowPlugin,
 } from './index.js';
 
@@ -2650,5 +2651,291 @@ describe('plugin runtime contract', () => {
       },
     ]);
     expect(listeners.size).toBe(0);
+  });
+
+  it('does not expose raw dispatchAgent through property descriptors', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: {
+        id: 'delivery-dispatch-agent-descriptor',
+        receivedAt: '2026-06-29T14:00:00.000Z',
+      },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'github://deliveries/delivery-dispatch-agent-descriptor',
+      },
+    });
+    const dispatchAgent = vi.fn(async () => ({ sessionKey: 'agent:main:descriptor-bypass' }));
+    const loader = createPluginLoader({
+      runtime: mockRuntimeContext({
+        runId: 'run-13',
+        now: () => new Date('2026-06-29T14:01:00.000Z'),
+        capabilities: {
+          provider: 'codex',
+          dispatchAgent,
+        },
+      }),
+    });
+
+    loader.on(
+      'github.issue',
+      async (handledEvent, context) => {
+        const rawDispatchAgent = Object.getOwnPropertyDescriptor(context.capabilities, 'dispatchAgent')?.value;
+        return rawDispatchAgent?.({
+          event: handledEvent,
+          workflow: 'descriptor-dispatch-agent-handler',
+          runId: context.runId,
+        });
+      },
+      { name: 'descriptor-dispatch-agent-handler' },
+    );
+
+    const [result] = await loader.dispatch(event);
+
+    expect(result).toMatchObject({
+      pluginName: 'descriptor-dispatch-agent-handler',
+      eventId: 'github-webhook:delivery-dispatch-agent-descriptor:github.issue',
+      status: 'rejected',
+    });
+    expect(dispatchAgent).not.toHaveBeenCalled();
+  });
+
+  it('does not expose raw dispatchAgent through capability prototypes', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: {
+        id: 'delivery-dispatch-agent-prototype-bypass',
+        receivedAt: '2026-06-29T14:00:00.000Z',
+      },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'github://deliveries/delivery-dispatch-agent-prototype-bypass',
+      },
+    });
+    const dispatchAgent = vi.fn(async (_request: Parameters<NonNullable<RuntimeCapabilities['dispatchAgent']>>[0]) => ({
+      sessionKey: 'agent:main:prototype-bypass',
+    }));
+    class RuntimeCapabilityBag {
+      provider = 'codex';
+
+      dispatchAgent(request: Parameters<NonNullable<RuntimeCapabilities['dispatchAgent']>>[0]) {
+        return dispatchAgent(request);
+      }
+    }
+    const loader = createPluginLoader({
+      runtime: mockRuntimeContext({
+        runId: 'run-13',
+        now: () => new Date('2026-06-29T14:01:00.000Z'),
+        capabilities: new RuntimeCapabilityBag() as unknown as RuntimeCapabilities,
+      }),
+    });
+
+    loader.on(
+      'github.issue',
+      async (handledEvent, context) => {
+        const rawDispatchAgent = (
+          Object.getPrototypeOf(context.capabilities) as {
+            dispatchAgent?: RuntimeCapabilities['dispatchAgent'];
+          }
+        ).dispatchAgent;
+        return rawDispatchAgent?.({
+          event: handledEvent,
+          workflow: 'prototype-dispatch-agent-handler',
+          runId: context.runId,
+        });
+      },
+      { name: 'prototype-dispatch-agent-handler' },
+    );
+
+    const [result] = await loader.dispatch(event);
+
+    expect(result).toMatchObject({
+      pluginName: 'prototype-dispatch-agent-handler',
+      eventId: 'github-webhook:delivery-dispatch-agent-prototype-bypass:github.issue',
+      status: 'rejected',
+    });
+    expect(dispatchAgent).not.toHaveBeenCalled();
+  });
+
+  it('uses the capability snapshot captured before accepts can mutate workflow metadata', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.pull_request',
+      delivery: {
+        id: 'delivery-accepts-mutated-capability',
+        receivedAt: '2026-06-29T14:00:00.000Z',
+      },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'pull_request', id: '44' },
+      payload: { action: 'closed' },
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'github://deliveries/delivery-accepts-mutated-capability',
+      },
+    });
+    const mergePullRequest = vi.fn(async () => ({ merged: true }));
+    const workflow = defineWorkflowPlugin({
+      name: 'accepts-mutating-capability-handler',
+      capabilities: [],
+      accepts: () => {
+        workflow.capabilities?.push('merge');
+        return true;
+      },
+      async handle(_event, context) {
+        return context.actions.mergePullRequest({ pullRequestId: '44' });
+      },
+    });
+    const dispatcher = createRuntimeDispatcher({
+      workflows: [workflow],
+      runtime: {
+        runId: 'run-13',
+        now: () => new Date('2026-06-29T14:01:00.000Z'),
+        actions: { mergePullRequest },
+      },
+    });
+
+    const [result] = await dispatcher.dispatch(event);
+
+    expect(result).toMatchObject({
+      pluginName: 'accepts-mutating-capability-handler',
+      eventId: 'github-webhook:delivery-accepts-mutated-capability:github.pull_request',
+      status: 'rejected',
+    });
+    expect(mergePullRequest).not.toHaveBeenCalled();
+  });
+
+  it('preserves runtime context prototype fields in the plugin context', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: {
+        id: 'delivery-runtime-prototype',
+        receivedAt: '2026-06-29T14:00:00.000Z',
+      },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'github://deliveries/delivery-runtime-prototype',
+      },
+    });
+    class RuntimeContext {
+      runId = 'run-13';
+
+      now() {
+        return new Date('2026-06-29T14:01:00.000Z');
+      }
+    }
+    const dispatcher = createRuntimeDispatcher({
+      workflows: [
+        defineWorkflowPlugin({
+          name: 'runtime-prototype-handler',
+          accepts: () => true,
+          handle: async (_event, context) => context.now().toISOString(),
+        }),
+      ],
+      runtime: new RuntimeContext() as RuntimeDispatcherContext,
+    });
+
+    await expect(dispatcher.dispatch(event)).resolves.toEqual([
+      {
+        pluginName: 'runtime-prototype-handler',
+        eventId: 'github-webhook:delivery-runtime-prototype:github.issue',
+        status: 'fulfilled',
+        value: '2026-06-29T14:01:00.000Z',
+      },
+    ]);
+  });
+
+  it('returns a rejected promise instead of throwing synchronously for late task provider calls', async () => {
+    vi.useFakeTimers();
+    try {
+      const event = createEventEnvelope({
+        source: { type: 'github', name: 'github-webhook' },
+        name: 'github.issue',
+        delivery: {
+          id: 'delivery-late-provider-rejection',
+          receivedAt: '2026-06-29T14:00:00.000Z',
+        },
+        occurredAt: '2026-06-29T14:00:00.000Z',
+        subject: { type: 'issue', id: '13' },
+        payload: { action: 'opened' },
+        rawPayload: {
+          kind: 'external-reference',
+          reference: 'github://deliveries/delivery-late-provider-rejection',
+        },
+      });
+      const createComment = vi.fn(async () => ({ id: 'comment:late' }));
+      let syncThrow: unknown;
+      let lateRejection: unknown;
+      const loader = createPluginLoader({
+        runtime: mockRuntimeContext({
+          runId: 'run-13',
+          now: () => new Date('2026-06-29T14:01:00.000Z'),
+          providers: {
+            tasks: {
+              name: 'mock-tasks',
+              kind: 'task-provider',
+              getIssue: async () => ({
+                id: 'issue:13',
+                provider: 'github',
+                repository: 'reirei-lab/rainrail',
+                number: 13,
+                title: 'Mock issue',
+              }),
+              createComment,
+            },
+          },
+        }),
+      });
+
+      loader.on(
+        'github.issue',
+        async (_event, context) => {
+          setTimeout(() => {
+            try {
+              const result = context.providers.tasks.createComment({
+                target: { provider: 'github', repository: 'reirei-lab/rainrail', number: 13 },
+                body: 'late comment',
+              });
+              void Promise.resolve(result).catch((reason: unknown) => {
+                lateRejection = reason;
+              });
+            } catch (reason) {
+              syncThrow = reason;
+            }
+          }, 100);
+
+          return { returned: true };
+        },
+        { name: 'late-provider-rejection-handler' },
+      );
+
+      await expect(loader.dispatch(event)).resolves.toEqual([
+        {
+          pluginName: 'late-provider-rejection-handler',
+          eventId: 'github-webhook:delivery-late-provider-rejection:github.issue',
+          status: 'fulfilled',
+          value: { returned: true },
+        },
+      ]);
+
+      await vi.advanceTimersByTimeAsync(100);
+      await Promise.resolve();
+      expect(syncThrow).toBeUndefined();
+      expect(lateRejection).toBeInstanceOf(Error);
+      expect(createComment).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

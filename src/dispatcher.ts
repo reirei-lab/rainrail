@@ -43,20 +43,26 @@ export interface RuntimeDispatcher {
   dispatch(event: RainrailEventEnvelope): Promise<WorkflowPluginResult[]>;
 }
 
+type DispatchAgentCapability = NonNullable<NonNullable<PluginRuntimeContext['capabilities']>['dispatchAgent']>;
+
 interface WorkflowExecutionPolicy {
   name: string;
   capabilities: ReadonlySet<RuntimeCapabilityName>;
 }
 
+interface WorkflowExecutionRecord {
+  workflow: WorkflowPlugin;
+  policy: WorkflowExecutionPolicy;
+  policyError?: unknown;
+}
+
 export function createRuntimeDispatcher(options: RuntimeDispatcherOptions): RuntimeDispatcher {
+  const workflows = options.workflows.map(createWorkflowExecutionRecord);
+
   return {
     async dispatch(event): Promise<WorkflowPluginResult[]> {
       const results: Array<WorkflowPluginResult | undefined> = await Promise.all(
-        options.workflows.map(async (workflow) => {
-          let policy: WorkflowExecutionPolicy = {
-            name: readWorkflowName(workflow),
-            capabilities: new Set(),
-          };
+        workflows.map(async ({ workflow, policy, policyError }) => {
           const audit = (action: WorkflowAuditEntry['action'], result: WorkflowAuditResult, reason?: unknown) =>
             recordAudit(options, policy, event, action, result, reason);
 
@@ -65,7 +71,9 @@ export function createRuntimeDispatcher(options: RuntimeDispatcherOptions): Runt
               return undefined;
             }
 
-            policy = snapshotWorkflowPolicy(workflow);
+            if (policyError !== undefined) {
+              throw policyError;
+            }
 
             const abort = createWorkflowAbortController(options.runtime.signal);
             let workflowStarted = false;
@@ -109,6 +117,26 @@ export function createRuntimeDispatcher(options: RuntimeDispatcherOptions): Runt
       return results.filter((result): result is WorkflowPluginResult => result !== undefined);
     },
   };
+}
+
+function createWorkflowExecutionRecord(workflow: WorkflowPlugin): WorkflowExecutionRecord {
+  const fallbackPolicy: WorkflowExecutionPolicy = {
+    name: readWorkflowName(workflow),
+    capabilities: new Set(),
+  };
+
+  try {
+    return {
+      workflow,
+      policy: snapshotWorkflowPolicy(workflow),
+    };
+  } catch (policyError) {
+    return {
+      workflow,
+      policy: fallbackPolicy,
+      policyError,
+    };
+  }
 }
 
 function snapshotWorkflowPolicy(workflow: WorkflowPlugin): WorkflowExecutionPolicy {
@@ -160,17 +188,32 @@ function createWorkflowContext(
   event: RainrailEventEnvelope,
   signal: AbortSignal,
 ): PluginRuntimeContext {
-  const { capabilities: _capabilities, ...runtime } = options.runtime;
+  const context = Object.create(options.runtime) as PluginRuntimeContext;
   const capabilities = createGatedRuntimeCapabilities(options, policy, event, signal);
 
-  return {
-    ...runtime,
-    ...(capabilities !== undefined ? { capabilities } : {}),
-    providers: createGuardedProviders(options, policy, event, signal),
-    runtime: createGatedRuntimeProvider(options, policy, event, signal),
-    signal,
-    actions: createGatedRuntimeActions(options, policy, event, signal),
-  };
+  if (capabilities !== undefined) {
+    defineWorkflowContextProperty(context, 'capabilities', capabilities);
+  }
+
+  defineWorkflowContextProperty(context, 'providers', createGuardedProviders(options, policy, event, signal));
+  defineWorkflowContextProperty(context, 'runtime', createGatedRuntimeProvider(options, policy, event, signal));
+  defineWorkflowContextProperty(context, 'signal', signal);
+  defineWorkflowContextProperty(context, 'actions', createGatedRuntimeActions(options, policy, event, signal));
+
+  return context;
+}
+
+function defineWorkflowContextProperty<TKey extends keyof PluginRuntimeContext>(
+  context: PluginRuntimeContext,
+  key: TKey,
+  value: PluginRuntimeContext[TKey],
+): void {
+  Object.defineProperty(context, key, {
+    configurable: true,
+    enumerable: true,
+    value,
+    writable: true,
+  });
 }
 
 const unavailableProviders: TaskProviderRegistry = {
@@ -256,16 +299,60 @@ function createGatedRuntimeCapabilities(
     return capabilities;
   }
 
-  return new Proxy(capabilities, {
-    get(target, property, receiver) {
-      if (property === 'dispatchAgent') {
-        return (request: Parameters<NonNullable<typeof capabilities.dispatchAgent>>[0], context?: { signal: AbortSignal }) =>
-          callDispatchAgent(options, policy, event, signal, request, context?.signal);
-      }
+  const dispatchAgent: DispatchAgentCapability = (request, context) =>
+    callDispatchAgent(options, policy, event, signal, request, context?.signal);
 
-      return Reflect.get(target, property, receiver);
-    },
-  });
+  return createDispatchAgentCapabilityProxy(capabilities, dispatchAgent);
+}
+
+function createDispatchAgentCapabilityProxy(
+  capabilities: NonNullable<PluginRuntimeContext['capabilities']>,
+  dispatchAgent: DispatchAgentCapability,
+): PluginRuntimeContext['capabilities'] {
+  const prototypeCache = new WeakMap<object, object>();
+  const createProxy = (target: object): object =>
+    new Proxy(target, {
+      get(target, property, receiver) {
+        if (property === 'dispatchAgent') {
+          return dispatchAgent;
+        }
+
+        return Reflect.get(target, property, receiver);
+      },
+      getOwnPropertyDescriptor(target, property) {
+        const descriptor = Reflect.getOwnPropertyDescriptor(target, property);
+        if (property !== 'dispatchAgent' || descriptor === undefined) {
+          return descriptor;
+        }
+
+        if ('value' in descriptor) {
+          return { ...descriptor, value: dispatchAgent };
+        }
+
+        return {
+          configurable: descriptor.configurable ?? false,
+          enumerable: descriptor.enumerable ?? false,
+          get: () => dispatchAgent,
+        };
+      },
+      getPrototypeOf(target) {
+        const prototype = Reflect.getPrototypeOf(target);
+        if (prototype === null || !Object.isExtensible(target)) {
+          return prototype;
+        }
+
+        const cached = prototypeCache.get(prototype);
+        if (cached !== undefined) {
+          return cached;
+        }
+
+        const wrappedPrototype = createProxy(prototype);
+        prototypeCache.set(prototype, wrappedPrototype);
+        return wrappedPrototype;
+      },
+    });
+
+  return createProxy(capabilities) as PluginRuntimeContext['capabilities'];
 }
 
 async function callDispatchAgent(
@@ -380,36 +467,56 @@ function createGuardedProviders(
   const guardedTasks: TaskProviderRegistry['tasks'] = {
     name: tasks.name,
     kind: tasks.kind,
-    getIssue: (ref, context) => {
-      guardProviderCall(options, policy, event, signal, 'tasks.getIssue');
+    getIssue: async (ref, context) => {
+      const denied = getDeniedProviderCallReason(options, policy, event, signal, 'tasks.getIssue');
+      if (denied !== undefined) {
+        throw denied;
+      }
+
       return tasks.getIssue.call(tasks, ref, { signal: combineAbortSignals(signal, context?.signal) });
     },
-    createComment: (input, context) => {
-      guardProviderCall(options, policy, event, signal, 'tasks.createComment');
+    createComment: async (input, context) => {
+      const denied = getDeniedProviderCallReason(options, policy, event, signal, 'tasks.createComment');
+      if (denied !== undefined) {
+        throw denied;
+      }
+
       return tasks.createComment.call(tasks, input, { signal: combineAbortSignals(signal, context?.signal) });
     },
   };
 
   if (tasks.addToProject !== undefined) {
     const addToProject = tasks.addToProject;
-    guardedTasks.addToProject = (input, context) => {
-      guardProviderCall(options, policy, event, signal, 'tasks.addToProject');
+    guardedTasks.addToProject = async (input, context) => {
+      const denied = getDeniedProviderCallReason(options, policy, event, signal, 'tasks.addToProject');
+      if (denied !== undefined) {
+        throw denied;
+      }
+
       return addToProject.call(tasks, input, { signal: combineAbortSignals(signal, context?.signal) });
     };
   }
 
   if (tasks.setStatus !== undefined) {
     const setStatus = tasks.setStatus;
-    guardedTasks.setStatus = (input, context) => {
-      guardProviderCall(options, policy, event, signal, 'tasks.setStatus');
+    guardedTasks.setStatus = async (input, context) => {
+      const denied = getDeniedProviderCallReason(options, policy, event, signal, 'tasks.setStatus');
+      if (denied !== undefined) {
+        throw denied;
+      }
+
       return setStatus.call(tasks, input, { signal: combineAbortSignals(signal, context?.signal) });
     };
   }
 
   if (tasks.createProposal !== undefined) {
     const createProposal = tasks.createProposal;
-    guardedTasks.createProposal = (input, context) => {
-      guardProviderCall(options, policy, event, signal, 'tasks.createProposal');
+    guardedTasks.createProposal = async (input, context) => {
+      const denied = getDeniedProviderCallReason(options, policy, event, signal, 'tasks.createProposal');
+      if (denied !== undefined) {
+        throw denied;
+      }
+
       return createProposal.call(tasks, input, { signal: combineAbortSignals(signal, context?.signal) });
     };
   }
@@ -420,20 +527,20 @@ function createGuardedProviders(
   };
 }
 
-function guardProviderCall(
+function getDeniedProviderCallReason(
   options: RuntimeDispatcherOptions,
   policy: WorkflowExecutionPolicy,
   event: RainrailEventEnvelope,
   signal: AbortSignal,
   action: WorkflowAuditEntry['action'],
-): void {
+): Error | undefined {
   if (!signal.aborted) {
-    return;
+    return undefined;
   }
 
   const reason = new PluginActionAbortedError(action, policy.name);
   recordAudit(options, policy, event, action, 'denied', reason);
-  throw reason;
+  return reason;
 }
 
 function recordAudit(
