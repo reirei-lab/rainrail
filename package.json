@@ -5,9 +5,12 @@
   "description": "Agent-ready development event routing and workflow orchestration suite.",
   "type": "module",
   "scripts": {
-    "test": "vitest run scripts"
+    "test": "vitest run scripts src",
+    "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
+    "@types/node": "^26.0.1",
+    "typescript": "^6.0.3",
     "vitest": "^3.2.3"
   }
 }
