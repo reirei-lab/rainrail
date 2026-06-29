@@ -317,6 +317,7 @@ describe('plugin runtime contract', () => {
     const workflowName = 'issue-agent-workflow';
     const workflow = defineWorkflowPlugin({
       name: workflowName,
+      capabilities: ['runtime:start'],
       accepts: (event) => event.name === 'github.issue' && event.subject.type === 'issue',
       async handle(event, context) {
         const issue = await context.providers.tasks.getIssue({
@@ -389,12 +390,15 @@ describe('plugin runtime contract', () => {
       repository: 'reirei-lab/rainrail',
       number: 14,
     });
-    expect(startRun).toHaveBeenCalledWith({
-      workflow: 'issue-agent-workflow',
-      event,
-      task: expect.objectContaining({ id: 'issue:14' }),
-      requestedBy: 'issue-agent-workflow',
-    });
+    expect(startRun).toHaveBeenCalledWith(
+      {
+        workflow: 'issue-agent-workflow',
+        event,
+        task: expect.objectContaining({ id: 'issue:14' }),
+        requestedBy: 'issue-agent-workflow',
+      },
+      { signal: expect.any(AbortSignal) },
+    );
     expect(createComment).toHaveBeenCalledWith({
       target: expect.objectContaining({ id: 'issue:14' }),
       body: 'Queued run:14',
@@ -1304,5 +1308,203 @@ describe('plugin runtime contract', () => {
         }),
       ]),
     );
+  });
+
+  it('gates runtime provider startRun behind runtime:start capability', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: {
+        id: 'delivery-runtime-gate',
+        receivedAt: '2026-06-29T14:00:00.000Z',
+      },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'github://deliveries/delivery-runtime-gate',
+      },
+    });
+    const startRun = vi.fn(async () => ({
+      id: 'run:unsafe',
+      provider: 'codex',
+      status: 'queued' as const,
+    }));
+    const auditEntries: unknown[] = [];
+    const loader = createPluginLoader({
+      runtime: mockRuntimeContext({
+        runId: 'run-13',
+        now: () => new Date('2026-06-29T14:01:00.000Z'),
+        runtime: {
+          name: 'mock-runtime',
+          kind: 'runtime-provider',
+          startRun,
+        },
+      }),
+      audit: {
+        record: (entry) => {
+          auditEntries.push(entry);
+        },
+      },
+    });
+
+    loader.on(
+      'github.issue',
+      async (handledEvent, context) =>
+        context.runtime.startRun({
+          workflow: 'unsafe-runtime-starter',
+          event: handledEvent,
+          requestedBy: 'unsafe-runtime-starter',
+        }),
+      { name: 'unsafe-runtime-starter' },
+    );
+
+    const [result] = await loader.dispatch(event);
+
+    expect(result).toMatchObject({
+      pluginName: 'unsafe-runtime-starter',
+      eventId: 'github-webhook:delivery-runtime-gate:github.issue',
+      status: 'rejected',
+    });
+    expect(startRun).not.toHaveBeenCalled();
+    expect(auditEntries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          pluginId: 'unsafe-runtime-starter',
+          eventId: 'github-webhook:delivery-runtime-gate:github.issue',
+          action: 'startRuntime',
+          result: 'denied',
+        }),
+      ]),
+    );
+  });
+
+  it('returns a rejected plugin result when the parent runtime signal aborts', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: {
+        id: 'delivery-parent-abort',
+        receivedAt: '2026-06-29T14:00:00.000Z',
+      },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'github://deliveries/delivery-parent-abort',
+      },
+    });
+    const parentController = new AbortController();
+    const auditEntries: unknown[] = [];
+    const loader = createPluginLoader({
+      runtime: mockRuntimeContext({
+        runId: 'run-13',
+        now: () => new Date('2026-06-29T14:01:00.000Z'),
+        signal: parentController.signal,
+      }),
+      audit: {
+        record: (entry) => {
+          auditEntries.push(entry);
+        },
+      },
+    });
+
+    loader.on(
+      'github.issue',
+      async () =>
+        new Promise(() => {
+          // Simulates a handler waiting on external work until the daemon shuts down.
+        }),
+      { name: 'parent-abort-handler' },
+    );
+
+    const dispatchPromise = loader.dispatch(event);
+    parentController.abort(new Error('daemon shutdown'));
+
+    await expect(dispatchPromise).resolves.toMatchObject([
+      {
+        pluginName: 'parent-abort-handler',
+        eventId: 'github-webhook:delivery-parent-abort:github.issue',
+        status: 'rejected',
+      },
+    ]);
+    expect(auditEntries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          pluginId: 'parent-abort-handler',
+          eventId: 'github-webhook:delivery-parent-abort:github.issue',
+          action: 'plugin.handle',
+          result: 'rejected',
+        }),
+      ]),
+    );
+  });
+
+  it('keeps timeout classification when abort cleanup settles the handler promise', async () => {
+    vi.useFakeTimers();
+    try {
+      const event = createEventEnvelope({
+        source: { type: 'github', name: 'github-webhook' },
+        name: 'github.issue',
+        delivery: {
+          id: 'delivery-timeout-first',
+          receivedAt: '2026-06-29T14:00:00.000Z',
+        },
+        occurredAt: '2026-06-29T14:00:00.000Z',
+        subject: { type: 'issue', id: '13' },
+        payload: { action: 'opened' },
+        rawPayload: {
+          kind: 'external-reference',
+          reference: 'github://deliveries/delivery-timeout-first',
+        },
+      });
+      const auditEntries: unknown[] = [];
+      const loader = createPluginLoader({
+        runtime: mockRuntimeContext({
+          runId: 'run-13',
+          now: () => new Date('2026-06-29T14:01:00.000Z'),
+        }),
+        defaultTimeoutMs: 25,
+        audit: {
+          record: (entry) => {
+            auditEntries.push(entry);
+          },
+        },
+      });
+
+      loader.on(
+        'github.issue',
+        async (_event, context) =>
+          new Promise((resolve) => {
+            context.signal.addEventListener('abort', () => resolve({ cleanedUp: true }), { once: true });
+          }),
+        { name: 'timeout-cleanup-handler' },
+      );
+
+      const dispatchPromise = loader.dispatch(event);
+      await vi.advanceTimersByTimeAsync(25);
+
+      await expect(dispatchPromise).resolves.toMatchObject([
+        {
+          pluginName: 'timeout-cleanup-handler',
+          eventId: 'github-webhook:delivery-timeout-first:github.issue',
+          status: 'rejected',
+        },
+      ]);
+      expect(auditEntries).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            pluginId: 'timeout-cleanup-handler',
+            eventId: 'github-webhook:delivery-timeout-first:github.issue',
+            action: 'plugin.handle',
+            result: 'timeout',
+          }),
+        ]),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

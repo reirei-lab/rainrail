@@ -95,6 +95,12 @@ handler が fulfilled/rejected で settle した後も同じ signal を abort �
 さらに runtime 側の action implementation には第2引数で同じ `AbortSignal` を渡す。
 すでに開始済みの merge、runtime start、secret access も、この signal を見て中断や
 冪等化を行えるようにする。
+`context.runtime.startRun` も handler へ直接 provider を渡さず gated wrapper にする。
+`runtime:start` capability がない handler は runtime provider 経由でも起動できない。
+親 runtime signal が abort された場合は handler promise や timeout を待たず、
+plugin の rejected result として dispatch を完了する。timeout 発火時は timeout result
+を先に確定してから signal を abort し、abort cleanup が handler を resolve/reject しても
+audit result は `timeout` のままにする。
 
 `audit.record(entry)` を渡すと、plugin id、event id、run id、action、
 result、発生時刻が記録される。action result は `fulfilled`、`rejected`、

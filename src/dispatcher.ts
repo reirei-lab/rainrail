@@ -127,7 +127,7 @@ function createWorkflowContext(
   return {
     ...options.runtime,
     providers: options.runtime.providers ?? unavailableProviders,
-    runtime: options.runtime.runtime ?? unavailableRuntimeProvider,
+    runtime: createGatedRuntimeProvider(options, workflow, event, signal),
     signal,
     actions: createGatedRuntimeActions(options, workflow, event, signal),
   };
@@ -153,6 +153,51 @@ const unavailableRuntimeProvider: RuntimeProvider = {
     throw new Error('Runtime provider is not configured');
   },
 };
+
+function createGatedRuntimeProvider(
+  options: RuntimeDispatcherOptions,
+  workflow: WorkflowPlugin,
+  event: RainrailEventEnvelope,
+  signal: AbortSignal,
+): RuntimeProvider {
+  const runtime = options.runtime.runtime ?? unavailableRuntimeProvider;
+
+  return {
+    name: runtime.name,
+    kind: runtime.kind,
+    startRun: (request) => callRuntimeStartRun(options, workflow, event, signal, runtime, request),
+  };
+}
+
+async function callRuntimeStartRun(
+  options: RuntimeDispatcherOptions,
+  workflow: WorkflowPlugin,
+  event: RainrailEventEnvelope,
+  signal: AbortSignal,
+  runtime: RuntimeProvider,
+  request: Parameters<RuntimeProvider['startRun']>[0],
+): Promise<Awaited<ReturnType<RuntimeProvider['startRun']>>> {
+  if (signal.aborted) {
+    const reason = new PluginActionAbortedError('startRuntime', workflow.name);
+    await recordAudit(options, workflow, event, 'startRuntime', 'denied', reason);
+    throw reason;
+  }
+
+  if (!workflow.capabilities?.includes('runtime:start')) {
+    const reason = new CapabilityDeniedError('startRuntime', 'runtime:start', workflow.name);
+    await recordAudit(options, workflow, event, 'startRuntime', 'denied', reason);
+    throw reason;
+  }
+
+  try {
+    const value = await runtime.startRun(request, { signal });
+    await recordAudit(options, workflow, event, 'startRuntime', 'fulfilled');
+    return value;
+  } catch (reason) {
+    await recordAudit(options, workflow, event, 'startRuntime', 'rejected', reason);
+    throw reason;
+  }
+}
 
 function createGatedRuntimeActions(
   options: RuntimeDispatcherOptions,
@@ -288,18 +333,32 @@ async function runWorkflow<T>(
   abort: WorkflowAbortController,
 ): Promise<T> {
   let timeout: NodeJS.Timeout | undefined;
+  let removeAbortListener: (() => void) | undefined;
   try {
+    const abortPromise = new Promise<never>((_resolve, reject) => {
+      const rejectAbort = () => reject(abort.controller.signal.reason ?? new Error('Plugin runtime signal aborted'));
+
+      if (abort.controller.signal.aborted) {
+        rejectAbort();
+        return;
+      }
+
+      abort.controller.signal.addEventListener('abort', rejectAbort, { once: true });
+      removeAbortListener = () => abort.controller.signal.removeEventListener('abort', rejectAbort);
+    });
+
     if (timeoutMs === undefined) {
-      return await promise;
+      return await Promise.race([promise, abortPromise]);
     }
 
     return await Promise.race([
       promise,
+      abortPromise,
       new Promise<never>((_resolve, reject) => {
         timeout = setTimeout(() => {
           const reason = new PluginTimeoutError(timeoutMs);
-          abort.controller.abort(reason);
           reject(reason);
+          abort.controller.abort(reason);
         }, timeoutMs);
       }),
     ]);
@@ -307,6 +366,8 @@ async function runWorkflow<T>(
     if (timeout !== undefined) {
       clearTimeout(timeout);
     }
+
+    removeAbortListener?.();
 
     if (!abort.controller.signal.aborted) {
       abort.controller.abort(new PluginLifecycleEndedError());
