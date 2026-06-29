@@ -1129,10 +1129,11 @@ describe('GitHub webhook source handling', () => {
         payload: {
           action: 'created',
           repository: { full_name: 'reirei-lab/rainrail' },
+          ref: 'refs/heads/main',
+          commit_oid: 'abc123',
           alert: {
             number: 7,
             state: 'open',
-            ref: 'refs/heads/main',
             html_url: 'https://github.com/reirei-lab/rainrail/security/code-scanning/7',
             rule: { security_severity_level: 'high' },
           },
@@ -1150,6 +1151,7 @@ describe('GitHub webhook source handling', () => {
           state: 'open',
           severity: 'high',
           ref: 'refs/heads/main',
+          headSha: 'abc123',
           url: 'https://github.com/reirei-lab/rainrail/security/code-scanning/7',
         },
       },
@@ -1220,6 +1222,208 @@ describe('GitHub webhook source handling', () => {
           title: 'v1',
           dueOn: '2026-07-31T00:00:00Z',
           url: 'https://github.com/reirei-lab/rainrail/milestone/2',
+        },
+      },
+    });
+  });
+
+  it('normalizes dispatch inputs, commit comments, protection rules, and advisory details', async () => {
+    await expect(
+      createGitHubWebhookEvent({
+        githubEvent: 'repository_dispatch',
+        deliveryId: 'delivery-repository-dispatch-1',
+        payload: {
+          action: 'agent-run',
+          repository: { full_name: 'reirei-lab/rainrail' },
+          client_payload: {
+            issue: 16,
+            instruction: 'normalize payload',
+          },
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.repository_dispatch',
+      payload: {
+        dispatch: {
+          eventType: 'agent-run',
+          clientPayload: {
+            issue: 16,
+            instruction: 'normalize payload',
+          },
+        },
+      },
+    });
+
+    await expect(
+      createGitHubWebhookEvent({
+        githubEvent: 'workflow_dispatch',
+        deliveryId: 'delivery-workflow-dispatch-1',
+        payload: {
+          action: 'manual',
+          repository: { full_name: 'reirei-lab/rainrail' },
+          inputs: {
+            issue: '16',
+          },
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.workflow_dispatch',
+      payload: {
+        dispatch: {
+          inputs: {
+            issue: '16',
+          },
+        },
+      },
+    });
+
+    await expect(
+      createGitHubWebhookEvent({
+        githubEvent: 'commit_comment',
+        deliveryId: 'delivery-commit-comment-1',
+        payload: {
+          action: 'created',
+          repository: { full_name: 'reirei-lab/rainrail' },
+          comment: {
+            id: 444,
+            body: 'Check this line',
+            commit_id: 'abc123',
+            path: 'src/github-webhook.ts',
+            position: 12,
+            html_url: 'https://github.com/reirei-lab/rainrail/commit/abc123#commitcomment-444',
+          },
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.commit_comment',
+      subject: {
+        type: 'commit_comment',
+        id: '444',
+        url: 'https://github.com/reirei-lab/rainrail/commit/abc123#commitcomment-444',
+      },
+      payload: {
+        resource: {
+          type: 'commit_comment',
+          id: '444',
+          commitId: 'abc123',
+          path: 'src/github-webhook.ts',
+          position: 12,
+          url: 'https://github.com/reirei-lab/rainrail/commit/abc123#commitcomment-444',
+        },
+        comment: {
+          id: '444',
+          body: 'Check this line',
+          commitId: 'abc123',
+          path: 'src/github-webhook.ts',
+          position: 12,
+        },
+      },
+    });
+
+    await expect(
+      createGitHubWebhookEvent({
+        githubEvent: 'deployment_protection_rule',
+        deliveryId: 'delivery-deployment-protection-1',
+        payload: {
+          action: 'requested',
+          repository: { full_name: 'reirei-lab/rainrail' },
+          environment: 'staging',
+          ref: 'main',
+          sha: 'def456',
+          deployment_callback_url: 'https://api.github.com/repos/reirei-lab/rainrail/actions/runs/1/deployment_protection_rule',
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.deployment_protection_rule',
+      payload: {
+        resource: {
+          type: 'deployment_protection_rule',
+          id: 'staging:def456',
+          environment: 'staging',
+          ref: 'main',
+          headSha: 'def456',
+          callbackUrl: 'https://api.github.com/repos/reirei-lab/rainrail/actions/runs/1/deployment_protection_rule',
+        },
+      },
+    });
+
+    await expect(
+      createGitHubWebhookEvent({
+        githubEvent: 'secret_scanning_alert_location',
+        deliveryId: 'delivery-secret-location-1',
+        payload: {
+          action: 'created',
+          repository: { full_name: 'reirei-lab/rainrail' },
+          alert: {
+            number: 9,
+            state: 'open',
+            html_url: 'https://github.com/reirei-lab/rainrail/security/secret-scanning/9',
+          },
+          location: {
+            type: 'commit',
+            details: {
+              path: 'src/secret.txt',
+              start_line: 10,
+              end_line: 10,
+              commit_sha: 'abc123',
+            },
+          },
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.secret_scanning_alert_location',
+      payload: {
+        resource: {
+          type: 'security_alert',
+          id: '9',
+          number: 9,
+          state: 'open',
+          locationType: 'commit',
+          path: 'src/secret.txt',
+          startLine: 10,
+          endLine: 10,
+          headSha: 'abc123',
+        },
+      },
+    });
+
+    await expect(
+      createGitHubWebhookEvent({
+        githubEvent: 'security_advisory',
+        deliveryId: 'delivery-security-advisory-1',
+        payload: {
+          action: 'published',
+          repository: { full_name: 'reirei-lab/rainrail' },
+          security_advisory: {
+            ghsa_id: 'GHSA-abcd-1234',
+            summary: 'Example advisory',
+            severity: 'high',
+            html_url: 'https://github.com/advisories/GHSA-abcd-1234',
+          },
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.security_advisory',
+      payload: {
+        resource: {
+          type: 'security_advisory',
+          id: 'GHSA-abcd-1234',
+          ghsaId: 'GHSA-abcd-1234',
+          summary: 'Example advisory',
+          severity: 'high',
+          url: 'https://github.com/advisories/GHSA-abcd-1234',
         },
       },
     });

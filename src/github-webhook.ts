@@ -188,6 +188,8 @@ export interface GitHubWebhookPayload {
   assignee?: GitHubWebhookRecord;
   requested_reviewer?: GitHubWebhookRecord;
   requested_team?: GitHubWebhookRecord;
+  client_payload?: unknown;
+  inputs?: unknown;
   installation?: GitHubWebhookRecord;
   organization?: GitHubWebhookRecord;
   label?: GitHubWebhookRecord;
@@ -210,6 +212,8 @@ export interface GitHubWebhookPayload {
   projects_v2_status_update?: GitHubWebhookRecord;
   projects_v2_item?: GitHubWebhookRecord;
   alert?: GitHubWebhookRecord;
+  location?: GitHubWebhookRecord;
+  security_advisory?: GitHubWebhookRecord;
   blocked_issue?: GitHubWebhookRecord;
   blocking_issue?: GitHubWebhookRecord;
   parent_issue?: GitHubWebhookRecord;
@@ -239,6 +243,7 @@ export interface NormalizedGitHubWebhookPayload {
   pullRequests?: NormalizedGitHubResource[];
   changes?: NormalizedGitHubChange[];
   comment?: NormalizedGitHubComment;
+  dispatch?: NormalizedGitHubDispatch;
   requestedAction?: NormalizedGitHubRequestedAction;
 }
 
@@ -297,6 +302,12 @@ export interface NormalizedGitHubChange {
   to?: string;
 }
 
+export interface NormalizedGitHubDispatch {
+  eventType?: string;
+  clientPayload?: unknown;
+  inputs?: unknown;
+}
+
 export interface NormalizedGitHubResource {
   type: string;
   id: string;
@@ -337,6 +348,13 @@ export interface NormalizedGitHubResource {
   issueUrl?: string;
   relatedIssueNumber?: number;
   relatedIssueUrl?: string;
+  commitId?: string;
+  position?: number;
+  callbackUrl?: string;
+  locationType?: string;
+  endLine?: number;
+  ghsaId?: string;
+  summary?: string;
   isResolved?: boolean;
   path?: string;
   line?: number;
@@ -358,6 +376,8 @@ export interface NormalizedGitHubComment {
   startSide?: string;
   originalLine?: number;
   originalStartLine?: number;
+  commitId?: string;
+  position?: number;
 }
 
 export interface NormalizedGitHubRequestedAction {
@@ -461,7 +481,19 @@ function findGitHubSubject(payload: GitHubWebhookPayload, name: RainrailEventNam
   }
 
   if (payload.alert) {
-    return subjectFromResource(resourceFromSecurityAlert(payload.alert));
+    return subjectFromResource(resourceFromSecurityAlert(payload));
+  }
+
+  if (payload.security_advisory) {
+    return subjectFromResource(resourceFromSecurityAdvisory(payload.security_advisory));
+  }
+
+  if (isCommitCommentPayload(payload)) {
+    return subjectFromResource(resourceFromCommitComment(payload.comment));
+  }
+
+  if (isDeploymentProtectionRulePayload(payload)) {
+    return subjectFromResource(resourceFromDeploymentProtectionRule(payload));
   }
 
   if (isIssueRelationPayload(payload)) {
@@ -716,6 +748,7 @@ function normalizeGitHubWebhookPayload(
   const pullRequests = normalizedRelatedPullRequests(payload);
   const changes = normalizedChanges(payload.changes);
   const comment = normalizedComment(payload.comment);
+  const dispatch = normalizedDispatch(githubEvent, payload);
   const requestedAction = normalizedRequestedAction(payload.requested_action);
 
   return {
@@ -736,6 +769,7 @@ function normalizeGitHubWebhookPayload(
     ...(pullRequests.length > 0 ? { pullRequests } : {}),
     ...(changes.length > 0 ? { changes } : {}),
     ...(comment ? { comment } : {}),
+    ...(dispatch ? { dispatch } : {}),
     ...(requestedAction ? { requestedAction } : {}),
   };
 }
@@ -865,7 +899,19 @@ function normalizedResource(payload: GitHubWebhookPayload): NormalizedGitHubReso
   }
 
   if (payload.alert) {
-    return resourceFromSecurityAlert(payload.alert);
+    return resourceFromSecurityAlert(payload);
+  }
+
+  if (payload.security_advisory) {
+    return resourceFromSecurityAdvisory(payload.security_advisory);
+  }
+
+  if (isCommitCommentPayload(payload)) {
+    return resourceFromCommitComment(payload.comment);
+  }
+
+  if (isDeploymentProtectionRulePayload(payload)) {
+    return resourceFromDeploymentProtectionRule(payload);
   }
 
   if (isIssueRelationPayload(payload)) {
@@ -1072,15 +1118,62 @@ function resourceFromWorkflowJob(workflowJob: GitHubWebhookRecord): NormalizedGi
   };
 }
 
-function resourceFromSecurityAlert(alert: GitHubWebhookRecord): NormalizedGitHubResource {
+function resourceFromSecurityAlert(payload: GitHubWebhookPayload): NormalizedGitHubResource {
+  const alert = payload.alert ?? {};
+  const location = payload.location;
+  const locationDetails = recordField(location, 'details');
+
   return {
     type: 'security_alert',
     id: String(alert.number ?? alert.id ?? 'unknown'),
     ...optionalNumberProperty('number', numberField(alert, 'number')),
     ...optionalStringProperty('state', stringField(alert, 'state')),
     ...optionalStringProperty('severity', alertSeverity(alert)),
-    ...optionalStringProperty('ref', stringField(alert, 'ref')),
+    ...optionalStringProperty('ref', stringField(payload, 'ref') ?? stringField(alert, 'ref')),
+    ...optionalStringProperty('headSha', stringField(payload, 'commit_oid') ?? stringField(locationDetails, 'commit_sha')),
+    ...optionalStringProperty('locationType', stringField(location, 'type')),
+    ...optionalStringProperty('path', stringField(locationDetails, 'path')),
+    ...optionalNumberProperty('startLine', numberField(locationDetails, 'start_line')),
+    ...optionalNumberProperty('endLine', numberField(locationDetails, 'end_line')),
     ...optionalStringProperty('url', stringField(alert, 'html_url')),
+  };
+}
+
+function resourceFromSecurityAdvisory(advisory: GitHubWebhookRecord): NormalizedGitHubResource {
+  const ghsaId = stringField(advisory, 'ghsa_id');
+
+  return {
+    type: 'security_advisory',
+    id: ghsaId ?? String(advisory.id ?? 'unknown'),
+    ...optionalStringProperty('ghsaId', ghsaId),
+    ...optionalStringProperty('summary', stringField(advisory, 'summary')),
+    ...optionalStringProperty('severity', stringField(advisory, 'severity')),
+    ...optionalStringProperty('url', stringField(advisory, 'html_url')),
+  };
+}
+
+function resourceFromCommitComment(comment: GitHubWebhookRecord | undefined): NormalizedGitHubResource {
+  return {
+    type: 'commit_comment',
+    id: String(comment?.id ?? 'unknown'),
+    ...optionalStringProperty('commitId', stringField(comment, 'commit_id')),
+    ...optionalStringProperty('path', stringField(comment, 'path')),
+    ...optionalNumberProperty('position', numberField(comment, 'position')),
+    ...optionalStringProperty('url', stringField(comment, 'html_url')),
+  };
+}
+
+function resourceFromDeploymentProtectionRule(payload: GitHubWebhookPayload): NormalizedGitHubResource {
+  const environment = stringField(payload, 'environment') ?? 'unknown';
+  const sha = stringField(payload, 'sha') ?? 'unknown';
+
+  return {
+    type: 'deployment_protection_rule',
+    id: `${environment}:${sha}`,
+    ...optionalStringProperty('environment', stringField(payload, 'environment')),
+    ...optionalStringProperty('ref', stringField(payload, 'ref')),
+    ...optionalStringProperty('headSha', stringField(payload, 'sha')),
+    ...optionalStringProperty('callbackUrl', stringField(payload, 'deployment_callback_url')),
   };
 }
 
@@ -1202,6 +1295,8 @@ function normalizedComment(comment: GitHubWebhookRecord | undefined): Normalized
     ...optionalStringProperty('startSide', stringField(comment, 'start_side')),
     ...optionalNumberProperty('originalLine', numberField(comment, 'original_line')),
     ...optionalNumberProperty('originalStartLine', numberField(comment, 'original_start_line')),
+    ...optionalStringProperty('commitId', stringField(comment, 'commit_id')),
+    ...optionalNumberProperty('position', numberField(comment, 'position')),
   };
 }
 
@@ -1244,6 +1339,22 @@ function normalizedChanges(changes: GitHubWebhookRecord | undefined): Normalized
       ...optionalStringProperty('to', normalizedChangeValue(change?.to)),
     };
   });
+}
+
+function normalizedDispatch(
+  githubEvent: string,
+  payload: GitHubWebhookPayload,
+): NormalizedGitHubDispatch | undefined {
+  const normalizedEvent = normalizeToken(githubEvent);
+  if (normalizedEvent !== 'repository_dispatch' && normalizedEvent !== 'workflow_dispatch') {
+    return undefined;
+  }
+
+  return {
+    ...optionalStringProperty('eventType', typeof payload.action === 'string' ? payload.action : undefined),
+    ...(payload.client_payload === undefined ? {} : { clientPayload: payload.client_payload }),
+    ...(payload.inputs === undefined ? {} : { inputs: payload.inputs }),
+  };
 }
 
 function normalizedChangeValue(value: unknown): string | undefined {
@@ -1360,6 +1471,23 @@ function isIssueRelationPayload(payload: GitHubWebhookPayload): boolean {
   return (
     (payload.blocked_issue !== undefined && payload.blocking_issue !== undefined) ||
     (payload.parent_issue !== undefined && payload.sub_issue !== undefined)
+  );
+}
+
+function isCommitCommentPayload(payload: GitHubWebhookPayload): boolean {
+  return (
+    stringField(payload.comment, 'commit_id') !== undefined &&
+    !payload.issue &&
+    !payload.pull_request &&
+    !payload.review &&
+    !payload.thread
+  );
+}
+
+function isDeploymentProtectionRulePayload(payload: GitHubWebhookPayload): boolean {
+  return (
+    stringField(payload, 'deployment_callback_url') !== undefined ||
+    (stringField(payload, 'environment') !== undefined && stringField(payload, 'sha') !== undefined)
   );
 }
 
