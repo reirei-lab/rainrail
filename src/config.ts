@@ -188,7 +188,14 @@ function parseOptionalNumber(value: unknown, path: string): number | undefined {
 }
 
 function expandEnv(raw: string): string {
-  return raw.replace(/\$\{([A-Z0-9_]+)\}/gu, (_match, name: string) => process.env[name] ?? '');
+  return raw.replace(
+    /\$\{([A-Z0-9_]+)\}/gu,
+    (_match, name: string) => escapeJsonStringContent(process.env[name] ?? ''),
+  );
+}
+
+function escapeJsonStringContent(value: string): string {
+  return JSON.stringify(value).slice(1, -1);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

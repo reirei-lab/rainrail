@@ -58,8 +58,8 @@ describe('parseConfig', () => {
     });
   });
 
-  it('expands environment variables before JSON parsing', async () => {
-    vi.stubEnv('RAINRAIL_GITHUB_TOKEN', 'expanded-token');
+  it('expands environment variables as JSON string content before parsing', async () => {
+    vi.stubEnv('RAINRAIL_GITHUB_TOKEN', 'expanded-"token"\\with\nnewline');
     const directory = join(tmpdir(), `rainrail-config-${crypto.randomUUID()}`);
     temporaryDirectories.push(directory);
     await mkdir(directory, { recursive: true });
@@ -75,7 +75,7 @@ describe('parseConfig', () => {
     await expect(loadConfig(path)).resolves.toMatchObject({
       taskProviders: {
         github: {
-          token: 'expanded-token',
+          token: 'expanded-"token"\\with\nnewline',
         },
       },
     });

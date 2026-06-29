@@ -1,5 +1,10 @@
 import type { GitHubAuthToken } from './github-auth.js';
-import { getGitHubAuthToken, type GitHubAuthConfig } from './github-auth.js';
+import {
+  getGitHubAuthToken,
+  getGitHubFallbackAuthToken,
+  isGitHubAuthFallbackEligibleError,
+  type GitHubAuthConfig,
+} from './github-auth.js';
 import { recordGitHubRateLimit } from './github-rate-limit.js';
 import type { TaskComment, TaskCommentInput, TaskIssue, TaskIssueRef, TaskProvider } from './task-provider.js';
 
@@ -32,7 +37,7 @@ interface GitHubCommentResponse {
 export function createGitHubTaskProvider(options: GitHubTaskProviderOptions = {}): TaskProvider {
   const fetchImpl = options.fetch ?? fetch;
   const auth = options.auth ?? {
-    getAuthToken: () => getGitHubAuthToken(options.config ?? {}, fetchImpl),
+    getAuthToken: () => getDefaultGitHubAuthToken(options.config ?? {}, fetchImpl),
   };
 
   return {
@@ -78,6 +83,24 @@ export function createGitHubTaskProvider(options: GitHubTaskProviderOptions = {}
       return mapGitHubComment(await response.json() as GitHubCommentResponse);
     },
   };
+}
+
+async function getDefaultGitHubAuthToken(
+  config: GitHubAuthConfig,
+  fetchImpl: typeof fetch,
+): Promise<GitHubAuthToken | undefined> {
+  try {
+    return await getGitHubAuthToken(config, fetchImpl);
+  } catch (error) {
+    if (!isGitHubAuthFallbackEligibleError(error)) {
+      throw error;
+    }
+    const fallbackToken = await getGitHubFallbackAuthToken(config);
+    if (fallbackToken === undefined) {
+      throw error;
+    }
+    return fallbackToken;
+  }
 }
 
 function requestHeaders(authToken: GitHubAuthToken | undefined): Record<string, string> {

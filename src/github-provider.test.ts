@@ -1,3 +1,8 @@
+import { generateKeyPairSync } from 'node:crypto';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createGitHubTaskProvider } from './github-provider.js';
@@ -5,6 +10,7 @@ import { clearGitHubRateLimitSnapshots, getGitHubRateLimitSnapshots } from './gi
 
 afterEach(() => {
   clearGitHubRateLimitSnapshots();
+  vi.unstubAllEnvs();
 });
 
 describe('createGitHubTaskProvider', () => {
@@ -103,5 +109,62 @@ describe('createGitHubTaskProvider', () => {
         remaining: 4997,
       },
     ]);
+  });
+
+  it('falls back to env auth when default GitHub App auth cannot mint a token', async () => {
+    vi.stubEnv('GH_TOKEN', 'fallback-token');
+    const directory = mkdtempSync(join(tmpdir(), 'rainrail-provider-fallback-'));
+    const keyPath = join(directory, 'private-key.pem');
+    const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+    writeFileSync(keyPath, privateKey.export({ type: 'pkcs1', format: 'pem' }), 'utf8');
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ message: 'secondary rate limit' }), {
+        status: 403,
+        headers: {
+          'content-type': 'application/json',
+          'retry-after': '60',
+        },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        node_id: 'issue-node-id',
+        number: 20,
+        title: 'Fallback issue',
+        state: 'open',
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }));
+    const provider = createGitHubTaskProvider({
+      config: {
+        githubApp: {
+          appId: '12345',
+          installationId: '67890',
+          privateKeyPath: keyPath,
+        },
+      },
+      fetch: fetchImpl as unknown as typeof fetch,
+    });
+
+    try {
+      await expect(provider.getIssue({
+        provider: 'github',
+        repository: 'reirei-lab/rainrail',
+        number: 20,
+      })).resolves.toMatchObject({
+        id: 'issue-node-id',
+        title: 'Fallback issue',
+      });
+      expect(fetchImpl).toHaveBeenLastCalledWith(
+        'https://api.github.com/repos/reirei-lab/rainrail/issues/20',
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            Authorization: 'Bearer fallback-token',
+          }),
+        }),
+      );
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 });

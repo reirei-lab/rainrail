@@ -31,6 +31,11 @@ interface CachedInstallationToken {
 }
 
 type FetchLike = typeof fetch;
+export type GitHubCliTokenRunner = (
+  file: string,
+  args: string[],
+  options: { maxBuffer: number },
+) => Promise<{ stdout: string; stderr: string }>;
 
 const installationTokenCache = new Map<string, CachedInstallationToken>();
 const tokenRefreshSkewMs = 5 * 60_000;
@@ -61,7 +66,10 @@ export async function getGitHubAuthToken(
   return getEnvGitHubAuthToken();
 }
 
-export async function getGitHubFallbackAuthToken(config: GitHubAuthConfig): Promise<GitHubAuthToken | undefined> {
+export async function getGitHubFallbackAuthToken(
+  config: GitHubAuthConfig,
+  cliRunner: GitHubCliTokenRunner = defaultGhCliTokenRunner,
+): Promise<GitHubAuthToken | undefined> {
   if (config.token !== undefined && config.token.length > 0) {
     return undefined;
   }
@@ -72,7 +80,7 @@ export async function getGitHubFallbackAuthToken(config: GitHubAuthConfig): Prom
   if (envToken !== undefined) {
     return { ...envToken, fallback: true };
   }
-  const ghCliToken = await getGhCliAuthToken();
+  const ghCliToken = await getGhCliAuthToken(cliRunner);
   return ghCliToken === undefined ? undefined : { ...ghCliToken, fallback: true };
 }
 
@@ -91,8 +99,18 @@ export function isGitHubRateLimitResponse(response: Response): boolean {
   if (response.status !== 403) {
     return false;
   }
+  if (response.headers.has('retry-after')) {
+    return true;
+  }
   const remaining = response.headers.get('x-ratelimit-remaining');
   return remaining === '0';
+}
+
+export function isGitHubAuthFallbackEligibleError(error: unknown): boolean {
+  if (!(error instanceof GitHubAuthRequestError)) {
+    return false;
+  }
+  return error.status === 401 || error.status === 403 || error.status === 429 || isGitHubRateLimitMessage(error);
 }
 
 export function clearGitHubAppTokenCache(): void {
@@ -101,23 +119,23 @@ export function clearGitHubAppTokenCache(): void {
 }
 
 function getEnvGitHubAuthToken(): GitHubAuthToken | undefined {
-  const envToken = process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN;
+  const envToken = process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN;
   return envToken !== undefined && envToken.length > 0
     ? { token: envToken, provider: 'env-token', fallback: false }
     : undefined;
 }
 
-async function getGhCliAuthToken(): Promise<GitHubAuthToken | undefined> {
+async function getGhCliAuthToken(cliRunner: GitHubCliTokenRunner): Promise<GitHubAuthToken | undefined> {
   if (cachedGhCliToken !== undefined) {
     return { token: cachedGhCliToken, provider: 'gh-cli', fallback: false };
   }
   for (const ghPath of ghPathCandidates()) {
     try {
-      const { stdout, stderr } = await execFileAsync(ghPath, ['auth', 'status', '--show-token'], {
+      const { stdout } = await cliRunner(ghPath, ['auth', 'token', '--hostname', 'github.com'], {
         maxBuffer: 200_000,
       });
-      const token = parseGhAuthStatusToken(`${stdout}\n${stderr}`);
-      if (token !== undefined) {
+      const token = stdout.trim();
+      if (token.length > 0) {
         cachedGhCliToken = token;
         return { token, provider: 'gh-cli', fallback: false };
       }
@@ -128,10 +146,12 @@ async function getGhCliAuthToken(): Promise<GitHubAuthToken | undefined> {
   return undefined;
 }
 
-function parseGhAuthStatusToken(output: string): string | undefined {
-  const match = output.match(/Token:\s*(\S+)/u);
-  const token = match?.[1];
-  return token === undefined || token.length === 0 ? undefined : token;
+async function defaultGhCliTokenRunner(
+  file: string,
+  args: string[],
+  options: { maxBuffer: number },
+): Promise<{ stdout: string; stderr: string }> {
+  return execFileAsync(file, args, options);
 }
 
 function ghPathCandidates(): string[] {
@@ -197,7 +217,7 @@ async function createInstallationToken(
   );
   recordGitHubRateLimit('rest', response.headers, { authProvider: 'github-app' });
   if (!response.ok) {
-    throw new Error(`GitHub App installation token request failed with HTTP ${response.status}`);
+    throw new GitHubAuthRequestError(`GitHub App installation token request failed with HTTP ${response.status}`, response);
   }
   const payload = await response.json() as { token?: unknown; expires_at?: unknown };
   if (typeof payload.token !== 'string' || payload.token.length === 0) {
@@ -234,4 +254,14 @@ async function createGitHubAppJwt(config: GitHubAppAuthConfig): Promise<string> 
 
 function base64UrlJson(value: unknown): string {
   return Buffer.from(JSON.stringify(value)).toString('base64url');
+}
+
+class GitHubAuthRequestError extends Error {
+  readonly status: number;
+
+  constructor(message: string, readonly response: Response) {
+    super(message);
+    this.name = 'GitHubAuthRequestError';
+    this.status = response.status;
+  }
 }

@@ -10,6 +10,7 @@ import {
   getGitHubAuthToken,
   getGitHubFallbackAuthToken,
   getGitHubToken,
+  isGitHubRateLimitResponse,
 } from './github-auth.js';
 import { clearGitHubRateLimitSnapshots, getGitHubRateLimitSnapshots } from './github-rate-limit.js';
 
@@ -90,7 +91,8 @@ describe('getGitHubToken', () => {
   });
 
   it('exposes the selected auth provider and env fallback token', async () => {
-    vi.stubEnv('GH_TOKEN', 'pat-token');
+    vi.stubEnv('GH_TOKEN', 'gh-token');
+    vi.stubEnv('GITHUB_TOKEN', 'github-token');
     const config = {
       githubApp: {
         appId: '12345',
@@ -100,7 +102,7 @@ describe('getGitHubToken', () => {
     };
 
     await expect(getGitHubFallbackAuthToken(config)).resolves.toEqual({
-      token: 'pat-token',
+      token: 'gh-token',
       provider: 'env-token',
       fallback: true,
     });
@@ -109,5 +111,41 @@ describe('getGitHubToken', () => {
       provider: 'configured-token',
       fallback: false,
     });
+  });
+
+  it('reads gh CLI tokens only from the active github.com host', async () => {
+    vi.stubEnv('GH_CLI_PATH', '/tmp/test-gh');
+    const calls: Array<{ file: string; args: string[] }> = [];
+
+    await expect(getGitHubFallbackAuthToken({
+      githubApp: {
+        appId: '12345',
+        installationId: '67890',
+        privateKeyPath: '/does/not/matter',
+      },
+    }, async (file, args) => {
+      calls.push({ file, args });
+      return { stdout: 'cli-token\n', stderr: '' };
+    })).resolves.toEqual({
+      token: 'cli-token',
+      provider: 'gh-cli',
+      fallback: true,
+    });
+    expect(calls).toEqual([
+      {
+        file: '/tmp/test-gh',
+        args: ['auth', 'token', '--hostname', 'github.com'],
+      },
+    ]);
+  });
+
+  it('treats retry-after 403 responses as rate limited', () => {
+    expect(isGitHubRateLimitResponse(new Response('', {
+      status: 403,
+      headers: {
+        'retry-after': '60',
+        'x-ratelimit-remaining': '4999',
+      },
+    }))).toBe(true);
   });
 });
