@@ -238,6 +238,14 @@ describe('Rainrail bridge room', () => {
     const room = new RainrailBridgeRoom(storage, { replayLimit: 10 });
     const event = {
       ...fixtureEvent('delivery-1', 'github.issue'),
+      payload: {
+        action: 'opened',
+        issue: { body: 'secret issue body' },
+        count: 1,
+        ok: true,
+        empty: null,
+        labels: ['secret label'],
+      },
       rawBody: 'secret raw webhook body',
       rawPayload: {
         kind: 'external-reference',
@@ -251,6 +259,12 @@ describe('Rainrail bridge room', () => {
     expect(publishResponse.status).toBe(200);
     expect(storage.storedEvents()).toHaveLength(1);
     expect(storage.storedEvents()[0]).not.toHaveProperty('rawBody');
+    expect(storage.storedEvents()[0]?.payload).toEqual({
+      action: 'opened',
+      count: 1,
+      ok: true,
+      empty: null,
+    });
     expect(storage.storedEvents()[0]?.rawPayload).not.toHaveProperty('secret');
 
     const eventsResponse = await room.fetch(new Request('https://rainrail.local/events'));
@@ -260,6 +274,8 @@ describe('Rainrail bridge room', () => {
     await reader?.cancel();
 
     expect(chunk).not.toContain('secret raw webhook body');
+    expect(chunk).not.toContain('secret issue body');
+    expect(chunk).not.toContain('secret label');
     expect(chunk).not.toContain('token-like value');
   });
 

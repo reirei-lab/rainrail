@@ -172,7 +172,7 @@ export async function createGitHubWebhookEvent({
     },
     occurredAt: receivedAtIso,
     subject,
-    payload,
+    payload: normalizeGitHubWebhookPayload(payload),
     rawPayload: {
       kind: 'inline-redacted',
       reference: `github://deliveries/${deliveryId}`,
@@ -186,8 +186,8 @@ export interface GitHubWebhookPayload {
   action?: unknown;
   sender?: { login?: unknown };
   repository?: { full_name?: unknown; html_url?: unknown; id?: unknown };
-  issue?: { number?: unknown; html_url?: unknown };
-  pull_request?: { number?: unknown; html_url?: unknown };
+  issue?: { number?: unknown; html_url?: unknown; title?: unknown; body?: unknown };
+  pull_request?: { number?: unknown; html_url?: unknown; title?: unknown; body?: unknown };
   check_run?: { id?: unknown; html_url?: unknown };
   check_suite?: { id?: unknown; html_url?: unknown };
   review?: { id?: unknown; html_url?: unknown };
@@ -347,8 +347,22 @@ function subjectFromRepository(
   };
 }
 
+function normalizeGitHubWebhookPayload(payload: GitHubWebhookPayload): Record<string, string | number | boolean | null> {
+  const normalized: Record<string, string | number | boolean | null> = {};
+
+  if (isJsonScalar(payload.action)) {
+    normalized.action = payload.action;
+  }
+
+  return normalized;
+}
+
 function isUrlEncodedForm(contentType: string | null): boolean {
   return contentType?.toLowerCase().split(';', 1)[0]?.trim() === 'application/x-www-form-urlencoded';
+}
+
+function isJsonScalar(value: unknown): value is string | number | boolean | null {
+  return value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean';
 }
 
 async function sha256Hex(value: GitHubWebhookRawBody): Promise<string> {

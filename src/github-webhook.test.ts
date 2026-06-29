@@ -145,7 +145,6 @@ describe('GitHub webhook source handling', () => {
         },
         payload: {
           action: 'opened',
-          issue: { number: 15, title: 'GitHub webhook signature' },
         },
         rawPayload: {
           kind: 'inline-redacted',
@@ -156,6 +155,7 @@ describe('GitHub webhook source handling', () => {
     });
 
     expect(result.ok && result.event.rawPayload.sha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(result.ok && result.event.payload).not.toHaveProperty('issue');
   });
 
   it('rejects unsigned GitHub webhook requests before parsing JSON', async () => {
@@ -218,7 +218,9 @@ describe('GitHub webhook source handling', () => {
           id: '15',
           url: 'https://github.com/reirei-lab/rainrail/issues/15',
         },
-        payload,
+        payload: {
+          action: 'opened',
+        },
         rawPayload: {
           contentType: 'application/x-www-form-urlencoded',
         },
@@ -328,6 +330,35 @@ describe('GitHub webhook source handling', () => {
         type: 'check_suite',
         id: '48847904331',
         url: 'https://github.com/reirei-lab/rainrail/actions/runs/17345176172',
+      },
+    });
+  });
+
+  it('redacts webhook object bodies from the event payload', async () => {
+    await expect(
+      createGitHubWebhookEvent({
+        githubEvent: 'issues',
+        deliveryId: 'delivery-redact-1',
+        payload: {
+          action: 'opened',
+          repository: { full_name: 'reirei-lab/rainrail' },
+          issue: {
+            number: 17,
+            title: 'Bridge room',
+            body: 'private issue body',
+            html_url: 'https://github.com/reirei-lab/rainrail/issues/17',
+          },
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      payload: {
+        action: 'opened',
+      },
+      subject: {
+        type: 'issue',
+        id: '17',
       },
     });
   });

@@ -61,9 +61,10 @@ event だけを再送する。指定 id が buffer に無い場合は、consumer
 - `GET /events`: storage から replay buffer を復元し、SSE stream を返す。
 
 storage の key は `rainrail:recent-events`。保存するのは正規化済み envelope だけで、
-secret、token、credential、生 webhook payload は core 側では保持しない。storage から
-復元する replay 要素も `RainrailEventEnvelope` と SSE field として検証し、壊れた要素や
-古い schema の要素は replay buffer に入れない。
+`payload` も shallow な JSON scalar metadata に縮約する。secret、token、credential、
+生 webhook payload、issue/comment body のような provider object 本文は core 側では
+保持しない。storage から復元する replay 要素も `RainrailEventEnvelope` と SSE field
+として検証し、壊れた要素や古い schema の要素は replay buffer に入れない。
 
 `POST /publish` は request body の読み込み開始直後に publish queue の枠を確保する。
 これにより、大きい body や streaming body の parse 完了順に左右されず、`fetch`

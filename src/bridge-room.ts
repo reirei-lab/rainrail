@@ -206,7 +206,7 @@ function validatePublishEnvelope(value: unknown): RainrailEventEnvelope {
       id: subjectId,
       ...optionalString(subject, 'url'),
     },
-    payload: value.payload,
+    payload: normalizePayload(value.payload),
     rawPayload: {
       kind: rawPayloadKind,
       reference: rawPayloadReference,
@@ -266,6 +266,25 @@ function optionalLinks(record: Record<string, unknown>): { links?: Record<string
   }
 
   return { links: normalizedLinks };
+}
+
+function normalizePayload(value: unknown): unknown {
+  if (!isRecord(value)) {
+    return isJsonScalar(value) ? value : null;
+  }
+
+  const payload: Record<string, string | number | boolean | null> = {};
+  for (const [key, nestedValue] of Object.entries(value)) {
+    if (isJsonScalar(nestedValue)) {
+      payload[key] = nestedValue;
+    }
+  }
+
+  return payload;
+}
+
+function isJsonScalar(value: unknown): value is string | number | boolean | null {
+  return value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean';
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
