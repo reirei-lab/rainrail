@@ -1151,6 +1151,11 @@ describe('GitHub webhook source handling', () => {
             conclusion: null,
             labels: ['self-hosted', 'macOS'],
             html_url: 'https://github.com/reirei-lab/rainrail/actions/runs/2000/job/1000',
+            deployment: {
+              environment: 'staging',
+              ref: 'main',
+              sha: 'deployabc',
+            },
           },
         },
         rawBody: '{}',
@@ -1166,6 +1171,9 @@ describe('GitHub webhook source handling', () => {
           name: 'test',
           status: 'queued',
           labels: ['self-hosted', 'macOS'],
+          environment: 'staging',
+          ref: 'main',
+          headSha: 'deployabc',
           url: 'https://github.com/reirei-lab/rainrail/actions/runs/2000/job/1000',
         },
       },
@@ -1354,6 +1362,7 @@ describe('GitHub webhook source handling', () => {
         payload: {
           action: 'manual',
           ref: 'refs/heads/main',
+          workflow: 'Agent dispatch',
           repository: { full_name: 'reirei-lab/rainrail' },
           inputs: {
             issue: '16',
@@ -1367,6 +1376,7 @@ describe('GitHub webhook source handling', () => {
       payload: {
         dispatch: {
           ref: 'refs/heads/main',
+          workflow: 'Agent dispatch',
           inputs: {
             issue: '16',
           },
@@ -2046,6 +2056,200 @@ describe('GitHub webhook source handling', () => {
           title: 'Deploy key',
           readOnly: true,
           url: 'https://api.github.com/repos/reirei-lab/rainrail/keys/82',
+        },
+      },
+    });
+  });
+
+  it('normalizes access, membership, pages, import, and scan resources', async () => {
+    await expect(
+      createGitHubWebhookEvent({
+        githubEvent: 'personal_access_token_request',
+        deliveryId: 'delivery-pat-request-1',
+        payload: {
+          action: 'approved',
+          organization: { login: 'reirei-lab' },
+          personal_access_token_request: {
+            id: 90,
+            owner: { login: 'developer' },
+            repositories: [{ full_name: 'reirei-lab/rainrail' }],
+            permissions: { contents: 'read', issues: 'write' },
+            html_url: 'https://github.com/organizations/reirei-lab/settings/personal-access-token-requests/90',
+          },
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.personal_access_token_request',
+      payload: {
+        resource: {
+          type: 'personal_access_token_request',
+          id: '90',
+          owner: 'developer',
+          permissions: {
+            contents: 'read',
+            issues: 'write',
+          },
+          url: 'https://github.com/organizations/reirei-lab/settings/personal-access-token-requests/90',
+        },
+        repositories: [
+          {
+            fullName: 'reirei-lab/rainrail',
+          },
+        ],
+      },
+    });
+
+    await expect(
+      createGitHubWebhookEvent({
+        githubEvent: 'dependabot_alert',
+        deliveryId: 'delivery-dependabot-alert-1',
+        payload: {
+          action: 'created',
+          repository: { full_name: 'reirei-lab/rainrail' },
+          alert: {
+            number: 91,
+            state: 'open',
+            dependency: {
+              package: { ecosystem: 'npm', name: 'vite' },
+              manifest_path: 'package.json',
+              scope: 'runtime',
+            },
+            security_advisory: { severity: 'high' },
+            html_url: 'https://github.com/reirei-lab/rainrail/security/dependabot/91',
+          },
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.dependabot_alert',
+      payload: {
+        resource: {
+          type: 'security_alert',
+          id: '91',
+          packageName: 'vite',
+          packageType: 'npm',
+          manifestPath: 'package.json',
+          dependencyScope: 'runtime',
+        },
+      },
+    });
+
+    await expect(
+      createGitHubWebhookEvent({
+        githubEvent: 'membership',
+        deliveryId: 'delivery-membership-1',
+        payload: {
+          action: 'added',
+          organization: { login: 'reirei-lab' },
+          member: {
+            id: 92,
+            login: 'octocat',
+            html_url: 'https://github.com/octocat',
+          },
+          team: {
+            id: 93,
+            name: 'Agents',
+            slug: 'agents',
+            html_url: 'https://github.com/orgs/reirei-lab/teams/agents',
+          },
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.membership',
+      payload: {
+        resource: {
+          type: 'membership',
+          id: '92:93',
+          login: 'octocat',
+          teamSlug: 'agents',
+          teamName: 'Agents',
+        },
+      },
+    });
+
+    await expect(
+      createGitHubWebhookEvent({
+        githubEvent: 'page_build',
+        deliveryId: 'delivery-page-build-1',
+        payload: {
+          repository: { full_name: 'reirei-lab/rainrail' },
+          build: {
+            id: 94,
+            status: 'errored',
+            error: { message: 'Build failed' },
+            url: 'https://api.github.com/repos/reirei-lab/rainrail/pages/builds/94',
+          },
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.page_build',
+      payload: {
+        resource: {
+          type: 'page_build',
+          id: '94',
+          status: 'errored',
+          errorMessage: 'Build failed',
+          url: 'https://api.github.com/repos/reirei-lab/rainrail/pages/builds/94',
+        },
+      },
+    });
+
+    await expect(
+      createGitHubWebhookEvent({
+        githubEvent: 'repository_import',
+        deliveryId: 'delivery-repository-import-1',
+        payload: {
+          repository: { full_name: 'reirei-lab/rainrail' },
+          status: 'failure',
+          url: 'https://api.github.com/repos/reirei-lab/rainrail/import',
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.repository_import',
+      payload: {
+        resource: {
+          type: 'repository_import',
+          id: 'reirei-lab/rainrail',
+          status: 'failure',
+          url: 'https://api.github.com/repos/reirei-lab/rainrail/import',
+        },
+      },
+    });
+
+    await expect(
+      createGitHubWebhookEvent({
+        githubEvent: 'secret_scanning_scan',
+        deliveryId: 'delivery-secret-scan-1',
+        payload: {
+          action: 'completed',
+          repository: { full_name: 'reirei-lab/rainrail' },
+          type: 'custom_pattern_backfill',
+          source: 'repository',
+          completed_at: '2026-06-29T13:00:44Z',
+          secret_types: ['generic_secret'],
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.secret_scanning_scan',
+      payload: {
+        resource: {
+          type: 'secret_scanning_scan',
+          id: 'custom_pattern_backfill:repository',
+          scanType: 'custom_pattern_backfill',
+          source: 'repository',
+          completedAt: '2026-06-29T13:00:44Z',
+          secretTypes: ['generic_secret'],
         },
       },
     });

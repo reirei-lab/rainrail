@@ -190,6 +190,7 @@ export interface GitHubWebhookPayload {
   requested_team?: GitHubWebhookRecord;
   client_payload?: unknown;
   inputs?: unknown;
+  workflow?: unknown;
   branch?: unknown;
   ref?: unknown;
   installation?: GitHubWebhookRecord;
@@ -217,6 +218,7 @@ export interface GitHubWebhookPayload {
   projects_v2?: GitHubWebhookRecord;
   projects_v2_status_update?: GitHubWebhookRecord;
   projects_v2_item?: GitHubWebhookRecord;
+  personal_access_token_request?: GitHubWebhookRecord;
   alert?: GitHubWebhookRecord;
   location?: GitHubWebhookRecord;
   security_advisory?: GitHubWebhookRecord;
@@ -230,6 +232,9 @@ export interface GitHubWebhookPayload {
   forkee?: GitHubWebhookRecord;
   key?: GitHubWebhookRecord;
   milestone?: GitHubWebhookRecord;
+  member?: GitHubWebhookRecord;
+  team?: GitHubWebhookRecord;
+  build?: GitHubWebhookRecord;
   blocked_issue?: GitHubWebhookRecord;
   blocking_issue?: GitHubWebhookRecord;
   parent_issue?: GitHubWebhookRecord;
@@ -337,6 +342,7 @@ export interface NormalizedGitHubDispatch {
   eventType?: string;
   ref?: string;
   branch?: string;
+  workflow?: string;
   clientPayload?: unknown;
   inputs?: unknown;
 }
@@ -394,15 +400,27 @@ export interface NormalizedGitHubResource {
   answerUrl?: string;
   action?: string;
   packageType?: string;
+  packageName?: string;
   version?: string;
   versionId?: string;
+  manifestPath?: string;
+  dependencyScope?: string;
   reviewerLogins?: string[];
   approver?: string;
   target?: string;
   enforcement?: string;
   fullName?: string;
   owner?: string;
+  permissions?: unknown;
+  login?: string;
+  teamSlug?: string;
+  teamName?: string;
   readOnly?: boolean;
+  errorMessage?: string;
+  scanType?: string;
+  source?: string;
+  completedAt?: string;
+  secretTypes?: string[];
   isResolved?: boolean;
   path?: string;
   line?: number;
@@ -498,6 +516,26 @@ function findGitHubSubject(payload: GitHubWebhookPayload, name: RainrailEventNam
 
   if (payload.milestone) {
     return subjectFromResource(resourceFromMilestone(payload.milestone));
+  }
+
+  if (payload.personal_access_token_request) {
+    return subjectFromResource(resourceFromPersonalAccessTokenRequest(payload.personal_access_token_request));
+  }
+
+  if (isMemberTeamPayload(payload)) {
+    return subjectFromResource(resourceFromMemberTeam(payload));
+  }
+
+  if (payload.build) {
+    return subjectFromResource(resourceFromPageBuild(payload.build));
+  }
+
+  if (isRepositoryImportPayload(payload)) {
+    return subjectFromResource(resourceFromRepositoryImport(payload));
+  }
+
+  if (isSecretScanningScanPayload(payload)) {
+    return subjectFromResource(resourceFromSecretScanningScan(payload));
   }
 
   if (payload.check_run) {
@@ -1030,6 +1068,26 @@ function normalizedResource(payload: GitHubWebhookPayload): NormalizedGitHubReso
     return resourceFromMilestone(payload.milestone);
   }
 
+  if (payload.personal_access_token_request) {
+    return resourceFromPersonalAccessTokenRequest(payload.personal_access_token_request);
+  }
+
+  if (isMemberTeamPayload(payload)) {
+    return resourceFromMemberTeam(payload);
+  }
+
+  if (payload.build) {
+    return resourceFromPageBuild(payload.build);
+  }
+
+  if (isRepositoryImportPayload(payload)) {
+    return resourceFromRepositoryImport(payload);
+  }
+
+  if (isSecretScanningScanPayload(payload)) {
+    return resourceFromSecretScanningScan(payload);
+  }
+
   if (payload.rule) {
     return resourceFromBranchProtectionRule(payload.rule);
   }
@@ -1139,6 +1197,16 @@ function resourceFromMilestone(milestone: GitHubWebhookRecord): NormalizedGitHub
     ...optionalStringProperty('title', normalized?.title),
     ...optionalStringProperty('dueOn', normalized?.dueOn),
     ...optionalStringProperty('url', normalized?.url),
+  };
+}
+
+function resourceFromPersonalAccessTokenRequest(request: GitHubWebhookRecord): NormalizedGitHubResource {
+  return {
+    type: 'personal_access_token_request',
+    id: String(request.id ?? 'unknown'),
+    ...optionalStringProperty('owner', stringField(recordField(request, 'owner'), 'login')),
+    ...(request.permissions === undefined ? {} : { permissions: request.permissions }),
+    ...optionalStringProperty('url', stringField(request, 'html_url')),
   };
 }
 
@@ -1271,6 +1339,8 @@ function resourceFromMergeGroup(mergeGroup: GitHubWebhookRecord): NormalizedGitH
 }
 
 function resourceFromWorkflowJob(workflowJob: GitHubWebhookRecord): NormalizedGitHubResource {
+  const deployment = recordField(workflowJob, 'deployment');
+
   return {
     type: 'workflow_job',
     id: String(workflowJob.id ?? 'unknown'),
@@ -1279,6 +1349,9 @@ function resourceFromWorkflowJob(workflowJob: GitHubWebhookRecord): NormalizedGi
     ...optionalStringProperty('status', stringField(workflowJob, 'status')),
     ...optionalStringProperty('conclusion', stringField(workflowJob, 'conclusion')),
     ...optionalStringArrayProperty('labels', stringArrayField(workflowJob, 'labels')),
+    ...optionalStringProperty('environment', stringField(deployment, 'environment')),
+    ...optionalStringProperty('ref', stringField(deployment, 'ref')),
+    ...optionalStringProperty('headSha', stringField(deployment, 'sha')),
     ...optionalStringProperty('url', stringField(workflowJob, 'html_url')),
   };
 }
@@ -1311,6 +1384,8 @@ function resourceFromSecurityAlert(payload: GitHubWebhookPayload): NormalizedGit
   const alert = payload.alert ?? {};
   const location = payload.location;
   const locationDetails = recordField(location, 'details');
+  const dependency = recordField(alert, 'dependency');
+  const dependencyPackage = recordField(dependency, 'package');
 
   return {
     type: 'security_alert',
@@ -1324,6 +1399,10 @@ function resourceFromSecurityAlert(payload: GitHubWebhookPayload): NormalizedGit
     ...optionalStringProperty('path', stringField(locationDetails, 'path')),
     ...optionalNumberProperty('startLine', numberField(locationDetails, 'start_line')),
     ...optionalNumberProperty('endLine', numberField(locationDetails, 'end_line')),
+    ...optionalStringProperty('packageName', stringField(dependencyPackage, 'name')),
+    ...optionalStringProperty('packageType', stringField(dependencyPackage, 'ecosystem')),
+    ...optionalStringProperty('manifestPath', stringField(dependency, 'manifest_path')),
+    ...optionalStringProperty('dependencyScope', stringField(dependency, 'scope')),
     ...optionalStringProperty('url', stringField(alert, 'html_url')),
   };
 }
@@ -1419,6 +1498,76 @@ function resourceFromDeployKey(key: GitHubWebhookRecord): NormalizedGitHubResour
     ...optionalStringProperty('title', stringField(key, 'title')),
     ...optionalBooleanProperty('readOnly', booleanField(key, 'read_only')),
     ...optionalStringProperty('url', stringField(key, 'url')),
+  };
+}
+
+function resourceFromMemberTeam(payload: GitHubWebhookPayload): NormalizedGitHubResource {
+  const member = payload.member;
+  const team = payload.team;
+  const memberId = idField(member, 'id');
+  const teamId = idField(team, 'id');
+
+  if (member && team) {
+    return {
+      type: 'membership',
+      id: `${memberId ?? 'unknown'}:${teamId ?? 'unknown'}`,
+      ...optionalStringProperty('login', stringField(member, 'login')),
+      ...optionalStringProperty('url', stringField(member, 'html_url')),
+      ...optionalStringProperty('teamSlug', stringField(team, 'slug')),
+      ...optionalStringProperty('teamName', stringField(team, 'name')),
+    };
+  }
+
+  if (member) {
+    return {
+      type: 'member',
+      id: memberId ?? 'unknown',
+      ...optionalStringProperty('login', stringField(member, 'login')),
+      ...optionalStringProperty('url', stringField(member, 'html_url')),
+    };
+  }
+
+  return {
+    type: 'team',
+    id: teamId ?? 'unknown',
+    ...optionalStringProperty('teamSlug', stringField(team, 'slug')),
+    ...optionalStringProperty('teamName', stringField(team, 'name')),
+    ...optionalStringProperty('url', stringField(team, 'html_url')),
+  };
+}
+
+function resourceFromPageBuild(build: GitHubWebhookRecord): NormalizedGitHubResource {
+  return {
+    type: 'page_build',
+    id: String(build.id ?? 'unknown'),
+    ...optionalStringProperty('status', stringField(build, 'status')),
+    ...optionalStringProperty('errorMessage', stringField(recordField(build, 'error'), 'message')),
+    ...optionalStringProperty('url', stringField(build, 'url')),
+  };
+}
+
+function resourceFromRepositoryImport(payload: GitHubWebhookPayload): NormalizedGitHubResource {
+  const repository = normalizedRepository(payload.repository);
+
+  return {
+    type: 'repository_import',
+    id: repository?.fullName ?? repository?.id ?? 'unknown',
+    ...optionalStringProperty('status', stringField(payload, 'status')),
+    ...optionalStringProperty('url', stringField(payload, 'url')),
+  };
+}
+
+function resourceFromSecretScanningScan(payload: GitHubWebhookPayload): NormalizedGitHubResource {
+  const scanType = stringField(payload, 'type');
+  const source = stringField(payload, 'source');
+
+  return {
+    type: 'secret_scanning_scan',
+    id: `${scanType ?? 'unknown'}:${source ?? 'unknown'}`,
+    ...optionalStringProperty('scanType', scanType),
+    ...optionalStringProperty('source', source),
+    ...optionalStringProperty('completedAt', stringField(payload, 'completed_at')),
+    ...optionalStringArrayProperty('secretTypes', stringArrayField(payload, 'secret_types')),
   };
 }
 
@@ -1619,6 +1768,7 @@ function normalizedInstallationRepositories(payload: GitHubWebhookPayload): Norm
     ...arrayField(payload, 'repositories'),
     ...arrayField(payload, 'repositories_added'),
     ...arrayField(payload, 'repositories_removed'),
+    ...arrayField(payload.personal_access_token_request, 'repositories'),
   ];
 
   return repositories
@@ -1676,6 +1826,7 @@ function normalizedDispatch(
     ...optionalStringProperty('eventType', typeof payload.action === 'string' ? payload.action : undefined),
     ...optionalStringProperty('ref', stringField(payload, 'ref') ?? stringField(payload, 'branch')),
     ...optionalStringProperty('branch', stringField(payload, 'branch')),
+    ...optionalStringProperty('workflow', stringField(payload, 'workflow')),
     ...(payload.client_payload === undefined ? {} : { clientPayload: payload.client_payload }),
     ...(payload.inputs === undefined ? {} : { inputs: payload.inputs }),
   };
@@ -1868,6 +2019,25 @@ function isInstallationRepositoriesPayload(payload: GitHubWebhookPayload): boole
       arrayField(payload, 'repositories_added').length > 0 ||
       arrayField(payload, 'repositories_removed').length > 0
     )
+  );
+}
+
+function isMemberTeamPayload(payload: GitHubWebhookPayload): boolean {
+  return payload.member !== undefined || payload.team !== undefined;
+}
+
+function isRepositoryImportPayload(payload: GitHubWebhookPayload): boolean {
+  return (
+    payload.repository !== undefined &&
+    stringField(payload, 'status') !== undefined &&
+    stringField(payload, 'url') !== undefined
+  );
+}
+
+function isSecretScanningScanPayload(payload: GitHubWebhookPayload): boolean {
+  return (
+    stringField(payload, 'completed_at') !== undefined &&
+    stringArrayField(payload, 'secret_types').length > 0
   );
 }
 

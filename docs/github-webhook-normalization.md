@@ -29,18 +29,21 @@ workflow plugin が受け取る `event.payload` は Rainrail 側で安定させ�
 - `deployment_protection_rule` は environment/ref/sha/callback URL を deployment protection rule resource として正規化し、関連 PR は `event.payload.pullRequests` に残す。
 - `deployment_review` は environment / nested reviewers / approver / string comment を deployment review resource として正規化する。
 - `merge_group` は merge queue の head SHA/ref と base ref を resource に残す。
-- `workflow_job` は job id/run id/status/conclusion/labels を workflow job resource として正規化する。
+- `workflow_job` は job id/run id/status/conclusion/labels と deployment environment/ref/sha を workflow job resource として正規化する。
 - `branch_protection_rule` は rule id/name と changes を branch protection rule resource として正規化する。
 - branch protection などの changes では string 配列も JSON 文字列として `from` / `to` に残す。
 - `milestone` webhook は top-level milestone を milestone resource と `event.payload.milestone` に残す。
 - `repository_ruleset` / `fork` / `deploy_key` は対象 ruleset / fork repository / deploy key を resource として正規化する。
+- `personal_access_token_request` は request id/owner/permissions と対象 repositories を正規化する。
+- `member` / `membership` / `team` / `team_add` は対象 user/team principal を resource として正規化する。
+- `page_build` / `repository_import` / `secret_scanning_scan` は build/import/scan 結果を resource として正規化する。
 - `package` / `registry_package` は package name/type/version/url を package resource として正規化する。
 - `installation` / `installation_repositories` の対象 repository 配列は `event.payload.repositories` に残す。
 - `gollum` は変更された wiki page を wiki page resource と `event.payload.pages` に残す。
 - security alert 系 webhook は top-level `alert` の id/state/severity/ref/url を security alert resource として正規化する。
 - `code_scanning_alert` の top-level ref/commit SHA と `secret_scanning_alert_location` の location details は security alert resource に残す。
 - `security_advisory` / `repository_advisory` は advisory id/summary/severity/url を advisory resource として正規化する。
-- `repository_dispatch` / `workflow_dispatch` は `client_payload` / `inputs` と対象 ref/branch を `event.payload.dispatch` に残す。
+- `repository_dispatch` / `workflow_dispatch` は `client_payload` / `inputs`、対象 ref/branch、workflow 名を `event.payload.dispatch` に残す。
 - `discussion` / `discussion_comment` は discussion number/url/category と answer 情報を discussion resource として正規化する。
 - `commit_comment` は commit id/path/position を commit comment resource と comment metadata に残す。
 - `issue_dependencies` / `sub_issues` は関係対象の issue 番号と URL を issue relation resource として正規化する。
