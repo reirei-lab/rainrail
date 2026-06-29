@@ -4,6 +4,7 @@ import { formatRainrailSseEvent, rainrailSseHeaders } from './sse.js';
 
 const RECENT_EVENTS_KEY = 'rainrail:recent-events';
 const DEFAULT_REPLAY_LIMIT = 100;
+const ALLOWED_PAYLOAD_KEYS = new Set(['action', 'status', 'conclusion']);
 
 type PublishEventResult =
   | { ok: true; event: RainrailEventEnvelope }
@@ -275,7 +276,7 @@ function normalizePayload(value: unknown): unknown {
 
   const payload: Record<string, string | number | boolean | null> = {};
   for (const [key, nestedValue] of Object.entries(value)) {
-    if (isJsonScalar(nestedValue)) {
+    if (ALLOWED_PAYLOAD_KEYS.has(key) && isJsonScalar(nestedValue)) {
       payload[key] = nestedValue;
     }
   }
