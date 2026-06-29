@@ -436,7 +436,7 @@ describe('plugin runtime contract', () => {
         value: { present: true },
       },
     ]);
-    expect(readSecret).toHaveBeenCalledWith({ name: 'api-token' });
+    expect(readSecret).toHaveBeenCalledWith({ name: 'api-token' }, { signal: expect.any(AbortSignal) });
     expect(auditEntries).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -714,5 +714,241 @@ describe('plugin runtime contract', () => {
       },
     ]);
     expect(laterHandler).toHaveBeenCalledOnce();
+  });
+
+  it('passes the plugin abort signal to an already running gated action', async () => {
+    vi.useFakeTimers();
+    try {
+      const event = createEventEnvelope({
+        source: { type: 'system', name: 'local-runtime' },
+        name: 'system.runtime-start',
+        delivery: {
+          id: 'delivery-running-action',
+          receivedAt: '2026-06-29T14:00:00.000Z',
+        },
+        occurredAt: '2026-06-29T14:00:00.000Z',
+        subject: { type: 'worker', id: 'runtime-1' },
+        payload: {},
+        rawPayload: {
+          kind: 'inline-redacted',
+          reference: 'redacted://delivery-running-action',
+        },
+      });
+      let actionSignal: AbortSignal | undefined;
+      let actionAbortReason: unknown;
+      const startRuntime = vi.fn(
+        async (_request: { runtimeId: string }, context: { signal: AbortSignal }) =>
+          new Promise((_resolve, reject) => {
+            actionSignal = context.signal;
+            context.signal.addEventListener(
+              'abort',
+              () => {
+                actionAbortReason = context.signal.reason;
+                reject(context.signal.reason);
+              },
+              { once: true },
+            );
+          }),
+      );
+      const loader = createPluginLoader({
+        runtime: {
+          runId: 'run-13',
+          now: () => new Date('2026-06-29T14:01:00.000Z'),
+          capabilities: { provider: 'local' },
+          actions: { startRuntime },
+        },
+        defaultTimeoutMs: 25,
+      });
+
+      loader.on(
+        'system.runtime-start',
+        async (_event, context) => context.actions.startRuntime({ runtimeId: 'runtime-1' }),
+        { name: 'runtime-starter', capabilities: ['runtime:start'] },
+      );
+
+      const dispatchPromise = loader.dispatch(event);
+      await vi.advanceTimersByTimeAsync(25);
+
+      await expect(dispatchPromise).resolves.toMatchObject([
+        {
+          pluginName: 'runtime-starter',
+          eventId: 'local-runtime:delivery-running-action:system.runtime-start',
+          status: 'rejected',
+        },
+      ]);
+      expect(startRuntime).toHaveBeenCalledOnce();
+      expect(actionSignal?.aborted).toBe(true);
+      expect(actionAbortReason).toBeInstanceOf(Error);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('removes parent abort listeners after workflow dispatch settles', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: {
+        id: 'delivery-listener-cleanup',
+        receivedAt: '2026-06-29T14:00:00.000Z',
+      },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'github://deliveries/delivery-listener-cleanup',
+      },
+    });
+    const parentController = new AbortController();
+    const originalAddEventListener = parentController.signal.addEventListener.bind(parentController.signal);
+    const originalRemoveEventListener = parentController.signal.removeEventListener.bind(parentController.signal);
+    const listeners = new Set<NonNullable<Parameters<AbortSignal['addEventListener']>[1]>>();
+
+    parentController.signal.addEventListener = ((type, listener, options) => {
+      if (type === 'abort' && listener !== null) {
+        listeners.add(listener);
+      }
+
+      return originalAddEventListener(type, listener, options);
+    }) as AbortSignal['addEventListener'];
+    parentController.signal.removeEventListener = ((type, listener, options) => {
+      if (type === 'abort' && listener !== null) {
+        listeners.delete(listener);
+      }
+
+      return originalRemoveEventListener(type, listener, options);
+    }) as AbortSignal['removeEventListener'];
+
+    const loader = createPluginLoader({
+      runtime: {
+        runId: 'run-13',
+        now: () => new Date('2026-06-29T14:01:00.000Z'),
+        capabilities: { provider: 'codex' },
+        signal: parentController.signal,
+      },
+    });
+
+    loader.on('github.issue', async () => ({ ok: true }), { name: 'listener-cleanup-handler' });
+
+    await expect(loader.dispatch(event)).resolves.toMatchObject([
+      {
+        pluginName: 'listener-cleanup-handler',
+        eventId: 'github-webhook:delivery-listener-cleanup:github.issue',
+        status: 'fulfilled',
+      },
+    ]);
+    expect(listeners.size).toBe(0);
+  });
+
+  it('redacts readSecret audit reasons without leaking secret manager messages', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'system', name: 'local-runtime' },
+      name: 'system.secret-requested',
+      delivery: {
+        id: 'delivery-secret-error',
+        receivedAt: '2026-06-29T14:00:00.000Z',
+      },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'secret', id: 'api-token' },
+      payload: {},
+      rawPayload: {
+        kind: 'inline-redacted',
+        reference: 'redacted://delivery-secret-error',
+      },
+    });
+    const auditEntries: unknown[] = [];
+    const readSecret = vi.fn(async () => {
+      throw new Error('secret manager returned token=super-secret-value');
+    });
+    const loader = createPluginLoader({
+      runtime: {
+        runId: 'run-13',
+        now: () => new Date('2026-06-29T14:01:00.000Z'),
+        capabilities: { provider: 'local' },
+        actions: { readSecret },
+      },
+      audit: {
+        record: (entry) => {
+          auditEntries.push(entry);
+        },
+      },
+    });
+
+    loader.on(
+      'system.secret-requested',
+      async (_event, context) => context.actions.readSecret({ name: 'api-token' }),
+      { name: 'secret-reader', capabilities: ['secret:access'] },
+    );
+
+    await expect(loader.dispatch(event)).resolves.toMatchObject([
+      {
+        pluginName: 'secret-reader',
+        eventId: 'local-runtime:delivery-secret-error:system.secret-requested',
+        status: 'rejected',
+      },
+    ]);
+    expect(JSON.stringify(auditEntries)).not.toContain('super-secret-value');
+    expect(JSON.stringify(auditEntries)).not.toContain('token=');
+    expect(auditEntries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          pluginId: 'secret-reader',
+          eventId: 'local-runtime:delivery-secret-error:system.secret-requested',
+          action: 'readSecret',
+          result: 'rejected',
+          reason: 'Error: redacted secret action failure',
+        }),
+      ]),
+    );
+  });
+
+  it('does not wait for a hanging audit sink before returning plugin results', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: {
+        id: 'delivery-hanging-audit',
+        receivedAt: '2026-06-29T14:00:00.000Z',
+      },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'github://deliveries/delivery-hanging-audit',
+      },
+    });
+    const loader = createPluginLoader({
+      runtime: {
+        runId: 'run-13',
+        now: () => new Date('2026-06-29T14:01:00.000Z'),
+        capabilities: { provider: 'codex' },
+      },
+      audit: {
+        record: () =>
+          new Promise(() => {
+            // Simulates a backend write that never resolves.
+          }),
+      },
+    });
+
+    loader.on('github.issue', async () => ({ ok: true }), { name: 'hanging-audit-handler' });
+
+    await expect(
+      Promise.race([
+        loader.dispatch(event),
+        new Promise((resolve) => {
+          setTimeout(() => resolve('blocked-on-audit'), 20);
+        }),
+      ]),
+    ).resolves.toEqual([
+      {
+        pluginName: 'hanging-audit-handler',
+        eventId: 'github-webhook:delivery-hanging-audit:github.issue',
+        status: 'fulfilled',
+        value: { ok: true },
+      },
+    ]);
   });
 });

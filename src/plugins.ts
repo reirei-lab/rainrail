@@ -26,10 +26,23 @@ export interface RuntimeCapabilities {
 
 export type RuntimeCapabilityName = 'merge' | 'runtime:start' | 'secret:access' | (string & {});
 
+export interface RuntimeActionContext {
+  signal: AbortSignal;
+}
+
 export interface RuntimeActions {
   mergePullRequest(request: { pullRequestId: string; [key: string]: unknown }): Promise<unknown>;
   startRuntime(request: { runtimeId: string; [key: string]: unknown }): Promise<unknown>;
   readSecret(request: { name: string; [key: string]: unknown }): Promise<string>;
+}
+
+export interface RuntimeActionImplementations {
+  mergePullRequest(
+    request: { pullRequestId: string; [key: string]: unknown },
+    context: RuntimeActionContext,
+  ): Promise<unknown>;
+  startRuntime(request: { runtimeId: string; [key: string]: unknown }, context: RuntimeActionContext): Promise<unknown>;
+  readSecret(request: { name: string; [key: string]: unknown }, context: RuntimeActionContext): Promise<string>;
 }
 
 export interface PluginRuntimeContext {

@@ -1,6 +1,7 @@
 import type { RainrailEventEnvelope } from './events.js';
 import type {
   PluginRuntimeContext,
+  RuntimeActionImplementations,
   RuntimeActions,
   RuntimeCapabilityName,
   WorkflowPlugin,
@@ -24,7 +25,7 @@ export interface WorkflowAuditSink {
 }
 
 export type RuntimeDispatcherContext = Omit<PluginRuntimeContext, 'actions' | 'signal'> & {
-  actions?: Partial<RuntimeActions>;
+  actions?: Partial<RuntimeActionImplementations>;
   signal?: AbortSignal;
 };
 
@@ -52,12 +53,12 @@ export function createRuntimeDispatcher(options: RuntimeDispatcherOptions): Runt
               return undefined;
             }
 
-            const controller = createWorkflowAbortController(options.runtime.signal);
-            const context = createWorkflowContext(options, workflow, event, controller.signal);
-            const value = await withTimeout(
+            const abort = createWorkflowAbortController(options.runtime.signal);
+            const context = createWorkflowContext(options, workflow, event, abort.controller.signal);
+            const value = await runWorkflow(
               Promise.resolve().then(() => workflow.handle(event, context)),
               workflow.timeoutMs ?? options.defaultTimeoutMs,
-              controller,
+              abort,
             );
 
             await audit('plugin.handle', 'fulfilled');
@@ -94,16 +95,23 @@ class PluginTimeoutError extends Error {
 }
 
 class CapabilityDeniedError extends Error {
-  constructor(action: keyof RuntimeActions, capability: RuntimeCapabilityName, pluginName: string) {
+  constructor(action: keyof RuntimeActionImplementations, capability: RuntimeCapabilityName, pluginName: string) {
     super(`Plugin "${pluginName}" needs capability "${capability}" to call ${action}`);
     this.name = 'CapabilityDeniedError';
   }
 }
 
 class PluginActionAbortedError extends Error {
-  constructor(action: keyof RuntimeActions, pluginName: string) {
+  constructor(action: keyof RuntimeActionImplementations, pluginName: string) {
     super(`Plugin "${pluginName}" cannot call ${action} after its runtime signal was aborted`);
     this.name = 'PluginActionAbortedError';
+  }
+}
+
+class SecretActionError extends Error {
+  constructor() {
+    super('redacted secret action failure');
+    this.name = 'Error';
   }
 }
 
@@ -141,7 +149,7 @@ async function callGatedAction<TRequest>(
   workflow: WorkflowPlugin,
   event: RainrailEventEnvelope,
   signal: AbortSignal,
-  action: keyof RuntimeActions,
+  action: keyof RuntimeActionImplementations,
   capability: RuntimeCapabilityName,
   request: TRequest,
 ): Promise<unknown> {
@@ -165,23 +173,24 @@ async function callGatedAction<TRequest>(
   }
 
   try {
-    const value = await implementation(request as never);
+    const value = await implementation(request as never, { signal });
     await recordAudit(options, workflow, event, action, 'fulfilled');
     return value;
   } catch (reason) {
-    await recordAudit(options, workflow, event, action, 'rejected', reason);
-    throw reason;
+    const auditedReason = action === 'readSecret' ? new SecretActionError() : reason;
+    await recordAudit(options, workflow, event, action, 'rejected', auditedReason);
+    throw auditedReason;
   }
 }
 
-async function recordAudit(
+function recordAudit(
   options: RuntimeDispatcherOptions,
   workflow: WorkflowPlugin,
   event: RainrailEventEnvelope,
   action: WorkflowAuditEntry['action'],
   result: WorkflowAuditResult,
   reason?: unknown,
-): Promise<void> {
+): void {
   const entry: WorkflowAuditEntry = {
     pluginId: workflow.name,
     eventId: event.id,
@@ -196,41 +205,54 @@ async function recordAudit(
   }
 
   try {
-    await options.audit?.record(entry);
+    void Promise.resolve(options.audit?.record(entry)).catch(() => {
+      // Audit sinks are observability dependencies and must not change plugin/action outcomes.
+    });
   } catch {
-    // Audit sinks are observability dependencies and must not change plugin/action outcomes.
+    // Synchronous audit failures are isolated for the same reason.
   }
 }
 
-function createWorkflowAbortController(parentSignal: AbortSignal | undefined): AbortController {
+interface WorkflowAbortController {
+  controller: AbortController;
+  dispose: () => void;
+}
+
+function createWorkflowAbortController(parentSignal: AbortSignal | undefined): WorkflowAbortController {
   const controller = new AbortController();
 
   if (parentSignal?.aborted) {
     controller.abort(parentSignal.reason);
-    return controller;
+    return { controller, dispose: () => undefined };
   }
 
-  parentSignal?.addEventListener('abort', () => controller.abort(parentSignal.reason), { once: true });
-  return controller;
+  let dispose: () => void = () => undefined;
+  if (parentSignal !== undefined) {
+    const abort = () => controller.abort(parentSignal.reason);
+    parentSignal.addEventListener('abort', abort, { once: true });
+    dispose = () => parentSignal.removeEventListener('abort', abort);
+  }
+
+  return { controller, dispose };
 }
 
-async function withTimeout<T>(
+async function runWorkflow<T>(
   promise: Promise<T>,
   timeoutMs: number | undefined,
-  controller: AbortController,
+  abort: WorkflowAbortController,
 ): Promise<T> {
-  if (timeoutMs === undefined) {
-    return promise;
-  }
-
   let timeout: NodeJS.Timeout | undefined;
   try {
+    if (timeoutMs === undefined) {
+      return await promise;
+    }
+
     return await Promise.race([
       promise,
       new Promise<never>((_resolve, reject) => {
         timeout = setTimeout(() => {
           const reason = new PluginTimeoutError(timeoutMs);
-          controller.abort(reason);
+          abort.controller.abort(reason);
           reject(reason);
         }, timeoutMs);
       }),
@@ -239,5 +261,7 @@ async function withTimeout<T>(
     if (timeout !== undefined) {
       clearTimeout(timeout);
     }
+
+    abort.dispose();
   }
 }

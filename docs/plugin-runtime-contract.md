@@ -81,12 +81,17 @@ capability がない handler が呼び出した場合、runtime action は実行
 handler timeout 後に handler 本体が遅れて処理を続けた場合でも、gated action は
 `signal.aborted` を確認して実行前に拒否する。これにより、呼び出し側が timeout として
 失敗処理や retry を開始した後に merge や runtime start が遅れて実行されることを防ぐ。
+さらに runtime 側の action implementation には第2引数で同じ `AbortSignal` を渡す。
+すでに開始済みの merge、runtime start、secret access も、この signal を見て中断や
+冪等化を行えるようにする。
 
 `audit.record(entry)` を渡すと、plugin id、event id、run id、action、
 result、発生時刻が記録される。action result は `fulfilled`、`rejected`、
 `denied`、`timeout` のいずれか。secret action の audit entry は secret の
-値を含めない。audit sink は observability dependency として扱い、書き込み失敗は
-plugin result や action result を変えない。
+値を含めない。`readSecret` の失敗 reason は固定文に redaction し、secret manager の
+例外 message を audit に保存しない。audit sink は observability dependency として扱い、
+書き込み失敗や長時間の未解決 Promise は plugin result や action result を変えず、
+dispatcher の結果返却も止めない。
 
 ## Dispatcher
 
