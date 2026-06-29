@@ -182,6 +182,29 @@ describe('Rainrail bridge room', () => {
     }
   });
 
+  it('treats aborted JSON parse failures as aborted publishes', async () => {
+    const storage = fakeControllableState();
+    const room = new RainrailBridgeRoom(storage.state, { replayLimit: 10 });
+    const health = room.fetch(new Request('https://rainrail.local/healthz'));
+    expect(storage.getCalls).toBe(1);
+    storage.resolveGet([]);
+    await health;
+
+    storage.pauseNextPut();
+    const firstPublish = room.fetch(publishRequest(fixtureEvent('delivery-1', 'github.issue')));
+    const controller = new AbortController();
+    const abortError = new DOMException('The operation was aborted.', 'AbortError');
+    const secondPublish = room.fetch(rejectingJsonPublishRequest(abortError, controller.signal));
+    await flushMicrotasks();
+
+    controller.abort();
+    storage.resolveNextPut();
+
+    expect((await firstPublish).status).toBe(200);
+    expect((await secondPublish).status).toBe(499);
+    expect(storage.storedEvents().map((event) => event.id)).toEqual(['github.issue-source:delivery-1:github.issue']);
+  });
+
   it('drops aborted publishes before persistence or broadcast side effects', async () => {
     const storage = fakeControllableState();
     const room = new RainrailBridgeRoom(storage.state, { replayLimit: 10 });
@@ -436,8 +459,11 @@ function delayedJsonPublishRequest(event: unknown) {
   };
 }
 
-function rejectingJsonPublishRequest(error: unknown): Request {
-  const request = new Request('https://rainrail.local/publish', { method: 'POST' });
+function rejectingJsonPublishRequest(error: unknown, signal?: AbortSignal): Request {
+  const request = new Request('https://rainrail.local/publish', {
+    method: 'POST',
+    ...(signal === undefined ? {} : { signal }),
+  });
   Object.defineProperty(request, 'json', {
     value: async () => {
       throw error;

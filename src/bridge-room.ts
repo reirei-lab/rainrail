@@ -78,6 +78,10 @@ export class RainrailBridgeRoom {
     const publishResult = this.#publishQueue.then(async () => {
       const eventResult = await eventResultPromise;
       if (!eventResult.ok) {
+        if (request.signal.aborted || isAbortError(eventResult.error)) {
+          return abortedPublishResponse();
+        }
+
         return new Response(`invalid event envelope: ${errorMessage(eventResult.error)}\n`, { status: 400 });
       }
 
@@ -278,6 +282,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === 'AbortError';
 }
 
 function abortedPublishResponse(): Response {
