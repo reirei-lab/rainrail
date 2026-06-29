@@ -4,12 +4,14 @@
   "private": true,
   "description": "Agent-ready development event routing and workflow orchestration suite.",
   "type": "module",
+  "packageManager": "pnpm@10.12.1",
   "scripts": {
+    "build": "node scripts/check-scripts.mjs",
     "test": "vitest run scripts src",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
-    "@types/node": "^26.0.1",
+    "@types/node": "^24.13.2",
     "typescript": "^6.0.3",
     "vitest": "^3.2.3"
   }
