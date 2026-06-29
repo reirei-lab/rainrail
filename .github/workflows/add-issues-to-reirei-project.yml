@@ -1,0 +1,32 @@
+name: Add Issues to Reirei Project
+
+on:
+  issues:
+    types:
+      - opened
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  add-issue-to-project:
+    name: Add issue to Reirei project
+    runs-on: self-hosted
+    steps:
+      - name: Assign issue to reirei-agent
+        uses: actions/github-script@v9
+        with:
+          script: |
+            await github.rest.issues.addAssignees({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              assignees: ['reirei-agent'],
+            });
+
+      - name: Add issue to Reirei project
+        uses: actions/add-to-project@v2.0.0
+        with:
+          project-url: https://github.com/orgs/reirei-lab/projects/1
+          github-token: ${{ secrets.REIREI_PROJECT_TOKEN }}

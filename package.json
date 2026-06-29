@@ -1,0 +1,13 @@
+{
+  "name": "rainrail",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Agent-ready development event routing and workflow orchestration suite.",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run scripts"
+  },
+  "devDependencies": {
+    "vitest": "^3.2.3"
+  }
+}
