@@ -69,6 +69,23 @@ Workflow plugin は event に反応し、Task provider と Runtime provider を
 mock task provider と mock runtime provider を `createRuntimeDispatcher` に渡せば、
 workflow test は外部 API なしで書ける。
 
+## Config と GitHub auth provider
+
+Rainrail の config は provider 境界ごとに分ける。`sources` は GitHub webhook
+などの event input、`taskProviders.github` は GitHub API 用の auth、
+`runtimeProviders.openclaw` は agent runtime 起動設定を持つ。環境変数は
+`${NAME}` 形式で JSON parse 前に展開する。secret 値そのものではなく、運用では
+環境変数や secret 名を config に渡す。
+
+GitHub auth は `token`、GitHub App installation token、環境変数 PAT、
+`gh auth` fallback を同じ `GitHubAuthToken` として扱う。`GitHubTaskProvider` は
+`auth.getAuthToken()` を注入できるため、workflow test や別 runtime では
+実 GitHub App/PAT 実装を差し替えられる。
+
+GitHub REST/GraphQL の rate limit header は `recordGitHubRateLimit()` で
+snapshot として記録する。snapshot には auth provider と fallback 有無を残し、
+provider 実装の観測性に使う。secret や token 値は snapshot に含めない。
+
 ## Dispatcher
 
 `createRuntimeDispatcher` は workflow plugin 配列と runtime context を受け取る。
