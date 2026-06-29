@@ -80,7 +80,7 @@ config に渡す。
 
 GitHub auth は `token`、GitHub App installation token、環境変数 PAT、
 `gh auth` fallback を同じ `GitHubAuthToken` として扱う。環境変数 fallback は
-GitHub CLI と同じく `GH_TOKEN` を `GITHUB_TOKEN` より優先する。`gh auth`
+GitHub CLI と同じく `GH_TOKEN`、`GITHUB_TOKEN` の順で最初の非空値を使う。`gh auth`
 fallback は Rainrail の GitHub API URL に合わせて `github.com` host だけから
 取得する。`GitHubTaskProvider` は `auth.getAuthToken()` を注入できるため、
 workflow test や別 runtime では実 GitHub App/PAT 実装を差し替えられる。

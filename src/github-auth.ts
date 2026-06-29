@@ -119,10 +119,14 @@ export function clearGitHubAppTokenCache(): void {
 }
 
 function getEnvGitHubAuthToken(): GitHubAuthToken | undefined {
-  const envToken = process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN;
+  const envToken = firstNonEmpty(process.env.GH_TOKEN, process.env.GITHUB_TOKEN);
   return envToken !== undefined && envToken.length > 0
     ? { token: envToken, provider: 'env-token', fallback: false }
     : undefined;
+}
+
+function firstNonEmpty(...values: Array<string | undefined>): string | undefined {
+  return values.find((value) => value !== undefined && value.length > 0);
 }
 
 async function getGhCliAuthToken(cliRunner: GitHubCliTokenRunner): Promise<GitHubAuthToken | undefined> {

@@ -113,6 +113,17 @@ describe('getGitHubToken', () => {
     });
   });
 
+  it('falls back to GITHUB_TOKEN when GH_TOKEN is defined but empty', async () => {
+    vi.stubEnv('GH_TOKEN', '');
+    vi.stubEnv('GITHUB_TOKEN', 'github-token');
+
+    await expect(getGitHubAuthToken({})).resolves.toEqual({
+      token: 'github-token',
+      provider: 'env-token',
+      fallback: false,
+    });
+  });
+
   it('reads gh CLI tokens only from the active github.com host', async () => {
     vi.stubEnv('GH_CLI_PATH', '/tmp/test-gh');
     const calls: Array<{ file: string; args: string[] }> = [];
