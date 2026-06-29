@@ -25,7 +25,6 @@ SSE response は次の header を使う。
 
 - `Content-Type: text/event-stream`
 - `Cache-Control: no-cache, no-transform`
-- `Connection: keep-alive`
 - `X-Accel-Buffering: no`
 
 接続時には `: connected` comment を送る。`keepAliveIntervalMs` が指定された
@@ -33,6 +32,10 @@ ReadableStream subscriber は `: keep-alive` comment を周期送信する。int
 指定しない場合、core は keepalive timer を作らない。これはテストや短命の local
 consumer を不要な timer で維持しないためで、runtime/entrypoint が必要に応じて
 policy を渡す。
+
+shared Fetch header では HTTP/2/HTTP/3 で禁止される hop-by-hop header を出さない。
+HTTP/1.1 の Node adapter が `Connection: keep-alive` を必要とする場合は adapter 側で
+付与する。
 
 `id:` と `event:` に入れる値は CR/LF を拒否する。Rainrail event envelope は
 custom `id` / `name` を許すため、ここで改行を通すと subscriber 側で別の SSE field
@@ -47,13 +50,18 @@ event だけを再送する。指定 id が buffer に無い場合は、consumer
 `RainrailBridgeRoom` は Fetch API 互換の endpoint を提供する。
 
 - `GET /healthz`: `{ ok, clients, recent }` を返す。
-- `POST /publish`: request JSON を `RainrailEventEnvelope` として publish し、
-  replay buffer を storage に保存する。
+- `POST /publish`: request JSON を `RainrailEventEnvelope` として検証し、replay
+  snapshot を storage に保存してから live subscriber へ publish する。
 - `GET /events`: storage から replay buffer を復元し、SSE stream を返す。
 
 storage の key は `rainrail:recent-events`。保存するのは正規化済み envelope だけで、
 secret、token、credential、生 webhook payload は core 側では保持しない。
 
-初回 storage 復元と publish 後の永続化は room 内で直列化する。これにより、複数の
+`POST /publish` は request body の読み込み開始直後に publish queue の枠を確保する。
+これにより、大きい body や streaming body の parse 完了順に左右されず、`fetch`
+呼び出し順に storage / replay / broadcast を処理する。
+
+初回 storage 復元と publish 永続化は room 内で直列化する。これにより、複数の
 `POST /publish` が同時に来ても古い snapshot で replay buffer や storage を
-上書きしない。
+上書きしない。storage への保存に失敗した event は subscriber へ broadcast せず、
+HTTP 結果と live 配信済み副作用が食い違わないようにする。

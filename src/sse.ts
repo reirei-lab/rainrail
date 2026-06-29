@@ -3,7 +3,6 @@ import type { RainrailEventEnvelope } from './events.js';
 export const rainrailSseHeaders = {
   'Content-Type': 'text/event-stream',
   'Cache-Control': 'no-cache, no-transform',
-  Connection: 'keep-alive',
   'X-Accel-Buffering': 'no',
 } as const;
 

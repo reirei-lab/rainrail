@@ -1,8 +1,9 @@
 import type { RainrailEventEnvelope } from './events.js';
 import { createRainrailEventBus, type RainrailEventBus } from './event-bus.js';
-import { rainrailSseHeaders } from './sse.js';
+import { formatRainrailSseEvent, rainrailSseHeaders } from './sse.js';
 
 const RECENT_EVENTS_KEY = 'rainrail:recent-events';
+const DEFAULT_REPLAY_LIMIT = 100;
 
 export interface RainrailBridgeRoomStorage {
   get(key: string): Promise<unknown>;
@@ -21,6 +22,7 @@ export interface RainrailBridgeRoomOptions {
 export class RainrailBridgeRoom {
   readonly #state: RainrailBridgeRoomState;
   readonly #bus: RainrailEventBus;
+  readonly #replayLimit: number;
   readonly #keepAliveIntervalMs: number | undefined;
   #loading: Promise<void> | undefined;
   #publishQueue: Promise<void> = Promise.resolve();
@@ -28,6 +30,7 @@ export class RainrailBridgeRoom {
 
   constructor(state: RainrailBridgeRoomState, options: RainrailBridgeRoomOptions = {}) {
     this.#state = state;
+    this.#replayLimit = options.replayLimit ?? DEFAULT_REPLAY_LIMIT;
     this.#bus = createRainrailEventBus(
       options.replayLimit === undefined ? {} : { replayLimit: options.replayLimit },
     );
@@ -59,13 +62,23 @@ export class RainrailBridgeRoom {
   }
 
   async #publish(request: Request): Promise<Response> {
-    const event = (await request.json()) as RainrailEventEnvelope;
+    const eventPromise = request.json().then(validatePublishEnvelope);
 
     const publishResult = this.#publishQueue.then(async () => {
-      await this.#loadRecentEvents();
+      let event: RainrailEventEnvelope;
+      try {
+        event = await eventPromise;
+      } catch (error) {
+        return new Response(`invalid event envelope: ${errorMessage(error)}\n`, { status: 400 });
+      }
 
-      this.#bus.publish(event);
-      await this.#state.storage.put(RECENT_EVENTS_KEY, this.#bus.recentEvents);
+      try {
+        await this.#loadRecentEvents();
+        await this.#state.storage.put(RECENT_EVENTS_KEY, this.#nextRecentEvents(event));
+        this.#bus.publish(event);
+      } catch (error) {
+        return new Response(`publish failed: ${errorMessage(error)}\n`, { status: 500 });
+      }
 
       return Response.json({
         ok: true,
@@ -116,4 +129,70 @@ export class RainrailBridgeRoom {
 
     return this.#loading;
   }
+
+  #nextRecentEvents(event: RainrailEventEnvelope): RainrailEventEnvelope[] {
+    if (this.#replayLimit <= 0) return [];
+
+    return [...this.#bus.recentEvents, event].slice(-this.#replayLimit);
+  }
+}
+
+function validatePublishEnvelope(value: unknown): RainrailEventEnvelope {
+  if (!isRecord(value)) {
+    throw new TypeError('body must be a JSON object');
+  }
+
+  expectString(value, 'id');
+  const schemaVersion = expectString(value, 'schemaVersion');
+  expectString(value, 'name');
+  expectString(value, 'occurredAt');
+  const source = expectRecord(value, 'source');
+  const delivery = expectRecord(value, 'delivery');
+  const subject = expectRecord(value, 'subject');
+  const rawPayload = expectRecord(value, 'rawPayload');
+
+  if (schemaVersion !== 'rainrail.event.v1') {
+    throw new TypeError('schemaVersion must be rainrail.event.v1');
+  }
+
+  expectString(source, 'type');
+  expectString(source, 'name');
+  expectString(delivery, 'id');
+  expectString(delivery, 'receivedAt');
+  expectString(subject, 'type');
+  expectString(subject, 'id');
+  expectString(rawPayload, 'kind');
+  expectString(rawPayload, 'reference');
+
+  if (!('payload' in value)) {
+    throw new TypeError('payload is required');
+  }
+
+  const event = value as unknown as RainrailEventEnvelope;
+  formatRainrailSseEvent(event);
+  return event;
+}
+
+function expectString(record: Record<string, unknown>, key: string): string {
+  if (typeof record[key] !== 'string' || record[key].length === 0) {
+    throw new TypeError(`${key} must be a non-empty string`);
+  }
+
+  return record[key];
+}
+
+function expectRecord(record: Record<string, unknown>, key: string): Record<string, unknown> {
+  if (!isRecord(record[key])) {
+    throw new TypeError(`${key} must be an object`);
+  }
+
+  return record[key];
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

@@ -103,6 +103,52 @@ describe('Rainrail bridge room', () => {
     expect(storage.storedEvents().map((event) => event.id)).toEqual([first.id, second.id]);
   });
 
+  it('reserves publish order before request JSON parsing completes', async () => {
+    const storage = fakeState();
+    const room = new RainrailBridgeRoom(storage, { replayLimit: 10 });
+    const first = fixtureEvent('delivery-1', 'github.issue');
+    const second = fixtureEvent('delivery-2', 'cloudflare.tail');
+    const firstRequest = delayedJsonPublishRequest(first);
+    const secondRequest = delayedJsonPublishRequest(second);
+
+    const firstPublish = room.fetch(firstRequest.request);
+    const secondPublish = room.fetch(secondRequest.request);
+    secondRequest.resolve();
+    await flushMicrotasks();
+
+    expect(storage.storedEvents()).toEqual([]);
+
+    firstRequest.resolve();
+    await Promise.all([firstPublish, secondPublish]);
+
+    expect(storage.storedEvents().map((event) => event.id)).toEqual([first.id, second.id]);
+  });
+
+  it('does not broadcast when persistence fails', async () => {
+    const room = new RainrailBridgeRoom(failingPutState(), { replayLimit: 10 });
+    const eventsResponse = await room.fetch(new Request('https://rainrail.local/events'));
+    const reader = eventsResponse.body?.getReader();
+    expect(reader).toBeDefined();
+    expect(await readNext(reader!)).toBe(': connected\n\n');
+
+    const publishResponse = await room.fetch(publishRequest(fixtureEvent('delivery-1', 'github.issue')));
+
+    expect(publishResponse.status).toBe(500);
+    await expect(readNextOrTimeout(reader!)).resolves.toBe('timeout');
+    await reader?.cancel();
+  });
+
+  it('rejects malformed publish envelopes before they reach storage or subscribers', async () => {
+    const storage = fakeState();
+    const room = new RainrailBridgeRoom(storage, { replayLimit: 10 });
+
+    const response = await room.fetch(publishRequest({}));
+
+    expect(response.status).toBe(400);
+    await expect(response.text()).resolves.toContain('invalid event envelope');
+    expect(storage.storedEvents()).toEqual([]);
+  });
+
   it('passes Last-Event-ID to the SSE replay policy', async () => {
     const room = new RainrailBridgeRoom(fakeState(), { replayLimit: 10 });
     const first = fixtureEvent('delivery-1', 'github.issue');
@@ -136,6 +182,7 @@ function fakeState() {
         map.set(key, value);
       },
     },
+    storedEvents: () => (map.get('rainrail:recent-events') ?? []) as ReturnType<typeof fixtureEvent>[],
   };
 }
 
@@ -151,6 +198,19 @@ async function readUntil(reader: ReadableStreamDefaultReader<Uint8Array>, expect
   }
 
   return text;
+}
+
+async function readNext(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<string> {
+  const { value, done } = await reader.read();
+  expect(done).toBe(false);
+  return new TextDecoder().decode(value);
+}
+
+async function readNextOrTimeout(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<string> {
+  return Promise.race([
+    readNext(reader),
+    new Promise<string>((resolve) => setTimeout(() => resolve('timeout'), 20)),
+  ]);
 }
 
 function fixtureEvent(deliveryId: string, name: 'github.issue' | 'cloudflare.tail') {
@@ -178,8 +238,37 @@ function publishRequest(event: unknown): Request {
   });
 }
 
+function delayedJsonPublishRequest(event: unknown) {
+  let resolve: (() => void) | undefined;
+  const request = new Request('https://rainrail.local/publish', { method: 'POST' });
+  const json = async () => {
+    await new Promise<void>((innerResolve) => {
+      resolve = innerResolve;
+    });
+    return event;
+  };
+
+  Object.defineProperty(request, 'json', { value: json });
+
+  return {
+    request,
+    resolve: () => resolve?.(),
+  };
+}
+
 async function flushMicrotasks(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+function failingPutState() {
+  return {
+    storage: {
+      get: async () => [],
+      put: async () => {
+        throw new Error('storage unavailable');
+      },
+    },
+  };
 }
 
 function fakeControllableState() {
