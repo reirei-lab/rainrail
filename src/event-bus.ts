@@ -52,7 +52,7 @@ class InMemoryRainrailEventBus implements RainrailEventBus {
       try {
         client.write(chunk);
       } catch {
-        this.#clients.delete(client);
+        this.#disconnect(client);
       }
     }
   }
@@ -69,8 +69,7 @@ class InMemoryRainrailEventBus implements RainrailEventBus {
     this.#clients.add(subscriber);
 
     return () => {
-      this.#clients.delete(subscriber);
-      subscriber.close?.();
+      this.#disconnect(subscriber);
     };
   }
 
@@ -171,6 +170,16 @@ class InMemoryRainrailEventBus implements RainrailEventBus {
 
     const lastIndex = this.#recent.findIndex((event) => event.id === lastEventId);
     return lastIndex === -1 ? this.#recent : this.#recent.slice(lastIndex + 1);
+  }
+
+  #disconnect(subscriber: RainrailEventBusSubscriber): void {
+    if (!this.#clients.delete(subscriber)) return;
+
+    try {
+      subscriber.close?.();
+    } catch {
+      // Cleanup should not break publish or cancel paths for other subscribers.
+    }
   }
 }
 

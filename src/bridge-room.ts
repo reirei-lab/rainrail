@@ -5,6 +5,10 @@ import { formatRainrailSseEvent, rainrailSseHeaders } from './sse.js';
 const RECENT_EVENTS_KEY = 'rainrail:recent-events';
 const DEFAULT_REPLAY_LIMIT = 100;
 
+type PublishEventResult =
+  | { ok: true; event: RainrailEventEnvelope }
+  | { ok: false; error: unknown };
+
 export interface RainrailBridgeRoomStorage {
   get(key: string): Promise<unknown>;
   put(key: string, value: unknown): Promise<void>;
@@ -62,18 +66,31 @@ export class RainrailBridgeRoom {
   }
 
   async #publish(request: Request): Promise<Response> {
-    const eventPromise = request.json().then(validatePublishEnvelope);
+    const eventResultPromise: Promise<PublishEventResult> = request
+      .json()
+      .then(validatePublishEnvelope)
+      .then(
+        (event) => ({ ok: true, event }),
+        (error: unknown) => ({ ok: false, error }),
+      );
 
     const publishResult = this.#publishQueue.then(async () => {
-      let event: RainrailEventEnvelope;
-      try {
-        event = await eventPromise;
-      } catch (error) {
-        return new Response(`invalid event envelope: ${errorMessage(error)}\n`, { status: 400 });
+      const eventResult = await eventResultPromise;
+      if (!eventResult.ok) {
+        return new Response(`invalid event envelope: ${errorMessage(eventResult.error)}\n`, { status: 400 });
       }
 
       try {
+        if (request.signal.aborted) {
+          return abortedPublishResponse();
+        }
+
         await this.#loadRecentEvents();
+        if (request.signal.aborted) {
+          return abortedPublishResponse();
+        }
+
+        const { event } = eventResult;
         await this.#state.storage.put(RECENT_EVENTS_KEY, this.#nextRecentEvents(event));
         this.#bus.publish(event);
       } catch (error) {
@@ -82,8 +99,8 @@ export class RainrailBridgeRoom {
 
       return Response.json({
         ok: true,
-        id: event.id,
-        name: event.name,
+        id: eventResult.event.id,
+        name: eventResult.event.name,
         clients: this.#bus.clientCount,
       });
     });
@@ -195,4 +212,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function abortedPublishResponse(): Response {
+  return new Response('request aborted\n', { status: 499 });
 }

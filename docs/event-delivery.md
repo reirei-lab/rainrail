@@ -59,9 +59,14 @@ secret、token、credential、生 webhook payload は core 側では保持しな
 
 `POST /publish` は request body の読み込み開始直後に publish queue の枠を確保する。
 これにより、大きい body や streaming body の parse 完了順に左右されず、`fetch`
-呼び出し順に storage / replay / broadcast を処理する。
+呼び出し順に storage / replay / broadcast を処理する。body parse や envelope 検証の
+失敗は queue 待機中でも即時に捕捉し、順番が来た時点で 400 応答へ変換する。
 
 初回 storage 復元と publish 永続化は room 内で直列化する。これにより、複数の
 `POST /publish` が同時に来ても古い snapshot で replay buffer や storage を
 上書きしない。storage への保存に失敗した event は subscriber へ broadcast せず、
 HTTP 結果と live 配信済み副作用が食い違わないようにする。
+
+queue 待機中に `request.signal` が abort 済みになった publish は、storage 永続化と
+live broadcast の前に 499 として破棄する。送信元が成功応答を受け取れない状態で
+副作用だけが進み、再試行時に agent workflow が重複起動することを避けるため。

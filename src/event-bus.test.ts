@@ -131,6 +131,28 @@ describe('Rainrail event bus', () => {
     bus.subscribe({ write: (chunk) => writes.push(chunk) });
     expect(writes.join('')).toBe(': connected\n\n');
   });
+
+  it('runs subscriber cleanup when a broadcast write fails', () => {
+    const bus = createRainrailEventBus({ replayLimit: 10 });
+    let closed = 0;
+
+    bus.subscribe({
+      write: (chunk) => {
+        if (chunk.includes('event: github.issue\n')) {
+          throw new Error('writer closed');
+        }
+      },
+      close: () => {
+        closed += 1;
+      },
+    });
+
+    expect(bus.clientCount).toBe(1);
+    bus.publish(fixtureEvent('github-webhook', 'delivery-1', 'github.issue', 'issue', '17'));
+
+    expect(bus.clientCount).toBe(0);
+    expect(closed).toBe(1);
+  });
 });
 
 function fixtureEvent(

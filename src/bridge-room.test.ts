@@ -149,6 +149,62 @@ describe('Rainrail bridge room', () => {
     expect(storage.storedEvents()).toEqual([]);
   });
 
+  it('captures JSON parse failures while the publish waits in queue', async () => {
+    const storage = fakeControllableState();
+    const room = new RainrailBridgeRoom(storage.state, { replayLimit: 10 });
+    const health = room.fetch(new Request('https://rainrail.local/healthz'));
+    expect(storage.getCalls).toBe(1);
+    storage.resolveGet([]);
+    await health;
+
+    storage.pauseNextPut();
+    const firstPublish = room.fetch(publishRequest(fixtureEvent('delivery-1', 'github.issue')));
+    const secondPublish = room.fetch(rejectingJsonPublishRequest(new SyntaxError('bad json')));
+    const unhandledRejections: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => {
+      unhandledRejections.push(reason);
+    };
+    process.on('unhandledRejection', onUnhandledRejection);
+
+    try {
+      await flushMicrotasks();
+      expect(unhandledRejections).toEqual([]);
+
+      storage.resolveNextPut();
+      await firstPublish;
+      const secondResponse = await secondPublish;
+
+      expect(secondResponse.status).toBe(400);
+      await expect(secondResponse.text()).resolves.toContain('bad json');
+    } finally {
+      process.off('unhandledRejection', onUnhandledRejection);
+    }
+  });
+
+  it('drops aborted publishes before persistence or broadcast side effects', async () => {
+    const storage = fakeControllableState();
+    const room = new RainrailBridgeRoom(storage.state, { replayLimit: 10 });
+    const health = room.fetch(new Request('https://rainrail.local/healthz'));
+    expect(storage.getCalls).toBe(1);
+    storage.resolveGet([]);
+    await health;
+
+    storage.pauseNextPut();
+    const first = fixtureEvent('delivery-1', 'github.issue');
+    const second = fixtureEvent('delivery-2', 'cloudflare.tail');
+    const secondController = new AbortController();
+    const firstPublish = room.fetch(publishRequest(first));
+    const secondPublish = room.fetch(publishRequest(second, secondController.signal));
+    await flushMicrotasks();
+
+    secondController.abort();
+    storage.resolveNextPut();
+
+    expect((await firstPublish).status).toBe(200);
+    expect((await secondPublish).status).toBe(499);
+    expect(storage.storedEvents().map((event) => event.id)).toEqual([first.id]);
+  });
+
   it('passes Last-Event-ID to the SSE replay policy', async () => {
     const room = new RainrailBridgeRoom(fakeState(), { replayLimit: 10 });
     const first = fixtureEvent('delivery-1', 'github.issue');
@@ -231,10 +287,11 @@ function fixtureEvent(deliveryId: string, name: 'github.issue' | 'cloudflare.tai
   });
 }
 
-function publishRequest(event: unknown): Request {
+function publishRequest(event: unknown, signal?: AbortSignal): Request {
   return new Request('https://rainrail.local/publish', {
     method: 'POST',
     body: JSON.stringify(event),
+    ...(signal === undefined ? {} : { signal }),
   });
 }
 
@@ -254,6 +311,16 @@ function delayedJsonPublishRequest(event: unknown) {
     request,
     resolve: () => resolve?.(),
   };
+}
+
+function rejectingJsonPublishRequest(error: unknown): Request {
+  const request = new Request('https://rainrail.local/publish', { method: 'POST' });
+  Object.defineProperty(request, 'json', {
+    value: async () => {
+      throw error;
+    },
+  });
+  return request;
 }
 
 async function flushMicrotasks(): Promise<void> {
