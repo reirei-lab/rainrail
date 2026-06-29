@@ -40,9 +40,47 @@ Workflow plugin は `accepts(event)` で対象イベントを絞り込み、
 `handle(event, context)` で処理する。`context` は runtime が持つ
 capability を含む。
 
-最初の capability contract は provider 名と任意 capability map だけを固定する。
-agent dispatch などの高レベル capability は `dispatchAgent` のように関数として
-差し込める。secret 値は contract に含めず、runtime 側で秘匿して扱う。
+Workflow plugin は任意で `capabilities` と `timeoutMs` を宣言できる。
+`capabilities` は危険操作を呼ぶための宣言であり、宣言されていない plugin は
+merge、runtime start、secret access を実行できない。
+
+provider 名や agent dispatch などの低レベル runtime 情報は
+`context.capabilities` に残す。一方で merge、runtime start、secret access は
+`context.actions` の gated action として渡す。secret 値は audit log に含めず、
+runtime action の戻り値を handler 内だけで扱う。
+
+## Plugin loader と local handler
+
+`createPluginLoader` は packaged Workflow plugin と local handler を同じ
+workflow 配列に登録する。
+
+- `register(plugin)`: packaged Workflow plugin を登録する。
+- `on(eventName, handler, options)`: local handler を登録する。内部では
+  `event.name === eventName` を満たす Workflow plugin に変換する。
+- `dispatch(event)`: 登録順に workflow を評価し、dispatcher と同じ
+  `WorkflowPluginResult[]` を返す。
+
+local handler も packaged plugin と同じ `PluginRuntimeContext` を受け取るため、
+event/context API は共通になる。名前を省略した local handler は
+`local:${eventName}:${n}` の id を持つ。
+
+## Capability gate と audit log
+
+危険操作は次の capability で gate する。
+
+- `mergePullRequest`: `merge`
+- `startRuntime`: `runtime:start`
+- `readSecret`: `secret:access`
+
+capability がない handler が呼び出した場合、runtime action は実行せず
+`CapabilityDeniedError` を投げる。plugin failure は dispatcher が
+その plugin の rejected result として隔離し、daemon 全体や後続 plugin を
+落とさない。
+
+`audit.record(entry)` を渡すと、plugin id、event id、run id、action、
+result、発生時刻が記録される。action result は `fulfilled`、`rejected`、
+`denied`、`timeout` のいずれか。secret action の audit entry は secret の
+値を含めない。
 
 ## Dispatcher
 
@@ -50,6 +88,8 @@ agent dispatch などの高レベル capability は `dispatchAgent` のように
 `dispatch(event)` は `accepts` が true の workflow だけを呼び、
 plugin ごとに fulfilled/rejected の結果を返す。`accepts` が例外を投げた場合も
 その plugin の rejected result として隔離し、後続 workflow の評価は続ける。
+handler が `timeoutMs` または loader/dispatcher の `defaultTimeoutMs` を超えた場合も、
+その plugin の rejected result と audit result `timeout` に隔離する。
 最小 contract では retry や並列度制御は持たせない。これらは orchestration policy
 として後続 issue で追加する。
 

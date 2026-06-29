@@ -24,10 +24,19 @@ export interface RuntimeCapabilities {
   [capability: string]: unknown;
 }
 
+export type RuntimeCapabilityName = 'merge' | 'runtime:start' | 'secret:access' | (string & {});
+
+export interface RuntimeActions {
+  mergePullRequest(request: { pullRequestId: string; [key: string]: unknown }): Promise<unknown>;
+  startRuntime(request: { runtimeId: string; [key: string]: unknown }): Promise<unknown>;
+  readSecret(request: { name: string; [key: string]: unknown }): Promise<string>;
+}
+
 export interface PluginRuntimeContext {
   runId: string;
   now: () => Date;
   capabilities: RuntimeCapabilities;
+  actions: RuntimeActions;
 }
 
 export interface WorkflowPluginResult {
@@ -40,6 +49,8 @@ export interface WorkflowPluginResult {
 
 export interface WorkflowPlugin<TEvent extends RainrailEventEnvelope = RainrailEventEnvelope> {
   name: string;
+  capabilities?: RuntimeCapabilityName[];
+  timeoutMs?: number;
   accepts?: (event: RainrailEventEnvelope) => boolean;
   handle(event: TEvent, context: PluginRuntimeContext): unknown | Promise<unknown>;
 }
