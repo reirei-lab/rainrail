@@ -2938,4 +2938,259 @@ describe('plugin runtime contract', () => {
       vi.useRealTimers();
     }
   });
+
+  it('does not expose raw runtime actions through the plugin context prototype', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.pull_request',
+      delivery: {
+        id: 'delivery-runtime-prototype-action-bypass',
+        receivedAt: '2026-06-29T14:00:00.000Z',
+      },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'pull_request', id: '44' },
+      payload: { action: 'closed' },
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'github://deliveries/delivery-runtime-prototype-action-bypass',
+      },
+    });
+    const mergePullRequest = vi.fn(async () => ({ merged: true }));
+    const dispatcher = createRuntimeDispatcher({
+      workflows: [
+        defineWorkflowPlugin({
+          name: 'runtime-prototype-action-bypass-handler',
+          accepts: () => true,
+          handle: async (_event, context) =>
+            (Object.getPrototypeOf(context) as RuntimeDispatcherContext).actions?.mergePullRequest?.(
+              {
+                pullRequestId: '44',
+              },
+              { signal: context.signal },
+            ),
+        }),
+      ],
+      runtime: {
+        runId: 'run-13',
+        now: () => new Date('2026-06-29T14:01:00.000Z'),
+        actions: { mergePullRequest },
+      },
+    });
+
+    const [result] = await dispatcher.dispatch(event);
+
+    expect(result).toEqual({
+      pluginName: 'runtime-prototype-action-bypass-handler',
+      eventId: 'github-webhook:delivery-runtime-prototype-action-bypass:github.pull_request',
+      status: 'fulfilled',
+      value: undefined,
+    });
+    expect(mergePullRequest).not.toHaveBeenCalled();
+  });
+
+  it('calls runtime context methods with the original receiver', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: {
+        id: 'delivery-runtime-private-now',
+        receivedAt: '2026-06-29T14:00:00.000Z',
+      },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'github://deliveries/delivery-runtime-private-now',
+      },
+    });
+    class RuntimeContext {
+      #clock = new Date('2026-06-29T14:01:00.000Z');
+      runId = 'run-13';
+
+      now() {
+        return this.#clock;
+      }
+    }
+    const dispatcher = createRuntimeDispatcher({
+      workflows: [
+        defineWorkflowPlugin({
+          name: 'runtime-private-now-handler',
+          accepts: () => true,
+          handle: async (_event, context) => context.now().toISOString(),
+        }),
+      ],
+      runtime: new RuntimeContext() as RuntimeDispatcherContext,
+    });
+
+    await expect(dispatcher.dispatch(event)).resolves.toEqual([
+      {
+        pluginName: 'runtime-private-now-handler',
+        eventId: 'github-webhook:delivery-runtime-private-now:github.issue',
+        status: 'fulfilled',
+        value: '2026-06-29T14:01:00.000Z',
+      },
+    ]);
+  });
+
+  it('does not expose raw dispatchAgent through capability constructors', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: {
+        id: 'delivery-dispatch-agent-constructor-bypass',
+        receivedAt: '2026-06-29T14:00:00.000Z',
+      },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'github://deliveries/delivery-dispatch-agent-constructor-bypass',
+      },
+    });
+    const dispatchAgent = vi.fn(async (_request: Parameters<NonNullable<RuntimeCapabilities['dispatchAgent']>>[0]) => ({
+      sessionKey: 'agent:main:constructor-bypass',
+    }));
+    class RuntimeCapabilityBag {
+      provider = 'codex';
+
+      dispatchAgent(request: Parameters<NonNullable<RuntimeCapabilities['dispatchAgent']>>[0]) {
+        return dispatchAgent(request);
+      }
+    }
+    const loader = createPluginLoader({
+      runtime: mockRuntimeContext({
+        runId: 'run-13',
+        now: () => new Date('2026-06-29T14:01:00.000Z'),
+        capabilities: new RuntimeCapabilityBag() as unknown as RuntimeCapabilities,
+      }),
+    });
+
+    loader.on(
+      'github.issue',
+      async (handledEvent, context) => {
+        const rawDispatchAgent = (
+          context.capabilities?.constructor as {
+            prototype?: { dispatchAgent?: RuntimeCapabilities['dispatchAgent'] };
+          }
+        ).prototype?.dispatchAgent;
+        return rawDispatchAgent?.({
+          event: handledEvent,
+          workflow: 'constructor-dispatch-agent-handler',
+          runId: context.runId,
+        });
+      },
+      { name: 'constructor-dispatch-agent-handler' },
+    );
+
+    const [result] = await loader.dispatch(event);
+
+    expect(result).toMatchObject({
+      pluginName: 'constructor-dispatch-agent-handler',
+      eventId: 'github-webhook:delivery-dispatch-agent-constructor-bypass:github.issue',
+      status: 'rejected',
+    });
+    expect(dispatchAgent).not.toHaveBeenCalled();
+  });
+
+  it('calls capability helpers with the original receiver', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: {
+        id: 'delivery-capability-private-helper',
+        receivedAt: '2026-06-29T14:00:00.000Z',
+      },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'github://deliveries/delivery-capability-private-helper',
+      },
+    });
+    class RuntimeCapabilityBag {
+      #runtime = 'private-runtime';
+      provider = 'codex';
+      dispatchAgent = async () => ({ sessionKey: 'agent:main:private-helper' });
+
+      lookupRuntime() {
+        return this.#runtime;
+      }
+    }
+    const loader = createPluginLoader({
+      runtime: mockRuntimeContext({
+        runId: 'run-13',
+        now: () => new Date('2026-06-29T14:01:00.000Z'),
+        capabilities: new RuntimeCapabilityBag() as unknown as RuntimeCapabilities,
+      }),
+    });
+
+    loader.on(
+      'github.issue',
+      async (_event, context) =>
+        (context.capabilities as unknown as { lookupRuntime: () => string }).lookupRuntime(),
+      { name: 'capability-private-helper-handler', capabilities: ['runtime:start'] },
+    );
+
+    await expect(loader.dispatch(event)).resolves.toEqual([
+      {
+        pluginName: 'capability-private-helper-handler',
+        eventId: 'github-webhook:delivery-capability-private-helper:github.issue',
+        status: 'fulfilled',
+        value: 'private-runtime',
+      },
+    ]);
+  });
+
+  it('allows gated dispatchAgent from frozen capabilities', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: {
+        id: 'delivery-frozen-dispatch-agent',
+        receivedAt: '2026-06-29T14:00:00.000Z',
+      },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'github://deliveries/delivery-frozen-dispatch-agent',
+      },
+    });
+    const dispatchAgent = vi.fn(async () => ({ sessionKey: 'agent:main:frozen' }));
+    const loader = createPluginLoader({
+      runtime: mockRuntimeContext({
+        runId: 'run-13',
+        now: () => new Date('2026-06-29T14:01:00.000Z'),
+        capabilities: Object.freeze({
+          provider: 'codex',
+          dispatchAgent,
+        }),
+      }),
+    });
+
+    loader.on(
+      'github.issue',
+      async (handledEvent, context) =>
+        context.capabilities?.dispatchAgent?.({
+          event: handledEvent,
+          workflow: 'frozen-dispatch-agent-handler',
+          runId: context.runId,
+        }),
+      { name: 'frozen-dispatch-agent-handler', capabilities: ['runtime:start'] },
+    );
+
+    await expect(loader.dispatch(event)).resolves.toEqual([
+      {
+        pluginName: 'frozen-dispatch-agent-handler',
+        eventId: 'github-webhook:delivery-frozen-dispatch-agent:github.issue',
+        status: 'fulfilled',
+        value: { sessionKey: 'agent:main:frozen' },
+      },
+    ]);
+    expect(dispatchAgent).toHaveBeenCalledOnce();
+  });
 });

@@ -188,8 +188,11 @@ function createWorkflowContext(
   event: RainrailEventEnvelope,
   signal: AbortSignal,
 ): PluginRuntimeContext {
-  const context = Object.create(options.runtime) as PluginRuntimeContext;
+  const context = {} as PluginRuntimeContext;
   const capabilities = createGatedRuntimeCapabilities(options, policy, event, signal);
+
+  defineWorkflowContextAccessor(context, 'runId', () => options.runtime.runId);
+  defineWorkflowContextProperty(context, 'now', () => options.runtime.now());
 
   if (capabilities !== undefined) {
     defineWorkflowContextProperty(context, 'capabilities', capabilities);
@@ -201,6 +204,18 @@ function createWorkflowContext(
   defineWorkflowContextProperty(context, 'actions', createGatedRuntimeActions(options, policy, event, signal));
 
   return context;
+}
+
+function defineWorkflowContextAccessor<TKey extends keyof PluginRuntimeContext>(
+  context: PluginRuntimeContext,
+  key: TKey,
+  get: () => PluginRuntimeContext[TKey],
+): void {
+  Object.defineProperty(context, key, {
+    configurable: true,
+    enumerable: true,
+    get,
+  });
 }
 
 function defineWorkflowContextProperty<TKey extends keyof PluginRuntimeContext>(
@@ -309,50 +324,158 @@ function createDispatchAgentCapabilityProxy(
   capabilities: NonNullable<PluginRuntimeContext['capabilities']>,
   dispatchAgent: DispatchAgentCapability,
 ): PluginRuntimeContext['capabilities'] {
-  const prototypeCache = new WeakMap<object, object>();
-  const createProxy = (target: object): object =>
-    new Proxy(target, {
-      get(target, property, receiver) {
-        if (property === 'dispatchAgent') {
-          return dispatchAgent;
-        }
+  const functionCache = new WeakMap<Function, Function>();
+  const viewCache = new WeakMap<object, object>();
 
-        return Reflect.get(target, property, receiver);
+  const bindCapabilityFunction = (value: Function): Function => {
+    const cached = functionCache.get(value);
+    if (cached !== undefined) {
+      return cached;
+    }
+
+    const bound = value.bind(capabilities);
+    functionCache.set(value, bound);
+    return bound;
+  };
+
+  const readCapabilityProperty = (source: object, property: string | symbol): unknown => {
+    if (property === 'constructor') {
+      return createCapabilityConstructorView(Reflect.get(source, property, capabilities), capabilities, dispatchAgent);
+    }
+
+    const value = Reflect.get(source, property, capabilities);
+    if (typeof value === 'function') {
+      return bindCapabilityFunction(value);
+    }
+
+    return value;
+  };
+
+  const describeCapabilityProperty = (source: object, property: string | symbol): PropertyDescriptor | undefined => {
+    const descriptor = Reflect.getOwnPropertyDescriptor(source, property);
+    if (descriptor === undefined) {
+      return undefined;
+    }
+
+    if (property === 'dispatchAgent') {
+      return {
+        configurable: true,
+        enumerable: descriptor.enumerable ?? false,
+        value: dispatchAgent,
+        writable: false,
+      };
+    }
+
+    return {
+      configurable: true,
+      enumerable: descriptor.enumerable ?? false,
+      value: readCapabilityProperty(source, property),
+      writable: false,
+    };
+  };
+
+  const createCapabilityView = (source: object): object => {
+    const cached = viewCache.get(source);
+    if (cached !== undefined) {
+      return cached;
+    }
+
+    const view = new Proxy(
+      {},
+      {
+        get(_target, property) {
+          if (property === 'dispatchAgent') {
+            return dispatchAgent;
+          }
+
+          return readCapabilityProperty(source, property);
+        },
+        getOwnPropertyDescriptor(_target, property) {
+          return describeCapabilityProperty(source, property);
+        },
+        getPrototypeOf() {
+          const prototype = Reflect.getPrototypeOf(source);
+          return prototype === null ? null : createCapabilityView(prototype);
+        },
+        has(_target, property) {
+          return property in source;
+        },
+        ownKeys() {
+          return Reflect.ownKeys(source);
+        },
       },
-      getOwnPropertyDescriptor(target, property) {
-        const descriptor = Reflect.getOwnPropertyDescriptor(target, property);
-        if (property !== 'dispatchAgent' || descriptor === undefined) {
-          return descriptor;
+    );
+
+    viewCache.set(source, view);
+    return view;
+  };
+
+  return createCapabilityView(capabilities) as PluginRuntimeContext['capabilities'];
+}
+
+function createCapabilityConstructorView(
+  constructorValue: unknown,
+  capabilities: NonNullable<PluginRuntimeContext['capabilities']>,
+  dispatchAgent: DispatchAgentCapability,
+): unknown {
+  if (typeof constructorValue !== 'function') {
+    return constructorValue;
+  }
+
+  const prototype = constructorValue.prototype;
+  if (typeof prototype !== 'object' || prototype === null) {
+    return constructorValue;
+  }
+
+  return new Proxy(
+    {},
+    {
+      get(_target, property) {
+        if (property !== 'prototype') {
+          return Reflect.get(constructorValue, property, constructorValue);
         }
 
-        if ('value' in descriptor) {
-          return { ...descriptor, value: dispatchAgent };
-        }
+        return new Proxy(
+          {},
+          {
+            get(_target, prototypeProperty) {
+              if (prototypeProperty === 'dispatchAgent') {
+                return dispatchAgent;
+              }
 
-        return {
-          configurable: descriptor.configurable ?? false,
-          enumerable: descriptor.enumerable ?? false,
-          get: () => dispatchAgent,
-        };
+              if (prototypeProperty === 'constructor') {
+                return createCapabilityConstructorView(constructorValue, capabilities, dispatchAgent);
+              }
+
+              const value = Reflect.get(prototype, prototypeProperty, capabilities);
+              return typeof value === 'function' ? value.bind(capabilities) : value;
+            },
+            getOwnPropertyDescriptor(_target, prototypeProperty) {
+              const descriptor = Reflect.getOwnPropertyDescriptor(prototype, prototypeProperty);
+              if (descriptor === undefined) {
+                return undefined;
+              }
+
+              return {
+                configurable: true,
+                enumerable: descriptor.enumerable ?? false,
+                value:
+                  prototypeProperty === 'dispatchAgent'
+                    ? dispatchAgent
+                    : prototypeProperty === 'constructor'
+                      ? createCapabilityConstructorView(constructorValue, capabilities, dispatchAgent)
+                    : Reflect.get(prototype, prototypeProperty, capabilities),
+                writable: false,
+              };
+            },
+            ownKeys() {
+              return Reflect.ownKeys(prototype);
+            },
+          },
+        );
       },
-      getPrototypeOf(target) {
-        const prototype = Reflect.getPrototypeOf(target);
-        if (prototype === null || !Object.isExtensible(target)) {
-          return prototype;
-        }
-
-        const cached = prototypeCache.get(prototype);
-        if (cached !== undefined) {
-          return cached;
-        }
-
-        const wrappedPrototype = createProxy(prototype);
-        prototypeCache.set(prototype, wrappedPrototype);
-        return wrappedPrototype;
-      },
-    });
-
-  return createProxy(capabilities) as PluginRuntimeContext['capabilities'];
+    },
+  );
 }
 
 async function callDispatchAgent(
