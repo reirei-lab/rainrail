@@ -91,8 +91,10 @@ export class RainrailBridgeRoom {
         }
 
         const { event } = eventResult;
+        const previousRecentEvents = this.#bus.recentEvents;
         await this.#state.storage.put(RECENT_EVENTS_KEY, this.#nextRecentEvents(event));
         if (request.signal.aborted) {
+          await this.#state.storage.put(RECENT_EVENTS_KEY, previousRecentEvents);
           return abortedPublishResponse();
         }
 

@@ -77,5 +77,7 @@ HTTP 結果と live 配信済み副作用が食い違わないようにする。
 文言にし、storage backend の接続文字列や内部 endpoint などを呼び出し元へ返さない。
 
 queue 待機中または storage 永続化中に `request.signal` が abort 済みになった publish
-は、live broadcast の前に 499 として破棄する。送信元が成功応答を受け取れない状態で
-配信だけが進み、再試行時に agent workflow が重複起動することを避けるため。
+は、live broadcast の前に 499 として破棄する。storage 永続化後に abort を検出した
+場合は直前の replay snapshot を再保存して rollback する。送信元が成功応答を
+受け取れない状態で durable replay や配信だけが進み、再試行時に agent workflow が
+重複起動することを避けるため。

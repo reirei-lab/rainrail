@@ -228,6 +228,7 @@ describe('Rainrail bridge room', () => {
     storage.resolveNextPut();
 
     expect((await publish).status).toBe(499);
+    expect(storage.storedEvents()).toEqual([]);
     await expect(readNextOrTimeout(reader!)).resolves.toBe('timeout');
     await reader?.cancel();
   });
