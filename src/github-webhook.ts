@@ -185,6 +185,7 @@ export async function createGitHubWebhookEvent({
 export interface GitHubWebhookPayload {
   action?: unknown;
   sender?: GitHubWebhookRecord;
+  assignee?: GitHubWebhookRecord;
   installation?: GitHubWebhookRecord;
   organization?: GitHubWebhookRecord;
   label?: GitHubWebhookRecord;
@@ -199,6 +200,7 @@ export interface GitHubWebhookPayload {
   review?: GitHubWebhookRecord;
   workflow_run?: GitHubWebhookRecord;
   projects_v2?: GitHubWebhookRecord;
+  projects_v2_status_update?: GitHubWebhookRecord;
   projects_v2_item?: GitHubWebhookRecord;
   changes?: GitHubWebhookRecord;
   head_commit?: GitHubWebhookRecord;
@@ -214,6 +216,7 @@ export interface NormalizedGitHubWebhookPayload {
   repository?: NormalizedGitHubRepository;
   organization?: NormalizedGitHubOrganization;
   actor?: NormalizedGitHubActor;
+  assignee?: NormalizedGitHubActor;
   installation?: NormalizedGitHubInstallation;
   resource: NormalizedGitHubResource;
   label?: NormalizedGitHubLabel;
@@ -271,6 +274,7 @@ export interface NormalizedGitHubResource {
   name?: string;
   title?: string;
   state?: string;
+  merged?: boolean;
   status?: string;
   conclusion?: string;
   url?: string;
@@ -281,8 +285,11 @@ export interface NormalizedGitHubResource {
   contentType?: string;
   contentNodeId?: string;
   ref?: string;
+  refType?: string;
   beforeSha?: string;
   headCommitMessage?: string;
+  body?: string;
+  projectNodeId?: string;
   isResolved?: boolean;
   path?: string;
   line?: number;
@@ -382,8 +389,16 @@ function findGitHubSubject(payload: GitHubWebhookPayload, name: RainrailEventNam
     return subjectFromProject(payload) ?? subjectFromRepository(payload, name);
   }
 
+  if (payload.projects_v2_status_update) {
+    return subjectFromProjectStatusUpdate(payload) ?? subjectFromRepository(payload, name);
+  }
+
   if (name === 'github.push') {
     return subjectFromPush(payload) ?? subjectFromRepository(payload, name);
+  }
+
+  if (name === 'github.create' || name === 'github.delete') {
+    return subjectFromRef(payload) ?? subjectFromRepository(payload, name);
   }
 
   return subjectFromRepository(payload, name);
@@ -429,6 +444,20 @@ function subjectFromProject(payload: GitHubWebhookPayload): RainrailEventEnvelop
     type: 'project',
     id: String(payload.projects_v2.id ?? payload.projects_v2.number ?? 'unknown'),
     ...(typeof payload.projects_v2.html_url === 'string' ? { url: payload.projects_v2.html_url } : {}),
+  };
+}
+
+function subjectFromProjectStatusUpdate(payload: GitHubWebhookPayload): RainrailEventEnvelope['subject'] | undefined {
+  if (!payload.projects_v2_status_update) {
+    return undefined;
+  }
+
+  return {
+    type: 'project_status_update',
+    id: String(payload.projects_v2_status_update.id ?? 'unknown'),
+    ...(typeof payload.projects_v2_status_update.html_url === 'string'
+      ? { url: payload.projects_v2_status_update.html_url }
+      : {}),
   };
 }
 
@@ -512,6 +541,19 @@ function subjectFromPush(payload: GitHubWebhookPayload): RainrailEventEnvelope['
   };
 }
 
+function subjectFromRef(payload: GitHubWebhookPayload): RainrailEventEnvelope['subject'] | undefined {
+  const ref = stringField(payload, 'ref');
+  const refType = stringField(payload, 'ref_type');
+  if (!ref) {
+    return undefined;
+  }
+
+  return {
+    type: 'ref',
+    id: `${refType ?? 'unknown'}:${ref}`,
+  };
+}
+
 function subjectFromRepository(
   payload: GitHubWebhookPayload,
   name: RainrailEventName,
@@ -566,6 +608,7 @@ function normalizeGitHubWebhookPayload(
   const repository = normalizedRepository(payload.repository);
   const organization = normalizedOrganization(payload.organization);
   const actor = normalizedActor(payload.sender);
+  const assignee = normalizedActor(payload.assignee);
   const installation = normalizedInstallation(payload.installation);
   const resource = normalizedResource(payload);
   const label = normalizedLabel(payload.label);
@@ -582,6 +625,7 @@ function normalizeGitHubWebhookPayload(
     ...(repository ? { repository } : {}),
     ...(organization ? { organization } : {}),
     ...(actor ? { actor } : {}),
+    ...(assignee ? { assignee } : {}),
     ...(installation ? { installation } : {}),
     resource,
     ...(label ? { label } : {}),
@@ -674,6 +718,10 @@ function normalizedResource(payload: GitHubWebhookPayload): NormalizedGitHubReso
     return resourceFromPush(payload);
   }
 
+  if (stringField(payload, 'ref') && stringField(payload, 'ref_type')) {
+    return resourceFromRef(payload);
+  }
+
   if (payload.thread) {
     return resourceFromReviewThread(payload.thread);
   }
@@ -710,6 +758,10 @@ function normalizedResource(payload: GitHubWebhookPayload): NormalizedGitHubReso
     return resourceFromProject(payload.projects_v2);
   }
 
+  if (payload.projects_v2_status_update) {
+    return resourceFromProjectStatusUpdate(payload.projects_v2_status_update);
+  }
+
   return resourceFromRepository(payload.repository);
 }
 
@@ -736,6 +788,7 @@ function resourceFromPullRequest(pullRequest: GitHubWebhookRecord): NormalizedGi
     ...(number === undefined ? {} : { number }),
     ...optionalStringProperty('title', stringField(pullRequest, 'title')),
     ...optionalStringProperty('state', stringField(pullRequest, 'state')),
+    ...optionalBooleanProperty('merged', booleanField(pullRequest, 'merged')),
     ...optionalStringProperty('url', stringField(pullRequest, 'html_url')),
     ...optionalStringProperty('headRef', stringField(head, 'ref')),
     ...optionalStringProperty('headSha', stringField(head, 'sha')),
@@ -823,6 +876,16 @@ function resourceFromProject(project: GitHubWebhookRecord): NormalizedGitHubReso
   };
 }
 
+function resourceFromProjectStatusUpdate(statusUpdate: GitHubWebhookRecord): NormalizedGitHubResource {
+  return {
+    type: 'project_status_update',
+    id: String(statusUpdate.id ?? 'unknown'),
+    ...optionalStringProperty('body', stringField(statusUpdate, 'body')),
+    ...optionalStringProperty('url', stringField(statusUpdate, 'html_url')),
+    ...optionalStringProperty('projectNodeId', stringField(statusUpdate, 'project_node_id')),
+  };
+}
+
 function resourceFromPush(payload: GitHubWebhookPayload): NormalizedGitHubResource {
   const headCommit = payload.head_commit;
   const after = stringField(payload, 'after') ?? 'unknown';
@@ -835,6 +898,18 @@ function resourceFromPush(payload: GitHubWebhookPayload): NormalizedGitHubResour
     ...optionalStringProperty('headSha', stringField(payload, 'after')),
     ...optionalStringProperty('headCommitMessage', stringField(headCommit, 'message')),
     ...optionalStringProperty('url', stringField(headCommit, 'url')),
+  };
+}
+
+function resourceFromRef(payload: GitHubWebhookPayload): NormalizedGitHubResource {
+  const ref = stringField(payload, 'ref') ?? 'unknown';
+  const refType = stringField(payload, 'ref_type') ?? 'unknown';
+
+  return {
+    type: 'ref',
+    id: `${refType}:${ref}`,
+    ref,
+    refType,
   };
 }
 
@@ -880,8 +955,12 @@ function normalizedRelatedPullRequest(
 }
 
 function normalizedRelatedPullRequests(payload: GitHubWebhookPayload): NormalizedGitHubResource[] {
-  const checkRunPullRequests = arrayField(payload.check_run, 'pull_requests');
-  return checkRunPullRequests.map(resourceFromPullRequest);
+  const pullRequests = [
+    ...arrayField(payload.check_run, 'pull_requests'),
+    ...arrayField(payload.check_suite, 'pull_requests'),
+  ];
+
+  return pullRequests.map(resourceFromPullRequest);
 }
 
 function normalizedChanges(changes: GitHubWebhookRecord | undefined): NormalizedGitHubChange[] {

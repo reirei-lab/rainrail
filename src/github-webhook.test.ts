@@ -343,6 +343,7 @@ describe('GitHub webhook source handling', () => {
           number: 17,
           title: 'Bridge Rainrail events',
           state: 'open',
+          merged: true,
           html_url: 'https://github.com/reirei-lab/rainrail/pull/17',
           head: { ref: 'feature', sha: 'abc123' },
           base: { ref: 'main', sha: 'def456' },
@@ -362,6 +363,7 @@ describe('GitHub webhook source handling', () => {
         number: 17,
         title: 'Bridge Rainrail events',
         state: 'open',
+        merged: true,
         url: 'https://github.com/reirei-lab/rainrail/pull/17',
         headRef: 'feature',
         headSha: 'abc123',
@@ -457,6 +459,72 @@ describe('GitHub webhook source handling', () => {
           name: 'agent-ready',
           color: '0e8a16',
           description: 'Ready for agent processing',
+        },
+      },
+    });
+  });
+
+  it('keeps assignment metadata on issue and pull request assigned deliveries', async () => {
+    await expect(
+      createGitHubWebhookEvent({
+        githubEvent: 'issues',
+        deliveryId: 'delivery-issue-assigned-1',
+        payload: {
+          action: 'assigned',
+          repository: { full_name: 'reirei-lab/rainrail' },
+          issue: {
+            number: 16,
+            html_url: 'https://github.com/reirei-lab/rainrail/issues/16',
+          },
+          assignee: {
+            id: 42,
+            login: 'rainrail-agent',
+            type: 'Bot',
+            html_url: 'https://github.com/apps/rainrail-agent',
+          },
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      payload: {
+        action: 'assigned',
+        assignee: {
+          id: '42',
+          login: 'rainrail-agent',
+          type: 'Bot',
+          url: 'https://github.com/apps/rainrail-agent',
+        },
+      },
+    });
+
+    await expect(
+      createGitHubWebhookEvent({
+        githubEvent: 'pull_request',
+        deliveryId: 'delivery-pr-assigned-1',
+        payload: {
+          action: 'assigned',
+          repository: { full_name: 'reirei-lab/rainrail' },
+          pull_request: {
+            number: 41,
+            html_url: 'https://github.com/reirei-lab/rainrail/pull/41',
+          },
+          assignee: {
+            login: 'rainrail-agent',
+          },
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.pull_request',
+      payload: {
+        resource: {
+          type: 'pull_request',
+          id: '41',
+        },
+        assignee: {
+          login: 'rainrail-agent',
         },
       },
     });
@@ -715,6 +783,45 @@ describe('GitHub webhook source handling', () => {
 
     await expect(
       createGitHubWebhookEvent({
+        githubEvent: 'projects_v2_status_update',
+        deliveryId: 'delivery-project-status-update-1',
+        payload: {
+          action: 'edited',
+          organization: {
+            login: 'reirei-lab',
+          },
+          projects_v2_status_update: {
+            id: 'PVTSU_lADOExample',
+            body: 'On track',
+            html_url: 'https://github.com/orgs/reirei-lab/projects/3/views/1?pane=issue&itemId=1',
+            project_node_id: 'PVT_kwDOProject',
+          },
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.projects_v2_status_update',
+      subject: {
+        type: 'project_status_update',
+        id: 'PVTSU_lADOExample',
+      },
+      payload: {
+        organization: {
+          login: 'reirei-lab',
+        },
+        resource: {
+          type: 'project_status_update',
+          id: 'PVTSU_lADOExample',
+          body: 'On track',
+          url: 'https://github.com/orgs/reirei-lab/projects/3/views/1?pane=issue&itemId=1',
+          projectNodeId: 'PVT_kwDOProject',
+        },
+      },
+    });
+
+    await expect(
+      createGitHubWebhookEvent({
         githubEvent: 'push',
         deliveryId: 'delivery-push-1',
         payload: {
@@ -749,6 +856,34 @@ describe('GitHub webhook source handling', () => {
           headSha: 'abc123',
           headCommitMessage: 'Update workflow',
           url: 'https://github.com/reirei-lab/rainrail/commit/abc123',
+        },
+      },
+    });
+
+    await expect(
+      createGitHubWebhookEvent({
+        githubEvent: 'create',
+        deliveryId: 'delivery-create-1',
+        payload: {
+          ref: 'release/v1',
+          ref_type: 'branch',
+          repository: { full_name: 'reirei-lab/rainrail' },
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.create',
+      subject: {
+        type: 'ref',
+        id: 'branch:release/v1',
+      },
+      payload: {
+        resource: {
+          type: 'ref',
+          id: 'branch:release/v1',
+          ref: 'release/v1',
+          refType: 'branch',
         },
       },
     });
@@ -882,6 +1017,12 @@ describe('GitHub webhook source handling', () => {
           check_suite: {
             id: 48847904331,
             html_url: 'https://github.com/reirei-lab/rainrail/actions/runs/17345176172',
+            pull_requests: [
+              {
+                number: 41,
+                html_url: 'https://github.com/reirei-lab/rainrail/pull/41',
+              },
+            ],
           },
         },
         rawBody: '{}',
@@ -893,6 +1034,15 @@ describe('GitHub webhook source handling', () => {
         type: 'check_suite',
         id: '48847904331',
         url: 'https://github.com/reirei-lab/rainrail/actions/runs/17345176172',
+      },
+      payload: {
+        pullRequests: [
+          {
+            id: '41',
+            number: 41,
+            url: 'https://github.com/reirei-lab/rainrail/pull/41',
+          },
+        ],
       },
     });
   });
