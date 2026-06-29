@@ -951,4 +951,208 @@ describe('plugin runtime contract', () => {
       },
     ]);
   });
+
+  it('denies gated actions scheduled after the handler has already completed', async () => {
+    vi.useFakeTimers();
+    try {
+      const event = createEventEnvelope({
+        source: { type: 'github', name: 'github-webhook' },
+        name: 'github.pull_request',
+        delivery: {
+          id: 'delivery-post-settle-action',
+          receivedAt: '2026-06-29T14:00:00.000Z',
+        },
+        occurredAt: '2026-06-29T14:00:00.000Z',
+        subject: { type: 'pull_request', id: '44' },
+        payload: { action: 'synchronize' },
+        rawPayload: {
+          kind: 'external-reference',
+          reference: 'github://deliveries/delivery-post-settle-action',
+        },
+      });
+      const mergePullRequest = vi.fn(async () => ({ merged: true }));
+      let lateActionReason: unknown;
+      const auditEntries: unknown[] = [];
+      const loader = createPluginLoader({
+        runtime: {
+          runId: 'run-13',
+          now: () => new Date('2026-06-29T14:01:00.000Z'),
+          capabilities: { provider: 'codex' },
+          actions: { mergePullRequest },
+        },
+        audit: {
+          record: (entry) => {
+            auditEntries.push(entry);
+          },
+        },
+      });
+
+      loader.on(
+        'github.pull_request',
+        async (_event, context) => {
+          setTimeout(() => {
+            void context.actions.mergePullRequest({ pullRequestId: '44' }).catch((reason: unknown) => {
+              lateActionReason = reason;
+            });
+          }, 100);
+
+          return { returned: true };
+        },
+        { name: 'post-settle-merge-handler', capabilities: ['merge'] },
+      );
+
+      await expect(loader.dispatch(event)).resolves.toEqual([
+        {
+          pluginName: 'post-settle-merge-handler',
+          eventId: 'github-webhook:delivery-post-settle-action:github.pull_request',
+          status: 'fulfilled',
+          value: { returned: true },
+        },
+      ]);
+
+      await vi.advanceTimersByTimeAsync(100);
+      expect(mergePullRequest).not.toHaveBeenCalled();
+      expect(lateActionReason).toBeInstanceOf(Error);
+      expect(auditEntries).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            pluginId: 'post-settle-merge-handler',
+            eventId: 'github-webhook:delivery-post-settle-action:github.pull_request',
+            action: 'mergePullRequest',
+            result: 'denied',
+          }),
+        ]),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('returns the original readSecret error to the plugin result while redacting audit', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'system', name: 'local-runtime' },
+      name: 'system.secret-requested',
+      delivery: {
+        id: 'delivery-secret-original-error',
+        receivedAt: '2026-06-29T14:00:00.000Z',
+      },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'secret', id: 'api-token' },
+      payload: {},
+      rawPayload: {
+        kind: 'inline-redacted',
+        reference: 'redacted://delivery-secret-original-error',
+      },
+    });
+    const originalError = new Error('SecretNotFound: api-token');
+    const auditEntries: unknown[] = [];
+    const loader = createPluginLoader({
+      runtime: {
+        runId: 'run-13',
+        now: () => new Date('2026-06-29T14:01:00.000Z'),
+        capabilities: { provider: 'local' },
+        actions: {
+          readSecret: async () => {
+            throw originalError;
+          },
+        },
+      },
+      audit: {
+        record: (entry) => {
+          auditEntries.push(entry);
+        },
+      },
+    });
+
+    loader.on(
+      'system.secret-requested',
+      async (_event, context) => context.actions.readSecret({ name: 'api-token' }),
+      { name: 'secret-reader-original-error', capabilities: ['secret:access'] },
+    );
+
+    const [result] = await loader.dispatch(event);
+
+    expect(result).toMatchObject({
+      pluginName: 'secret-reader-original-error',
+      eventId: 'local-runtime:delivery-secret-original-error:system.secret-requested',
+      status: 'rejected',
+    });
+    expect(result?.reason).toBe(originalError);
+    expect(auditEntries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          pluginId: 'secret-reader-original-error',
+          eventId: 'local-runtime:delivery-secret-original-error:system.secret-requested',
+          action: 'readSecret',
+          result: 'rejected',
+          reason: 'Error: redacted secret action failure',
+        }),
+      ]),
+    );
+  });
+
+  it('redacts secret-capable handler failure reasons in audit entries', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'system', name: 'local-runtime' },
+      name: 'system.secret-requested',
+      delivery: {
+        id: 'delivery-secret-handler-error',
+        receivedAt: '2026-06-29T14:00:00.000Z',
+      },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'secret', id: 'api-token' },
+      payload: {},
+      rawPayload: {
+        kind: 'inline-redacted',
+        reference: 'redacted://delivery-secret-handler-error',
+      },
+    });
+    const auditEntries: unknown[] = [];
+    const loader = createPluginLoader({
+      runtime: {
+        runId: 'run-13',
+        now: () => new Date('2026-06-29T14:01:00.000Z'),
+        capabilities: { provider: 'local' },
+        actions: {
+          readSecret: async () => 'super-secret-value',
+        },
+      },
+      audit: {
+        record: (entry) => {
+          auditEntries.push(entry);
+        },
+      },
+    });
+
+    loader.on(
+      'system.secret-requested',
+      async (_event, context) => {
+        const token = await context.actions.readSecret({ name: 'api-token' });
+        throw new Error(`token=${token}`);
+      },
+      { name: 'secret-capable-handler-error', capabilities: ['secret:access'] },
+    );
+
+    const [result] = await loader.dispatch(event);
+
+    expect(result).toMatchObject({
+      pluginName: 'secret-capable-handler-error',
+      eventId: 'local-runtime:delivery-secret-handler-error:system.secret-requested',
+      status: 'rejected',
+    });
+    expect(result?.reason).toBeInstanceOf(Error);
+    expect(JSON.stringify(auditEntries)).not.toContain('super-secret-value');
+    expect(JSON.stringify(auditEntries)).not.toContain('token=');
+    expect(auditEntries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          pluginId: 'secret-capable-handler-error',
+          eventId: 'local-runtime:delivery-secret-handler-error:system.secret-requested',
+          action: 'plugin.handle',
+          result: 'rejected',
+          reason: 'Error: redacted secret-capable plugin failure',
+        }),
+      ]),
+    );
+  });
 });

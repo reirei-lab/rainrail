@@ -108,10 +108,10 @@ class PluginActionAbortedError extends Error {
   }
 }
 
-class SecretActionError extends Error {
+class PluginLifecycleEndedError extends Error {
   constructor() {
-    super('redacted secret action failure');
-    this.name = 'Error';
+    super('Plugin handler lifecycle has ended');
+    this.name = 'PluginLifecycleEndedError';
   }
 }
 
@@ -177,9 +177,8 @@ async function callGatedAction<TRequest>(
     await recordAudit(options, workflow, event, action, 'fulfilled');
     return value;
   } catch (reason) {
-    const auditedReason = action === 'readSecret' ? new SecretActionError() : reason;
-    await recordAudit(options, workflow, event, action, 'rejected', auditedReason);
-    throw auditedReason;
+    await recordAudit(options, workflow, event, action, 'rejected', reason);
+    throw reason;
   }
 }
 
@@ -200,8 +199,9 @@ function recordAudit(
     occurredAt: options.runtime.now().toISOString(),
   };
 
-  if (reason instanceof Error) {
-    entry.reason = `${reason.name}: ${reason.message}`;
+  const auditReason = formatAuditReason(workflow, action, reason);
+  if (auditReason !== undefined) {
+    entry.reason = auditReason;
   }
 
   try {
@@ -211,6 +211,26 @@ function recordAudit(
   } catch {
     // Synchronous audit failures are isolated for the same reason.
   }
+}
+
+function formatAuditReason(
+  workflow: WorkflowPlugin,
+  action: WorkflowAuditEntry['action'],
+  reason: unknown,
+): string | undefined {
+  if (!(reason instanceof Error)) {
+    return undefined;
+  }
+
+  if (action === 'readSecret') {
+    return 'Error: redacted secret action failure';
+  }
+
+  if (action === 'plugin.handle' && workflow.capabilities?.includes('secret:access')) {
+    return 'Error: redacted secret-capable plugin failure';
+  }
+
+  return `${reason.name}: ${reason.message}`;
 }
 
 interface WorkflowAbortController {
@@ -260,6 +280,10 @@ async function runWorkflow<T>(
   } finally {
     if (timeout !== undefined) {
       clearTimeout(timeout);
+    }
+
+    if (!abort.controller.signal.aborted) {
+      abort.controller.abort(new PluginLifecycleEndedError());
     }
 
     abort.dispose();
