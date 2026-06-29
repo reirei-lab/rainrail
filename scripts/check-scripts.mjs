@@ -42,6 +42,8 @@ export function checkScriptSyntax(root, options = {}) {
   return 0;
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+const invokedScript = process.argv[1];
+
+if (invokedScript && import.meta.url === pathToFileURL(invokedScript).href) {
   process.exitCode = checkScriptSyntax(new URL('.', import.meta.url).pathname);
 }

@@ -7,8 +7,8 @@
   "packageManager": "pnpm@10.12.1",
   "scripts": {
     "build": "node scripts/check-scripts.mjs",
-    "typecheck": "tsc --allowJs --checkJs --noEmit --module NodeNext --moduleResolution NodeNext --target ES2022 --lib ESNext --types node scripts/*.mjs",
-    "test": "vitest run scripts"
+    "test": "vitest run scripts src",
+    "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "@types/node": "^24.13.2",
