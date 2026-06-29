@@ -186,6 +186,8 @@ export interface GitHubWebhookPayload {
   action?: unknown;
   sender?: GitHubWebhookRecord;
   assignee?: GitHubWebhookRecord;
+  requested_reviewer?: GitHubWebhookRecord;
+  requested_team?: GitHubWebhookRecord;
   installation?: GitHubWebhookRecord;
   organization?: GitHubWebhookRecord;
   label?: GitHubWebhookRecord;
@@ -198,6 +200,7 @@ export interface GitHubWebhookPayload {
   check_run?: GitHubWebhookRecord;
   check_suite?: GitHubWebhookRecord;
   review?: GitHubWebhookRecord;
+  release?: GitHubWebhookRecord;
   workflow_run?: GitHubWebhookRecord;
   projects_v2?: GitHubWebhookRecord;
   projects_v2_status_update?: GitHubWebhookRecord;
@@ -217,6 +220,8 @@ export interface NormalizedGitHubWebhookPayload {
   organization?: NormalizedGitHubOrganization;
   actor?: NormalizedGitHubActor;
   assignee?: NormalizedGitHubActor;
+  requestedReviewer?: NormalizedGitHubActor;
+  requestedTeam?: NormalizedGitHubTeam;
   installation?: NormalizedGitHubInstallation;
   resource: NormalizedGitHubResource;
   label?: NormalizedGitHubLabel;
@@ -245,6 +250,13 @@ export interface NormalizedGitHubActor {
 export interface NormalizedGitHubOrganization {
   id?: string;
   login?: string;
+  url?: string;
+}
+
+export interface NormalizedGitHubTeam {
+  id?: string;
+  name?: string;
+  slug?: string;
   url?: string;
 }
 
@@ -284,12 +296,18 @@ export interface NormalizedGitHubResource {
   baseSha?: string;
   contentType?: string;
   contentNodeId?: string;
+  nodeId?: string;
   ref?: string;
   refType?: string;
   beforeSha?: string;
   headCommitMessage?: string;
   body?: string;
   projectNodeId?: string;
+  startDate?: string;
+  targetDate?: string;
+  tagName?: string;
+  draft?: boolean;
+  prerelease?: boolean;
   isResolved?: boolean;
   path?: string;
   line?: number;
@@ -393,6 +411,10 @@ function findGitHubSubject(payload: GitHubWebhookPayload, name: RainrailEventNam
     return subjectFromProjectStatusUpdate(payload) ?? subjectFromRepository(payload, name);
   }
 
+  if (payload.release) {
+    return subjectFromRelease(payload) ?? subjectFromRepository(payload, name);
+  }
+
   if (name === 'github.push') {
     return subjectFromPush(payload) ?? subjectFromRepository(payload, name);
   }
@@ -458,6 +480,18 @@ function subjectFromProjectStatusUpdate(payload: GitHubWebhookPayload): Rainrail
     ...(typeof payload.projects_v2_status_update.html_url === 'string'
       ? { url: payload.projects_v2_status_update.html_url }
       : {}),
+  };
+}
+
+function subjectFromRelease(payload: GitHubWebhookPayload): RainrailEventEnvelope['subject'] | undefined {
+  if (!payload.release) {
+    return undefined;
+  }
+
+  return {
+    type: 'release',
+    id: String(payload.release.id ?? payload.release.tag_name ?? 'unknown'),
+    ...(typeof payload.release.html_url === 'string' ? { url: payload.release.html_url } : {}),
   };
 }
 
@@ -609,6 +643,8 @@ function normalizeGitHubWebhookPayload(
   const organization = normalizedOrganization(payload.organization);
   const actor = normalizedActor(payload.sender);
   const assignee = normalizedActor(payload.assignee);
+  const requestedReviewer = normalizedActor(payload.requested_reviewer);
+  const requestedTeam = normalizedTeam(payload.requested_team);
   const installation = normalizedInstallation(payload.installation);
   const resource = normalizedResource(payload);
   const label = normalizedLabel(payload.label);
@@ -626,6 +662,8 @@ function normalizeGitHubWebhookPayload(
     ...(organization ? { organization } : {}),
     ...(actor ? { actor } : {}),
     ...(assignee ? { assignee } : {}),
+    ...(requestedReviewer ? { requestedReviewer } : {}),
+    ...(requestedTeam ? { requestedTeam } : {}),
     ...(installation ? { installation } : {}),
     resource,
     ...(label ? { label } : {}),
@@ -681,6 +719,21 @@ function normalizedOrganization(
     ...optionalStringProperty('id', idField(organization, 'id')),
     ...optionalStringProperty('login', stringField(organization, 'login')),
     ...optionalStringProperty('url', stringField(organization, 'html_url')),
+  };
+
+  return objectHasKeys(normalized) ? normalized : undefined;
+}
+
+function normalizedTeam(team: GitHubWebhookRecord | undefined): NormalizedGitHubTeam | undefined {
+  if (!team) {
+    return undefined;
+  }
+
+  const normalized = {
+    ...optionalStringProperty('id', idField(team, 'id')),
+    ...optionalStringProperty('name', stringField(team, 'name')),
+    ...optionalStringProperty('slug', stringField(team, 'slug')),
+    ...optionalStringProperty('url', stringField(team, 'html_url')),
   };
 
   return objectHasKeys(normalized) ? normalized : undefined;
@@ -760,6 +813,10 @@ function normalizedResource(payload: GitHubWebhookPayload): NormalizedGitHubReso
 
   if (payload.projects_v2_status_update) {
     return resourceFromProjectStatusUpdate(payload.projects_v2_status_update);
+  }
+
+  if (payload.release) {
+    return resourceFromRelease(payload.release);
   }
 
   return resourceFromRepository(payload.repository);
@@ -860,6 +917,8 @@ function resourceFromProjectItem(projectItem: GitHubWebhookRecord): NormalizedGi
   return {
     type: 'project_item',
     id: String(projectItem.id ?? 'unknown'),
+    ...optionalStringProperty('nodeId', stringField(projectItem, 'node_id')),
+    ...optionalStringProperty('projectNodeId', stringField(projectItem, 'project_node_id')),
     ...optionalStringProperty('contentType', stringField(projectItem, 'content_type')),
     ...optionalStringProperty('contentNodeId', stringField(projectItem, 'content_node_id')),
   };
@@ -881,8 +940,23 @@ function resourceFromProjectStatusUpdate(statusUpdate: GitHubWebhookRecord): Nor
     type: 'project_status_update',
     id: String(statusUpdate.id ?? 'unknown'),
     ...optionalStringProperty('body', stringField(statusUpdate, 'body')),
+    ...optionalStringProperty('status', stringField(statusUpdate, 'status')),
+    ...optionalStringProperty('startDate', stringField(statusUpdate, 'start_date')),
+    ...optionalStringProperty('targetDate', stringField(statusUpdate, 'target_date')),
     ...optionalStringProperty('url', stringField(statusUpdate, 'html_url')),
     ...optionalStringProperty('projectNodeId', stringField(statusUpdate, 'project_node_id')),
+  };
+}
+
+function resourceFromRelease(release: GitHubWebhookRecord): NormalizedGitHubResource {
+  return {
+    type: 'release',
+    id: String(release.id ?? release.tag_name ?? 'unknown'),
+    ...optionalStringProperty('tagName', stringField(release, 'tag_name')),
+    ...optionalStringProperty('name', stringField(release, 'name')),
+    ...optionalBooleanProperty('draft', booleanField(release, 'draft')),
+    ...optionalBooleanProperty('prerelease', booleanField(release, 'prerelease')),
+    ...optionalStringProperty('url', stringField(release, 'html_url')),
   };
 }
 
@@ -958,6 +1032,7 @@ function normalizedRelatedPullRequests(payload: GitHubWebhookPayload): Normalize
   const pullRequests = [
     ...arrayField(payload.check_run, 'pull_requests'),
     ...arrayField(payload.check_suite, 'pull_requests'),
+    ...arrayField(payload.workflow_run, 'pull_requests'),
   ];
 
   return pullRequests.map(resourceFromPullRequest);
