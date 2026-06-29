@@ -93,8 +93,8 @@ export class RainrailBridgeRoom {
         const { event } = eventResult;
         await this.#state.storage.put(RECENT_EVENTS_KEY, this.#nextRecentEvents(event));
         this.#bus.publish(event);
-      } catch (error) {
-        return new Response(`publish failed: ${errorMessage(error)}\n`, { status: 500 });
+      } catch {
+        return new Response('publish failed\n', { status: 500 });
       }
 
       return Response.json({

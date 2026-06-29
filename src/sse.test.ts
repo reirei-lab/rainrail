@@ -67,4 +67,25 @@ describe('Rainrail SSE formatting', () => {
 
     expect(() => formatRainrailSseEvent(event)).toThrow(/SSE field/);
   });
+
+  it('rejects NUL in SSE id fields', () => {
+    const event = createEventEnvelope({
+      id: 'delivery-17\u0000ignored',
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: {
+        id: 'delivery-17',
+        receivedAt: '2026-06-29T18:18:21.000Z',
+      },
+      occurredAt: '2026-06-29T18:18:20.000Z',
+      subject: { type: 'issue', id: '17' },
+      payload: { action: 'opened' },
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'github://deliveries/delivery-17',
+      },
+    });
+
+    expect(() => formatRainrailSseEvent(event)).toThrow(/SSE field "id"/);
+  });
 });

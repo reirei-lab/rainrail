@@ -43,9 +43,10 @@ class InMemoryRainrailEventBus implements RainrailEventBus {
   }
 
   publish(event: RainrailEventEnvelope): void {
-    const chunk = formatRainrailSseEvent(event);
+    const replayEvent = cloneEvent(event);
+    const chunk = formatRainrailSseEvent(replayEvent);
 
-    this.#recent.push(event);
+    this.#recent.push(replayEvent);
     this.#trimRecent();
 
     for (const client of this.#clients) {
@@ -142,7 +143,7 @@ class InMemoryRainrailEventBus implements RainrailEventBus {
   }
 
   loadReplay(events: RainrailEventEnvelope[]): void {
-    this.#recent = this.#replayLimit <= 0 ? [] : events.slice(-this.#replayLimit);
+    this.#recent = this.#replayLimit <= 0 ? [] : events.slice(-this.#replayLimit).map(cloneEvent);
   }
 
   get clientCount(): number {
@@ -154,7 +155,7 @@ class InMemoryRainrailEventBus implements RainrailEventBus {
   }
 
   get recentEvents(): RainrailEventEnvelope[] {
-    return [...this.#recent];
+    return this.#recent.map(cloneEvent);
   }
 
   #trimRecent(): void {
@@ -168,7 +169,14 @@ class InMemoryRainrailEventBus implements RainrailEventBus {
       return this.#recent;
     }
 
-    const lastIndex = this.#recent.findIndex((event) => event.id === lastEventId);
+    let lastIndex = -1;
+    for (let index = this.#recent.length - 1; index >= 0; index -= 1) {
+      if (this.#recent[index]?.id === lastEventId) {
+        lastIndex = index;
+        break;
+      }
+    }
+
     return lastIndex === -1 ? this.#recent : this.#recent.slice(lastIndex + 1);
   }
 
@@ -181,6 +189,10 @@ class InMemoryRainrailEventBus implements RainrailEventBus {
       // Cleanup should not break publish or cancel paths for other subscribers.
     }
   }
+}
+
+function cloneEvent(event: RainrailEventEnvelope): RainrailEventEnvelope {
+  return JSON.parse(JSON.stringify(event)) as RainrailEventEnvelope;
 }
 
 function unrefTimer(timer: ReturnType<typeof setInterval>): void {

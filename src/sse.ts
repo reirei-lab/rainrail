@@ -22,5 +22,9 @@ function formatSseFieldValue(field: string, value: string): string {
     throw new TypeError(`SSE field "${field}" must not contain CR or LF`);
   }
 
+  if (field === 'id' && value.includes('\u0000')) {
+    throw new TypeError('SSE field "id" must not contain NUL');
+  }
+
   return value;
 }

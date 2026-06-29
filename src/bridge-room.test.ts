@@ -134,6 +134,7 @@ describe('Rainrail bridge room', () => {
     const publishResponse = await room.fetch(publishRequest(fixtureEvent('delivery-1', 'github.issue')));
 
     expect(publishResponse.status).toBe(500);
+    await expect(publishResponse.text()).resolves.toBe('publish failed\n');
     await expect(readNextOrTimeout(reader!)).resolves.toBe('timeout');
     await reader?.cancel();
   });

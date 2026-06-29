@@ -117,6 +117,47 @@ describe('Rainrail event bus', () => {
     expect(chunks).toContain('event: github.review\n');
   });
 
+  it('replays from the last matching event when duplicate ids exist', async () => {
+    const bus = createRainrailEventBus({ replayLimit: 10 });
+    const first = fixtureEvent('github-webhook', 'delivery-1', 'github.issue', 'issue', '17');
+    const second = fixtureEvent('cloudflare-tail', 'delivery-2', 'cloudflare.tail', 'worker', 'api-worker');
+    const duplicate = { ...fixtureEvent('github-webhook', 'delivery-3', 'github.review', 'review', 'review-1'), id: first.id };
+    const fourth = fixtureEvent('github-webhook', 'delivery-4', 'github.check_run', 'check_run', 'check-1');
+
+    bus.publish(first);
+    bus.publish(second);
+    bus.publish(duplicate);
+    bus.publish(fourth);
+
+    const stream = bus.createReadableStream({ lastEventId: first.id });
+    const reader = stream.getReader();
+    const chunks = [await readNext(reader), await readNext(reader)].join('');
+    await reader.cancel();
+
+    expect(chunks).toContain(': connected\n\n');
+    expect(chunks).not.toContain('event: cloudflare.tail\n');
+    expect(chunks).not.toContain('event: github.review\n');
+    expect(chunks).toContain('event: github.check_run\n');
+  });
+
+  it('does not expose mutable replay event references', () => {
+    const bus = createRainrailEventBus({ replayLimit: 10 });
+    const event = fixtureEvent('github-webhook', 'delivery-1', 'github.issue', 'issue', '17');
+    bus.publish(event);
+
+    const recent = bus.recentEvents;
+    recent[0]!.id = 'mutated-id';
+    (recent[0]!.payload as Record<string, unknown>).subjectId = 'mutated-payload';
+
+    const writes: string[] = [];
+    bus.subscribe({ write: (chunk) => writes.push(chunk) });
+
+    expect(writes.join('')).toContain(event.id);
+    expect(writes.join('')).toContain('"subjectId":"17"');
+    expect(writes.join('')).not.toContain('mutated-id');
+    expect(writes.join('')).not.toContain('mutated-payload');
+  });
+
   it('does not pollute replay when an event cannot be serialized', () => {
     const bus = createRainrailEventBus({ replayLimit: 10 });
     const event = fixtureEvent('github-webhook', 'delivery-1', 'github.issue', 'issue', '17');
