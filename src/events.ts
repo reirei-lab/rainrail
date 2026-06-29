@@ -42,7 +42,7 @@ export interface RainrailEventEnvelope<TPayload = unknown, TName extends Rainrai
   name: TName;
   delivery: RainrailEventDelivery;
   occurredAt: string;
-  subject?: RainrailEventSubject;
+  subject: RainrailEventSubject;
   payload: TPayload;
   rawPayload: RainrailRawPayloadReference;
   links?: Record<string, string>;

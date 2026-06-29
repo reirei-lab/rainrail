@@ -192,4 +192,61 @@ describe('plugin runtime contract', () => {
       }),
     );
   });
+
+  it('isolates accepts predicate failures to the failing workflow result', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: {
+        id: 'delivery-12',
+        receivedAt: '2026-06-29T13:00:44.000Z',
+      },
+      occurredAt: '2026-06-29T13:00:44.000Z',
+      subject: { type: 'issue', id: '12' },
+      payload: { action: 'opened' },
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'github://deliveries/delivery-12',
+      },
+    });
+    const laterHandler = vi.fn(async () => ({ continued: true }));
+    const dispatcher = createRuntimeDispatcher({
+      workflows: [
+        defineWorkflowPlugin({
+          name: 'malformed-event-sensitive-router',
+          accepts: () => {
+            throw new Error('unexpected event shape');
+          },
+          handle: async () => ({ unreachable: true }),
+        }),
+        defineWorkflowPlugin({
+          name: 'later-router',
+          accepts: () => true,
+          handle: laterHandler,
+        }),
+      ],
+      runtime: {
+        runId: 'run-1',
+        now: () => new Date('2026-06-29T13:01:00.000Z'),
+        capabilities: { provider: 'codex' },
+      },
+    });
+
+    const results = await dispatcher.dispatch(event);
+
+    expect(results).toHaveLength(2);
+    expect(results[0]).toMatchObject({
+      pluginName: 'malformed-event-sensitive-router',
+      eventId: 'github-webhook:delivery-12:github.issue',
+      status: 'rejected',
+    });
+    expect(results[0]?.reason).toBeInstanceOf(Error);
+    expect(results[1]).toEqual({
+      pluginName: 'later-router',
+      eventId: 'github-webhook:delivery-12:github.issue',
+      status: 'fulfilled',
+      value: { continued: true },
+    });
+    expect(laterHandler).toHaveBeenCalledWith(event, expect.objectContaining({ runId: 'run-1' }));
+  });
 });

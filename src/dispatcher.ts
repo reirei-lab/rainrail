@@ -12,12 +12,14 @@ export interface RuntimeDispatcher {
 
 export function createRuntimeDispatcher(options: RuntimeDispatcherOptions): RuntimeDispatcher {
   return {
-    async dispatch(event) {
-      const matchingWorkflows = options.workflows.filter((workflow) => workflow.accepts?.(event) ?? true);
-
-      return Promise.all(
-        matchingWorkflows.map(async (workflow) => {
+    async dispatch(event): Promise<WorkflowPluginResult[]> {
+      const results: Array<WorkflowPluginResult | undefined> = await Promise.all(
+        options.workflows.map(async (workflow) => {
           try {
+            if (workflow.accepts && !workflow.accepts(event)) {
+              return undefined;
+            }
+
             const value = await workflow.handle(event, options.runtime);
 
             return {
@@ -36,6 +38,8 @@ export function createRuntimeDispatcher(options: RuntimeDispatcherOptions): Runt
           }
         }),
       );
+
+      return results.filter((result): result is WorkflowPluginResult => result !== undefined);
     },
   };
 }

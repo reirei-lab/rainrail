@@ -48,9 +48,10 @@ agent dispatch などの高レベル capability は `dispatchAgent` のように
 
 `createRuntimeDispatcher` は workflow plugin 配列と runtime context を受け取る。
 `dispatch(event)` は `accepts` が true の workflow だけを呼び、
-plugin ごとに fulfilled/rejected の結果を返す。最小 contract では retry や
-並列度制御は持たせない。これらは orchestration policy として後続 issue で
-追加する。
+plugin ごとに fulfilled/rejected の結果を返す。`accepts` が例外を投げた場合も
+その plugin の rejected result として隔離し、後続 workflow の評価は続ける。
+最小 contract では retry や並列度制御は持たせない。これらは orchestration policy
+として後続 issue で追加する。
 
 ## reirei-harness matcher/router 移行の見通し
 
