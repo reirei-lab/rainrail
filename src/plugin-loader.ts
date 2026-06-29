@@ -36,7 +36,7 @@ export function createPluginLoader(options: PluginLoaderOptions): PluginLoader {
 
   return {
     register(plugin) {
-      workflows.push(plugin);
+      workflows.push(createRegisteredWorkflow(plugin));
     },
     on(eventName, handler, handlerOptions = {}) {
       const count = (localHandlerCounts.get(eventName) ?? 0) + 1;
@@ -56,7 +56,7 @@ export function createPluginLoader(options: PluginLoaderOptions): PluginLoader {
         workflow.timeoutMs = handlerOptions.timeoutMs;
       }
 
-      workflows.push(workflow);
+      workflows.push(createRegisteredWorkflow(workflow));
     },
     dispatch(event) {
       const dispatcherOptions = {
@@ -78,4 +78,42 @@ export function createPluginLoader(options: PluginLoaderOptions): PluginLoader {
       return [...workflows];
     },
   };
+}
+
+function createRegisteredWorkflow(plugin: WorkflowPlugin): WorkflowPlugin {
+  let capabilities: RuntimeCapabilityName[] | undefined;
+  let capabilityError: unknown;
+
+  try {
+    capabilities = plugin.capabilities === undefined ? undefined : [...plugin.capabilities];
+  } catch (reason) {
+    capabilityError = reason;
+  }
+
+  const workflow: WorkflowPlugin = {
+    name: plugin.name,
+    handle: (event, context) => plugin.handle.call(plugin, event, context),
+  };
+
+  if (plugin.accepts !== undefined) {
+    workflow.accepts = (event) => plugin.accepts?.call(plugin, event) ?? false;
+  }
+
+  if (plugin.timeoutMs !== undefined) {
+    workflow.timeoutMs = plugin.timeoutMs;
+  }
+
+  Object.defineProperty(workflow, 'capabilities', {
+    configurable: true,
+    enumerable: true,
+    get() {
+      if (capabilityError !== undefined) {
+        throw capabilityError;
+      }
+
+      return capabilities === undefined ? undefined : [...capabilities];
+    },
+  });
+
+  return workflow;
 }

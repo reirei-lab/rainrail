@@ -339,6 +339,15 @@ function createDispatchAgentCapabilityProxy(
   };
 
   const readCapabilityProperty = (source: object, property: string | symbol): unknown => {
+    if (property === 'valueOf') {
+      return () => createCapabilityView(source);
+    }
+
+    if (property === '__proto__') {
+      const prototype = Reflect.getPrototypeOf(source);
+      return prototype === null ? null : createCapabilityView(prototype);
+    }
+
     if (property === 'constructor') {
       return createCapabilityConstructorView(Reflect.get(source, property, capabilities), capabilities, dispatchAgent);
     }
