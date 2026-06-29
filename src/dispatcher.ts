@@ -1,4 +1,6 @@
 import type { RainrailEventEnvelope } from './events.js';
+import type { RuntimeProvider } from './runtime-provider.js';
+import type { TaskProviderRegistry } from './task-provider.js';
 import type {
   PluginRuntimeContext,
   RuntimeActionImplementations,
@@ -24,7 +26,8 @@ export interface WorkflowAuditSink {
   record(entry: WorkflowAuditEntry): void | Promise<void>;
 }
 
-export type RuntimeDispatcherContext = Omit<PluginRuntimeContext, 'actions' | 'signal'> & {
+export type RuntimeDispatcherContext = Pick<PluginRuntimeContext, 'runId' | 'now'> &
+  Partial<Omit<PluginRuntimeContext, 'runId' | 'now' | 'actions' | 'signal'>> & {
   actions?: Partial<RuntimeActionImplementations>;
   signal?: AbortSignal;
 };
@@ -123,10 +126,33 @@ function createWorkflowContext(
 ): PluginRuntimeContext {
   return {
     ...options.runtime,
+    providers: options.runtime.providers ?? unavailableProviders,
+    runtime: options.runtime.runtime ?? unavailableRuntimeProvider,
     signal,
     actions: createGatedRuntimeActions(options, workflow, event, signal),
   };
 }
+
+const unavailableProviders: TaskProviderRegistry = {
+  tasks: {
+    name: 'unavailable-tasks',
+    kind: 'task-provider',
+    getIssue: async () => {
+      throw new Error('Task provider is not configured');
+    },
+    createComment: async () => {
+      throw new Error('Task provider is not configured');
+    },
+  },
+};
+
+const unavailableRuntimeProvider: RuntimeProvider = {
+  name: 'unavailable-runtime',
+  kind: 'runtime-provider',
+  startRun: async () => {
+    throw new Error('Runtime provider is not configured');
+  },
+};
 
 function createGatedRuntimeActions(
   options: RuntimeDispatcherOptions,

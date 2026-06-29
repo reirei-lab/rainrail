@@ -37,8 +37,17 @@ routing できる。
 ## Workflow plugin
 
 Workflow plugin は `accepts(event)` で対象イベントを絞り込み、
-`handle(event, context)` で処理する。`context` は runtime が持つ
-capability を含む。
+`handle(event, context)` で処理する。`context` は `providers.tasks` と
+`runtime` を受け取り、必要なら既存の `capabilities` も使える。
+
+Workflow plugin は event に反応し、Task provider と Runtime provider を
+組み合わせるだけにする。GitHub/Forgejo の API 呼び出しや OpenClaw/devteam/Codex
+の起動詳細は、それぞれの provider/runtime 実装に閉じ込める。
+
+mock task provider と mock runtime provider を `createRuntimeDispatcher` に渡せば、
+workflow test は外部 API なしで書ける。互換性のため dispatcher runtime context は
+provider/runtime 未指定でも構成できるが、その場合 handler に渡る provider/runtime は
+呼び出し時に明示的な unavailable error を返す。
 
 Workflow plugin は任意で `capabilities` と `timeoutMs` を宣言できる。
 `capabilities` は危険操作を呼ぶための宣言であり、宣言されていない plugin は
