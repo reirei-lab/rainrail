@@ -206,7 +206,7 @@ describe('Rainrail bridge room', () => {
     expect(storage.storedEvents().map((event) => event.id)).toEqual([first.id]);
   });
 
-  it('does not broadcast when publish aborts during persistence', async () => {
+  it('completes delivery when publish aborts after persistence succeeds', async () => {
     const storage = fakeControllableState();
     const room = new RainrailBridgeRoom(storage.state, { replayLimit: 10 });
     const health = room.fetch(new Request('https://rainrail.local/healthz'));
@@ -227,10 +227,40 @@ describe('Rainrail bridge room', () => {
     controller.abort();
     storage.resolveNextPut();
 
-    expect((await publish).status).toBe(499);
-    expect(storage.storedEvents()).toEqual([]);
-    await expect(readNextOrTimeout(reader!)).resolves.toBe('timeout');
+    expect((await publish).status).toBe(200);
+    expect(storage.storedEvents().map((event) => event.id)).toEqual(['github.issue-source:delivery-1:github.issue']);
+    await expect(readNext(reader!)).resolves.toContain('github.issue-source:delivery-1:github.issue');
     await reader?.cancel();
+  });
+
+  it('strips non-contract envelope fields before storage and SSE delivery', async () => {
+    const storage = fakeState();
+    const room = new RainrailBridgeRoom(storage, { replayLimit: 10 });
+    const event = {
+      ...fixtureEvent('delivery-1', 'github.issue'),
+      rawBody: 'secret raw webhook body',
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'test://delivery-1',
+        secret: 'token-like value',
+      },
+    };
+
+    const publishResponse = await room.fetch(publishRequest(event));
+
+    expect(publishResponse.status).toBe(200);
+    expect(storage.storedEvents()).toHaveLength(1);
+    expect(storage.storedEvents()[0]).not.toHaveProperty('rawBody');
+    expect(storage.storedEvents()[0]?.rawPayload).not.toHaveProperty('secret');
+
+    const eventsResponse = await room.fetch(new Request('https://rainrail.local/events'));
+    const reader = eventsResponse.body?.getReader();
+    expect(reader).toBeDefined();
+    const chunk = await readUntil(reader!, 'github.issue');
+    await reader?.cancel();
+
+    expect(chunk).not.toContain('secret raw webhook body');
+    expect(chunk).not.toContain('token-like value');
   });
 
   it('ignores invalid stored replay entries during restore', async () => {

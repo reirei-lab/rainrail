@@ -91,13 +91,7 @@ export class RainrailBridgeRoom {
         }
 
         const { event } = eventResult;
-        const previousRecentEvents = this.#bus.recentEvents;
         await this.#state.storage.put(RECENT_EVENTS_KEY, this.#nextRecentEvents(event));
-        if (request.signal.aborted) {
-          await this.#state.storage.put(RECENT_EVENTS_KEY, previousRecentEvents);
-          return abortedPublishResponse();
-        }
-
         this.#bus.publish(event);
       } catch {
         return new Response('publish failed\n', { status: 500 });
@@ -165,10 +159,10 @@ function validatePublishEnvelope(value: unknown): RainrailEventEnvelope {
     throw new TypeError('body must be a JSON object');
   }
 
-  expectString(value, 'id');
+  const id = expectString(value, 'id');
   const schemaVersion = expectString(value, 'schemaVersion');
-  expectString(value, 'name');
-  expectString(value, 'occurredAt');
+  const name = expectString(value, 'name');
+  const occurredAt = expectString(value, 'occurredAt');
   const source = expectRecord(value, 'source');
   const delivery = expectRecord(value, 'delivery');
   const subject = expectRecord(value, 'subject');
@@ -178,20 +172,49 @@ function validatePublishEnvelope(value: unknown): RainrailEventEnvelope {
     throw new TypeError('schemaVersion must be rainrail.event.v1');
   }
 
-  expectString(source, 'type');
-  expectString(source, 'name');
-  expectString(delivery, 'id');
-  expectString(delivery, 'receivedAt');
-  expectString(subject, 'type');
-  expectString(subject, 'id');
-  expectString(rawPayload, 'kind');
-  expectString(rawPayload, 'reference');
+  const sourceType = expectString(source, 'type');
+  const sourceName = expectString(source, 'name');
+  const deliveryId = expectString(delivery, 'id');
+  const deliveryReceivedAt = expectString(delivery, 'receivedAt');
+  const subjectType = expectString(subject, 'type');
+  const subjectId = expectString(subject, 'id');
+  const rawPayloadKind = expectString(rawPayload, 'kind');
+  const rawPayloadReference = expectString(rawPayload, 'reference');
 
   if (!('payload' in value)) {
     throw new TypeError('payload is required');
   }
 
-  const event = value as unknown as RainrailEventEnvelope;
+  const event: RainrailEventEnvelope = {
+    id,
+    schemaVersion,
+    source: {
+      type: sourceType,
+      name: sourceName,
+      ...optionalString(source, 'repository'),
+      ...optionalString(source, 'account'),
+      ...optionalString(source, 'environment'),
+    },
+    name,
+    delivery: {
+      id: deliveryId,
+      receivedAt: deliveryReceivedAt,
+    },
+    occurredAt,
+    subject: {
+      type: subjectType,
+      id: subjectId,
+      ...optionalString(subject, 'url'),
+    },
+    payload: value.payload,
+    rawPayload: {
+      kind: rawPayloadKind,
+      reference: rawPayloadReference,
+      ...optionalString(rawPayload, 'contentType'),
+      ...optionalString(rawPayload, 'sha256'),
+    },
+    ...optionalLinks(value),
+  };
   formatRainrailSseEvent(event);
   return event;
 }
@@ -218,6 +241,31 @@ function expectRecord(record: Record<string, unknown>, key: string): Record<stri
   }
 
   return record[key];
+}
+
+function optionalString(record: Record<string, unknown>, key: string): Record<string, string> {
+  if (!(key in record)) return {};
+
+  if (typeof record[key] !== 'string') {
+    throw new TypeError(`${key} must be a string`);
+  }
+
+  return { [key]: record[key] };
+}
+
+function optionalLinks(record: Record<string, unknown>): { links?: Record<string, string> } {
+  if (!('links' in record)) return {};
+
+  const links = expectRecord(record, 'links');
+  const normalizedLinks: Record<string, string> = {};
+  for (const [key, value] of Object.entries(links)) {
+    if (typeof value !== 'string') {
+      throw new TypeError(`links.${key} must be a string`);
+    }
+    normalizedLinks[key] = value;
+  }
+
+  return { links: normalizedLinks };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
