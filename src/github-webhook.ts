@@ -198,7 +198,7 @@ export interface GitHubWebhookPayload {
   repository?: GitHubWebhookRecord;
   issue?: GitHubWebhookRecord;
   pull_request?: GitHubWebhookRecord;
-  comment?: GitHubWebhookRecord;
+  comment?: GitHubWebhookRecord | string;
   thread?: GitHubWebhookRecord;
   requested_action?: GitHubWebhookRecord;
   check_run?: GitHubWebhookRecord;
@@ -224,8 +224,12 @@ export interface GitHubWebhookPayload {
   discussion?: GitHubWebhookRecord;
   answer?: GitHubWebhookRecord;
   rule?: GitHubWebhookRecord;
+  repository_ruleset?: GitHubWebhookRecord;
   package?: GitHubWebhookRecord;
   registry_package?: GitHubWebhookRecord;
+  forkee?: GitHubWebhookRecord;
+  key?: GitHubWebhookRecord;
+  milestone?: GitHubWebhookRecord;
   blocked_issue?: GitHubWebhookRecord;
   blocking_issue?: GitHubWebhookRecord;
   parent_issue?: GitHubWebhookRecord;
@@ -322,6 +326,7 @@ export interface NormalizedGitHubWikiPage {
 
 export interface NormalizedGitHubChange {
   field: string;
+  fieldNodeId?: string;
   fieldName?: string;
   fieldType?: string;
   from?: string;
@@ -393,6 +398,11 @@ export interface NormalizedGitHubResource {
   versionId?: string;
   reviewerLogins?: string[];
   approver?: string;
+  target?: string;
+  enforcement?: string;
+  fullName?: string;
+  owner?: string;
+  readOnly?: boolean;
   isResolved?: boolean;
   path?: string;
   line?: number;
@@ -470,12 +480,24 @@ function findGitHubSubject(payload: GitHubWebhookPayload, name: RainrailEventNam
     );
   }
 
+  if (isDeploymentProtectionRulePayload(payload)) {
+    return subjectFromResource(resourceFromDeploymentProtectionRule(payload));
+  }
+
+  if (payload.deployment || payload.deployment_status) {
+    return subjectFromResource(resourceFromDeployment(payload));
+  }
+
   if (payload.issue) {
     return subjectFromIssue(payload);
   }
 
   if (payload.pull_request) {
     return subjectFromPullRequest(payload);
+  }
+
+  if (payload.milestone) {
+    return subjectFromResource(resourceFromMilestone(payload.milestone));
   }
 
   if (payload.check_run) {
@@ -514,10 +536,6 @@ function findGitHubSubject(payload: GitHubWebhookPayload, name: RainrailEventNam
     return subjectFromResource(resourceFromCommitStatus(payload));
   }
 
-  if (payload.deployment || payload.deployment_status) {
-    return subjectFromResource(resourceFromDeployment(payload));
-  }
-
   if (payload.merge_group) {
     return subjectFromResource(resourceFromMergeGroup(payload.merge_group));
   }
@@ -554,8 +572,20 @@ function findGitHubSubject(payload: GitHubWebhookPayload, name: RainrailEventNam
     return subjectFromResource(resourceFromBranchProtectionRule(payload.rule));
   }
 
+  if (payload.repository_ruleset) {
+    return subjectFromResource(resourceFromRepositoryRuleset(payload.repository_ruleset));
+  }
+
   if (payload.package || payload.registry_package) {
     return subjectFromResource(resourceFromPackage(payload.package ?? payload.registry_package));
+  }
+
+  if (payload.forkee) {
+    return subjectFromResource(resourceFromFork(payload.forkee));
+  }
+
+  if (payload.key) {
+    return subjectFromResource(resourceFromDeployKey(payload.key));
   }
 
   if (isInstallationRepositoriesPayload(payload)) {
@@ -808,7 +838,7 @@ function normalizeGitHubWebhookPayload(
   const resource = normalizedResource(payload);
   const label = normalizedLabel(payload.label);
   const milestone = normalizedMilestone(
-    recordField(payload.issue, 'milestone') ?? recordField(payload.pull_request, 'milestone'),
+    payload.milestone ?? recordField(payload.issue, 'milestone') ?? recordField(payload.pull_request, 'milestone'),
   );
   const pullRequest = normalizedRelatedPullRequest(payload, resource);
   const pullRequests = normalizedRelatedPullRequests(payload);
@@ -952,6 +982,10 @@ function normalizedMilestone(milestone: GitHubWebhookRecord | undefined): Normal
 }
 
 function normalizedResource(payload: GitHubWebhookPayload): NormalizedGitHubResource {
+  if (isDeploymentProtectionRulePayload(payload)) {
+    return resourceFromDeploymentProtectionRule(payload);
+  }
+
   if (isCommitStatusPayload(payload)) {
     return resourceFromCommitStatus(payload);
   }
@@ -988,20 +1022,32 @@ function normalizedResource(payload: GitHubWebhookPayload): NormalizedGitHubReso
     return resourceFromCommitComment(payload.comment);
   }
 
-  if (isDeploymentProtectionRulePayload(payload)) {
-    return resourceFromDeploymentProtectionRule(payload);
-  }
-
   if (isIssueRelationPayload(payload)) {
     return resourceFromIssueRelation(payload);
+  }
+
+  if (payload.milestone) {
+    return resourceFromMilestone(payload.milestone);
   }
 
   if (payload.rule) {
     return resourceFromBranchProtectionRule(payload.rule);
   }
 
+  if (payload.repository_ruleset) {
+    return resourceFromRepositoryRuleset(payload.repository_ruleset);
+  }
+
   if (payload.package || payload.registry_package) {
     return resourceFromPackage(payload.package ?? payload.registry_package);
+  }
+
+  if (payload.forkee) {
+    return resourceFromFork(payload.forkee);
+  }
+
+  if (payload.key) {
+    return resourceFromDeployKey(payload.key);
   }
 
   if (isInstallationRepositoriesPayload(payload)) {
@@ -1083,6 +1129,19 @@ function resourceFromIssue(issue: GitHubWebhookRecord): NormalizedGitHubResource
   };
 }
 
+function resourceFromMilestone(milestone: GitHubWebhookRecord): NormalizedGitHubResource {
+  const normalized = normalizedMilestone(milestone);
+
+  return {
+    type: 'milestone',
+    id: normalized?.id ?? String(milestone.id ?? milestone.number ?? 'unknown'),
+    ...(normalized?.number === undefined ? {} : { number: normalized.number }),
+    ...optionalStringProperty('title', normalized?.title),
+    ...optionalStringProperty('dueOn', normalized?.dueOn),
+    ...optionalStringProperty('url', normalized?.url),
+  };
+}
+
 function resourceFromPullRequest(
   pullRequest: GitHubWebhookRecord,
   payload?: GitHubWebhookPayload,
@@ -1118,16 +1177,18 @@ function resourceFromReview(review: GitHubWebhookRecord): NormalizedGitHubResour
 }
 
 function resourceFromReviewThread(thread: GitHubWebhookRecord): NormalizedGitHubResource {
+  const firstComment = arrayField(thread, 'comments')[0];
+
   return {
     type: 'review_thread',
     id: String(thread.node_id ?? thread.id ?? 'unknown'),
     ...optionalStringProperty('nodeId', stringField(thread, 'node_id')),
     ...optionalBooleanProperty('isResolved', booleanField(thread, 'is_resolved')),
-    ...optionalStringProperty('path', stringField(thread, 'path')),
-    ...optionalNumberProperty('line', numberField(thread, 'line')),
-    ...optionalStringProperty('side', stringField(thread, 'side')),
-    ...optionalNumberProperty('startLine', numberField(thread, 'start_line')),
-    ...optionalStringProperty('startSide', stringField(thread, 'start_side')),
+    ...optionalStringProperty('path', stringField(thread, 'path') ?? stringField(firstComment, 'path')),
+    ...optionalNumberProperty('line', numberField(thread, 'line') ?? numberField(firstComment, 'line')),
+    ...optionalStringProperty('side', stringField(thread, 'side') ?? stringField(firstComment, 'side')),
+    ...optionalNumberProperty('startLine', numberField(thread, 'start_line') ?? numberField(firstComment, 'start_line')),
+    ...optionalStringProperty('startSide', stringField(thread, 'start_side') ?? stringField(firstComment, 'start_side')),
   };
 }
 
@@ -1228,7 +1289,10 @@ function resourceFromDeploymentReview(payload: GitHubWebhookPayload): Normalized
   const runId = idField(workflowRun, 'id');
   const environment = stringField(workflowJobRun, 'environment') ?? 'unknown';
   const reviewerLogins = arrayField(payload, 'reviewers')
-    .map((reviewer) => stringField(reviewer, 'login'))
+    .map((wrapper) => {
+      const reviewer = recordField(wrapper, 'reviewer') ?? wrapper;
+      return stringField(reviewer, 'login') ?? stringField(reviewer, 'slug') ?? stringField(reviewer, 'name');
+    })
     .filter((login): login is string => login !== undefined);
 
   return {
@@ -1238,7 +1302,7 @@ function resourceFromDeploymentReview(payload: GitHubWebhookPayload): Normalized
     ...optionalStringProperty('environment', stringField(workflowJobRun, 'environment')),
     ...optionalStringArrayProperty('reviewerLogins', reviewerLogins),
     ...optionalStringProperty('approver', stringField(payload.approver, 'login')),
-    ...optionalStringProperty('body', stringField(payload.comment, 'body')),
+    ...optionalStringProperty('body', deploymentReviewComment(payload.comment)),
     ...optionalStringProperty('url', stringField(workflowRun, 'html_url')),
   };
 }
@@ -1308,6 +1372,18 @@ function resourceFromBranchProtectionRule(rule: GitHubWebhookRecord): Normalized
   };
 }
 
+function resourceFromRepositoryRuleset(ruleset: GitHubWebhookRecord): NormalizedGitHubResource {
+  return {
+    type: 'repository_ruleset',
+    id: String(ruleset.id ?? ruleset.node_id ?? 'unknown'),
+    ...optionalStringProperty('nodeId', stringField(ruleset, 'node_id')),
+    ...optionalStringProperty('name', stringField(ruleset, 'name')),
+    ...optionalStringProperty('target', stringField(ruleset, 'target')),
+    ...optionalStringProperty('enforcement', stringField(ruleset, 'enforcement')),
+    ...optionalStringProperty('url', stringField(ruleset, 'html_url')),
+  };
+}
+
 function resourceFromPackage(pkg: GitHubWebhookRecord | undefined): NormalizedGitHubResource {
   const version = recordField(pkg, 'package_version');
 
@@ -1319,6 +1395,30 @@ function resourceFromPackage(pkg: GitHubWebhookRecord | undefined): NormalizedGi
     ...optionalStringProperty('version', stringField(version, 'name')),
     ...optionalStringProperty('versionId', idField(version, 'id')),
     ...optionalStringProperty('url', stringField(pkg, 'html_url') ?? stringField(version, 'html_url')),
+  };
+}
+
+function resourceFromFork(forkee: GitHubWebhookRecord): NormalizedGitHubResource {
+  const fullName = stringField(forkee, 'full_name');
+  const nameParts = fullName?.split('/');
+
+  return {
+    type: 'fork',
+    id: String(forkee.id ?? fullName ?? 'unknown'),
+    ...optionalStringProperty('fullName', fullName),
+    ...optionalStringProperty('owner', stringField(recordField(forkee, 'owner'), 'login') ?? nameParts?.[0]),
+    ...optionalStringProperty('name', stringField(forkee, 'name') ?? nameParts?.[1]),
+    ...optionalStringProperty('url', stringField(forkee, 'html_url')),
+  };
+}
+
+function resourceFromDeployKey(key: GitHubWebhookRecord): NormalizedGitHubResource {
+  return {
+    type: 'deploy_key',
+    id: String(key.id ?? 'unknown'),
+    ...optionalStringProperty('title', stringField(key, 'title')),
+    ...optionalBooleanProperty('readOnly', booleanField(key, 'read_only')),
+    ...optionalStringProperty('url', stringField(key, 'url')),
   };
 }
 
@@ -1343,10 +1443,10 @@ function resourceFromWikiPage(page: GitHubWebhookRecord | undefined): Normalized
   };
 }
 
-function resourceFromCommitComment(comment: GitHubWebhookRecord | undefined): NormalizedGitHubResource {
+function resourceFromCommitComment(comment: unknown): NormalizedGitHubResource {
   return {
     type: 'commit_comment',
-    id: String(comment?.id ?? 'unknown'),
+    id: idField(comment, 'id') ?? 'unknown',
     ...optionalStringProperty('commitId', stringField(comment, 'commit_id')),
     ...optionalStringProperty('path', stringField(comment, 'path')),
     ...optionalNumberProperty('position', numberField(comment, 'position')),
@@ -1468,26 +1568,27 @@ function resourceFromRepository(repository: GitHubWebhookRecord | undefined): No
   };
 }
 
-function normalizedComment(comment: GitHubWebhookRecord | undefined): NormalizedGitHubComment | undefined {
-  if (!comment) {
+function normalizedComment(comment: unknown): NormalizedGitHubComment | undefined {
+  if (!comment || typeof comment !== 'object' || Array.isArray(comment)) {
     return undefined;
   }
+  const record = comment as GitHubWebhookRecord;
 
   return {
-    id: String(comment.id ?? 'unknown'),
-    ...optionalStringProperty('body', stringField(comment, 'body')),
-    ...optionalStringProperty('url', stringField(comment, 'html_url')),
-    ...optionalStringProperty('author', stringField(recordField(comment, 'user'), 'login')),
-    ...optionalStringProperty('reviewId', idField(comment, 'pull_request_review_id')),
-    ...optionalStringProperty('path', stringField(comment, 'path')),
-    ...optionalNumberProperty('line', numberField(comment, 'line')),
-    ...optionalStringProperty('side', stringField(comment, 'side')),
-    ...optionalNumberProperty('startLine', numberField(comment, 'start_line')),
-    ...optionalStringProperty('startSide', stringField(comment, 'start_side')),
-    ...optionalNumberProperty('originalLine', numberField(comment, 'original_line')),
-    ...optionalNumberProperty('originalStartLine', numberField(comment, 'original_start_line')),
-    ...optionalStringProperty('commitId', stringField(comment, 'commit_id')),
-    ...optionalNumberProperty('position', numberField(comment, 'position')),
+    id: String(record.id ?? 'unknown'),
+    ...optionalStringProperty('body', stringField(record, 'body')),
+    ...optionalStringProperty('url', stringField(record, 'html_url')),
+    ...optionalStringProperty('author', stringField(recordField(record, 'user'), 'login')),
+    ...optionalStringProperty('reviewId', idField(record, 'pull_request_review_id')),
+    ...optionalStringProperty('path', stringField(record, 'path')),
+    ...optionalNumberProperty('line', numberField(record, 'line')),
+    ...optionalStringProperty('side', stringField(record, 'side')),
+    ...optionalNumberProperty('startLine', numberField(record, 'start_line')),
+    ...optionalStringProperty('startSide', stringField(record, 'start_side')),
+    ...optionalNumberProperty('originalLine', numberField(record, 'original_line')),
+    ...optionalNumberProperty('originalStartLine', numberField(record, 'original_start_line')),
+    ...optionalStringProperty('commitId', stringField(record, 'commit_id')),
+    ...optionalNumberProperty('position', numberField(record, 'position')),
   };
 }
 
@@ -1504,6 +1605,7 @@ function normalizedRelatedPullRequest(
 
 function normalizedRelatedPullRequests(payload: GitHubWebhookPayload): NormalizedGitHubResource[] {
   const pullRequests = [
+    ...arrayField(payload, 'pull_requests'),
     ...arrayField(payload.check_run, 'pull_requests'),
     ...arrayField(payload.check_suite, 'pull_requests'),
     ...arrayField(payload.workflow_run, 'pull_requests'),
@@ -1552,6 +1654,7 @@ function normalizedChanges(changes: GitHubWebhookRecord | undefined): Normalized
 
     return {
       field,
+      ...optionalStringProperty('fieldNodeId', stringField(change, 'field_node_id')),
       ...optionalStringProperty('fieldName', stringField(change, 'field_name') ?? stringField(change, 'name')),
       ...optionalStringProperty('fieldType', stringField(change, 'field_type') ?? stringField(change, 'type')),
       ...optionalStringProperty('from', normalizedChangeValue(change?.from)),
@@ -1579,6 +1682,10 @@ function normalizedDispatch(
 }
 
 function normalizedChangeValue(value: unknown): string | undefined {
+  if (Array.isArray(value)) {
+    return JSON.stringify(value);
+  }
+
   if (typeof value === 'string' && value.trim()) {
     return value;
   }
@@ -1593,6 +1700,14 @@ function normalizedChangeValue(value: unknown): string | undefined {
   }
 
   return undefined;
+}
+
+function deploymentReviewComment(comment: unknown): string | undefined {
+  if (typeof comment === 'string' && comment.trim()) {
+    return comment;
+  }
+
+  return stringField(comment, 'body');
 }
 
 function normalizedRequestedAction(
@@ -1611,13 +1726,19 @@ function normalizedRequestedAction(
   return objectHasKeys(normalized) ? normalized : undefined;
 }
 
-function recordField(record: GitHubWebhookRecord | undefined, key: string): GitHubWebhookRecord | undefined {
-  const value = record?.[key];
+function recordField(record: unknown, key: string): GitHubWebhookRecord | undefined {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) {
+    return undefined;
+  }
+  const value = (record as GitHubWebhookRecord)[key];
   return value && typeof value === 'object' && !Array.isArray(value) ? (value as GitHubWebhookRecord) : undefined;
 }
 
-function arrayField(record: GitHubWebhookRecord | undefined, key: string): GitHubWebhookRecord[] {
-  const value = record?.[key];
+function arrayField(record: unknown, key: string): GitHubWebhookRecord[] {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) {
+    return [];
+  }
+  const value = (record as GitHubWebhookRecord)[key];
   return Array.isArray(value)
     ? value.filter(
       (item): item is GitHubWebhookRecord => Boolean(item) && typeof item === 'object' && !Array.isArray(item),
@@ -1625,28 +1746,43 @@ function arrayField(record: GitHubWebhookRecord | undefined, key: string): GitHu
     : [];
 }
 
-function stringArrayField(record: GitHubWebhookRecord | undefined, key: string): string[] {
-  const value = record?.[key];
+function stringArrayField(record: unknown, key: string): string[] {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) {
+    return [];
+  }
+  const value = (record as GitHubWebhookRecord)[key];
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
 }
 
-function stringField(record: GitHubWebhookRecord | undefined, key: string): string | undefined {
-  const value = record?.[key];
+function stringField(record: unknown, key: string): string | undefined {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) {
+    return undefined;
+  }
+  const value = (record as GitHubWebhookRecord)[key];
   return typeof value === 'string' && value.trim() ? value : undefined;
 }
 
-function numberField(record: GitHubWebhookRecord | undefined, key: string): number | undefined {
-  const value = record?.[key];
+function numberField(record: unknown, key: string): number | undefined {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) {
+    return undefined;
+  }
+  const value = (record as GitHubWebhookRecord)[key];
   return typeof value === 'number' ? value : undefined;
 }
 
-function booleanField(record: GitHubWebhookRecord | undefined, key: string): boolean | undefined {
-  const value = record?.[key];
+function booleanField(record: unknown, key: string): boolean | undefined {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) {
+    return undefined;
+  }
+  const value = (record as GitHubWebhookRecord)[key];
   return typeof value === 'boolean' ? value : undefined;
 }
 
-function idField(record: GitHubWebhookRecord | undefined, key: string): string | undefined {
-  const value = record?.[key];
+function idField(record: unknown, key: string): string | undefined {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) {
+    return undefined;
+  }
+  const value = (record as GitHubWebhookRecord)[key];
   if (typeof value === 'string' && value.trim()) {
     return value;
   }

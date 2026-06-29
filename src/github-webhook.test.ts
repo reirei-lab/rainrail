@@ -781,6 +781,7 @@ describe('GitHub webhook source handling', () => {
           },
           changes: {
             field_value: {
+              field_node_id: 'PVTSSF_lADOStatus',
               field_name: 'Status',
               field_type: 'single_select',
               from: { name: 'Todo' },
@@ -817,6 +818,7 @@ describe('GitHub webhook source handling', () => {
         changes: [
           {
             field: 'field_value',
+            fieldNodeId: 'PVTSSF_lADOStatus',
             fieldName: 'Status',
             fieldType: 'single_select',
             from: 'Todo',
@@ -1077,12 +1079,20 @@ describe('GitHub webhook source handling', () => {
             state: 'success',
             target_url: 'https://deploy.example/status',
           },
+          check_run: {
+            id: 902,
+            html_url: 'https://github.com/reirei-lab/rainrail/runs/902',
+          },
         },
         rawBody: '{}',
         receivedAt: new Date('2026-06-29T13:00:44.000Z'),
       }),
     ).resolves.toMatchObject({
       name: 'github.deployment_status',
+      subject: {
+        type: 'deployment',
+        id: '900',
+      },
       payload: {
         resource: {
           type: 'deployment',
@@ -1264,6 +1274,45 @@ describe('GitHub webhook source handling', () => {
         },
       },
     });
+
+    await expect(
+      createGitHubWebhookEvent({
+        githubEvent: 'milestone',
+        deliveryId: 'delivery-milestone-1',
+        payload: {
+          action: 'created',
+          repository: { full_name: 'reirei-lab/rainrail' },
+          milestone: {
+            id: 301,
+            number: 3,
+            title: 'v2',
+            due_on: '2026-08-31T00:00:00Z',
+            html_url: 'https://github.com/reirei-lab/rainrail/milestone/3',
+          },
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.milestone',
+      payload: {
+        resource: {
+          type: 'milestone',
+          id: '301',
+          number: 3,
+          title: 'v2',
+          dueOn: '2026-08-31T00:00:00Z',
+          url: 'https://github.com/reirei-lab/rainrail/milestone/3',
+        },
+        milestone: {
+          id: '301',
+          number: 3,
+          title: 'v2',
+          dueOn: '2026-08-31T00:00:00Z',
+          url: 'https://github.com/reirei-lab/rainrail/milestone/3',
+        },
+      },
+    });
   });
 
   it('normalizes dispatch inputs, commit comments, protection rules, and advisory details', async () => {
@@ -1377,10 +1426,20 @@ describe('GitHub webhook source handling', () => {
         payload: {
           action: 'requested',
           repository: { full_name: 'reirei-lab/rainrail' },
+          deployment: {
+            id: 777,
+            environment: 'staging',
+          },
           environment: 'staging',
           ref: 'main',
           sha: 'def456',
           deployment_callback_url: 'https://api.github.com/repos/reirei-lab/rainrail/actions/runs/1/deployment_protection_rule',
+          pull_requests: [
+            {
+              number: 41,
+              html_url: 'https://github.com/reirei-lab/rainrail/pull/41',
+            },
+          ],
         },
         rawBody: '{}',
         receivedAt: new Date('2026-06-29T13:00:44.000Z'),
@@ -1396,6 +1455,14 @@ describe('GitHub webhook source handling', () => {
           headSha: 'def456',
           callbackUrl: 'https://api.github.com/repos/reirei-lab/rainrail/actions/runs/1/deployment_protection_rule',
         },
+        pullRequests: [
+          {
+            type: 'pull_request',
+            id: '41',
+            number: 41,
+            url: 'https://github.com/reirei-lab/rainrail/pull/41',
+          },
+        ],
       },
     });
 
@@ -1651,9 +1718,15 @@ describe('GitHub webhook source handling', () => {
           thread: {
             node_id: 'PRRT_kwDOExample',
             is_resolved: true,
-            path: 'src/github-webhook.ts',
-            line: 531,
-            side: 'RIGHT',
+            comments: [
+              {
+                path: 'src/github-webhook.ts',
+                line: 531,
+                side: 'RIGHT',
+                start_line: 520,
+                start_side: 'RIGHT',
+              },
+            ],
           },
         },
         rawBody: '{}',
@@ -1673,6 +1746,8 @@ describe('GitHub webhook source handling', () => {
           path: 'src/github-webhook.ts',
           line: 531,
           side: 'RIGHT',
+          startLine: 520,
+          startSide: 'RIGHT',
         },
         pullRequest: {
           type: 'pull_request',
@@ -1717,6 +1792,8 @@ describe('GitHub webhook source handling', () => {
         changes: [
           {
             field: 'required_status_checks',
+            from: '["test"]',
+            to: '["test","build"]',
           },
         ],
       },
@@ -1740,9 +1817,9 @@ describe('GitHub webhook source handling', () => {
               environment: 'staging',
             },
           ],
-          reviewers: [{ login: 'ops-team' }],
+          reviewers: [{ type: 'Team', reviewer: { slug: 'ops-team', name: 'Ops Team' } }],
           approver: { login: 'maintainer' },
-          comment: { body: 'ship it' },
+          comment: 'ship it',
         },
         rawBody: '{}',
         receivedAt: new Date('2026-06-29T13:00:44.000Z'),
@@ -1877,6 +1954,99 @@ describe('GitHub webhook source handling', () => {
             url: 'https://github.com/reirei-lab/rainrail/wiki/Agent-Guide',
           },
         ],
+      },
+    });
+
+    await expect(
+      createGitHubWebhookEvent({
+        githubEvent: 'repository_ruleset',
+        deliveryId: 'delivery-repository-ruleset-1',
+        payload: {
+          action: 'edited',
+          repository: { full_name: 'reirei-lab/rainrail' },
+          repository_ruleset: {
+            id: 80,
+            name: 'Protect main',
+            target: 'branch',
+            enforcement: 'active',
+            html_url: 'https://github.com/reirei-lab/rainrail/rules/80',
+          },
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.repository_ruleset',
+      payload: {
+        resource: {
+          type: 'repository_ruleset',
+          id: '80',
+          name: 'Protect main',
+          target: 'branch',
+          enforcement: 'active',
+          url: 'https://github.com/reirei-lab/rainrail/rules/80',
+        },
+      },
+    });
+
+    await expect(
+      createGitHubWebhookEvent({
+        githubEvent: 'fork',
+        deliveryId: 'delivery-fork-1',
+        payload: {
+          repository: { full_name: 'reirei-lab/rainrail' },
+          forkee: {
+            id: 81,
+            full_name: 'someone/rainrail',
+            html_url: 'https://github.com/someone/rainrail',
+            owner: { login: 'someone' },
+            name: 'rainrail',
+          },
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.fork',
+      payload: {
+        resource: {
+          type: 'fork',
+          id: '81',
+          fullName: 'someone/rainrail',
+          owner: 'someone',
+          name: 'rainrail',
+          url: 'https://github.com/someone/rainrail',
+        },
+      },
+    });
+
+    await expect(
+      createGitHubWebhookEvent({
+        githubEvent: 'deploy_key',
+        deliveryId: 'delivery-deploy-key-1',
+        payload: {
+          action: 'created',
+          repository: { full_name: 'reirei-lab/rainrail' },
+          key: {
+            id: 82,
+            title: 'Deploy key',
+            read_only: true,
+            url: 'https://api.github.com/repos/reirei-lab/rainrail/keys/82',
+          },
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.deploy_key',
+      payload: {
+        resource: {
+          type: 'deploy_key',
+          id: '82',
+          title: 'Deploy key',
+          readOnly: true,
+          url: 'https://api.github.com/repos/reirei-lab/rainrail/keys/82',
+        },
       },
     });
   });
