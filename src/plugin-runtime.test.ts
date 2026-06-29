@@ -1507,4 +1507,202 @@ describe('plugin runtime contract', () => {
       vi.useRealTimers();
     }
   });
+
+  it('does not start a handler when the parent runtime signal is already aborted', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: {
+        id: 'delivery-pre-aborted',
+        receivedAt: '2026-06-29T14:00:00.000Z',
+      },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'github://deliveries/delivery-pre-aborted',
+      },
+    });
+    const parentController = new AbortController();
+    const handler = vi.fn(async () => ({ unreachable: true }));
+    const auditEntries: unknown[] = [];
+    parentController.abort(new Error('daemon already stopped'));
+    const loader = createPluginLoader({
+      runtime: mockRuntimeContext({
+        runId: 'run-13',
+        now: () => new Date('2026-06-29T14:01:00.000Z'),
+        signal: parentController.signal,
+      }),
+      audit: {
+        record: (entry) => {
+          auditEntries.push(entry);
+        },
+      },
+    });
+
+    loader.on('github.issue', handler, { name: 'pre-aborted-handler' });
+
+    await expect(loader.dispatch(event)).resolves.toMatchObject([
+      {
+        pluginName: 'pre-aborted-handler',
+        eventId: 'github-webhook:delivery-pre-aborted:github.issue',
+        status: 'rejected',
+      },
+    ]);
+    expect(handler).not.toHaveBeenCalled();
+    expect(auditEntries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          pluginId: 'pre-aborted-handler',
+          eventId: 'github-webhook:delivery-pre-aborted:github.issue',
+          action: 'plugin.handle',
+          result: 'rejected',
+        }),
+      ]),
+    );
+  });
+
+  it('uses the registered capability snapshot even if the workflow mutates itself later', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.pull_request',
+      delivery: {
+        id: 'delivery-mutated-capability',
+        receivedAt: '2026-06-29T14:00:00.000Z',
+      },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'pull_request', id: '44' },
+      payload: { action: 'closed' },
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'github://deliveries/delivery-mutated-capability',
+      },
+    });
+    const mergePullRequest = vi.fn(async () => ({ merged: true }));
+    const auditEntries: unknown[] = [];
+    const workflow = defineWorkflowPlugin({
+      name: 'mutating-capability-handler',
+      capabilities: [],
+      accepts: (candidate) => candidate.name === 'github.pull_request',
+      async handle(_event, context) {
+        workflow.capabilities?.push('merge');
+        return context.actions.mergePullRequest({ pullRequestId: '44' });
+      },
+    });
+    const dispatcher = createRuntimeDispatcher({
+      workflows: [workflow],
+      runtime: {
+        runId: 'run-13',
+        now: () => new Date('2026-06-29T14:01:00.000Z'),
+        actions: { mergePullRequest },
+      },
+      audit: {
+        record: (entry) => {
+          auditEntries.push(entry);
+        },
+      },
+    });
+
+    const [result] = await dispatcher.dispatch(event);
+
+    expect(result).toMatchObject({
+      pluginName: 'mutating-capability-handler',
+      eventId: 'github-webhook:delivery-mutated-capability:github.pull_request',
+      status: 'rejected',
+    });
+    expect(mergePullRequest).not.toHaveBeenCalled();
+    expect(auditEntries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          pluginId: 'mutating-capability-handler',
+          eventId: 'github-webhook:delivery-mutated-capability:github.pull_request',
+          action: 'mergePullRequest',
+          result: 'denied',
+        }),
+      ]),
+    );
+  });
+
+  it('denies task provider side effects after the handler timeout has fired', async () => {
+    vi.useFakeTimers();
+    try {
+      const event = createEventEnvelope({
+        source: { type: 'github', name: 'github-webhook' },
+        name: 'github.issue',
+        delivery: {
+          id: 'delivery-late-task-provider',
+          receivedAt: '2026-06-29T14:00:00.000Z',
+        },
+        occurredAt: '2026-06-29T14:00:00.000Z',
+        subject: { type: 'issue', id: '13' },
+        payload: { action: 'opened' },
+        rawPayload: {
+          kind: 'external-reference',
+          reference: 'github://deliveries/delivery-late-task-provider',
+        },
+      });
+      const createComment = vi.fn(async () => ({ id: 'comment:late' }));
+      let lateProviderReason: unknown;
+      const loader = createPluginLoader({
+        runtime: mockRuntimeContext({
+          runId: 'run-13',
+          now: () => new Date('2026-06-29T14:01:00.000Z'),
+          providers: {
+            tasks: {
+              name: 'mock-tasks',
+              kind: 'task-provider',
+              getIssue: async () => ({
+                id: 'issue:13',
+                provider: 'github',
+                repository: 'reirei-lab/rainrail',
+                number: 13,
+                title: 'Mock issue',
+              }),
+              createComment,
+            },
+          },
+        }),
+        defaultTimeoutMs: 25,
+      });
+
+      loader.on(
+        'github.issue',
+        async (_event, context) => {
+          await new Promise((resolve) => {
+            setTimeout(resolve, 100);
+          });
+
+          try {
+            await context.providers.tasks.createComment({
+              target: { provider: 'github', repository: 'reirei-lab/rainrail', number: 13 },
+              body: 'late comment',
+            });
+          } catch (reason) {
+            lateProviderReason = reason;
+          }
+
+          return { late: true };
+        },
+        { name: 'late-task-provider-handler' },
+      );
+
+      const dispatchPromise = loader.dispatch(event);
+      await vi.advanceTimersByTimeAsync(25);
+
+      await expect(dispatchPromise).resolves.toMatchObject([
+        {
+          pluginName: 'late-task-provider-handler',
+          eventId: 'github-webhook:delivery-late-task-provider:github.issue',
+          status: 'rejected',
+        },
+      ]);
+
+      await vi.advanceTimersByTimeAsync(75);
+      expect(createComment).not.toHaveBeenCalled();
+      expect(lateProviderReason).toBeInstanceOf(Error);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

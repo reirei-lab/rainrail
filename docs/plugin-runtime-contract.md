@@ -51,7 +51,9 @@ provider/runtime 未指定でも構成できるが、その場合 handler に渡
 
 Workflow plugin は任意で `capabilities` と `timeoutMs` を宣言できる。
 `capabilities` は危険操作を呼ぶための宣言であり、宣言されていない plugin は
-merge、runtime start、secret access を実行できない。
+merge、runtime start、secret access を実行できない。dispatcher は handler 起動前に
+capability 宣言を snapshot し、handler 実行中に plugin object や capability 配列が
+mutate されても、その dispatch の権限境界は変えない。
 
 provider 名や agent dispatch などの低レベル runtime 情報は
 `context.capabilities` に残す。一方で merge、runtime start、secret access は
@@ -98,9 +100,15 @@ handler が fulfilled/rejected で settle した後も同じ signal を abort �
 `context.runtime.startRun` も handler へ直接 provider を渡さず gated wrapper にする。
 `runtime:start` capability がない handler は runtime provider 経由でも起動できない。
 親 runtime signal が abort された場合は handler promise や timeout を待たず、
-plugin の rejected result として dispatch を完了する。timeout 発火時は timeout result
-を先に確定してから signal を abort し、abort cleanup が handler を resolve/reject しても
-audit result は `timeout` のままにする。
+plugin の rejected result として dispatch を完了する。dispatch 開始時点で親 signal が
+すでに abort 済みの場合は、handler を起動せずに rejected result として扱う。
+timeout 発火時は timeout result を先に確定してから signal を abort し、abort cleanup が
+handler を resolve/reject しても audit result は `timeout` のままにする。
+
+`context.providers.tasks` も handler lifecycle の signal で guard する。timeout、親 abort、
+または handler settle 後に遅れて続行した handler が `createComment`、`setStatus`、
+`createProposal` などの task provider 操作を呼んでも、provider 実装は実行せず rejected
+side effect として拒否する。
 
 `audit.record(entry)` を渡すと、plugin id、event id、run id、action、
 result、発生時刻が記録される。action result は `fulfilled`、`rejected`、
