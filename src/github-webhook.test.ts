@@ -966,6 +966,9 @@ describe('GitHub webhook source handling', () => {
           ref: 'refs/heads/main',
           before: '0000000',
           after: 'abc123',
+          created: true,
+          deleted: false,
+          forced: true,
           repository: { full_name: 'reirei-lab/rainrail' },
           head_commit: {
             id: 'abc123',
@@ -992,6 +995,9 @@ describe('GitHub webhook source handling', () => {
           ref: 'refs/heads/main',
           beforeSha: '0000000',
           headSha: 'abc123',
+          created: true,
+          deleted: false,
+          forced: true,
           headCommitMessage: 'Update workflow',
           url: 'https://github.com/reirei-lab/rainrail/commit/abc123',
         },
@@ -1192,7 +1198,14 @@ describe('GitHub webhook source handling', () => {
             number: 7,
             state: 'open',
             html_url: 'https://github.com/reirei-lab/rainrail/security/code-scanning/7',
-            rule: { security_severity_level: 'high' },
+            rule: { severity: 'warning' },
+            most_recent_instance: {
+              location: {
+                path: 'src/github-webhook.ts',
+                start_line: 10,
+                end_line: 12,
+              },
+            },
           },
         },
         rawBody: '{}',
@@ -1206,9 +1219,12 @@ describe('GitHub webhook source handling', () => {
           id: '7',
           number: 7,
           state: 'open',
-          severity: 'high',
+          severity: 'warning',
           ref: 'refs/heads/main',
           headSha: 'abc123',
+          path: 'src/github-webhook.ts',
+          startLine: 10,
+          endLine: 12,
           url: 'https://github.com/reirei-lab/rainrail/security/code-scanning/7',
         },
       },
@@ -2064,6 +2080,68 @@ describe('GitHub webhook source handling', () => {
   it('normalizes access, membership, pages, import, and scan resources', async () => {
     await expect(
       createGitHubWebhookEvent({
+        githubEvent: 'project_card',
+        deliveryId: 'delivery-project-card-1',
+        payload: {
+          action: 'created',
+          repository: { full_name: 'reirei-lab/rainrail' },
+          project_card: {
+            id: 100,
+            note: 'Track issue',
+            column_id: 101,
+            project_url: 'https://api.github.com/projects/1',
+            html_url: 'https://github.com/orgs/reirei-lab/projects/1#card-100',
+          },
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.project_card',
+      payload: {
+        resource: {
+          type: 'project_card',
+          id: '100',
+          body: 'Track issue',
+          columnId: '101',
+          projectUrl: 'https://api.github.com/projects/1',
+          url: 'https://github.com/orgs/reirei-lab/projects/1#card-100',
+        },
+      },
+    });
+
+    await expect(
+      createGitHubWebhookEvent({
+        githubEvent: 'project_column',
+        deliveryId: 'delivery-project-column-1',
+        payload: {
+          action: 'moved',
+          repository: { full_name: 'reirei-lab/rainrail' },
+          project_column: {
+            id: 102,
+            name: 'In progress',
+            project_url: 'https://api.github.com/projects/1',
+            html_url: 'https://github.com/orgs/reirei-lab/projects/1#column-102',
+          },
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.project_column',
+      payload: {
+        resource: {
+          type: 'project_column',
+          id: '102',
+          name: 'In progress',
+          projectUrl: 'https://api.github.com/projects/1',
+          url: 'https://github.com/orgs/reirei-lab/projects/1#column-102',
+        },
+      },
+    });
+
+    await expect(
+      createGitHubWebhookEvent({
         githubEvent: 'personal_access_token_request',
         deliveryId: 'delivery-pat-request-1',
         payload: {
@@ -2208,7 +2286,6 @@ describe('GitHub webhook source handling', () => {
         payload: {
           repository: { full_name: 'reirei-lab/rainrail' },
           status: 'failure',
-          url: 'https://api.github.com/repos/reirei-lab/rainrail/import',
         },
         rawBody: '{}',
         receivedAt: new Date('2026-06-29T13:00:44.000Z'),
@@ -2220,7 +2297,6 @@ describe('GitHub webhook source handling', () => {
           type: 'repository_import',
           id: 'reirei-lab/rainrail',
           status: 'failure',
-          url: 'https://api.github.com/repos/reirei-lab/rainrail/import',
         },
       },
     });
@@ -2235,7 +2311,7 @@ describe('GitHub webhook source handling', () => {
           type: 'custom_pattern_backfill',
           source: 'repository',
           completed_at: '2026-06-29T13:00:44Z',
-          secret_types: ['generic_secret'],
+          secret_types: [],
         },
         rawBody: '{}',
         receivedAt: new Date('2026-06-29T13:00:44.000Z'),
@@ -2249,7 +2325,7 @@ describe('GitHub webhook source handling', () => {
           scanType: 'custom_pattern_backfill',
           source: 'repository',
           completedAt: '2026-06-29T13:00:44Z',
-          secretTypes: ['generic_secret'],
+          secretTypes: [],
         },
       },
     });

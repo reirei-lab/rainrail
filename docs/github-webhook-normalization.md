@@ -19,9 +19,9 @@ workflow plugin が受け取る `event.payload` は Rainrail 側で安定させ�
 - `check_run` / `check_suite` / `workflow_run` に紐づく PR は `event.payload.pullRequests` に残す。
 - `projects_v2_item.edited` の field changes は `field_node_id` とともに `event.payload.changes` に集約する。
 - `projects_v2_item` では REST id だけでなく GraphQL の `node_id` / `project_node_id` も resource に残す。
-- `projects_v2` は project 本体を `event.payload.resource` にする。
+- classic `project` / `project_card` / `project_column` と `projects_v2` は project 系 resource として正規化する。
 - `projects_v2_status_update` は status update 本体と status/date metadata を `event.payload.resource` にする。
-- `push` は ref / before sha / head sha / head commit summary を `event.payload.resource` に集約する。
+- `push` は ref / before sha / head sha / created/deleted/forced / head commit summary を `event.payload.resource` に集約する。
 - `create` / `delete` は branch/tag の ref と ref type を `event.payload.resource` に集約する。
 - `release` は tag/name/url/draft/prerelease を release resource として正規化する。
 - `status` は commit SHA / state / context / target URL を commit status resource として正規化する。
@@ -36,12 +36,12 @@ workflow plugin が受け取る `event.payload` は Rainrail 側で安定させ�
 - `repository_ruleset` / `fork` / `deploy_key` は対象 ruleset / fork repository / deploy key を resource として正規化する。
 - `personal_access_token_request` は request id/owner/permissions と対象 repositories を正規化する。
 - `member` / `membership` / `team` / `team_add` は対象 user/team principal を resource として正規化する。
-- `page_build` / `repository_import` / `secret_scanning_scan` は build/import/scan 結果を resource として正規化する。
+- `page_build` / `repository_import` / `secret_scanning_scan` は build/import/scan 結果を resource として正規化する。repository import は URL なしでも status を保持し、secret scan は空の secret types でも scan resource にする。
 - `package` / `registry_package` は package name/type/version/url を package resource として正規化する。
 - `installation` / `installation_repositories` の対象 repository 配列は `event.payload.repositories` に残す。
 - `gollum` は変更された wiki page を wiki page resource と `event.payload.pages` に残す。
 - security alert 系 webhook は top-level `alert` の id/state/severity/ref/url を security alert resource として正規化する。
-- `code_scanning_alert` の top-level ref/commit SHA と `secret_scanning_alert_location` の location details は security alert resource に残す。
+- `code_scanning_alert` の top-level ref/commit SHA、rule severity、most recent instance location と `secret_scanning_alert_location` の location details は security alert resource に残す。
 - `security_advisory` / `repository_advisory` は advisory id/summary/severity/url を advisory resource として正規化する。
 - `repository_dispatch` / `workflow_dispatch` は `client_payload` / `inputs`、対象 ref/branch、workflow 名を `event.payload.dispatch` に残す。
 - `discussion` / `discussion_comment` は discussion number/url/category と answer 情報を discussion resource として正規化する。

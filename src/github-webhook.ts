@@ -218,6 +218,9 @@ export interface GitHubWebhookPayload {
   projects_v2?: GitHubWebhookRecord;
   projects_v2_status_update?: GitHubWebhookRecord;
   projects_v2_item?: GitHubWebhookRecord;
+  project?: GitHubWebhookRecord;
+  project_card?: GitHubWebhookRecord;
+  project_column?: GitHubWebhookRecord;
   personal_access_token_request?: GitHubWebhookRecord;
   alert?: GitHubWebhookRecord;
   location?: GitHubWebhookRecord;
@@ -416,6 +419,11 @@ export interface NormalizedGitHubResource {
   teamSlug?: string;
   teamName?: string;
   readOnly?: boolean;
+  created?: boolean;
+  deleted?: boolean;
+  forced?: boolean;
+  columnId?: string;
+  projectUrl?: string;
   errorMessage?: string;
   scanType?: string;
   source?: string;
@@ -556,6 +564,10 @@ function findGitHubSubject(payload: GitHubWebhookPayload, name: RainrailEventNam
 
   if (payload.projects_v2_status_update) {
     return subjectFromProjectStatusUpdate(payload) ?? subjectFromRepository(payload, name);
+  }
+
+  if (payload.project || payload.project_card || payload.project_column) {
+    return subjectFromResource(resourceFromClassicProject(payload));
   }
 
   if (payload.release) {
@@ -1164,6 +1176,10 @@ function normalizedResource(payload: GitHubWebhookPayload): NormalizedGitHubReso
     return resourceFromProjectStatusUpdate(payload.projects_v2_status_update);
   }
 
+  if (payload.project || payload.project_card || payload.project_column) {
+    return resourceFromClassicProject(payload);
+  }
+
   if (payload.release) {
     return resourceFromRelease(payload.release);
   }
@@ -1384,6 +1400,7 @@ function resourceFromSecurityAlert(payload: GitHubWebhookPayload): NormalizedGit
   const alert = payload.alert ?? {};
   const location = payload.location;
   const locationDetails = recordField(location, 'details');
+  const codeScanningLocation = recordField(recordField(alert, 'most_recent_instance'), 'location');
   const dependency = recordField(alert, 'dependency');
   const dependencyPackage = recordField(dependency, 'package');
 
@@ -1396,9 +1413,9 @@ function resourceFromSecurityAlert(payload: GitHubWebhookPayload): NormalizedGit
     ...optionalStringProperty('ref', stringField(payload, 'ref') ?? stringField(alert, 'ref')),
     ...optionalStringProperty('headSha', stringField(payload, 'commit_oid') ?? stringField(locationDetails, 'commit_sha')),
     ...optionalStringProperty('locationType', stringField(location, 'type')),
-    ...optionalStringProperty('path', stringField(locationDetails, 'path')),
-    ...optionalNumberProperty('startLine', numberField(locationDetails, 'start_line')),
-    ...optionalNumberProperty('endLine', numberField(locationDetails, 'end_line')),
+    ...optionalStringProperty('path', stringField(locationDetails, 'path') ?? stringField(codeScanningLocation, 'path')),
+    ...optionalNumberProperty('startLine', numberField(locationDetails, 'start_line') ?? numberField(codeScanningLocation, 'start_line')),
+    ...optionalNumberProperty('endLine', numberField(locationDetails, 'end_line') ?? numberField(codeScanningLocation, 'end_line')),
     ...optionalStringProperty('packageName', stringField(dependencyPackage, 'name')),
     ...optionalStringProperty('packageType', stringField(dependencyPackage, 'ecosystem')),
     ...optionalStringProperty('manifestPath', stringField(dependency, 'manifest_path')),
@@ -1560,6 +1577,7 @@ function resourceFromRepositoryImport(payload: GitHubWebhookPayload): Normalized
 function resourceFromSecretScanningScan(payload: GitHubWebhookPayload): NormalizedGitHubResource {
   const scanType = stringField(payload, 'type');
   const source = stringField(payload, 'source');
+  const secretTypes = Array.isArray(payload.secret_types) ? stringArrayField(payload, 'secret_types') : undefined;
 
   return {
     type: 'secret_scanning_scan',
@@ -1567,7 +1585,7 @@ function resourceFromSecretScanningScan(payload: GitHubWebhookPayload): Normaliz
     ...optionalStringProperty('scanType', scanType),
     ...optionalStringProperty('source', source),
     ...optionalStringProperty('completedAt', stringField(payload, 'completed_at')),
-    ...optionalStringArrayProperty('secretTypes', stringArrayField(payload, 'secret_types')),
+    ...(secretTypes === undefined ? {} : { secretTypes }),
   };
 }
 
@@ -1669,6 +1687,39 @@ function resourceFromProjectStatusUpdate(statusUpdate: GitHubWebhookRecord): Nor
   };
 }
 
+function resourceFromClassicProject(payload: GitHubWebhookPayload): NormalizedGitHubResource {
+  if (payload.project_card) {
+    return {
+      type: 'project_card',
+      id: String(payload.project_card.id ?? 'unknown'),
+      ...optionalStringProperty('body', stringField(payload.project_card, 'note')),
+      ...optionalStringProperty('columnId', idField(payload.project_card, 'column_id')),
+      ...optionalStringProperty('projectUrl', stringField(payload.project_card, 'project_url')),
+      ...optionalStringProperty('url', stringField(payload.project_card, 'html_url')),
+    };
+  }
+
+  if (payload.project_column) {
+    return {
+      type: 'project_column',
+      id: String(payload.project_column.id ?? 'unknown'),
+      ...optionalStringProperty('name', stringField(payload.project_column, 'name')),
+      ...optionalStringProperty('projectUrl', stringField(payload.project_column, 'project_url')),
+      ...optionalStringProperty('url', stringField(payload.project_column, 'html_url')),
+    };
+  }
+
+  const project = payload.project ?? {};
+  return {
+    type: 'project',
+    id: String(project.id ?? 'unknown'),
+    ...optionalStringProperty('name', stringField(project, 'name')),
+    ...optionalStringProperty('body', stringField(project, 'body')),
+    ...optionalStringProperty('state', stringField(project, 'state')),
+    ...optionalStringProperty('url', stringField(project, 'html_url')),
+  };
+}
+
 function resourceFromRelease(release: GitHubWebhookRecord): NormalizedGitHubResource {
   return {
     type: 'release',
@@ -1691,6 +1742,9 @@ function resourceFromPush(payload: GitHubWebhookPayload): NormalizedGitHubResour
     ...optionalStringProperty('ref', stringField(payload, 'ref')),
     ...optionalStringProperty('beforeSha', stringField(payload, 'before')),
     ...optionalStringProperty('headSha', stringField(payload, 'after')),
+    ...optionalBooleanProperty('created', booleanField(payload, 'created')),
+    ...optionalBooleanProperty('deleted', booleanField(payload, 'deleted')),
+    ...optionalBooleanProperty('forced', booleanField(payload, 'forced')),
     ...optionalStringProperty('headCommitMessage', stringField(headCommit, 'message')),
     ...optionalStringProperty('url', stringField(headCommit, 'url')),
   };
@@ -2029,16 +2083,12 @@ function isMemberTeamPayload(payload: GitHubWebhookPayload): boolean {
 function isRepositoryImportPayload(payload: GitHubWebhookPayload): boolean {
   return (
     payload.repository !== undefined &&
-    stringField(payload, 'status') !== undefined &&
-    stringField(payload, 'url') !== undefined
+    stringField(payload, 'status') !== undefined
   );
 }
 
 function isSecretScanningScanPayload(payload: GitHubWebhookPayload): boolean {
-  return (
-    stringField(payload, 'completed_at') !== undefined &&
-    stringArrayField(payload, 'secret_types').length > 0
-  );
+  return stringField(payload, 'completed_at') !== undefined;
 }
 
 function relationType(payload: GitHubWebhookPayload): string | undefined {
@@ -2056,6 +2106,7 @@ function relationType(payload: GitHubWebhookPayload): string | undefined {
 function alertSeverity(alert: GitHubWebhookRecord): string | undefined {
   return (
     stringField(alert, 'severity') ??
+    stringField(recordField(alert, 'rule'), 'severity') ??
     stringField(recordField(alert, 'rule'), 'security_severity_level') ??
     stringField(recordField(alert, 'security_advisory'), 'severity')
   );
