@@ -32,6 +32,28 @@ describe('Rainrail event bus', () => {
     expect(writes.at(-1)).toBe('closed');
   });
 
+  it('does not broadcast to subscribers added reentrantly during the same publish', () => {
+    const bus = createRainrailEventBus({ replayLimit: 10 });
+    const event = fixtureEvent('github-webhook', 'delivery-1', 'github.issue', 'issue', '17');
+    const secondWrites: string[] = [];
+    let subscribedSecond = false;
+
+    bus.subscribe({
+      write: (chunk) => {
+        if (!subscribedSecond && chunk.includes('event: github.issue\n')) {
+          subscribedSecond = true;
+          bus.subscribe({ write: (secondChunk) => secondWrites.push(secondChunk) });
+        }
+      },
+    });
+
+    bus.publish(event);
+
+    expect(secondWrites.join('')).toContain(': connected\n\n');
+    expect(secondWrites.join('')).toContain(event.id);
+    expect(secondWrites.join('').split('event: github.issue\n').length - 1).toBe(1);
+  });
+
   it('creates a Worker-compatible SSE stream with replay, keepalive, and abort cleanup', async () => {
     vi.useFakeTimers();
     try {

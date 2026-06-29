@@ -16,7 +16,9 @@ Rainrail core のイベント配信は Source plugin が作った `RainrailEvent
 - event を clone して replay buffer に追加し、`replayLimit` を超えた古い event を
   捨てる。`recentEvents` も clone を返し、外部 code が過去 event を可変参照で
   書き換えないようにする。
-- 現在の subscriber へ `formatRainrailSseEvent(event)` を broadcast する。
+- publish 開始時点の subscriber snapshot へ `formatRainrailSseEvent(event)` を broadcast
+  する。write 中に reentrant に追加された subscriber は replay だけを受け取り、同じ
+  event の live broadcast を重複して受け取らない。
 - write に失敗した subscriber は切断済みとして `close` cleanup を呼んでから削除する。
 
 subscriber は Node `ServerResponse` のような `{ write, close }` でも、

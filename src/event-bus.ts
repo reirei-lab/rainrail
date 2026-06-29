@@ -49,7 +49,7 @@ class InMemoryRainrailEventBus implements RainrailEventBus {
     this.#recent.push(replayEvent);
     this.#trimRecent();
 
-    for (const client of this.#clients) {
+    for (const client of Array.from(this.#clients)) {
       try {
         client.write(chunk);
       } catch {
