@@ -104,7 +104,9 @@ object を receiver として呼ぶため、`this.client` などに依存する 
 `context.runtime.startRun` も handler へ直接 provider を渡さず gated wrapper にする。
 `runtime:start` capability がない handler は runtime provider 経由でも起動できない。
 互換 API の `context.capabilities.dispatchAgent` も同じ `runtime:start` gate を通し、
-未宣言 handler から agent/run 起動経路を迂回できないようにする。
+未宣言 handler から agent/run 起動経路を迂回できないようにする。handler が
+`dispatchAgent` に独自の abort signal を渡した場合でも、dispatcher は plugin lifecycle
+signal と合成して provider へ渡し、timeout や親 abort が必ず agent/run 起動へ伝播する。
 親 runtime signal が abort された場合は handler promise や timeout を待たず、
 plugin の rejected result として dispatch を完了する。dispatch 開始時点で親 signal が
 すでに abort 済みの場合は、handler を起動せずに rejected result として扱う。
@@ -133,7 +135,8 @@ recovery や retry 判断に使えるようにする。`secret:access` を持つ
 reason も固定文に redaction し、secret を別 action の request に含めた後の失敗経路でも
 audit に secret 断片を保存しない。audit sink は observability dependency として扱い、
 書き込み失敗や長時間の未解決 Promise は plugin result や action result を変えず、
-dispatcher の結果返却も止めない。
+dispatcher の結果返却も止めない。audit sink が未設定の場合、dispatcher は audit entry
+自体を作らず `runtime.now()` も呼ばない。
 
 ## Dispatcher
 
@@ -141,10 +144,13 @@ dispatcher の結果返却も止めない。
 `dispatch(event)` は `accepts` が true の workflow だけを呼び、
 plugin ごとに fulfilled/rejected の結果を返す。`accepts` が例外を投げた場合も
 その plugin の rejected result として隔離し、後続 workflow の評価は続ける。
+`accepts` が false の workflow は処理対象外なので、capability metadata は読まない。
 capability metadata の読み取りや snapshot が失敗した場合も同じ plugin 単位の
 rejected result に隔離し、`Promise.all` 全体を reject しない。
 handler が `timeoutMs` または loader/dispatcher の `defaultTimeoutMs` を超えた場合も、
 その plugin の rejected result と audit result `timeout` に隔離する。
+親 abort listener は context 構築が失敗した場合も cleanup し、長寿命 shutdown signal に
+listener/controller を蓄積しない。
 最小 contract では retry や並列度制御は持たせない。これらは orchestration policy
 として後続 issue で追加する。
 

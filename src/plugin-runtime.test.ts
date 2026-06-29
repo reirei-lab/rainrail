@@ -2154,4 +2154,241 @@ describe('plugin runtime contract', () => {
     });
     expect(laterHandler).toHaveBeenCalledOnce();
   });
+
+  it('combines caller and lifecycle abort signals for legacy dispatchAgent', async () => {
+    vi.useFakeTimers();
+    try {
+      const event = createEventEnvelope({
+        source: { type: 'github', name: 'github-webhook' },
+        name: 'github.issue',
+        delivery: {
+          id: 'delivery-dispatch-agent-combined-signal',
+          receivedAt: '2026-06-29T14:00:00.000Z',
+        },
+        occurredAt: '2026-06-29T14:00:00.000Z',
+        subject: { type: 'issue', id: '13' },
+        payload: { action: 'opened' },
+        rawPayload: {
+          kind: 'external-reference',
+          reference: 'github://deliveries/delivery-dispatch-agent-combined-signal',
+        },
+      });
+      const callerController = new AbortController();
+      let dispatchAgentSignal: AbortSignal | undefined;
+      let dispatchAgentAbortReason: unknown;
+      const dispatchAgent = vi.fn(
+        async (_request, context?: { signal: AbortSignal }) =>
+          new Promise((_resolve, reject) => {
+            dispatchAgentSignal = context?.signal;
+            context?.signal.addEventListener(
+              'abort',
+              () => {
+                dispatchAgentAbortReason = context.signal.reason;
+                reject(context.signal.reason);
+              },
+              { once: true },
+            );
+          }),
+      );
+      const loader = createPluginLoader({
+        runtime: mockRuntimeContext({
+          runId: 'run-13',
+          now: () => new Date('2026-06-29T14:01:00.000Z'),
+          capabilities: {
+            provider: 'codex',
+            dispatchAgent,
+          },
+        }),
+        defaultTimeoutMs: 25,
+      });
+
+      loader.on(
+        'github.issue',
+        async (handledEvent, context) =>
+          context.capabilities?.dispatchAgent?.(
+            {
+              event: handledEvent,
+              workflow: 'dispatch-agent-combined-signal-handler',
+              runId: context.runId,
+            },
+            { signal: callerController.signal },
+          ),
+        { name: 'dispatch-agent-combined-signal-handler', capabilities: ['runtime:start'] },
+      );
+
+      const dispatchPromise = loader.dispatch(event);
+      await vi.advanceTimersByTimeAsync(25);
+
+      await expect(dispatchPromise).resolves.toMatchObject([
+        {
+          pluginName: 'dispatch-agent-combined-signal-handler',
+          eventId: 'github-webhook:delivery-dispatch-agent-combined-signal:github.issue',
+          status: 'rejected',
+        },
+      ]);
+      expect(dispatchAgent).toHaveBeenCalledOnce();
+      expect(dispatchAgentSignal?.aborted).toBe(true);
+      expect(dispatchAgentAbortReason).toBeInstanceOf(Error);
+      expect(callerController.signal.aborted).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not read capabilities for workflows rejected by accepts', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: {
+        id: 'delivery-accepts-false-capability',
+        receivedAt: '2026-06-29T14:00:00.000Z',
+      },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'github://deliveries/delivery-accepts-false-capability',
+      },
+    });
+    const laterHandler = vi.fn(async () => ({ continued: true }));
+    const skippedWorkflow = {
+      name: 'skipped-malformed-capability-plugin',
+      accepts: () => false,
+      get capabilities(): never {
+        throw new Error('capabilities should not be read');
+      },
+      handle: async () => ({ unreachable: true }),
+    } satisfies WorkflowPlugin;
+    const dispatcher = createRuntimeDispatcher({
+      workflows: [
+        skippedWorkflow,
+        defineWorkflowPlugin({
+          name: 'later-after-skipped-capability',
+          accepts: () => true,
+          handle: laterHandler,
+        }),
+      ],
+      runtime: {
+        runId: 'run-13',
+        now: () => new Date('2026-06-29T14:01:00.000Z'),
+      },
+    });
+
+    await expect(dispatcher.dispatch(event)).resolves.toEqual([
+      {
+        pluginName: 'later-after-skipped-capability',
+        eventId: 'github-webhook:delivery-accepts-false-capability:github.issue',
+        status: 'fulfilled',
+        value: { continued: true },
+      },
+    ]);
+    expect(laterHandler).toHaveBeenCalledOnce();
+  });
+
+  it('does not call runtime.now when audit is disabled', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: {
+        id: 'delivery-audit-disabled',
+        receivedAt: '2026-06-29T14:00:00.000Z',
+      },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'github://deliveries/delivery-audit-disabled',
+      },
+    });
+    const dispatcher = createRuntimeDispatcher({
+      workflows: [
+        defineWorkflowPlugin({
+          name: 'audit-disabled-handler',
+          accepts: () => true,
+          handle: async () => ({ ok: true }),
+        }),
+      ],
+      runtime: {
+        runId: 'run-13',
+        now: () => {
+          throw new Error('clock should not be used without audit');
+        },
+      },
+    });
+
+    await expect(dispatcher.dispatch(event)).resolves.toEqual([
+      {
+        pluginName: 'audit-disabled-handler',
+        eventId: 'github-webhook:delivery-audit-disabled:github.issue',
+        status: 'fulfilled',
+        value: { ok: true },
+      },
+    ]);
+  });
+
+  it('removes parent abort listeners when context creation fails before runWorkflow starts', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: {
+        id: 'delivery-context-failure-cleanup',
+        receivedAt: '2026-06-29T14:00:00.000Z',
+      },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'github://deliveries/delivery-context-failure-cleanup',
+      },
+    });
+    const parentController = new AbortController();
+    const originalAddEventListener = parentController.signal.addEventListener.bind(parentController.signal);
+    const originalRemoveEventListener = parentController.signal.removeEventListener.bind(parentController.signal);
+    const listeners = new Set<NonNullable<Parameters<AbortSignal['addEventListener']>[1]>>();
+
+    parentController.signal.addEventListener = ((type, listener, options) => {
+      if (type === 'abort' && listener !== null) {
+        listeners.add(listener);
+      }
+
+      return originalAddEventListener(type, listener, options);
+    }) as AbortSignal['addEventListener'];
+    parentController.signal.removeEventListener = ((type, listener, options) => {
+      if (type === 'abort' && listener !== null) {
+        listeners.delete(listener);
+      }
+
+      return originalRemoveEventListener(type, listener, options);
+    }) as AbortSignal['removeEventListener'];
+
+    const dispatcher = createRuntimeDispatcher({
+      workflows: [
+        defineWorkflowPlugin({
+          name: 'context-failure-handler',
+          accepts: () => true,
+          handle: async () => ({ unreachable: true }),
+        }),
+      ],
+      runtime: {
+        runId: 'run-13',
+        now: () => new Date('2026-06-29T14:01:00.000Z'),
+        signal: parentController.signal,
+        get providers(): never {
+          throw new Error('task provider metadata is malformed');
+        },
+      },
+    });
+
+    await expect(dispatcher.dispatch(event)).resolves.toMatchObject([
+      {
+        pluginName: 'context-failure-handler',
+        eventId: 'github-webhook:delivery-context-failure-cleanup:github.issue',
+        status: 'rejected',
+      },
+    ]);
+    expect(listeners.size).toBe(0);
+  });
 });

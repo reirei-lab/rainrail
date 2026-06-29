@@ -61,19 +61,28 @@ export function createRuntimeDispatcher(options: RuntimeDispatcherOptions): Runt
             recordAudit(options, policy, event, action, result, reason);
 
           try {
-            policy = snapshotWorkflowPolicy(workflow);
-
             if (workflow.accepts && !workflow.accepts(event)) {
               return undefined;
             }
 
+            policy = snapshotWorkflowPolicy(workflow);
+
             const abort = createWorkflowAbortController(options.runtime.signal);
-            const context = createWorkflowContext(options, policy, event, abort.controller.signal);
-            const value = await runWorkflow(
-              () => Promise.resolve(workflow.handle(event, context)),
-              workflow.timeoutMs ?? options.defaultTimeoutMs,
-              abort,
-            );
+            let workflowStarted = false;
+            let value: unknown;
+            try {
+              const context = createWorkflowContext(options, policy, event, abort.controller.signal);
+              workflowStarted = true;
+              value = await runWorkflow(
+                () => Promise.resolve(workflow.handle(event, context)),
+                workflow.timeoutMs ?? options.defaultTimeoutMs,
+                abort,
+              );
+            } finally {
+              if (!workflowStarted) {
+                abort.dispose();
+              }
+            }
 
             await audit('plugin.handle', 'fulfilled');
 
@@ -279,13 +288,21 @@ async function callDispatchAgent(
   }
 
   try {
-    const value = await dispatchAgent.call(capabilities, request, { signal: callerSignal ?? signal });
+    const value = await dispatchAgent.call(capabilities, request, { signal: combineAbortSignals(signal, callerSignal) });
     await recordAudit(options, policy, event, 'startRuntime', 'fulfilled');
     return value;
   } catch (reason) {
     await recordAudit(options, policy, event, 'startRuntime', 'rejected', reason);
     throw reason;
   }
+}
+
+function combineAbortSignals(lifecycleSignal: AbortSignal, callerSignal: AbortSignal | undefined): AbortSignal {
+  if (callerSignal === undefined || callerSignal === lifecycleSignal) {
+    return lifecycleSignal;
+  }
+
+  return AbortSignal.any([lifecycleSignal, callerSignal]);
 }
 
 function createGatedRuntimeActions(
@@ -418,22 +435,26 @@ function recordAudit(
   result: WorkflowAuditResult,
   reason?: unknown,
 ): void {
-  const entry: WorkflowAuditEntry = {
-    pluginId: policy.name,
-    eventId: event.id,
-    action,
-    result,
-    runId: options.runtime.runId,
-    occurredAt: options.runtime.now().toISOString(),
-  };
-
-  const auditReason = formatAuditReason(policy, action, result, reason);
-  if (auditReason !== undefined) {
-    entry.reason = auditReason;
+  if (options.audit === undefined) {
+    return;
   }
 
   try {
-    void Promise.resolve(options.audit?.record(entry)).catch(() => {
+    const entry: WorkflowAuditEntry = {
+      pluginId: policy.name,
+      eventId: event.id,
+      action,
+      result,
+      runId: options.runtime.runId,
+      occurredAt: options.runtime.now().toISOString(),
+    };
+
+    const auditReason = formatAuditReason(policy, action, result, reason);
+    if (auditReason !== undefined) {
+      entry.reason = auditReason;
+    }
+
+    void Promise.resolve(options.audit.record(entry)).catch(() => {
       // Audit sinks are observability dependencies and must not change plugin/action outcomes.
     });
   } catch {
