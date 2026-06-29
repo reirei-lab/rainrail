@@ -205,6 +205,10 @@ export interface GitHubWebhookPayload {
   check_suite?: GitHubWebhookRecord;
   deployment?: GitHubWebhookRecord;
   deployment_status?: GitHubWebhookRecord;
+  workflow_job_run?: GitHubWebhookRecord;
+  workflow_job_runs?: GitHubWebhookRecord[];
+  reviewers?: GitHubWebhookRecord[];
+  approver?: GitHubWebhookRecord;
   merge_group?: GitHubWebhookRecord;
   review?: GitHubWebhookRecord;
   release?: GitHubWebhookRecord;
@@ -219,10 +223,17 @@ export interface GitHubWebhookPayload {
   repository_advisory?: GitHubWebhookRecord;
   discussion?: GitHubWebhookRecord;
   answer?: GitHubWebhookRecord;
+  rule?: GitHubWebhookRecord;
+  package?: GitHubWebhookRecord;
+  registry_package?: GitHubWebhookRecord;
   blocked_issue?: GitHubWebhookRecord;
   blocking_issue?: GitHubWebhookRecord;
   parent_issue?: GitHubWebhookRecord;
   sub_issue?: GitHubWebhookRecord;
+  repositories?: GitHubWebhookRecord[];
+  repositories_added?: GitHubWebhookRecord[];
+  repositories_removed?: GitHubWebhookRecord[];
+  pages?: GitHubWebhookRecord[];
   changes?: GitHubWebhookRecord;
   head_commit?: GitHubWebhookRecord;
   [key: string]: unknown;
@@ -246,6 +257,8 @@ export interface NormalizedGitHubWebhookPayload {
   milestone?: NormalizedGitHubMilestone;
   pullRequest?: NormalizedGitHubResource;
   pullRequests?: NormalizedGitHubResource[];
+  repositories?: NormalizedGitHubRepository[];
+  pages?: NormalizedGitHubWikiPage[];
   changes?: NormalizedGitHubChange[];
   comment?: NormalizedGitHubComment;
   dispatch?: NormalizedGitHubDispatch;
@@ -296,6 +309,14 @@ export interface NormalizedGitHubMilestone {
   number?: number;
   title?: string;
   dueOn?: string;
+  url?: string;
+}
+
+export interface NormalizedGitHubWikiPage {
+  name?: string;
+  title?: string;
+  action?: string;
+  sha?: string;
   url?: string;
 }
 
@@ -366,6 +387,12 @@ export interface NormalizedGitHubResource {
   categorySlug?: string;
   answerId?: string;
   answerUrl?: string;
+  action?: string;
+  packageType?: string;
+  version?: string;
+  versionId?: string;
+  reviewerLogins?: string[];
+  approver?: string;
   isResolved?: boolean;
   path?: string;
   line?: number;
@@ -479,6 +506,10 @@ function findGitHubSubject(payload: GitHubWebhookPayload, name: RainrailEventNam
     return subjectFromResource(resourceFromDiscussion(payload));
   }
 
+  if (isDeploymentReviewPayload(payload)) {
+    return subjectFromResource(resourceFromDeploymentReview(payload));
+  }
+
   if (isCommitStatusPayload(payload)) {
     return subjectFromResource(resourceFromCommitStatus(payload));
   }
@@ -517,6 +548,22 @@ function findGitHubSubject(payload: GitHubWebhookPayload, name: RainrailEventNam
 
   if (isIssueRelationPayload(payload)) {
     return subjectFromResource(resourceFromIssueRelation(payload));
+  }
+
+  if (payload.rule) {
+    return subjectFromResource(resourceFromBranchProtectionRule(payload.rule));
+  }
+
+  if (payload.package || payload.registry_package) {
+    return subjectFromResource(resourceFromPackage(payload.package ?? payload.registry_package));
+  }
+
+  if (isInstallationRepositoriesPayload(payload)) {
+    return subjectFromResource(resourceFromInstallation(payload.installation));
+  }
+
+  if (payload.pages) {
+    return subjectFromResource(resourceFromWikiPage(arrayField(payload, 'pages')[0]));
   }
 
   if (name === 'github.push') {
@@ -662,7 +709,7 @@ function subjectFromReviewThread(payload: GitHubWebhookPayload): RainrailEventEn
 
   return {
     type: 'review_thread',
-    id: String(payload.thread.id ?? 'unknown'),
+    id: String(payload.thread.node_id ?? payload.thread.id ?? 'unknown'),
   };
 }
 
@@ -765,6 +812,8 @@ function normalizeGitHubWebhookPayload(
   );
   const pullRequest = normalizedRelatedPullRequest(payload, resource);
   const pullRequests = normalizedRelatedPullRequests(payload);
+  const repositories = normalizedInstallationRepositories(payload);
+  const pages = normalizedWikiPages(payload);
   const changes = normalizedChanges(payload.changes);
   const comment = normalizedComment(payload.comment);
   const dispatch = normalizedDispatch(githubEvent, payload);
@@ -786,6 +835,8 @@ function normalizeGitHubWebhookPayload(
     ...(milestone ? { milestone } : {}),
     ...(pullRequest ? { pullRequest } : {}),
     ...(pullRequests.length > 0 ? { pullRequests } : {}),
+    ...(repositories.length > 0 ? { repositories } : {}),
+    ...(pages.length > 0 ? { pages } : {}),
     ...(changes.length > 0 ? { changes } : {}),
     ...(comment ? { comment } : {}),
     ...(dispatch ? { dispatch } : {}),
@@ -917,6 +968,10 @@ function normalizedResource(payload: GitHubWebhookPayload): NormalizedGitHubReso
     return resourceFromWorkflowJob(payload.workflow_job);
   }
 
+  if (isDeploymentReviewPayload(payload)) {
+    return resourceFromDeploymentReview(payload);
+  }
+
   if (payload.alert) {
     return resourceFromSecurityAlert(payload);
   }
@@ -939,6 +994,22 @@ function normalizedResource(payload: GitHubWebhookPayload): NormalizedGitHubReso
 
   if (isIssueRelationPayload(payload)) {
     return resourceFromIssueRelation(payload);
+  }
+
+  if (payload.rule) {
+    return resourceFromBranchProtectionRule(payload.rule);
+  }
+
+  if (payload.package || payload.registry_package) {
+    return resourceFromPackage(payload.package ?? payload.registry_package);
+  }
+
+  if (isInstallationRepositoriesPayload(payload)) {
+    return resourceFromInstallation(payload.installation);
+  }
+
+  if (payload.pages) {
+    return resourceFromWikiPage(arrayField(payload, 'pages')[0]);
   }
 
   if (stringField(payload, 'ref') && stringField(payload, 'after')) {
@@ -1049,7 +1120,8 @@ function resourceFromReview(review: GitHubWebhookRecord): NormalizedGitHubResour
 function resourceFromReviewThread(thread: GitHubWebhookRecord): NormalizedGitHubResource {
   return {
     type: 'review_thread',
-    id: String(thread.id ?? 'unknown'),
+    id: String(thread.node_id ?? thread.id ?? 'unknown'),
+    ...optionalStringProperty('nodeId', stringField(thread, 'node_id')),
     ...optionalBooleanProperty('isResolved', booleanField(thread, 'is_resolved')),
     ...optionalStringProperty('path', stringField(thread, 'path')),
     ...optionalNumberProperty('line', numberField(thread, 'line')),
@@ -1150,6 +1222,27 @@ function resourceFromWorkflowJob(workflowJob: GitHubWebhookRecord): NormalizedGi
   };
 }
 
+function resourceFromDeploymentReview(payload: GitHubWebhookPayload): NormalizedGitHubResource {
+  const workflowRun = payload.workflow_run;
+  const workflowJobRun = payload.workflow_job_run ?? arrayField(payload, 'workflow_job_runs')[0];
+  const runId = idField(workflowRun, 'id');
+  const environment = stringField(workflowJobRun, 'environment') ?? 'unknown';
+  const reviewerLogins = arrayField(payload, 'reviewers')
+    .map((reviewer) => stringField(reviewer, 'login'))
+    .filter((login): login is string => login !== undefined);
+
+  return {
+    type: 'deployment_review',
+    id: `${runId ?? 'unknown'}:${environment}`,
+    ...optionalStringProperty('runId', runId),
+    ...optionalStringProperty('environment', stringField(workflowJobRun, 'environment')),
+    ...optionalStringArrayProperty('reviewerLogins', reviewerLogins),
+    ...optionalStringProperty('approver', stringField(payload.approver, 'login')),
+    ...optionalStringProperty('body', stringField(payload.comment, 'body')),
+    ...optionalStringProperty('url', stringField(workflowRun, 'html_url')),
+  };
+}
+
 function resourceFromSecurityAlert(payload: GitHubWebhookPayload): NormalizedGitHubResource {
   const alert = payload.alert ?? {};
   const location = payload.location;
@@ -1203,6 +1296,50 @@ function resourceFromDiscussion(payload: GitHubWebhookPayload): NormalizedGitHub
     ...optionalStringProperty('categorySlug', stringField(category, 'slug')),
     ...optionalStringProperty('answerId', idField(answer, 'id')),
     ...optionalStringProperty('answerUrl', stringField(answer, 'html_url')),
+  };
+}
+
+function resourceFromBranchProtectionRule(rule: GitHubWebhookRecord): NormalizedGitHubResource {
+  return {
+    type: 'branch_protection_rule',
+    id: String(rule.id ?? rule.node_id ?? rule.name ?? 'unknown'),
+    ...optionalStringProperty('nodeId', stringField(rule, 'node_id')),
+    ...optionalStringProperty('name', stringField(rule, 'name')),
+  };
+}
+
+function resourceFromPackage(pkg: GitHubWebhookRecord | undefined): NormalizedGitHubResource {
+  const version = recordField(pkg, 'package_version');
+
+  return {
+    type: 'package',
+    id: String(pkg?.id ?? 'unknown'),
+    ...optionalStringProperty('name', stringField(pkg, 'name')),
+    ...optionalStringProperty('packageType', stringField(pkg, 'package_type')),
+    ...optionalStringProperty('version', stringField(version, 'name')),
+    ...optionalStringProperty('versionId', idField(version, 'id')),
+    ...optionalStringProperty('url', stringField(pkg, 'html_url') ?? stringField(version, 'html_url')),
+  };
+}
+
+function resourceFromInstallation(installation: GitHubWebhookRecord | undefined): NormalizedGitHubResource {
+  return {
+    type: 'installation',
+    id: String(installation?.id ?? 'unknown'),
+  };
+}
+
+function resourceFromWikiPage(page: GitHubWebhookRecord | undefined): NormalizedGitHubResource {
+  const name = stringField(page, 'page_name') ?? stringField(page, 'title');
+
+  return {
+    type: 'wiki_page',
+    id: name ?? stringField(page, 'sha') ?? 'unknown',
+    ...optionalStringProperty('name', name),
+    ...optionalStringProperty('title', stringField(page, 'title')),
+    ...optionalStringProperty('action', stringField(page, 'action')),
+    ...optionalStringProperty('headSha', stringField(page, 'sha')),
+    ...optionalStringProperty('url', stringField(page, 'html_url')),
   };
 }
 
@@ -1375,6 +1512,34 @@ function normalizedRelatedPullRequests(payload: GitHubWebhookPayload): Normalize
   return pullRequests.map((pullRequest) => resourceFromPullRequest(pullRequest));
 }
 
+function normalizedInstallationRepositories(payload: GitHubWebhookPayload): NormalizedGitHubRepository[] {
+  const repositories = [
+    ...arrayField(payload, 'repositories'),
+    ...arrayField(payload, 'repositories_added'),
+    ...arrayField(payload, 'repositories_removed'),
+  ];
+
+  return repositories
+    .map(normalizedRepository)
+    .filter((repository): repository is NormalizedGitHubRepository => repository !== undefined);
+}
+
+function normalizedWikiPages(payload: GitHubWebhookPayload): NormalizedGitHubWikiPage[] {
+  return arrayField(payload, 'pages')
+    .map((page) => {
+      const normalized = {
+        ...optionalStringProperty('name', stringField(page, 'page_name')),
+        ...optionalStringProperty('title', stringField(page, 'title')),
+        ...optionalStringProperty('action', stringField(page, 'action')),
+        ...optionalStringProperty('sha', stringField(page, 'sha')),
+        ...optionalStringProperty('url', stringField(page, 'html_url')),
+      };
+
+      return objectHasKeys(normalized) ? normalized : undefined;
+    })
+    .filter((page): page is NormalizedGitHubWikiPage => page !== undefined);
+}
+
 function normalizedChanges(changes: GitHubWebhookRecord | undefined): NormalizedGitHubChange[] {
   if (!changes) {
     return [];
@@ -1544,6 +1709,29 @@ function isDeploymentProtectionRulePayload(payload: GitHubWebhookPayload): boole
   return (
     stringField(payload, 'deployment_callback_url') !== undefined ||
     (stringField(payload, 'environment') !== undefined && stringField(payload, 'sha') !== undefined)
+  );
+}
+
+function isDeploymentReviewPayload(payload: GitHubWebhookPayload): boolean {
+  return (
+    payload.workflow_run !== undefined &&
+    (
+      payload.workflow_job_run !== undefined ||
+      arrayField(payload, 'workflow_job_runs').length > 0 ||
+      arrayField(payload, 'reviewers').length > 0 ||
+      payload.approver !== undefined
+    )
+  );
+}
+
+function isInstallationRepositoriesPayload(payload: GitHubWebhookPayload): boolean {
+  return (
+    payload.installation !== undefined &&
+    (
+      arrayField(payload, 'repositories').length > 0 ||
+      arrayField(payload, 'repositories_added').length > 0 ||
+      arrayField(payload, 'repositories_removed').length > 0
+    )
   );
 }
 

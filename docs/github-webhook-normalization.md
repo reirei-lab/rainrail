@@ -15,7 +15,7 @@ workflow plugin が受け取る `event.payload` は Rainrail 側で安定させ�
 - `issue_comment` が pull request conversation comment の場合は、`payload.issue.pull_request` marker を見て `event.payload.resource.type` と `event.subject.type` を `pull_request` にする。
 - `pull_request.closed` では、通常 close と merge を区別できるように `event.payload.resource.merged` を残す。draft 状態と synchronize の before/after SHA も pull request resource に残す。
 - `pull_request_review` は `pull_request` より `review` を優先して `event.payload.resource` にし、関連 PR を `event.payload.pullRequest` に残す。
-- `pull_request_review_thread` は `thread` を `event.payload.resource` にし、解決状態や対象位置を残す。関連 PR は `event.payload.pullRequest` に残す。
+- `pull_request_review_thread` は `thread.node_id` を resource id とし、解決状態や対象位置を残す。関連 PR は `event.payload.pullRequest` に残す。
 - `check_run` / `check_suite` / `workflow_run` に紐づく PR は `event.payload.pullRequests` に残す。
 - `projects_v2_item.edited` の field changes は `event.payload.changes` に集約する。
 - `projects_v2_item` では REST id だけでなく GraphQL の `node_id` / `project_node_id` も resource に残す。
@@ -27,8 +27,13 @@ workflow plugin が受け取る `event.payload` は Rainrail 側で安定させ�
 - `status` は commit SHA / state / context / target URL を commit status resource として正規化する。
 - `deployment` / `deployment_status` は deployment id/ref/environment と status state を deployment resource として正規化する。
 - `deployment_protection_rule` は environment/ref/sha/callback URL を deployment protection rule resource として正規化する。
+- `deployment_review` は environment / reviewers / approver / comment を deployment review resource として正規化する。
 - `merge_group` は merge queue の head SHA/ref と base ref を resource に残す。
 - `workflow_job` は job id/run id/status/conclusion/labels を workflow job resource として正規化する。
+- `branch_protection_rule` は rule id/name と changes を branch protection rule resource として正規化する。
+- `package` / `registry_package` は package name/type/version/url を package resource として正規化する。
+- `installation` / `installation_repositories` の対象 repository 配列は `event.payload.repositories` に残す。
+- `gollum` は変更された wiki page を wiki page resource と `event.payload.pages` に残す。
 - security alert 系 webhook は top-level `alert` の id/state/severity/ref/url を security alert resource として正規化する。
 - `code_scanning_alert` の top-level ref/commit SHA と `secret_scanning_alert_location` の location details は security alert resource に残す。
 - `security_advisory` / `repository_advisory` は advisory id/summary/severity/url を advisory resource として正規化する。

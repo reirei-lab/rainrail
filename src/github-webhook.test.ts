@@ -1649,7 +1649,7 @@ describe('GitHub webhook source handling', () => {
             html_url: 'https://github.com/reirei-lab/rainrail/pull/39',
           },
           thread: {
-            id: 'PRRT_kwDOExample',
+            node_id: 'PRRT_kwDOExample',
             is_resolved: true,
             path: 'src/github-webhook.ts',
             line: 531,
@@ -1680,6 +1680,203 @@ describe('GitHub webhook source handling', () => {
           number: 39,
           url: 'https://github.com/reirei-lab/rainrail/pull/39',
         },
+      },
+    });
+  });
+
+  it('normalizes protection, deployment review, package, installation repository, and wiki resources', async () => {
+    await expect(
+      createGitHubWebhookEvent({
+        githubEvent: 'branch_protection_rule',
+        deliveryId: 'delivery-branch-protection-1',
+        payload: {
+          action: 'edited',
+          repository: { full_name: 'reirei-lab/rainrail' },
+          rule: {
+            id: 5000,
+            name: 'main',
+          },
+          changes: {
+            required_status_checks: {
+              from: ['test'],
+              to: ['test', 'build'],
+            },
+          },
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.branch_protection_rule',
+      payload: {
+        resource: {
+          type: 'branch_protection_rule',
+          id: '5000',
+          name: 'main',
+        },
+        changes: [
+          {
+            field: 'required_status_checks',
+          },
+        ],
+      },
+    });
+
+    await expect(
+      createGitHubWebhookEvent({
+        githubEvent: 'deployment_review',
+        deliveryId: 'delivery-deployment-review-1',
+        payload: {
+          action: 'approved',
+          repository: { full_name: 'reirei-lab/rainrail' },
+          workflow_run: {
+            id: 9000,
+            name: 'deploy',
+            html_url: 'https://github.com/reirei-lab/rainrail/actions/runs/9000',
+          },
+          workflow_job_runs: [
+            {
+              id: 9100,
+              environment: 'staging',
+            },
+          ],
+          reviewers: [{ login: 'ops-team' }],
+          approver: { login: 'maintainer' },
+          comment: { body: 'ship it' },
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.deployment_review',
+      payload: {
+        resource: {
+          type: 'deployment_review',
+          id: '9000:staging',
+          runId: '9000',
+          environment: 'staging',
+          reviewerLogins: ['ops-team'],
+          approver: 'maintainer',
+          body: 'ship it',
+        },
+      },
+    });
+
+    await expect(
+      createGitHubWebhookEvent({
+        githubEvent: 'registry_package',
+        deliveryId: 'delivery-registry-package-1',
+        payload: {
+          action: 'published',
+          repository: { full_name: 'reirei-lab/rainrail' },
+          registry_package: {
+            id: 3000,
+            name: '@reirei-lab/rainrail',
+            package_type: 'npm',
+            html_url: 'https://github.com/reirei-lab/rainrail/pkgs/npm/rainrail',
+            package_version: {
+              id: 3001,
+              name: '1.2.3',
+              html_url: 'https://github.com/reirei-lab/rainrail/pkgs/npm/rainrail/3001',
+            },
+          },
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.registry_package',
+      payload: {
+        resource: {
+          type: 'package',
+          id: '3000',
+          name: '@reirei-lab/rainrail',
+          packageType: 'npm',
+          version: '1.2.3',
+          versionId: '3001',
+          url: 'https://github.com/reirei-lab/rainrail/pkgs/npm/rainrail',
+        },
+      },
+    });
+
+    await expect(
+      createGitHubWebhookEvent({
+        githubEvent: 'installation_repositories',
+        deliveryId: 'delivery-installation-repositories-1',
+        payload: {
+          action: 'added',
+          installation: { id: 123 },
+          repositories_added: [
+            {
+              id: 1,
+              full_name: 'reirei-lab/rainrail',
+              html_url: 'https://github.com/reirei-lab/rainrail',
+              owner: { login: 'reirei-lab' },
+              name: 'rainrail',
+            },
+          ],
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.installation_repositories',
+      payload: {
+        resource: {
+          type: 'installation',
+          id: '123',
+        },
+        repositories: [
+          {
+            id: '1',
+            fullName: 'reirei-lab/rainrail',
+            url: 'https://github.com/reirei-lab/rainrail',
+            owner: 'reirei-lab',
+            name: 'rainrail',
+          },
+        ],
+      },
+    });
+
+    await expect(
+      createGitHubWebhookEvent({
+        githubEvent: 'gollum',
+        deliveryId: 'delivery-gollum-1',
+        payload: {
+          repository: { full_name: 'reirei-lab/rainrail' },
+          pages: [
+            {
+              page_name: 'Agent Guide',
+              title: 'Agent Guide',
+              action: 'edited',
+              sha: 'abc123',
+              html_url: 'https://github.com/reirei-lab/rainrail/wiki/Agent-Guide',
+            },
+          ],
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.gollum',
+      payload: {
+        resource: {
+          type: 'wiki_page',
+          id: 'Agent Guide',
+          name: 'Agent Guide',
+          action: 'edited',
+          headSha: 'abc123',
+          url: 'https://github.com/reirei-lab/rainrail/wiki/Agent-Guide',
+        },
+        pages: [
+          {
+            name: 'Agent Guide',
+            title: 'Agent Guide',
+            action: 'edited',
+            sha: 'abc123',
+            url: 'https://github.com/reirei-lab/rainrail/wiki/Agent-Guide',
+          },
+        ],
       },
     });
   });
