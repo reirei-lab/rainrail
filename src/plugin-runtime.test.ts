@@ -5,8 +5,40 @@ import {
   createRuntimeDispatcher,
   defineSourcePlugin,
   defineWorkflowPlugin,
+  type PluginRuntimeContext,
   type RainrailEventEnvelope,
 } from './index.js';
+
+function mockRuntimeContext(overrides: Partial<PluginRuntimeContext> = {}): PluginRuntimeContext {
+  return {
+    runId: 'run-1',
+    now: () => new Date('2026-06-29T13:01:00.000Z'),
+    providers: {
+      tasks: {
+        name: 'mock-tasks',
+        kind: 'task-provider',
+        getIssue: async () => ({
+          id: 'issue:mock',
+          provider: 'github',
+          repository: 'reirei-lab/rainrail',
+          number: 12,
+          title: 'Mock issue',
+        }),
+        createComment: async () => ({ id: 'comment:mock' }),
+      },
+    },
+    runtime: {
+      name: 'mock-runtime',
+      kind: 'runtime-provider',
+      startRun: async () => ({
+        id: 'run:mock',
+        provider: 'codex',
+        status: 'queued',
+      }),
+    },
+    ...overrides,
+  };
+}
 
 describe('Rainrail neutral event model', () => {
   it('wraps GitHub issue webhooks without leaking GitHub-specific routing into the envelope', () => {
@@ -151,14 +183,12 @@ describe('plugin runtime contract', () => {
     });
     const dispatcher = createRuntimeDispatcher({
       workflows: [workflow],
-      runtime: {
-        runId: 'run-1',
-        now: () => new Date('2026-06-29T13:01:00.000Z'),
+      runtime: mockRuntimeContext({
         capabilities: {
           provider: 'codex',
           dispatchAgent: async () => ({ sessionKey: 'agent:main:rainrail-12' }),
         },
-      },
+      }),
     });
     const event = createEventEnvelope({
       source: { type: 'github', name: 'github-webhook' },
@@ -226,8 +256,7 @@ describe('plugin runtime contract', () => {
         }),
       ],
       runtime: {
-        runId: 'run-1',
-        now: () => new Date('2026-06-29T13:01:00.000Z'),
+        ...mockRuntimeContext(),
         capabilities: { provider: 'codex' },
       },
     });
@@ -248,5 +277,111 @@ describe('plugin runtime contract', () => {
       value: { continued: true },
     });
     expect(laterHandler).toHaveBeenCalledWith(event, expect.objectContaining({ runId: 'run-1' }));
+  });
+
+  it('lets workflow plugins compose mock task providers and runtimes through separated contracts', async () => {
+    const getIssue = vi.fn(async () => ({
+      id: 'issue:14',
+      provider: 'github',
+      repository: 'reirei-lab/rainrail',
+      number: 14,
+      title: 'Split plugin contracts',
+      url: 'https://github.com/reirei-lab/rainrail/issues/14',
+    }));
+    const createComment = vi.fn(async () => ({
+      id: 'comment:queued',
+      url: 'https://github.com/reirei-lab/rainrail/issues/14#issuecomment-queued',
+    }));
+    const startRun = vi.fn(async () => ({
+      id: 'run:14',
+      provider: 'openclaw',
+      status: 'queued' as const,
+      url: 'openclaw://sessions/agent:main:rainrail-14',
+    }));
+    const workflowName = 'issue-agent-workflow';
+    const workflow = defineWorkflowPlugin({
+      name: workflowName,
+      accepts: (event) => event.name === 'github.issue' && event.subject.type === 'issue',
+      async handle(event, context) {
+        const issue = await context.providers.tasks.getIssue({
+          provider: event.source.type,
+          repository: event.source.repository ?? 'unknown',
+          number: Number(event.subject.id),
+        });
+
+        const run = await context.runtime.startRun({
+          workflow: workflowName,
+          event,
+          task: issue,
+          requestedBy: workflowName,
+        });
+
+        await context.providers.tasks.createComment({
+          target: issue,
+          body: `Queued ${run.id}`,
+        });
+
+        return { issueId: issue.id, runId: run.id };
+      },
+    });
+    const dispatcher = createRuntimeDispatcher({
+      workflows: [workflow],
+      runtime: {
+        runId: 'dispatch-14',
+        now: () => new Date('2026-06-29T13:01:00.000Z'),
+        providers: {
+          tasks: {
+            name: 'mock-github',
+            kind: 'task-provider',
+            getIssue,
+            createComment,
+          },
+        },
+        runtime: {
+          name: 'mock-openclaw',
+          kind: 'runtime-provider',
+          startRun,
+        },
+      },
+    });
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook', repository: 'reirei-lab/rainrail' },
+      name: 'github.issue',
+      delivery: {
+        id: 'delivery-14',
+        receivedAt: '2026-06-29T13:00:44.000Z',
+      },
+      occurredAt: '2026-06-29T13:00:44.000Z',
+      subject: { type: 'issue', id: '14' },
+      payload: { action: 'opened' },
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'github://deliveries/delivery-14',
+      },
+    });
+
+    await expect(dispatcher.dispatch(event)).resolves.toEqual([
+      {
+        pluginName: 'issue-agent-workflow',
+        eventId: 'github-webhook:delivery-14:github.issue',
+        status: 'fulfilled',
+        value: { issueId: 'issue:14', runId: 'run:14' },
+      },
+    ]);
+    expect(getIssue).toHaveBeenCalledWith({
+      provider: 'github',
+      repository: 'reirei-lab/rainrail',
+      number: 14,
+    });
+    expect(startRun).toHaveBeenCalledWith({
+      workflow: 'issue-agent-workflow',
+      event,
+      task: expect.objectContaining({ id: 'issue:14' }),
+      requestedBy: 'issue-agent-workflow',
+    });
+    expect(createComment).toHaveBeenCalledWith({
+      target: expect.objectContaining({ id: 'issue:14' }),
+      body: 'Queued run:14',
+    });
   });
 });

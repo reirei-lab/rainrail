@@ -1,5 +1,5 @@
 import type { RainrailEventEnvelope } from './events.js';
-import type { PluginRuntimeContext, WorkflowPlugin, WorkflowPluginResult } from './plugins.js';
+import type { PluginRuntimeContext, WorkflowPlugin, WorkflowPluginResult } from './workflow-plugin.js';
 
 export interface RuntimeDispatcherOptions {
   workflows: WorkflowPlugin[];
