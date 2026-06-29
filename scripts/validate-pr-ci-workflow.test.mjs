@@ -19,8 +19,11 @@ describe('pull request CI workflow', () => {
     expect(workflow).not.toMatch(/^ {2}pull-requests: write$/m);
   });
 
-  it('runs on the documented self-hosted runner with pnpm cached by lockfile', () => {
-    expect(workflow).toMatch(/^ {4}runs-on: self-hosted$/m);
+  it('uses self-hosted only for trusted pull requests with pnpm cached by lockfile', () => {
+    expect(workflow).toContain("&& 'self-hosted' || 'ubuntu-latest'");
+    expect(workflow).toContain('github.event.pull_request.head.repo.full_name == github.repository');
+    expect(workflow).toContain('"OWNER", "MEMBER", "COLLABORATOR"');
+    expect(workflow).toContain('github.event.pull_request.author_association');
     expect(workflow).toContain('uses: pnpm/action-setup@v4');
     expect(workflow).toContain('cache: pnpm');
     expect(workflow).toContain('cache-dependency-path: pnpm-lock.yaml');

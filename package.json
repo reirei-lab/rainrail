@@ -6,12 +6,12 @@
   "type": "module",
   "packageManager": "pnpm@10.12.1",
   "scripts": {
-    "build": "node --check scripts/*.mjs",
+    "build": "node scripts/check-scripts.mjs",
     "typecheck": "tsc --allowJs --checkJs --noEmit --module NodeNext --moduleResolution NodeNext --target ES2022 --lib ESNext --types node scripts/*.mjs",
     "test": "vitest run scripts"
   },
   "devDependencies": {
-    "@types/node": "^26.0.1",
+    "@types/node": "^24.13.2",
     "typescript": "^6.0.3",
     "vitest": "^3.2.3"
   }
