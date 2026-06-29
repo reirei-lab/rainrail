@@ -238,6 +238,7 @@ describe('Rainrail bridge room', () => {
     const room = new RainrailBridgeRoom(storage, { replayLimit: 10 });
     const event = {
       ...fixtureEvent('delivery-1', 'github.issue'),
+      links: { raw: 'https://example.test/webhook?token=secret-link-token' },
       payload: {
         action: 'opened',
         body: 'secret top-level body',
@@ -263,6 +264,7 @@ describe('Rainrail bridge room', () => {
     expect(publishResponse.status).toBe(200);
     expect(storage.storedEvents()).toHaveLength(1);
     expect(storage.storedEvents()[0]).not.toHaveProperty('rawBody');
+    expect(storage.storedEvents()[0]).not.toHaveProperty('links');
     expect(storage.storedEvents()[0]?.payload).toEqual({
       action: 'opened',
       status: 'queued',
@@ -277,11 +279,34 @@ describe('Rainrail bridge room', () => {
     await reader?.cancel();
 
     expect(chunk).not.toContain('secret raw webhook body');
+    expect(chunk).not.toContain('secret-link-token');
     expect(chunk).not.toContain('secret top-level body');
     expect(chunk).not.toContain('secret top-level token');
     expect(chunk).not.toContain('secret issue body');
     expect(chunk).not.toContain('secret label');
     expect(chunk).not.toContain('token-like value');
+  });
+
+  it('normalizes scalar payloads to an empty object before storage and SSE delivery', async () => {
+    const storage = fakeState();
+    const room = new RainrailBridgeRoom(storage, { replayLimit: 10 });
+    const event = {
+      ...fixtureEvent('delivery-1', 'github.issue'),
+      payload: 'secret scalar webhook body',
+    };
+
+    const publishResponse = await room.fetch(publishRequest(event));
+
+    expect(publishResponse.status).toBe(200);
+    expect(storage.storedEvents()[0]?.payload).toEqual({});
+
+    const eventsResponse = await room.fetch(new Request('https://rainrail.local/events'));
+    const reader = eventsResponse.body?.getReader();
+    expect(reader).toBeDefined();
+    const chunk = await readUntil(reader!, 'github.issue');
+    await reader?.cancel();
+
+    expect(chunk).not.toContain('secret scalar webhook body');
   });
 
   it('ignores invalid stored replay entries during restore', async () => {

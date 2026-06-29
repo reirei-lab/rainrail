@@ -188,10 +188,10 @@ export interface GitHubWebhookPayload {
   repository?: { full_name?: unknown; html_url?: unknown; id?: unknown };
   issue?: { number?: unknown; html_url?: unknown; title?: unknown; body?: unknown };
   pull_request?: { number?: unknown; html_url?: unknown; title?: unknown; body?: unknown };
-  check_run?: { id?: unknown; html_url?: unknown };
-  check_suite?: { id?: unknown; html_url?: unknown };
+  check_run?: { id?: unknown; html_url?: unknown; status?: unknown; conclusion?: unknown };
+  check_suite?: { id?: unknown; html_url?: unknown; status?: unknown; conclusion?: unknown };
   review?: { id?: unknown; html_url?: unknown };
-  workflow_run?: { id?: unknown; html_url?: unknown };
+  workflow_run?: { id?: unknown; html_url?: unknown; status?: unknown; conclusion?: unknown };
   [key: string]: unknown;
 }
 
@@ -352,6 +352,16 @@ function normalizeGitHubWebhookPayload(payload: GitHubWebhookPayload): Record<st
 
   if (isJsonScalar(payload.action)) {
     normalized.action = payload.action;
+  }
+
+  const checkMetadata = payload.check_run ?? payload.check_suite ?? payload.workflow_run;
+  if (checkMetadata !== undefined) {
+    if (isJsonScalar(checkMetadata.status)) {
+      normalized.status = checkMetadata.status;
+    }
+    if (isJsonScalar(checkMetadata.conclusion)) {
+      normalized.conclusion = checkMetadata.conclusion;
+    }
   }
 
   return normalized;

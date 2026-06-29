@@ -214,7 +214,6 @@ function validatePublishEnvelope(value: unknown): RainrailEventEnvelope {
       ...optionalString(rawPayload, 'contentType'),
       ...optionalString(rawPayload, 'sha256'),
     },
-    ...optionalLinks(value),
   };
   formatRainrailSseEvent(event);
   return event;
@@ -254,24 +253,9 @@ function optionalString(record: Record<string, unknown>, key: string): Record<st
   return { [key]: record[key] };
 }
 
-function optionalLinks(record: Record<string, unknown>): { links?: Record<string, string> } {
-  if (!('links' in record)) return {};
-
-  const links = expectRecord(record, 'links');
-  const normalizedLinks: Record<string, string> = {};
-  for (const [key, value] of Object.entries(links)) {
-    if (typeof value !== 'string') {
-      throw new TypeError(`links.${key} must be a string`);
-    }
-    normalizedLinks[key] = value;
-  }
-
-  return { links: normalizedLinks };
-}
-
 function normalizePayload(value: unknown): unknown {
   if (!isRecord(value)) {
-    return isJsonScalar(value) ? value : null;
+    return {};
   }
 
   const payload: Record<string, string | number | boolean | null> = {};
