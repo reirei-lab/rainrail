@@ -578,6 +578,45 @@ describe('GitHub webhook source handling', () => {
     });
   });
 
+  it('keeps draft and synchronize commit range on pull request resources', async () => {
+    await expect(
+      createGitHubWebhookEvent({
+        githubEvent: 'pull_request',
+        deliveryId: 'delivery-pr-synchronize-1',
+        payload: {
+          action: 'synchronize',
+          before: 'old-head-sha',
+          after: 'new-head-sha',
+          repository: { full_name: 'reirei-lab/rainrail' },
+          pull_request: {
+            number: 41,
+            title: 'Normalize GitHub payloads',
+            state: 'open',
+            draft: true,
+            html_url: 'https://github.com/reirei-lab/rainrail/pull/41',
+            head: { ref: 'feature/github-normalization', sha: 'new-head-sha' },
+            base: { ref: 'main', sha: 'base-sha' },
+          },
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.pull_request',
+      payload: {
+        action: 'synchronize',
+        resource: {
+          type: 'pull_request',
+          id: '41',
+          number: 41,
+          draft: true,
+          beforeSha: 'old-head-sha',
+          headSha: 'new-head-sha',
+        },
+      },
+    });
+  });
+
   it('normalizes review, check, workflow, and project item payload families', async () => {
     await expect(
       createGitHubWebhookEvent({
@@ -1234,6 +1273,7 @@ describe('GitHub webhook source handling', () => {
         deliveryId: 'delivery-repository-dispatch-1',
         payload: {
           action: 'agent-run',
+          branch: 'agent/reirei-lab-rainrail-16',
           repository: { full_name: 'reirei-lab/rainrail' },
           client_payload: {
             issue: 16,
@@ -1248,6 +1288,8 @@ describe('GitHub webhook source handling', () => {
       payload: {
         dispatch: {
           eventType: 'agent-run',
+          ref: 'agent/reirei-lab-rainrail-16',
+          branch: 'agent/reirei-lab-rainrail-16',
           clientPayload: {
             issue: 16,
             instruction: 'normalize payload',
@@ -1262,6 +1304,7 @@ describe('GitHub webhook source handling', () => {
         deliveryId: 'delivery-workflow-dispatch-1',
         payload: {
           action: 'manual',
+          ref: 'refs/heads/main',
           repository: { full_name: 'reirei-lab/rainrail' },
           inputs: {
             issue: '16',
@@ -1274,6 +1317,7 @@ describe('GitHub webhook source handling', () => {
       name: 'github.workflow_dispatch',
       payload: {
         dispatch: {
+          ref: 'refs/heads/main',
           inputs: {
             issue: '16',
           },
@@ -1424,6 +1468,124 @@ describe('GitHub webhook source handling', () => {
           summary: 'Example advisory',
           severity: 'high',
           url: 'https://github.com/advisories/GHSA-abcd-1234',
+        },
+      },
+    });
+
+    await expect(
+      createGitHubWebhookEvent({
+        githubEvent: 'repository_advisory',
+        deliveryId: 'delivery-repository-advisory-1',
+        payload: {
+          action: 'published',
+          repository: { full_name: 'reirei-lab/rainrail' },
+          repository_advisory: {
+            ghsa_id: 'GHSA-wxyz-5678',
+            summary: 'Repository advisory',
+            severity: 'critical',
+            html_url: 'https://github.com/reirei-lab/rainrail/security/advisories/GHSA-wxyz-5678',
+          },
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.repository_advisory',
+      payload: {
+        resource: {
+          type: 'repository_advisory',
+          id: 'GHSA-wxyz-5678',
+          ghsaId: 'GHSA-wxyz-5678',
+          summary: 'Repository advisory',
+          severity: 'critical',
+          url: 'https://github.com/reirei-lab/rainrail/security/advisories/GHSA-wxyz-5678',
+        },
+      },
+    });
+  });
+
+  it('normalizes discussion and discussion comment resources', async () => {
+    await expect(
+      createGitHubWebhookEvent({
+        githubEvent: 'discussion',
+        deliveryId: 'delivery-discussion-1',
+        payload: {
+          action: 'answered',
+          repository: { full_name: 'reirei-lab/rainrail' },
+          discussion: {
+            id: 700,
+            number: 12,
+            title: 'How should agents route events?',
+            html_url: 'https://github.com/reirei-lab/rainrail/discussions/12',
+            category: { name: 'Q&A', slug: 'q-a' },
+          },
+          answer: {
+            id: 701,
+            html_url: 'https://github.com/reirei-lab/rainrail/discussions/12#discussioncomment-701',
+          },
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.discussion',
+      subject: {
+        type: 'discussion',
+        id: '12',
+        url: 'https://github.com/reirei-lab/rainrail/discussions/12',
+      },
+      payload: {
+        resource: {
+          type: 'discussion',
+          id: '12',
+          number: 12,
+          title: 'How should agents route events?',
+          url: 'https://github.com/reirei-lab/rainrail/discussions/12',
+          categoryName: 'Q&A',
+          categorySlug: 'q-a',
+          answerId: '701',
+          answerUrl: 'https://github.com/reirei-lab/rainrail/discussions/12#discussioncomment-701',
+        },
+      },
+    });
+
+    await expect(
+      createGitHubWebhookEvent({
+        githubEvent: 'discussion_comment',
+        deliveryId: 'delivery-discussion-comment-1',
+        payload: {
+          action: 'created',
+          repository: { full_name: 'reirei-lab/rainrail' },
+          discussion: {
+            id: 700,
+            number: 12,
+            title: 'How should agents route events?',
+            html_url: 'https://github.com/reirei-lab/rainrail/discussions/12',
+            category: { name: 'Q&A', slug: 'q-a' },
+          },
+          comment: {
+            id: 702,
+            body: 'Use normalized resources.',
+            html_url: 'https://github.com/reirei-lab/rainrail/discussions/12#discussioncomment-702',
+            user: { login: 'reviewer' },
+          },
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.discussion_comment',
+      payload: {
+        resource: {
+          type: 'discussion',
+          id: '12',
+          number: 12,
+          categoryName: 'Q&A',
+        },
+        comment: {
+          id: '702',
+          body: 'Use normalized resources.',
+          author: 'reviewer',
         },
       },
     });

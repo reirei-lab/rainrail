@@ -190,6 +190,8 @@ export interface GitHubWebhookPayload {
   requested_team?: GitHubWebhookRecord;
   client_payload?: unknown;
   inputs?: unknown;
+  branch?: unknown;
+  ref?: unknown;
   installation?: GitHubWebhookRecord;
   organization?: GitHubWebhookRecord;
   label?: GitHubWebhookRecord;
@@ -214,6 +216,9 @@ export interface GitHubWebhookPayload {
   alert?: GitHubWebhookRecord;
   location?: GitHubWebhookRecord;
   security_advisory?: GitHubWebhookRecord;
+  repository_advisory?: GitHubWebhookRecord;
+  discussion?: GitHubWebhookRecord;
+  answer?: GitHubWebhookRecord;
   blocked_issue?: GitHubWebhookRecord;
   blocking_issue?: GitHubWebhookRecord;
   parent_issue?: GitHubWebhookRecord;
@@ -304,6 +309,8 @@ export interface NormalizedGitHubChange {
 
 export interface NormalizedGitHubDispatch {
   eventType?: string;
+  ref?: string;
+  branch?: string;
   clientPayload?: unknown;
   inputs?: unknown;
 }
@@ -355,6 +362,10 @@ export interface NormalizedGitHubResource {
   endLine?: number;
   ghsaId?: string;
   summary?: string;
+  categoryName?: string;
+  categorySlug?: string;
+  answerId?: string;
+  answerUrl?: string;
   isResolved?: boolean;
   path?: string;
   line?: number;
@@ -464,6 +475,10 @@ function findGitHubSubject(payload: GitHubWebhookPayload, name: RainrailEventNam
     return subjectFromRelease(payload) ?? subjectFromRepository(payload, name);
   }
 
+  if (payload.discussion) {
+    return subjectFromResource(resourceFromDiscussion(payload));
+  }
+
   if (isCommitStatusPayload(payload)) {
     return subjectFromResource(resourceFromCommitStatus(payload));
   }
@@ -486,6 +501,10 @@ function findGitHubSubject(payload: GitHubWebhookPayload, name: RainrailEventNam
 
   if (payload.security_advisory) {
     return subjectFromResource(resourceFromSecurityAdvisory(payload.security_advisory));
+  }
+
+  if (payload.repository_advisory) {
+    return subjectFromResource(resourceFromSecurityAdvisory(payload.repository_advisory, 'repository_advisory'));
   }
 
   if (isCommitCommentPayload(payload)) {
@@ -906,6 +925,10 @@ function normalizedResource(payload: GitHubWebhookPayload): NormalizedGitHubReso
     return resourceFromSecurityAdvisory(payload.security_advisory);
   }
 
+  if (payload.repository_advisory) {
+    return resourceFromSecurityAdvisory(payload.repository_advisory, 'repository_advisory');
+  }
+
   if (isCommitCommentPayload(payload)) {
     return resourceFromCommitComment(payload.comment);
   }
@@ -935,7 +958,7 @@ function normalizedResource(payload: GitHubWebhookPayload): NormalizedGitHubReso
   }
 
   if (payload.pull_request) {
-    return resourceFromPullRequest(payload.pull_request);
+    return resourceFromPullRequest(payload.pull_request, payload);
   }
 
   if (payload.issue) {
@@ -970,6 +993,10 @@ function normalizedResource(payload: GitHubWebhookPayload): NormalizedGitHubReso
     return resourceFromRelease(payload.release);
   }
 
+  if (payload.discussion) {
+    return resourceFromDiscussion(payload);
+  }
+
   return resourceFromRepository(payload.repository);
 }
 
@@ -985,7 +1012,10 @@ function resourceFromIssue(issue: GitHubWebhookRecord): NormalizedGitHubResource
   };
 }
 
-function resourceFromPullRequest(pullRequest: GitHubWebhookRecord): NormalizedGitHubResource {
+function resourceFromPullRequest(
+  pullRequest: GitHubWebhookRecord,
+  payload?: GitHubWebhookPayload,
+): NormalizedGitHubResource {
   const number = numberField(pullRequest, 'number');
   const head = recordField(pullRequest, 'head');
   const base = recordField(pullRequest, 'base');
@@ -997,9 +1027,11 @@ function resourceFromPullRequest(pullRequest: GitHubWebhookRecord): NormalizedGi
     ...optionalStringProperty('title', stringField(pullRequest, 'title')),
     ...optionalStringProperty('state', stringField(pullRequest, 'state')),
     ...optionalBooleanProperty('merged', booleanField(pullRequest, 'merged')),
+    ...optionalBooleanProperty('draft', booleanField(pullRequest, 'draft')),
     ...optionalStringProperty('url', stringField(pullRequest, 'html_url')),
     ...optionalStringProperty('headRef', stringField(head, 'ref')),
-    ...optionalStringProperty('headSha', stringField(head, 'sha')),
+    ...optionalStringProperty('beforeSha', stringField(payload, 'before')),
+    ...optionalStringProperty('headSha', stringField(payload, 'after') ?? stringField(head, 'sha')),
     ...optionalStringProperty('baseRef', stringField(base, 'ref')),
     ...optionalStringProperty('baseSha', stringField(base, 'sha')),
   };
@@ -1139,16 +1171,38 @@ function resourceFromSecurityAlert(payload: GitHubWebhookPayload): NormalizedGit
   };
 }
 
-function resourceFromSecurityAdvisory(advisory: GitHubWebhookRecord): NormalizedGitHubResource {
+function resourceFromSecurityAdvisory(
+  advisory: GitHubWebhookRecord,
+  type = 'security_advisory',
+): NormalizedGitHubResource {
   const ghsaId = stringField(advisory, 'ghsa_id');
 
   return {
-    type: 'security_advisory',
+    type,
     id: ghsaId ?? String(advisory.id ?? 'unknown'),
     ...optionalStringProperty('ghsaId', ghsaId),
     ...optionalStringProperty('summary', stringField(advisory, 'summary')),
     ...optionalStringProperty('severity', stringField(advisory, 'severity')),
     ...optionalStringProperty('url', stringField(advisory, 'html_url')),
+  };
+}
+
+function resourceFromDiscussion(payload: GitHubWebhookPayload): NormalizedGitHubResource {
+  const discussion = payload.discussion ?? {};
+  const number = numberField(discussion, 'number');
+  const category = recordField(discussion, 'category');
+  const answer = payload.answer;
+
+  return {
+    type: 'discussion',
+    id: String(number ?? discussion.id ?? 'unknown'),
+    ...(number === undefined ? {} : { number }),
+    ...optionalStringProperty('title', stringField(discussion, 'title')),
+    ...optionalStringProperty('url', stringField(discussion, 'html_url')),
+    ...optionalStringProperty('categoryName', stringField(category, 'name')),
+    ...optionalStringProperty('categorySlug', stringField(category, 'slug')),
+    ...optionalStringProperty('answerId', idField(answer, 'id')),
+    ...optionalStringProperty('answerUrl', stringField(answer, 'html_url')),
   };
 }
 
@@ -1318,7 +1372,7 @@ function normalizedRelatedPullRequests(payload: GitHubWebhookPayload): Normalize
     ...arrayField(payload.workflow_run, 'pull_requests'),
   ];
 
-  return pullRequests.map(resourceFromPullRequest);
+  return pullRequests.map((pullRequest) => resourceFromPullRequest(pullRequest));
 }
 
 function normalizedChanges(changes: GitHubWebhookRecord | undefined): NormalizedGitHubChange[] {
@@ -1352,6 +1406,8 @@ function normalizedDispatch(
 
   return {
     ...optionalStringProperty('eventType', typeof payload.action === 'string' ? payload.action : undefined),
+    ...optionalStringProperty('ref', stringField(payload, 'ref') ?? stringField(payload, 'branch')),
+    ...optionalStringProperty('branch', stringField(payload, 'branch')),
     ...(payload.client_payload === undefined ? {} : { clientPayload: payload.client_payload }),
     ...(payload.inputs === undefined ? {} : { inputs: payload.inputs }),
   };

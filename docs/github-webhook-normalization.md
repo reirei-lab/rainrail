@@ -13,7 +13,7 @@ workflow plugin が受け取る `event.payload` は Rainrail 側で安定させ�
 - `issues.assigned` / `pull_request.assigned` では、対象 assignee を `event.payload.assignee` に集約する。
 - `pull_request.review_requested` / `pull_request.review_request_removed` では、対象 reviewer/team を `event.payload.requestedReviewer` / `event.payload.requestedTeam` に集約する。
 - `issue_comment` が pull request conversation comment の場合は、`payload.issue.pull_request` marker を見て `event.payload.resource.type` と `event.subject.type` を `pull_request` にする。
-- `pull_request.closed` では、通常 close と merge を区別できるように `event.payload.resource.merged` を残す。
+- `pull_request.closed` では、通常 close と merge を区別できるように `event.payload.resource.merged` を残す。draft 状態と synchronize の before/after SHA も pull request resource に残す。
 - `pull_request_review` は `pull_request` より `review` を優先して `event.payload.resource` にし、関連 PR を `event.payload.pullRequest` に残す。
 - `pull_request_review_thread` は `thread` を `event.payload.resource` にし、解決状態や対象位置を残す。関連 PR は `event.payload.pullRequest` に残す。
 - `check_run` / `check_suite` / `workflow_run` に紐づく PR は `event.payload.pullRequests` に残す。
@@ -31,8 +31,9 @@ workflow plugin が受け取る `event.payload` は Rainrail 側で安定させ�
 - `workflow_job` は job id/run id/status/conclusion/labels を workflow job resource として正規化する。
 - security alert 系 webhook は top-level `alert` の id/state/severity/ref/url を security alert resource として正規化する。
 - `code_scanning_alert` の top-level ref/commit SHA と `secret_scanning_alert_location` の location details は security alert resource に残す。
-- `security_advisory` は advisory id/summary/severity/url を security advisory resource として正規化する。
-- `repository_dispatch` / `workflow_dispatch` は `client_payload` / `inputs` を `event.payload.dispatch` に残す。
+- `security_advisory` / `repository_advisory` は advisory id/summary/severity/url を advisory resource として正規化する。
+- `repository_dispatch` / `workflow_dispatch` は `client_payload` / `inputs` と対象 ref/branch を `event.payload.dispatch` に残す。
+- `discussion` / `discussion_comment` は discussion number/url/category と answer 情報を discussion resource として正規化する。
 - `commit_comment` は commit id/path/position を commit comment resource と comment metadata に残す。
 - `issue_dependencies` / `sub_issues` は関係対象の issue 番号と URL を issue relation resource として正規化する。
 - milestone 変更では issue/PR の milestone id/number/title/due date を `event.payload.milestone` に集約する。
