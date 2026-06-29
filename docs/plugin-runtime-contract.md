@@ -60,7 +60,9 @@ provider 名や agent dispatch などの低レベル runtime 情報は
 `context.actions` の gated action として渡す。secret 値は audit log に含めず、
 runtime action の戻り値を handler 内だけで扱う。互換 API の
 `context.capabilities.dispatchAgent` も runtime start と同等に扱い、
-`runtime:start` capability、audit、lifecycle signal を通す。
+`runtime:start` capability、audit、lifecycle signal を通す。dispatcher は
+capabilities object 全体を plain object にコピーせず、`dispatchAgent` だけを wrapper で
+差し替えるため、provider 固有の prototype method や non-enumerable helper を保持する。
 
 ## Plugin loader と local handler
 
@@ -103,6 +105,8 @@ object を receiver として呼ぶため、`this.client` などに依存する 
 そのまま利用できる。
 `context.runtime.startRun` も handler へ直接 provider を渡さず gated wrapper にする。
 `runtime:start` capability がない handler は runtime provider 経由でも起動できない。
+handler が `context.runtime.startRun(request, { signal })` として caller signal を渡した
+場合、dispatcher は plugin lifecycle signal と caller signal を合成して provider へ渡す。
 互換 API の `context.capabilities.dispatchAgent` も同じ `runtime:start` gate を通し、
 未宣言 handler から agent/run 起動経路を迂回できないようにする。handler が
 `dispatchAgent` に独自の abort signal を渡した場合でも、dispatcher は plugin lifecycle
@@ -120,9 +124,10 @@ shutdown/cancel の rejected result を維持する。
 `createProposal` などの task provider 操作を呼んでも、provider 実装は実行せず rejected
 side effect として拒否する。開始済みの provider 操作にも第2引数で同じ
 `AbortSignal` を渡すため、network 待ちの `createComment`、`setStatus`、
-`createProposal` なども provider 実装側で中断や冪等化を行える。provider method も
-tasks object を receiver として呼ぶため、`this.name` や `this.client` を使う実装を
-壊さない。
+`createProposal` なども provider 実装側で中断や冪等化を行える。handler が task provider
+呼び出しに caller signal を渡した場合も、dispatcher は lifecycle signal と caller signal
+を合成して provider へ渡す。provider method も tasks object を receiver として呼ぶため、
+`this.name` や `this.client` を使う実装を壊さない。
 
 `audit.record(entry)` を渡すと、plugin id、event id、run id、action、
 result、発生時刻が記録される。action result は `fulfilled`、`rejected`、
@@ -150,7 +155,8 @@ rejected result に隔離し、`Promise.all` 全体を reject しない。
 handler が `timeoutMs` または loader/dispatcher の `defaultTimeoutMs` を超えた場合も、
 その plugin の rejected result と audit result `timeout` に隔離する。
 親 abort listener は context 構築が失敗した場合も cleanup し、長寿命 shutdown signal に
-listener/controller を蓄積しない。
+listener/controller を蓄積しない。`timeoutMs` metadata の読み取りが context 構築後に
+失敗した場合も同じ cleanup を行う。
 最小 contract では retry や並列度制御は持たせない。これらは orchestration policy
 として後続 issue で追加する。
 

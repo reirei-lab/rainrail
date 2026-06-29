@@ -8,6 +8,7 @@ import {
   defineWorkflowPlugin,
   type PluginRuntimeContext,
   type RainrailEventEnvelope,
+  type RuntimeCapabilities,
   type WorkflowPlugin,
 } from './index.js';
 
@@ -2386,6 +2387,265 @@ describe('plugin runtime contract', () => {
       {
         pluginName: 'context-failure-handler',
         eventId: 'github-webhook:delivery-context-failure-cleanup:github.issue',
+        status: 'rejected',
+      },
+    ]);
+    expect(listeners.size).toBe(0);
+  });
+
+  it('combines caller and lifecycle abort signals for runtime provider startRun', async () => {
+    vi.useFakeTimers();
+    try {
+      const event = createEventEnvelope({
+        source: { type: 'github', name: 'github-webhook' },
+        name: 'github.issue',
+        delivery: {
+          id: 'delivery-start-run-caller-signal',
+          receivedAt: '2026-06-29T14:00:00.000Z',
+        },
+        occurredAt: '2026-06-29T14:00:00.000Z',
+        subject: { type: 'issue', id: '13' },
+        payload: { action: 'opened' },
+        rawPayload: {
+          kind: 'external-reference',
+          reference: 'github://deliveries/delivery-start-run-caller-signal',
+        },
+      });
+      const callerController = new AbortController();
+      let startRunSignal: AbortSignal | undefined;
+      const startRun = vi.fn(
+        async (_request, context?: { signal: AbortSignal }) =>
+          new Promise<{ id: string; provider: 'codex'; status: 'queued' }>((_resolve, reject) => {
+            startRunSignal = context?.signal;
+            context?.signal.addEventListener('abort', () => reject(context.signal.reason), { once: true });
+          }),
+      );
+      const loader = createPluginLoader({
+        runtime: mockRuntimeContext({
+          runId: 'run-13',
+          now: () => new Date('2026-06-29T14:01:00.000Z'),
+          runtime: {
+            name: 'mock-runtime',
+            kind: 'runtime-provider',
+            startRun,
+          },
+        }),
+        defaultTimeoutMs: 25,
+      });
+
+      loader.on(
+        'github.issue',
+        async (handledEvent, context) =>
+          context.runtime.startRun(
+            {
+              workflow: 'start-run-caller-signal-handler',
+              event: handledEvent,
+              requestedBy: 'start-run-caller-signal-handler',
+            },
+            { signal: callerController.signal },
+          ),
+        { name: 'start-run-caller-signal-handler', capabilities: ['runtime:start'] },
+      );
+
+      const dispatchPromise = loader.dispatch(event);
+      callerController.abort(new Error('caller canceled run'));
+      await Promise.resolve();
+
+      expect(startRun).toHaveBeenCalledOnce();
+      expect(startRunSignal?.aborted).toBe(true);
+      await expect(dispatchPromise).resolves.toMatchObject([
+        {
+          pluginName: 'start-run-caller-signal-handler',
+          eventId: 'github-webhook:delivery-start-run-caller-signal:github.issue',
+          status: 'rejected',
+        },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('combines caller and lifecycle abort signals for task provider methods', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: {
+        id: 'delivery-task-caller-signal',
+        receivedAt: '2026-06-29T14:00:00.000Z',
+      },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'github://deliveries/delivery-task-caller-signal',
+      },
+    });
+    const callerController = new AbortController();
+    let createCommentSignal: AbortSignal | undefined;
+    const createComment = vi.fn(
+      async (_input, context?: { signal: AbortSignal }) =>
+        new Promise<{ id: string }>((_resolve, reject) => {
+          createCommentSignal = context?.signal;
+          context?.signal.addEventListener('abort', () => reject(context.signal.reason), { once: true });
+        }),
+    );
+    const loader = createPluginLoader({
+      runtime: mockRuntimeContext({
+        runId: 'run-13',
+        now: () => new Date('2026-06-29T14:01:00.000Z'),
+        providers: {
+          tasks: {
+            name: 'mock-tasks',
+            kind: 'task-provider',
+            getIssue: async () => ({
+              id: 'issue:13',
+              provider: 'github',
+              repository: 'reirei-lab/rainrail',
+              number: 13,
+              title: 'Mock issue',
+            }),
+            createComment,
+          },
+        },
+      }),
+    });
+
+    loader.on(
+      'github.issue',
+      async (_event, context) =>
+        context.providers.tasks.createComment(
+          {
+            target: { provider: 'github', repository: 'reirei-lab/rainrail', number: 13 },
+            body: 'caller cancellable comment',
+          },
+          { signal: callerController.signal },
+        ),
+      { name: 'task-caller-signal-handler' },
+    );
+
+    const dispatchPromise = loader.dispatch(event);
+    callerController.abort(new Error('caller canceled comment'));
+    await Promise.resolve();
+
+    expect(createComment).toHaveBeenCalledOnce();
+    expect(createCommentSignal?.aborted).toBe(true);
+    await expect(dispatchPromise).resolves.toMatchObject([
+      {
+        pluginName: 'task-caller-signal-handler',
+        eventId: 'github-webhook:delivery-task-caller-signal:github.issue',
+        status: 'rejected',
+      },
+    ]);
+  });
+
+  it('preserves capability prototype helpers when wrapping dispatchAgent', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: {
+        id: 'delivery-capability-prototype',
+        receivedAt: '2026-06-29T14:00:00.000Z',
+      },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'github://deliveries/delivery-capability-prototype',
+      },
+    });
+    class RuntimeCapabilityBag {
+      provider = 'codex';
+      dispatchAgent = async () => ({ sessionKey: 'agent:main:prototype' });
+
+      lookupRuntime() {
+        return 'prototype-runtime';
+      }
+    }
+    const loader = createPluginLoader({
+      runtime: mockRuntimeContext({
+        runId: 'run-13',
+        now: () => new Date('2026-06-29T14:01:00.000Z'),
+        capabilities: new RuntimeCapabilityBag() as unknown as RuntimeCapabilities,
+      }),
+    });
+
+    loader.on(
+      'github.issue',
+      async (_event, context) =>
+        (context.capabilities as unknown as { lookupRuntime: () => string }).lookupRuntime(),
+      { name: 'capability-prototype-handler', capabilities: ['runtime:start'] },
+    );
+
+    await expect(loader.dispatch(event)).resolves.toEqual([
+      {
+        pluginName: 'capability-prototype-handler',
+        eventId: 'github-webhook:delivery-capability-prototype:github.issue',
+        status: 'fulfilled',
+        value: 'prototype-runtime',
+      },
+    ]);
+  });
+
+  it('removes parent abort listeners when timeoutMs metadata fails after context creation', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: {
+        id: 'delivery-timeout-metadata-cleanup',
+        receivedAt: '2026-06-29T14:00:00.000Z',
+      },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'github://deliveries/delivery-timeout-metadata-cleanup',
+      },
+    });
+    const parentController = new AbortController();
+    const originalAddEventListener = parentController.signal.addEventListener.bind(parentController.signal);
+    const originalRemoveEventListener = parentController.signal.removeEventListener.bind(parentController.signal);
+    const listeners = new Set<NonNullable<Parameters<AbortSignal['addEventListener']>[1]>>();
+
+    parentController.signal.addEventListener = ((type, listener, options) => {
+      if (type === 'abort' && listener !== null) {
+        listeners.add(listener);
+      }
+
+      return originalAddEventListener(type, listener, options);
+    }) as AbortSignal['addEventListener'];
+    parentController.signal.removeEventListener = ((type, listener, options) => {
+      if (type === 'abort' && listener !== null) {
+        listeners.delete(listener);
+      }
+
+      return originalRemoveEventListener(type, listener, options);
+    }) as AbortSignal['removeEventListener'];
+
+    const malformedTimeoutWorkflow = {
+      name: 'malformed-timeout-handler',
+      accepts: () => true,
+      capabilities: [],
+      get timeoutMs(): never {
+        throw new Error('timeout metadata is malformed');
+      },
+      handle: async () => ({ unreachable: true }),
+    } satisfies WorkflowPlugin;
+    const dispatcher = createRuntimeDispatcher({
+      workflows: [malformedTimeoutWorkflow],
+      runtime: mockRuntimeContext({
+        runId: 'run-13',
+        now: () => new Date('2026-06-29T14:01:00.000Z'),
+        signal: parentController.signal,
+      }),
+    });
+
+    await expect(dispatcher.dispatch(event)).resolves.toMatchObject([
+      {
+        pluginName: 'malformed-timeout-handler',
+        eventId: 'github-webhook:delivery-timeout-metadata-cleanup:github.issue',
         status: 'rejected',
       },
     ]);

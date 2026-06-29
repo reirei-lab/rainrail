@@ -72,10 +72,11 @@ export function createRuntimeDispatcher(options: RuntimeDispatcherOptions): Runt
             let value: unknown;
             try {
               const context = createWorkflowContext(options, policy, event, abort.controller.signal);
+              const timeoutMs = workflow.timeoutMs ?? options.defaultTimeoutMs;
               workflowStarted = true;
               value = await runWorkflow(
                 () => Promise.resolve(workflow.handle(event, context)),
-                workflow.timeoutMs ?? options.defaultTimeoutMs,
+                timeoutMs,
                 abort,
               );
             } finally {
@@ -204,7 +205,8 @@ function createGatedRuntimeProvider(
   return {
     name: runtime.name,
     kind: runtime.kind,
-    startRun: (request) => callRuntimeStartRun(options, policy, event, signal, runtime, request),
+    startRun: (request, context) =>
+      callRuntimeStartRun(options, policy, event, signal, runtime, request, context?.signal),
   };
 }
 
@@ -215,6 +217,7 @@ async function callRuntimeStartRun(
   signal: AbortSignal,
   runtime: RuntimeProvider,
   request: Parameters<RuntimeProvider['startRun']>[0],
+  callerSignal: AbortSignal | undefined,
 ): Promise<Awaited<ReturnType<RuntimeProvider['startRun']>>> {
   if (signal.aborted) {
     const reason = new PluginActionAbortedError('startRuntime', policy.name);
@@ -229,7 +232,7 @@ async function callRuntimeStartRun(
   }
 
   try {
-    const value = await runtime.startRun(request, { signal });
+    const value = await runtime.startRun(request, { signal: combineAbortSignals(signal, callerSignal) });
     await recordAudit(options, policy, event, 'startRuntime', 'fulfilled');
     return value;
   } catch (reason) {
@@ -253,10 +256,16 @@ function createGatedRuntimeCapabilities(
     return capabilities;
   }
 
-  return {
-    ...capabilities,
-    dispatchAgent: (request, context) => callDispatchAgent(options, policy, event, signal, request, context?.signal),
-  };
+  return new Proxy(capabilities, {
+    get(target, property, receiver) {
+      if (property === 'dispatchAgent') {
+        return (request: Parameters<NonNullable<typeof capabilities.dispatchAgent>>[0], context?: { signal: AbortSignal }) =>
+          callDispatchAgent(options, policy, event, signal, request, context?.signal);
+      }
+
+      return Reflect.get(target, property, receiver);
+    },
+  });
 }
 
 async function callDispatchAgent(
@@ -371,37 +380,37 @@ function createGuardedProviders(
   const guardedTasks: TaskProviderRegistry['tasks'] = {
     name: tasks.name,
     kind: tasks.kind,
-    getIssue: (ref) => {
+    getIssue: (ref, context) => {
       guardProviderCall(options, policy, event, signal, 'tasks.getIssue');
-      return tasks.getIssue.call(tasks, ref, { signal });
+      return tasks.getIssue.call(tasks, ref, { signal: combineAbortSignals(signal, context?.signal) });
     },
-    createComment: (input) => {
+    createComment: (input, context) => {
       guardProviderCall(options, policy, event, signal, 'tasks.createComment');
-      return tasks.createComment.call(tasks, input, { signal });
+      return tasks.createComment.call(tasks, input, { signal: combineAbortSignals(signal, context?.signal) });
     },
   };
 
   if (tasks.addToProject !== undefined) {
     const addToProject = tasks.addToProject;
-    guardedTasks.addToProject = (input) => {
+    guardedTasks.addToProject = (input, context) => {
       guardProviderCall(options, policy, event, signal, 'tasks.addToProject');
-      return addToProject.call(tasks, input, { signal });
+      return addToProject.call(tasks, input, { signal: combineAbortSignals(signal, context?.signal) });
     };
   }
 
   if (tasks.setStatus !== undefined) {
     const setStatus = tasks.setStatus;
-    guardedTasks.setStatus = (input) => {
+    guardedTasks.setStatus = (input, context) => {
       guardProviderCall(options, policy, event, signal, 'tasks.setStatus');
-      return setStatus.call(tasks, input, { signal });
+      return setStatus.call(tasks, input, { signal: combineAbortSignals(signal, context?.signal) });
     };
   }
 
   if (tasks.createProposal !== undefined) {
     const createProposal = tasks.createProposal;
-    guardedTasks.createProposal = (input) => {
+    guardedTasks.createProposal = (input, context) => {
       guardProviderCall(options, policy, event, signal, 'tasks.createProposal');
-      return createProposal.call(tasks, input, { signal });
+      return createProposal.call(tasks, input, { signal: combineAbortSignals(signal, context?.signal) });
     };
   }
 
