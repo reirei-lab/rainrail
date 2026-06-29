@@ -2,6 +2,7 @@ export * from './bridge-room.js';
 export * from './dispatcher.js';
 export * from './event-bus.js';
 export * from './events.js';
+export * from './github-webhook.js';
 export * from './plugins.js';
 export * from './runtime-provider.js';
 export * from './source-plugin.js';
