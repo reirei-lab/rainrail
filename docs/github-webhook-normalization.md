@@ -10,6 +10,7 @@ workflow plugin が受け取る `event.payload` は Rainrail 側で安定させ�
 - repository metadata は `event.payload.repository`、organization metadata は `event.payload.organization`、actor metadata は `event.payload.actor` に集約する。
 - issue / pull request / review / check / workflow / project item などの主対象は `event.payload.resource` に集約する。
 - `issues.labeled` / `issues.unlabeled` では、対象 label を `event.payload.label` に集約する。
+- `label.created` / `label.edited` / `label.deleted` では、対象 label を `event.payload.resource` にする。
 - `issues.assigned` / `pull_request.assigned` では、対象 assignee を `event.payload.assignee` に集約する。
 - `pull_request.review_requested` / `pull_request.review_request_removed` では、対象 reviewer/team を `event.payload.requestedReviewer` / `event.payload.requestedTeam` に集約する。
 - `issue_comment` が pull request conversation comment の場合は、`payload.issue.pull_request` marker を見て `event.payload.resource.type` と `event.subject.type` を `pull_request` にする。
@@ -24,11 +25,11 @@ workflow plugin が受け取る `event.payload` は Rainrail 側で安定させ�
 - `push` は ref / before sha / head sha / created/deleted/forced / head commit summary を `event.payload.resource` に集約する。
 - `create` / `delete` は branch/tag の ref と ref type を `event.payload.resource` に集約する。
 - `release` は tag/name/url/draft/prerelease を release resource として正規化する。
-- `status` は commit SHA / state / context / target URL を commit status resource として正規化する。
+- `status` は status id を resource id とし、commit SHA / state / context / target URL を commit status resource として正規化する。
 - `status` は branches と description も commit status resource に残す。
 - `deployment` / `deployment_status` は deployment id/ref/environment と status state を deployment resource として正規化する。
 - `deployment_protection_rule` は environment/ref/sha/callback URL を deployment protection rule resource として正規化し、関連 PR は `event.payload.pullRequests` に残す。
-- `deployment_review` は environment / nested reviewers / approver / string comment を deployment review resource として正規化する。
+- `deployment_review` は requested delivery の top-level environment/requester と、nested reviewers / approver / string comment を deployment review resource として正規化する。
 - `merge_group` は merge queue の head SHA/ref と base ref を resource に残す。
 - `workflow_job` は job id/run id/status/conclusion/labels と deployment environment/ref/sha を workflow job resource として正規化する。
 - `branch_protection_rule` は rule id/name と changes を branch protection rule resource として正規化する。
@@ -43,9 +44,9 @@ workflow plugin が受け取る `event.payload` は Rainrail 側で安定させ�
 - `package` / `registry_package` は package name/type/version/url を package resource として正規化する。
 - `installation` / `installation_repositories` の対象 repository 配列は `event.payload.repositories` に残す。
 - `gollum` は変更された wiki page を wiki page resource と `event.payload.pages` に残す。
-- security alert 系 webhook は top-level `alert` の id/state/severity/ref/url を security alert resource として正規化する。
+- security alert 系 webhook は top-level `alert` の id/state/severity/ref/url と secret type / validity / resolution など秘密値ではない監査 metadata を security alert resource として正規化する。
 - `code_scanning_alert` の top-level ref/commit SHA、rule severity、most recent instance location と `secret_scanning_alert_location` の location details は security alert resource に残す。
-- `security_advisory` / `repository_advisory` は advisory id/summary/severity/url を advisory resource として正規化する。
+- `security_advisory` / `repository_advisory` は advisory id/summary/severity/url と affected package 情報を advisory resource として正規化する。
 - `repository_dispatch` / `workflow_dispatch` は `client_payload` / `inputs`、対象 ref/branch、workflow 名を `event.payload.dispatch` に残す。
 - `discussion` / `discussion_comment` は discussion number/url/category と answer 情報を discussion resource として正規化する。
 - `commit_comment` は commit id/path/position を commit comment resource と comment metadata に残す。

@@ -462,6 +462,40 @@ describe('GitHub webhook source handling', () => {
         },
       },
     });
+
+    await expect(
+      createGitHubWebhookEvent({
+        githubEvent: 'label',
+        deliveryId: 'delivery-label-created-1',
+        payload: {
+          action: 'created',
+          repository: { full_name: 'reirei-lab/rainrail' },
+          label: {
+            id: 901,
+            name: 'triage',
+            color: '0052cc',
+            description: 'Needs triage',
+          },
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.label',
+      subject: {
+        type: 'label',
+        id: '901',
+      },
+      payload: {
+        resource: {
+          type: 'label',
+          id: '901',
+          name: 'triage',
+          color: '0052cc',
+          description: 'Needs triage',
+        },
+      },
+    });
   });
 
   it('keeps assignment metadata on issue and pull request assigned deliveries', async () => {
@@ -1039,6 +1073,7 @@ describe('GitHub webhook source handling', () => {
         githubEvent: 'status',
         deliveryId: 'delivery-status-1',
         payload: {
+          id: 7000,
           sha: 'abc123',
           state: 'success',
           context: 'ci/test',
@@ -1054,13 +1089,13 @@ describe('GitHub webhook source handling', () => {
       name: 'github.status',
       subject: {
         type: 'commit_status',
-        id: 'abc123',
+        id: '7000',
         url: 'https://github.com/reirei-lab/rainrail/actions/runs/1',
       },
       payload: {
         resource: {
           type: 'commit_status',
-          id: 'abc123',
+          id: '7000',
           headSha: 'abc123',
           state: 'success',
           context: 'ci/test',
@@ -1506,6 +1541,10 @@ describe('GitHub webhook source handling', () => {
           alert: {
             number: 9,
             state: 'open',
+            secret_type: 'github_token',
+            secret_type_display_name: 'GitHub Token',
+            validity: 'active',
+            resolution: 'revoked',
             html_url: 'https://github.com/reirei-lab/rainrail/security/secret-scanning/9',
           },
           location: {
@@ -1529,6 +1568,10 @@ describe('GitHub webhook source handling', () => {
           id: '9',
           number: 9,
           state: 'open',
+          secretType: 'github_token',
+          secretTypeDisplayName: 'GitHub Token',
+          validity: 'active',
+          resolution: 'revoked',
           locationType: 'commit',
           path: 'src/secret.txt',
           startLine: 10,
@@ -1550,6 +1593,13 @@ describe('GitHub webhook source handling', () => {
             summary: 'Example advisory',
             severity: 'high',
             html_url: 'https://github.com/advisories/GHSA-abcd-1234',
+            vulnerabilities: [
+              {
+                package: { ecosystem: 'npm', name: 'vite' },
+                vulnerable_version_range: '<5.0.0',
+                patched_versions: '5.0.0',
+              },
+            ],
           },
         },
         rawBody: '{}',
@@ -1565,6 +1615,14 @@ describe('GitHub webhook source handling', () => {
           summary: 'Example advisory',
           severity: 'high',
           url: 'https://github.com/advisories/GHSA-abcd-1234',
+          affectedPackages: [
+            {
+              ecosystem: 'npm',
+              name: 'vite',
+              vulnerableVersionRange: '<5.0.0',
+              patchedVersions: '5.0.0',
+            },
+          ],
         },
       },
     });
@@ -1865,6 +1923,37 @@ describe('GitHub webhook source handling', () => {
           reviewerLogins: ['ops-team'],
           approver: 'maintainer',
           body: 'ship it',
+        },
+      },
+    });
+
+    await expect(
+      createGitHubWebhookEvent({
+        githubEvent: 'deployment_review',
+        deliveryId: 'delivery-deployment-review-requested-1',
+        payload: {
+          action: 'requested',
+          repository: { full_name: 'reirei-lab/rainrail' },
+          workflow_run: {
+            id: 9001,
+            name: 'deploy',
+            html_url: 'https://github.com/reirei-lab/rainrail/actions/runs/9001',
+          },
+          environment: 'production',
+          requester: { login: 'octocat' },
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.deployment_review',
+      payload: {
+        resource: {
+          type: 'deployment_review',
+          id: '9001:production',
+          runId: '9001',
+          environment: 'production',
+          requester: 'octocat',
         },
       },
     });

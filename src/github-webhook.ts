@@ -360,6 +360,13 @@ export interface NormalizedGitHubDispatch {
   inputs?: unknown;
 }
 
+export interface NormalizedGitHubAffectedPackage {
+  ecosystem?: string;
+  name?: string;
+  vulnerableVersionRange?: string;
+  patchedVersions?: string;
+}
+
 export interface NormalizedGitHubResource {
   type: string;
   id: string;
@@ -418,8 +425,14 @@ export interface NormalizedGitHubResource {
   versionId?: string;
   manifestPath?: string;
   dependencyScope?: string;
+  secretType?: string;
+  secretTypeDisplayName?: string;
+  validity?: string;
+  resolution?: string;
+  affectedPackages?: NormalizedGitHubAffectedPackage[];
   reviewerLogins?: string[];
   approver?: string;
+  requester?: string;
   target?: string;
   enforcement?: string;
   fullName?: string;
@@ -543,6 +556,10 @@ function findGitHubSubject(payload: GitHubWebhookPayload, name: RainrailEventNam
 
   if (payload.pull_request) {
     return subjectFromPullRequest(payload);
+  }
+
+  if (isStandaloneLabelPayload(payload)) {
+    return subjectFromResource(resourceFromLabel(payload.label));
   }
 
   if (payload.milestone) {
@@ -1134,6 +1151,10 @@ function normalizedResource(payload: GitHubWebhookPayload): NormalizedGitHubReso
     return resourceFromMilestone(payload.milestone);
   }
 
+  if (isStandaloneLabelPayload(payload)) {
+    return resourceFromLabel(payload.label);
+  }
+
   if (payload.personal_access_token_request) {
     return resourceFromPersonalAccessTokenRequest(payload.personal_access_token_request);
   }
@@ -1397,19 +1418,32 @@ function resourceFromCheckSuite(checkSuite: GitHubWebhookRecord): NormalizedGitH
 
 function resourceFromCommitStatus(payload: GitHubWebhookPayload): NormalizedGitHubResource {
   const sha = stringField(payload, 'sha') ?? 'unknown';
+  const statusId = idField(payload, 'id');
   const branches = arrayField(payload, 'branches')
     .map((branch) => stringField(branch, 'name'))
     .filter((branch): branch is string => branch !== undefined);
 
   return {
     type: 'commit_status',
-    id: sha,
+    id: statusId ?? sha,
     ...optionalStringProperty('headSha', stringField(payload, 'sha')),
     ...optionalStringProperty('state', stringField(payload, 'state')),
     ...optionalStringProperty('context', stringField(payload, 'context')),
     ...optionalStringProperty('description', stringField(payload, 'description')),
     ...optionalStringArrayProperty('branches', branches),
     ...optionalStringProperty('url', stringField(payload, 'target_url')),
+  };
+}
+
+function resourceFromLabel(label: GitHubWebhookRecord | undefined): NormalizedGitHubResource {
+  const normalized = normalizedLabel(label);
+
+  return {
+    type: 'label',
+    id: normalized?.id ?? normalized?.name ?? 'unknown',
+    ...optionalStringProperty('name', normalized?.name),
+    ...optionalStringProperty('color', normalized?.color),
+    ...optionalStringProperty('description', normalized?.description),
   };
 }
 
@@ -1463,7 +1497,7 @@ function resourceFromDeploymentReview(payload: GitHubWebhookPayload): Normalized
   const workflowRun = payload.workflow_run;
   const workflowJobRun = payload.workflow_job_run ?? arrayField(payload, 'workflow_job_runs')[0];
   const runId = idField(workflowRun, 'id');
-  const environment = stringField(workflowJobRun, 'environment') ?? 'unknown';
+  const environment = stringField(workflowJobRun, 'environment') ?? stringField(payload, 'environment') ?? 'unknown';
   const reviewerLogins = arrayField(payload, 'reviewers')
     .map((wrapper) => {
       const reviewer = recordField(wrapper, 'reviewer') ?? wrapper;
@@ -1475,9 +1509,10 @@ function resourceFromDeploymentReview(payload: GitHubWebhookPayload): Normalized
     type: 'deployment_review',
     id: `${runId ?? 'unknown'}:${environment}`,
     ...optionalStringProperty('runId', runId),
-    ...optionalStringProperty('environment', stringField(workflowJobRun, 'environment')),
+    ...optionalStringProperty('environment', environment === 'unknown' ? undefined : environment),
     ...optionalStringArrayProperty('reviewerLogins', reviewerLogins),
     ...optionalStringProperty('approver', stringField(payload.approver, 'login')),
+    ...optionalStringProperty('requester', stringField(recordField(payload, 'requester'), 'login')),
     ...optionalStringProperty('body', deploymentReviewComment(payload.comment)),
     ...optionalStringProperty('url', stringField(workflowRun, 'html_url')),
   };
@@ -1503,6 +1538,10 @@ function resourceFromSecurityAlert(payload: GitHubWebhookPayload): NormalizedGit
     ...optionalStringProperty('path', stringField(locationDetails, 'path') ?? stringField(codeScanningLocation, 'path')),
     ...optionalNumberProperty('startLine', numberField(locationDetails, 'start_line') ?? numberField(codeScanningLocation, 'start_line')),
     ...optionalNumberProperty('endLine', numberField(locationDetails, 'end_line') ?? numberField(codeScanningLocation, 'end_line')),
+    ...optionalStringProperty('secretType', stringField(alert, 'secret_type')),
+    ...optionalStringProperty('secretTypeDisplayName', stringField(alert, 'secret_type_display_name')),
+    ...optionalStringProperty('validity', stringField(alert, 'validity')),
+    ...optionalStringProperty('resolution', stringField(alert, 'resolution')),
     ...optionalStringProperty('packageName', stringField(dependencyPackage, 'name')),
     ...optionalStringProperty('packageType', stringField(dependencyPackage, 'ecosystem')),
     ...optionalStringProperty('manifestPath', stringField(dependency, 'manifest_path')),
@@ -1516,6 +1555,9 @@ function resourceFromSecurityAdvisory(
   type = 'security_advisory',
 ): NormalizedGitHubResource {
   const ghsaId = stringField(advisory, 'ghsa_id');
+  const affectedPackages = arrayField(advisory, 'vulnerabilities')
+    .map(normalizedAffectedPackage)
+    .filter((affectedPackage): affectedPackage is NormalizedGitHubAffectedPackage => affectedPackage !== undefined);
 
   return {
     type,
@@ -1523,8 +1565,21 @@ function resourceFromSecurityAdvisory(
     ...optionalStringProperty('ghsaId', ghsaId),
     ...optionalStringProperty('summary', stringField(advisory, 'summary')),
     ...optionalStringProperty('severity', stringField(advisory, 'severity')),
+    ...(affectedPackages.length > 0 ? { affectedPackages } : {}),
     ...optionalStringProperty('url', stringField(advisory, 'html_url')),
   };
+}
+
+function normalizedAffectedPackage(vulnerability: GitHubWebhookRecord): NormalizedGitHubAffectedPackage | undefined {
+  const advisoryPackage = recordField(vulnerability, 'package');
+  const normalized = {
+    ...optionalStringProperty('ecosystem', stringField(advisoryPackage, 'ecosystem')),
+    ...optionalStringProperty('name', stringField(advisoryPackage, 'name')),
+    ...optionalStringProperty('vulnerableVersionRange', stringField(vulnerability, 'vulnerable_version_range')),
+    ...optionalStringProperty('patchedVersions', stringField(vulnerability, 'patched_versions')),
+  };
+
+  return objectHasKeys(normalized) ? normalized : undefined;
 }
 
 function resourceFromDiscussion(payload: GitHubWebhookPayload): NormalizedGitHubResource {
@@ -2253,9 +2308,15 @@ function isDeploymentReviewPayload(payload: GitHubWebhookPayload): boolean {
       payload.workflow_job_run !== undefined ||
       arrayField(payload, 'workflow_job_runs').length > 0 ||
       arrayField(payload, 'reviewers').length > 0 ||
-      payload.approver !== undefined
+      payload.approver !== undefined ||
+      stringField(payload, 'environment') !== undefined ||
+      payload.requester !== undefined
     )
   );
+}
+
+function isStandaloneLabelPayload(payload: GitHubWebhookPayload): boolean {
+  return payload.label !== undefined && payload.issue === undefined && payload.pull_request === undefined;
 }
 
 function isInstallationRepositoriesPayload(payload: GitHubWebhookPayload): boolean {
