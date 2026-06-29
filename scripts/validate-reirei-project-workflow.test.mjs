@@ -13,6 +13,10 @@ describe('add issue to Reirei project workflow', () => {
     expect(workflow).not.toContain('pull_request_target');
   });
 
+  it('uses a GitHub-hosted runner for issue intake', () => {
+    expect(workflow).toMatch(/^ {4}runs-on: ubuntu-latest$/m);
+  });
+
   it('adds the opened issue to the Reirei organization project', () => {
     expect(workflow).toContain('uses: actions/add-to-project@v2.0.0');
     expect(workflow).toContain('project-url: https://github.com/orgs/reirei-lab/projects/1');
