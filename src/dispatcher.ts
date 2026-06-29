@@ -1,6 +1,6 @@
 import type { RainrailEventEnvelope } from './events.js';
 import type { RuntimeProvider } from './runtime-provider.js';
-import type { TaskProviderRegistry } from './task-provider.js';
+import type { TaskProvider, TaskProviderRegistry } from './task-provider.js';
 import type {
   PluginRuntimeContext,
   RuntimeActionImplementations,
@@ -54,6 +54,8 @@ interface WorkflowExecutionRecord {
   workflow: WorkflowPlugin;
   policy: WorkflowExecutionPolicy;
   policyError?: unknown;
+  timeoutMs?: number;
+  timeoutError?: unknown;
 }
 
 export function createRuntimeDispatcher(options: RuntimeDispatcherOptions): RuntimeDispatcher {
@@ -62,7 +64,7 @@ export function createRuntimeDispatcher(options: RuntimeDispatcherOptions): Runt
   return {
     async dispatch(event): Promise<WorkflowPluginResult[]> {
       const results: Array<WorkflowPluginResult | undefined> = await Promise.all(
-        workflows.map(async ({ workflow, policy, policyError }) => {
+        workflows.map(async ({ workflow, policy, policyError, timeoutMs, timeoutError }) => {
           const audit = (action: WorkflowAuditEntry['action'], result: WorkflowAuditResult, reason?: unknown) =>
             recordAudit(options, policy, event, action, result, reason);
 
@@ -75,16 +77,20 @@ export function createRuntimeDispatcher(options: RuntimeDispatcherOptions): Runt
               throw policyError;
             }
 
+            if (timeoutError !== undefined) {
+              throw timeoutError;
+            }
+
             const abort = createWorkflowAbortController(options.runtime.signal);
             let workflowStarted = false;
             let value: unknown;
             try {
               const context = createWorkflowContext(options, policy, event, abort.controller.signal);
-              const timeoutMs = workflow.timeoutMs ?? options.defaultTimeoutMs;
+              const workflowTimeoutMs = timeoutMs ?? options.defaultTimeoutMs;
               workflowStarted = true;
               value = await runWorkflow(
                 () => Promise.resolve(workflow.handle(event, context)),
-                timeoutMs,
+                workflowTimeoutMs,
                 abort,
               );
             } finally {
@@ -124,17 +130,29 @@ function createWorkflowExecutionRecord(workflow: WorkflowPlugin): WorkflowExecut
     name: readWorkflowName(workflow),
     capabilities: new Set(),
   };
+  let timeoutMs: number | undefined;
+  let timeoutError: unknown;
+
+  try {
+    timeoutMs = workflow.timeoutMs;
+  } catch (reason) {
+    timeoutError = reason;
+  }
 
   try {
     return {
       workflow,
       policy: snapshotWorkflowPolicy(workflow),
+      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+      ...(timeoutError !== undefined ? { timeoutError } : {}),
     };
   } catch (policyError) {
     return {
       workflow,
       policy: fallbackPolicy,
       policyError,
+      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+      ...(timeoutError !== undefined ? { timeoutError } : {}),
     };
   }
 }
@@ -339,6 +357,14 @@ function createDispatchAgentCapabilityProxy(
   };
 
   const readCapabilityProperty = (source: object, property: string | symbol): unknown => {
+    if (property === '__lookupGetter__') {
+      return (lookupProperty: string | symbol) => (lookupProperty === 'dispatchAgent' ? () => dispatchAgent : undefined);
+    }
+
+    if (property === '__lookupSetter__') {
+      return () => undefined;
+    }
+
     if (property === 'valueOf') {
       return () => createCapabilityView(source);
     }
@@ -436,55 +462,86 @@ function createCapabilityConstructorView(
     return constructorValue;
   }
 
-  return new Proxy(
+  let constructorView: object;
+  const prototypeView: object = new Proxy(
     {},
     {
       get(_target, property) {
-        if (property !== 'prototype') {
-          return Reflect.get(constructorValue, property, constructorValue);
+        if (property === 'dispatchAgent') {
+          return dispatchAgent;
         }
 
-        return new Proxy(
-          {},
-          {
-            get(_target, prototypeProperty) {
-              if (prototypeProperty === 'dispatchAgent') {
-                return dispatchAgent;
-              }
+        if (property === 'constructor') {
+          return constructorView;
+        }
 
-              if (prototypeProperty === 'constructor') {
-                return createCapabilityConstructorView(constructorValue, capabilities, dispatchAgent);
-              }
+        const value = Reflect.get(prototype, property, capabilities);
+        return typeof value === 'function' ? value.bind(capabilities) : value;
+      },
+      getOwnPropertyDescriptor(_target, property): PropertyDescriptor | undefined {
+        const descriptor = Reflect.getOwnPropertyDescriptor(prototype, property);
+        if (descriptor === undefined) {
+          return undefined;
+        }
 
-              const value = Reflect.get(prototype, prototypeProperty, capabilities);
-              return typeof value === 'function' ? value.bind(capabilities) : value;
-            },
-            getOwnPropertyDescriptor(_target, prototypeProperty) {
-              const descriptor = Reflect.getOwnPropertyDescriptor(prototype, prototypeProperty);
-              if (descriptor === undefined) {
-                return undefined;
-              }
-
-              return {
-                configurable: true,
-                enumerable: descriptor.enumerable ?? false,
-                value:
-                  prototypeProperty === 'dispatchAgent'
-                    ? dispatchAgent
-                    : prototypeProperty === 'constructor'
-                      ? createCapabilityConstructorView(constructorValue, capabilities, dispatchAgent)
-                    : Reflect.get(prototype, prototypeProperty, capabilities),
-                writable: false,
-              };
-            },
-            ownKeys() {
-              return Reflect.ownKeys(prototype);
-            },
-          },
-        );
+        return {
+          configurable: true,
+          enumerable: descriptor.enumerable ?? false,
+          value:
+            property === 'dispatchAgent'
+              ? dispatchAgent
+              : property === 'constructor'
+                ? constructorView
+                : Reflect.get(prototype, property, capabilities),
+          writable: false,
+        };
+      },
+      ownKeys() {
+        return Reflect.ownKeys(prototype);
       },
     },
   );
+
+  constructorView = new Proxy(
+    {},
+    {
+      get(_target, property) {
+        if (property === 'prototype') {
+          return prototypeView;
+        }
+
+        const value = Reflect.get(constructorValue, property, constructorView);
+        return typeof value === 'function' ? value.bind(constructorView) : value;
+      },
+      getOwnPropertyDescriptor(_target, property): PropertyDescriptor | undefined {
+        if (property === 'prototype') {
+          return {
+            configurable: true,
+            enumerable: false,
+            value: prototypeView,
+            writable: false,
+          };
+        }
+
+        const descriptor = Reflect.getOwnPropertyDescriptor(constructorValue, property);
+        if (descriptor === undefined) {
+          return undefined;
+        }
+
+        return {
+          configurable: true,
+          enumerable: descriptor.enumerable ?? false,
+          value: Reflect.get(constructorValue, property, constructorView),
+          writable: false,
+        };
+      },
+      ownKeys() {
+        return Reflect.ownKeys(constructorValue);
+      },
+    },
+  );
+
+  return constructorView;
 }
 
 async function callDispatchAgent(
@@ -595,12 +652,44 @@ function createGuardedProviders(
   signal: AbortSignal,
 ): TaskProviderRegistry {
   const providers = options.runtime.providers ?? unavailableProviders;
-  const tasks = providers.tasks;
-  const guardedTasks: TaskProviderRegistry['tasks'] = {
+  const guardedProviders: TaskProviderRegistry = {
+    ...providers,
+    tasks: createGuardedTaskProvider(options, policy, event, signal, providers.tasks, 'tasks'),
+  };
+
+  for (const [name, provider] of Object.entries(providers)) {
+    if (name !== 'tasks' && isTaskProvider(provider)) {
+      guardedProviders[name] = createGuardedTaskProvider(options, policy, event, signal, provider, name);
+    }
+  }
+
+  return guardedProviders;
+}
+
+function isTaskProvider(provider: unknown): provider is TaskProvider {
+  return (
+    typeof provider === 'object' &&
+    provider !== null &&
+    (provider as TaskProvider).kind === 'task-provider' &&
+    typeof (provider as TaskProvider).getIssue === 'function' &&
+    typeof (provider as TaskProvider).createComment === 'function'
+  );
+}
+
+function createGuardedTaskProvider(
+  options: RuntimeDispatcherOptions,
+  policy: WorkflowExecutionPolicy,
+  event: RainrailEventEnvelope,
+  signal: AbortSignal,
+  tasks: TaskProvider,
+  actionPrefix: string,
+): TaskProvider {
+  const auditAction = (name: string) => `${actionPrefix}.${name}` as WorkflowAuditEntry['action'];
+  const guardedTasks: TaskProvider = {
     name: tasks.name,
     kind: tasks.kind,
     getIssue: async (ref, context) => {
-      const denied = getDeniedProviderCallReason(options, policy, event, signal, 'tasks.getIssue');
+      const denied = getDeniedProviderCallReason(options, policy, event, signal, auditAction('getIssue'));
       if (denied !== undefined) {
         throw denied;
       }
@@ -608,7 +697,7 @@ function createGuardedProviders(
       return tasks.getIssue.call(tasks, ref, { signal: combineAbortSignals(signal, context?.signal) });
     },
     createComment: async (input, context) => {
-      const denied = getDeniedProviderCallReason(options, policy, event, signal, 'tasks.createComment');
+      const denied = getDeniedProviderCallReason(options, policy, event, signal, auditAction('createComment'));
       if (denied !== undefined) {
         throw denied;
       }
@@ -620,7 +709,7 @@ function createGuardedProviders(
   if (tasks.addToProject !== undefined) {
     const addToProject = tasks.addToProject;
     guardedTasks.addToProject = async (input, context) => {
-      const denied = getDeniedProviderCallReason(options, policy, event, signal, 'tasks.addToProject');
+      const denied = getDeniedProviderCallReason(options, policy, event, signal, auditAction('addToProject'));
       if (denied !== undefined) {
         throw denied;
       }
@@ -632,7 +721,7 @@ function createGuardedProviders(
   if (tasks.setStatus !== undefined) {
     const setStatus = tasks.setStatus;
     guardedTasks.setStatus = async (input, context) => {
-      const denied = getDeniedProviderCallReason(options, policy, event, signal, 'tasks.setStatus');
+      const denied = getDeniedProviderCallReason(options, policy, event, signal, auditAction('setStatus'));
       if (denied !== undefined) {
         throw denied;
       }
@@ -644,7 +733,7 @@ function createGuardedProviders(
   if (tasks.createProposal !== undefined) {
     const createProposal = tasks.createProposal;
     guardedTasks.createProposal = async (input, context) => {
-      const denied = getDeniedProviderCallReason(options, policy, event, signal, 'tasks.createProposal');
+      const denied = getDeniedProviderCallReason(options, policy, event, signal, auditAction('createProposal'));
       if (denied !== undefined) {
         throw denied;
       }
@@ -653,10 +742,7 @@ function createGuardedProviders(
     };
   }
 
-  return {
-    ...providers,
-    tasks: guardedTasks,
-  };
+  return guardedTasks;
 }
 
 function getDeniedProviderCallReason(
