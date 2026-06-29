@@ -187,6 +187,7 @@ export interface GitHubWebhookPayload {
   sender?: GitHubWebhookRecord;
   installation?: GitHubWebhookRecord;
   organization?: GitHubWebhookRecord;
+  label?: GitHubWebhookRecord;
   repository?: GitHubWebhookRecord;
   issue?: GitHubWebhookRecord;
   pull_request?: GitHubWebhookRecord;
@@ -197,7 +198,10 @@ export interface GitHubWebhookPayload {
   check_suite?: GitHubWebhookRecord;
   review?: GitHubWebhookRecord;
   workflow_run?: GitHubWebhookRecord;
+  projects_v2?: GitHubWebhookRecord;
   projects_v2_item?: GitHubWebhookRecord;
+  changes?: GitHubWebhookRecord;
+  head_commit?: GitHubWebhookRecord;
   [key: string]: unknown;
 }
 
@@ -212,6 +216,10 @@ export interface NormalizedGitHubWebhookPayload {
   actor?: NormalizedGitHubActor;
   installation?: NormalizedGitHubInstallation;
   resource: NormalizedGitHubResource;
+  label?: NormalizedGitHubLabel;
+  pullRequest?: NormalizedGitHubResource;
+  pullRequests?: NormalizedGitHubResource[];
+  changes?: NormalizedGitHubChange[];
   comment?: NormalizedGitHubComment;
   requestedAction?: NormalizedGitHubRequestedAction;
 }
@@ -241,6 +249,21 @@ export interface NormalizedGitHubInstallation {
   id?: string;
 }
 
+export interface NormalizedGitHubLabel {
+  id?: string;
+  name?: string;
+  color?: string;
+  description?: string;
+}
+
+export interface NormalizedGitHubChange {
+  field: string;
+  fieldName?: string;
+  fieldType?: string;
+  from?: string;
+  to?: string;
+}
+
 export interface NormalizedGitHubResource {
   type: string;
   id: string;
@@ -257,6 +280,9 @@ export interface NormalizedGitHubResource {
   baseSha?: string;
   contentType?: string;
   contentNodeId?: string;
+  ref?: string;
+  beforeSha?: string;
+  headCommitMessage?: string;
   isResolved?: boolean;
   path?: string;
   line?: number;
@@ -352,6 +378,14 @@ function findGitHubSubject(payload: GitHubWebhookPayload, name: RainrailEventNam
     return subjectFromProjectItem(payload) ?? subjectFromRepository(payload, name);
   }
 
+  if (payload.projects_v2) {
+    return subjectFromProject(payload) ?? subjectFromRepository(payload, name);
+  }
+
+  if (name === 'github.push') {
+    return subjectFromPush(payload) ?? subjectFromRepository(payload, name);
+  }
+
   return subjectFromRepository(payload, name);
 }
 
@@ -383,6 +417,18 @@ function subjectFromProjectItem(payload: GitHubWebhookPayload): RainrailEventEnv
   return {
     type: 'project_item',
     id: String(payload.projects_v2_item.id ?? 'unknown'),
+  };
+}
+
+function subjectFromProject(payload: GitHubWebhookPayload): RainrailEventEnvelope['subject'] | undefined {
+  if (!payload.projects_v2) {
+    return undefined;
+  }
+
+  return {
+    type: 'project',
+    id: String(payload.projects_v2.id ?? payload.projects_v2.number ?? 'unknown'),
+    ...(typeof payload.projects_v2.html_url === 'string' ? { url: payload.projects_v2.html_url } : {}),
   };
 }
 
@@ -453,6 +499,19 @@ function subjectFromReviewThread(payload: GitHubWebhookPayload): RainrailEventEn
   };
 }
 
+function subjectFromPush(payload: GitHubWebhookPayload): RainrailEventEnvelope['subject'] | undefined {
+  const after = stringField(payload, 'after');
+  if (!after) {
+    return undefined;
+  }
+
+  return {
+    type: 'push',
+    id: after,
+    ...(typeof payload.head_commit?.url === 'string' ? { url: payload.head_commit.url } : {}),
+  };
+}
+
 function subjectFromRepository(
   payload: GitHubWebhookPayload,
   name: RainrailEventName,
@@ -508,6 +567,11 @@ function normalizeGitHubWebhookPayload(
   const organization = normalizedOrganization(payload.organization);
   const actor = normalizedActor(payload.sender);
   const installation = normalizedInstallation(payload.installation);
+  const resource = normalizedResource(payload);
+  const label = normalizedLabel(payload.label);
+  const pullRequest = normalizedRelatedPullRequest(payload, resource);
+  const pullRequests = normalizedRelatedPullRequests(payload);
+  const changes = normalizedChanges(payload.changes);
   const comment = normalizedComment(payload.comment);
   const requestedAction = normalizedRequestedAction(payload.requested_action);
 
@@ -519,7 +583,11 @@ function normalizeGitHubWebhookPayload(
     ...(organization ? { organization } : {}),
     ...(actor ? { actor } : {}),
     ...(installation ? { installation } : {}),
-    resource: normalizedResource(payload),
+    resource,
+    ...(label ? { label } : {}),
+    ...(pullRequest ? { pullRequest } : {}),
+    ...(pullRequests.length > 0 ? { pullRequests } : {}),
+    ...(changes.length > 0 ? { changes } : {}),
     ...(comment ? { comment } : {}),
     ...(requestedAction ? { requestedAction } : {}),
   };
@@ -586,7 +654,26 @@ function normalizedInstallation(installation: GitHubWebhookRecord | undefined): 
   return objectHasKeys(normalized) ? normalized : undefined;
 }
 
+function normalizedLabel(label: GitHubWebhookRecord | undefined): NormalizedGitHubLabel | undefined {
+  if (!label) {
+    return undefined;
+  }
+
+  const normalized = {
+    ...optionalStringProperty('id', idField(label, 'id')),
+    ...optionalStringProperty('name', stringField(label, 'name')),
+    ...optionalStringProperty('color', stringField(label, 'color')),
+    ...optionalStringProperty('description', stringField(label, 'description')),
+  };
+
+  return objectHasKeys(normalized) ? normalized : undefined;
+}
+
 function normalizedResource(payload: GitHubWebhookPayload): NormalizedGitHubResource {
+  if (stringField(payload, 'ref') && stringField(payload, 'after')) {
+    return resourceFromPush(payload);
+  }
+
   if (payload.thread) {
     return resourceFromReviewThread(payload.thread);
   }
@@ -617,6 +704,10 @@ function normalizedResource(payload: GitHubWebhookPayload): NormalizedGitHubReso
 
   if (payload.projects_v2_item) {
     return resourceFromProjectItem(payload.projects_v2_item);
+  }
+
+  if (payload.projects_v2) {
+    return resourceFromProject(payload.projects_v2);
   }
 
   return resourceFromRepository(payload.repository);
@@ -721,6 +812,32 @@ function resourceFromProjectItem(projectItem: GitHubWebhookRecord): NormalizedGi
   };
 }
 
+function resourceFromProject(project: GitHubWebhookRecord): NormalizedGitHubResource {
+  const number = numberField(project, 'number');
+  return {
+    type: 'project',
+    id: String(project.id ?? number ?? 'unknown'),
+    ...(number === undefined ? {} : { number }),
+    ...optionalStringProperty('title', stringField(project, 'title')),
+    ...optionalStringProperty('url', stringField(project, 'html_url')),
+  };
+}
+
+function resourceFromPush(payload: GitHubWebhookPayload): NormalizedGitHubResource {
+  const headCommit = payload.head_commit;
+  const after = stringField(payload, 'after') ?? 'unknown';
+
+  return {
+    type: 'push',
+    id: after,
+    ...optionalStringProperty('ref', stringField(payload, 'ref')),
+    ...optionalStringProperty('beforeSha', stringField(payload, 'before')),
+    ...optionalStringProperty('headSha', stringField(payload, 'after')),
+    ...optionalStringProperty('headCommitMessage', stringField(headCommit, 'message')),
+    ...optionalStringProperty('url', stringField(headCommit, 'url')),
+  };
+}
+
 function resourceFromRepository(repository: GitHubWebhookRecord | undefined): NormalizedGitHubResource {
   return {
     type: 'repository',
@@ -751,6 +868,59 @@ function normalizedComment(comment: GitHubWebhookRecord | undefined): Normalized
   };
 }
 
+function normalizedRelatedPullRequest(
+  payload: GitHubWebhookPayload,
+  resource: NormalizedGitHubResource,
+): NormalizedGitHubResource | undefined {
+  if (!payload.pull_request || resource.type === 'pull_request') {
+    return undefined;
+  }
+
+  return resourceFromPullRequest(payload.pull_request);
+}
+
+function normalizedRelatedPullRequests(payload: GitHubWebhookPayload): NormalizedGitHubResource[] {
+  const checkRunPullRequests = arrayField(payload.check_run, 'pull_requests');
+  return checkRunPullRequests.map(resourceFromPullRequest);
+}
+
+function normalizedChanges(changes: GitHubWebhookRecord | undefined): NormalizedGitHubChange[] {
+  if (!changes) {
+    return [];
+  }
+
+  return Object.entries(changes).map(([field, value]) => {
+    const change = value && typeof value === 'object' && !Array.isArray(value)
+      ? (value as GitHubWebhookRecord)
+      : undefined;
+
+    return {
+      field,
+      ...optionalStringProperty('fieldName', stringField(change, 'field_name') ?? stringField(change, 'name')),
+      ...optionalStringProperty('fieldType', stringField(change, 'field_type') ?? stringField(change, 'type')),
+      ...optionalStringProperty('from', normalizedChangeValue(change?.from)),
+      ...optionalStringProperty('to', normalizedChangeValue(change?.to)),
+    };
+  });
+}
+
+function normalizedChangeValue(value: unknown): string | undefined {
+  if (typeof value === 'string' && value.trim()) {
+    return value;
+  }
+
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const record = value as GitHubWebhookRecord;
+    return stringField(record, 'name') ?? stringField(record, 'title') ?? stringField(record, 'value') ?? idField(record, 'id');
+  }
+
+  return undefined;
+}
+
 function normalizedRequestedAction(
   requestedAction: GitHubWebhookRecord | undefined,
 ): NormalizedGitHubRequestedAction | undefined {
@@ -770,6 +940,15 @@ function normalizedRequestedAction(
 function recordField(record: GitHubWebhookRecord | undefined, key: string): GitHubWebhookRecord | undefined {
   const value = record?.[key];
   return value && typeof value === 'object' && !Array.isArray(value) ? (value as GitHubWebhookRecord) : undefined;
+}
+
+function arrayField(record: GitHubWebhookRecord | undefined, key: string): GitHubWebhookRecord[] {
+  const value = record?.[key];
+  return Array.isArray(value)
+    ? value.filter(
+      (item): item is GitHubWebhookRecord => Boolean(item) && typeof item === 'object' && !Array.isArray(item),
+    )
+    : [];
 }
 
 function stringField(record: GitHubWebhookRecord | undefined, key: string): string | undefined {
