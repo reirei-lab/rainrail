@@ -199,12 +199,21 @@ export interface GitHubWebhookPayload {
   requested_action?: GitHubWebhookRecord;
   check_run?: GitHubWebhookRecord;
   check_suite?: GitHubWebhookRecord;
+  deployment?: GitHubWebhookRecord;
+  deployment_status?: GitHubWebhookRecord;
+  merge_group?: GitHubWebhookRecord;
   review?: GitHubWebhookRecord;
   release?: GitHubWebhookRecord;
+  workflow_job?: GitHubWebhookRecord;
   workflow_run?: GitHubWebhookRecord;
   projects_v2?: GitHubWebhookRecord;
   projects_v2_status_update?: GitHubWebhookRecord;
   projects_v2_item?: GitHubWebhookRecord;
+  alert?: GitHubWebhookRecord;
+  blocked_issue?: GitHubWebhookRecord;
+  blocking_issue?: GitHubWebhookRecord;
+  parent_issue?: GitHubWebhookRecord;
+  sub_issue?: GitHubWebhookRecord;
   changes?: GitHubWebhookRecord;
   head_commit?: GitHubWebhookRecord;
   [key: string]: unknown;
@@ -225,6 +234,7 @@ export interface NormalizedGitHubWebhookPayload {
   installation?: NormalizedGitHubInstallation;
   resource: NormalizedGitHubResource;
   label?: NormalizedGitHubLabel;
+  milestone?: NormalizedGitHubMilestone;
   pullRequest?: NormalizedGitHubResource;
   pullRequests?: NormalizedGitHubResource[];
   changes?: NormalizedGitHubChange[];
@@ -271,6 +281,14 @@ export interface NormalizedGitHubLabel {
   description?: string;
 }
 
+export interface NormalizedGitHubMilestone {
+  id?: string;
+  number?: number;
+  title?: string;
+  dueOn?: string;
+  url?: string;
+}
+
 export interface NormalizedGitHubChange {
   field: string;
   fieldName?: string;
@@ -289,6 +307,7 @@ export interface NormalizedGitHubResource {
   merged?: boolean;
   status?: string;
   conclusion?: string;
+  context?: string;
   url?: string;
   headRef?: string;
   headSha?: string;
@@ -303,11 +322,21 @@ export interface NormalizedGitHubResource {
   headCommitMessage?: string;
   body?: string;
   projectNodeId?: string;
+  environment?: string;
+  statusId?: string;
+  runId?: string;
   startDate?: string;
   targetDate?: string;
   tagName?: string;
   draft?: boolean;
   prerelease?: boolean;
+  labels?: string[];
+  severity?: string;
+  relationship?: string;
+  issueNumber?: number;
+  issueUrl?: string;
+  relatedIssueNumber?: number;
+  relatedIssueUrl?: string;
   isResolved?: boolean;
   path?: string;
   line?: number;
@@ -413,6 +442,30 @@ function findGitHubSubject(payload: GitHubWebhookPayload, name: RainrailEventNam
 
   if (payload.release) {
     return subjectFromRelease(payload) ?? subjectFromRepository(payload, name);
+  }
+
+  if (isCommitStatusPayload(payload)) {
+    return subjectFromResource(resourceFromCommitStatus(payload));
+  }
+
+  if (payload.deployment || payload.deployment_status) {
+    return subjectFromResource(resourceFromDeployment(payload));
+  }
+
+  if (payload.merge_group) {
+    return subjectFromResource(resourceFromMergeGroup(payload.merge_group));
+  }
+
+  if (payload.workflow_job) {
+    return subjectFromResource(resourceFromWorkflowJob(payload.workflow_job));
+  }
+
+  if (payload.alert) {
+    return subjectFromResource(resourceFromSecurityAlert(payload.alert));
+  }
+
+  if (isIssueRelationPayload(payload)) {
+    return subjectFromResource(resourceFromIssueRelation(payload));
   }
 
   if (name === 'github.push') {
@@ -601,6 +654,14 @@ function subjectFromRepository(
   };
 }
 
+function subjectFromResource(resource: NormalizedGitHubResource): RainrailEventEnvelope['subject'] {
+  return {
+    type: resource.type,
+    id: resource.id,
+    ...(resource.url ? { url: resource.url } : {}),
+  };
+}
+
 function isUrlEncodedForm(contentType: string | null): boolean {
   return contentType?.toLowerCase().split(';', 1)[0]?.trim() === 'application/x-www-form-urlencoded';
 }
@@ -648,6 +709,9 @@ function normalizeGitHubWebhookPayload(
   const installation = normalizedInstallation(payload.installation);
   const resource = normalizedResource(payload);
   const label = normalizedLabel(payload.label);
+  const milestone = normalizedMilestone(
+    recordField(payload.issue, 'milestone') ?? recordField(payload.pull_request, 'milestone'),
+  );
   const pullRequest = normalizedRelatedPullRequest(payload, resource);
   const pullRequests = normalizedRelatedPullRequests(payload);
   const changes = normalizedChanges(payload.changes);
@@ -667,6 +731,7 @@ function normalizeGitHubWebhookPayload(
     ...(installation ? { installation } : {}),
     resource,
     ...(label ? { label } : {}),
+    ...(milestone ? { milestone } : {}),
     ...(pullRequest ? { pullRequest } : {}),
     ...(pullRequests.length > 0 ? { pullRequests } : {}),
     ...(changes.length > 0 ? { changes } : {}),
@@ -766,7 +831,47 @@ function normalizedLabel(label: GitHubWebhookRecord | undefined): NormalizedGitH
   return objectHasKeys(normalized) ? normalized : undefined;
 }
 
+function normalizedMilestone(milestone: GitHubWebhookRecord | undefined): NormalizedGitHubMilestone | undefined {
+  if (!milestone) {
+    return undefined;
+  }
+
+  const normalized = {
+    ...optionalStringProperty('id', idField(milestone, 'id')),
+    ...optionalNumberProperty('number', numberField(milestone, 'number')),
+    ...optionalStringProperty('title', stringField(milestone, 'title')),
+    ...optionalStringProperty('dueOn', stringField(milestone, 'due_on')),
+    ...optionalStringProperty('url', stringField(milestone, 'html_url')),
+  };
+
+  return objectHasKeys(normalized) ? normalized : undefined;
+}
+
 function normalizedResource(payload: GitHubWebhookPayload): NormalizedGitHubResource {
+  if (isCommitStatusPayload(payload)) {
+    return resourceFromCommitStatus(payload);
+  }
+
+  if (payload.deployment || payload.deployment_status) {
+    return resourceFromDeployment(payload);
+  }
+
+  if (payload.merge_group) {
+    return resourceFromMergeGroup(payload.merge_group);
+  }
+
+  if (payload.workflow_job) {
+    return resourceFromWorkflowJob(payload.workflow_job);
+  }
+
+  if (payload.alert) {
+    return resourceFromSecurityAlert(payload.alert);
+  }
+
+  if (isIssueRelationPayload(payload)) {
+    return resourceFromIssueRelation(payload);
+  }
+
   if (stringField(payload, 'ref') && stringField(payload, 'after')) {
     return resourceFromPush(payload);
   }
@@ -910,6 +1015,89 @@ function resourceFromCheckSuite(checkSuite: GitHubWebhookRecord): NormalizedGitH
     ...optionalStringProperty('headRef', stringField(checkSuite, 'head_branch')),
     ...optionalStringProperty('headSha', stringField(checkSuite, 'head_sha')),
     ...optionalStringProperty('url', stringField(checkSuite, 'html_url')),
+  };
+}
+
+function resourceFromCommitStatus(payload: GitHubWebhookPayload): NormalizedGitHubResource {
+  const sha = stringField(payload, 'sha') ?? 'unknown';
+
+  return {
+    type: 'commit_status',
+    id: sha,
+    ...optionalStringProperty('headSha', stringField(payload, 'sha')),
+    ...optionalStringProperty('state', stringField(payload, 'state')),
+    ...optionalStringProperty('context', stringField(payload, 'context')),
+    ...optionalStringProperty('url', stringField(payload, 'target_url')),
+  };
+}
+
+function resourceFromDeployment(payload: GitHubWebhookPayload): NormalizedGitHubResource {
+  const deployment = payload.deployment;
+  const deploymentStatus = payload.deployment_status;
+
+  return {
+    type: 'deployment',
+    id: String(deployment?.id ?? 'unknown'),
+    ...optionalStringProperty('ref', stringField(deployment, 'ref')),
+    ...optionalStringProperty('headSha', stringField(deployment, 'sha')),
+    ...optionalStringProperty('environment', stringField(deployment, 'environment')),
+    ...optionalStringProperty('state', stringField(deploymentStatus, 'state')),
+    ...optionalStringProperty('statusId', idField(deploymentStatus, 'id')),
+    ...optionalStringProperty('url', stringField(deploymentStatus, 'target_url') ?? stringField(deployment, 'url')),
+  };
+}
+
+function resourceFromMergeGroup(mergeGroup: GitHubWebhookRecord): NormalizedGitHubResource {
+  const headSha = stringField(mergeGroup, 'head_sha') ?? 'unknown';
+
+  return {
+    type: 'merge_group',
+    id: headSha,
+    ...optionalStringProperty('headSha', stringField(mergeGroup, 'head_sha')),
+    ...optionalStringProperty('headRef', stringField(mergeGroup, 'head_ref')),
+    ...optionalStringProperty('baseRef', stringField(mergeGroup, 'base_ref')),
+  };
+}
+
+function resourceFromWorkflowJob(workflowJob: GitHubWebhookRecord): NormalizedGitHubResource {
+  return {
+    type: 'workflow_job',
+    id: String(workflowJob.id ?? 'unknown'),
+    ...optionalStringProperty('runId', idField(workflowJob, 'run_id')),
+    ...optionalStringProperty('name', stringField(workflowJob, 'name')),
+    ...optionalStringProperty('status', stringField(workflowJob, 'status')),
+    ...optionalStringProperty('conclusion', stringField(workflowJob, 'conclusion')),
+    ...optionalStringArrayProperty('labels', stringArrayField(workflowJob, 'labels')),
+    ...optionalStringProperty('url', stringField(workflowJob, 'html_url')),
+  };
+}
+
+function resourceFromSecurityAlert(alert: GitHubWebhookRecord): NormalizedGitHubResource {
+  return {
+    type: 'security_alert',
+    id: String(alert.number ?? alert.id ?? 'unknown'),
+    ...optionalNumberProperty('number', numberField(alert, 'number')),
+    ...optionalStringProperty('state', stringField(alert, 'state')),
+    ...optionalStringProperty('severity', alertSeverity(alert)),
+    ...optionalStringProperty('ref', stringField(alert, 'ref')),
+    ...optionalStringProperty('url', stringField(alert, 'html_url')),
+  };
+}
+
+function resourceFromIssueRelation(payload: GitHubWebhookPayload): NormalizedGitHubResource {
+  const issue = payload.blocked_issue ?? payload.parent_issue;
+  const relatedIssue = payload.blocking_issue ?? payload.sub_issue;
+  const issueNumber = numberField(issue, 'number');
+  const relatedIssueNumber = numberField(relatedIssue, 'number');
+
+  return {
+    type: 'issue_relation',
+    id: `${issueNumber ?? 'unknown'}:${relatedIssueNumber ?? 'unknown'}`,
+    ...optionalStringProperty('relationship', relationType(payload)),
+    ...optionalNumberProperty('issueNumber', issueNumber),
+    ...optionalStringProperty('issueUrl', stringField(issue, 'html_url')),
+    ...optionalNumberProperty('relatedIssueNumber', relatedIssueNumber),
+    ...optionalStringProperty('relatedIssueUrl', stringField(relatedIssue, 'html_url')),
   };
 }
 
@@ -1105,6 +1293,11 @@ function arrayField(record: GitHubWebhookRecord | undefined, key: string): GitHu
     : [];
 }
 
+function stringArrayField(record: GitHubWebhookRecord | undefined, key: string): string[] {
+  const value = record?.[key];
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+}
+
 function stringField(record: GitHubWebhookRecord | undefined, key: string): string | undefined {
   const value = record?.[key];
   return typeof value === 'string' && value.trim() ? value : undefined;
@@ -1148,8 +1341,46 @@ function optionalBooleanProperty<TKey extends string>(
   return value === undefined ? {} : { [key]: value } as Record<TKey, boolean>;
 }
 
+function optionalStringArrayProperty<TKey extends string>(
+  key: TKey,
+  value: string[],
+): Partial<Record<TKey, string[]>> {
+  return value.length === 0 ? {} : { [key]: value } as Record<TKey, string[]>;
+}
+
 function isPullRequestIssue(issue: GitHubWebhookRecord | undefined): boolean {
   return recordField(issue, 'pull_request') !== undefined;
+}
+
+function isCommitStatusPayload(payload: GitHubWebhookPayload): boolean {
+  return stringField(payload, 'sha') !== undefined && stringField(payload, 'state') !== undefined;
+}
+
+function isIssueRelationPayload(payload: GitHubWebhookPayload): boolean {
+  return (
+    (payload.blocked_issue !== undefined && payload.blocking_issue !== undefined) ||
+    (payload.parent_issue !== undefined && payload.sub_issue !== undefined)
+  );
+}
+
+function relationType(payload: GitHubWebhookPayload): string | undefined {
+  if (payload.blocked_issue && payload.blocking_issue) {
+    return 'blocked_by';
+  }
+
+  if (payload.parent_issue && payload.sub_issue) {
+    return 'sub_issue';
+  }
+
+  return undefined;
+}
+
+function alertSeverity(alert: GitHubWebhookRecord): string | undefined {
+  return (
+    stringField(alert, 'severity') ??
+    stringField(recordField(alert, 'rule'), 'security_severity_level') ??
+    stringField(recordField(alert, 'security_advisory'), 'severity')
+  );
 }
 
 function objectHasKeys(value: object): boolean {

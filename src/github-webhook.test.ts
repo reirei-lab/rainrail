@@ -986,6 +986,245 @@ describe('GitHub webhook source handling', () => {
     });
   });
 
+  it('normalizes status, deployment, queue, security, relation, and milestone routing resources', async () => {
+    await expect(
+      createGitHubWebhookEvent({
+        githubEvent: 'status',
+        deliveryId: 'delivery-status-1',
+        payload: {
+          sha: 'abc123',
+          state: 'success',
+          context: 'ci/test',
+          target_url: 'https://github.com/reirei-lab/rainrail/actions/runs/1',
+          repository: { full_name: 'reirei-lab/rainrail' },
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.status',
+      subject: {
+        type: 'commit_status',
+        id: 'abc123',
+        url: 'https://github.com/reirei-lab/rainrail/actions/runs/1',
+      },
+      payload: {
+        resource: {
+          type: 'commit_status',
+          id: 'abc123',
+          headSha: 'abc123',
+          state: 'success',
+          context: 'ci/test',
+          url: 'https://github.com/reirei-lab/rainrail/actions/runs/1',
+        },
+      },
+    });
+
+    await expect(
+      createGitHubWebhookEvent({
+        githubEvent: 'deployment_status',
+        deliveryId: 'delivery-deployment-status-1',
+        payload: {
+          action: 'created',
+          repository: { full_name: 'reirei-lab/rainrail' },
+          deployment: {
+            id: 900,
+            ref: 'main',
+            sha: 'def456',
+            environment: 'staging',
+          },
+          deployment_status: {
+            id: 901,
+            state: 'success',
+            target_url: 'https://deploy.example/status',
+          },
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.deployment_status',
+      payload: {
+        resource: {
+          type: 'deployment',
+          id: '900',
+          ref: 'main',
+          headSha: 'def456',
+          environment: 'staging',
+          state: 'success',
+          statusId: '901',
+          url: 'https://deploy.example/status',
+        },
+      },
+    });
+
+    await expect(
+      createGitHubWebhookEvent({
+        githubEvent: 'merge_group',
+        deliveryId: 'delivery-merge-group-1',
+        payload: {
+          action: 'checks_requested',
+          repository: { full_name: 'reirei-lab/rainrail' },
+          merge_group: {
+            head_sha: 'mergeabc',
+            head_ref: 'gh-readonly-queue/main/pr-41',
+            base_ref: 'main',
+          },
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.merge_group',
+      payload: {
+        resource: {
+          type: 'merge_group',
+          id: 'mergeabc',
+          headSha: 'mergeabc',
+          headRef: 'gh-readonly-queue/main/pr-41',
+          baseRef: 'main',
+        },
+      },
+    });
+
+    await expect(
+      createGitHubWebhookEvent({
+        githubEvent: 'workflow_job',
+        deliveryId: 'delivery-workflow-job-1',
+        payload: {
+          action: 'queued',
+          repository: { full_name: 'reirei-lab/rainrail' },
+          workflow_job: {
+            id: 1000,
+            run_id: 2000,
+            name: 'test',
+            status: 'queued',
+            conclusion: null,
+            labels: ['self-hosted', 'macOS'],
+            html_url: 'https://github.com/reirei-lab/rainrail/actions/runs/2000/job/1000',
+          },
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.workflow_job',
+      payload: {
+        resource: {
+          type: 'workflow_job',
+          id: '1000',
+          runId: '2000',
+          name: 'test',
+          status: 'queued',
+          labels: ['self-hosted', 'macOS'],
+          url: 'https://github.com/reirei-lab/rainrail/actions/runs/2000/job/1000',
+        },
+      },
+    });
+
+    await expect(
+      createGitHubWebhookEvent({
+        githubEvent: 'code_scanning_alert',
+        deliveryId: 'delivery-alert-1',
+        payload: {
+          action: 'created',
+          repository: { full_name: 'reirei-lab/rainrail' },
+          alert: {
+            number: 7,
+            state: 'open',
+            ref: 'refs/heads/main',
+            html_url: 'https://github.com/reirei-lab/rainrail/security/code-scanning/7',
+            rule: { security_severity_level: 'high' },
+          },
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.code_scanning_alert',
+      payload: {
+        resource: {
+          type: 'security_alert',
+          id: '7',
+          number: 7,
+          state: 'open',
+          severity: 'high',
+          ref: 'refs/heads/main',
+          url: 'https://github.com/reirei-lab/rainrail/security/code-scanning/7',
+        },
+      },
+    });
+
+    await expect(
+      createGitHubWebhookEvent({
+        githubEvent: 'issue_dependencies',
+        deliveryId: 'delivery-issue-relation-1',
+        payload: {
+          action: 'blocked_by_added',
+          repository: { full_name: 'reirei-lab/rainrail' },
+          blocked_issue: {
+            number: 16,
+            html_url: 'https://github.com/reirei-lab/rainrail/issues/16',
+          },
+          blocking_issue: {
+            number: 15,
+            html_url: 'https://github.com/reirei-lab/rainrail/issues/15',
+          },
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.issue_dependencies',
+      payload: {
+        resource: {
+          type: 'issue_relation',
+          id: '16:15',
+          relationship: 'blocked_by',
+          issueNumber: 16,
+          issueUrl: 'https://github.com/reirei-lab/rainrail/issues/16',
+          relatedIssueNumber: 15,
+          relatedIssueUrl: 'https://github.com/reirei-lab/rainrail/issues/15',
+        },
+      },
+    });
+
+    await expect(
+      createGitHubWebhookEvent({
+        githubEvent: 'issues',
+        deliveryId: 'delivery-milestoned-1',
+        payload: {
+          action: 'milestoned',
+          repository: { full_name: 'reirei-lab/rainrail' },
+          issue: {
+            number: 16,
+            html_url: 'https://github.com/reirei-lab/rainrail/issues/16',
+            milestone: {
+              id: 300,
+              number: 2,
+              title: 'v1',
+              due_on: '2026-07-31T00:00:00Z',
+              html_url: 'https://github.com/reirei-lab/rainrail/milestone/2',
+            },
+          },
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.issue',
+      payload: {
+        milestone: {
+          id: '300',
+          number: 2,
+          title: 'v1',
+          dueOn: '2026-07-31T00:00:00Z',
+          url: 'https://github.com/reirei-lab/rainrail/milestone/2',
+        },
+      },
+    });
+  });
+
   it('uses the review object as the subject for pull request review deliveries', async () => {
     await expect(
       createGitHubWebhookEvent({
