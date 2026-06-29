@@ -96,15 +96,15 @@ export async function handleGitHubWebhookRequest(
     return { ok: false, status: 401, reason: verification.reason };
   }
 
+  const contentType = request.headers.get('content-type');
   let payload: GitHubWebhookPayload;
   try {
-    payload = JSON.parse(decoder.decode(rawBody)) as GitHubWebhookPayload;
+    payload = parseGitHubWebhookPayload(rawBody, contentType);
   } catch {
     return { ok: false, status: 400, reason: 'invalid_json_payload' };
   }
 
   const receivedAt = options.receivedAt ?? new Date();
-  const contentType = request.headers.get('content-type');
   const event = await createGitHubWebhookEvent({
     githubEvent,
     deliveryId,
@@ -189,6 +189,7 @@ export interface GitHubWebhookPayload {
   issue?: { number?: unknown; html_url?: unknown };
   pull_request?: { number?: unknown; html_url?: unknown };
   check_run?: { id?: unknown; html_url?: unknown };
+  check_suite?: { id?: unknown; html_url?: unknown };
   review?: { id?: unknown; html_url?: unknown };
   workflow_run?: { id?: unknown; html_url?: unknown };
   [key: string]: unknown;
@@ -209,7 +210,11 @@ function toRainrailGitHubEventName(githubEvent: string): RainrailEventName {
     return 'github.check_run';
   }
 
-  if (normalized === 'pull_request_review' || normalized === 'pull_request_review_comment') {
+  if (
+    normalized === 'pull_request_review' ||
+    normalized === 'pull_request_review_comment' ||
+    normalized === 'pull_request_review_thread'
+  ) {
     return 'github.review';
   }
 
@@ -217,38 +222,122 @@ function toRainrailGitHubEventName(githubEvent: string): RainrailEventName {
 }
 
 function findGitHubSubject(payload: GitHubWebhookPayload, name: RainrailEventName): RainrailEventEnvelope['subject'] {
+  if (name === 'github.review') {
+    return (
+      subjectFromReview(payload) ??
+      subjectFromPullRequest(payload) ??
+      subjectFromIssue(payload) ??
+      subjectFromRepository(payload, name)
+    );
+  }
+
+  if (name === 'github.check_run') {
+    return (
+      subjectFromCheckRun(payload) ??
+      subjectFromWorkflowRun(payload) ??
+      subjectFromCheckSuite(payload) ??
+      subjectFromRepository(payload, name)
+    );
+  }
+
   if (payload.issue) {
-    return {
-      type: 'issue',
-      id: String(payload.issue.number ?? 'unknown'),
-      ...(typeof payload.issue.html_url === 'string' ? { url: payload.issue.html_url } : {}),
-    };
+    return subjectFromIssue(payload);
   }
 
   if (payload.pull_request) {
-    return {
-      type: 'pull_request',
-      id: String(payload.pull_request.number ?? 'unknown'),
-      ...(typeof payload.pull_request.html_url === 'string' ? { url: payload.pull_request.html_url } : {}),
-    };
+    return subjectFromPullRequest(payload);
   }
 
   if (payload.check_run) {
-    return {
-      type: 'check_run',
-      id: String(payload.check_run.id ?? 'unknown'),
-      ...(typeof payload.check_run.html_url === 'string' ? { url: payload.check_run.html_url } : {}),
-    };
+    return subjectFromCheckRun(payload) ?? subjectFromRepository(payload, name);
   }
 
   if (payload.review) {
-    return {
-      type: 'review',
-      id: String(payload.review.id ?? 'unknown'),
-      ...(typeof payload.review.html_url === 'string' ? { url: payload.review.html_url } : {}),
-    };
+    return subjectFromReview(payload) ?? subjectFromRepository(payload, name);
   }
 
+  return subjectFromRepository(payload, name);
+}
+
+function parseGitHubWebhookPayload(rawBody: ArrayBuffer, contentType: string | null): GitHubWebhookPayload {
+  const bodyText = decoder.decode(rawBody);
+  const jsonText = isUrlEncodedForm(contentType) ? new URLSearchParams(bodyText).get('payload') : bodyText;
+
+  if (!jsonText) {
+    throw new SyntaxError('Missing GitHub payload');
+  }
+
+  return JSON.parse(jsonText) as GitHubWebhookPayload;
+}
+
+function subjectFromIssue(payload: GitHubWebhookPayload): RainrailEventEnvelope['subject'] {
+  return {
+    type: 'issue',
+    id: String(payload.issue?.number ?? 'unknown'),
+    ...(typeof payload.issue?.html_url === 'string' ? { url: payload.issue.html_url } : {}),
+  };
+}
+
+function subjectFromPullRequest(payload: GitHubWebhookPayload): RainrailEventEnvelope['subject'] {
+  return {
+    type: 'pull_request',
+    id: String(payload.pull_request?.number ?? 'unknown'),
+    ...(typeof payload.pull_request?.html_url === 'string' ? { url: payload.pull_request.html_url } : {}),
+  };
+}
+
+function subjectFromCheckRun(payload: GitHubWebhookPayload): RainrailEventEnvelope['subject'] | undefined {
+  if (!payload.check_run) {
+    return undefined;
+  }
+
+  return {
+    type: 'check_run',
+    id: String(payload.check_run.id ?? 'unknown'),
+    ...(typeof payload.check_run.html_url === 'string' ? { url: payload.check_run.html_url } : {}),
+  };
+}
+
+function subjectFromWorkflowRun(payload: GitHubWebhookPayload): RainrailEventEnvelope['subject'] | undefined {
+  if (!payload.workflow_run) {
+    return undefined;
+  }
+
+  return {
+    type: 'workflow_run',
+    id: String(payload.workflow_run.id ?? 'unknown'),
+    ...(typeof payload.workflow_run.html_url === 'string' ? { url: payload.workflow_run.html_url } : {}),
+  };
+}
+
+function subjectFromCheckSuite(payload: GitHubWebhookPayload): RainrailEventEnvelope['subject'] | undefined {
+  if (!payload.check_suite) {
+    return undefined;
+  }
+
+  return {
+    type: 'check_suite',
+    id: String(payload.check_suite.id ?? 'unknown'),
+    ...(typeof payload.check_suite.html_url === 'string' ? { url: payload.check_suite.html_url } : {}),
+  };
+}
+
+function subjectFromReview(payload: GitHubWebhookPayload): RainrailEventEnvelope['subject'] | undefined {
+  if (!payload.review) {
+    return undefined;
+  }
+
+  return {
+    type: 'review',
+    id: String(payload.review.id ?? 'unknown'),
+    ...(typeof payload.review.html_url === 'string' ? { url: payload.review.html_url } : {}),
+  };
+}
+
+function subjectFromRepository(
+  payload: GitHubWebhookPayload,
+  name: RainrailEventName,
+): RainrailEventEnvelope['subject'] {
   const repositoryId = payload.repository?.full_name ?? payload.repository?.id ?? name;
 
   return {
@@ -256,6 +345,10 @@ function findGitHubSubject(payload: GitHubWebhookPayload, name: RainrailEventNam
     id: String(repositoryId),
     ...(typeof payload.repository?.html_url === 'string' ? { url: payload.repository.html_url } : {}),
   };
+}
+
+function isUrlEncodedForm(contentType: string | null): boolean {
+  return contentType?.toLowerCase().split(';', 1)[0]?.trim() === 'application/x-www-form-urlencoded';
 }
 
 async function sha256Hex(value: GitHubWebhookRawBody): Promise<string> {

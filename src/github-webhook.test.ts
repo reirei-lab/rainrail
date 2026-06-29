@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  createGitHubWebhookEvent,
   createGitHubWebhookSourcePlugin,
   createGitHubWebhookSignature,
   handleGitHubWebhookRequest,
@@ -175,6 +176,159 @@ describe('GitHub webhook source handling', () => {
       ok: false,
       status: 401,
       reason: 'missing_signature',
+    });
+  });
+
+  it('parses URL-encoded GitHub payloads after verifying the raw request body', async () => {
+    const payload = {
+      action: 'opened',
+      repository: { full_name: 'reirei-lab/rainrail' },
+      issue: {
+        number: 15,
+        html_url: 'https://github.com/reirei-lab/rainrail/issues/15',
+      },
+    };
+    const rawBody = new URLSearchParams({ payload: JSON.stringify(payload) }).toString();
+    const signature = await createGitHubWebhookSignature('secret', rawBody);
+
+    const result = await handleGitHubWebhookRequest(
+      new Request('https://rainrail.example/webhooks/github', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/x-www-form-urlencoded',
+          'x-github-event': 'issues',
+          'x-github-delivery': 'delivery-form-15',
+          'x-hub-signature-256': signature,
+        },
+        body: rawBody,
+      }),
+      {
+        secret: 'secret',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      },
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      event: {
+        name: 'github.issue',
+        delivery: { id: 'delivery-form-15' },
+        subject: {
+          type: 'issue',
+          id: '15',
+          url: 'https://github.com/reirei-lab/rainrail/issues/15',
+        },
+        payload,
+        rawPayload: {
+          contentType: 'application/x-www-form-urlencoded',
+        },
+      },
+    });
+  });
+
+  it('uses the review object as the subject for pull request review deliveries', async () => {
+    await expect(
+      createGitHubWebhookEvent({
+        githubEvent: 'pull_request_review',
+        deliveryId: 'delivery-review-1',
+        payload: {
+          action: 'submitted',
+          repository: { full_name: 'reirei-lab/rainrail' },
+          pull_request: {
+            number: 39,
+            html_url: 'https://github.com/reirei-lab/rainrail/pull/39',
+          },
+          review: {
+            id: 4594627585,
+            html_url: 'https://github.com/reirei-lab/rainrail/pull/39#pullrequestreview-4594627585',
+          },
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.review',
+      subject: {
+        type: 'review',
+        id: '4594627585',
+        url: 'https://github.com/reirei-lab/rainrail/pull/39#pullrequestreview-4594627585',
+      },
+    });
+  });
+
+  it('normalizes pull request review thread deliveries as review events', async () => {
+    await expect(
+      createGitHubWebhookEvent({
+        githubEvent: 'pull_request_review_thread',
+        deliveryId: 'delivery-review-thread-1',
+        payload: {
+          action: 'resolved',
+          repository: { full_name: 'reirei-lab/rainrail' },
+          pull_request: {
+            number: 39,
+            html_url: 'https://github.com/reirei-lab/rainrail/pull/39',
+          },
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.review',
+      subject: {
+        type: 'pull_request',
+        id: '39',
+        url: 'https://github.com/reirei-lab/rainrail/pull/39',
+      },
+    });
+  });
+
+  it('keeps workflow run and check suite subjects on check run deliveries', async () => {
+    await expect(
+      createGitHubWebhookEvent({
+        githubEvent: 'workflow_run',
+        deliveryId: 'delivery-workflow-run-1',
+        payload: {
+          action: 'completed',
+          repository: { full_name: 'reirei-lab/rainrail' },
+          workflow_run: {
+            id: 17345176172,
+            html_url: 'https://github.com/reirei-lab/rainrail/actions/runs/17345176172',
+          },
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.check_run',
+      subject: {
+        type: 'workflow_run',
+        id: '17345176172',
+        url: 'https://github.com/reirei-lab/rainrail/actions/runs/17345176172',
+      },
+    });
+
+    await expect(
+      createGitHubWebhookEvent({
+        githubEvent: 'check_suite',
+        deliveryId: 'delivery-check-suite-1',
+        payload: {
+          action: 'completed',
+          repository: { full_name: 'reirei-lab/rainrail' },
+          check_suite: {
+            id: 48847904331,
+            html_url: 'https://github.com/reirei-lab/rainrail/actions/runs/17345176172',
+          },
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.check_run',
+      subject: {
+        type: 'check_suite',
+        id: '48847904331',
+        url: 'https://github.com/reirei-lab/rainrail/actions/runs/17345176172',
+      },
     });
   });
 });
