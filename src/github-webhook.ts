@@ -186,10 +186,13 @@ export interface GitHubWebhookPayload {
   action?: unknown;
   sender?: GitHubWebhookRecord;
   installation?: GitHubWebhookRecord;
+  organization?: GitHubWebhookRecord;
   repository?: GitHubWebhookRecord;
   issue?: GitHubWebhookRecord;
   pull_request?: GitHubWebhookRecord;
   comment?: GitHubWebhookRecord;
+  thread?: GitHubWebhookRecord;
+  requested_action?: GitHubWebhookRecord;
   check_run?: GitHubWebhookRecord;
   check_suite?: GitHubWebhookRecord;
   review?: GitHubWebhookRecord;
@@ -205,10 +208,12 @@ export interface NormalizedGitHubWebhookPayload {
   event: string;
   action: string;
   repository?: NormalizedGitHubRepository;
+  organization?: NormalizedGitHubOrganization;
   actor?: NormalizedGitHubActor;
   installation?: NormalizedGitHubInstallation;
   resource: NormalizedGitHubResource;
   comment?: NormalizedGitHubComment;
+  requestedAction?: NormalizedGitHubRequestedAction;
 }
 
 export interface NormalizedGitHubRepository {
@@ -223,6 +228,12 @@ export interface NormalizedGitHubActor {
   id?: string;
   login?: string;
   type?: string;
+  url?: string;
+}
+
+export interface NormalizedGitHubOrganization {
+  id?: string;
+  login?: string;
   url?: string;
 }
 
@@ -246,6 +257,12 @@ export interface NormalizedGitHubResource {
   baseSha?: string;
   contentType?: string;
   contentNodeId?: string;
+  isResolved?: boolean;
+  path?: string;
+  line?: number;
+  side?: string;
+  startLine?: number;
+  startSide?: string;
 }
 
 export interface NormalizedGitHubComment {
@@ -254,6 +271,19 @@ export interface NormalizedGitHubComment {
   url?: string;
   author?: string;
   reviewId?: string;
+  path?: string;
+  line?: number;
+  side?: string;
+  startLine?: number;
+  startSide?: string;
+  originalLine?: number;
+  originalStartLine?: number;
+}
+
+export interface NormalizedGitHubRequestedAction {
+  identifier?: string;
+  label?: string;
+  description?: string;
 }
 
 function toRainrailGitHubEventName(githubEvent: string): RainrailEventName {
@@ -286,6 +316,7 @@ function findGitHubSubject(payload: GitHubWebhookPayload, name: RainrailEventNam
   if (name === 'github.review') {
     return (
       subjectFromReview(payload) ??
+      subjectFromReviewThread(payload) ??
       subjectFromPullRequest(payload) ??
       subjectFromIssue(payload) ??
       subjectFromRepository(payload, name)
@@ -336,8 +367,9 @@ function parseGitHubWebhookPayload(rawBody: ArrayBuffer, contentType: string | n
 }
 
 function subjectFromIssue(payload: GitHubWebhookPayload): RainrailEventEnvelope['subject'] {
+  const type = isPullRequestIssue(payload.issue) ? 'pull_request' : 'issue';
   return {
-    type: 'issue',
+    type,
     id: String(payload.issue?.number ?? 'unknown'),
     ...(typeof payload.issue?.html_url === 'string' ? { url: payload.issue.html_url } : {}),
   };
@@ -410,6 +442,17 @@ function subjectFromReview(payload: GitHubWebhookPayload): RainrailEventEnvelope
   };
 }
 
+function subjectFromReviewThread(payload: GitHubWebhookPayload): RainrailEventEnvelope['subject'] | undefined {
+  if (!payload.thread) {
+    return undefined;
+  }
+
+  return {
+    type: 'review_thread',
+    id: String(payload.thread.id ?? 'unknown'),
+  };
+}
+
 function subjectFromRepository(
   payload: GitHubWebhookPayload,
   name: RainrailEventName,
@@ -462,19 +505,23 @@ function normalizeGitHubWebhookPayload(
   payload: GitHubWebhookPayload,
 ): NormalizedGitHubWebhookPayload {
   const repository = normalizedRepository(payload.repository);
+  const organization = normalizedOrganization(payload.organization);
   const actor = normalizedActor(payload.sender);
   const installation = normalizedInstallation(payload.installation);
   const comment = normalizedComment(payload.comment);
+  const requestedAction = normalizedRequestedAction(payload.requested_action);
 
   return {
     provider: 'github',
     event: normalizeToken(githubEvent) || 'unknown',
     action: typeof payload.action === 'string' ? normalizeToken(payload.action) || 'received' : 'received',
     ...(repository ? { repository } : {}),
+    ...(organization ? { organization } : {}),
     ...(actor ? { actor } : {}),
     ...(installation ? { installation } : {}),
     resource: normalizedResource(payload),
     ...(comment ? { comment } : {}),
+    ...(requestedAction ? { requestedAction } : {}),
   };
 }
 
@@ -511,6 +558,22 @@ function normalizedActor(sender: GitHubWebhookRecord | undefined): NormalizedGit
   return objectHasKeys(normalized) ? normalized : undefined;
 }
 
+function normalizedOrganization(
+  organization: GitHubWebhookRecord | undefined,
+): NormalizedGitHubOrganization | undefined {
+  if (!organization) {
+    return undefined;
+  }
+
+  const normalized = {
+    ...optionalStringProperty('id', idField(organization, 'id')),
+    ...optionalStringProperty('login', stringField(organization, 'login')),
+    ...optionalStringProperty('url', stringField(organization, 'html_url')),
+  };
+
+  return objectHasKeys(normalized) ? normalized : undefined;
+}
+
 function normalizedInstallation(installation: GitHubWebhookRecord | undefined): NormalizedGitHubInstallation | undefined {
   if (!installation) {
     return undefined;
@@ -524,16 +587,20 @@ function normalizedInstallation(installation: GitHubWebhookRecord | undefined): 
 }
 
 function normalizedResource(payload: GitHubWebhookPayload): NormalizedGitHubResource {
-  if (payload.issue) {
-    return resourceFromIssue(payload.issue);
+  if (payload.thread) {
+    return resourceFromReviewThread(payload.thread);
+  }
+
+  if (payload.review) {
+    return resourceFromReview(payload.review);
   }
 
   if (payload.pull_request) {
     return resourceFromPullRequest(payload.pull_request);
   }
 
-  if (payload.review) {
-    return resourceFromReview(payload.review);
+  if (payload.issue) {
+    return resourceFromIssue(payload.issue);
   }
 
   if (payload.check_run) {
@@ -558,7 +625,7 @@ function normalizedResource(payload: GitHubWebhookPayload): NormalizedGitHubReso
 function resourceFromIssue(issue: GitHubWebhookRecord): NormalizedGitHubResource {
   const number = numberField(issue, 'number');
   return {
-    type: 'issue',
+    type: isPullRequestIssue(issue) ? 'pull_request' : 'issue',
     id: String(number ?? issue.id ?? 'unknown'),
     ...(number === undefined ? {} : { number }),
     ...optionalStringProperty('title', stringField(issue, 'title')),
@@ -592,6 +659,19 @@ function resourceFromReview(review: GitHubWebhookRecord): NormalizedGitHubResour
     id: String(review.id ?? 'unknown'),
     ...optionalStringProperty('state', stringField(review, 'state')),
     ...optionalStringProperty('url', stringField(review, 'html_url')),
+  };
+}
+
+function resourceFromReviewThread(thread: GitHubWebhookRecord): NormalizedGitHubResource {
+  return {
+    type: 'review_thread',
+    id: String(thread.id ?? 'unknown'),
+    ...optionalBooleanProperty('isResolved', booleanField(thread, 'is_resolved')),
+    ...optionalStringProperty('path', stringField(thread, 'path')),
+    ...optionalNumberProperty('line', numberField(thread, 'line')),
+    ...optionalStringProperty('side', stringField(thread, 'side')),
+    ...optionalNumberProperty('startLine', numberField(thread, 'start_line')),
+    ...optionalStringProperty('startSide', stringField(thread, 'start_side')),
   };
 }
 
@@ -661,7 +741,30 @@ function normalizedComment(comment: GitHubWebhookRecord | undefined): Normalized
     ...optionalStringProperty('url', stringField(comment, 'html_url')),
     ...optionalStringProperty('author', stringField(recordField(comment, 'user'), 'login')),
     ...optionalStringProperty('reviewId', idField(comment, 'pull_request_review_id')),
+    ...optionalStringProperty('path', stringField(comment, 'path')),
+    ...optionalNumberProperty('line', numberField(comment, 'line')),
+    ...optionalStringProperty('side', stringField(comment, 'side')),
+    ...optionalNumberProperty('startLine', numberField(comment, 'start_line')),
+    ...optionalStringProperty('startSide', stringField(comment, 'start_side')),
+    ...optionalNumberProperty('originalLine', numberField(comment, 'original_line')),
+    ...optionalNumberProperty('originalStartLine', numberField(comment, 'original_start_line')),
   };
+}
+
+function normalizedRequestedAction(
+  requestedAction: GitHubWebhookRecord | undefined,
+): NormalizedGitHubRequestedAction | undefined {
+  if (!requestedAction) {
+    return undefined;
+  }
+
+  const normalized = {
+    ...optionalStringProperty('identifier', stringField(requestedAction, 'identifier')),
+    ...optionalStringProperty('label', stringField(requestedAction, 'label')),
+    ...optionalStringProperty('description', stringField(requestedAction, 'description')),
+  };
+
+  return objectHasKeys(normalized) ? normalized : undefined;
 }
 
 function recordField(record: GitHubWebhookRecord | undefined, key: string): GitHubWebhookRecord | undefined {
@@ -679,6 +782,11 @@ function numberField(record: GitHubWebhookRecord | undefined, key: string): numb
   return typeof value === 'number' ? value : undefined;
 }
 
+function booleanField(record: GitHubWebhookRecord | undefined, key: string): boolean | undefined {
+  const value = record?.[key];
+  return typeof value === 'boolean' ? value : undefined;
+}
+
 function idField(record: GitHubWebhookRecord | undefined, key: string): string | undefined {
   const value = record?.[key];
   if (typeof value === 'string' && value.trim()) {
@@ -694,6 +802,21 @@ function idField(record: GitHubWebhookRecord | undefined, key: string): string |
 
 function optionalStringProperty<TKey extends string>(key: TKey, value: string | undefined): Partial<Record<TKey, string>> {
   return value === undefined ? {} : { [key]: value } as Record<TKey, string>;
+}
+
+function optionalNumberProperty<TKey extends string>(key: TKey, value: number | undefined): Partial<Record<TKey, number>> {
+  return value === undefined ? {} : { [key]: value } as Record<TKey, number>;
+}
+
+function optionalBooleanProperty<TKey extends string>(
+  key: TKey,
+  value: boolean | undefined,
+): Partial<Record<TKey, boolean>> {
+  return value === undefined ? {} : { [key]: value } as Record<TKey, boolean>;
+}
+
+function isPullRequestIssue(issue: GitHubWebhookRecord | undefined): boolean {
+  return recordField(issue, 'pull_request') !== undefined;
 }
 
 function objectHasKeys(value: object): boolean {
