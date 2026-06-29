@@ -4,6 +4,7 @@ export * from './events.js';
 export * from './github-auth.js';
 export * from './github-provider.js';
 export * from './github-rate-limit.js';
+export * from './github-webhook.js';
 export * from './plugins.js';
 export * from './runtime-provider.js';
 export * from './source-plugin.js';
