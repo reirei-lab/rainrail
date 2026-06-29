@@ -63,6 +63,8 @@ workflow 配列に登録する。
 local handler も packaged plugin と同じ `PluginRuntimeContext` を受け取るため、
 event/context API は共通になる。名前を省略した local handler は
 `local:${eventName}:${n}` の id を持つ。
+`PluginRuntimeContext` には `signal` も含まれる。handler timeout や親 runtime の
+abort が発生した場合、この signal は abort される。
 
 ## Capability gate と audit log
 
@@ -76,11 +78,15 @@ capability がない handler が呼び出した場合、runtime action は実行
 `CapabilityDeniedError` を投げる。plugin failure は dispatcher が
 その plugin の rejected result として隔離し、daemon 全体や後続 plugin を
 落とさない。
+handler timeout 後に handler 本体が遅れて処理を続けた場合でも、gated action は
+`signal.aborted` を確認して実行前に拒否する。これにより、呼び出し側が timeout として
+失敗処理や retry を開始した後に merge や runtime start が遅れて実行されることを防ぐ。
 
 `audit.record(entry)` を渡すと、plugin id、event id、run id、action、
 result、発生時刻が記録される。action result は `fulfilled`、`rejected`、
 `denied`、`timeout` のいずれか。secret action の audit entry は secret の
-値を含めない。
+値を含めない。audit sink は observability dependency として扱い、書き込み失敗は
+plugin result や action result を変えない。
 
 ## Dispatcher
 

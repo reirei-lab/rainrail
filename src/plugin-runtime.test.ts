@@ -525,4 +525,194 @@ describe('plugin runtime contract', () => {
       vi.useRealTimers();
     }
   });
+
+  it('denies gated actions that run after the handler timeout has fired', async () => {
+    vi.useFakeTimers();
+    try {
+      const event = createEventEnvelope({
+        source: { type: 'github', name: 'github-webhook' },
+        name: 'github.pull_request',
+        delivery: {
+          id: 'delivery-late-action',
+          receivedAt: '2026-06-29T14:00:00.000Z',
+        },
+        occurredAt: '2026-06-29T14:00:00.000Z',
+        subject: { type: 'pull_request', id: '44' },
+        payload: { action: 'synchronize' },
+        rawPayload: {
+          kind: 'external-reference',
+          reference: 'github://deliveries/delivery-late-action',
+        },
+      });
+      const mergePullRequest = vi.fn(async () => ({ merged: true }));
+      let lateActionReason: unknown;
+      const auditEntries: unknown[] = [];
+      const loader = createPluginLoader({
+        runtime: {
+          runId: 'run-13',
+          now: () => new Date('2026-06-29T14:01:00.000Z'),
+          capabilities: { provider: 'codex' },
+          actions: { mergePullRequest },
+        },
+        defaultTimeoutMs: 25,
+        audit: {
+          record: (entry) => {
+            auditEntries.push(entry);
+          },
+        },
+      });
+
+      loader.on(
+        'github.pull_request',
+        async (_event, context) => {
+          await new Promise((resolve) => {
+            setTimeout(resolve, 100);
+          });
+
+          try {
+            await context.actions.mergePullRequest({ pullRequestId: '44' });
+          } catch (reason) {
+            lateActionReason = reason;
+          }
+
+          return { late: true };
+        },
+        { name: 'late-merge-handler', capabilities: ['merge'] },
+      );
+
+      const dispatchPromise = loader.dispatch(event);
+      await vi.advanceTimersByTimeAsync(25);
+
+      await expect(dispatchPromise).resolves.toMatchObject([
+        {
+          pluginName: 'late-merge-handler',
+          eventId: 'github-webhook:delivery-late-action:github.pull_request',
+          status: 'rejected',
+        },
+      ]);
+
+      await vi.advanceTimersByTimeAsync(75);
+      expect(mergePullRequest).not.toHaveBeenCalled();
+      expect(lateActionReason).toBeInstanceOf(Error);
+      expect(auditEntries).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            pluginId: 'late-merge-handler',
+            eventId: 'github-webhook:delivery-late-action:github.pull_request',
+            action: 'mergePullRequest',
+            result: 'denied',
+          }),
+        ]),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not report an action failure when fulfilled audit recording fails', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.pull_request',
+      delivery: {
+        id: 'delivery-audit-action',
+        receivedAt: '2026-06-29T14:00:00.000Z',
+      },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'pull_request', id: '44' },
+      payload: { action: 'closed' },
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'github://deliveries/delivery-audit-action',
+      },
+    });
+    const mergePullRequest = vi.fn(async () => ({ merged: true }));
+    const loader = createPluginLoader({
+      runtime: {
+        runId: 'run-13',
+        now: () => new Date('2026-06-29T14:01:00.000Z'),
+        capabilities: { provider: 'codex' },
+        actions: { mergePullRequest },
+      },
+      audit: {
+        record: (entry) => {
+          if (entry.action === 'mergePullRequest' && entry.result === 'fulfilled') {
+            throw new Error('audit backend unavailable');
+          }
+        },
+      },
+    });
+
+    loader.on(
+      'github.pull_request',
+      async (_event, context) => context.actions.mergePullRequest({ pullRequestId: '44' }),
+      { name: 'audited-merge-handler', capabilities: ['merge'] },
+    );
+
+    await expect(loader.dispatch(event)).resolves.toEqual([
+      {
+        pluginName: 'audited-merge-handler',
+        eventId: 'github-webhook:delivery-audit-action:github.pull_request',
+        status: 'fulfilled',
+        value: { merged: true },
+      },
+    ]);
+    expect(mergePullRequest).toHaveBeenCalledOnce();
+  });
+
+  it('returns plugin results when failure audit recording fails', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: {
+        id: 'delivery-audit-failure',
+        receivedAt: '2026-06-29T14:00:00.000Z',
+      },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'github://deliveries/delivery-audit-failure',
+      },
+    });
+    const laterHandler = vi.fn(async () => ({ continued: true }));
+    const loader = createPluginLoader({
+      runtime: {
+        runId: 'run-13',
+        now: () => new Date('2026-06-29T14:01:00.000Z'),
+        capabilities: { provider: 'codex' },
+      },
+      audit: {
+        record: (entry) => {
+          if (entry.pluginId === 'failing-handler') {
+            throw new Error('audit backend unavailable');
+          }
+        },
+      },
+    });
+
+    loader.on(
+      'github.issue',
+      async () => {
+        throw new Error('handler failed');
+      },
+      { name: 'failing-handler' },
+    );
+    loader.on('github.issue', laterHandler, { name: 'later-handler' });
+
+    await expect(loader.dispatch(event)).resolves.toMatchObject([
+      {
+        pluginName: 'failing-handler',
+        eventId: 'github-webhook:delivery-audit-failure:github.issue',
+        status: 'rejected',
+      },
+      {
+        pluginName: 'later-handler',
+        eventId: 'github-webhook:delivery-audit-failure:github.issue',
+        status: 'fulfilled',
+        value: { continued: true },
+      },
+    ]);
+    expect(laterHandler).toHaveBeenCalledOnce();
+  });
 });

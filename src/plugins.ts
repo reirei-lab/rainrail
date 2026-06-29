@@ -36,6 +36,7 @@ export interface PluginRuntimeContext {
   runId: string;
   now: () => Date;
   capabilities: RuntimeCapabilities;
+  signal: AbortSignal;
   actions: RuntimeActions;
 }
 
