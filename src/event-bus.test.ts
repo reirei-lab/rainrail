@@ -96,6 +96,45 @@ describe('Rainrail event bus', () => {
     expect(writes.join('')).toBe(': connected\n\n');
   });
 
+  it('rejects non-finite and non-integer replay limits', () => {
+    expect(() => createRainrailEventBus({ replayLimit: Number.NaN })).toThrow('replayLimit');
+    expect(() => createRainrailEventBus({ replayLimit: Number.POSITIVE_INFINITY })).toThrow('replayLimit');
+    expect(() => createRainrailEventBus({ replayLimit: -1 })).toThrow('replayLimit');
+    expect(() => createRainrailEventBus({ replayLimit: 1.5 })).toThrow('replayLimit');
+  });
+
+  it('ignores non-positive and non-finite keepalive intervals', async () => {
+    vi.useFakeTimers();
+    try {
+      const bus = createRainrailEventBus({ replayLimit: 10 });
+      const stream = bus.createReadableStream({ keepAliveIntervalMs: 0 });
+      const reader = stream.getReader();
+
+      expect(await readNext(reader)).toBe(': connected\n\n');
+      await vi.advanceTimersByTimeAsync(1000);
+      const next = readNextOrTimeout(reader);
+      await vi.advanceTimersByTimeAsync(20);
+      await expect(next).resolves.toBe('timeout');
+      await reader.cancel();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not load replay events that fail SSE validation', () => {
+    const bus = createRainrailEventBus({ replayLimit: 10 });
+    const valid = fixtureEvent('github-webhook', 'delivery-1', 'github.issue', 'issue', '17');
+    const invalid = { ...fixtureEvent('github-webhook', 'delivery-2', 'github.review', 'review', 'review-1'), id: 'bad\nid' };
+    const writes: string[] = [];
+
+    bus.loadReplay([valid, invalid]);
+    bus.subscribe({ write: (chunk) => writes.push(chunk) });
+
+    expect(bus.recentCount).toBe(1);
+    expect(writes.join('')).toContain(valid.id);
+    expect(writes.join('')).not.toContain('bad\\nid');
+  });
+
   it('replays only events after the supplied last event id', async () => {
     const bus = createRainrailEventBus({ replayLimit: 10 });
     const first = fixtureEvent('github-webhook', 'delivery-1', 'github.issue', 'issue', '17');
@@ -246,4 +285,11 @@ async function readNext(reader: ReadableStreamDefaultReader<Uint8Array>): Promis
   const { value, done } = await reader.read();
   expect(done).toBe(false);
   return new TextDecoder().decode(value);
+}
+
+async function readNextOrTimeout(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<string> {
+  return Promise.race([
+    readNext(reader),
+    new Promise<string>((resolve) => setTimeout(() => resolve('timeout'), 20)),
+  ]);
 }

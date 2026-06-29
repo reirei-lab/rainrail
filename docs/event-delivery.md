@@ -7,6 +7,8 @@ Rainrail core のイベント配信は Source plugin が作った `RainrailEvent
 ## Event bus
 
 `createRainrailEventBus` は in-memory の subscriber 集合と replay buffer を持つ。
+`replayLimit` は有限な非負整数だけを受け付け、`NaN` / `Infinity` / 負数 / 小数は
+設定エラーとして拒否する。
 `publish(event)` は次を行う。
 
 - event を SSE 文字列に serialize できることを先に確認する。serialize できない
@@ -23,6 +25,9 @@ Cloudflare Worker entrypoint は同じ core contract を共有する。接続時
 初期 replay の write が失敗した場合も `close` cleanup を呼び、購読開始に失敗した
 connection のリソースを残さない。
 
+`loadReplay(events)` でも replay buffer に入れる前に clone と SSE serialize 検証を行う。
+CR/LF 入りの `id` / `name` など、SSE として配信できない event は replay から除外する。
+
 ## SSE
 
 SSE response は次の header を使う。
@@ -35,7 +40,8 @@ SSE response は次の header を使う。
 ReadableStream subscriber は `: keep-alive` comment を周期送信する。interval を
 指定しない場合、core は keepalive timer を作らない。これはテストや短命の local
 consumer を不要な timer で維持しないためで、runtime/entrypoint が必要に応じて
-policy を渡す。
+policy を渡す。`keepAliveIntervalMs` は正の有限値だけを有効化し、`0` / 負数 / `NaN`
+などは timer を作らない。
 
 shared Fetch header では HTTP/2/HTTP/3 で禁止される hop-by-hop header を出さない。
 HTTP/1.1 の Node adapter が `Connection: keep-alive` を必要とする場合は adapter 側で

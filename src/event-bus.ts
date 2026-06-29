@@ -39,7 +39,7 @@ class InMemoryRainrailEventBus implements RainrailEventBus {
   #replayLimit: number;
 
   constructor(options: RainrailEventBusOptions) {
-    this.#replayLimit = options.replayLimit ?? 100;
+    this.#replayLimit = normalizeReplayLimit(options.replayLimit);
   }
 
   publish(event: RainrailEventEnvelope): void {
@@ -125,14 +125,15 @@ class InMemoryRainrailEventBus implements RainrailEventBus {
           },
         );
 
-        if (options.keepAliveIntervalMs !== undefined) {
+        const keepAliveIntervalMs = normalizeKeepAliveInterval(options.keepAliveIntervalMs);
+        if (keepAliveIntervalMs !== undefined) {
           keepAliveTimer = setInterval(() => {
             try {
               subscriber.write(formatRainrailSseComment('keep-alive'));
             } catch {
               close();
             }
-          }, options.keepAliveIntervalMs);
+          }, keepAliveIntervalMs);
           unrefTimer(keepAliveTimer);
         }
 
@@ -148,7 +149,12 @@ class InMemoryRainrailEventBus implements RainrailEventBus {
   }
 
   loadReplay(events: RainrailEventEnvelope[]): void {
-    this.#recent = this.#replayLimit <= 0 ? [] : events.slice(-this.#replayLimit).map(cloneEvent);
+    if (this.#replayLimit <= 0) {
+      this.#recent = [];
+      return;
+    }
+
+    this.#recent = events.flatMap(cloneSerializableEvent).slice(-this.#replayLimit);
   }
 
   get clientCount(): number {
@@ -194,6 +200,32 @@ class InMemoryRainrailEventBus implements RainrailEventBus {
 
 function cloneEvent(event: RainrailEventEnvelope): RainrailEventEnvelope {
   return JSON.parse(JSON.stringify(event)) as RainrailEventEnvelope;
+}
+
+function cloneSerializableEvent(event: RainrailEventEnvelope): RainrailEventEnvelope[] {
+  try {
+    const replayEvent = cloneEvent(event);
+    formatRainrailSseEvent(replayEvent);
+    return [replayEvent];
+  } catch {
+    return [];
+  }
+}
+
+function normalizeReplayLimit(replayLimit: number | undefined): number {
+  if (replayLimit === undefined) return 100;
+
+  if (!Number.isFinite(replayLimit) || !Number.isInteger(replayLimit) || replayLimit < 0) {
+    throw new RangeError('replayLimit must be a finite non-negative integer');
+  }
+
+  return replayLimit;
+}
+
+function normalizeKeepAliveInterval(keepAliveIntervalMs: number | undefined): number | undefined {
+  if (keepAliveIntervalMs === undefined) return undefined;
+
+  return Number.isFinite(keepAliveIntervalMs) && keepAliveIntervalMs > 0 ? keepAliveIntervalMs : undefined;
 }
 
 function closeSubscriber(subscriber: RainrailEventBusSubscriber): void {
