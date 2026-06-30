@@ -608,6 +608,7 @@ function createDispatchAgentCapabilityProxy(
         dispatchAgent,
         getRawDispatchAgent,
         peekRawDispatchAgent,
+        source,
         safeReceiver,
         args,
         (object) => createCapabilityView(object),
@@ -756,7 +757,7 @@ function createDispatchAgentCapabilityProxy(
         },
         getPrototypeOf() {
           const prototype = Reflect.getPrototypeOf(source);
-          return prototype === null || findPropertyDescriptor(prototype, 'dispatchAgent') === undefined
+          return prototype === null || !prototypeMayExposeDispatchAgent(prototype)
             ? prototype
             : createCapabilityView(prototype);
         },
@@ -842,6 +843,7 @@ function createCapabilityConstructorView(
             dispatchAgent,
             getRawDispatchAgent,
             getRawDispatchAgent,
+            prototype,
             prototypeView,
             args,
             wrapObject,
@@ -959,6 +961,7 @@ function readConstructorProperty(
           dispatchAgent,
           getRawDispatchAgent,
           getRawDispatchAgent,
+          constructorValue,
           constructorView,
           args,
           wrapObject,
@@ -1104,6 +1107,7 @@ function callCapabilityFunction(
   dispatchAgent: DispatchAgentCapability,
   getRawDispatchAgent: () => DispatchAgentCapability | undefined,
   peekRawDispatchAgent: () => DispatchAgentCapability | undefined,
+  privateReceiver: object,
   safeReceiver: object,
   args: unknown[],
   wrapObject: (object: object) => object,
@@ -1114,10 +1118,10 @@ function callCapabilityFunction(
     }
 
     return normalizeCapabilityFunctionResult(
-      Reflect.apply(helper, capabilities, args),
+      Reflect.apply(helper, privateReceiver, args),
       capabilities,
       safeReceiver,
-      peekRawDispatchAgent,
+      getRawDispatchAgent,
       dispatchAgent,
       retryWithPrivateReceiver,
       wrapObject,
@@ -1156,6 +1160,21 @@ function callCapabilityFunction(
 
     return retryWithPrivateReceiver(reason);
   }
+}
+
+function prototypeMayExposeDispatchAgent(prototype: object): boolean {
+  if (findPropertyDescriptor(prototype, 'dispatchAgent') !== undefined) {
+    return true;
+  }
+
+  return Reflect.ownKeys(prototype).some((property) => {
+    if (!isDispatchAgentLikeProperty(property)) {
+      return false;
+    }
+
+    const descriptor = Reflect.getOwnPropertyDescriptor(prototype, property);
+    return descriptor !== undefined && (typeof descriptor.get === 'function' || typeof descriptor.value === 'function');
+  });
 }
 
 
@@ -1219,10 +1238,7 @@ function normalizeCapabilityHelperResult(
   }
 
   if (typeof value === 'function') {
-    const rawDispatchAgent = getRawDispatchAgent();
-    if (value === rawDispatchAgent || isBoundDispatchAgentAlias(value, undefined, rawDispatchAgent)) {
-      return dispatchAgent;
-    }
+    return createNormalizedCapabilityFunction(value, capabilities, safeReceiver, getRawDispatchAgent, dispatchAgent, wrapObject);
   }
 
   if (isPromiseLike(value)) {
@@ -1234,6 +1250,36 @@ function normalizeCapabilityHelperResult(
   }
 
   return value;
+}
+
+function createNormalizedCapabilityFunction(
+  value: Function,
+  capabilities: NonNullable<PluginRuntimeContext['capabilities']>,
+  safeReceiver: object,
+  getRawDispatchAgent: DispatchAgentResolver,
+  dispatchAgent: DispatchAgentCapability,
+  wrapObject: (object: object) => object,
+): Function {
+  return function normalizedCapabilityFunction(this: unknown, ...args: unknown[]) {
+    if (isDispatchAgentRequest(args[0])) {
+      const rawDispatchAgent = getRawDispatchAgent();
+      if (value === rawDispatchAgent || isBoundDispatchAgentAlias(value, undefined, rawDispatchAgent)) {
+        return dispatchAgent(args[0], args[1] as Parameters<DispatchAgentCapability>[1]);
+      }
+    }
+
+    return normalizeCapabilityFunctionResult(
+      Reflect.apply(value, this, args),
+      capabilities,
+      safeReceiver,
+      getRawDispatchAgent,
+      dispatchAgent,
+      (reason) => {
+        throw reason;
+      },
+      wrapObject,
+    );
+  };
 }
 
 function normalizeCapabilityPromiseResult(
