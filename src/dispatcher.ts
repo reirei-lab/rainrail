@@ -163,7 +163,12 @@ function createWorkflowExecutionRecord(workflow: WorkflowPlugin): WorkflowExecut
   if (nameMetadata.error !== undefined) {
     record.policyError = nameMetadata.error;
   }
-  const capabilitiesDescriptor = findPropertyDescriptor(workflow, 'capabilities');
+  let capabilitiesDescriptor: PropertyDescriptor | undefined;
+  try {
+    capabilitiesDescriptor = findPropertyDescriptor(workflow, 'capabilities');
+  } catch (policyError) {
+    record.policyError = policyError;
+  }
   if (capabilitiesDescriptor !== undefined) {
     if ('value' in capabilitiesDescriptor) {
       try {
@@ -182,7 +187,12 @@ function createWorkflowExecutionRecord(workflow: WorkflowPlugin): WorkflowExecut
     }
   }
 
-  const timeoutDescriptor = findPropertyDescriptor(workflow, 'timeoutMs');
+  let timeoutDescriptor: PropertyDescriptor | undefined;
+  try {
+    timeoutDescriptor = findPropertyDescriptor(workflow, 'timeoutMs');
+  } catch (timeoutError) {
+    record.timeoutError = timeoutError;
+  }
   if (timeoutDescriptor !== undefined) {
     if ('value' in timeoutDescriptor) {
       const timeoutMs = normalizeTimeoutMs(timeoutDescriptor.value);
@@ -1136,18 +1146,15 @@ function callCapabilityFunction(
 
   try {
     if (isDispatchAgentRequest(args[0])) {
-      const rawDispatchAgent = getRawDispatchAgent();
-      if (helper === rawDispatchAgent || isBoundDispatchAgentAlias(helper, undefined, rawDispatchAgent)) {
-        return normalizeCapabilityFunctionResult(
-          dispatchAgent(args[0], args[1] as Parameters<DispatchAgentCapability>[1]),
-          capabilities,
-          safeReceiver,
-          getRawDispatchAgent,
-          dispatchAgent,
-          retryWithPrivateReceiver,
-          wrapObject,
-        );
-      }
+      return normalizeCapabilityFunctionResult(
+        dispatchAgent(args[0], args[1] as Parameters<DispatchAgentCapability>[1]),
+        capabilities,
+        safeReceiver,
+        getRawDispatchAgent,
+        dispatchAgent,
+        retryWithPrivateReceiver,
+        wrapObject,
+      );
     }
 
     return normalizeCapabilityFunctionResult(
@@ -1431,7 +1438,7 @@ function helperMayResolveDispatchAgent(helper: Function): boolean {
       ) ||
       (/\bthis\b/u.test(source) && /\b(?:dispatchAgent|startAgent)\b/u.test(source)) ||
       (/this\s*(?:\?\.|\s*)\[/u.test(source) && /\b(?:dispatch|start)\b/u.test(source) && /\bAgent\b/u.test(source)) ||
-      /#[\p{ID_Start}\p{ID_Continue}]*(?:dispatch|start|launch|agent)[\p{ID_Continue}]*/iu.test(source)
+      /#[\p{ID_Start}\p{ID_Continue}]*(?:dispatch|start|launch)[\p{ID_Continue}]*/iu.test(source)
     );
   } catch {
     return true;
@@ -1452,14 +1459,14 @@ function shouldWrapCapabilityObject(value: unknown): value is object {
   }
 
   if (typeof value === 'function') {
-    return findPropertyDescriptor(value, 'dispatchAgent') !== undefined;
+    return objectMayExposeDispatchAgent(value);
   }
 
   if (typeof value !== 'object') {
     return false;
   }
 
-  if (findPropertyDescriptor(value, 'dispatchAgent') !== undefined) {
+  if (objectMayExposeDispatchAgent(value)) {
     return true;
   }
 
@@ -1491,6 +1498,21 @@ function shouldWrapCapabilityObject(value: unknown): value is object {
 
   const prototype = Reflect.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
+}
+
+function objectMayExposeDispatchAgent(value: object): boolean {
+  if (findPropertyDescriptor(value, 'dispatchAgent') !== undefined) {
+    return true;
+  }
+
+  return Reflect.ownKeys(value).some((property) => {
+    if (!isDispatchAgentLikeProperty(property)) {
+      return false;
+    }
+
+    const descriptor = Reflect.getOwnPropertyDescriptor(value, property);
+    return descriptor !== undefined && (typeof descriptor.get === 'function' || typeof descriptor.value === 'function');
+  });
 }
 
 function isBuiltinCapabilityCollection(

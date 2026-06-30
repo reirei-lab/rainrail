@@ -2577,6 +2577,71 @@ describe('plugin runtime contract', () => {
     expect(laterHandler).toHaveBeenCalledOnce();
   });
 
+  it('isolates capability descriptor failures to the malformed workflow result', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: {
+        id: 'delivery-bad-capability-descriptor',
+        receivedAt: '2026-06-29T14:00:00.000Z',
+      },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'github://deliveries/delivery-bad-capability-descriptor',
+      },
+    });
+    const laterHandler = vi.fn(async () => ({ continued: true }));
+    const malformedWorkflow = new Proxy(
+      {
+        name: 'malformed-capability-descriptor-plugin',
+        accepts: () => true,
+        handle: async () => ({ unreachable: true }),
+      } satisfies WorkflowPlugin,
+      {
+        getOwnPropertyDescriptor(target, property) {
+          if (property === 'capabilities') {
+            throw new Error('capabilities descriptor is malformed');
+          }
+
+          return Reflect.getOwnPropertyDescriptor(target, property);
+        },
+      },
+    );
+    const dispatcher = createRuntimeDispatcher({
+      workflows: [
+        malformedWorkflow,
+        defineWorkflowPlugin({
+          name: 'later-after-malformed-capability-descriptor',
+          accepts: () => true,
+          handle: laterHandler,
+        }),
+      ],
+      runtime: {
+        runId: 'run-13',
+        now: () => new Date('2026-06-29T14:01:00.000Z'),
+      },
+    });
+
+    const results = await dispatcher.dispatch(event);
+
+    expect(results).toHaveLength(2);
+    expect(results[0]).toMatchObject({
+      pluginName: 'malformed-capability-descriptor-plugin',
+      eventId: 'github-webhook:delivery-bad-capability-descriptor:github.issue',
+      status: 'rejected',
+    });
+    expect(results[1]).toEqual({
+      pluginName: 'later-after-malformed-capability-descriptor',
+      eventId: 'github-webhook:delivery-bad-capability-descriptor:github.issue',
+      status: 'fulfilled',
+      value: { continued: true },
+    });
+    expect(laterHandler).toHaveBeenCalledOnce();
+  });
+
   it('combines caller and lifecycle abort signals for legacy dispatchAgent', async () => {
     vi.useFakeTimers();
     try {
@@ -7688,6 +7753,52 @@ describe('plugin runtime contract', () => {
     expect(dispatchAgentReads).toBe(0);
   });
 
+  it('gates dispatch request calls through arbitrary helpers', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: { id: 'delivery-arbitrary-helper-dispatch-request', receivedAt: '2026-06-29T14:00:00.000Z' },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: { kind: 'external-reference', reference: 'github://deliveries/arbitrary-helper-dispatch-request' },
+    });
+    const dispatchAgent = vi.fn(async (_request: Parameters<NonNullable<RuntimeCapabilities['dispatchAgent']>>[0]) => ({
+      sessionKey: 'agent:main:arbitrary-helper-dispatch-request',
+    }));
+    const loader = createPluginLoader({
+      runtime: mockRuntimeContext({
+        capabilities: {
+          provider: 'codex',
+          dispatchAgent,
+          run(request: Parameters<NonNullable<RuntimeCapabilities['dispatchAgent']>>[0]) {
+            return dispatchAgent(request);
+          },
+        } as RuntimeCapabilities & { run: NonNullable<RuntimeCapabilities['dispatchAgent']> },
+      }),
+    });
+
+    loader.on(
+      'github.issue',
+      (handledEvent, context) =>
+        (context.capabilities as unknown as { run: RuntimeCapabilities['dispatchAgent'] }).run?.({
+          event: handledEvent,
+          workflow: 'arbitrary-helper-dispatch-request-handler',
+          runId: context.runId,
+        }),
+      { name: 'arbitrary-helper-dispatch-request-handler' },
+    );
+
+    const [result] = await loader.dispatch(event);
+
+    expect(result).toMatchObject({
+      pluginName: 'arbitrary-helper-dispatch-request-handler',
+      eventId: 'github-webhook:delivery-arbitrary-helper-dispatch-request:github.issue',
+      status: 'rejected',
+    });
+    expect(dispatchAgent).not.toHaveBeenCalled();
+  });
+
   it('does not expose raw dispatchAgent through frozen array descriptors', async () => {
     const event = createEventEnvelope({
       source: { type: 'github', name: 'github-webhook' },
@@ -9050,6 +9161,92 @@ describe('plugin runtime contract', () => {
       status: 'rejected',
     });
     expect(dispatchAgent).not.toHaveBeenCalled();
+  });
+
+  it('wraps dispatchAgent-like aliases on built-in capability objects', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: { id: 'delivery-builtin-start-agent-property', receivedAt: '2026-06-29T14:00:00.000Z' },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: { kind: 'external-reference', reference: 'github://deliveries/builtin-start-agent-property' },
+    });
+    const dispatchAgent = vi.fn(async () => ({ sessionKey: 'agent:main:builtin-start-agent-property' }));
+    const metadata = Object.assign(new Date('2026-06-29T14:00:00.000Z'), { startAgent: dispatchAgent });
+    const loader = createPluginLoader({
+      runtime: mockRuntimeContext({
+        capabilities: {
+          provider: 'codex',
+          metadata,
+        } as unknown as RuntimeCapabilities & { metadata: Date & { startAgent: RuntimeCapabilities['dispatchAgent'] } },
+      }),
+    });
+
+    loader.on(
+      'github.issue',
+      (handledEvent, context) =>
+        (
+          context.capabilities as unknown as {
+            metadata: Date & { startAgent?: RuntimeCapabilities['dispatchAgent'] };
+          }
+        ).metadata.startAgent?.({
+          event: handledEvent,
+          workflow: 'builtin-start-agent-property-handler',
+          runId: context.runId,
+        }),
+      { name: 'builtin-start-agent-property-handler' },
+    );
+
+    const [result] = await loader.dispatch(event);
+
+    expect(result).toMatchObject({
+      pluginName: 'builtin-start-agent-property-handler',
+      eventId: 'github-webhook:delivery-builtin-start-agent-property:github.issue',
+      status: 'rejected',
+    });
+    expect(dispatchAgent).not.toHaveBeenCalled();
+  });
+
+  it('retries benign private agent metadata helpers', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: { id: 'delivery-private-agent-id-helper', receivedAt: '2026-06-29T14:00:00.000Z' },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: { kind: 'external-reference', reference: 'github://deliveries/private-agent-id-helper' },
+    });
+    class RuntimeCapabilityBag {
+      #agentId = 'agent-metadata';
+      provider = 'codex';
+
+      describe() {
+        return this.#agentId;
+      }
+    }
+    const loader = createPluginLoader({
+      runtime: mockRuntimeContext({
+        capabilities: new RuntimeCapabilityBag() as unknown as RuntimeCapabilities,
+      }),
+    });
+
+    loader.on(
+      'github.issue',
+      (_handledEvent, context) => (context.capabilities as unknown as { describe: () => string }).describe(),
+      { name: 'private-agent-id-helper-handler' },
+    );
+
+    await expect(loader.dispatch(event)).resolves.toMatchObject([
+      {
+        pluginName: 'private-agent-id-helper-handler',
+        eventId: 'github-webhook:delivery-private-agent-id-helper:github.issue',
+        status: 'fulfilled',
+        value: 'agent-metadata',
+      },
+    ]);
   });
 
   it('preserves instanceof checks for capability prototype helpers', async () => {
