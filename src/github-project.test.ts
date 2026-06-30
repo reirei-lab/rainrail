@@ -518,14 +518,13 @@ describe('createGitHubProjectTaskQueueProvider', () => {
       agentSessionId: 'agent:main:rainrail-21',
       branchName: 'agent/reirei-lab-rainrail-21-project-issue-selection',
       commentBody: 'started',
-    })).rejects.toThrow('GitHub Project item is no longer claimable');
+    })).rejects.toThrow('Reference already exists');
 
     expect(calls.filter((call) => call.query?.includes('updateProjectV2ItemFieldValue'))).toHaveLength(0);
   });
 
-  it('recovers a stale issue lock when the Project item is still unclaimed', async () => {
+  it('does not delete an existing issue lock while a concurrent claim may still be active', async () => {
     const calls: Array<{ query?: string; variables?: Record<string, unknown> }> = [];
-    let createLockAttempts = 0;
     const provider = createGitHubProjectTaskQueueProvider({
       config: projectConfig(),
       auth: { getAuthToken: async () => ({ token: 'project-token', provider: 'configured-token', fallback: false }) },
@@ -553,20 +552,10 @@ describe('createGitHubProjectTaskQueueProvider', () => {
           return projectMetadataResponse();
         }
         if (request.query?.includes('RainrailCreateProjectIssueClaimLock')) {
-          createLockAttempts += 1;
-          if (createLockAttempts === 1) {
-            return new Response(JSON.stringify({ errors: [{ message: 'Reference already exists' }] }), {
-              status: 200,
-              headers: { 'content-type': 'application/json' },
-            });
-          }
-          return jsonResponse({ data: { createRef: { ref: { id: 'REF_lock_new' } } } });
-        }
-        if (request.query?.includes('RainrailProjectIssueClaimLock')) {
-          return jsonResponse({ data: { node: { ref: { id: 'REF_lock_stale' } } } });
-        }
-        if (request.query?.includes('RainrailDeleteProjectIssueClaimLock')) {
-          return jsonResponse({ data: { deleteRef: { clientMutationId: null } } });
+          return new Response(JSON.stringify({ errors: [{ message: 'Reference already exists' }] }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          });
         }
         if (request.query?.includes('addComment')) {
           return jsonResponse({ data: { addComment: { commentEdge: { node: { id: 'comment_1' } } } } });
@@ -587,12 +576,12 @@ describe('createGitHubProjectTaskQueueProvider', () => {
       agentSessionId: 'agent:main:rainrail-21',
       branchName: 'agent/reirei-lab-rainrail-21-project-issue-selection',
       commentBody: 'started',
-    })).resolves.toMatchObject({ lockRefId: 'REF_lock_new' });
+    })).rejects.toThrow('Reference already exists');
 
-    expect(createLockAttempts).toBe(2);
-    expect(calls.find((call) => call.query?.includes('RainrailDeleteProjectIssueClaimLock'))?.variables).toEqual({
-      refId: 'REF_lock_stale',
-    });
+    expect(calls.filter((call) => call.query?.includes('RainrailCreateProjectIssueClaimLock'))).toHaveLength(1);
+    expect(calls.find((call) => call.query?.includes('RainrailProjectIssueClaimLock'))).toBeUndefined();
+    expect(calls.find((call) => call.query?.includes('RainrailDeleteProjectIssueClaimLock'))).toBeUndefined();
+    expect(calls.filter((call) => call.query?.includes('updateProjectV2ItemFieldValue'))).toHaveLength(0);
   });
 
   it('releases a claimed issue back to todo status', async () => {

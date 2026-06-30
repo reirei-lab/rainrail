@@ -269,13 +269,7 @@ async function acquireProjectIssueClaimLock(
   try {
     return await createProjectIssueClaimLock(status.repositoryId, name, status.defaultBranchOid, fetchImpl, auth);
   } catch (error) {
-    if (!isReferenceAlreadyExistsError(error)) {
-      throw error;
-    }
-    assertClaimable(await loadProjectItemStatus(input.issue.id, fetchImpl, auth, config), input, config);
-    const staleLockRefId = await loadProjectIssueClaimLockRefId(status.repositoryId, name, fetchImpl, auth);
-    await deleteProjectIssueClaimLock({ projectItemId: input.issue.id, lockRefId: staleLockRefId }, fetchImpl, auth);
-    return createProjectIssueClaimLock(status.repositoryId, name, status.defaultBranchOid, fetchImpl, auth);
+    throw error;
   }
 }
 
@@ -301,27 +295,6 @@ async function createProjectIssueClaimLock(
     throw new Error('GitHub Project issue claim lock response is missing ref id');
   }
   return refId;
-}
-
-async function loadProjectIssueClaimLockRefId(
-  repositoryId: string,
-  name: string,
-  fetchImpl: typeof fetch,
-  auth: GitHubProjectAuthTokenProvider,
-): Promise<string> {
-  const payload = await runGraphql<{ node?: unknown }>(
-    fetchImpl,
-    auth,
-    projectIssueClaimLockQuery,
-    {
-      repositoryId,
-      qualifiedName: qualifiedRefName(name),
-    },
-  );
-  if (!isRecord(payload.node) || !isRecord(payload.node.ref) || typeof payload.node.ref.id !== 'string') {
-    throw new Error('GitHub Project issue claim lock response is missing existing ref id');
-  }
-  return payload.node.ref.id;
 }
 
 async function deleteProjectIssueClaimLock(
@@ -769,14 +742,6 @@ function projectIssueLockRefName(issue: ProjectIssue): string {
   return `refs/heads/rainrail/locks/${repo}-${issueId}`;
 }
 
-function qualifiedRefName(name: string): string {
-  return name.startsWith('refs/heads/') ? name.slice('refs/heads/'.length) : name;
-}
-
-function isReferenceAlreadyExistsError(error: unknown): boolean {
-  return error instanceof Error && error.message.includes('Reference already exists');
-}
-
 function camelCaseFieldName(name: string): string {
   const words = name.trim().split(/[\s_-]+/u).filter((word) => word.length > 0);
   return words.map((word, index) => {
@@ -911,16 +876,6 @@ const createProjectIssueClaimLockMutation = `
   mutation RainrailCreateProjectIssueClaimLock($repositoryId: ID!, $name: String!, $oid: GitObjectID!) {
     createRef(input: { repositoryId: $repositoryId, name: $name, oid: $oid }) {
       ref { id }
-    }
-  }
-`;
-
-const projectIssueClaimLockQuery = `
-  query RainrailProjectIssueClaimLock($repositoryId: ID!, $qualifiedName: String!) {
-    node(id: $repositoryId) {
-      ... on Repository {
-        ref(qualifiedName: $qualifiedName) { id }
-      }
     }
   }
 `;
