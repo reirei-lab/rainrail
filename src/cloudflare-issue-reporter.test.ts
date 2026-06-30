@@ -681,7 +681,7 @@ describe('cloudflare issue redaction', () => {
     });
 
     await expect(workflow.handle(cloudflareErrorEvent({
-      message: 'upstream failed api_key=api-key-secret&key=generic-key-secret public_key=public-key-secret',
+      message: 'upstream failed api_key=api-key-secret&key=generic-key-secret public_key=public-key-secret authorization=Basic basic-secret cookie=session=cookie-secret',
     }), runtimeContext())).resolves.toMatchObject({
       handled: true,
     });
@@ -689,9 +689,13 @@ describe('cloudflare issue redaction', () => {
     expect(createdIssues[0]?.body).not.toContain('api-key-secret');
     expect(createdIssues[0]?.body).not.toContain('generic-key-secret');
     expect(createdIssues[0]?.body).not.toContain('public-key-secret');
+    expect(createdIssues[0]?.body).not.toContain('basic-secret');
+    expect(createdIssues[0]?.body).not.toContain('cookie-secret');
     expect(createdIssues[0]?.body).toContain('api_key=[redacted]');
     expect(createdIssues[0]?.body).toContain('key=[redacted]');
     expect(createdIssues[0]?.body).toContain('public_key=[redacted]');
+    expect(createdIssues[0]?.body).toContain('authorization=[redacted]');
+    expect(createdIssues[0]?.body).toContain('cookie=[redacted]');
   });
 
   it('redacts colon-separated secret scalars in exception strings', async () => {
@@ -716,6 +720,8 @@ describe('cloudflare issue redaction', () => {
         'serialized input {"code":123456,"password":plain-secret}',
         'x-api-key: header-key-secret',
         'password: header-password-secret',
+        'password: "quoted-password-secret"',
+        'x-api-key: "quoted-key-secret"',
       ].join('\n'),
     }), runtimeContext())).resolves.toMatchObject({
       handled: true,
@@ -725,8 +731,12 @@ describe('cloudflare issue redaction', () => {
     expect(createdIssues[0]?.body).not.toContain('plain-secret');
     expect(createdIssues[0]?.body).not.toContain('header-key-secret');
     expect(createdIssues[0]?.body).not.toContain('header-password-secret');
+    expect(createdIssues[0]?.body).not.toContain('quoted-password-secret');
+    expect(createdIssues[0]?.body).not.toContain('quoted-key-secret');
     expect(createdIssues[0]?.body).toContain('x-api-key: [redacted]');
     expect(createdIssues[0]?.body).toContain('password: [redacted]');
+    expect(createdIssues[0]?.body).toContain('password: \\"[redacted]\\"');
+    expect(createdIssues[0]?.body).toContain('x-api-key: \\"[redacted]\\"');
   });
 
   it('uses only stack frames for the stack signature', async () => {
@@ -757,6 +767,28 @@ describe('cloudflare issue redaction', () => {
     }));
 
     expect(cloudflareErrorFingerprint(first!)).toBe(cloudflareErrorFingerprint(second!));
+  });
+
+  it('normalizes dynamic stack function names before fingerprinting', () => {
+    const first = cloudflareErrorCandidateFromEvent(cloudflareErrorEvent({
+      stack: '    at Object.handler_alice (worker.js:10:1)',
+    }));
+    const second = cloudflareErrorCandidateFromEvent(cloudflareErrorEvent({
+      stack: '    at Object.handler_bob (worker.js:10:1)',
+    }));
+    const third = cloudflareErrorCandidateFromEvent(cloudflareErrorEvent({
+      stack: '    at Object.access_token=stack-secret (worker.js:10:1)',
+    }));
+    const fourth = cloudflareErrorCandidateFromEvent(cloudflareErrorEvent({
+      stack: '    at Object.access_token=other-secret (worker.js:10:1)',
+    }));
+
+    expect(first?.stackSignature).toEqual(['Object.handler_:value @ worker.js']);
+    expect(second?.stackSignature).toEqual(['Object.handler_:value @ worker.js']);
+    expect(third?.stackSignature).toEqual(['Object.access_token=[redacted] @ worker.js']);
+    expect(fourth?.stackSignature).toEqual(['Object.access_token=[redacted] @ worker.js']);
+    expect(cloudflareErrorFingerprint(first!)).toBe(cloudflareErrorFingerprint(second!));
+    expect(cloudflareErrorFingerprint(third!)).toBe(cloudflareErrorFingerprint(fourth!));
   });
 
   it('redacts stack function names before writing issue titles', async () => {
@@ -845,6 +877,35 @@ describe('cloudflare issue redaction', () => {
     expect(messageLine?.length).toBeLessThan(1_200);
     expect(messageLine).toContain('... truncated ...');
     expect(messageLine).not.toContain('summary-tail');
+  });
+
+  it('truncates the summary exception name independently from raw data', async () => {
+    const createdIssues: Array<{ body: string }> = [];
+    const workflow = createCloudflareIssueReporterWorkflow({
+      repository: 'reirei-lab/rainrail',
+      store: createInMemoryCloudflareErrorIssueStore(),
+      issues: {
+        findOpenIssueByFingerprint: async () => undefined,
+        createIssue: async (input) => {
+          createdIssues.push(input);
+          return {
+            number: 136,
+            url: 'https://github.com/reirei-lab/rainrail/issues/136',
+          };
+        },
+      },
+    });
+
+    await expect(workflow.handle(cloudflareErrorEvent({
+      exceptionName: `HugeError ${'n'.repeat(5_000)} exception-name-tail`,
+    }), runtimeContext())).resolves.toMatchObject({
+      handled: true,
+    });
+
+    const exceptionLine = createdIssues[0]?.body.split('\n').find((line) => line.startsWith('- Exception: '));
+    expect(exceptionLine?.length).toBeLessThan(260);
+    expect(exceptionLine).toContain('... truncated ...');
+    expect(exceptionLine).not.toContain('exception-name-tail');
   });
 });
 
