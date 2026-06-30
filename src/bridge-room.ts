@@ -20,6 +20,7 @@ export interface RainrailBridgeRoomState {
 }
 
 export interface RainrailBridgeRoomOptions {
+  publishToken: string;
   replayLimit?: number;
   keepAliveIntervalMs?: number;
 }
@@ -27,19 +28,21 @@ export interface RainrailBridgeRoomOptions {
 export class RainrailBridgeRoom {
   readonly #state: RainrailBridgeRoomState;
   readonly #bus: RainrailEventBus;
+  readonly #publishToken: string;
   readonly #replayLimit: number;
   readonly #keepAliveIntervalMs: number | undefined;
   #loading: Promise<void> | undefined;
   #publishQueue: Promise<void> = Promise.resolve();
   #loaded = false;
 
-  constructor(state: RainrailBridgeRoomState, options: RainrailBridgeRoomOptions = {}) {
+  constructor(state: RainrailBridgeRoomState, options: RainrailBridgeRoomOptions) {
     this.#state = state;
-    this.#replayLimit = options.replayLimit ?? DEFAULT_REPLAY_LIMIT;
+    this.#publishToken = expectPublishToken(options?.publishToken);
+    this.#replayLimit = options?.replayLimit ?? DEFAULT_REPLAY_LIMIT;
     this.#bus = createRainrailEventBus(
-      options.replayLimit === undefined ? {} : { replayLimit: options.replayLimit },
+      options?.replayLimit === undefined ? {} : { replayLimit: options.replayLimit },
     );
-    this.#keepAliveIntervalMs = options.keepAliveIntervalMs;
+    this.#keepAliveIntervalMs = options?.keepAliveIntervalMs;
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -60,6 +63,10 @@ export class RainrailBridgeRoom {
     }
 
     if (request.method === 'POST' && url.pathname === '/publish') {
+      if (!isAuthorizedPublishRequest(request, this.#publishToken)) {
+        return new Response('unauthorized\n', { status: 401 });
+      }
+
       return this.#publish(request);
     }
 
@@ -101,6 +108,10 @@ export class RainrailBridgeRoom {
 
         const { event } = eventResult;
         const recentEvents = await this.#loadCurrentRecentEvents();
+        if (request.signal.aborted) {
+          return abortedPublishResponse();
+        }
+
         if (!recentEvents.some((recentEvent) => recentEvent.id === event.id)) {
           const nextRecentEvents = this.#nextRecentEvents(recentEvents, event);
           await this.#state.storage.put(RECENT_EVENTS_KEY, nextRecentEvents);
@@ -131,7 +142,7 @@ export class RainrailBridgeRoom {
 
   async #subscribe(request: Request): Promise<Response> {
     try {
-      await this.#loadRecentEvents();
+      await this.#refreshRecentEvents();
     } catch {
       return storageRestoreFailedResponse();
     }
@@ -165,6 +176,11 @@ export class RainrailBridgeRoom {
     });
 
     return this.#loading;
+  }
+
+  async #refreshRecentEvents(): Promise<void> {
+    await this.#loadRecentEvents();
+    this.#bus.loadReplay(await this.#loadCurrentRecentEvents());
   }
 
   async #loadCurrentRecentEvents(): Promise<RainrailEventEnvelope[]> {
@@ -238,7 +254,7 @@ function validatePublishEnvelope(value: unknown): RainrailEventEnvelope {
       kind: rawPayloadKind,
       reference: sanitizeUrl(rawPayloadReference),
       ...optionalString(rawPayload, 'contentType'),
-      ...optionalString(rawPayload, 'sha256'),
+      ...optionalSha256(rawPayload),
     },
   };
   formatRainrailSseEvent(event);
@@ -292,12 +308,26 @@ function optionalUrl(record: Record<string, unknown>, key: string): Record<strin
 function sanitizeUrl(value: string): string {
   try {
     const url = new URL(value);
+    url.username = '';
+    url.password = '';
     url.search = '';
     url.hash = '';
     return url.toString();
   } catch {
     return value;
   }
+}
+
+function optionalSha256(record: Record<string, unknown>): Record<string, string> {
+  if (!('sha256' in record)) return {};
+
+  if (typeof record.sha256 !== 'string') {
+    throw new TypeError('sha256 must be a string');
+  }
+
+  if (!/^[a-f0-9]{64}$/i.test(record.sha256)) return {};
+
+  return { sha256: record.sha256.toLowerCase() };
 }
 
 function normalizePayload(value: unknown): unknown {
@@ -329,6 +359,35 @@ function errorMessage(error: unknown): string {
 
 function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === 'AbortError';
+}
+
+function expectPublishToken(value: unknown): string {
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new TypeError('publishToken must be a non-empty string');
+  }
+
+  return value;
+}
+
+function isAuthorizedPublishRequest(request: Request, publishToken: string): boolean {
+  const authorization = request.headers.get('Authorization');
+  if (authorization?.startsWith('Bearer ') && constantTimeStringEqual(authorization.slice('Bearer '.length), publishToken)) {
+    return true;
+  }
+
+  const headerToken = request.headers.get('X-Rainrail-Publish-Token');
+  return headerToken !== null && constantTimeStringEqual(headerToken, publishToken);
+}
+
+function constantTimeStringEqual(left: string, right: string): boolean {
+  let diff = left.length ^ right.length;
+  const maxLength = Math.max(left.length, right.length);
+
+  for (let index = 0; index < maxLength; index += 1) {
+    diff |= (left.charCodeAt(index) || 0) ^ (right.charCodeAt(index) || 0);
+  }
+
+  return diff === 0;
 }
 
 function abortedPublishResponse(): Response {

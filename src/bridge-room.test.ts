@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { createEventEnvelope, RainrailBridgeRoom } from './index.js';
+import { createEventEnvelope, RainrailBridgeRoom, type RainrailBridgeRoomOptions, type RainrailBridgeRoomState } from './index.js';
+
+const TEST_PUBLISH_TOKEN = 'test-publish-token';
 
 describe('Rainrail bridge room', () => {
   it('stores published events and replays them through the Fetch SSE endpoint', async () => {
-    const room = new RainrailBridgeRoom(fakeState(), { replayLimit: 10 });
+    const room = createTestRoom(fakeState(), { replayLimit: 10 });
     const event = createEventEnvelope({
       source: { type: 'github', name: 'github-webhook', repository: 'reirei-lab/rainrail' },
       name: 'github.issue',
@@ -21,12 +23,7 @@ describe('Rainrail bridge room', () => {
       },
     });
 
-    const publishResponse = await room.fetch(
-      new Request('https://rainrail.local/publish', {
-        method: 'POST',
-        body: JSON.stringify(event),
-      }),
-    );
+    const publishResponse = await room.fetch(publishRequest(event));
 
     expect(publishResponse.status).toBe(200);
     await expect(publishResponse.json()).resolves.toMatchObject({
@@ -52,7 +49,7 @@ describe('Rainrail bridge room', () => {
   });
 
   it('reports health for current subscribers and replay buffer', async () => {
-    const room = new RainrailBridgeRoom(fakeState(), { replayLimit: 10 });
+    const room = createTestRoom(fakeState(), { replayLimit: 10 });
     const response = await room.fetch(new Request('https://rainrail.local/healthz'));
 
     expect(response.status).toBe(200);
@@ -65,7 +62,7 @@ describe('Rainrail bridge room', () => {
 
   it('serializes initial restore so concurrent publishes do not replay stale storage', async () => {
     const storage = fakeControllableState();
-    const room = new RainrailBridgeRoom(storage.state, { replayLimit: 10 });
+    const room = createTestRoom(storage.state, { replayLimit: 10 });
     const first = fixtureEvent('delivery-1', 'github.issue');
     const second = fixtureEvent('delivery-2', 'cloudflare.tail');
 
@@ -83,7 +80,7 @@ describe('Rainrail bridge room', () => {
 
   it('serializes publish persistence so slow stale snapshots cannot overwrite newer events', async () => {
     const storage = fakeControllableState();
-    const room = new RainrailBridgeRoom(storage.state, { replayLimit: 10 });
+    const room = createTestRoom(storage.state, { replayLimit: 10 });
     const health = room.fetch(new Request('https://rainrail.local/healthz'));
     expect(storage.getCalls).toBe(1);
     storage.resolveGet([]);
@@ -105,7 +102,7 @@ describe('Rainrail bridge room', () => {
 
   it('reserves publish order before request JSON parsing completes', async () => {
     const storage = fakeState();
-    const room = new RainrailBridgeRoom(storage, { replayLimit: 10 });
+    const room = createTestRoom(storage, { replayLimit: 10 });
     const first = fixtureEvent('delivery-1', 'github.issue');
     const second = fixtureEvent('delivery-2', 'cloudflare.tail');
     const firstRequest = delayedJsonPublishRequest(first);
@@ -125,7 +122,7 @@ describe('Rainrail bridge room', () => {
   });
 
   it('does not broadcast when persistence fails', async () => {
-    const room = new RainrailBridgeRoom(failingPutState(), { replayLimit: 10 });
+    const room = createTestRoom(failingPutState(), { replayLimit: 10 });
     const eventsResponse = await room.fetch(new Request('https://rainrail.local/events'));
     const reader = eventsResponse.body?.getReader();
     expect(reader).toBeDefined();
@@ -141,7 +138,7 @@ describe('Rainrail bridge room', () => {
 
   it('treats duplicate event ids as successful no-ops', async () => {
     const storage = fakeState();
-    const room = new RainrailBridgeRoom(storage, { replayLimit: 10 });
+    const room = createTestRoom(storage, { replayLimit: 10 });
     const event = fixtureEvent('delivery-1', 'github.issue');
 
     const eventsResponse = await room.fetch(new Request('https://rainrail.local/events'));
@@ -160,8 +157,8 @@ describe('Rainrail bridge room', () => {
 
   it('merges the latest storage snapshot before publishing from a stale room', async () => {
     const storage = fakeState();
-    const staleRoom = new RainrailBridgeRoom(storage, { replayLimit: 10 });
-    const otherRoom = new RainrailBridgeRoom(storage, { replayLimit: 10 });
+    const staleRoom = createTestRoom(storage, { replayLimit: 10 });
+    const otherRoom = createTestRoom(storage, { replayLimit: 10 });
     const first = fixtureEvent('delivery-1', 'github.issue');
     const second = fixtureEvent('delivery-2', 'cloudflare.tail');
 
@@ -172,8 +169,26 @@ describe('Rainrail bridge room', () => {
     expect(storage.storedEvents().map((event) => event.id)).toEqual([first.id, second.id]);
   });
 
+  it('reloads the latest storage snapshot before subscribing from a stale room', async () => {
+    const storage = fakeState();
+    const staleRoom = createTestRoom(storage, { replayLimit: 10 });
+    const otherRoom = createTestRoom(storage, { replayLimit: 10 });
+    const event = fixtureEvent('delivery-1', 'github.issue');
+
+    expect((await staleRoom.fetch(new Request('https://rainrail.local/healthz'))).status).toBe(200);
+    expect((await otherRoom.fetch(publishRequest(event))).status).toBe(200);
+
+    const eventsResponse = await staleRoom.fetch(new Request('https://rainrail.local/events'));
+    const reader = eventsResponse.body?.getReader();
+    expect(reader).toBeDefined();
+    const chunk = await readUntil(reader!, event.id);
+    await reader?.cancel();
+
+    expect(chunk).toContain(event.id);
+  });
+
   it('returns stable 500 responses when storage restore fails for GET endpoints', async () => {
-    const room = new RainrailBridgeRoom(failingGetState(), { replayLimit: 10 });
+    const room = createTestRoom(failingGetState(), { replayLimit: 10 });
 
     const health = await room.fetch(new Request('https://rainrail.local/healthz'));
     const events = await room.fetch(new Request('https://rainrail.local/events'));
@@ -186,7 +201,7 @@ describe('Rainrail bridge room', () => {
 
   it('rejects malformed publish envelopes before they reach storage or subscribers', async () => {
     const storage = fakeState();
-    const room = new RainrailBridgeRoom(storage, { replayLimit: 10 });
+    const room = createTestRoom(storage, { replayLimit: 10 });
 
     const response = await room.fetch(publishRequest({}));
 
@@ -195,9 +210,23 @@ describe('Rainrail bridge room', () => {
     expect(storage.storedEvents()).toEqual([]);
   });
 
+  it('rejects publish requests without the configured capability token', async () => {
+    const storage = fakeState();
+    const room = createTestRoom(storage, { replayLimit: 10 });
+    const event = fixtureEvent('delivery-1', 'github.issue');
+
+    const missingToken = await room.fetch(publishRequest(event, undefined, null));
+    const wrongToken = await room.fetch(publishRequest(event, undefined, 'wrong-token'));
+
+    expect(missingToken.status).toBe(401);
+    await expect(missingToken.text()).resolves.toBe('unauthorized\n');
+    expect(wrongToken.status).toBe(401);
+    expect(storage.storedEvents()).toEqual([]);
+  });
+
   it('captures JSON parse failures while the publish waits in queue', async () => {
     const storage = fakeControllableState();
-    const room = new RainrailBridgeRoom(storage.state, { replayLimit: 10 });
+    const room = createTestRoom(storage.state, { replayLimit: 10 });
     const health = room.fetch(new Request('https://rainrail.local/healthz'));
     expect(storage.getCalls).toBe(1);
     storage.resolveGet([]);
@@ -229,7 +258,7 @@ describe('Rainrail bridge room', () => {
 
   it('treats aborted JSON parse failures as aborted publishes', async () => {
     const storage = fakeControllableState();
-    const room = new RainrailBridgeRoom(storage.state, { replayLimit: 10 });
+    const room = createTestRoom(storage.state, { replayLimit: 10 });
     const health = room.fetch(new Request('https://rainrail.local/healthz'));
     expect(storage.getCalls).toBe(1);
     storage.resolveGet([]);
@@ -252,7 +281,7 @@ describe('Rainrail bridge room', () => {
 
   it('drops aborted publishes before persistence or broadcast side effects', async () => {
     const storage = fakeControllableState();
-    const room = new RainrailBridgeRoom(storage.state, { replayLimit: 10 });
+    const room = createTestRoom(storage.state, { replayLimit: 10 });
     const health = room.fetch(new Request('https://rainrail.local/healthz'));
     expect(storage.getCalls).toBe(1);
     storage.resolveGet([]);
@@ -274,9 +303,30 @@ describe('Rainrail bridge room', () => {
     expect(storage.storedEvents().map((event) => event.id)).toEqual([first.id]);
   });
 
+  it('drops aborted publishes after loading the latest storage snapshot and before persistence', async () => {
+    const storage = fakeDelayedSecondGetState();
+    const room = createTestRoom(storage.state, { replayLimit: 10 });
+    const health = room.fetch(new Request('https://rainrail.local/healthz'));
+    expect(storage.getCalls).toBe(1);
+    storage.resolveNextGet([]);
+    await health;
+
+    const controller = new AbortController();
+    const publish = room.fetch(publishRequest(fixtureEvent('delivery-1', 'github.issue'), controller.signal));
+    await flushMicrotasks();
+
+    expect(storage.getCalls).toBe(2);
+    expect(storage.pendingGetCount()).toBe(1);
+    controller.abort();
+    storage.resolveNextGet([]);
+
+    expect((await publish).status).toBe(499);
+    expect(storage.storedEvents()).toBeUndefined();
+  });
+
   it('completes delivery when publish aborts after persistence succeeds', async () => {
     const storage = fakeControllableState();
-    const room = new RainrailBridgeRoom(storage.state, { replayLimit: 10 });
+    const room = createTestRoom(storage.state, { replayLimit: 10 });
     const health = room.fetch(new Request('https://rainrail.local/healthz'));
     expect(storage.getCalls).toBe(1);
     storage.resolveGet([]);
@@ -303,13 +353,13 @@ describe('Rainrail bridge room', () => {
 
   it('strips non-contract envelope fields before storage and SSE delivery', async () => {
     const storage = fakeState();
-    const room = new RainrailBridgeRoom(storage, { replayLimit: 10 });
+    const room = createTestRoom(storage, { replayLimit: 10 });
     const event = {
       ...fixtureEvent('delivery-1', 'github.issue'),
       subject: {
         type: 'issue',
         id: 'delivery-1',
-        url: 'https://github.com/reirei-lab/rainrail/issues/17?token=secret-subject-token#secret-fragment',
+        url: 'https://token:secret@github.com/reirei-lab/rainrail/issues/17?token=secret-subject-token#secret-fragment',
       },
       links: { raw: 'https://example.test/webhook?token=secret-link-token' },
       payload: {
@@ -327,7 +377,8 @@ describe('Rainrail bridge room', () => {
       rawBody: 'secret raw webhook body',
       rawPayload: {
         kind: 'external-reference',
-        reference: 'https://example.test/raw/delivery-1?token=secret-reference-token#secret-fragment',
+        reference: 'https://token:secret@example.test/raw/delivery-1?token=secret-reference-token#secret-fragment',
+        sha256: 'token=secret-sha-value',
         secret: 'token-like value',
       },
     };
@@ -346,6 +397,7 @@ describe('Rainrail bridge room', () => {
     });
     expect(storage.storedEvents()[0]?.rawPayload.reference).toBe('https://example.test/raw/delivery-1');
     expect(storage.storedEvents()[0]?.rawPayload).not.toHaveProperty('secret');
+    expect(storage.storedEvents()[0]?.rawPayload).not.toHaveProperty('sha256');
 
     const eventsResponse = await room.fetch(new Request('https://rainrail.local/events'));
     const reader = eventsResponse.body?.getReader();
@@ -357,6 +409,8 @@ describe('Rainrail bridge room', () => {
     expect(chunk).not.toContain('secret-subject-token');
     expect(chunk).not.toContain('secret-reference-token');
     expect(chunk).not.toContain('secret-fragment');
+    expect(chunk).not.toContain('token:secret');
+    expect(chunk).not.toContain('token=secret-sha-value');
     expect(chunk).not.toContain('secret-link-token');
     expect(chunk).not.toContain('secret top-level body');
     expect(chunk).not.toContain('secret top-level token');
@@ -367,7 +421,7 @@ describe('Rainrail bridge room', () => {
 
   it('normalizes scalar payloads to an empty object before storage and SSE delivery', async () => {
     const storage = fakeState();
-    const room = new RainrailBridgeRoom(storage, { replayLimit: 10 });
+    const room = createTestRoom(storage, { replayLimit: 10 });
     const event = {
       ...fixtureEvent('delivery-1', 'github.issue'),
       payload: 'secret scalar webhook body',
@@ -389,7 +443,7 @@ describe('Rainrail bridge room', () => {
 
   it('ignores invalid stored replay entries during restore', async () => {
     const valid = fixtureEvent('delivery-1', 'github.issue');
-    const room = new RainrailBridgeRoom(storedReplayState([valid, {}, { ...valid, id: 'bad\nid' }]), { replayLimit: 10 });
+    const room = createTestRoom(storedReplayState([valid, {}, { ...valid, id: 'bad\nid' }]), { replayLimit: 10 });
 
     const health = await room.fetch(new Request('https://rainrail.local/healthz'));
 
@@ -407,7 +461,7 @@ describe('Rainrail bridge room', () => {
   });
 
   it('passes Last-Event-ID to the SSE replay policy', async () => {
-    const room = new RainrailBridgeRoom(fakeState(), { replayLimit: 10 });
+    const room = createTestRoom(fakeState(), { replayLimit: 10 });
     const first = fixtureEvent('delivery-1', 'github.issue');
     const second = fixtureEvent('delivery-2', 'cloudflare.tail');
 
@@ -428,6 +482,13 @@ describe('Rainrail bridge room', () => {
     expect(chunk).toContain('event: cloudflare.tail\n');
   });
 });
+
+function createTestRoom(
+  state: RainrailBridgeRoomState,
+  options: Omit<RainrailBridgeRoomOptions, 'publishToken'> = {},
+): RainrailBridgeRoom {
+  return new RainrailBridgeRoom(state, { publishToken: TEST_PUBLISH_TOKEN, ...options });
+}
 
 function fakeState() {
   const map = new Map<string, unknown>();
@@ -488,9 +549,10 @@ function fixtureEvent(deliveryId: string, name: 'github.issue' | 'cloudflare.tai
   });
 }
 
-function publishRequest(event: unknown, signal?: AbortSignal): Request {
+function publishRequest(event: unknown, signal?: AbortSignal, publishToken: string | null = TEST_PUBLISH_TOKEN): Request {
   return new Request('https://rainrail.local/publish', {
     method: 'POST',
+    headers: publishToken === null ? {} : { Authorization: `Bearer ${publishToken}` },
     body: JSON.stringify(event),
     ...(signal === undefined ? {} : { signal }),
   });
@@ -498,7 +560,10 @@ function publishRequest(event: unknown, signal?: AbortSignal): Request {
 
 function delayedJsonPublishRequest(event: unknown) {
   let resolve: (() => void) | undefined;
-  const request = new Request('https://rainrail.local/publish', { method: 'POST' });
+  const request = new Request('https://rainrail.local/publish', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${TEST_PUBLISH_TOKEN}` },
+  });
   const json = async () => {
     await new Promise<void>((innerResolve) => {
       resolve = innerResolve;
@@ -517,6 +582,7 @@ function delayedJsonPublishRequest(event: unknown) {
 function rejectingJsonPublishRequest(error: unknown, signal?: AbortSignal): Request {
   const request = new Request('https://rainrail.local/publish', {
     method: 'POST',
+    headers: { Authorization: `Bearer ${TEST_PUBLISH_TOKEN}` },
     ...(signal === undefined ? {} : { signal }),
   });
   Object.defineProperty(request, 'json', {
@@ -559,6 +625,38 @@ function storedReplayState(events: unknown[]) {
       get: async () => events,
       put: async () => undefined,
     },
+  };
+}
+
+function fakeDelayedSecondGetState() {
+  let getCalls = 0;
+  let stored: unknown = undefined;
+  const pendingGets: Array<(value: unknown) => void> = [];
+
+  return {
+    get getCalls() {
+      return getCalls;
+    },
+    state: {
+      storage: {
+        get: async () => {
+          getCalls += 1;
+          if (getCalls === 1) {
+            return new Promise((resolve) => pendingGets.push(resolve));
+          }
+
+          return new Promise((resolve) => pendingGets.push(resolve));
+        },
+        put: async (_key: string, value: unknown) => {
+          stored = value;
+        },
+      },
+    },
+    pendingGetCount: () => pendingGets.length,
+    resolveNextGet: (value: unknown) => {
+      pendingGets.shift()?.(value);
+    },
+    storedEvents: () => stored as ReturnType<typeof fixtureEvent>[] | undefined,
   };
 }
 

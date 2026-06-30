@@ -71,14 +71,22 @@ event だけを再送する。指定 id が buffer に無い場合は、consumer
   snapshot を storage に保存してから live subscriber へ publish する。
 - `GET /events`: storage から replay buffer を復元し、SSE stream を返す。
 
+`POST /publish` は capability token で保護する。adapter は `RainrailBridgeRoom` に
+`publishToken` を渡し、caller は `Authorization: Bearer <token>` または
+`X-Rainrail-Publish-Token` を付ける。認証に失敗した publish は body を読む前に
+401 として拒否し、storage / replay / workflow 起動の副作用を作らない。
+
 `GET /healthz` と `GET /events` は storage 復元失敗を generic 500 応答に変換する。
 adapter/runtime の未処理例外として落とさず、呼び出し元に安定した失敗を返すため。
+`GET /events` は subscribe 直前に storage の最新 snapshot と room 内 replay buffer を
+merge し、別 room / process が保存した durable event も新規 subscriber へ replay する。
 
 storage の key は `rainrail:recent-events`。保存するのは正規化済み envelope だけで、
 object payload も allowlist された shallow JSON scalar metadata（`action` / `status` /
 `conclusion`）に縮約し、object でない payload は空 object にする。任意 URL や query を
 持ち込める `links` は保存しない。`subject.url` と `rawPayload.reference` は URL として
-parse できる場合に query / fragment を除去してから保存する。secret、token、credential、
+parse できる場合に userinfo / query / fragment を除去してから保存する。
+`rawPayload.sha256` は 64 桁 hex digest の場合だけ保存する。secret、token、credential、
 生 webhook payload、issue/comment body のような provider object 本文は core 側では
 保持しない。storage から復元する replay 要素も `RainrailEventEnvelope` と SSE field
 として検証し、壊れた要素や古い schema の要素は replay buffer に入れない。
