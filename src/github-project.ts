@@ -358,7 +358,7 @@ async function claimProjectIssue(
 
   const before = await loadProjectItemStatus(input.issue.id, fetchImpl, auth, config);
   assertClaimable(before, input, config);
-  await assertParentIssueExecutionConditions(input.issue, fetchImpl, auth);
+  await assertParentIssueExecutionConditions(config, input.issue, fetchImpl, auth);
   const metadata = await loadProjectMetadata(config, fetchImpl, auth);
   let claim: ProjectIssueClaim | undefined;
   try {
@@ -380,7 +380,7 @@ async function claimProjectIssue(
       ...(input.issue.status === undefined ? {} : { originalStatus: input.issue.status }),
     };
     assertClaimable(await loadProjectItemStatus(input.issue.id, fetchImpl, auth, config), input, config);
-    await assertParentIssueExecutionConditions(input.issue, fetchImpl, auth);
+    await assertParentIssueExecutionConditions(config, input.issue, fetchImpl, auth);
   } catch (error) {
     if (claim !== undefined) {
       await deleteProjectIssueClaimLock(claim, fetchImpl, auth);
@@ -454,13 +454,29 @@ async function releaseProjectIssue(
   await updateProjectField(fetchImpl, auth, metadata.projectId, input.issue.id, metadata.statusFieldId, {
     singleSelectOptionId: releaseStatusOptionId,
   });
-  await updateProjectField(fetchImpl, auth, metadata.projectId, input.issue.id, metadata.agentSessionIdFieldId, {
-    text: '',
-  });
-  await updateProjectField(fetchImpl, auth, metadata.projectId, input.issue.id, metadata.branchFieldId, {
-    text: '',
-  });
-  await deleteProjectIssueClaimLocks(input.claim, fetchImpl, auth);
+  let releaseError: unknown;
+  try {
+    await updateProjectFieldWithRetry(fetchImpl, auth, metadata.projectId, input.issue.id, metadata.agentSessionIdFieldId, {
+      text: '',
+    });
+  } catch (error) {
+    releaseError = error;
+  }
+  try {
+    await updateProjectFieldWithRetry(fetchImpl, auth, metadata.projectId, input.issue.id, metadata.branchFieldId, {
+      text: '',
+    });
+  } catch (error) {
+    releaseError ??= error;
+  }
+  try {
+    await deleteProjectIssueClaimLocks(input.claim, fetchImpl, auth);
+  } catch (error) {
+    releaseError ??= error;
+  }
+  if (releaseError !== undefined) {
+    throw releaseError;
+  }
 }
 
 async function acquireProjectIssueClaimLock(
@@ -1030,6 +1046,7 @@ function assertProjectIssueExecutionConditions(status: ProjectItemStatus, issue:
 }
 
 async function assertParentIssueExecutionConditions(
+  config: GitHubProjectTaskQueueConfig,
   issue: ProjectIssue,
   fetchImpl: typeof fetch,
   auth: GitHubProjectAuthTokenProvider,
@@ -1037,24 +1054,52 @@ async function assertParentIssueExecutionConditions(
   if (issue.parent?.repository === undefined || issue.parent.number === undefined) {
     return;
   }
-  const [owner, repo] = splitRepositoryNameWithOwner(issue.parent.repository);
-  const payload = await runGraphql<{ repository?: unknown }>(fetchImpl, auth, projectIssueReferenceQuery, {
-    owner,
-    repo,
-    number: issue.parent.number,
-  });
-  const repository = isRecord(payload.repository) ? payload.repository : undefined;
-  const parent = isRecord(repository?.issue) ? repository.issue : undefined;
-  if (!isRecord(parent)) {
-    throw new Error('GitHub Project parent issue is missing');
+  const parent = await loadProjectIssueFromProjectReference(config, issue.parent, fetchImpl, auth);
+  if (parent === undefined) {
+    throw new Error('GitHub Project item is no longer claimable');
   }
-  const blockers = blockedBy(parent);
   if (
-    (typeof parent.state === 'string' && parent.state.trim().toLowerCase() === 'closed')
-    || hasUnfinishedBlocker(blockers)
+    normalizeToken(parent.status ?? '') !== normalizeToken(config.todoStatus)
+    || !parent.assigneeLogins.some((login) => sameLogin(login, config.assigneeLogin))
+    || (parent.contentType === 'Issue' && parent.state?.trim().toLowerCase() === 'closed')
+    || hasUnfinishedBlocker(parent.blockedBy)
   ) {
     throw new Error('GitHub Project item is no longer claimable');
   }
+}
+
+async function loadProjectIssueFromProjectReference(
+  config: GitHubProjectTaskQueueConfig,
+  reference: ProjectIssueReference,
+  fetchImpl: typeof fetch,
+  auth: GitHubProjectAuthTokenProvider,
+): Promise<ProjectIssue | undefined> {
+  if (reference.repository === undefined || reference.number === undefined) {
+    return undefined;
+  }
+  let after: string | undefined;
+  do {
+    const payload = await runGraphql<ProjectItemsData>(fetchImpl, auth, projectIssuesQuery, {
+      organization: config.organization,
+      projectNumber: config.projectNumber,
+      after,
+      statusFieldName: config.statusFieldName,
+    });
+    const items = payload.organization?.projectV2?.items;
+    if (items === undefined || !Array.isArray(items.nodes)) {
+      throw new Error('GitHub Project items response is missing project items');
+    }
+    const match = items.nodes
+      .flatMap((item) => mapProjectIssueItem(item, config))
+      .find((candidate) => projectIssueReferenceKey(candidate) === projectIssueReferenceKey(reference));
+    if (match !== undefined) {
+      return match;
+    }
+    after = items.pageInfo?.hasNextPage === true && typeof items.pageInfo.endCursor === 'string'
+      ? items.pageInfo.endCursor
+      : undefined;
+  } while (after !== undefined);
+  return undefined;
 }
 
 function isRestorableDispatchedClaimStatus(
@@ -1094,6 +1139,26 @@ async function updateProjectField(
     fieldId,
     value,
   });
+}
+
+async function updateProjectFieldWithRetry(
+  fetchImpl: typeof fetch,
+  auth: GitHubProjectAuthTokenProvider,
+  projectId: string,
+  itemId: string,
+  fieldId: string,
+  value: { singleSelectOptionId: string } | { text: string },
+): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await updateProjectField(fetchImpl, auth, projectId, itemId, fieldId, value);
+      return;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
 async function runGraphql<TData>(
@@ -1703,22 +1768,6 @@ const projectItemStatusQuery = `
           ... on ProjectV2ItemFieldTextValue { text }
           ... on ProjectV2ItemFieldSingleSelectValue { name }
         }
-      }
-    }
-  }
-`;
-
-const projectIssueReferenceQuery = `
-  query RainrailProjectIssueReference($owner: String!, $repo: String!, $number: Int!) {
-    repository(owner: $owner, name: $repo) {
-      issue(number: $number) {
-        number
-        title
-        state
-        url
-        repository { nameWithOwner }
-        issueDependenciesSummary { blockedBy }
-        blockedBy(first: 100) { totalCount nodes { number title state url repository { nameWithOwner } } }
       }
     }
   }
