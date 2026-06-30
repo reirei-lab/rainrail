@@ -339,6 +339,9 @@ async function cleanupDispatchedProjectIssueLocksForIssue(
   if (lock?.dispatchedAt === undefined || lock.projectItemId !== issue.id) {
     return;
   }
+  if (lock.startingLockReadFailed === true) {
+    return;
+  }
   const current = await loadProjectItemStatus(issue.id, fetchImpl, auth, config);
   if (!isFinalizedProjectIssueClaim(current, lock, issue)) {
     return;
@@ -520,6 +523,7 @@ async function acquireProjectIssueClaimLock(
     ) {
       throw error;
     }
+    await assertNoDispatchedClaimMarker(status.repositoryId, input.issue, fetchImpl, auth);
     await deleteProjectIssueClaimLock({ projectItemId: input.issue.id, lockRefId: existingLock.id }, fetchImpl, auth);
     const retryLockOid = await createProjectIssueClaimLockCommit(status, input, fetchImpl, auth);
     return createProjectIssueClaimLock(status.repositoryId, name, retryLockOid, fetchImpl, auth);
@@ -1093,13 +1097,36 @@ async function loadProjectIssueFromProjectReference(
       .flatMap((item) => mapProjectIssueItem(item, config))
       .find((candidate) => projectIssueReferenceKey(candidate) === projectIssueReferenceKey(reference));
     if (match !== undefined) {
-      return match;
+      return projectIssueWithClaimLockView(config, match, fetchImpl, auth);
     }
     after = items.pageInfo?.hasNextPage === true && typeof items.pageInfo.endCursor === 'string'
       ? items.pageInfo.endCursor
       : undefined;
   } while (after !== undefined);
   return undefined;
+}
+
+async function projectIssueWithClaimLockView(
+  config: GitHubProjectTaskQueueConfig,
+  issue: ProjectIssue,
+  fetchImpl: typeof fetch,
+  auth: GitHubProjectAuthTokenProvider,
+): Promise<ProjectIssue> {
+  const normalizedStatus = normalizeToken(issue.status ?? '');
+  if (
+    normalizedStatus !== normalizeToken(config.todoStatus)
+    && normalizedStatus !== normalizeToken(config.backlogStatus)
+  ) {
+    return issue;
+  }
+  const lock = await loadProjectIssueClaimLockForIssue(issue, fetchImpl, auth);
+  if (lock?.dispatchedAt !== undefined && lock.projectItemId === issue.id) {
+    return { ...issue, status: config.inProgressStatus };
+  }
+  if (lock !== undefined && lock.projectItemId === issue.id && !isRecoverableStaleLock(lock, { issue })) {
+    return { ...issue, status: config.inProgressStatus };
+  }
+  return issue;
 }
 
 function isRestorableDispatchedClaimStatus(
