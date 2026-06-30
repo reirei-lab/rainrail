@@ -2,9 +2,11 @@ import { publishCloudflareTailEvents, type CloudflareTailEvent, type PublishClou
 import { rainrailEventsAuthErrorResponse, verifyRainrailEventsBearerToken } from './events-auth.js';
 import { handleGitHubWebhookRequest } from './github-webhook.js';
 import {
+  DEFAULT_MAX_REQUEST_BODY_BYTES,
   corsPreflightResponse,
   jsonResponse,
   methodNotAllowedResponse,
+  readFetchRequestBody,
   textResponse,
   withCors,
 } from './http-utils.js';
@@ -20,6 +22,7 @@ export interface RainrailHttpAppOptions {
   eventsBearerToken?: string;
   runtime?: string;
   githubSourceName?: string;
+  maxWebhookBodyBytes?: number;
 }
 
 export interface RainrailHttpApp {
@@ -41,6 +44,7 @@ export function createRainrailHttpApp(options: RainrailHttpAppOptions): Rainrail
 
     async tail(events): Promise<PublishCloudflareTailEventResult[]> {
       return publishCloudflareTailEvents(events, {
+        fallbackDeliveryId: await stableTailFallbackDeliveryId(events),
         publish: (event) => publishEvent(options, event),
       });
     },
@@ -91,7 +95,24 @@ async function routeRainrailHttpRequest(request: Request, options: RainrailHttpA
 }
 
 async function handleGitHubWebhook(request: Request, options: RainrailHttpAppOptions): Promise<Response> {
-  const result = await handleGitHubWebhookRequest(request, {
+  let rawBody: ArrayBuffer;
+  try {
+    rawBody = await readFetchRequestBody(request, options.maxWebhookBodyBytes ?? DEFAULT_MAX_REQUEST_BODY_BYTES);
+  } catch (error) {
+    if (isStatusCodeError(error) && error.statusCode === 413) {
+      return jsonResponse({ error: 'request_body_too_large' }, { status: 413 });
+    }
+
+    throw error;
+  }
+
+  const limitedRequest = new Request(request.url, {
+    method: request.method,
+    headers: request.headers,
+    body: rawBody,
+    signal: request.signal,
+  });
+  const result = await handleGitHubWebhookRequest(limitedRequest, {
     secret: options.githubWebhookSecret,
     ...(options.githubSourceName === undefined ? {} : { sourceName: options.githubSourceName }),
   });
@@ -134,4 +155,39 @@ function bridgeAuthorizationHeaders(request: Request, publishToken: string): Hea
   }
 
   return headers;
+}
+
+async function stableTailFallbackDeliveryId(events: CloudflareTailEvent[]): Promise<string> {
+  const digest = await globalThis.crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(stableStringify(events)),
+  );
+
+  return `tail-batch-${toHex(new Uint8Array(digest)).slice(0, 32)}`;
+}
+
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== 'object') {
+    return JSON.stringify(value);
+  }
+
+  if (Array.isArray(value)) {
+    return `[${value.map(stableStringify).join(',')}]`;
+  }
+
+  return `{${Object.entries(value)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, item]) => `${JSON.stringify(key)}:${stableStringify(item)}`)
+    .join(',')}}`;
+}
+
+function toHex(bytes: Uint8Array): string {
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function isStatusCodeError(error: unknown): error is { statusCode: number } {
+  return typeof error === 'object'
+    && error !== null
+    && 'statusCode' in error
+    && typeof error.statusCode === 'number';
 }

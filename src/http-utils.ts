@@ -83,6 +83,38 @@ export async function readRequestBody(request: IncomingMessage, maxBytes = DEFAU
   return Buffer.concat(chunks);
 }
 
+export async function readFetchRequestBody(request: Request, maxBytes = DEFAULT_MAX_REQUEST_BODY_BYTES): Promise<ArrayBuffer> {
+  const contentLength = request.headers.get('content-length');
+  if (contentLength !== null && Number.parseInt(contentLength, 10) > maxBytes) {
+    throw Object.assign(new Error('request body too large'), { statusCode: 413 });
+  }
+
+  if (request.body === null) {
+    return new ArrayBuffer(0);
+  }
+
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel();
+        throw Object.assign(new Error('request body too large'), { statusCode: 413 });
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  return concatenateChunks(chunks, total);
+}
+
 export async function writeFetchResponse(
   response: ServerResponse,
   fetchResponse: Response,
@@ -109,7 +141,9 @@ export async function writeFetchResponse(
     while (true) {
       const { value, done } = await reader.read();
       if (done) break;
-      response.write(value);
+      if (!response.write(value)) {
+        await waitForDrain(response, options.signal);
+      }
     }
   } finally {
     options.signal?.removeEventListener('abort', cancelReader);
@@ -119,6 +153,37 @@ export async function writeFetchResponse(
     }
     reader.releaseLock();
   }
+}
+
+function concatenateChunks(chunks: Uint8Array[], total: number): ArrayBuffer {
+  const body = new Uint8Array(total);
+  let offset = 0;
+
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+
+  return body.buffer;
+}
+
+function waitForDrain(response: ServerResponse, signal: AbortSignal | undefined): Promise<void> {
+  if (signal?.aborted || response.destroyed) {
+    return Promise.resolve();
+  }
+
+  return new Promise((resolve) => {
+    const done = (): void => {
+      response.off('drain', done);
+      response.off('close', done);
+      signal?.removeEventListener('abort', done);
+      resolve();
+    };
+
+    response.once('drain', done);
+    response.once('close', done);
+    signal?.addEventListener('abort', done, { once: true });
+  });
 }
 
 function responseHeaders(input: ConstructorParameters<typeof Headers>[0] | undefined, defaults: Record<string, string>): Headers {

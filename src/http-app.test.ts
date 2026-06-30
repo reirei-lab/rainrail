@@ -4,6 +4,7 @@ import {
   RainrailBridgeRoom,
   createGitHubWebhookSignature,
   createRainrailHttpApp,
+  type CloudflareTailEvent,
   type RainrailBridgeRoomState,
 } from './index.js';
 
@@ -90,6 +91,49 @@ describe('Rainrail HTTP app', () => {
     await expect(response.json()).resolves.toEqual({ error: 'events_auth_not_configured' });
   });
 
+  it('rejects oversized GitHub webhook bodies before signature verification', async () => {
+    const app = createTestApp(fakeState(), { maxWebhookBodyBytes: 4 });
+    const response = await app.fetch(new Request('https://rainrail.local/webhooks/github', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-github-event': 'issues',
+        'x-github-delivery': 'oversized-delivery',
+        'x-hub-signature-256': 'sha256=invalid',
+      },
+      body: '{"too":"large"}',
+    }));
+
+    expect(response.status).toBe(413);
+    await expect(response.json()).resolves.toEqual({ error: 'request_body_too_large' });
+  });
+
+  it('uses a stable fallback delivery id for retried Cloudflare tail batches without cf-ray', async () => {
+    const storage = fakeState();
+    const app = createTestApp(storage);
+    const tailEvent: CloudflareTailEvent = {
+      eventTimestamp: '2026-06-30T12:00:00.000Z',
+      outcome: 'ok',
+      scriptName: 'rainrail-worker',
+      event: {
+        request: {
+          method: 'GET',
+          url: 'https://rainrail.example/healthz',
+          headers: {},
+        },
+        response: { status: 200 },
+      },
+    };
+
+    const first = await app.tail?.([tailEvent]);
+    const second = await app.tail?.([tailEvent]);
+
+    expect(second).toEqual(first);
+    expect(storage.storedEvents().map((event) => event.id)).toEqual([
+      first?.[0]?.id,
+    ]);
+  });
+
   it('handles CORS preflight, unsupported methods, and uncaught route errors consistently', async () => {
     const app = createTestApp(fakeState());
 
@@ -122,7 +166,7 @@ describe('Rainrail HTTP app', () => {
 
 function createTestApp(
   storage: ReturnType<typeof fakeState>,
-  options: { eventsBearerToken?: string } = {},
+  options: { eventsBearerToken?: string; maxWebhookBodyBytes?: number } = {},
 ) {
   const room = new RainrailBridgeRoom(storage, {
     publishToken: TEST_PUBLISH_TOKEN,
