@@ -187,6 +187,11 @@ async function reconcileProjectIssueClaimState(
   ) {
     const lock = await loadProjectIssueClaimLockForIssue(issue, fetchImpl, auth);
     if (lock?.dispatchedAt !== undefined && lock.projectItemId === issue.id) {
+      const current = await loadProjectItemStatus(issue.id, fetchImpl, auth, config);
+      if (isFinalizedProjectIssueClaim(current, lock, issue)) {
+        await deleteProjectIssueClaimLocks(dispatchedLockClaim(issue, lock), fetchImpl, auth).catch(() => undefined);
+        return issue;
+      }
       return restoreDispatchedProjectIssueClaim(config, issue, lock, fetchImpl, auth);
     }
     if (lock !== undefined && lock.projectItemId === issue.id && !isRecoverableStaleLock(lock, { issue })) {
@@ -195,7 +200,7 @@ async function reconcileProjectIssueClaimState(
     return issue;
   }
   if (normalizedStatus !== normalizeToken(config.inProgressStatus)) {
-    await cleanupDispatchedProjectIssueLocksForIssue(issue, fetchImpl, auth);
+    await cleanupDispatchedProjectIssueLocksForIssue(config, issue, fetchImpl, auth);
     return issue;
   }
   const current = await loadProjectItemStatus(issue.id, fetchImpl, auth, config);
@@ -208,7 +213,7 @@ async function reconcileProjectIssueClaimState(
   const hasAgentSessionId = hasText(current.agentSessionId);
   const hasBranchName = hasText(current.branchName);
   if (hasAgentSessionId && hasBranchName) {
-    await cleanupDispatchedProjectIssueLocks(issue, current.repositoryId, fetchImpl, auth);
+    await cleanupDispatchedProjectIssueLocks(config, issue, current.repositoryId, fetchImpl, auth);
     return issue;
   }
   const lock = await loadProjectIssueClaimLockPair(current.repositoryId, issue, fetchImpl, auth);
@@ -268,6 +273,7 @@ async function restoreDispatchedProjectIssueClaim(
 }
 
 async function cleanupDispatchedProjectIssueLocks(
+  config: GitHubProjectTaskQueueConfig,
   issue: ProjectIssue,
   repositoryId: string,
   fetchImpl: typeof fetch,
@@ -276,6 +282,10 @@ async function cleanupDispatchedProjectIssueLocks(
   const lock = await loadProjectIssueClaimLock(repositoryId, projectIssueLockRefName(issue), fetchImpl, auth).catch(() => undefined);
   const dispatchedLock = await loadProjectIssueClaimLock(repositoryId, projectIssueDispatchedLockRefName(issue), fetchImpl, auth).catch(() => undefined);
   if (dispatchedLock?.dispatchedAt !== undefined && dispatchedLock.projectItemId === issue.id) {
+    const current = await loadProjectItemStatus(issue.id, fetchImpl, auth, config);
+    if (!isFinalizedProjectIssueClaim(current, dispatchedLock, issue)) {
+      return;
+    }
     await deleteProjectIssueClaimLocks({
       projectItemId: issue.id,
       lockRefId: lock?.id ?? dispatchedLock.id,
@@ -284,17 +294,26 @@ async function cleanupDispatchedProjectIssueLocks(
     return;
   }
   if (lock?.dispatchedAt !== undefined && lock.projectItemId === issue.id) {
+    const current = await loadProjectItemStatus(issue.id, fetchImpl, auth, config);
+    if (!isFinalizedProjectIssueClaim(current, lock, issue)) {
+      return;
+    }
     await deleteProjectIssueClaimLocks(dispatchedLockClaim(issue, lock), fetchImpl, auth).catch(() => undefined);
   }
 }
 
 async function cleanupDispatchedProjectIssueLocksForIssue(
+  config: GitHubProjectTaskQueueConfig,
   issue: ProjectIssue,
   fetchImpl: typeof fetch,
   auth: GitHubProjectAuthTokenProvider,
 ): Promise<void> {
   const lock = await loadProjectIssueClaimLockForIssue(issue, fetchImpl, auth);
   if (lock?.dispatchedAt === undefined || lock.projectItemId !== issue.id) {
+    return;
+  }
+  const current = await loadProjectItemStatus(issue.id, fetchImpl, auth, config);
+  if (!isFinalizedProjectIssueClaim(current, lock, issue)) {
     return;
   }
   await deleteProjectIssueClaimLocks(dispatchedLockClaim(issue, lock), fetchImpl, auth).catch(() => undefined);
@@ -435,8 +454,12 @@ async function acquireProjectIssueClaimLock(
       throw error;
     }
     const existingLock = await loadProjectIssueClaimLock(status.repositoryId, name, fetchImpl, auth).catch(() => undefined);
-    const dispatchedLock = await loadProjectIssueClaimLock(status.repositoryId, projectIssueDispatchedLockRefName(input.issue), fetchImpl, auth)
-      .catch(() => undefined);
+    const dispatchedLock = await loadProjectIssueClaimLockIfExists(
+      status.repositoryId,
+      projectIssueDispatchedLockRefName(input.issue),
+      fetchImpl,
+      auth,
+    );
     if (dispatchedLock?.dispatchedAt !== undefined && dispatchedLock.projectItemId === input.issue.id) {
       throw error;
     }
@@ -444,6 +467,14 @@ async function acquireProjectIssueClaimLock(
       throw error;
     }
     assertClaimable(await loadProjectItemStatus(input.issue.id, fetchImpl, auth, config), input, config);
+    const currentLock = await loadProjectIssueClaimLockIfExists(status.repositoryId, name, fetchImpl, auth);
+    if (
+      currentLock === undefined
+      || !isSameProjectIssueClaimLock(existingLock, currentLock)
+      || !isRecoverableStaleLock(currentLock, input)
+    ) {
+      throw error;
+    }
     await deleteProjectIssueClaimLock({ projectItemId: input.issue.id, lockRefId: existingLock.id }, fetchImpl, auth);
     const retryLockOid = await createProjectIssueClaimLockCommit(status, input, fetchImpl, auth);
     return createProjectIssueClaimLock(status.repositoryId, name, retryLockOid, fetchImpl, auth);
@@ -1288,6 +1319,28 @@ function isRecoverableStaleLock(lock: ProjectIssueClaimLock, input: Pick<Project
   }
   const createdAt = Date.parse(lock.createdAt);
   return Number.isFinite(createdAt) && Date.now() - createdAt >= PROJECT_ISSUE_CLAIM_LOCK_TTL_MS;
+}
+
+function isFinalizedProjectIssueClaim(
+  status: ProjectItemStatus,
+  lock: ProjectIssueClaimLock,
+  issue: ProjectIssue,
+): boolean {
+  return lock.projectItemId === issue.id
+    && lock.agentSessionId !== undefined
+    && lock.branchName !== undefined
+    && status.agentSessionId === lock.agentSessionId
+    && status.branchName === lock.branchName;
+}
+
+function isSameProjectIssueClaimLock(left: ProjectIssueClaimLock, right: ProjectIssueClaimLock): boolean {
+  return left.id === right.id
+    && left.createdAt === right.createdAt
+    && left.dispatchedAt === right.dispatchedAt
+    && left.agentSessionId === right.agentSessionId
+    && left.branchName === right.branchName
+    && left.projectItemId === right.projectItemId
+    && left.originalStatus === right.originalStatus;
 }
 
 function recoverableOriginalStatus(
