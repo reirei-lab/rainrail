@@ -6943,6 +6943,56 @@ describe('plugin runtime contract', () => {
     ]);
   });
 
+  it('unwraps capability function keys before built-in collection lookups', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: { id: 'delivery-map-function-key', receivedAt: '2026-06-29T14:00:00.000Z' },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: { kind: 'external-reference', reference: 'github://deliveries/delivery-map-function-key' },
+    });
+    const helper = Object.assign(() => 'helper:ok', { label: 'helper' });
+    const loader = createPluginLoader({
+      runtime: mockRuntimeContext({
+        capabilities: {
+          provider: 'codex',
+          helper,
+          metadata: new Map([[helper, 'found']]),
+          cache: new WeakMap([[helper, 'weak-found']]),
+        } as unknown as RuntimeCapabilities,
+      }),
+    });
+
+    loader.on(
+      'github.issue',
+      (_handledEvent, context) => {
+        const capabilities = context.capabilities as unknown as {
+          helper: () => string;
+          metadata: Map<() => string, string>;
+          cache: WeakMap<() => string, string>;
+        };
+        return {
+          value: capabilities.metadata.get(capabilities.helper),
+          has: capabilities.metadata.has(capabilities.helper),
+          weakValue: capabilities.cache.get(capabilities.helper),
+          weakHas: capabilities.cache.has(capabilities.helper),
+        };
+      },
+      { name: 'map-function-key-handler' },
+    );
+
+    await expect(loader.dispatch(event)).resolves.toEqual([
+      {
+        pluginName: 'map-function-key-handler',
+        eventId: 'github-webhook:delivery-map-function-key:github.issue',
+        status: 'fulfilled',
+        value: { value: 'found', has: true, weakValue: 'weak-found', weakHas: true },
+      },
+    ]);
+  });
+
   it('treats missing workflow timeoutMs as an undefined snapshot before accepts can add it', async () => {
     vi.useFakeTimers();
     try {
@@ -7519,6 +7569,43 @@ describe('plugin runtime contract', () => {
     expect(result).toMatchObject({
       pluginName: 'loader-data-capability-snapshot-handler',
       eventId: 'github-webhook:delivery-loader-data-capability-snapshot:github.issue',
+      status: 'rejected',
+    });
+    expect(mergePullRequest).not.toHaveBeenCalled();
+  });
+
+  it('freezes missing loader capability metadata as empty at registration time', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: { id: 'delivery-loader-missing-capability-snapshot', receivedAt: '2026-06-29T14:00:00.000Z' },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: { kind: 'external-reference', reference: 'github://deliveries/loader-missing-capability-snapshot' },
+    });
+    const workflow = {
+      name: 'loader-missing-capability-snapshot-handler',
+      accepts() {
+        this.capabilities = ['merge'];
+        return true;
+      },
+      handle: (_handledEvent, context) => context.actions.mergePullRequest({ pullRequestId: '44' }),
+    } satisfies WorkflowPlugin;
+    const mergePullRequest = vi.fn(async () => ({ merged: true }));
+    const loader = createPluginLoader({
+      runtime: mockRuntimeContext({
+        actions: { ...mockRuntimeContext().actions, mergePullRequest },
+      }),
+    });
+
+    loader.register(workflow);
+
+    const [result] = await loader.dispatch(event);
+
+    expect(result).toMatchObject({
+      pluginName: 'loader-missing-capability-snapshot-handler',
+      eventId: 'github-webhook:delivery-loader-missing-capability-snapshot:github.issue',
       status: 'rejected',
     });
     expect(mergePullRequest).not.toHaveBeenCalled();
@@ -9034,6 +9121,55 @@ describe('plugin runtime contract', () => {
     expect(result).toMatchObject({
       pluginName: 'prototype-getter-dispatch-alias-handler',
       eventId: 'github-webhook:delivery-prototype-getter-dispatch-alias:github.issue',
+      status: 'rejected',
+    });
+    expect(dispatchAgent).not.toHaveBeenCalled();
+  });
+
+  it('gates prototype run aliases for field-backed dispatchAgent', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: { id: 'delivery-prototype-run-dispatch-alias', receivedAt: '2026-06-29T14:00:00.000Z' },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: { kind: 'external-reference', reference: 'github://deliveries/prototype-run-dispatch-alias' },
+    });
+    const dispatchAgent = vi.fn(async () => ({ sessionKey: 'agent:main:prototype-run-alias' }));
+    class RuntimeCapabilityBag {
+      provider = 'codex';
+      dispatchAgent = dispatchAgent;
+    }
+    (RuntimeCapabilityBag.prototype as RuntimeCapabilityBag & {
+      run?: RuntimeCapabilities['dispatchAgent'];
+    }).run = dispatchAgent;
+    const loader = createPluginLoader({
+      runtime: mockRuntimeContext({
+        capabilities: new RuntimeCapabilityBag() as unknown as RuntimeCapabilities,
+      }),
+    });
+
+    loader.on(
+      'github.issue',
+      (handledEvent, context) =>
+        (
+          Object.getPrototypeOf(context.capabilities) as {
+            run?: RuntimeCapabilities['dispatchAgent'];
+          }
+        ).run?.({
+          event: handledEvent,
+          workflow: 'prototype-run-dispatch-alias-handler',
+          runId: context.runId,
+        }),
+      { name: 'prototype-run-dispatch-alias-handler' },
+    );
+
+    const [result] = await loader.dispatch(event);
+
+    expect(result).toMatchObject({
+      pluginName: 'prototype-run-dispatch-alias-handler',
+      eventId: 'github-webhook:delivery-prototype-run-dispatch-alias:github.issue',
       status: 'rejected',
     });
     expect(dispatchAgent).not.toHaveBeenCalled();

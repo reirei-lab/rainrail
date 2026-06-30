@@ -517,7 +517,7 @@ function createDispatchAgentCapabilityProxy(
   const viewCache = new WeakMap<object, object>();
   const sourceCache = new WeakMap<object, object>();
   const unwrapCapabilityValue = (value: unknown): unknown =>
-    typeof value === 'object' && value !== null
+    (typeof value === 'object' && value !== null) || typeof value === 'function'
       ? sourceCache.get(value) ?? value
       : value;
   const hasDispatchAgentProperty = (source: object): boolean => {
@@ -586,6 +586,7 @@ function createDispatchAgentCapabilityProxy(
         args,
         (object) => createCapabilityView(object),
       );
+    sourceCache.set(wrapped, value);
     return wrapped;
   };
 
@@ -789,6 +790,10 @@ function isDispatchAgentAliasProperty(property: string | symbol | undefined): bo
 
 function isDispatchAgentLikeProperty(property: string | symbol | undefined): boolean {
   return typeof property === 'string' && /(?:dispatch|start|launch|agent)/iu.test(property);
+}
+
+function isStarterAliasProperty(property: string | symbol | undefined): boolean {
+  return typeof property === 'string' && /^(?:run|start|launch)$/iu.test(property);
 }
 
 function createCapabilityConstructorView(
@@ -1221,7 +1226,7 @@ function prototypeMayExposeDispatchAgent(prototype: object): boolean {
   }
 
   return Reflect.ownKeys(prototype).some((property) => {
-    if (!isDispatchAgentLikeProperty(property)) {
+    if (!isDispatchAgentLikeProperty(property) && !isStarterAliasProperty(property)) {
       return false;
     }
 

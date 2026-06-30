@@ -90,7 +90,9 @@ function createRegisteredWorkflow(plugin: WorkflowPlugin): WorkflowPlugin {
 
   const capabilityDescriptor = findPropertyDescriptor(plugin, 'capabilities');
   const hasAccessorCapabilities = capabilityDescriptor !== undefined && !('value' in capabilityDescriptor);
-  if (capabilityDescriptor !== undefined && 'value' in capabilityDescriptor) {
+  if (capabilityDescriptor === undefined) {
+    capabilitySnapshot = true;
+  } else if ('value' in capabilityDescriptor) {
     try {
       capabilities = capabilityDescriptor.value === undefined ? undefined : [...capabilityDescriptor.value];
     } catch (reason) {
