@@ -8007,6 +8007,46 @@ describe('plugin runtime contract', () => {
     expect(dispatchAgent).not.toHaveBeenCalled();
   });
 
+  it('retries argument-taking private helpers that do not resolve dispatchAgent', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: { id: 'delivery-private-lookup-helper', receivedAt: '2026-06-29T14:00:00.000Z' },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: { kind: 'external-reference', reference: 'github://deliveries/private-lookup-helper' },
+    });
+    class RuntimeCapabilityBag {
+      #client = new Map([['runtime', 'codex']]);
+      provider = 'codex';
+
+      lookup(id: string) {
+        return this.#client.get(id);
+      }
+    }
+    const loader = createPluginLoader({
+      runtime: mockRuntimeContext({
+        capabilities: new RuntimeCapabilityBag() as unknown as RuntimeCapabilities,
+      }),
+    });
+
+    loader.on(
+      'github.issue',
+      (_handledEvent, context) => (context.capabilities as unknown as { lookup: (id: string) => string }).lookup('runtime'),
+      { name: 'private-lookup-helper-handler' },
+    );
+
+    await expect(loader.dispatch(event)).resolves.toMatchObject([
+      {
+        pluginName: 'private-lookup-helper-handler',
+        eventId: 'github-webhook:delivery-private-lookup-helper:github.issue',
+        status: 'fulfilled',
+        value: 'codex',
+      },
+    ]);
+  });
+
   it('proxies capability bags with custom Symbol.toStringTag values', async () => {
     const event = createEventEnvelope({
       source: { type: 'github', name: 'github-webhook' },
@@ -8052,7 +8092,7 @@ describe('plugin runtime contract', () => {
     expect(dispatchAgent).not.toHaveBeenCalled();
   });
 
-  it('gates bound aliases for anonymous dispatchAgent functions', async () => {
+  it('does not gate unrelated anonymous bound helpers by name alone', async () => {
     const event = createEventEnvelope({
       source: { type: 'github', name: 'github-webhook' },
       name: 'github.issue',
@@ -8062,36 +8102,117 @@ describe('plugin runtime contract', () => {
       payload: { action: 'opened' },
       rawPayload: { kind: 'external-reference', reference: 'github://deliveries/empty-name-bound-dispatch' },
     });
-    const dispatchAgent = vi.fn(async () => ({ sessionKey: 'agent:main:empty-name-bound' }));
-    const rawDispatchAgent = [async () => dispatchAgent()][0] as NonNullable<RuntimeCapabilities['dispatchAgent']>;
+    const rawDispatchAgent = [async () => ({ sessionKey: 'agent:main:empty-name-bound' })][0] as NonNullable<
+      RuntimeCapabilities['dispatchAgent']
+    >;
+    const describe = function () {
+      return 'helper:ok';
+    };
     const loader = createPluginLoader({
       runtime: mockRuntimeContext({
         capabilities: {
           provider: 'codex',
           dispatchAgent: rawDispatchAgent,
-          startAgent: rawDispatchAgent.bind({}),
-        } as RuntimeCapabilities & { startAgent: RuntimeCapabilities['dispatchAgent'] },
+          describe: describe.bind({}),
+        } as RuntimeCapabilities & { describe: () => string },
       }),
     });
 
     loader.on(
       'github.issue',
-      (handledEvent, context) =>
-        (context.capabilities as unknown as { startAgent: RuntimeCapabilities['dispatchAgent'] }).startAgent?.({
-          event: handledEvent,
-          workflow: 'empty-name-bound-dispatch-handler',
-          runId: context.runId,
-        }),
+      (_handledEvent, context) => (context.capabilities as unknown as { describe: () => string }).describe(),
       { name: 'empty-name-bound-dispatch-handler' },
     );
 
-    const [result] = await loader.dispatch(event);
+    await expect(loader.dispatch(event)).resolves.toMatchObject([
+      {
+        pluginName: 'empty-name-bound-dispatch-handler',
+        eventId: 'github-webhook:delivery-empty-name-bound-dispatch:github.issue',
+        status: 'fulfilled',
+        value: 'helper:ok',
+      },
+    ]);
+  });
 
-    expect(result).toMatchObject({
-      pluginName: 'empty-name-bound-dispatch-handler',
-      eventId: 'github-webhook:delivery-empty-name-bound-dispatch:github.issue',
-      status: 'rejected',
+  it('does not read failing dispatchAgent getters for unrelated accessor helpers', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: { id: 'delivery-accessor-helper-dispatch-getter', receivedAt: '2026-06-29T14:00:00.000Z' },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: { kind: 'external-reference', reference: 'github://deliveries/accessor-helper-dispatch-getter' },
     });
-    expect(dispatchAgent).not.toHaveBeenCalled();
+    let dispatchAgentReads = 0;
+    const loader = createPluginLoader({
+      runtime: mockRuntimeContext({
+        capabilities: {
+          provider: 'codex',
+          get dispatchAgent(): never {
+            dispatchAgentReads += 1;
+            throw new Error('dispatchAgent is not configured');
+          },
+          get describe() {
+            return () => 'helper:ok';
+          },
+        },
+      }),
+    });
+
+    loader.on(
+      'github.issue',
+      (_handledEvent, context) => (context.capabilities as unknown as { describe: () => string }).describe(),
+      { name: 'accessor-helper-dispatch-getter-handler' },
+    );
+
+    await expect(loader.dispatch(event)).resolves.toMatchObject([
+      {
+        pluginName: 'accessor-helper-dispatch-getter-handler',
+        eventId: 'github-webhook:delivery-accessor-helper-dispatch-getter:github.issue',
+        status: 'fulfilled',
+        value: 'helper:ok',
+      },
+    ]);
+    expect(dispatchAgentReads).toBe(0);
+  });
+
+  it('does not advertise missing optional task provider methods', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: { id: 'delivery-missing-optional-task-method', receivedAt: '2026-06-29T14:00:00.000Z' },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: { kind: 'external-reference', reference: 'github://deliveries/missing-optional-task-method' },
+    });
+    const tasks = {
+      name: 'mock-tasks',
+      kind: 'task-provider',
+      getIssue: async () => ({ id: 'issue:13', provider: 'github' as const, repository: 'reirei-lab/rainrail', number: 13, title: 'Issue' }),
+      createComment: async () => ({ id: 'comment:mock' }),
+    } satisfies TaskProvider;
+    const loader = createPluginLoader({
+      runtime: mockRuntimeContext({ providers: { tasks } }),
+    });
+
+    loader.on(
+      'github.issue',
+      (_handledEvent, context) => ({
+        hasCreateProposal: 'createProposal' in context.providers.tasks,
+        keys: Object.keys(context.providers.tasks),
+      }),
+      { name: 'missing-optional-task-method-handler' },
+    );
+
+    await expect(loader.dispatch(event)).resolves.toMatchObject([
+      {
+        pluginName: 'missing-optional-task-method-handler',
+        eventId: 'github-webhook:delivery-missing-optional-task-method:github.issue',
+        status: 'fulfilled',
+        value: { hasCreateProposal: false, keys: ['name', 'kind', 'getIssue', 'createComment'] },
+      },
+    ]);
   });
 });

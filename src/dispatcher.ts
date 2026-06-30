@@ -175,7 +175,18 @@ function createWorkflowExecutionRecord(workflow: WorkflowPlugin): WorkflowExecut
         record.policyError = policyError;
       }
     } else {
-      record.policyAccessor = () => capabilitiesDescriptor.get?.call(workflow) as RuntimeCapabilityName[] | undefined;
+      const capabilityReceiver = createWorkflowMetadataReceiverSnapshot(workflow);
+      record.policyAccessor = () => {
+        try {
+          return capabilitiesDescriptor.get?.call(capabilityReceiver) as RuntimeCapabilityName[] | undefined;
+        } catch (reason) {
+          if (!isPrivateReceiverError(reason)) {
+            throw reason;
+          }
+
+          return capabilitiesDescriptor.get?.call(workflow) as RuntimeCapabilityName[] | undefined;
+        }
+      };
       record.policySnapshot = false;
     }
   }
@@ -543,10 +554,19 @@ function createDispatchAgentCapabilityProxy(
     }
 
     const propertyDescriptor = property === undefined ? undefined : findPropertyDescriptor(source, property);
-    const shouldResolveAccessorAlias = propertyDescriptor !== undefined && !('value' in propertyDescriptor);
-    const rawDispatchAgent = property === 'startAgent' || shouldResolveAccessorAlias
-      ? getRawDispatchAgent()
-      : peekRawDispatchAgent();
+    const shouldResolveAccessorAlias =
+      propertyDescriptor !== undefined && !('value' in propertyDescriptor) && isDispatchAgentLikeProperty(property);
+    let rawDispatchAgent: DispatchAgentCapability | undefined;
+    try {
+      rawDispatchAgent =
+        property === 'startAgent' || shouldResolveAccessorAlias ? getRawDispatchAgent() : peekRawDispatchAgent();
+    } catch (reason) {
+      if (shouldResolveAccessorAlias) {
+        return false;
+      }
+
+      throw reason;
+    }
     if (value === rawDispatchAgent) {
       return true;
     }
@@ -749,6 +769,10 @@ function isDispatchAgentAliasProperty(property: string | symbol | undefined): bo
     typeof property === 'string' &&
     /^(?:dispatchAgent|startAgent|launchAgent|rawDispatchAgent)$/u.test(property)
   );
+}
+
+function isDispatchAgentLikeProperty(property: string | symbol | undefined): boolean {
+  return typeof property === 'string' && /(?:dispatch|start|launch|agent)/iu.test(property);
 }
 
 function createCapabilityConstructorView(
@@ -1042,7 +1066,7 @@ function callCapabilityFunction(
   wrapObject: (object: object) => object,
 ): unknown {
   const retryWithPrivateReceiver = (reason: unknown) => {
-    if (args.length > 0 || helperMayResolveDispatchAgent(helper)) {
+    if (helperMayResolveDispatchAgent(helper)) {
       throw reason;
     }
 
@@ -1200,7 +1224,8 @@ function helperMayResolveDispatchAgent(helper: Function): boolean {
         source,
       ) ||
       (/\bthis\b/u.test(source) && /\b(?:dispatchAgent|startAgent)\b/u.test(source)) ||
-      (/this\s*(?:\?\.|\s*)\[/u.test(source) && /\b(?:dispatch|start)\b/u.test(source) && /\bAgent\b/u.test(source))
+      (/this\s*(?:\?\.|\s*)\[/u.test(source) && /\b(?:dispatch|start)\b/u.test(source) && /\bAgent\b/u.test(source)) ||
+      /#[\p{ID_Start}\p{ID_Continue}]*(?:dispatch|start|launch|agent)[\p{ID_Continue}]*/iu.test(source)
     );
   } catch {
     return true;
@@ -1274,7 +1299,7 @@ function isBoundDispatchAgentAlias(
     return true;
   }
 
-  return rawDispatchAgent !== undefined && rawDispatchAgent.name === '' && value.name === 'bound ';
+  return false;
 }
 
 async function callDispatchAgent(
@@ -1507,7 +1532,31 @@ function createGuardedTaskProvider(
   defineOptionalGuardedTaskMethod(guardedTasks, 'setStatus', getTasks, options, policy, event, lifecycle, auditAction);
   defineOptionalGuardedTaskMethod(guardedTasks, 'createProposal', getTasks, options, policy, event, lifecycle, auditAction);
 
-  return guardedTasks;
+  return new Proxy(guardedTasks, {
+    getOwnPropertyDescriptor(target, property) {
+      if (isOptionalTaskMethodKey(property) && getTasks()[property] === undefined) {
+        return undefined;
+      }
+
+      return Reflect.getOwnPropertyDescriptor(target, property);
+    },
+    has(target, property) {
+      if (isOptionalTaskMethodKey(property)) {
+        return getTasks()[property] !== undefined;
+      }
+
+      return property in target;
+    },
+    ownKeys(target) {
+      return Reflect.ownKeys(target).filter(
+        (property) => !isOptionalTaskMethodKey(property) || getTasks()[property] !== undefined,
+      );
+    },
+  });
+}
+
+function isOptionalTaskMethodKey(property: string | symbol): property is 'addToProject' | 'setStatus' | 'createProposal' {
+  return property === 'addToProject' || property === 'setStatus' || property === 'createProposal';
 }
 
 function defineOptionalGuardedTaskMethod<TKey extends 'addToProject' | 'setStatus' | 'createProposal'>(
