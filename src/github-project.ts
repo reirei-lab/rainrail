@@ -406,7 +406,13 @@ async function finalizeProjectIssueClaim(
   fetchImpl: typeof fetch,
   auth: GitHubProjectAuthTokenProvider,
 ): Promise<void> {
-  await markProjectIssueClaimDispatched(input, fetchImpl, auth);
+  try {
+    await markProjectIssueClaimDispatched(input, fetchImpl, auth);
+  } catch (error) {
+    if (isClaimLockOwnershipError(error)) {
+      throw error;
+    }
+  }
   const metadata = await loadProjectMetadata(config, fetchImpl, auth);
   const before = await loadProjectItemStatus(input.issue.id, fetchImpl, auth, config);
   assertClaimable(before, {
@@ -583,6 +589,7 @@ async function markProjectIssueClaimDispatched(
       lastError = error;
     }
   }
+  await assertCurrentStartingClaimLockOwned(input, fetchImpl, auth);
   try {
     const lockOid = await createProjectIssueClaimLockCommit(context, {
       issue: input.issue,
@@ -601,6 +608,38 @@ async function markProjectIssueClaimDispatched(
   } catch {
     throw lastError instanceof Error ? lastError : new Error(String(lastError));
   }
+}
+
+async function assertCurrentStartingClaimLockOwned(
+  input: ProjectIssueFinalizeInput,
+  fetchImpl: typeof fetch,
+  auth: GitHubProjectAuthTokenProvider,
+): Promise<void> {
+  if (input.claim.lockRepositoryId === undefined) {
+    throw new Error('GitHub Project issue claim is missing lock commit metadata');
+  }
+  let lock: ProjectIssueClaimLock | undefined;
+  try {
+    lock = await loadProjectIssueClaimLockIfExists(
+      input.claim.lockRepositoryId,
+      projectIssueLockRefName(input.issue),
+      fetchImpl,
+      auth,
+    );
+  } catch (error) {
+    throw new Error('GitHub Project issue claim lock ownership could not be verified', { cause: error });
+  }
+  if (
+    lock?.projectItemId !== input.issue.id
+    || lock.agentSessionId !== input.agentSessionId
+    || lock.branchName !== input.branchName
+  ) {
+    throw new Error('GitHub Project issue claim lock is no longer owned by this claim');
+  }
+}
+
+function isClaimLockOwnershipError(error: unknown): boolean {
+  return error instanceof Error && error.message.includes('claim lock');
 }
 
 async function createProjectIssueClaimLockCommit(
@@ -943,11 +982,47 @@ async function assertProjectIssueSelectionStillAvailable(
   if (issue.repository === undefined || issue.number === undefined) {
     return;
   }
-  const issues = await fetchProjectIssues(config, fetchImpl, auth);
+  const issues = await fetchProjectIssuesForClaimSelection(config, issue, fetchImpl, auth);
   const next = getNextProjectIssueToStart(issues, projectIssueSelectionOptions(config));
   if (next?.id !== issue.id) {
     throw new Error('GitHub Project item is no longer claimable');
   }
+}
+
+async function fetchProjectIssuesForClaimSelection(
+  config: GitHubProjectTaskQueueConfig,
+  selectedIssue: ProjectIssue,
+  fetchImpl: typeof fetch,
+  auth: GitHubProjectAuthTokenProvider,
+): Promise<ProjectIssue[]> {
+  const issues: ProjectIssue[] = [];
+  let after: string | undefined;
+
+  do {
+    const payload = await runGraphql<ProjectItemsData>(fetchImpl, auth, projectIssuesQuery, {
+      organization: config.organization,
+      projectNumber: config.projectNumber,
+      after,
+      statusFieldName: config.statusFieldName,
+    });
+    const items = payload.organization?.projectV2?.items;
+    if (items === undefined || !Array.isArray(items.nodes)) {
+      throw new Error('GitHub Project items response is missing project items');
+    }
+    const pageIssues = items.nodes.flatMap((item) => mapProjectIssueItem(item, config));
+    for (const issue of pageIssues) {
+      if (issue.id === selectedIssue.id) {
+        issues.push(issue);
+      } else {
+        issues.push(await reconcileProjectIssueClaimState(config, issue, fetchImpl, auth));
+      }
+    }
+    after = items.pageInfo?.hasNextPage === true && typeof items.pageInfo.endCursor === 'string'
+      ? items.pageInfo.endCursor
+      : undefined;
+  } while (after !== undefined);
+
+  return issues;
 }
 
 function projectIssueSelectionOptions(config: GitHubProjectTaskQueueConfig): ProjectIssueSelectionOptions {
