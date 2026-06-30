@@ -11,6 +11,7 @@ workflow plugin が受け取る `event.payload` は Rainrail 側で安定させ�
 - issue / pull request / review / check / workflow / project item などの主対象は `event.payload.resource` に集約する。
 - `issues.labeled` / `issues.unlabeled` では、対象 label を `event.payload.label` に集約する。
 - `label.created` / `label.edited` / `label.deleted` では、対象 label を `event.payload.resource` にする。
+- issue resource には issue object の既存 labels の name 一覧を残す。
 - `issues.assigned` / `pull_request.assigned` では、対象 assignee を `event.payload.assignee` に集約する。
 - `pull_request.review_requested` / `pull_request.review_request_removed` では、対象 reviewer/team を `event.payload.requestedReviewer` / `event.payload.requestedTeam` に集約する。
 - `issue_comment` が pull request conversation comment の場合は、`payload.issue.pull_request` marker を見て `event.payload.resource.type` と `event.subject.type` を `pull_request` にする。
@@ -42,15 +43,17 @@ workflow plugin が受け取る `event.payload` は Rainrail 側で安定させ�
 - `org_block` / `organization` membership / `installation_target` / `meta` / `marketplace_purchase` / `sponsorship` は repository が無い delivery でも対象 principal/resource を正規化する。
 - `page_build` / `repository_import` / `secret_scanning_scan` は build/import/scan 結果を resource として正規化する。repository import は URL なしでも status を保持し、secret scan は空の secret types でも scan resource にする。
 - `package` / `registry_package` は package name/type/version/url を package resource として正規化する。
-- `installation` / `installation_repositories` の対象 repository 配列は `event.payload.repositories` に残す。
+- `installation` は installation resource として正規化し、`installation_repositories` の対象 repository 配列は `event.payload.repositories` に残す。
 - `gollum` は変更された wiki page を wiki page resource と `event.payload.pages` に残す。
 - security alert 系 webhook は top-level `alert` の id/state/severity/ref/url と secret type / validity / resolution など秘密値ではない監査 metadata を security alert resource として正規化する。
 - `code_scanning_alert` の top-level ref/commit SHA、rule severity、most recent instance location と `secret_scanning_alert_location` の location details は security alert resource に残す。
 - `security_advisory` / `repository_advisory` は advisory id/summary/severity/url と affected package 情報を advisory resource として正規化する。
 - `repository_dispatch` / `workflow_dispatch` は `client_payload` / `inputs`、対象 ref/branch、workflow 名を `event.payload.dispatch` に残す。
-- `discussion` / `discussion_comment` は discussion number/url/category と answer 情報を discussion resource として正規化する。
+- `discussion` / `discussion_comment` は discussion number/url/category と answer 情報を discussion resource として正規化する。discussion の label 変更では discussion を主 resource に保ち、対象 label は `event.payload.label` に残す。
 - `commit_comment` は commit id/path/position を commit comment resource と comment metadata に残す。
 - `issue_dependencies` / `sub_issues` は関係対象の issue 番号と URL を issue relation resource として正規化する。
+- `github_app_authorization.revoked` は失効した user を github app authorization resource として正規化する。
+- `organization.deleted` は削除された organization を organization resource として正規化する。
 - milestone 変更では issue/PR の milestone id/number/title/due date を `event.payload.milestone` に集約する。
 - issue comment や review comment は、主対象と別に `event.payload.comment` に集約する。review comment では対象ファイルや diff 位置も残す。
 - `check_run.requested_action` では、押された action button を `event.payload.requestedAction` に集約する。

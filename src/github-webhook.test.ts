@@ -439,6 +439,10 @@ describe('GitHub webhook source handling', () => {
             number: 16,
             title: 'Normalize GitHub payloads',
             html_url: 'https://github.com/reirei-lab/rainrail/issues/16',
+            labels: [
+              { name: 'agent-ready' },
+              { name: 'bug' },
+            ],
           },
           label: {
             id: 900,
@@ -454,6 +458,11 @@ describe('GitHub webhook source handling', () => {
       name: 'github.issue',
       payload: {
         action: 'labeled',
+        resource: {
+          type: 'issue',
+          id: '16',
+          labels: ['agent-ready', 'bug'],
+        },
         label: {
           id: '900',
           name: 'agent-ready',
@@ -1742,6 +1751,48 @@ describe('GitHub webhook source handling', () => {
 
     await expect(
       createGitHubWebhookEvent({
+        githubEvent: 'discussion',
+        deliveryId: 'delivery-discussion-labeled-1',
+        payload: {
+          action: 'labeled',
+          repository: { full_name: 'reirei-lab/rainrail' },
+          discussion: {
+            id: 703,
+            number: 13,
+            title: 'Routing labels on discussions',
+            html_url: 'https://github.com/reirei-lab/rainrail/discussions/13',
+            category: { name: 'Ideas', slug: 'ideas' },
+          },
+          label: {
+            id: 704,
+            name: 'needs-answer',
+          },
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.discussion',
+      subject: {
+        type: 'discussion',
+        id: '13',
+      },
+      payload: {
+        resource: {
+          type: 'discussion',
+          id: '13',
+          number: 13,
+          categorySlug: 'ideas',
+        },
+        label: {
+          id: '704',
+          name: 'needs-answer',
+        },
+      },
+    });
+
+    await expect(
+      createGitHubWebhookEvent({
         githubEvent: 'discussion_comment',
         deliveryId: 'delivery-discussion-comment-1',
         payload: {
@@ -2072,6 +2123,35 @@ describe('GitHub webhook source handling', () => {
 
     await expect(
       createGitHubWebhookEvent({
+        githubEvent: 'installation',
+        deliveryId: 'delivery-installation-created-1',
+        payload: {
+          action: 'created',
+          installation: {
+            id: 124,
+            account: { login: 'reirei-lab' },
+            repository_selection: 'all',
+          },
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.installation',
+      subject: {
+        type: 'installation',
+        id: '124',
+      },
+      payload: {
+        resource: {
+          type: 'installation',
+          id: '124',
+        },
+      },
+    });
+
+    await expect(
+      createGitHubWebhookEvent({
         githubEvent: 'gollum',
         deliveryId: 'delivery-gollum-1',
         payload: {
@@ -2326,6 +2406,37 @@ describe('GitHub webhook source handling', () => {
 
     await expect(
       createGitHubWebhookEvent({
+        githubEvent: 'organization',
+        deliveryId: 'delivery-organization-deleted-1',
+        payload: {
+          action: 'deleted',
+          organization: {
+            id: 113,
+            login: 'old-org',
+            html_url: 'https://github.com/old-org',
+          },
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.organization',
+      subject: {
+        type: 'organization',
+        id: '113',
+      },
+      payload: {
+        resource: {
+          type: 'organization',
+          id: '113',
+          login: 'old-org',
+          url: 'https://github.com/old-org',
+        },
+      },
+    });
+
+    await expect(
+      createGitHubWebhookEvent({
         githubEvent: 'installation_target',
         deliveryId: 'delivery-installation-target-1',
         payload: {
@@ -2532,6 +2643,37 @@ describe('GitHub webhook source handling', () => {
             fullName: 'reirei-lab/rainrail',
           },
         ],
+      },
+    });
+
+    await expect(
+      createGitHubWebhookEvent({
+        githubEvent: 'github_app_authorization',
+        deliveryId: 'delivery-github-app-authorization-1',
+        payload: {
+          action: 'revoked',
+          sender: {
+            id: 94,
+            login: 'octocat',
+            html_url: 'https://github.com/octocat',
+          },
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.github_app_authorization',
+      subject: {
+        type: 'github_app_authorization',
+        id: '94',
+      },
+      payload: {
+        resource: {
+          type: 'github_app_authorization',
+          id: '94',
+          login: 'octocat',
+          url: 'https://github.com/octocat',
+        },
       },
     });
 

@@ -573,6 +573,10 @@ function findGitHubSubject(payload: GitHubWebhookPayload, name: RainrailEventNam
     return subjectFromResource(resourceFromPersonalAccessTokenRequest(payload.personal_access_token_request));
   }
 
+  if (name === 'github.github_app_authorization') {
+    return subjectFromResource(resourceFromGitHubAppAuthorization(payload.sender));
+  }
+
   if (isMemberTeamPayload(payload)) {
     return subjectFromResource(resourceFromMemberTeam(payload));
   }
@@ -709,8 +713,12 @@ function findGitHubSubject(payload: GitHubWebhookPayload, name: RainrailEventNam
     return subjectFromResource(resourceFromDeployKey(payload.key));
   }
 
-  if (isInstallationRepositoriesPayload(payload)) {
+  if (isInstallationResourcePayload(payload)) {
     return subjectFromResource(resourceFromInstallation(payload.installation));
+  }
+
+  if (isOrganizationResourcePayload(payload)) {
+    return subjectFromResource(resourceFromOrganization(payload.organization));
   }
 
   if (payload.pages) {
@@ -956,7 +964,7 @@ function normalizeGitHubWebhookPayload(
   const requestedReviewer = normalizedActor(payload.requested_reviewer);
   const requestedTeam = normalizedTeam(payload.requested_team);
   const installation = normalizedInstallation(payload.installation);
-  const resource = normalizedResource(payload);
+  const resource = normalizedResource(githubEvent, payload);
   const label = normalizedLabel(payload.label);
   const milestone = normalizedMilestone(
     payload.milestone ?? recordField(payload.issue, 'milestone') ?? recordField(payload.pull_request, 'milestone'),
@@ -1105,7 +1113,7 @@ function normalizedMilestone(milestone: GitHubWebhookRecord | undefined): Normal
   return objectHasKeys(normalized) ? normalized : undefined;
 }
 
-function normalizedResource(payload: GitHubWebhookPayload): NormalizedGitHubResource {
+function normalizedResource(githubEvent: string, payload: GitHubWebhookPayload): NormalizedGitHubResource {
   if (isDeploymentProtectionRulePayload(payload)) {
     return resourceFromDeploymentProtectionRule(payload);
   }
@@ -1160,6 +1168,10 @@ function normalizedResource(payload: GitHubWebhookPayload): NormalizedGitHubReso
 
   if (payload.personal_access_token_request) {
     return resourceFromPersonalAccessTokenRequest(payload.personal_access_token_request);
+  }
+
+  if (normalizeToken(githubEvent) === 'github_app_authorization') {
+    return resourceFromGitHubAppAuthorization(payload.sender);
   }
 
   if (isMemberTeamPayload(payload)) {
@@ -1226,7 +1238,7 @@ function normalizedResource(payload: GitHubWebhookPayload): NormalizedGitHubReso
     return resourceFromDeployKey(payload.key);
   }
 
-  if (isInstallationRepositoriesPayload(payload)) {
+  if (isInstallationResourcePayload(payload)) {
     return resourceFromInstallation(payload.installation);
   }
 
@@ -1294,17 +1306,26 @@ function normalizedResource(payload: GitHubWebhookPayload): NormalizedGitHubReso
     return resourceFromDiscussion(payload);
   }
 
+  if (isOrganizationResourcePayload(payload)) {
+    return resourceFromOrganization(payload.organization);
+  }
+
   return resourceFromRepository(payload.repository);
 }
 
 function resourceFromIssue(issue: GitHubWebhookRecord): NormalizedGitHubResource {
   const number = numberField(issue, 'number');
+  const labels = arrayField(issue, 'labels')
+    .map((label) => stringField(label, 'name'))
+    .filter((label): label is string => label !== undefined);
+
   return {
     type: isPullRequestIssue(issue) ? 'pull_request' : 'issue',
     id: String(number ?? issue.id ?? 'unknown'),
     ...(number === undefined ? {} : { number }),
     ...optionalStringProperty('title', stringField(issue, 'title')),
     ...optionalStringProperty('state', stringField(issue, 'state')),
+    ...optionalStringArrayProperty('labels', labels),
     ...optionalStringProperty('url', stringField(issue, 'html_url')),
   };
 }
@@ -1728,6 +1749,24 @@ function resourceFromOrganizationMembership(membership: GitHubWebhookRecord): No
     ...optionalStringProperty('login', stringField(user, 'login')),
     ...optionalStringProperty('role', stringField(membership, 'role')),
     ...optionalStringProperty('url', stringField(user, 'html_url')),
+  };
+}
+
+function resourceFromOrganization(organization: GitHubWebhookRecord | undefined): NormalizedGitHubResource {
+  return {
+    type: 'organization',
+    id: idField(organization, 'id') ?? stringField(organization, 'login') ?? 'unknown',
+    ...optionalStringProperty('login', stringField(organization, 'login')),
+    ...optionalStringProperty('url', stringField(organization, 'html_url')),
+  };
+}
+
+function resourceFromGitHubAppAuthorization(sender: GitHubWebhookRecord | undefined): NormalizedGitHubResource {
+  return {
+    type: 'github_app_authorization',
+    id: idField(sender, 'id') ?? stringField(sender, 'login') ?? 'unknown',
+    ...optionalStringProperty('login', stringField(sender, 'login')),
+    ...optionalStringProperty('url', stringField(sender, 'html_url')),
   };
 }
 
@@ -2332,7 +2371,24 @@ function isDeploymentReviewPayload(payload: GitHubWebhookPayload): boolean {
 }
 
 function isStandaloneLabelPayload(payload: GitHubWebhookPayload): boolean {
-  return payload.label !== undefined && payload.issue === undefined && payload.pull_request === undefined;
+  return (
+    payload.label !== undefined &&
+    payload.issue === undefined &&
+    payload.pull_request === undefined &&
+    payload.discussion === undefined
+  );
+}
+
+function isInstallationResourcePayload(payload: GitHubWebhookPayload): boolean {
+  return (
+    payload.installation !== undefined &&
+    (
+      payload.repository === undefined ||
+      arrayField(payload, 'repositories').length > 0 ||
+      arrayField(payload, 'repositories_added').length > 0 ||
+      arrayField(payload, 'repositories_removed').length > 0
+    )
+  );
 }
 
 function isInstallationRepositoriesPayload(payload: GitHubWebhookPayload): boolean {
@@ -2344,6 +2400,10 @@ function isInstallationRepositoriesPayload(payload: GitHubWebhookPayload): boole
       arrayField(payload, 'repositories_removed').length > 0
     )
   );
+}
+
+function isOrganizationResourcePayload(payload: GitHubWebhookPayload): boolean {
+  return payload.organization !== undefined && payload.repository === undefined && payload.membership === undefined;
 }
 
 function isMemberTeamPayload(payload: GitHubWebhookPayload): boolean {
