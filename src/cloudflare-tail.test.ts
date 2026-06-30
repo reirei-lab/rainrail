@@ -670,6 +670,18 @@ function runtimeContext() {
         throw new Error('not used');
       },
     },
+    signal: new AbortController().signal,
+    actions: {
+      mergePullRequest: async () => {
+        throw new Error('not used');
+      },
+      startRuntime: async () => {
+        throw new Error('not used');
+      },
+      readSecret: async () => {
+        throw new Error('not used');
+      },
+    },
   };
 }
 

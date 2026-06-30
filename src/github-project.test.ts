@@ -208,6 +208,74 @@ describe('createGitHubProjectTaskQueueProvider', () => {
     expect(calls.some((call) => call.query?.includes('deleteRef'))).toBe(true);
   });
 
+  it('recovers stale mention draft creation locks before retrying create', async () => {
+    const calls: Array<{ query?: string; variables?: Record<string, unknown> }> = [];
+    let createLockAttempts = 0;
+    const provider = createGitHubProjectTaskQueueProvider({
+      config: projectConfig(),
+      auth: { getAuthToken: async () => ({ token: 'project-token', provider: 'configured-token', fallback: false }) },
+      fetch: (async (_url, init) => {
+        if (isCreateLockCommitRequest(_url)) {
+          return lockCommitResponse(`lock_sha_${calls.length}`);
+        }
+        const request = JSON.parse(String(init?.body)) as { query?: string; variables?: Record<string, unknown> };
+        calls.push(request);
+        if (request.query?.includes('RainrailProjectMetadata')) {
+          return projectMetadataResponse();
+        }
+        if (request.query?.includes('RainrailRepositoryLockMetadata')) {
+          return repositoryLockMetadataResponse();
+        }
+        if (request.query?.includes('RainrailProjectIssueClaimLock')) {
+          return lockRefResponse({
+            id: 'REF_stale_mention_draft_lock',
+            createdAt: '2026-06-30T00:00:00.000Z',
+            committedDate: '2026-06-30T00:00:00.000Z',
+            agentSessionId: 'mention-draft:reirei-agent:old',
+            branchName: 'mention-draft/reirei-lab-rainrail-old',
+            projectItemId: 'mention-draft-4b790469aad3',
+          });
+        }
+        if (request.query?.includes('RainrailCreateProjectIssueClaimLock')) {
+          createLockAttempts += 1;
+          if (createLockAttempts === 1) {
+            return new Response(JSON.stringify({ errors: [{ message: 'Reference already exists' }] }), {
+              status: 200,
+              headers: { 'content-type': 'application/json' },
+            });
+          }
+          return jsonResponse({ data: { createRef: { ref: { id: 'REF_mention_draft_lock' } } } });
+        }
+        if (request.query?.includes('RainrailMentionDraftItems')) {
+          return mentionDraftItemsResponse([]);
+        }
+        if (request.query?.includes('RainrailAddProjectDraftIssue')) {
+          return jsonResponse({
+            data: { addProjectV2DraftIssue: { projectItem: { id: 'PVTI_new_draft' } } },
+          });
+        }
+        if (request.query?.includes('deleteRef')) {
+          return jsonResponse({ data: { deleteRef: { clientMutationId: null } } });
+        }
+        return jsonResponse({ data: { updateProjectV2ItemFieldValue: { projectV2Item: { id: 'PVTI_new_draft' } } } });
+      }) as typeof fetch,
+    });
+
+    await expect(provider.addMentionDraftItem?.({
+      title: 'Respond to reirei-lab/rainrail#24',
+      body: mentionDraftBody('https://github.com/reirei-lab/rainrail/issues/24#issuecomment-1'),
+      commentUrl: 'https://github.com/reirei-lab/rainrail/issues/24#issuecomment-1',
+      repository: 'reirei-lab/rainrail',
+      number: 24,
+    })).resolves.toMatchObject({
+      projectItemId: 'PVTI_new_draft',
+      created: true,
+    });
+    expect(calls.filter((call) => call.query?.includes('RainrailCreateProjectIssueClaimLock'))).toHaveLength(2);
+    expect(calls.some((call) => call.query?.includes('deleteRef'))).toBe(true);
+    expect(calls.some((call) => call.query?.includes('RainrailAddProjectDraftIssue'))).toBe(true);
+  });
+
   it('reuses existing mention draft items with the same comment URL', async () => {
     const calls: Array<{ query?: string; variables?: Record<string, unknown> }> = [];
     const provider = createGitHubProjectTaskQueueProvider({

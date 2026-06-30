@@ -14,10 +14,11 @@ import type {
   TaskIssueRef,
   TaskIssueSearchInput,
   TaskProvider,
+  TaskProviderContext,
 } from './task-provider.js';
 
 export interface GitHubAuthTokenProvider {
-  getAuthToken(): Promise<GitHubAuthToken | undefined>;
+  getAuthToken(context?: TaskProviderContext): Promise<GitHubAuthToken | undefined>;
 }
 
 export interface GitHubTaskProviderOptions {
@@ -49,20 +50,26 @@ interface GitHubSearchIssuesResponse {
 export function createGitHubTaskProvider(options: GitHubTaskProviderOptions = {}): TaskProvider {
   const fetchImpl = options.fetch ?? fetch;
   const auth = options.auth ?? {
-    getAuthToken: () => getDefaultGitHubAuthToken(options.config ?? {}, fetchImpl),
+    getAuthToken: (context?: TaskProviderContext) => getDefaultGitHubAuthToken(options.config ?? {}, fetchImpl, context?.signal),
   };
 
   return {
     name: 'github',
     kind: 'task-provider',
-    async getIssue(ref: TaskIssueRef): Promise<TaskIssue> {
+    async getIssue(ref: TaskIssueRef, context?: TaskProviderContext): Promise<TaskIssue> {
       const repository = requireRepository(ref);
       const number = requireIssueNumber(ref);
-      const authToken = await auth.getAuthToken();
+      throwIfAborted(context?.signal);
+      const authToken = await auth.getAuthToken(context);
+      throwIfAborted(context?.signal);
       const headers = requestHeaders(authToken);
+      const init: RequestInit = { headers };
+      if (context?.signal !== undefined) {
+        init.signal = context.signal;
+      }
       const response = await fetchImpl(
         `https://api.github.com/repos/${repository}/issues/${number}`,
-        { headers },
+        init,
       );
       recordGitHubRateLimit('rest', response.headers, authToken === undefined
         ? undefined
@@ -73,20 +80,26 @@ export function createGitHubTaskProvider(options: GitHubTaskProviderOptions = {}
 
       return mapGitHubIssue(repository, await response.json() as GitHubIssueResponse);
     },
-    async createIssue(input: TaskIssueCreateInput): Promise<TaskIssue> {
+    async createIssue(input: TaskIssueCreateInput, context?: TaskProviderContext): Promise<TaskIssue> {
       const repository = requireRepository(input);
-      const authToken = await auth.getAuthToken();
+      throwIfAborted(context?.signal);
+      const authToken = await auth.getAuthToken(context);
+      throwIfAborted(context?.signal);
+      const init: RequestInit = {
+        method: 'POST',
+        headers: requestHeaders(authToken),
+        body: JSON.stringify({
+          title: input.title,
+          body: input.body,
+          ...(input.labels === undefined ? {} : { labels: input.labels }),
+        }),
+      };
+      if (context?.signal !== undefined) {
+        init.signal = context.signal;
+      }
       const response = await fetchImpl(
         `https://api.github.com/repos/${repository}/issues`,
-        {
-          method: 'POST',
-          headers: requestHeaders(authToken),
-          body: JSON.stringify({
-            title: input.title,
-            body: input.body,
-            ...(input.labels === undefined ? {} : { labels: input.labels }),
-          }),
-        },
+        init,
       );
       recordGitHubRateLimit('rest', response.headers, authToken === undefined
         ? undefined
@@ -97,9 +110,11 @@ export function createGitHubTaskProvider(options: GitHubTaskProviderOptions = {}
 
       return mapGitHubIssue(repository, await response.json() as GitHubIssueResponse);
     },
-    async searchIssues(input: TaskIssueSearchInput): Promise<TaskIssue[]> {
+    async searchIssues(input: TaskIssueSearchInput, context?: TaskProviderContext): Promise<TaskIssue[]> {
       const repository = requireRepository(input);
-      const authToken = await auth.getAuthToken();
+      throwIfAborted(context?.signal);
+      const authToken = await auth.getAuthToken(context);
+      throwIfAborted(context?.signal);
       const query = [
         `repo:${repository}`,
         'is:issue',
@@ -108,7 +123,11 @@ export function createGitHubTaskProvider(options: GitHubTaskProviderOptions = {}
       ].filter((part): part is string => part !== undefined && part.length > 0).join(' ');
       const url = new URL('https://api.github.com/search/issues');
       url.searchParams.set('q', query);
-      const response = await fetchImpl(url, { headers: requestHeaders(authToken) });
+      const init: RequestInit = { headers: requestHeaders(authToken) };
+      if (context?.signal !== undefined) {
+        init.signal = context.signal;
+      }
+      const response = await fetchImpl(url, init);
       recordGitHubRateLimit('rest', response.headers, authToken === undefined
         ? undefined
         : { authProvider: authToken.provider, fallback: authToken.fallback });
@@ -121,17 +140,23 @@ export function createGitHubTaskProvider(options: GitHubTaskProviderOptions = {}
         ? payload.items.map((item) => mapGitHubIssue(repository, item as GitHubIssueResponse))
         : [];
     },
-    async createComment(input: TaskCommentInput): Promise<TaskComment> {
+    async createComment(input: TaskCommentInput, context?: TaskProviderContext): Promise<TaskComment> {
       const repository = requireRepository(input.target);
       const number = requireIssueNumber(input.target);
-      const authToken = await auth.getAuthToken();
+      throwIfAborted(context?.signal);
+      const authToken = await auth.getAuthToken(context);
+      throwIfAborted(context?.signal);
+      const init: RequestInit = {
+        method: 'POST',
+        headers: requestHeaders(authToken),
+        body: JSON.stringify({ body: input.body }),
+      };
+      if (context?.signal !== undefined) {
+        init.signal = context.signal;
+      }
       const response = await fetchImpl(
         `https://api.github.com/repos/${repository}/issues/${number}/comments`,
-        {
-          method: 'POST',
-          headers: requestHeaders(authToken),
-          body: JSON.stringify({ body: input.body }),
-        },
+        init,
       );
       recordGitHubRateLimit('rest', response.headers, authToken === undefined
         ? undefined
@@ -148,18 +173,27 @@ export function createGitHubTaskProvider(options: GitHubTaskProviderOptions = {}
 async function getDefaultGitHubAuthToken(
   config: GitHubAuthConfig,
   fetchImpl: typeof fetch,
+  signal: AbortSignal | undefined,
 ): Promise<GitHubAuthToken | undefined> {
   try {
-    return await getGitHubAuthToken(config, fetchImpl);
+    throwIfAborted(signal);
+    return await getGitHubAuthToken(config, fetchImpl, signal);
   } catch (error) {
     if (!isGitHubAuthFallbackEligibleError(error)) {
       throw error;
     }
-    const fallbackToken = await getGitHubFallbackAuthToken(config);
+    throwIfAborted(signal);
+    const fallbackToken = await getGitHubFallbackAuthToken(config, undefined, signal);
     if (fallbackToken === undefined) {
       throw error;
     }
     return fallbackToken;
+  }
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) {
+    throw signal.reason ?? new Error('GitHub task provider operation aborted');
   }
 }
 

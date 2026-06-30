@@ -477,6 +477,18 @@ describe('cloudflare issue reporter workflow', () => {
     ).toThrow('compareAndSet');
   });
 
+  it('requires compare-and-set storage to expose a function', () => {
+    const storage = {
+      get: async (_key: string) => undefined,
+      put: async (_key: string, _value: unknown) => undefined,
+      compareAndSet: true,
+    };
+
+    expect(() =>
+      createStorageCloudflareErrorIssueStore(storage as unknown as CloudflareIssueReporterStorage)
+    ).toThrow('compareAndSet');
+  });
+
   it('accepts storage-backed fingerprint stores with explicit compare-and-set storage', () => {
     const storage: CloudflareIssueReporterStorage = {
       get: async (_key) => undefined,
@@ -790,6 +802,47 @@ describe('cloudflare issue redaction', () => {
     expect(createdIssues[0]?.body).toContain('"code": "[redacted]"');
     expect(createdIssues[0]?.body).toContain('"resetCode": "[redacted]"');
     expect(createdIssues[0]?.body).toContain('"verification_code": "[redacted]"');
+  });
+
+  it('redacts serialized secret key fragments, arrays, and cookie chains', async () => {
+    const createdIssues: Array<{ body: string }> = [];
+    const workflow = createCloudflareIssueReporterWorkflow({
+      repository: 'reirei-lab/rainrail',
+      store: createInMemoryCloudflareErrorIssueStore(),
+      issues: {
+        findOpenIssueByFingerprint: async () => undefined,
+        createIssue: async (input) => {
+          createdIssues.push(input);
+          return {
+            number: 132,
+            url: 'https://github.com/reirei-lab/rainrail/issues/132',
+          };
+        },
+      },
+    });
+
+    await expect(workflow.handle(cloudflareErrorEvent({
+      message: [
+        'serialized {"apiKeyValue":"api-key-value-secret","tokens":["abc]def"],"password_hash":"hash-secret"}',
+        'secretValue=secret-value-secret',
+        'cookie=session=session-secret; csrf=csrf-secret',
+      ].join(' '),
+    }), runtimeContext())).resolves.toMatchObject({
+      handled: true,
+    });
+
+    expect(createdIssues[0]?.body).not.toContain('api-key-value-secret');
+    expect(createdIssues[0]?.body).not.toContain('abc');
+    expect(createdIssues[0]?.body).not.toContain('def');
+    expect(createdIssues[0]?.body).not.toContain('hash-secret');
+    expect(createdIssues[0]?.body).not.toContain('secret-value-secret');
+    expect(createdIssues[0]?.body).not.toContain('session-secret');
+    expect(createdIssues[0]?.body).not.toContain('csrf-secret');
+    expect(createdIssues[0]?.body).toContain('\\"apiKeyValue\\":\\"[redacted]\\"');
+    expect(createdIssues[0]?.body).toContain('\\"tokens\\":[redacted]');
+    expect(createdIssues[0]?.body).toContain('\\"password_hash\\":\\"[redacted]\\"');
+    expect(createdIssues[0]?.body).toContain('secretValue=[redacted]');
+    expect(createdIssues[0]?.body).toContain('cookie=[redacted]');
   });
 
   it('redacts raw strings before truncating long quoted secret values', async () => {
@@ -1157,6 +1210,18 @@ function runtimeContext() {
       name: 'mock-runtime',
       kind: 'runtime-provider' as const,
       startRun: async () => {
+        throw new Error('not used');
+      },
+    },
+    signal: new AbortController().signal,
+    actions: {
+      mergePullRequest: async () => {
+        throw new Error('not used');
+      },
+      startRuntime: async () => {
+        throw new Error('not used');
+      },
+      readSecret: async () => {
         throw new Error('not used');
       },
     },

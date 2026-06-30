@@ -673,10 +673,18 @@ function sanitizeGitHubMentionUrl(value: string): string | undefined {
     url.username = '';
     url.password = '';
     url.search = '';
+    if (!isSafeGitHubMentionFragment(url.hash)) {
+      url.hash = '';
+    }
     return url.toString();
   } catch {
     return undefined;
   }
+}
+
+function isSafeGitHubMentionFragment(hash: string): boolean {
+  if (hash.length === 0) return true;
+  return /^#(?:issuecomment-\d+|discussion_r\d+|pullrequestreview-\d+)$/iu.test(hash);
 }
 
 function pickNumberFields(record: Record<string, unknown>, keys: string[]): Record<string, number> {
@@ -708,21 +716,64 @@ function sanitizePayloadPathname(pathname: string): string {
 }
 
 function sanitizePayloadText(value: string): string {
-  return value
+  return redactPayloadSecretArrays(value)
     .replace(/https?:\/\/[^\s"'<>`]+/giu, (url) => sanitizePayloadUrl(url) ?? '[redacted-url]')
     .replace(/\b(cookie|set-cookie)\s*:\s*[^\r\n]+/giu, '$1: [redacted]')
     .replace(/\bauthorization\s*:\s*[^\r\n]+/giu, 'authorization: [redacted]')
-    .replace(/(["'])([A-Za-z0-9_-]*(?:authorization|cookie|tokens?|secrets?|passwords?|keys?|codes?|resets?|verification))\1(\s*:\s*)\[[^\]]*\]/giu, '$1$2$1$3[redacted]')
-    .replace(/(^|[{\s"'<>`,;])(["']?)([A-Za-z0-9_-]*(?:authorization|cookie|tokens?|secrets?|passwords?|keys?|codes?|resets?|verification))\2(\s*:\s*)\[[^\]]*\]/giu, '$1$2$3$2$4[redacted]')
-    .replace(/(["'])([A-Za-z0-9_-]*(?:authorization|cookie|tokens?|secrets?|passwords?|keys?|codes?|resets?|verification))\1(\s*:\s*)(["'])(?:\\.|(?!\4)[^\\])*\4/giu, '$1$2$1$3$4[redacted]$4')
-    .replace(/(^|[{\s"'<>`,;])(["']?)([A-Za-z0-9_-]*(?:authorization|cookie|tokens?|secrets?|passwords?|keys?|codes?|resets?|verification))\2(\s*:\s*)(["'])(?:\\.|(?!\5)[^\\])*\5/giu, '$1$2$3$2$4$5[redacted]$5')
-    .replace(/(["'])([A-Za-z0-9_-]*(?:authorization|cookie|tokens?|secrets?|passwords?|keys?|codes?|resets?|verification))\1(\s*:\s*)(["'])(?:\\.|(?!\4)[^\\])*$/giu, '$1$2$1$3$4[redacted]$4')
-    .replace(/(^|[{\s"'<>`,;])(["']?)([A-Za-z0-9_-]*(?:authorization|cookie|tokens?|secrets?|passwords?|keys?|codes?|resets?|verification))\2(\s*:\s*)(["'])(?:\\.|(?!\5)[^\\])*$/giu, '$1$2$3$2$4$5[redacted]$5')
-    .replace(/(^|[{\s"'<>`,;])(["']?)([A-Za-z0-9_-]*(?:authorization|cookie|tokens?|secrets?|passwords?|keys?|codes?|resets?|verification))\2(\s*:\s*)(?!["'])([^,\s\r\n}\]]+)/giu, '$1$2$3$2$4[redacted]')
-    .replace(/(^|[.?&\s"'<>`,;])([A-Za-z0-9_-]*authorization)=([^\r\n"'<>`,;]*?)(?=(?:\s+[A-Za-z0-9_-]*(?:authorization|cookie|set-cookie|tokens?|secrets?|passwords?|keys?|codes?|resets?|verification)=)|[&\r\n"'<>`,;]|$)/giu, '$1$2=[redacted]')
-    .replace(/(^|[.?&\s"'<>`,;])([A-Za-z0-9_-]*(?:cookie|set-cookie))=([^&\s"'<>`,;]+)/giu, '$1$2=[redacted]')
-    .replace(/(^|[.?&\s"'<>`,;])([A-Za-z0-9_-]*(?:tokens?|secrets?|passwords?|keys?|codes?|resets?|verification))=([^&\s"'<>`,;]+)/giu, '$1$2=[redacted]')
+    .replace(/(["'])([A-Za-z0-9_-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification)[A-Za-z0-9_-]*)\1(\s*:\s*)(["'])(?:\\.|(?!\4)[^\\])*\4/giu, '$1$2$1$3$4[redacted]$4')
+    .replace(/(^|[{\s"'<>`,;])(["']?)([A-Za-z0-9_-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification)[A-Za-z0-9_-]*)\2(\s*:\s*)(["'])(?:\\.|(?!\5)[^\\])*\5/giu, '$1$2$3$2$4$5[redacted]$5')
+    .replace(/(["'])([A-Za-z0-9_-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification)[A-Za-z0-9_-]*)\1(\s*:\s*)(["'])(?:\\.|(?!\4)[^\\])*$/giu, '$1$2$1$3$4[redacted]$4')
+    .replace(/(^|[{\s"'<>`,;])(["']?)([A-Za-z0-9_-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification)[A-Za-z0-9_-]*)\2(\s*:\s*)(["'])(?:\\.|(?!\5)[^\\])*$/giu, '$1$2$3$2$4$5[redacted]$5')
+    .replace(/(^|[{\s"'<>`,;])(["']?)([A-Za-z0-9_-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification)[A-Za-z0-9_-]*)\2(\s*:\s*)(?!["'])([^,\s\r\n}\]]+)/giu, '$1$2$3$2$4[redacted]')
+    .replace(/(^|[.?&\s"'<>`,;])([A-Za-z0-9_-]*authorization[A-Za-z0-9_-]*)=([^\r\n"'<>`,;]*?)(?=(?:\s+[A-Za-z0-9_-]*(?:authorization|cookie|set-cookie|token|secret|password|key|code|reset|verification)[A-Za-z0-9_-]*=)|[&\r\n"'<>`,;]|$)/giu, '$1$2=[redacted]')
+    .replace(/(^|[.?&\s"'<>`,;])([A-Za-z0-9_-]*(?:cookie|set-cookie)[A-Za-z0-9_-]*)=([^;\s\r\n"'<>`,]*(?:;\s*[^=;\s\r\n"'<>`,]+=[^;\s\r\n"'<>`,]*)*)/giu, '$1$2=[redacted]')
+    .replace(/(^|[.?&\s"'<>`,;])([A-Za-z0-9_-]*(?:token|secret|password|key|code|reset|verification)[A-Za-z0-9_-]*)=([^&\s"'<>`,;]+)/giu, '$1$2=[redacted]')
     .replace(/\bBearer\s+[A-Za-z0-9._~+/-]+=*/giu, 'Bearer [redacted]');
+}
+
+function redactPayloadSecretArrays(value: string): string {
+  const keyPattern = /(^|[{\s"'<>`,;])(["']?)([A-Za-z0-9_-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification)[A-Za-z0-9_-]*)\2(\s*:\s*)\[/giu;
+  let redacted = '';
+  let cursor = 0;
+  for (const match of value.matchAll(keyPattern)) {
+    const matchText = match[0];
+    const matchIndex = match.index;
+    if (matchIndex < cursor) continue;
+    const arrayStart = matchIndex + matchText.length - 1;
+    const arrayEnd = findPayloadJsonArrayEnd(value, arrayStart);
+    redacted += value.slice(cursor, matchIndex);
+    redacted += `${match[1] ?? ''}${match[2] ?? ''}${match[3] ?? ''}${match[2] ?? ''}${match[4] ?? ''}[redacted]`;
+    cursor = arrayEnd === undefined ? value.length : arrayEnd + 1;
+  }
+  return redacted + value.slice(cursor);
+}
+
+function findPayloadJsonArrayEnd(value: string, arrayStart: number): number | undefined {
+  let depth = 0;
+  let quote: string | undefined;
+  let escaped = false;
+  for (let index = arrayStart; index < value.length; index += 1) {
+    const char = value[index];
+    if (quote !== undefined) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === '\\') {
+        escaped = true;
+      } else if (char === quote) {
+        quote = undefined;
+      }
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+    } else if (char === '[') {
+      depth += 1;
+    } else if (char === ']') {
+      depth -= 1;
+      if (depth === 0) return index;
+    }
+  }
+  return undefined;
 }
 
 function mentionedLoginsFromComment(value: Record<string, unknown>): { mentionedLogins: string[] } | {} {

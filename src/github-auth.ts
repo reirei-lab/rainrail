@@ -34,7 +34,7 @@ type FetchLike = typeof fetch;
 export type GitHubCliTokenRunner = (
   file: string,
   args: string[],
-  options: { maxBuffer: number },
+  options: { maxBuffer: number; signal?: AbortSignal },
 ) => Promise<{ stdout: string; stderr: string }>;
 
 const installationTokenCache = new Map<string, CachedInstallationToken>();
@@ -45,20 +45,22 @@ let cachedGhCliToken: string | undefined;
 export async function getGitHubToken(
   config: GitHubAuthConfig,
   fetchImpl: FetchLike = fetch,
+  signal?: AbortSignal,
 ): Promise<string | undefined> {
-  return (await getGitHubAuthToken(config, fetchImpl))?.token;
+  return (await getGitHubAuthToken(config, fetchImpl, signal))?.token;
 }
 
 export async function getGitHubAuthToken(
   config: GitHubAuthConfig,
   fetchImpl: FetchLike = fetch,
+  signal?: AbortSignal,
 ): Promise<GitHubAuthToken | undefined> {
   if (config.token !== undefined && config.token.length > 0) {
     return { token: config.token, provider: 'configured-token', fallback: false };
   }
   if (config.githubApp !== undefined) {
     return {
-      token: await githubAppInstallationToken(config.githubApp, fetchImpl),
+      token: await githubAppInstallationToken(config.githubApp, fetchImpl, signal),
       provider: 'github-app',
       fallback: false,
     };
@@ -69,6 +71,7 @@ export async function getGitHubAuthToken(
 export async function getGitHubFallbackAuthToken(
   config: GitHubAuthConfig,
   cliRunner: GitHubCliTokenRunner = defaultGhCliTokenRunner,
+  signal?: AbortSignal,
 ): Promise<GitHubAuthToken | undefined> {
   if (config.token !== undefined && config.token.length > 0) {
     return undefined;
@@ -80,7 +83,8 @@ export async function getGitHubFallbackAuthToken(
   if (envToken !== undefined) {
     return { ...envToken, fallback: true };
   }
-  const ghCliToken = await getGhCliAuthToken(cliRunner);
+  throwIfAborted(signal);
+  const ghCliToken = await waitForSignal(getGhCliAuthToken(cliRunner, signal), signal);
   return ghCliToken === undefined ? undefined : { ...ghCliToken, fallback: true };
 }
 
@@ -129,15 +133,24 @@ function firstNonEmpty(...values: Array<string | undefined>): string | undefined
   return values.find((value) => value !== undefined && value.length > 0);
 }
 
-async function getGhCliAuthToken(cliRunner: GitHubCliTokenRunner): Promise<GitHubAuthToken | undefined> {
+async function getGhCliAuthToken(
+  cliRunner: GitHubCliTokenRunner,
+  signal: AbortSignal | undefined,
+): Promise<GitHubAuthToken | undefined> {
   if (cachedGhCliToken !== undefined) {
     return { token: cachedGhCliToken, provider: 'gh-cli', fallback: false };
   }
   for (const ghPath of ghPathCandidates()) {
+    throwIfAborted(signal);
+    const options: { maxBuffer: number; signal?: AbortSignal } = {
+      maxBuffer: 200_000,
+    };
+    if (signal !== undefined) {
+      options.signal = signal;
+    }
+
     try {
-      const { stdout } = await cliRunner(ghPath, ['auth', 'token', '--hostname', 'github.com'], {
-        maxBuffer: 200_000,
-      });
+      const { stdout } = await cliRunner(ghPath, ['auth', 'token', '--hostname', 'github.com'], options);
       const token = stdout.trim();
       if (token.length > 0) {
         cachedGhCliToken = token;
@@ -153,7 +166,7 @@ async function getGhCliAuthToken(cliRunner: GitHubCliTokenRunner): Promise<GitHu
 async function defaultGhCliTokenRunner(
   file: string,
   args: string[],
-  options: { maxBuffer: number },
+  options: { maxBuffer: number; signal?: AbortSignal },
 ): Promise<{ stdout: string; stderr: string }> {
   return execFileAsync(file, args, options);
 }
@@ -170,6 +183,7 @@ function ghPathCandidates(): string[] {
 async function githubAppInstallationToken(
   config: GitHubAppAuthConfig,
   fetchImpl: FetchLike,
+  signal: AbortSignal | undefined,
 ): Promise<string> {
   const cacheKey = [
     config.appId,
@@ -179,11 +193,14 @@ async function githubAppInstallationToken(
   const now = Date.now();
   const cached = installationTokenCache.get(cacheKey);
   if (cached !== undefined && cached.expiresAtMs - tokenRefreshSkewMs > now) {
+    throwIfAborted(signal);
     return cached.token;
   }
   if (cached?.pending !== undefined) {
-    return cached.pending;
+    return waitForSignal(cached.pending, signal);
   }
+
+  throwIfAborted(signal);
 
   const pending = createInstallationToken(config, fetchImpl)
     .then(({ token, expiresAtMs }) => {
@@ -201,23 +218,25 @@ async function githubAppInstallationToken(
     expiresAtMs: 0,
     pending,
   });
-  return pending;
+  return waitForSignal(pending, signal);
 }
 
 async function createInstallationToken(
   config: GitHubAppAuthConfig,
   fetchImpl: FetchLike,
 ): Promise<{ token: string; expiresAtMs: number }> {
+  const init: RequestInit = {
+    method: 'POST',
+    headers: {
+      Accept: 'application/vnd.github+json',
+      Authorization: `Bearer ${await createGitHubAppJwt(config)}`,
+      'X-GitHub-Api-Version': '2022-11-28',
+    },
+  };
+
   const response = await fetchImpl(
     `https://api.github.com/app/installations/${encodeURIComponent(config.installationId)}/access_tokens`,
-    {
-      method: 'POST',
-      headers: {
-        Accept: 'application/vnd.github+json',
-        Authorization: `Bearer ${await createGitHubAppJwt(config)}`,
-        'X-GitHub-Api-Version': '2022-11-28',
-      },
-    },
+    init,
   );
   recordGitHubRateLimit('rest', response.headers, { authProvider: 'github-app' });
   if (!response.ok) {
@@ -238,6 +257,37 @@ async function createInstallationToken(
     token: payload.token,
     expiresAtMs,
   };
+}
+
+function waitForSignal<T>(promise: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (signal === undefined) {
+    return promise;
+  }
+
+  if (signal.aborted) {
+    return Promise.reject(signal.reason ?? new Error('GitHub App installation token request aborted'));
+  }
+
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(signal.reason ?? new Error('GitHub App installation token request aborted'));
+    signal.addEventListener('abort', abort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener('abort', abort);
+        resolve(value);
+      },
+      (reason: unknown) => {
+        signal.removeEventListener('abort', abort);
+        reject(reason);
+      },
+    );
+  });
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) {
+    throw signal.reason ?? new Error('GitHub App installation token request aborted');
+  }
 }
 
 async function createGitHubAppJwt(config: GitHubAppAuthConfig): Promise<string> {

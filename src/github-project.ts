@@ -321,9 +321,9 @@ async function withMentionDraftCreationLock<T>(
     defaultBranchOid: repository.defaultBranchOid,
     defaultBranchTreeOid: repository.defaultBranchTreeOid,
   }, lockInput, fetchImpl, auth);
-  const lockRefId = await createProjectIssueClaimLock(
+  const lockRefId = await acquireMentionDraftCreationLock(
     repository.id,
-    projectIssueLockRefName(issue),
+    issue,
     lockOid,
     fetchImpl,
     auth,
@@ -332,6 +332,37 @@ async function withMentionDraftCreationLock<T>(
     return await fn();
   } finally {
     await deleteProjectIssueClaimLock({ projectItemId: issue.id, lockRefId }, fetchImpl, auth).catch(() => undefined);
+  }
+}
+
+async function acquireMentionDraftCreationLock(
+  repositoryId: string,
+  issue: ProjectIssue,
+  lockOid: string,
+  fetchImpl: typeof fetch,
+  auth: GitHubProjectAuthTokenProvider,
+): Promise<string> {
+  const name = projectIssueLockRefName(issue);
+  try {
+    return await createProjectIssueClaimLock(repositoryId, name, lockOid, fetchImpl, auth);
+  } catch (error) {
+    if (!isReferenceAlreadyExistsError(error)) {
+      throw error;
+    }
+    const existingLock = await loadProjectIssueClaimLockIfExists(repositoryId, name, fetchImpl, auth);
+    if (existingLock === undefined || !isRecoverableStaleLock(existingLock, { issue })) {
+      throw error;
+    }
+    const currentLock = await loadProjectIssueClaimLockIfExists(repositoryId, name, fetchImpl, auth);
+    if (
+      currentLock === undefined
+      || !isSameProjectIssueClaimLock(existingLock, currentLock)
+      || !isRecoverableStaleLock(currentLock, { issue })
+    ) {
+      throw error;
+    }
+    await deleteProjectIssueClaimLock({ projectItemId: issue.id, lockRefId: currentLock.id }, fetchImpl, auth);
+    return createProjectIssueClaimLock(repositoryId, name, lockOid, fetchImpl, auth);
   }
 }
 

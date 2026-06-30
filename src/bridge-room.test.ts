@@ -916,7 +916,7 @@ describe('Rainrail bridge room', () => {
           id: '49',
           number: 49,
           title: 'Mention workflow token=secret-title-token',
-          url: 'https://github.com/reirei-lab/rainrail/pull/49?token=secret-query',
+          url: 'https://github.com/reirei-lab/rainrail/pull/49?token=secret-query#access_token=secret-resource-fragment',
         },
         comment: {
           id: '3500091217',
@@ -938,6 +938,7 @@ describe('Rainrail bridge room', () => {
     expect(publishResponse.status).toBe(200);
     const storedEvent = storage.storedEvents()[0];
     expect(storedEvent?.payload).toEqual({
+      provider: 'github',
       event: 'pull_request_review_comment',
       action: 'created',
       actor: { login: 'hiragram' },
@@ -951,9 +952,9 @@ describe('Rainrail bridge room', () => {
       },
       comment: {
         id: '3500091217',
-        body: 'Please handle this @reirei-agent token=[redacted]',
         url: 'https://github.com/reirei-lab/rainrail/pull/49#discussion_r3500091217',
         author: 'hiragram',
+        mentionedLogins: ['reirei-agent'],
       },
     });
     expect(mentionDraftRequestFromEvent(storedEvent!, 'reirei-agent')).toMatchObject({
@@ -973,6 +974,7 @@ describe('Rainrail bridge room', () => {
     expect(chunk).toContain('#discussion_r3500091217');
     expect(chunk).not.toContain('secret-comment-token');
     expect(chunk).not.toContain('secret-query');
+    expect(chunk).not.toContain('secret-resource-fragment');
     expect(chunk).not.toContain('secret-actor-token');
     expect(chunk).not.toContain('secret nested body');
   });
@@ -1131,7 +1133,7 @@ describe('Rainrail bridge room', () => {
         scriptName: 'asme-site',
         exceptions: [{
           name: `HugeError ${'n'.repeat(2_000)} name-tail`,
-          message: `prefix {"password":"storage-secret","escapedPassword":"abc\\"escaped-tail","code":123456,"tokens":["bridge-array-secret"],"apiKeys":["bridge-camel-secret"]} passwords: "bridge-plural-secret" x-api-key: bridge-key-secret x-api-key: "bridge-quoted-key-secret" authorization=Basic bridge-basic-secret cookie=session=bridge-cookie-secret ${'m'.repeat(2_000)} suffix`,
+          message: `prefix {"password":"storage-secret","escapedPassword":"abc\\"escaped-tail","code":123456,"tokens":["bridge-array-secret]bridge-array-tail"],"apiKeys":["bridge-camel-secret"],"apiKeyValue":"bridge-key-value-secret","password_hash":"bridge-hash-secret"} passwords: "bridge-plural-secret" secretValue=bridge-secret-value x-api-key: bridge-key-secret x-api-key: "bridge-quoted-key-secret" authorization=Basic bridge-basic-secret cookie=session=bridge-cookie-secret; csrf=bridge-csrf-secret ${'m'.repeat(2_000)} suffix`,
           stack: Array.from({ length: 40 }, (_, index) => `    at frame${index} (worker.js:${index}:1)`).join('\n'),
         }],
       },
@@ -1150,13 +1152,18 @@ describe('Rainrail bridge room', () => {
     expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('storage-secret');
     expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('123456');
     expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-array-secret');
+    expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-array-tail');
     expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-camel-secret');
+    expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-key-value-secret');
+    expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-hash-secret');
+    expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-secret-value');
     expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('escaped-tail');
     expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-plural-secret');
     expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-key-secret');
     expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-quoted-key-secret');
     expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-basic-secret');
     expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-cookie-secret');
+    expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-csrf-secret');
     expect(exception?.name.length).toBeLessThan(260);
     expect(exception?.message.length).toBeLessThan(700);
     expect(exception?.stack.length).toBeLessThan(1_500);

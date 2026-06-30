@@ -8,8 +8,29 @@ export interface RuntimeCapabilities {
     event: RainrailEventEnvelope;
     workflow: string;
     runId: string;
-  }) => Promise<unknown>;
+  }, context?: RuntimeActionContext) => Promise<unknown>;
   [capability: string]: unknown;
+}
+
+export type RuntimeCapabilityName = 'merge' | 'runtime:start' | 'secret:access' | (string & {});
+
+export interface RuntimeActionContext {
+  signal: AbortSignal;
+}
+
+export interface RuntimeActions {
+  mergePullRequest(request: { pullRequestId: string; [key: string]: unknown }): Promise<unknown>;
+  startRuntime(request: { runtimeId: string; [key: string]: unknown }): Promise<unknown>;
+  readSecret(request: { name: string; [key: string]: unknown }): Promise<string>;
+}
+
+export interface RuntimeActionImplementations {
+  mergePullRequest(
+    request: { pullRequestId: string; [key: string]: unknown },
+    context: RuntimeActionContext,
+  ): Promise<unknown>;
+  startRuntime(request: { runtimeId: string; [key: string]: unknown }, context: RuntimeActionContext): Promise<unknown>;
+  readSecret(request: { name: string; [key: string]: unknown }, context: RuntimeActionContext): Promise<string>;
 }
 
 export interface PluginRuntimeContext {
@@ -18,6 +39,8 @@ export interface PluginRuntimeContext {
   providers: TaskProviderRegistry;
   runtime: RuntimeProvider;
   capabilities?: RuntimeCapabilities;
+  signal: AbortSignal;
+  actions: RuntimeActions;
 }
 
 export interface WorkflowPluginResult {
@@ -30,6 +53,8 @@ export interface WorkflowPluginResult {
 
 export interface WorkflowPlugin<TEvent extends RainrailEventEnvelope = RainrailEventEnvelope> {
   name: string;
+  capabilities?: RuntimeCapabilityName[];
+  timeoutMs?: number;
   accepts?: (event: RainrailEventEnvelope) => boolean;
   handle(event: TEvent, context: PluginRuntimeContext): unknown | Promise<unknown>;
 }
