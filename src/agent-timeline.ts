@@ -426,10 +426,10 @@ function redactSensitiveText(value: string): string {
     .replace(/\bgithub_pat_[A-Za-z0-9_]+\b/g, '[redacted-token]')
     .replace(/(gh[pousr]_[A-Za-z0-9_]+)/g, '[redacted-token]')
     .replace(/(sk-[A-Za-z0-9_-]{20,})/g, '[redacted-token]')
-    .replace(/(Bearer\s+)[^\s'",}]+/gi, '$1[redacted-token]')
-    .replace(/("[^"]*(?:token|secret|password|api[_-]?key)[^"]*"\s*:\s*)"[^"]*"/gi, '$1"[redacted]"')
-    .replace(/((?:token|api[_-]?key|password|secret)\s*[:=]\s*)(["'])(.*?)\2/gi, '$1$2[redacted]$2')
-    .replace(/((?:token|api[_-]?key|password|secret)\s*[:=]\s*)[^\s'",}]+/gi, '$1[redacted]');
+    .replace(/(Authorization:\s*[A-Za-z][A-Za-z0-9._-]*\s+)[^\s'",}]+/gi, '$1[redacted-token]')
+    .replace(/("[^"]*(?:token|secret|password|api[_-]?key|private[_-]?key)[^"]*"\s*:\s*)"[^"]*"/gi, '$1"[redacted]"')
+    .replace(/([A-Za-z0-9_-]*(?:token|secret|password|api[_-]?key|private[_-]?key)[A-Za-z0-9_-]*\s*[:=]\s*)(["'])(.*?)\2/gi, '$1$2[redacted]$2')
+    .replace(/([A-Za-z0-9_-]*(?:token|secret|password|api[_-]?key|private[_-]?key)[A-Za-z0-9_-]*\s*[:=]\s*)[^\s'",}]+/gi, '$1[redacted]');
 }
 
 function truncate(value: string, maxLength: number): string {

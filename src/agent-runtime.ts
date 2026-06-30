@@ -195,9 +195,10 @@ export function readRuntimeRunCompletionFromLog(raw: string): RuntimeRunCompleti
     return compactionFailureFromLog(raw);
   }
 
-  const explicitStatus = stringValue(payload.status);
-  const outcome = outcomeFromPayload(payload);
-  const status = runtimeStatusFromPayload(payload, explicitStatus, outcome);
+  const completionPayload = completionPayloadFromResponse(payload);
+  const explicitStatus = stringValue(payload.status) ?? stringValue(completionPayload.status);
+  const outcome = outcomeFromPayload(completionPayload);
+  const status = runtimeStatusFromPayload(completionPayload, explicitStatus, outcome);
   if (status === undefined) {
     return undefined;
   }
@@ -205,11 +206,14 @@ export function readRuntimeRunCompletionFromLog(raw: string): RuntimeRunCompleti
   return {
     status,
     outcome,
-    summary: stringValue(payload.summary) ?? completionSummaryFromPayload(payload),
-    promptError: stringValue(payload.promptError),
-    timedOut: booleanValue(payload.timedOut),
-    timeoutPhase: stringValue(payload.timeoutPhase),
-    stopReason: stringValue(payload.stopReason) ?? stringValue(recordValue(payload.completion)?.stopReason),
+    summary: stringValue(completionPayload.summary) ?? completionSummaryFromPayload(completionPayload) ?? stringValue(payload.summary),
+    promptError: stringValue(completionPayload.promptError) ?? stringValue(payload.promptError),
+    timedOut: booleanValue(completionPayload.timedOut) ?? booleanValue(payload.timedOut),
+    timeoutPhase: stringValue(completionPayload.timeoutPhase) ?? stringValue(payload.timeoutPhase),
+    stopReason: stringValue(completionPayload.stopReason)
+      ?? stringValue(recordValue(completionPayload.completion)?.stopReason)
+      ?? stringValue(payload.stopReason)
+      ?? stringValue(recordValue(payload.completion)?.stopReason),
   };
 }
 
@@ -377,6 +381,10 @@ function completionSummaryFromPayload(payload: Record<string, unknown>): string 
     }
   }
   return undefined;
+}
+
+function completionPayloadFromResponse(payload: Record<string, unknown>): Record<string, unknown> {
+  return recordValue(payload.result) ?? payload;
 }
 
 function parseJsonFromLog(raw: string): unknown {

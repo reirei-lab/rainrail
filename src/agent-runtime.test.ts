@@ -441,6 +441,13 @@ describe('runtime task completion and resume helpers', () => {
       meta: { agentMeta: { sessionId: 'session-1' } },
     }))).toMatchObject({ status: 'succeeded', outcome: 'implemented' });
 
+    expect(readRuntimeRunCompletionFromLog(JSON.stringify({
+      result: {
+        payloads: [{ text: 'Issue に調査結果を追記しました。\n\nOutcome: updated_issue' }],
+        meta: { agentMeta: { sessionId: 'session-2' } },
+      },
+    }))).toMatchObject({ status: 'succeeded', outcome: 'updated_issue' });
+
     expect(readRuntimeRunCompletionFromLog(
       'GatewayClientRequestError: Error: CLI transcript compaction failed for openai/gpt-5.5: Compaction timed out',
     )).toMatchObject({
