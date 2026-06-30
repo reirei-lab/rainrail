@@ -1,4 +1,4 @@
-import { closeSync, mkdirSync, openSync } from 'node:fs';
+import { closeSync, mkdirSync, openSync, readFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 
@@ -100,14 +100,15 @@ export function createOpenClawRuntimeProvider(options: OpenClawRuntimeProviderOp
       mkdirSync(options.logDirectory, { recursive: true });
       const logPath = join(options.logDirectory, `${safeFileName(request.attemptId)}.log`);
       const outputFd = openSync(logPath, 'a');
+      const resumeSessionId = runtimeResumeSessionId(request.task);
       const args = [
         'agent',
         '--agent',
         options.agentId,
         '--session-key',
-        request.task.agentSessionId,
+        resumeSessionId,
         '--message',
-        promptForRuntimeTaskResume(request.task),
+        promptForRuntimeTaskResume(request.task, resumeSessionId),
         '--timeout',
         String(options.timeoutSeconds),
         '--json',
@@ -120,13 +121,13 @@ export function createOpenClawRuntimeProvider(options: OpenClawRuntimeProviderOp
         attachSpawnErrorHandler(child, options, 'resume');
         child.unref?.();
         return {
-          id: request.task.agentSessionId,
+          id: resumeSessionId,
           provider: 'openclaw',
           status: 'running',
           metadata: {
             pid: child.pid,
             logPath,
-            agentSessionId: request.task.agentSessionId,
+            agentSessionId: resumeSessionId,
             branchName: request.task.branchName,
             attemptId: request.attemptId,
           },
@@ -231,8 +232,13 @@ export function runningRuntimeTaskPid(task: RuntimeAgentTask, isRunning: (pid: n
   return runningAttempt?.pid;
 }
 
-export function nextRuntimeResumeAttemptId(task: Pick<RuntimeAgentTask, 'id' | 'resumeAttempts'>): string {
-  return `${task.id}_resume_${String(task.resumeAttempts.length + 1).padStart(2, '0')}`;
+export function nextRuntimeResumeAttemptId(
+  task: Pick<RuntimeAgentTask, 'id' | 'resumeAttempts'> & { agentSessionId?: string },
+): string {
+  const sessionId = task.agentSessionId !== undefined
+    ? `_${safeFileName(task.agentSessionId)}`
+    : '';
+  return `${task.id}${sessionId}_resume_${String(task.resumeAttempts.length + 1).padStart(2, '0')}`;
 }
 
 function promptForRuntimeTask(task: RuntimeAgentTaskInput, sessionKey: string): string {
@@ -258,11 +264,11 @@ function promptForRuntimeTask(task: RuntimeAgentTaskInput, sessionKey: string): 
   ].join('\n');
 }
 
-function promptForRuntimeTaskResume(task: RuntimeAgentTask): string {
+function promptForRuntimeTaskResume(task: RuntimeAgentTask, sessionKey = task.agentSessionId): string {
   return [
     'あなたは Rainrail によって再開された GitHub issue 処理エージェントです。',
     '',
-    `Session key: ${task.agentSessionId}`,
+    `Session key: ${sessionKey}`,
     `Branch to use: ${task.branchName}`,
     `Existing task log: ${task.logPath}`,
     '',
@@ -281,12 +287,7 @@ function runtimeAgentTaskInput(value: unknown): RuntimeAgentTaskInput {
     title: value.title,
     agentSessionId: stringValue(value.agentSessionId),
     branchName: stringValue(value.branchName),
-    issue: isRecord(value.issue) ? {
-      repository: stringValue(value.issue.repository),
-      number: typeof value.issue.number === 'number' ? value.issue.number : undefined,
-      title: stringValue(value.issue.title),
-      url: stringValue(value.issue.url),
-    } : undefined,
+    issue: issueFieldsFromValue(value),
   };
 }
 
@@ -295,20 +296,23 @@ function runtimeStatusFromPayload(
   explicitStatus: string | undefined,
   outcome = outcomeFromPayload(payload),
 ): RuntimeRunStatus | undefined {
-  if (outcome === 'needs_human' || outcome === 'split_recommended') {
-    return outcome;
-  }
-  if (isCanonicalRuntimeRunStatus(explicitStatus)) {
-    return explicitStatus;
-  }
-  if (explicitStatus === 'ok') {
-    return 'succeeded';
+  if (explicitStatus === 'error') {
+    return 'failed';
   }
   if (explicitStatus === 'timeout') {
     return 'timed_out';
   }
-  if (explicitStatus === 'error') {
-    return 'failed';
+  if (isFailureRuntimeRunStatus(explicitStatus)) {
+    return explicitStatus;
+  }
+  if (outcome === 'needs_human' || outcome === 'split_recommended') {
+    return outcome;
+  }
+  if (explicitStatus === 'ok') {
+    return 'succeeded';
+  }
+  if (isCanonicalRuntimeRunStatus(explicitStatus)) {
+    return explicitStatus;
   }
   if (explicitStatus === 'needs_human' || explicitStatus === 'split_recommended') {
     return explicitStatus;
@@ -323,6 +327,14 @@ function runtimeStatusFromPayload(
     return 'succeeded';
   }
   return undefined;
+}
+
+function isFailureRuntimeRunStatus(status: string | undefined): status is RuntimeRunStatus {
+  return status === 'failed'
+    || status === 'canceled'
+    || status === 'stopped'
+    || status === 'timed_out'
+    || status === 'compaction_failed';
 }
 
 function isCanonicalRuntimeRunStatus(status: string | undefined): status is RuntimeRunStatus {
@@ -383,12 +395,39 @@ function parseLastJsonObjectFromLog(raw: string): unknown {
       const candidate = JSON.parse(raw.slice(index, end + 1));
       if (isRecord(candidate) && runtimeStatusFromPayload(candidate, stringValue(candidate.status)) !== undefined) {
         latest = candidate;
+        index = end;
       }
     } catch {
       // Logs may contain partial JSON fragments.
     }
   }
   return latest;
+}
+
+function issueFieldsFromValue(value: Record<string, unknown>): RuntimeAgentTaskInput['issue'] {
+  const source = isRecord(value.issue) ? value.issue : value;
+  const repository = stringValue(source.repository);
+  const number = typeof source.number === 'number' ? source.number : undefined;
+  const title = stringValue(source.title);
+  const url = stringValue(source.url);
+  return repository === undefined && number === undefined && title === undefined && url === undefined
+    ? undefined
+    : { repository, number, title, url };
+}
+
+function runtimeResumeSessionId(task: RuntimeAgentTask): string {
+  try {
+    const fallbackSessionId = extractFallbackRuntimeSessionId(readFileSync(task.logPath, 'utf8'));
+    return fallbackSessionId ?? task.agentSessionId;
+  } catch {
+    return task.agentSessionId;
+  }
+}
+
+function extractFallbackRuntimeSessionId(log: string): string | undefined {
+  const match = log.match(/EMBEDDED FALLBACK:[^\n\r]*fresh session\s+(gateway-fallback-[A-Za-z0-9._-]+)/i)
+    ?? log.match(/\bgateway-fallback-[A-Za-z0-9._-]+/);
+  return match?.[1] ?? match?.[0];
 }
 
 function findJsonObjectEnd(raw: string, start: number): number | undefined {

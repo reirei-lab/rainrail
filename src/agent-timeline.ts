@@ -121,6 +121,9 @@ export async function readRuntimeTimelineStatus(
     if (event.type === 'session.ended') {
       status.ended = true;
       status.endedStatus = stringField(event.data, 'status');
+    } else {
+      status.ended = false;
+      status.endedStatus = undefined;
     }
   }
   return status;
@@ -376,6 +379,7 @@ function redactSensitiveText(value: string): string {
     .replace(/(sk-[A-Za-z0-9_-]{20,})/g, '[redacted-token]')
     .replace(/(Bearer\s+)[^\s'",}]+/gi, '$1[redacted-token]')
     .replace(/("(?:token|apiKey|api_key|password|secret)"\s*:\s*)"[^"]*"/gi, '$1"[redacted]"')
+    .replace(/((?:token|api[_-]?key|password|secret)\s*[:=]\s*)(["'])(.*?)\2/gi, '$1$2[redacted]$2')
     .replace(/((?:token|api[_-]?key|password|secret)\s*[:=]\s*)[^\s'",}]+/gi, '$1[redacted]');
 }
 

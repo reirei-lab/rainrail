@@ -1,4 +1,4 @@
-import { mkdirSync, rmSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { EventEmitter } from 'node:events';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -175,6 +175,39 @@ describe('createOpenClawRuntimeProvider', () => {
     expect(first.metadata?.logPath).not.toBe(second.metadata?.logPath);
   });
 
+  it('passes top-level task issue fields into the start prompt', async () => {
+    const spawnProcess = vi.fn(() => ({ pid: 4242, unref: vi.fn() }));
+    const provider = createOpenClawRuntimeProvider({
+      enabled: true,
+      command: 'openclaw',
+      agentId: 'main',
+      sessionKeyPrefix: 'rainrail',
+      timeoutSeconds: 900,
+      logDirectory: temporaryDirectory(),
+      spawnProcess,
+    });
+
+    await provider.startRun({
+      ...runtimeRequest(),
+      task: {
+        id: 'issue_22',
+        title: 'OpenClaw runtime',
+        repository: 'reirei-lab/rainrail',
+        number: 22,
+        url: 'https://github.com/reirei-lab/rainrail/issues/22',
+      },
+    });
+
+    expect(spawnProcess).toHaveBeenCalledWith('openclaw', expect.arrayContaining([
+      '--message',
+      expect.stringContaining('Repository: reirei-lab/rainrail'),
+    ]), expect.anything());
+    expect(spawnProcess).toHaveBeenCalledWith('openclaw', expect.arrayContaining([
+      '--message',
+      expect.stringContaining('Issue URL: https://github.com/reirei-lab/rainrail/issues/22'),
+    ]), expect.anything());
+  });
+
   it('resumes OpenClaw agent tasks in the existing session with an attempt log', async () => {
     const spawnProcess = vi.fn(() => ({ pid: 5151, unref: vi.fn() }));
     const logDirectory = temporaryDirectory();
@@ -218,6 +251,44 @@ describe('createOpenClawRuntimeProvider', () => {
       '--message',
       expect.stringContaining('Existing task log: var/agent-task-logs/task.log'),
       '--json',
+    ]), expect.anything());
+  });
+
+  it('resumes the fallback session recorded in the previous task log', async () => {
+    const spawnProcess = vi.fn(() => ({ pid: 5151, unref: vi.fn() }));
+    const logDirectory = temporaryDirectory();
+    const logPath = `${logDirectory}/task.log`;
+    writeFileSync(logPath, 'EMBEDDED FALLBACK: Gateway timed out; running embedded agent with fresh session gateway-fallback-abc123', 'utf8');
+    const provider = createOpenClawRuntimeProvider({
+      enabled: true,
+      command: 'openclaw',
+      agentId: 'main',
+      sessionKeyPrefix: 'rainrail',
+      timeoutSeconds: 900,
+      logDirectory,
+      spawnProcess,
+    });
+
+    await expect(provider.resumeRun?.({
+      run: { id: 'agent:main:intended-session', provider: 'openclaw', status: 'stopped' },
+      task: {
+        id: 'agent_task_reirei-lab-rainrail_22',
+        title: 'OpenClaw runtime',
+        agentSessionId: 'agent:main:intended-session',
+        branchName: 'agent/reirei-lab-rainrail-22',
+        logPath,
+        resumeAttempts: [],
+      },
+      attemptId: 'agent_task_reirei-lab-rainrail_22_resume_01',
+      requestedBy: 'reirei-agent',
+    })).resolves.toMatchObject({
+      id: 'gateway-fallback-abc123',
+      metadata: { agentSessionId: 'gateway-fallback-abc123' },
+    });
+
+    expect(spawnProcess).toHaveBeenCalledWith('openclaw', expect.arrayContaining([
+      '--session-key',
+      'gateway-fallback-abc123',
     ]), expect.anything());
   });
 
@@ -278,6 +349,18 @@ describe('runtime task completion and resume helpers', () => {
     });
   });
 
+  it('does not let advisory Outcome text override explicit failure statuses', () => {
+    expect(readRuntimeRunCompletionFromLog(JSON.stringify({
+      status: 'error',
+      finalAssistantVisibleText: 'Outcome: needs_human',
+    }))).toMatchObject({ status: 'failed', outcome: 'needs_human' });
+
+    expect(readRuntimeRunCompletionFromLog(JSON.stringify({
+      status: 'timed_out',
+      finalAssistantVisibleText: 'Outcome: split_recommended',
+    }))).toMatchObject({ status: 'timed_out', outcome: 'split_recommended' });
+  });
+
   it('accepts canonical runtime completion statuses from JSON logs', () => {
     for (const status of ['failed', 'canceled', 'stopped', 'timed_out', 'compaction_failed'] as const) {
       expect(readRuntimeRunCompletionFromLog(JSON.stringify({ status, summary: `${status} run` }))).toMatchObject({
@@ -285,6 +368,24 @@ describe('runtime task completion and resume helpers', () => {
         summary: `${status} run`,
       });
     }
+  });
+
+  it('keeps nested JSON payload objects from replacing the top-level completion', () => {
+    const raw = [
+      'banner',
+      JSON.stringify({
+        finalAssistantVisibleText: 'Outcome: implemented',
+        executionTrace: { result: 'success' },
+        completion: { finishReason: 'stop' },
+        payloads: [{ status: 'failed', summary: 'nested tool result' }],
+      }),
+      'footer',
+    ].join('\n');
+
+    expect(readRuntimeRunCompletionFromLog(raw)).toMatchObject({
+      status: 'succeeded',
+      outcome: 'implemented',
+    });
   });
 
   it('detects running task attempts and creates stable resume attempt ids', () => {
@@ -302,7 +403,24 @@ describe('runtime task completion and resume helpers', () => {
     };
 
     expect(runningRuntimeTaskPid(task, (pid) => pid === 222)).toBe(222);
-    expect(nextRuntimeResumeAttemptId(task)).toBe('agent_task_reirei-lab-rainrail_22_resume_03');
+    expect(nextRuntimeResumeAttemptId(task)).toBe('agent_task_reirei-lab-rainrail_22_agent_main_session_resume_03');
+  });
+
+  it('keeps resume attempt ids distinct for the same issue task in different sessions', () => {
+    const first = nextRuntimeResumeAttemptId({
+      id: 'agent_task_reirei-lab-rainrail_22',
+      agentSessionId: 'agent:main:run-a',
+      resumeAttempts: [],
+    });
+    const second = nextRuntimeResumeAttemptId({
+      id: 'agent_task_reirei-lab-rainrail_22',
+      agentSessionId: 'agent:main:run-b',
+      resumeAttempts: [],
+    });
+
+    expect(first).toContain('run-a');
+    expect(second).toContain('run-b');
+    expect(first).not.toBe(second);
   });
 });
 

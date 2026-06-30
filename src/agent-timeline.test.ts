@@ -69,6 +69,32 @@ describe('agent timeline', () => {
     }
   });
 
+  it('uses the latest lifecycle event when reporting ended trajectory status', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'rainrail-resumed-timeline-'));
+    const logPath = join(directory, 'agent.log');
+    writeFileSync(logPath, '', 'utf8');
+    writeFileSync(join(directory, 'resumed-session.trajectory.jsonl'), [
+      JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:08:00.000Z', seq: 1 }),
+      JSON.stringify({ type: 'session.ended', ts: '2026-06-30T15:58:00.000Z', seq: 2, data: { status: 'success' } }),
+      JSON.stringify({ type: 'session.started', ts: '2026-06-30T16:08:00.000Z', seq: 3 }),
+      JSON.stringify({ type: 'tool.call', ts: '2026-06-30T16:09:00.000Z', seq: 4, data: { name: 'bash', arguments: { command: 'pnpm test' } } }),
+    ].join('\n'), 'utf8');
+
+    try {
+      await expect(readRuntimeTimelineStatus(
+        { logPath, agentSessionId: 'resumed-session' },
+        { sessionsDirectory: directory },
+      )).resolves.toMatchObject({
+        sessionId: 'resumed-session',
+        ended: false,
+        endedStatus: undefined,
+        lastTimestamp: '2026-06-30T16:09:00.000Z',
+      });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('uses the configured agent id when deriving the default trajectory directory', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'rainrail-agent-id-timeline-'));
     const openClawHome = join(directory, '.openclaw');
@@ -98,20 +124,22 @@ describe('agent timeline', () => {
     const timeline = parseRuntimeTrajectoryTimeline([
       JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:08:00.000Z', seq: 1 }),
       JSON.stringify({ type: 'tool.call', ts: '2026-06-30T15:09:00.000Z', seq: 2, data: { name: 'bash', arguments: { command: 'pnpm test' } } }),
-      JSON.stringify({ type: 'tool.call', ts: '2026-06-30T15:09:05.000Z', seq: 3, data: { name: 'bash', arguments: { command: 'gh api -H "Authorization: Bearer github_pat_secretValue" repos/reirei-lab/rainrail' } } }),
-      JSON.stringify({ type: 'tool.result', ts: '2026-06-30T15:09:10.000Z', seq: 4, data: { name: 'bash', status: 'completed', output: 'ok token=secret-value Authorization: Bearer github_pat_outputSecret' } }),
+      JSON.stringify({ type: 'tool.call', ts: '2026-06-30T15:09:05.000Z', seq: 3, data: { name: 'bash', arguments: { command: 'gh api -H "Authorization: Bearer github_pat_secretValue" repos/reirei-lab/rainrail token="quoted-secret"' } } }),
+      JSON.stringify({ type: 'tool.result', ts: '2026-06-30T15:09:10.000Z', seq: 4, data: { name: 'bash', status: 'completed', output: "ok token=secret-value api_key='quoted-output-secret' Authorization: Bearer github_pat_outputSecret" } }),
       JSON.stringify({ type: 'tool.result', ts: '2026-06-30T15:09:20.000Z', seq: 5, data: { name: 'bash', status: 'completed', contentItems: [{ token: 'secret-json-token', apiKey: 'secret-json-key', password: 'secret-json-password' }] } }),
     ].join('\n'));
 
     expect(timeline.map((entry) => [entry.phase, entry.summary])).toEqual([
       ['session.started', 'session.started'],
       ['確認', 'pnpm test'],
-      ['調査', 'gh api -H "Authorization: Bearer [redacted-token]" repos/reirei-lab/rainrail'],
+      ['調査', 'gh api -H "Authorization: Bearer [redacted-token]" repos/reirei-lab/rainrail token="[redacted]"'],
       ['tool.result', 'bash completed'],
       ['tool.result', 'bash completed'],
     ]);
     expect(timeline[2]!.detail).toContain('Bearer [redacted-token]');
+    expect(timeline[2]!.detail).toContain('token="[redacted]"');
     expect(timeline[3]!.excerpt).toContain('token=[redacted]');
+    expect(timeline[3]!.excerpt).toContain("api_key='[redacted]'");
     expect(timeline[3]!.excerpt).toContain('Bearer [redacted-token]');
     expect(timeline[4]!.excerpt).toContain('"token": "[redacted]"');
     expect(timeline[4]!.excerpt).toContain('"apiKey": "[redacted]"');
