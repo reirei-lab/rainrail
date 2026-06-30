@@ -98,6 +98,8 @@ object payload も allowlist された shallow metadata（`action` / `status` /
 parse でき、scheme が GitHub provider URL、`github://deliveries/...`、または
 `cloudflare://deliveries/...` の場合だけ、
 userinfo / query / fragment を除去してから保存する。
+delivery scheme の path は短い安全な delivery id 1 セグメントだけを許可し、
+`/tokens/<secret>` や `token=...` のような値は拒否する。
 URL として parse できない optional `subject.url` は保存せず、必須の
 `rawPayload.reference` が parse できない、または allowlist 外 scheme の場合は publish を
 400 で拒否する。

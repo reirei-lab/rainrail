@@ -341,6 +341,34 @@ describe('Rainrail bridge room', () => {
     expect(storage.storedEvents()[0]?.rawPayload.reference).toBe('cloudflare://deliveries/delivery-1');
   });
 
+  it('rejects unsafe delivery reference paths before storage', async () => {
+    const secretPathStorage = fakeState();
+    const secretPathRoom = createTestRoom(secretPathStorage, { replayLimit: 10 });
+    const secretPathEvent = {
+      ...fixtureEvent('delivery-1', 'github.issue'),
+      rawPayload: { kind: 'external-reference', reference: 'github://deliveries/token=secret' },
+    };
+
+    const secretPathResponse = await secretPathRoom.fetch(publishRequest(secretPathEvent));
+
+    expect(secretPathResponse.status).toBe(400);
+    await expect(secretPathResponse.text()).resolves.toContain('reference must be a valid URL');
+    expect(secretPathStorage.storedEvents()).toEqual([]);
+
+    const nestedPathStorage = fakeState();
+    const nestedPathRoom = createTestRoom(nestedPathStorage, { replayLimit: 10 });
+    const nestedPathEvent = {
+      ...fixtureEvent('delivery-2', 'cloudflare.tail'),
+      rawPayload: { kind: 'external-reference', reference: 'cloudflare://deliveries/tokens/secret' },
+    };
+
+    const nestedPathResponse = await nestedPathRoom.fetch(publishRequest(nestedPathEvent));
+
+    expect(nestedPathResponse.status).toBe(400);
+    await expect(nestedPathResponse.text()).resolves.toContain('reference must be a valid URL');
+    expect(nestedPathStorage.storedEvents()).toEqual([]);
+  });
+
   it('rejects unknown raw payload kinds before storage', async () => {
     const storage = fakeState();
     const room = createTestRoom(storage, { replayLimit: 10 });

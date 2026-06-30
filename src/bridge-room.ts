@@ -7,6 +7,7 @@ const DEFAULT_REPLAY_LIMIT = 100;
 const ALLOWED_PAYLOAD_KEYS = new Set(['action', 'status', 'conclusion']);
 const ALLOWED_RAW_PAYLOAD_KINDS = new Set(['external-reference', 'inline-redacted']);
 const ALLOWED_URL_PROTOCOLS = new Set(['https:', 'github:', 'cloudflare:']);
+const SAFE_DELIVERY_REFERENCE_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 const SAFE_METADATA_TOKEN = /^[a-z0-9][a-z0-9._:-]{0,63}$/i;
 const claimedStorages = new WeakSet<RainrailBridgeRoomStorage>();
 
@@ -375,7 +376,11 @@ function isAllowedUrl(url: URL): boolean {
     return isAllowedGitHubUrl(url);
   }
 
-  return (url.protocol !== 'github:' && url.protocol !== 'cloudflare:') || url.hostname === 'deliveries';
+  if (url.protocol === 'github:' || url.protocol === 'cloudflare:') {
+    return isAllowedDeliveryReferenceUrl(url);
+  }
+
+  return true;
 }
 
 function isAllowedGitHubUrl(url: URL): boolean {
@@ -393,6 +398,13 @@ function isAllowedGitHubUrl(url: URL): boolean {
     ((resource === 'issues' || resource === 'pull') && /^\d+$/.test(id ?? '') && parts.length === 4) ||
     (resource === 'actions' && parts[3] === 'runs' && /^\d+$/.test(parts[4] ?? '') && parts.length === 5)
   );
+}
+
+function isAllowedDeliveryReferenceUrl(url: URL): boolean {
+  if (url.hostname !== 'deliveries') return false;
+
+  const parts = url.pathname.split('/').filter(Boolean);
+  return parts.length === 1 && url.pathname === `/${parts[0]}` && SAFE_DELIVERY_REFERENCE_ID.test(parts[0] ?? '');
 }
 
 function expectSanitizedUrl(value: string, key: string): string {
