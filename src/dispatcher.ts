@@ -260,17 +260,33 @@ function createWorkflowContext(
   lifecycle: WorkflowLifecycle,
 ): PluginRuntimeContext {
   const context = {} as PluginRuntimeContext;
-  const capabilities = createGatedRuntimeCapabilities(options, policy, event, lifecycle);
+  let capabilitiesResolved = false;
+  let capabilities: PluginRuntimeContext['capabilities'];
+  let providers: PluginRuntimeContext['providers'] | undefined;
+  let runtime: PluginRuntimeContext['runtime'] | undefined;
+  const getCapabilities = () => {
+    if (!capabilitiesResolved) {
+      capabilities = createGatedRuntimeCapabilities(options, policy, event, lifecycle);
+      capabilitiesResolved = true;
+    }
+
+    return capabilities;
+  };
+  const getProviders = () => {
+    providers ??= createGuardedProviders(options, policy, event, lifecycle);
+    return providers;
+  };
+  const getRuntime = () => {
+    runtime ??= createGatedRuntimeProvider(options, policy, event, lifecycle);
+    return runtime;
+  };
 
   defineWorkflowContextAccessor(context, 'runId', () => options.runtime.runId);
   defineWorkflowContextProperty(context, 'now', () => options.runtime.now());
 
-  if (capabilities !== undefined) {
-    defineWorkflowContextProperty(context, 'capabilities', capabilities);
-  }
-
-  defineWorkflowContextProperty(context, 'providers', createGuardedProviders(options, policy, event, lifecycle));
-  defineWorkflowContextProperty(context, 'runtime', createGatedRuntimeProvider(options, policy, event, lifecycle));
+  defineWorkflowContextAccessor(context, 'capabilities', getCapabilities);
+  defineWorkflowContextAccessor(context, 'providers', getProviders);
+  defineWorkflowContextAccessor(context, 'runtime', getRuntime);
   defineWorkflowContextProperty(context, 'signal', lifecycle.signal);
   defineWorkflowContextProperty(context, 'actions', createGatedRuntimeActions(options, policy, event, lifecycle));
 
@@ -329,13 +345,21 @@ function createGatedRuntimeProvider(
   event: RainrailEventEnvelope,
   lifecycle: WorkflowLifecycle,
 ): RuntimeProvider {
-  const runtime = options.runtime.runtime ?? unavailableRuntimeProvider;
+  let runtime: RuntimeProvider | undefined;
+  const getRuntime = () => {
+    runtime ??= options.runtime.runtime ?? unavailableRuntimeProvider;
+    return runtime;
+  };
 
   return {
-    name: runtime.name,
-    kind: runtime.kind,
+    get name() {
+      return getRuntime().name;
+    },
+    get kind() {
+      return getRuntime().kind;
+    },
     startRun: (request, context) =>
-      callRuntimeStartRun(options, policy, event, lifecycle, runtime, request, context?.signal),
+      callRuntimeStartRun(options, policy, event, lifecycle, getRuntime(), request, context?.signal),
   };
 }
 
@@ -405,7 +429,24 @@ function createDispatchAgentCapabilityProxy(
 ): PluginRuntimeContext['capabilities'] {
   const viewCache = new WeakMap<object, object>();
 
-  const bindCapabilityFunction = (value: Function, safeReceiver: object): Function => {
+  const isDispatchAgentFunction = (value: Function, property?: string | symbol): boolean => {
+    if (property === 'dispatchAgent') {
+      return true;
+    }
+
+    const rawDispatchAgent = getRawDispatchAgent();
+    if (value === rawDispatchAgent) {
+      return true;
+    }
+
+    return isBoundDispatchAgentAlias(value, property, rawDispatchAgent);
+  };
+
+  const bindCapabilityFunction = (value: Function, safeReceiver: object, property?: string | symbol): Function => {
+    if (isDispatchAgentFunction(value, property)) {
+      return dispatchAgent;
+    }
+
     const wrapped = (...args: unknown[]) =>
       callCapabilityFunction(
         value,
@@ -438,27 +479,33 @@ function createDispatchAgentCapabilityProxy(
     }
 
     if (property === 'constructor') {
-      return createCapabilityConstructorView(
-        Reflect.get(source, property, capabilities),
-        capabilities,
-        dispatchAgent,
-        getRawDispatchAgent,
-        (object) => createCapabilityView(object),
-      );
+      const safeReceiver = createCapabilityView(source);
+      const constructorValue = Reflect.get(source, property, safeReceiver);
+      return typeof constructorValue === 'function'
+        ? createCapabilityConstructorView(
+            constructorValue,
+            capabilities,
+            dispatchAgent,
+            getRawDispatchAgent,
+            (object) => createCapabilityView(object),
+          )
+        : normalizeCapabilityHelperResult(
+            constructorValue,
+            capabilities,
+            safeReceiver,
+            getRawDispatchAgent(),
+            dispatchAgent,
+            (object) => createCapabilityView(object),
+          );
     }
 
     const safeReceiver = createCapabilityView(source);
     const value = Reflect.get(source, property, safeReceiver);
     if (typeof value === 'function') {
-      const rawDispatchAgent = getRawDispatchAgent();
-      if (value === rawDispatchAgent) {
-        return dispatchAgent;
-      }
-
-      return bindCapabilityFunction(value, safeReceiver);
+      return bindCapabilityFunction(value, safeReceiver, property);
     }
 
-    if (typeof value === 'object' && value !== null) {
+    if (shouldWrapCapabilityObject(value)) {
       return createCapabilityView(value);
     }
 
@@ -489,6 +536,10 @@ function createDispatchAgentCapabilityProxy(
   };
 
   const createCapabilityView = (source: object): object => {
+    if (!shouldWrapCapabilityObject(source)) {
+      return source;
+    }
+
     const cached = viewCache.get(source);
     if (cached !== undefined) {
       return cached;
@@ -660,7 +711,10 @@ function readConstructorProperty(
 
   const value = Reflect.get(constructorValue, property, constructorView);
   const rawDispatchAgent = getRawDispatchAgent();
-  if (value === rawDispatchAgent) {
+  if (
+    value === rawDispatchAgent ||
+    (typeof value === 'function' && isBoundDispatchAgentAlias(value, property, rawDispatchAgent))
+  ) {
     return dispatchAgent;
   }
 
@@ -680,7 +734,7 @@ function callCapabilityFunction(
   wrapObject: (object: object) => object,
 ): unknown {
   const retryWithPrivateReceiver = (reason: unknown) => {
-    if (helperMayUsePublicThisProperty(helper)) {
+    if (helperMayResolveDispatchAgent(helper)) {
       throw reason;
     }
 
@@ -768,7 +822,7 @@ function normalizeCapabilityHelperResult(
     return dispatchAgent;
   }
 
-  if (typeof value === 'object' && value !== null) {
+  if (shouldWrapCapabilityObject(value)) {
     return wrapObject(value);
   }
 
@@ -779,12 +833,43 @@ function isPrivateReceiverError(reason: unknown): boolean {
   return reason instanceof TypeError && reason.message.includes('private');
 }
 
-function helperMayUsePublicThisProperty(helper: Function): boolean {
+function helperMayResolveDispatchAgent(helper: Function): boolean {
   try {
-    return /this\s*(?:\.|\[)(?!#)/u.test(Function.prototype.toString.call(helper));
+    return /this\s*(?:\.\s*(?:dispatchAgent|startAgent)|\[[^\]]*(?:dispatch|start)[^\]]*Agent[^\]]*\])/u.test(
+      Function.prototype.toString.call(helper),
+    );
   } catch {
     return true;
   }
+}
+
+function shouldWrapCapabilityObject(value: unknown): value is object {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+
+  const tag = Object.prototype.toString.call(value);
+  return tag === '[object Object]' || tag === '[object Array]';
+}
+
+function isBoundDispatchAgentAlias(
+  value: Function,
+  property: string | symbol | undefined,
+  rawDispatchAgent: DispatchAgentCapability | undefined,
+): boolean {
+  if (!value.name.startsWith('bound ')) {
+    return false;
+  }
+
+  if (typeof property === 'string' && /(?:dispatch|start).*agent/i.test(property)) {
+    return true;
+  }
+
+  if (rawDispatchAgent?.name && value.name === `bound ${rawDispatchAgent.name}`) {
+    return true;
+  }
+
+  return false;
 }
 
 async function callDispatchAgent(
@@ -991,43 +1076,50 @@ function createGuardedTaskProvider(
     },
   };
 
-  if (tasks.addToProject !== undefined) {
-    const addToProject = tasks.addToProject;
-    guardedTasks.addToProject = async (input, context) => {
-      const denied = getDeniedProviderCallReason(options, policy, event, lifecycle, auditAction('addToProject'));
-      if (denied !== undefined) {
-        throw denied;
-      }
-
-      return addToProject.call(tasks, input, { signal: combineAbortSignals(lifecycle.signal, context?.signal) });
-    };
+  if ('addToProject' in tasks) {
+    defineOptionalGuardedTaskMethod(guardedTasks, 'addToProject', tasks, options, policy, event, lifecycle, auditAction);
   }
 
-  if (tasks.setStatus !== undefined) {
-    const setStatus = tasks.setStatus;
-    guardedTasks.setStatus = async (input, context) => {
-      const denied = getDeniedProviderCallReason(options, policy, event, lifecycle, auditAction('setStatus'));
-      if (denied !== undefined) {
-        throw denied;
-      }
-
-      return setStatus.call(tasks, input, { signal: combineAbortSignals(lifecycle.signal, context?.signal) });
-    };
+  if ('setStatus' in tasks) {
+    defineOptionalGuardedTaskMethod(guardedTasks, 'setStatus', tasks, options, policy, event, lifecycle, auditAction);
   }
 
-  if (tasks.createProposal !== undefined) {
-    const createProposal = tasks.createProposal;
-    guardedTasks.createProposal = async (input, context) => {
-      const denied = getDeniedProviderCallReason(options, policy, event, lifecycle, auditAction('createProposal'));
-      if (denied !== undefined) {
-        throw denied;
-      }
-
-      return createProposal.call(tasks, input, { signal: combineAbortSignals(lifecycle.signal, context?.signal) });
-    };
+  if ('createProposal' in tasks) {
+    defineOptionalGuardedTaskMethod(guardedTasks, 'createProposal', tasks, options, policy, event, lifecycle, auditAction);
   }
 
   return guardedTasks;
+}
+
+function defineOptionalGuardedTaskMethod<TKey extends 'addToProject' | 'setStatus' | 'createProposal'>(
+  guardedTasks: TaskProvider,
+  key: TKey,
+  tasks: TaskProvider,
+  options: RuntimeDispatcherOptions,
+  policy: WorkflowExecutionPolicy,
+  event: RainrailEventEnvelope,
+  lifecycle: WorkflowLifecycle,
+  auditAction: (name: string) => WorkflowAuditEntry['action'],
+): void {
+  Object.defineProperty(guardedTasks, key, {
+    configurable: true,
+    enumerable: true,
+    get() {
+      const implementation = tasks[key];
+      if (implementation === undefined) {
+        return undefined;
+      }
+
+      return async (input: never, context?: { signal?: AbortSignal }) => {
+        const denied = getDeniedProviderCallReason(options, policy, event, lifecycle, auditAction(key));
+        if (denied !== undefined) {
+          throw denied;
+        }
+
+        return implementation.call(tasks, input, { signal: combineAbortSignals(lifecycle.signal, context?.signal) });
+      };
+    },
+  });
 }
 
 function getDeniedProviderCallReason(
