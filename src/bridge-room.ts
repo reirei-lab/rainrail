@@ -8,7 +8,9 @@ const ALLOWED_PAYLOAD_KEYS = new Set(['action', 'status', 'conclusion']);
 const ALLOWED_RAW_PAYLOAD_KINDS = new Set(['external-reference', 'inline-redacted']);
 const ALLOWED_URL_PROTOCOLS = new Set(['https:', 'github:', 'cloudflare:']);
 const SAFE_DELIVERY_REFERENCE_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
+const SAFE_IDENTIFIER_TOKEN = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/;
 const SAFE_METADATA_TOKEN = /^[a-z0-9][a-z0-9._:-]{0,63}$/i;
+const SAFE_REPOSITORY_NAME = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const claimedStorages = new WeakSet<RainrailBridgeRoomStorage>();
 
 type PublishEventResult =
@@ -154,6 +156,10 @@ export class RainrailBridgeRoom {
 
   async #subscribe(request: Request): Promise<Response> {
     const refreshResult = this.#publishQueue.then(async () => {
+      if (request.signal.aborted) {
+        return abortedPublishResponse();
+      }
+
       try {
         await this.#refreshRecentEvents();
       } catch {
@@ -226,9 +232,9 @@ function validatePublishEnvelope(value: unknown): RainrailEventEnvelope {
     throw new TypeError('body must be a JSON object');
   }
 
-  const id = expectString(value, 'id');
+  const id = expectIdentifier(value, 'id');
   const schemaVersion = expectString(value, 'schemaVersion');
-  const name = expectString(value, 'name');
+  const name = expectIdentifier(value, 'name');
   const occurredAt = expectString(value, 'occurredAt');
   const source = expectRecord(value, 'source');
   const delivery = expectRecord(value, 'delivery');
@@ -239,12 +245,12 @@ function validatePublishEnvelope(value: unknown): RainrailEventEnvelope {
     throw new TypeError('schemaVersion must be rainrail.event.v1');
   }
 
-  const sourceType = expectString(source, 'type');
-  const sourceName = expectString(source, 'name');
-  const deliveryId = expectString(delivery, 'id');
+  const sourceType = expectIdentifier(source, 'type');
+  const sourceName = expectIdentifier(source, 'name');
+  const deliveryId = expectIdentifier(delivery, 'id');
   const deliveryReceivedAt = expectString(delivery, 'receivedAt');
-  const subjectType = expectString(subject, 'type');
-  const subjectId = expectString(subject, 'id');
+  const subjectType = expectIdentifier(subject, 'type');
+  const subjectId = expectIdentifier(subject, 'id');
   const rawPayloadKind = expectRawPayloadKind(rawPayload);
   const rawPayloadReference = expectString(rawPayload, 'reference');
 
@@ -258,9 +264,9 @@ function validatePublishEnvelope(value: unknown): RainrailEventEnvelope {
     source: {
       type: sourceType,
       name: sourceName,
-      ...optionalString(source, 'repository'),
-      ...optionalString(source, 'account'),
-      ...optionalString(source, 'environment'),
+      ...optionalRepository(source, 'repository'),
+      ...optionalIdentifier(source, 'account'),
+      ...optionalIdentifier(source, 'environment'),
     },
     name,
     delivery: {
@@ -301,6 +307,15 @@ function expectString(record: Record<string, unknown>, key: string): string {
   return record[key];
 }
 
+function expectIdentifier(record: Record<string, unknown>, key: string): string {
+  const value = expectString(record, key);
+  if (!isSafeIdentifier(value)) {
+    throw new TypeError(`${key} must be a safe identifier`);
+  }
+
+  return value;
+}
+
 function expectRecord(record: Record<string, unknown>, key: string): Record<string, unknown> {
   if (!isRecord(record[key])) {
     throw new TypeError(`${key} must be an object`);
@@ -309,14 +324,24 @@ function expectRecord(record: Record<string, unknown>, key: string): Record<stri
   return record[key];
 }
 
-function optionalString(record: Record<string, unknown>, key: string): Record<string, string> {
+function optionalIdentifier(record: Record<string, unknown>, key: string): Record<string, string> {
   if (!(key in record)) return {};
 
   if (typeof record[key] !== 'string') {
     throw new TypeError(`${key} must be a string`);
   }
 
-  return { [key]: record[key] };
+  return isSafeIdentifier(record[key]) ? { [key]: record[key] } : {};
+}
+
+function optionalRepository(record: Record<string, unknown>, key: string): Record<string, string> {
+  if (!(key in record)) return {};
+
+  if (typeof record[key] !== 'string') {
+    throw new TypeError(`${key} must be a string`);
+  }
+
+  return SAFE_REPOSITORY_NAME.test(record[key]) ? { [key]: record[key] } : {};
 }
 
 function optionalUrl(record: Record<string, unknown>, key: string): Record<string, string> {
@@ -387,7 +412,7 @@ function isAllowedGitHubUrl(url: URL): boolean {
   if (url.hostname !== 'github.com') return false;
 
   const parts = url.pathname.split('/').filter(Boolean);
-  if (parts.length < 4) return false;
+  if (parts.length < 2) return false;
 
   const [, , resource, id] = parts;
   if (!/^[A-Za-z0-9_.-]+$/.test(parts[0] ?? '') || !/^[A-Za-z0-9_.-]+$/.test(parts[1] ?? '')) {
@@ -395,7 +420,9 @@ function isAllowedGitHubUrl(url: URL): boolean {
   }
 
   return (
+    parts.length === 2 ||
     ((resource === 'issues' || resource === 'pull') && /^\d+$/.test(id ?? '') && parts.length === 4) ||
+    (resource === 'runs' && /^\d+$/.test(id ?? '') && parts.length === 4) ||
     (resource === 'actions' && parts[3] === 'runs' && /^\d+$/.test(parts[4] ?? '') && parts.length === 5)
   );
 }
@@ -447,6 +474,10 @@ function isSafePayloadMetadata(value: unknown): value is string | null {
   if (value === null) return true;
 
   return typeof value === 'string' && SAFE_METADATA_TOKEN.test(value);
+}
+
+function isSafeIdentifier(value: string): boolean {
+  return SAFE_IDENTIFIER_TOKEN.test(value) || SAFE_REPOSITORY_NAME.test(value);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

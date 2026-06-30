@@ -191,6 +191,28 @@ describe('Rainrail bridge room', () => {
     await reader?.cancel();
   });
 
+  it('skips aborted event subscription refreshes queued behind publishes', async () => {
+    const storage = countingState();
+    const room = createTestRoom(storage.state, { replayLimit: 10 });
+    const health = await room.fetch(new Request('https://rainrail.local/healthz'));
+    expect(health.status).toBe(200);
+    expect(storage.getCalls).toBe(1);
+
+    const delayedPublish = delayedJsonPublishRequest(fixtureEvent('delivery-1', 'github.issue'));
+    const publish = room.fetch(delayedPublish.request);
+    await flushMicrotasks();
+
+    const controller = new AbortController();
+    const events = room.fetch(eventsRequest(TEST_PUBLISH_TOKEN, {}, controller.signal));
+    controller.abort();
+
+    delayedPublish.resolve();
+
+    expect((await publish).status).toBe(200);
+    expect((await events).status).toBe(499);
+    expect(storage.getCalls).toBe(2);
+  });
+
   it('keeps duplicate replay ids at their latest occurrence when enforcing replay limits', async () => {
     const staleDuplicate = fixtureEvent('delivery-1', 'github.issue');
     const other = fixtureEvent('delivery-2', 'cloudflare.tail');
@@ -339,6 +361,27 @@ describe('Rainrail bridge room', () => {
 
     expect(response.status).toBe(200);
     expect(storage.storedEvents()[0]?.rawPayload.reference).toBe('cloudflare://deliveries/delivery-1');
+  });
+
+  it('accepts safe GitHub repository and check run URLs', async () => {
+    const storage = fakeState();
+    const room = createTestRoom(storage, { replayLimit: 10 });
+    const repositoryEvent = {
+      ...fixtureEvent('delivery-1', 'github.issue'),
+      subject: { type: 'repository', id: 'reirei-lab/rainrail', url: 'https://github.com/reirei-lab/rainrail' },
+    };
+    const checkRunEvent = {
+      ...fixtureEvent('delivery-2', 'github.issue'),
+      subject: { type: 'check_run', id: '1234567890', url: 'https://github.com/reirei-lab/rainrail/runs/1234567890' },
+    };
+
+    expect((await room.fetch(publishRequest(repositoryEvent))).status).toBe(200);
+    expect((await room.fetch(publishRequest(checkRunEvent))).status).toBe(200);
+
+    expect(storage.storedEvents().map((event) => event.subject.url)).toEqual([
+      'https://github.com/reirei-lab/rainrail',
+      'https://github.com/reirei-lab/rainrail/runs/1234567890',
+    ]);
   });
 
   it('rejects unsafe delivery reference paths before storage', async () => {
@@ -584,6 +627,67 @@ describe('Rainrail bridge room', () => {
     expect(chunk).not.toContain('token-like value');
   });
 
+  it('normalizes unsafe source metadata before storage and SSE delivery', async () => {
+    const storage = fakeState();
+    const room = createTestRoom(storage, { replayLimit: 10 });
+    const event = {
+      ...fixtureEvent('delivery-1', 'github.issue'),
+      source: {
+        type: 'github',
+        name: 'github-webhook',
+        repository: 'token=secret-repository',
+        account: 'token=secret-account',
+        environment: 'production',
+      },
+    };
+
+    const response = await room.fetch(publishRequest(event));
+
+    expect(response.status).toBe(200);
+    expect(storage.storedEvents()[0]?.source).toEqual({
+      type: 'github',
+      name: 'github-webhook',
+      environment: 'production',
+    });
+
+    const eventsResponse = await room.fetch(eventsRequest());
+    const reader = eventsResponse.body?.getReader();
+    expect(reader).toBeDefined();
+    const chunk = await readUntil(reader!, 'github.issue');
+    await reader?.cancel();
+
+    expect(chunk).not.toContain('secret-repository');
+    expect(chunk).not.toContain('secret-account');
+  });
+
+  it('rejects unsafe identifier fields before storage', async () => {
+    const deliveryStorage = fakeState();
+    const deliveryRoom = createTestRoom(deliveryStorage, { replayLimit: 10 });
+    const unsafeDeliveryEvent = {
+      ...fixtureEvent('delivery-1', 'github.issue'),
+      id: 'safe-event-id',
+      delivery: { id: 'token=secret-delivery', receivedAt: '2026-06-29T18:18:21.000Z' },
+    };
+
+    const deliveryResponse = await deliveryRoom.fetch(publishRequest(unsafeDeliveryEvent));
+
+    expect(deliveryResponse.status).toBe(400);
+    expect(deliveryStorage.storedEvents()).toEqual([]);
+
+    const subjectStorage = fakeState();
+    const subjectRoom = createTestRoom(subjectStorage, { replayLimit: 10 });
+    const unsafeSubjectEvent = {
+      ...fixtureEvent('delivery-2', 'github.issue'),
+      id: 'safe-event-id',
+      subject: { type: 'issue', id: 'token=secret-subject' },
+    };
+
+    const subjectResponse = await subjectRoom.fetch(publishRequest(unsafeSubjectEvent));
+
+    expect(subjectResponse.status).toBe(400);
+    expect(subjectStorage.storedEvents()).toEqual([]);
+  });
+
   it('normalizes raw payload content types before storage and SSE delivery', async () => {
     const storage = fakeState();
     const room = createTestRoom(storage, { replayLimit: 10 });
@@ -780,12 +884,17 @@ function publishRequest(event: unknown, signal?: AbortSignal, publishToken: stri
   });
 }
 
-function eventsRequest(publishToken: string | null = TEST_PUBLISH_TOKEN, headers: Record<string, string> = {}): Request {
+function eventsRequest(
+  publishToken: string | null = TEST_PUBLISH_TOKEN,
+  headers: Record<string, string> = {},
+  signal?: AbortSignal,
+): Request {
   return new Request('https://rainrail.local/events', {
     headers: {
       ...headers,
       ...(publishToken === null ? {} : { Authorization: `Bearer ${publishToken}` }),
     },
+    ...(signal === undefined ? {} : { signal }),
   });
 }
 
@@ -855,6 +964,28 @@ function storedReplayState(events: unknown[]) {
     storage: {
       get: async () => events,
       put: async () => undefined,
+    },
+  };
+}
+
+function countingState() {
+  let getCalls = 0;
+  let stored: unknown[] = [];
+
+  return {
+    get getCalls() {
+      return getCalls;
+    },
+    state: {
+      storage: {
+        get: async () => {
+          getCalls += 1;
+          return stored;
+        },
+        put: async (_key: string, value: unknown) => {
+          stored = Array.isArray(value) ? value : [];
+        },
+      },
     },
   };
 }

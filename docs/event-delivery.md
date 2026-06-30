@@ -91,6 +91,11 @@ constructor が拒否する。Worker/Node adapter は同じ room へ sticky rout
 room ごとに別 storage namespace を使う。
 
 storage の key は `rainrail:recent-events`。保存するのは正規化済み envelope だけで、
+`id` / `name` / `source.type` / `source.name` / `delivery.id` / `subject.type` /
+`subject.id` は短い安全な identifier（または `owner/repo` 形式の repository id）だけを
+受け付ける。任意の `source.repository` は `owner/repo` 形式だけ、
+`source.account` / `source.environment` は短い安全な identifier だけ保存し、
+それ以外の任意 metadata は落とす。
 object payload も allowlist された shallow metadata（`action` / `status` /
 `conclusion`）のうち、短い token 文字列または `null` だけに縮約し、object でない payload は
 空 object にする。任意 URL や query を
@@ -98,6 +103,8 @@ object payload も allowlist された shallow metadata（`action` / `status` /
 parse でき、scheme が GitHub provider URL、`github://deliveries/...`、または
 `cloudflare://deliveries/...` の場合だけ、
 userinfo / query / fragment を除去してから保存する。
+GitHub provider URL は `https://github.com/<owner>/<repo>`、issue / pull、
+check run の `runs/<id>`、Actions run の `actions/runs/<id>` だけを許可する。
 delivery scheme の path は短い安全な delivery id 1 セグメントだけを許可し、
 `/tokens/<secret>` や `token=...` のような値は拒否する。
 URL として parse できない optional `subject.url` は保存せず、必須の
