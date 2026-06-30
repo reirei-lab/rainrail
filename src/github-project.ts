@@ -792,9 +792,14 @@ async function loadProjectIssueClaimLockForIssue(
   } catch {
     return undefined;
   }
-  const lock = await loadProjectIssueClaimLockByRepositoryNameIfExists(owner, repo, projectIssueLockRefName(issue), fetchImpl, auth)
-    .catch(() => 'read-error' as const);
-  if (lock !== 'read-error' && lock?.dispatchedAt !== undefined) {
+  let lock: ProjectIssueClaimLock | undefined;
+  let startingLockReadError: unknown;
+  try {
+    lock = await loadProjectIssueClaimLockByRepositoryNameIfExists(owner, repo, projectIssueLockRefName(issue), fetchImpl, auth);
+  } catch (error) {
+    startingLockReadError = error;
+  }
+  if (lock?.dispatchedAt !== undefined) {
     return lock;
   }
   const dispatchedLock = await loadProjectIssueClaimLockByRepositoryNameIfExists(
@@ -807,10 +812,13 @@ async function loadProjectIssueClaimLockForIssue(
   if (dispatchedLock?.dispatchedAt !== undefined && dispatchedLock.projectItemId === issue.id) {
     return {
       ...dispatchedLock,
-      ...(lock === undefined ? {} : lock === 'read-error' ? { startingLockReadFailed: true } : { startingLockRefId: lock.id }),
+      ...(startingLockReadError !== undefined ? { startingLockReadFailed: true } : lock === undefined ? {} : { startingLockRefId: lock.id }),
     };
   }
-  return lock === 'read-error' ? undefined : lock;
+  if (startingLockReadError !== undefined) {
+    throw startingLockReadError;
+  }
+  return lock;
 }
 
 async function loadProjectIssueClaimLockByRepositoryNameIfExists(

@@ -82,6 +82,65 @@ describe('project issue selection', () => {
     ])).toEqual(child);
   });
 
+  it('does not select todo children whose parent is no longer ready', () => {
+    const fallback = issue('issue_30', {
+      status: 'Todo',
+      assigneeLogins: ['reirei-agent'],
+      repository: 'reirei-lab/rainrail',
+      number: 30,
+    });
+
+    expect(getNextProjectIssueToStart([
+      issue('parent', {
+        status: 'Done',
+        assigneeLogins: ['reirei-agent'],
+        repository: 'reirei-lab/rainrail',
+        number: 21,
+      }),
+      issue('child', {
+        status: 'Todo',
+        assigneeLogins: ['reirei-agent'],
+        repository: 'reirei-lab/rainrail',
+        number: 22,
+        parent: { repository: 'reirei-lab/rainrail', number: 21 },
+      }),
+      fallback,
+    ])).toEqual(fallback);
+  });
+
+  it('does not start a backlog child while a sibling is already in progress', () => {
+    const fallback = issue('issue_30', {
+      status: 'Todo',
+      assigneeLogins: ['reirei-agent'],
+      repository: 'reirei-lab/rainrail',
+      number: 30,
+    });
+
+    expect(getNextProjectIssueToStart([
+      issue('parent', {
+        status: 'Todo',
+        assigneeLogins: ['reirei-agent'],
+        repository: 'reirei-lab/rainrail',
+        number: 21,
+      }),
+      issue('running_child', {
+        status: 'In Progress',
+        assigneeLogins: ['other-agent'],
+        repository: 'reirei-lab/rainrail',
+        number: 22,
+        parent: { repository: 'reirei-lab/rainrail', number: 21 },
+      }),
+      issue('backlog_child', {
+        status: 'Backlog',
+        assigneeLogins: [],
+        repository: 'reirei-lab/rainrail',
+        number: 23,
+        parent: { repository: 'reirei-lab/rainrail', number: 21 },
+      }),
+      fallback,
+    ], { maxConcurrentAgentTasks: 2 })).toEqual(fallback);
+  });
+
   it('does not select children assigned to another agent', () => {
     const unassignedChild = issue('child_2', {
       status: 'Backlog',

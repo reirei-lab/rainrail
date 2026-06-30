@@ -69,6 +69,12 @@ export function getUpcomingProjectIssueCandidate(
       if (hasUnfinishedBlocker(issue)) {
         continue;
       }
+      if (projectChildren.some((candidate) =>
+        !isClosedProjectIssue(candidate)
+        && normalizeToken(candidate.status) === normalizeToken(resolved.inProgressStatus)
+      )) {
+        continue;
+      }
       const child = projectChildren.find((candidate) =>
         isRunnableForAgent(candidate, resolved.assigneeLogin)
         && !isClosedProjectIssue(candidate)
@@ -78,15 +84,12 @@ export function getUpcomingProjectIssueCandidate(
       if (child !== undefined) {
         return child;
       }
-      if (projectChildren.some((candidate) =>
-        !isClosedProjectIssue(candidate)
-        && normalizeToken(candidate.status) === normalizeToken(resolved.inProgressStatus)
-      )) {
-        continue;
-      }
     }
 
-    if (!hasUnfinishedBlocker(issue)) {
+    if (issue.parent !== undefined && !hasReadyParentForChild(issue, issues, resolved)) {
+      continue;
+    }
+    if (!hasUnfinishedBlocker(issue) && !hasInProgressSibling(issue, issues, resolved)) {
       return issue;
     }
   }
@@ -134,11 +137,41 @@ function childIssuesOf(issue: ProjectIssue, issues: readonly ProjectIssue[]): Pr
   return issues.filter((candidate) => isChildOf(candidate, issue));
 }
 
+function hasReadyParentForChild(
+  issue: ProjectIssue,
+  issues: readonly ProjectIssue[],
+  options: Required<ProjectIssueSelectionOptions>,
+): boolean {
+  const parent = issues.find((candidate) => isChildOf(issue, candidate));
+  return parent !== undefined
+    && isProjectIssueAssignedTo(parent, options.assigneeLogin)
+    && !isClosedProjectIssue(parent)
+    && normalizeToken(parent.status) === normalizeToken(options.todoStatus)
+    && !hasUnfinishedBlocker(parent);
+}
+
+function hasInProgressSibling(
+  issue: ProjectIssue,
+  issues: readonly ProjectIssue[],
+  options: Required<ProjectIssueSelectionOptions>,
+): boolean {
+  if (issue.parent === undefined) {
+    return false;
+  }
+  const parent = issue.parent;
+  return issues.some((candidate) =>
+    candidate.id !== issue.id
+    && isChildOf(candidate, parent)
+    && !isClosedProjectIssue(candidate)
+    && normalizeToken(candidate.status) === normalizeToken(options.inProgressStatus)
+  );
+}
+
 function isRunnableForAgent(issue: ProjectIssue, assigneeLogin: string): boolean {
   return issue.assigneeLogins.length === 0 || isProjectIssueAssignedTo(issue, assigneeLogin);
 }
 
-function isChildOf(issue: ProjectIssue, parent: ProjectIssue): boolean {
+function isChildOf(issue: ProjectIssue, parent: ProjectIssue | ProjectIssueReference): boolean {
   const parentKey = issueKey(parent);
   return parentKey !== undefined && issueKey(issue.parent) === parentKey;
 }
