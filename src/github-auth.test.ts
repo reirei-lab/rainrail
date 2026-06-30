@@ -125,6 +125,8 @@ describe('getGitHubToken', () => {
   });
 
   it('reads gh CLI tokens only from the active github.com host', async () => {
+    vi.stubEnv('GH_TOKEN', '');
+    vi.stubEnv('GITHUB_TOKEN', '');
     vi.stubEnv('GH_CLI_PATH', '/tmp/test-gh');
     const calls: Array<{ file: string; args: string[] }> = [];
 

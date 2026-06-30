@@ -1,4 +1,5 @@
 import type { RainrailEventSourceType } from './events.js';
+import type { TaskQueueProvider } from './task-queue.js';
 
 export type TaskProviderName = 'github' | 'forgejo' | 'openclaw' | (string & {});
 
@@ -64,5 +65,6 @@ export interface TaskProvider {
 
 export interface TaskProviderRegistry {
   tasks: TaskProvider;
+  queue?: TaskQueueProvider;
   [provider: string]: unknown;
 }
