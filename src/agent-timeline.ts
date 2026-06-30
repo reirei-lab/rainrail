@@ -456,7 +456,7 @@ function redactSensitiveText(value: string): string {
     .replace(/(Authorization:\s*[A-Za-z][A-Za-z0-9._-]*\s+)[^\s'",}]+/gi, '$1[redacted-token]')
     .replace(/\b(Set-Cookie:\s*)[^\n\r"]+/gi, '$1[redacted-cookie]')
     .replace(/\b(Cookie:\s*)[^\n\r"]+?(?=\s+Set-Cookie:|[\n\r"]|$)/gi, '$1[redacted-cookie]')
-    .replace(/("[^"]*(?:token|secret|password|api[_-]?key|private[_-]?key|authorization)[^"]*"\s*:\s*)"(?:(?:\\.)|[^"\\])*"/gi, '$1"[redacted]"')
+    .replace(/("[^"]*(?:token|secret|password|api[_-]?key|private[_-]?key|authorization|set-cookie|cookie)[^"]*"\s*:\s*)"(?:(?:\\.)|[^"\\])*"/gi, '$1"[redacted]"')
     .replace(/([A-Za-z0-9_-]*(?:token|secret|password|api[_-]?key|private[_-]?key)[A-Za-z0-9_-]*\s*[:=]\s*)"(?:(?:\\.)|[^"\\])*"/gi, '$1"[redacted]"')
     .replace(/([A-Za-z0-9_-]*authorization[A-Za-z0-9_-]*\s*=\s*)"(?:(?:\\.)|[^"\\])*"/gi, '$1"[redacted]"')
     .replace(/([A-Za-z0-9_-]*(?:token|secret|password|api[_-]?key|private[_-]?key)[A-Za-z0-9_-]*\s*[:=]\s*)'(?:(?:\\.)|[^'\\])*'/gi, "$1'[redacted]'")

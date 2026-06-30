@@ -282,7 +282,7 @@ describe('agent timeline', () => {
       JSON.stringify({ type: 'tool.call', ts: '2026-06-30T15:09:00.000Z', seq: 2, data: { name: 'bash', arguments: { command: 'pnpm test' } } }),
       JSON.stringify({ type: 'tool.call', ts: '2026-06-30T15:09:05.000Z', seq: 3, data: { name: 'bash', arguments: { command: 'curl https://user:password@example.com/repo.git -H "Authorization: Bearer github_pat_secretValue" -H "Authorization: Basic dXNlcjpwYXNz" -H "Cookie: session=abc123; csrf=def456" AUTHORIZATION="Bearer env-secret" token="quoted-secret" password="pa\\"ss"' } } }),
       JSON.stringify({ type: 'tool.result', ts: '2026-06-30T15:09:10.000Z', seq: 4, data: { name: 'bash', status: 'completed', output: "ok https://user:password@example.com/repo.git token=secret-value AWS_SECRET_ACCESS_KEY=cloud-secret AUTHORIZATION=BasicEnvSecret api_key='quoted-output-secret' Authorization: Bearer github_pat_outputSecret Authorization: Basic dXNlcjpwYXNz Cookie: session=abc123 Set-Cookie: refresh=def456\n-----BEGIN OPENSSH PRIVATE KEY-----\nplaceholder\n-----END OPENSSH PRIVATE KEY-----" } }),
-      JSON.stringify({ type: 'tool.result', ts: '2026-06-30T15:09:20.000Z', seq: 5, data: { name: 'bash', status: 'completed', contentItems: [{ token: 'secret-json-token', apiKey: 'secret-json-key', password: 'pa\\"ss', Authorization: 'Basic dXNlcjpwYXNz', webhookSecret: 'secret-webhook', clientSecret: 'secret-client', apiToken: 'secret-api-token', privateKey: '-----BEGIN PRIVATE KEY-----\\nplaceholder\\n-----END PRIVATE KEY-----', private_key: 'private-key-material' }] } }),
+      JSON.stringify({ type: 'tool.result', ts: '2026-06-30T15:09:20.000Z', seq: 5, data: { name: 'bash', status: 'completed', contentItems: [{ token: 'secret-json-token', apiKey: 'secret-json-key', password: 'pa\\"ss', Authorization: 'Basic dXNlcjpwYXNz', Cookie: 'session=json-cookie', 'Set-Cookie': 'refresh=json-refresh', webhookSecret: 'secret-webhook', clientSecret: 'secret-client', apiToken: 'secret-api-token', privateKey: '-----BEGIN PRIVATE KEY-----\\nplaceholder\\n-----END PRIVATE KEY-----', private_key: 'private-key-material' }] } }),
     ].join('\n'));
 
     expect(timeline.map((entry) => [entry.phase, entry.summary])).toEqual([
@@ -321,6 +321,10 @@ describe('agent timeline', () => {
     expect(timeline[4]!.excerpt).toContain('"apiKey": "[redacted]"');
     expect(timeline[4]!.excerpt).toContain('"password": "[redacted]"');
     expect(timeline[4]!.excerpt).toContain('"Authorization": "[redacted]"');
+    expect(timeline[4]!.excerpt).toContain('"Cookie": "[redacted]"');
+    expect(timeline[4]!.excerpt).toContain('"Set-Cookie": "[redacted]"');
+    expect(timeline[4]!.excerpt).not.toContain('json-cookie');
+    expect(timeline[4]!.excerpt).not.toContain('json-refresh');
     expect(timeline[4]!.excerpt).not.toContain('ss"');
     expect(timeline[4]!.excerpt).toContain('"webhookSecret": "[redacted]"');
     expect(timeline[4]!.excerpt).toContain('"clientSecret": "[redacted]"');
