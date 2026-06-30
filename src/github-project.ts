@@ -18,6 +18,7 @@ import type {
 const PROJECT_ISSUE_CLAIM_LOCK_TTL_MS = 15 * 60 * 1000;
 const PROJECT_ISSUE_CLAIM_LOCK_DISPATCH_MARK_ATTEMPTS = 3;
 const PROJECT_ISSUE_CLAIM_LOCK_COMMIT_PREFIX = 'Rainrail project issue claim lock';
+let latestGitHubResponseDateMs: number | undefined;
 
 export interface GitHubProjectTaskQueueConfig {
   organization: string;
@@ -90,6 +91,7 @@ interface ProjectItemStatus {
 interface ProjectIssueClaimLock {
   id: string;
   startingLockRefId?: string;
+  startingLockReadFailed?: boolean;
   createdAt: string;
   dispatchedAt?: string;
   agentSessionId?: string;
@@ -192,7 +194,13 @@ async function reconcileProjectIssueClaimState(
     const lock = await loadProjectIssueClaimLockForIssue(issue, fetchImpl, auth);
     if (lock?.dispatchedAt !== undefined && lock.projectItemId === issue.id) {
       const current = await loadProjectItemStatus(issue.id, fetchImpl, auth, config);
+      if (!isRestorableDispatchedClaimStatus(current, config)) {
+        return { ...issue, ...(current.status === undefined ? {} : { status: current.status }) };
+      }
       if (isFinalizedProjectIssueClaim(current, lock, issue)) {
+        if (lock.startingLockReadFailed === true) {
+          return issue;
+        }
         await deleteProjectIssueClaimLocks(dispatchedLockClaim(issue, lock), fetchImpl, auth).catch(() => undefined);
         return issue;
       }
@@ -268,8 +276,10 @@ async function restoreDispatchedProjectIssueClaim(
     await updateProjectField(fetchImpl, auth, metadata.projectId, issue.id, metadata.branchFieldId, {
       text: lock.branchName,
     });
-    await deleteProjectIssueClaimLocks(dispatchedLockClaim(issue, lock), fetchImpl, auth)
-      .catch(() => undefined);
+    if (lock.startingLockReadFailed !== true) {
+      await deleteProjectIssueClaimLocks(dispatchedLockClaim(issue, lock), fetchImpl, auth)
+        .catch(() => undefined);
+    }
   } catch {
     return { ...issue, status: config.inProgressStatus };
   }
@@ -348,6 +358,7 @@ async function claimProjectIssue(
 
   const before = await loadProjectItemStatus(input.issue.id, fetchImpl, auth, config);
   assertClaimable(before, input, config);
+  await assertParentIssueExecutionConditions(input.issue, fetchImpl, auth);
   const metadata = await loadProjectMetadata(config, fetchImpl, auth);
   let claim: ProjectIssueClaim | undefined;
   try {
@@ -369,6 +380,7 @@ async function claimProjectIssue(
       ...(input.issue.status === undefined ? {} : { originalStatus: input.issue.status }),
     };
     assertClaimable(await loadProjectItemStatus(input.issue.id, fetchImpl, auth, config), input, config);
+    await assertParentIssueExecutionConditions(input.issue, fetchImpl, auth);
   } catch (error) {
     if (claim !== undefined) {
       await deleteProjectIssueClaimLock(claim, fetchImpl, auth);
@@ -686,17 +698,24 @@ async function loadProjectIssueClaimLockPair(
   fetchImpl: typeof fetch,
   auth: GitHubProjectAuthTokenProvider,
 ): Promise<ProjectIssueClaimLock | undefined> {
-  const lock = await loadProjectIssueClaimLock(repositoryId, projectIssueLockRefName(issue), fetchImpl, auth)
-    .catch(() => undefined);
-  if (lock?.dispatchedAt !== undefined) {
+  const lock = await loadProjectIssueClaimLockIfExists(repositoryId, projectIssueLockRefName(issue), fetchImpl, auth)
+    .catch(() => 'read-error' as const);
+  if (lock !== 'read-error' && lock?.dispatchedAt !== undefined) {
     return lock;
   }
-  const dispatchedLock = await loadProjectIssueClaimLock(repositoryId, projectIssueDispatchedLockRefName(issue), fetchImpl, auth)
-    .catch(() => undefined);
+  const dispatchedLock = await loadProjectIssueClaimLockIfExists(
+    repositoryId,
+    projectIssueDispatchedLockRefName(issue),
+    fetchImpl,
+    auth,
+  ).catch(() => undefined);
   if (dispatchedLock?.dispatchedAt !== undefined && dispatchedLock.projectItemId === issue.id) {
-    return { ...dispatchedLock, ...(lock === undefined ? {} : { startingLockRefId: lock.id }) };
+    return {
+      ...dispatchedLock,
+      ...(lock === undefined ? {} : lock === 'read-error' ? { startingLockReadFailed: true } : { startingLockRefId: lock.id }),
+    };
   }
-  return lock;
+  return lock === 'read-error' ? undefined : lock;
 }
 
 async function loadProjectIssueClaimLockForIssue(
@@ -714,17 +733,42 @@ async function loadProjectIssueClaimLockForIssue(
   } catch {
     return undefined;
   }
-  const lock = await loadProjectIssueClaimLockByRepositoryName(owner, repo, projectIssueLockRefName(issue), fetchImpl, auth)
-    .catch(() => undefined);
-  if (lock?.dispatchedAt !== undefined) {
+  const lock = await loadProjectIssueClaimLockByRepositoryNameIfExists(owner, repo, projectIssueLockRefName(issue), fetchImpl, auth)
+    .catch(() => 'read-error' as const);
+  if (lock !== 'read-error' && lock?.dispatchedAt !== undefined) {
     return lock;
   }
-  const dispatchedLock = await loadProjectIssueClaimLockByRepositoryName(owner, repo, projectIssueDispatchedLockRefName(issue), fetchImpl, auth)
-    .catch(() => undefined);
+  const dispatchedLock = await loadProjectIssueClaimLockByRepositoryNameIfExists(
+    owner,
+    repo,
+    projectIssueDispatchedLockRefName(issue),
+    fetchImpl,
+    auth,
+  ).catch(() => undefined);
   if (dispatchedLock?.dispatchedAt !== undefined && dispatchedLock.projectItemId === issue.id) {
-    return { ...dispatchedLock, ...(lock === undefined ? {} : { startingLockRefId: lock.id }) };
+    return {
+      ...dispatchedLock,
+      ...(lock === undefined ? {} : lock === 'read-error' ? { startingLockReadFailed: true } : { startingLockRefId: lock.id }),
+    };
   }
-  return lock;
+  return lock === 'read-error' ? undefined : lock;
+}
+
+async function loadProjectIssueClaimLockByRepositoryNameIfExists(
+  owner: string,
+  repo: string,
+  name: string,
+  fetchImpl: typeof fetch,
+  auth: GitHubProjectAuthTokenProvider,
+): Promise<ProjectIssueClaimLock | undefined> {
+  try {
+    return await loadProjectIssueClaimLockByRepositoryName(owner, repo, name, fetchImpl, auth);
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('missing existing ref')) {
+      return undefined;
+    }
+    throw error;
+  }
 }
 
 async function loadProjectIssueClaimLockByRepositoryName(
@@ -985,6 +1029,44 @@ function assertProjectIssueExecutionConditions(status: ProjectItemStatus, issue:
   }
 }
 
+async function assertParentIssueExecutionConditions(
+  issue: ProjectIssue,
+  fetchImpl: typeof fetch,
+  auth: GitHubProjectAuthTokenProvider,
+): Promise<void> {
+  if (issue.parent?.repository === undefined || issue.parent.number === undefined) {
+    return;
+  }
+  const [owner, repo] = splitRepositoryNameWithOwner(issue.parent.repository);
+  const payload = await runGraphql<{ repository?: unknown }>(fetchImpl, auth, projectIssueReferenceQuery, {
+    owner,
+    repo,
+    number: issue.parent.number,
+  });
+  const repository = isRecord(payload.repository) ? payload.repository : undefined;
+  const parent = isRecord(repository?.issue) ? repository.issue : undefined;
+  if (!isRecord(parent)) {
+    throw new Error('GitHub Project parent issue is missing');
+  }
+  const blockers = blockedBy(parent);
+  if (
+    (typeof parent.state === 'string' && parent.state.trim().toLowerCase() === 'closed')
+    || hasUnfinishedBlocker(blockers)
+  ) {
+    throw new Error('GitHub Project item is no longer claimable');
+  }
+}
+
+function isRestorableDispatchedClaimStatus(
+  status: ProjectItemStatus,
+  config: GitHubProjectTaskQueueConfig,
+): boolean {
+  const normalized = normalizeToken(status.status ?? '');
+  return normalized === normalizeToken(config.todoStatus)
+    || normalized === normalizeToken(config.backlogStatus)
+    || normalized === normalizeToken(config.inProgressStatus);
+}
+
 function shouldReleaseCurrentClaim(
   status: ProjectItemStatus,
   input: ProjectIssueReleaseInput,
@@ -1033,6 +1115,7 @@ async function runGraphql<TData>(
   recordGitHubRateLimit('graphql', response.headers, authToken === undefined
     ? undefined
     : { authProvider: authToken.provider, fallback: authToken.fallback });
+  recordGitHubResponseDate(response.headers);
   if (!response.ok) {
     throw new Error(`GitHub GraphQL request failed with HTTP ${response.status}`);
   }
@@ -1066,10 +1149,21 @@ async function runGitHubRest<TData>(
   recordGitHubRateLimit('rest', response.headers, authToken === undefined
     ? undefined
     : { authProvider: authToken.provider, fallback: authToken.fallback });
+  recordGitHubResponseDate(response.headers);
   if (!response.ok) {
     throw new Error(`GitHub REST request failed with HTTP ${response.status}`);
   }
   return await response.json() as TData;
+}
+
+function recordGitHubResponseDate(headers: Headers): void {
+  const dateHeader = headers.get('date');
+  const parsed = dateHeader === null ? NaN : Date.parse(dateHeader);
+  latestGitHubResponseDateMs = Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function githubClockNowMs(): number {
+  return latestGitHubResponseDateMs ?? Date.now();
 }
 
 function mapProjectIssueItem(item: unknown, config: GitHubProjectTaskQueueConfig): ProjectIssue[] {
@@ -1373,7 +1467,7 @@ function isRecoverableStaleLock(lock: ProjectIssueClaimLock, input: Pick<Project
     return false;
   }
   const createdAt = Date.parse(lock.createdAt);
-  return Number.isFinite(createdAt) && Date.now() - createdAt >= PROJECT_ISSUE_CLAIM_LOCK_TTL_MS;
+  return Number.isFinite(createdAt) && githubClockNowMs() - createdAt >= PROJECT_ISSUE_CLAIM_LOCK_TTL_MS;
 }
 
 function isFinalizedProjectIssueClaim(
@@ -1609,6 +1703,22 @@ const projectItemStatusQuery = `
           ... on ProjectV2ItemFieldTextValue { text }
           ... on ProjectV2ItemFieldSingleSelectValue { name }
         }
+      }
+    }
+  }
+`;
+
+const projectIssueReferenceQuery = `
+  query RainrailProjectIssueReference($owner: String!, $repo: String!, $number: Int!) {
+    repository(owner: $owner, name: $repo) {
+      issue(number: $number) {
+        number
+        title
+        state
+        url
+        repository { nameWithOwner }
+        issueDependenciesSummary { blockedBy }
+        blockedBy(first: 100) { totalCount nodes { number title state url repository { nameWithOwner } } }
       }
     }
   }
