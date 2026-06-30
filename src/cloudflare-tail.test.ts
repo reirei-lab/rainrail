@@ -313,6 +313,37 @@ describe('Cloudflare tail source', () => {
     expect(createdIssues[0]?.title).toBe('[asme-site] TypeError in resolveCurrentHumanAccount');
   });
 
+  it('bounds Cloudflare exception fields before publishing tail events', async () => {
+    const published: RainrailEventEnvelope[] = [];
+    const longStack = Array.from({ length: 80 }, (_, index) => `    at frame${index} (worker.js:${index}:1)`).join('\n');
+
+    await publishCloudflareTailEvents([
+      cloudflareTailFixture({
+        outcome: 'exception',
+        exceptions: [{
+          name: `HugeError ${'n'.repeat(500)} name-tail`,
+          message: `message ${'m'.repeat(2_000)} message-tail`,
+          stack: `${longStack}\nstack-tail`,
+        }],
+      }),
+    ], {
+      receivedAt: new Date('2026-06-15T08:12:01.000Z'),
+      publish: async (event) => {
+        published.push(event);
+        return Response.json({ ok: true });
+      },
+    });
+
+    const payload = published[0]?.payload as { exceptions?: Array<{ name?: string; message?: string; stack?: string }> } | undefined;
+    const exception = payload?.exceptions?.[0];
+    expect(exception?.name).toContain('... truncated ...');
+    expect(exception?.message).toContain('... truncated ...');
+    expect(exception?.stack).toContain('... truncated ...');
+    expect(exception?.name).not.toContain('name-tail');
+    expect(exception?.message).not.toContain('message-tail');
+    expect(exception?.stack).not.toContain('stack-tail');
+  });
+
   it('keeps fallback delivery ids unique inside a cf-ray-less batch', async () => {
     const storage = fakeState();
     const room = new RainrailBridgeRoom(storage, { publishToken: TEST_PUBLISH_TOKEN, replayLimit: 10 });

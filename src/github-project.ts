@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import type { GitHubAuthToken } from './github-auth.js';
 import {
   getGitHubAuthToken,
@@ -218,26 +220,52 @@ async function addMentionDraftItem(
   const metadata = await loadProjectMetadata(config, fetchImpl, auth);
   const existing = await findExistingMentionDraftItem(config, input, fetchImpl, auth);
   if (existing !== undefined) {
-    if (shouldResetExistingMentionDraftStatus(config, existing)) {
-      await updateProjectFieldWithRetry(
-        fetchImpl,
-        auth,
-        metadata.projectId,
-        existing.id,
-        metadata.statusFieldId,
-        { singleSelectOptionId: metadata.todoStatusOptionId },
-      );
-    }
-
-    return {
-      projectId: metadata.projectId,
-      projectItemId: existing.id,
-      statusFieldId: metadata.statusFieldId,
-      statusOptionId: metadata.todoStatusOptionId,
-      created: false,
-    };
+    return reuseMentionDraftItem(config, metadata, existing, fetchImpl, auth);
   }
 
+  return withMentionDraftCreationLock(config, input, fetchImpl, auth, async () => {
+    const lockedExisting = await findExistingMentionDraftItem(config, input, fetchImpl, auth);
+    if (lockedExisting !== undefined) {
+      return reuseMentionDraftItem(config, metadata, lockedExisting, fetchImpl, auth);
+    }
+
+    return createMentionDraftItem(metadata, input, fetchImpl, auth);
+  });
+}
+
+async function reuseMentionDraftItem(
+  config: GitHubProjectTaskQueueConfig,
+  metadata: ProjectMetadata,
+  existing: MentionDraftProjectItem,
+  fetchImpl: typeof fetch,
+  auth: GitHubProjectAuthTokenProvider,
+): Promise<ProjectMentionDraftItem> {
+  if (shouldResetExistingMentionDraftStatus(config, existing)) {
+    await updateProjectFieldWithRetry(
+      fetchImpl,
+      auth,
+      metadata.projectId,
+      existing.id,
+      metadata.statusFieldId,
+      { singleSelectOptionId: metadata.todoStatusOptionId },
+    );
+  }
+
+  return {
+    projectId: metadata.projectId,
+    projectItemId: existing.id,
+    statusFieldId: metadata.statusFieldId,
+    statusOptionId: metadata.todoStatusOptionId,
+    created: false,
+  };
+}
+
+async function createMentionDraftItem(
+  metadata: ProjectMetadata,
+  input: ProjectMentionDraftInput,
+  fetchImpl: typeof fetch,
+  auth: GitHubProjectAuthTokenProvider,
+): Promise<ProjectMentionDraftItem> {
   const payload = await runGraphql<AddProjectDraftIssueData>(fetchImpl, auth, addProjectDraftIssueMutation, {
     projectId: metadata.projectId,
     title: input.title,
@@ -263,6 +291,74 @@ async function addMentionDraftItem(
     statusFieldId: metadata.statusFieldId,
     statusOptionId: metadata.todoStatusOptionId,
     created: true,
+  };
+}
+
+async function withMentionDraftCreationLock<T>(
+  config: GitHubProjectTaskQueueConfig,
+  input: ProjectMentionDraftInput,
+  fetchImpl: typeof fetch,
+  auth: GitHubProjectAuthTokenProvider,
+  fn: () => Promise<T>,
+): Promise<T> {
+  if (input.repository === undefined) {
+    return fn();
+  }
+  const repository = await loadRepositoryLockMetadata(input.repository, fetchImpl, auth);
+  if (
+    repository.id === undefined
+    || repository.nameWithOwner === undefined
+    || repository.defaultBranchOid === undefined
+    || repository.defaultBranchTreeOid === undefined
+  ) {
+    return fn();
+  }
+
+  const issue = mentionDraftCreationLockIssue(config, input);
+  const lockInput = mentionDraftCreationLockInput(issue);
+  const lockOid = await createProjectIssueClaimLockCommit({
+    repositoryNameWithOwner: repository.nameWithOwner,
+    defaultBranchOid: repository.defaultBranchOid,
+    defaultBranchTreeOid: repository.defaultBranchTreeOid,
+  }, lockInput, fetchImpl, auth);
+  const lockRefId = await createProjectIssueClaimLock(
+    repository.id,
+    projectIssueLockRefName(issue),
+    lockOid,
+    fetchImpl,
+    auth,
+  );
+  try {
+    return await fn();
+  } finally {
+    await deleteProjectIssueClaimLock({ projectItemId: issue.id, lockRefId }, fetchImpl, auth).catch(() => undefined);
+  }
+}
+
+function mentionDraftCreationLockIssue(
+  config: GitHubProjectTaskQueueConfig,
+  input: ProjectMentionDraftInput,
+): ProjectIssue {
+  const targetAgentLogin = input.targetAgentLogin ?? config.assigneeLogin;
+  return {
+    id: `mention-draft-${shortHash(`${targetAgentLogin}\n${input.commentUrl}`)}`,
+    contentType: 'DraftIssue',
+    title: input.title,
+    state: 'OPEN',
+    status: config.todoStatus,
+    assigneeLogins: [targetAgentLogin],
+    ...(input.repository === undefined ? {} : { repository: input.repository }),
+    ...(input.number === undefined ? {} : { number: input.number }),
+    commentUrl: input.commentUrl,
+  };
+}
+
+function mentionDraftCreationLockInput(issue: ProjectIssue): ProjectIssueClaimInput {
+  return {
+    issue,
+    agentSessionId: `mention-draft:${slug(issue.assigneeLogins[0] ?? 'agent')}:${slug(issue.commentUrl ?? issue.id)}`,
+    branchName: `mention-draft/${slug(issue.repository ?? 'repo')}-${slug(issue.id)}`,
+    commentBody: 'Rainrail is creating a mention draft.',
   };
 }
 
@@ -2248,6 +2344,10 @@ function camelCaseFieldName(name: string): string {
 function slug(value: string): string {
   const normalized = value.trim().toLowerCase().replace(/[^a-z0-9]+/gu, '-').replace(/^-+|-+$/gu, '');
   return normalized.length === 0 ? 'item' : normalized;
+}
+
+function shortHash(value: string): string {
+  return createHash('sha256').update(value).digest('hex').slice(0, 12);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

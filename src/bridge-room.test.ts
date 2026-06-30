@@ -976,7 +976,7 @@ describe('Rainrail bridge room', () => {
         scriptName: 'asme-site',
         exceptions: [{
           name: `HugeError ${'n'.repeat(2_000)} name-tail`,
-          message: `prefix {"password":"storage-secret","code":123456,"tokens":["bridge-array-secret"],"apiKeys":["bridge-camel-secret"]} passwords: "bridge-plural-secret" x-api-key: bridge-key-secret x-api-key: "bridge-quoted-key-secret" authorization=Basic bridge-basic-secret cookie=session=bridge-cookie-secret ${'m'.repeat(2_000)} suffix`,
+          message: `prefix {"password":"storage-secret","escapedPassword":"abc\\"escaped-tail","code":123456,"tokens":["bridge-array-secret"],"apiKeys":["bridge-camel-secret"]} passwords: "bridge-plural-secret" x-api-key: bridge-key-secret x-api-key: "bridge-quoted-key-secret" authorization=Basic bridge-basic-secret cookie=session=bridge-cookie-secret ${'m'.repeat(2_000)} suffix`,
           stack: Array.from({ length: 40 }, (_, index) => `    at frame${index} (worker.js:${index}:1)`).join('\n'),
         }],
       },
@@ -996,6 +996,7 @@ describe('Rainrail bridge room', () => {
     expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('123456');
     expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-array-secret');
     expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-camel-secret');
+    expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('escaped-tail');
     expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-plural-secret');
     expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-key-secret');
     expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-quoted-key-secret');

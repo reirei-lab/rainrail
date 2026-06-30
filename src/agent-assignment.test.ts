@@ -79,6 +79,48 @@ describe('assignNextProjectIssueToAgent', () => {
     ]);
   });
 
+  it('uses mention draft comment URLs in task identity', async () => {
+    const tasks: Array<{ id: string; agentSessionId: string; branchName: string }> = [];
+
+    for (const commentUrl of [
+      'https://github.com/reirei-lab/rainrail/issues/21#issuecomment-1',
+      'https://github.com/reirei-lab/rainrail/issues/21#issuecomment-2',
+    ]) {
+      await assignNextProjectIssueToAgent({
+        queue: {
+          name: 'github-project',
+          kind: 'task-queue-provider',
+          listProjectIssues: async () => [projectIssue({
+            id: `draft-${commentUrl.endsWith('-1') ? 'one' : 'two'}`,
+            contentType: 'DraftIssue',
+            commentUrl,
+          })],
+          claimProjectIssue: async ({ agentSessionId, branchName }) => {
+            tasks.push({
+              id: agentSessionId.split('rainrail-')[1]?.replace(/-run-21$/u, '') ?? '',
+              agentSessionId,
+              branchName,
+            });
+            return { projectItemId: 'item_21' };
+          },
+        },
+        runtime: {
+          runId: 'run-21',
+          workflow: 'project-issue-selection',
+          agentId: 'main',
+          sessionKeyPrefix: 'rainrail',
+          dispatchAgent: async () => ({ sessionKey: 'agent:main:run-21' }),
+        },
+      });
+    }
+
+    expect(tasks[0]?.id).not.toBe(tasks[1]?.id);
+    expect(tasks[0]?.agentSessionId).not.toBe(tasks[1]?.agentSessionId);
+    expect(tasks[0]?.branchName).not.toBe(tasks[1]?.branchName);
+    expect(tasks[0]?.id).toContain('comment-');
+    expect(tasks[0]?.branchName).toContain('comment-');
+  });
+
   it('finalizes a claimed issue after dispatch succeeds', async () => {
     const issue = projectIssue({ number: 21, title: 'Project issue selection' });
     const claim = { projectItemId: 'item_21', lockRefId: 'REF_lock' };

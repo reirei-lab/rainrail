@@ -767,7 +767,7 @@ describe('cloudflare issue redaction', () => {
     });
 
     await expect(workflow.handle(cloudflareErrorEvent({
-      message: 'serialized input {"password":"abc\\"def","verification_code":"verify-secret"} resetCode: "reset-secret"',
+      message: 'serialized input {"password":"abc\\"def","verification_code":"verify-secret"} resetCode: "reset-secret" verification: 123456 verification=verify-scalar-secret',
       rawData: {
         code: 'plain-code-secret',
         resetCode: 'reset-code-secret',
@@ -781,6 +781,8 @@ describe('cloudflare issue redaction', () => {
     expect(createdIssues[0]?.body).not.toContain('def');
     expect(createdIssues[0]?.body).not.toContain('verify-secret');
     expect(createdIssues[0]?.body).not.toContain('reset-secret');
+    expect(createdIssues[0]?.body).not.toContain('123456');
+    expect(createdIssues[0]?.body).not.toContain('verify-scalar-secret');
     expect(createdIssues[0]?.body).not.toContain('plain-code-secret');
     expect(createdIssues[0]?.body).not.toContain('reset-code-secret');
     expect(createdIssues[0]?.body).not.toContain('verification-code-secret');

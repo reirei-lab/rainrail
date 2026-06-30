@@ -9,6 +9,10 @@ const FAILURE_OUTCOMES = new Set([
   'canceled',
   'responseStreamDisconnected',
 ]);
+const MAX_EXCEPTION_NAME_LENGTH = 200;
+const MAX_EXCEPTION_MESSAGE_LENGTH = 512;
+const MAX_EXCEPTION_STACK_LENGTH = 1_200;
+const MAX_EXCEPTION_STACK_LINES = 8;
 
 export interface CloudflareTailEvent {
   eventTimestamp?: number | string;
@@ -297,7 +301,30 @@ function normalizeExceptions(value: unknown): CloudflareTailException[] {
 
 function optionalField(record: Record<string, unknown>, key: 'name' | 'message' | 'stack'): Record<typeof key, string> | {} {
   const value = optionalString(record[key]);
-  return value === null ? {} : { [key]: value };
+  if (value === null) return {};
+  return { [key]: boundedExceptionField(key, value) };
+}
+
+function boundedExceptionField(key: 'name' | 'message' | 'stack', value: string): string {
+  if (key === 'name') return truncateText(value, MAX_EXCEPTION_NAME_LENGTH);
+  if (key === 'message') return truncateText(value, MAX_EXCEPTION_MESSAGE_LENGTH);
+  return truncateText(truncateLines(value, MAX_EXCEPTION_STACK_LINES), MAX_EXCEPTION_STACK_LENGTH);
+}
+
+function truncateText(value: string, maxLength: number): string {
+  if (value.length <= maxLength) return value;
+  return `${value.slice(0, maxLength)}\n... truncated ...`;
+}
+
+function truncateLines(value: string, maxLines: number): string {
+  const lines: string[] = [];
+  for (const line of value.split(/\r?\n/u)) {
+    if (lines.length >= maxLines) {
+      return `${lines.join('\n')}\n... truncated ...`;
+    }
+    lines.push(line);
+  }
+  return value;
 }
 
 function optionalTimestampField(value: unknown): { timestamp: string } | {} {
