@@ -54,9 +54,12 @@ interface WorkflowExecutionRecord {
   workflow: WorkflowPlugin;
   policy: WorkflowExecutionPolicy;
   policySnapshot: boolean;
+  policyAccessor?: () => RuntimeCapabilityName[] | undefined;
   policyError?: unknown;
   timeoutSnapshot: boolean;
   timeoutMs?: number;
+  timeoutAccessor?: () => number | undefined;
+  timeoutReceiver?: object;
   timeoutError?: unknown;
 }
 
@@ -162,6 +165,7 @@ function createWorkflowExecutionRecord(workflow: WorkflowPlugin): WorkflowExecut
         record.policyError = policyError;
       }
     } else {
+      record.policyAccessor = () => capabilitiesDescriptor.get?.call(workflow) as RuntimeCapabilityName[] | undefined;
       record.policySnapshot = false;
     }
   }
@@ -173,7 +177,21 @@ function createWorkflowExecutionRecord(workflow: WorkflowPlugin): WorkflowExecut
         record.timeoutMs = timeoutDescriptor.value as number;
       }
     } else {
-      record.timeoutSnapshot = false;
+      const timeoutReceiver = createWorkflowMetadataReceiverSnapshot(workflow);
+      record.timeoutAccessor = () => timeoutDescriptor.get?.call(timeoutReceiver) as number | undefined;
+      record.timeoutReceiver = timeoutReceiver;
+      if (workflow.accepts !== undefined && functionSourceMentions(workflow.accepts, 'timeout')) {
+        try {
+          const timeoutMs = record.timeoutAccessor();
+          if (timeoutMs !== undefined) {
+            record.timeoutMs = timeoutMs;
+          }
+        } catch (timeoutError) {
+          record.timeoutError = timeoutError;
+        }
+      } else {
+        record.timeoutSnapshot = false;
+      }
     }
   }
 
@@ -185,7 +203,7 @@ function resolveWorkflowExecutionMetadata(record: WorkflowExecutionRecord): Work
 
   if (!resolved.policySnapshot) {
     try {
-      resolved.policy = snapshotWorkflowPolicy(record.workflow);
+      resolved.policy = snapshotWorkflowPolicy(record.workflow, record.policyAccessor);
     } catch (policyError) {
       resolved.policyError = policyError;
     }
@@ -194,7 +212,7 @@ function resolveWorkflowExecutionMetadata(record: WorkflowExecutionRecord): Work
 
   if (!resolved.timeoutSnapshot) {
     try {
-      const timeoutMs = record.workflow.timeoutMs;
+      const timeoutMs = record.timeoutAccessor === undefined ? record.workflow.timeoutMs : record.timeoutAccessor();
       if (timeoutMs !== undefined) {
         resolved.timeoutMs = timeoutMs;
       }
@@ -220,10 +238,30 @@ function findPropertyDescriptor(target: object, property: string | symbol): Prop
   return undefined;
 }
 
-function snapshotWorkflowPolicy(workflow: WorkflowPlugin): WorkflowExecutionPolicy {
+function createWorkflowMetadataReceiverSnapshot(workflow: WorkflowPlugin): object {
+  const snapshot = Object.create(Reflect.getPrototypeOf(workflow)) as Record<PropertyKey, unknown>;
+
+  for (const property of Reflect.ownKeys(workflow)) {
+    if (property === 'accepts' || property === 'handle') {
+      continue;
+    }
+
+    const descriptor = Reflect.getOwnPropertyDescriptor(workflow, property);
+    if (descriptor !== undefined) {
+      Reflect.defineProperty(snapshot, property, descriptor);
+    }
+  }
+
+  return snapshot;
+}
+
+function snapshotWorkflowPolicy(
+  workflow: WorkflowPlugin,
+  capabilityAccessor?: () => RuntimeCapabilityName[] | undefined,
+): WorkflowExecutionPolicy {
   return {
     name: workflow.name,
-    capabilities: new Set(workflow.capabilities ?? []),
+    capabilities: new Set((capabilityAccessor === undefined ? workflow.capabilities : capabilityAccessor()) ?? []),
   };
 }
 
@@ -422,6 +460,16 @@ function createGatedRuntimeCapabilities(
 
   let rawDispatchAgent: DispatchAgentCapability | undefined;
   let rawDispatchAgentResolved = false;
+  const peekRawDispatchAgent = () => {
+    if (rawDispatchAgentResolved) {
+      return rawDispatchAgent;
+    }
+
+    const descriptor = findPropertyDescriptor(capabilities, 'dispatchAgent');
+    return descriptor !== undefined && 'value' in descriptor
+      ? (descriptor.value as DispatchAgentCapability | undefined)
+      : undefined;
+  };
   const getRawDispatchAgent = () => {
     if (!rawDispatchAgentResolved) {
       rawDispatchAgent = capabilities.dispatchAgent;
@@ -434,13 +482,14 @@ function createGatedRuntimeCapabilities(
   const dispatchAgent: DispatchAgentCapability = (request, context) =>
     callDispatchAgent(options, policy, event, lifecycle, getRawDispatchAgent, capabilities, request, context?.signal);
 
-  return createDispatchAgentCapabilityProxy(capabilities, dispatchAgent, getRawDispatchAgent);
+  return createDispatchAgentCapabilityProxy(capabilities, dispatchAgent, getRawDispatchAgent, peekRawDispatchAgent);
 }
 
 function createDispatchAgentCapabilityProxy(
   capabilities: NonNullable<PluginRuntimeContext['capabilities']>,
   dispatchAgent: DispatchAgentCapability,
   getRawDispatchAgent: () => DispatchAgentCapability | undefined,
+  peekRawDispatchAgent: () => DispatchAgentCapability | undefined,
 ): PluginRuntimeContext['capabilities'] {
   const viewCache = new WeakMap<object, object>();
   const sourceCache = new WeakMap<object, object>();
@@ -458,11 +507,7 @@ function createDispatchAgentCapabilityProxy(
       return true;
     }
 
-    if (property !== 'startAgent') {
-      return false;
-    }
-
-    const rawDispatchAgent = getRawDispatchAgent();
+    const rawDispatchAgent = property === 'startAgent' ? getRawDispatchAgent() : peekRawDispatchAgent();
     if (value === rawDispatchAgent) {
       return true;
     }
@@ -587,6 +632,10 @@ function createDispatchAgentCapabilityProxy(
     }
 
     if (Array.isArray(source) && property === 'length') {
+      return descriptor;
+    }
+
+    if (Array.isArray(source) && descriptor.configurable === false) {
       return descriptor;
     }
 
@@ -844,6 +893,14 @@ function callCapabilityCollectionMethod(
   }
 
   if (source instanceof Set) {
+    if (property === 'has') {
+      return source.has(unwrapValue(args[0]));
+    }
+
+    if (property === 'delete') {
+      return source.delete(unwrapValue(args[0]));
+    }
+
     if (property === 'forEach') {
       const callback = args[0];
       if (typeof callback !== 'function') {
@@ -877,6 +934,14 @@ function callCapabilityCollectionMethod(
   }
 
   if (source instanceof WeakMap && property === 'delete') {
+    return source.delete(unwrapValue(args[0]) as object);
+  }
+
+  if (source instanceof WeakSet && property === 'has') {
+    return source.has(unwrapValue(args[0]) as object);
+  }
+
+  if (source instanceof WeakSet && property === 'delete') {
     return source.delete(unwrapValue(args[0]) as object);
   }
 
@@ -1072,9 +1137,20 @@ function capabilityAccessorMayResolveDispatchAgent(source: object, property: str
 
 function helperMayResolveDispatchAgent(helper: Function): boolean {
   try {
-    return /this\s*(?:(?:\?\.|\.)\s*(?:dispatchAgent|startAgent)|(?:\?\.|\s*)\[[^\]]*(?:dispatch|start)[^\]]*Agent[^\]]*\])/u.test(
-      Function.prototype.toString.call(helper),
+    const source = Function.prototype.toString.call(helper);
+    return (
+      /this\s*(?:(?:\?\.|\.)\s*(?:dispatchAgent|startAgent)|(?:\?\.|\s*)\[[^\]]*(?:dispatch|start)[^\]]*Agent[^\]]*\])/u.test(
+        source,
+      ) || (/\bthis\b/u.test(source) && /\b(?:dispatchAgent|startAgent)\b/u.test(source))
     );
+  } catch {
+    return true;
+  }
+}
+
+function functionSourceMentions(helper: Function, token: string): boolean {
+  try {
+    return Function.prototype.toString.call(helper).includes(token);
   } catch {
     return true;
   }

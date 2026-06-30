@@ -86,11 +86,22 @@ function createRegisteredWorkflow(plugin: WorkflowPlugin): WorkflowPlugin {
   let capabilitySnapshot = false;
   let timeoutMs: number | undefined;
   let timeoutError: unknown;
+  let timeoutSnapshot = false;
 
-  try {
-    timeoutMs = plugin.timeoutMs;
-  } catch (reason) {
-    timeoutError = reason;
+  const capabilityDescriptor = findPropertyDescriptor(plugin, 'capabilities');
+  if (capabilityDescriptor !== undefined && 'value' in capabilityDescriptor) {
+    try {
+      capabilities = capabilityDescriptor.value === undefined ? undefined : [...capabilityDescriptor.value];
+    } catch (reason) {
+      capabilityError = reason;
+    }
+    capabilitySnapshot = true;
+  }
+
+  const timeoutDescriptor = findPropertyDescriptor(plugin, 'timeoutMs');
+  if (timeoutDescriptor !== undefined && 'value' in timeoutDescriptor) {
+    timeoutMs = timeoutDescriptor.value;
+    timeoutSnapshot = true;
   }
 
   const workflow = {
@@ -137,6 +148,15 @@ function createRegisteredWorkflow(plugin: WorkflowPlugin): WorkflowPlugin {
     configurable: true,
     enumerable: true,
     get() {
+      if (!timeoutSnapshot) {
+        try {
+          timeoutMs = plugin.timeoutMs;
+        } catch (reason) {
+          timeoutError = reason;
+        }
+        timeoutSnapshot = true;
+      }
+
       if (timeoutError !== undefined) {
         throw timeoutError;
       }
@@ -146,4 +166,17 @@ function createRegisteredWorkflow(plugin: WorkflowPlugin): WorkflowPlugin {
   });
 
   return workflow;
+}
+
+function findPropertyDescriptor(target: object, property: string | symbol): PropertyDescriptor | undefined {
+  let current: object | null = target;
+  while (current !== null) {
+    const descriptor = Reflect.getOwnPropertyDescriptor(current, property);
+    if (descriptor !== undefined) {
+      return descriptor;
+    }
+    current = Reflect.getPrototypeOf(current);
+  }
+
+  return undefined;
 }
