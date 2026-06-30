@@ -74,12 +74,16 @@ interface ProjectMetadata {
 
 interface ProjectItemStatus {
   status?: string;
+  contentType?: string;
+  state?: string;
   agentSessionId?: string;
   branchName?: string;
   repositoryId?: string;
   repositoryNameWithOwner?: string;
   defaultBranchOid?: string;
   defaultBranchTreeOid?: string;
+  parent?: ProjectIssueReference;
+  blockedBy?: readonly ProjectIssueReference[];
   assigneeLogins: readonly string[];
 }
 
@@ -279,9 +283,22 @@ async function cleanupDispatchedProjectIssueLocks(
   fetchImpl: typeof fetch,
   auth: GitHubProjectAuthTokenProvider,
 ): Promise<void> {
-  const lock = await loadProjectIssueClaimLock(repositoryId, projectIssueLockRefName(issue), fetchImpl, auth).catch(() => undefined);
-  const dispatchedLock = await loadProjectIssueClaimLock(repositoryId, projectIssueDispatchedLockRefName(issue), fetchImpl, auth).catch(() => undefined);
+  const lock = await loadProjectIssueClaimLockIfExists(
+    repositoryId,
+    projectIssueLockRefName(issue),
+    fetchImpl,
+    auth,
+  ).catch(() => 'read-error' as const);
+  const dispatchedLock = await loadProjectIssueClaimLockIfExists(
+    repositoryId,
+    projectIssueDispatchedLockRefName(issue),
+    fetchImpl,
+    auth,
+  ).catch(() => undefined);
   if (dispatchedLock?.dispatchedAt !== undefined && dispatchedLock.projectItemId === issue.id) {
+    if (lock === 'read-error') {
+      return;
+    }
     const current = await loadProjectItemStatus(issue.id, fetchImpl, auth, config);
     if (!isFinalizedProjectIssueClaim(current, dispatchedLock, issue)) {
       return;
@@ -293,7 +310,7 @@ async function cleanupDispatchedProjectIssueLocks(
     }, fetchImpl, auth).catch(() => undefined);
     return;
   }
-  if (lock?.dispatchedAt !== undefined && lock.projectItemId === issue.id) {
+  if (lock !== 'read-error' && lock?.dispatchedAt !== undefined && lock.projectItemId === issue.id) {
     const current = await loadProjectItemStatus(issue.id, fetchImpl, auth, config);
     if (!isFinalizedProjectIssueClaim(current, lock, issue)) {
       return;
@@ -422,14 +439,14 @@ async function releaseProjectIssue(
   const releaseStatusOptionId = normalizeToken(input.issue.status ?? config.todoStatus) === normalizeToken(config.backlogStatus)
     ? metadata.backlogStatusOptionId
     : metadata.todoStatusOptionId;
+  await updateProjectField(fetchImpl, auth, metadata.projectId, input.issue.id, metadata.statusFieldId, {
+    singleSelectOptionId: releaseStatusOptionId,
+  });
   await updateProjectField(fetchImpl, auth, metadata.projectId, input.issue.id, metadata.agentSessionIdFieldId, {
     text: '',
   });
   await updateProjectField(fetchImpl, auth, metadata.projectId, input.issue.id, metadata.branchFieldId, {
     text: '',
-  });
-  await updateProjectField(fetchImpl, auth, metadata.projectId, input.issue.id, metadata.statusFieldId, {
-    singleSelectOptionId: releaseStatusOptionId,
   });
   await deleteProjectIssueClaimLocks(input.claim, fetchImpl, auth);
 }
@@ -900,14 +917,21 @@ async function loadProjectItemStatus(
   const branchName = fixedAliasFieldValue(payload.node, 'branch')
     ?? fieldValueByName(payload.node, config.branchFieldName);
   const repository = projectItemRepository(payload.node);
+  const content = isRecord(payload.node.content) ? payload.node.content : undefined;
+  const parent = content === undefined ? undefined : parentReference(content);
+  const blockers = content === undefined ? [] : blockedBy(content);
   return {
     ...(status === undefined ? {} : { status }),
+    ...(typeof content?.__typename === 'string' ? { contentType: content.__typename } : {}),
+    ...(typeof content?.state === 'string' ? { state: content.state } : {}),
     ...(agentSessionId === undefined ? {} : { agentSessionId }),
     ...(branchName === undefined ? {} : { branchName }),
     ...(repository?.id === undefined ? {} : { repositoryId: repository.id }),
     ...(repository?.nameWithOwner === undefined ? {} : { repositoryNameWithOwner: repository.nameWithOwner }),
     ...(repository?.defaultBranchOid === undefined ? {} : { defaultBranchOid: repository.defaultBranchOid }),
     ...(repository?.defaultBranchTreeOid === undefined ? {} : { defaultBranchTreeOid: repository.defaultBranchTreeOid }),
+    ...(parent === undefined ? {} : { parent }),
+    ...(blockers.length === 0 ? {} : { blockedBy: blockers }),
     assigneeLogins: projectItemAssigneeLogins(payload.node),
   };
 }
@@ -929,6 +953,7 @@ function assertClaimable(
   ) {
     throw new Error('GitHub Project item is no longer claimable');
   }
+  assertProjectIssueExecutionConditions(status, input.issue);
   if (!isStillOwnedByAgent(status.assigneeLogins, input.issue.assigneeLogins, config.assigneeLogin)) {
     throw new Error('GitHub Project item is no longer assigned to this agent');
   }
@@ -945,6 +970,18 @@ function assertClaimMatches(
     || status.branchName !== input.branchName
   ) {
     throw new Error('GitHub Project item claim was overwritten by another assignment');
+  }
+}
+
+function assertProjectIssueExecutionConditions(status: ProjectItemStatus, issue: ProjectIssue): void {
+  if (status.contentType === 'Issue' && status.state?.trim().toLowerCase() === 'closed') {
+    throw new Error('GitHub Project item is no longer claimable');
+  }
+  if (!sameProjectIssueReference(status.parent, issue.parent)) {
+    throw new Error('GitHub Project item is no longer claimable');
+  }
+  if (hasUnfinishedBlocker(status.blockedBy)) {
+    throw new Error('GitHub Project item is no longer claimable');
   }
 }
 
@@ -1298,6 +1335,24 @@ function sameLogin(left: string, right: string): boolean {
   return left.trim().toLowerCase() === right.trim().toLowerCase();
 }
 
+function hasUnfinishedBlocker(blockers: readonly ProjectIssueReference[] | undefined): boolean {
+  return (blockers ?? []).some((blocker) => blocker.state?.trim().toLowerCase() !== 'closed');
+}
+
+function sameProjectIssueReference(
+  left: ProjectIssueReference | undefined,
+  right: ProjectIssueReference | undefined,
+): boolean {
+  return projectIssueReferenceKey(left) === projectIssueReferenceKey(right);
+}
+
+function projectIssueReferenceKey(reference: ProjectIssueReference | undefined): string | undefined {
+  if (reference?.repository === undefined || reference.number === undefined) {
+    return undefined;
+  }
+  return `${reference.repository.trim().toLowerCase()}#${reference.number}`;
+}
+
 function projectIssueLockRefName(issue: ProjectIssue): string {
   const repo = slug(issue.repository ?? 'repo');
   const issueId = issue.number === undefined ? slug(issue.id) : String(issue.number);
@@ -1523,6 +1578,7 @@ const projectItemStatusQuery = `
         content {
           __typename
           ... on Issue {
+            state
             repository {
               id
               nameWithOwner
@@ -1536,6 +1592,9 @@ const projectItemStatusQuery = `
               }
             }
             assignees(first: 20) { nodes { login } }
+            parent { number title state url repository { nameWithOwner } }
+            issueDependenciesSummary { blockedBy }
+            blockedBy(first: 100) { totalCount nodes { number title state url repository { nameWithOwner } } }
           }
         }
         status: fieldValueByName(name: $statusFieldName) {
