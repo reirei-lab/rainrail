@@ -921,6 +921,35 @@ describe('Rainrail bridge room', () => {
     expect(chunk).not.toContain('bad\\nid');
   });
 
+  it('keeps stored GitHub mention logins when restoring bodyless replay events', async () => {
+    const storedMention = {
+      ...fixtureEvent('delivery-1', 'github.issue'),
+      payload: {
+        provider: 'github',
+        event: 'issue_comment',
+        action: 'created',
+        comment: {
+          id: '1',
+          url: 'https://github.com/reirei-lab/rainrail/issues/17#issuecomment-1',
+          author: 'hiragram',
+          mentionedLogins: ['reirei-agent', 'Hiragram', 'bad_login', '-bad', 'bad-'],
+        },
+      },
+    };
+    const room = createTestRoom(storedReplayState([storedMention]), { replayLimit: 10 });
+
+    const eventsResponse = await room.fetch(eventsRequest());
+    const reader = eventsResponse.body?.getReader();
+    expect(reader).toBeDefined();
+    const chunk = await readUntil(reader!, 'github.issue');
+    await reader?.cancel();
+
+    expect(chunk).toContain('"mentionedLogins":["reirei-agent","Hiragram"]');
+    expect(chunk).not.toContain('bad_login');
+    expect(chunk).not.toContain('"-bad"');
+    expect(chunk).not.toContain('"bad-"');
+  });
+
   it('passes Last-Event-ID to the SSE replay policy', async () => {
     const room = createTestRoom(fakeState(), { replayLimit: 10 });
     const first = fixtureEvent('delivery-1', 'github.issue');

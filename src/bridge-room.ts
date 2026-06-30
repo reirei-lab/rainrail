@@ -622,7 +622,7 @@ function normalizeGitHubComment(value: unknown): unknown {
   if (!isRecord(value)) return undefined;
   const normalized = {
     ...pickStringFields(value, ['id', 'url', 'author']),
-    ...mentionedLoginsFromBody(value.body),
+    ...normalizeMentionedLogins(value),
   };
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
@@ -686,15 +686,38 @@ function sanitizePayloadText(value: string): string {
     .replace(/\bBearer\s+[A-Za-z0-9._~+/-]+=*/giu, 'Bearer [redacted]');
 }
 
-function mentionedLoginsFromBody(value: unknown): { mentionedLogins: string[] } | {} {
-  if (typeof value !== 'string' || value.length === 0) return {};
+function normalizeMentionedLogins(record: Record<string, unknown>): { mentionedLogins: string[] } | {} {
+  const mentions = new Set<string>();
+
+  for (const login of mentionedLoginsFromBody(record.body)) {
+    mentions.add(login);
+  }
+
+  if (Array.isArray(record.mentionedLogins)) {
+    for (const login of record.mentionedLogins) {
+      if (typeof login === 'string' && isValidGitHubLogin(login)) {
+        mentions.add(login);
+      }
+      if (mentions.size >= 20) break;
+    }
+  }
+
+  return mentions.size > 0 ? { mentionedLogins: [...mentions] } : {};
+}
+
+function mentionedLoginsFromBody(value: unknown): string[] {
+  if (typeof value !== 'string' || value.length === 0) return [];
   const mentions = new Set<string>();
   for (const match of value.matchAll(/(^|[^\w-])@([A-Za-z0-9-]{1,39})(?=$|[^\w-])/gu)) {
     const login = match[2];
-    if (login !== undefined) mentions.add(login);
+    if (login !== undefined && isValidGitHubLogin(login)) mentions.add(login);
     if (mentions.size >= 20) break;
   }
-  return mentions.size > 0 ? { mentionedLogins: [...mentions] } : {};
+  return [...mentions];
+}
+
+function isValidGitHubLogin(value: string): boolean {
+  return /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/u.test(value);
 }
 
 function isSafePayloadMetadata(value: unknown): value is string | null {
