@@ -751,12 +751,15 @@ function createDispatchAgentCapabilityProxy(
     };
     if (typeof source === 'function') {
       viewHandler.apply = (_target, thisArg, args) =>
-        normalizeCapabilityHelperResult(
-          Reflect.apply(source, thisArg, args),
+        callCapabilityFunction(
+          source,
           capabilities,
-          view,
-          getRawDispatchAgent,
           dispatchAgent,
+          getRawDispatchAgent,
+          peekRawDispatchAgent,
+          source,
+          view,
+          args,
           (object) => createCapabilityView(object),
         );
     }
@@ -1229,13 +1232,16 @@ function prototypeMayExposeDispatchAgent(prototype: object): boolean {
 
 
 function isDispatchAgentRequest(value: unknown): value is Parameters<DispatchAgentCapability>[0] {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    'event' in value &&
-    'workflow' in value &&
-    'runId' in value
-  );
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+
+  try {
+    const request = value as { event?: unknown; workflow?: unknown; runId?: unknown };
+    return request.event !== undefined && request.workflow !== undefined && request.runId !== undefined;
+  } catch {
+    return false;
+  }
 }
 
 function isPromiseLike(value: unknown): value is Promise<unknown> {
@@ -1770,14 +1776,20 @@ function createGuardedTaskProvider(
 
   return new Proxy(guardedTasks, {
     getOwnPropertyDescriptor(target, property) {
-      if (isOptionalTaskMethodKey(property) && getTasks()[property] === undefined) {
-        return undefined;
+      if (isOptionalTaskMethodKey(property)) {
+        if (lifecycle.isSideEffectClosed() || getTasks()[property] === undefined) {
+          return undefined;
+        }
       }
 
       return Reflect.getOwnPropertyDescriptor(target, property);
     },
     has(target, property) {
       if (isOptionalTaskMethodKey(property)) {
+        if (lifecycle.isSideEffectClosed()) {
+          return false;
+        }
+
         return getTasks()[property] !== undefined;
       }
 
@@ -1785,7 +1797,9 @@ function createGuardedTaskProvider(
     },
     ownKeys(target) {
       return Reflect.ownKeys(target).filter(
-        (property) => !isOptionalTaskMethodKey(property) || getTasks()[property] !== undefined,
+        (property) =>
+          !isOptionalTaskMethodKey(property) ||
+          (!lifecycle.isSideEffectClosed() && getTasks()[property] !== undefined),
       );
     },
   });
