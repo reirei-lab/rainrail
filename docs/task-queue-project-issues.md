@@ -19,12 +19,14 @@ Rainrail の Project issue selection は、GitHub Project v2 固有の GraphQL
 であることを表す。dispatch 前の排他には GitHub ref の starting lock を使い、
 Project item は Todo/Backlog のままにする。starting lock には作成時刻、owner
 相当の session/branch、元 Status を含め、dispatch が durable に始まったら
-`dispatchedAt` を追記する。TTL を過ぎた未dispatch lock は次回の claim/list 時に
-安全に回収するが、`dispatchedAt` つき lock は起動済み agent の保護として
-自動回収しない。`dispatchedAt` 追記後に Project field 更新が途中で失敗した
+finalize の最初に `dispatchedAt` を追記する。TTL は runner のローカル時刻ではなく
+GitHub commit の `committedDate` で判定し、TTL を過ぎた未dispatch lock は次回の
+claim/list 時に安全に回収するが、`dispatchedAt` つき lock は起動済み agent の保護
+として自動回収しない。`dispatchedAt` 追記後に Project field 更新が途中で失敗した
 場合、list 時に lock metadata から `In Progress` / session / branch を復元する。
 復元が一時失敗しても selector には In Progress 相当として返し、同じ issue の
-重複 dispatch を防ぐ。
+重複 dispatch を防ぐ。開始コメントの投稿失敗は agent 起動済み claim の確定を
+失敗扱いせず、lock cleanup を優先する。
 
 ## closed issue handling
 

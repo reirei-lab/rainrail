@@ -93,6 +93,12 @@ interface ProjectIssueClaimLock {
   originalStatus?: string;
 }
 
+interface ProjectIssueClaimLockCommitContext {
+  repositoryNameWithOwner?: string;
+  defaultBranchOid?: string;
+  defaultBranchTreeOid?: string;
+}
+
 interface ProjectMetadataData {
   organization?: {
     projectV2?: {
@@ -190,15 +196,21 @@ async function reconcileProjectIssueClaimState(
   const current = await loadProjectItemStatus(issue.id, fetchImpl, auth, config);
   if (
     normalizeToken(current.status ?? '') !== normalizeToken(config.inProgressStatus)
-    || hasText(current.agentSessionId)
-    || hasText(current.branchName)
     || current.repositoryId === undefined
   ) {
+    return issue;
+  }
+  const hasAgentSessionId = hasText(current.agentSessionId);
+  const hasBranchName = hasText(current.branchName);
+  if (hasAgentSessionId && hasBranchName) {
     return issue;
   }
   const lock = await loadProjectIssueClaimLock(current.repositoryId, projectIssueLockRefName(issue), fetchImpl, auth).catch(() => undefined);
   if (lock?.dispatchedAt !== undefined && lock.projectItemId === issue.id) {
     return restoreDispatchedProjectIssueClaim(config, issue, lock, fetchImpl, auth);
+  }
+  if (hasAgentSessionId || hasBranchName) {
+    return issue;
   }
   if (lock === undefined || !isRecoverableStaleLock(lock, { issue })) {
     return issue;
@@ -274,6 +286,10 @@ async function claimProjectIssue(
       contentId: input.issue.contentId,
       commentBody: input.commentBody,
       lockRefId,
+      ...(before.repositoryNameWithOwner === undefined ? {} : { lockRepositoryNameWithOwner: before.repositoryNameWithOwner }),
+      ...(before.defaultBranchOid === undefined ? {} : { lockDefaultBranchOid: before.defaultBranchOid }),
+      ...(before.defaultBranchTreeOid === undefined ? {} : { lockDefaultBranchTreeOid: before.defaultBranchTreeOid }),
+      ...(input.issue.status === undefined ? {} : { originalStatus: input.issue.status }),
     };
     assertClaimable(await loadProjectItemStatus(input.issue.id, fetchImpl, auth, config), input, config);
   } catch (error) {
@@ -292,6 +308,7 @@ async function finalizeProjectIssueClaim(
   fetchImpl: typeof fetch,
   auth: GitHubProjectAuthTokenProvider,
 ): Promise<void> {
+  await markProjectIssueClaimDispatched(input, fetchImpl, auth);
   const metadata = await loadProjectMetadata(config, fetchImpl, auth);
   const before = await loadProjectItemStatus(input.issue.id, fetchImpl, auth, config);
   assertClaimable(before, {
@@ -300,7 +317,6 @@ async function finalizeProjectIssueClaim(
     branchName: input.branchName,
     commentBody: input.claim.commentBody ?? '',
   }, config);
-  await markProjectIssueClaimDispatched(before, input, fetchImpl, auth);
   await updateProjectField(fetchImpl, auth, metadata.projectId, input.issue.id, metadata.statusFieldId, {
     singleSelectOptionId: metadata.statusOptionId,
   });
@@ -317,15 +333,18 @@ async function finalizeProjectIssueClaim(
     branchName: input.branchName,
     commentBody: input.claim.commentBody ?? '',
   }, config);
-  if (input.claim.contentId !== undefined && input.claim.commentBody !== undefined) {
-    await runGraphql<{ addComment?: { commentEdge?: { node?: { url?: unknown } } } }>(
-      fetchImpl,
-      auth,
-      addCommentMutation,
-      { subjectId: input.claim.contentId, body: input.claim.commentBody },
-    );
+  try {
+    if (input.claim.contentId !== undefined && input.claim.commentBody !== undefined) {
+      await runGraphql<{ addComment?: { commentEdge?: { node?: { url?: unknown } } } }>(
+        fetchImpl,
+        auth,
+        addCommentMutation,
+        { subjectId: input.claim.contentId, body: input.claim.commentBody },
+      ).catch(() => undefined);
+    }
+  } finally {
+    await deleteProjectIssueClaimLock(input.claim, fetchImpl, auth);
   }
-  await deleteProjectIssueClaimLock(input.claim, fetchImpl, auth);
 }
 
 async function releaseProjectIssue(
@@ -385,7 +404,6 @@ async function acquireProjectIssueClaimLock(
 }
 
 async function markProjectIssueClaimDispatched(
-  status: ProjectItemStatus,
   input: ProjectIssueFinalizeInput,
   fetchImpl: typeof fetch,
   auth: GitHubProjectAuthTokenProvider,
@@ -393,10 +411,22 @@ async function markProjectIssueClaimDispatched(
   if (input.claim.lockRefId === undefined) {
     return;
   }
+  if (
+    input.claim.lockRepositoryNameWithOwner === undefined
+    || input.claim.lockDefaultBranchOid === undefined
+    || input.claim.lockDefaultBranchTreeOid === undefined
+  ) {
+    throw new Error('GitHub Project issue claim is missing lock commit metadata');
+  }
+  const context = {
+    repositoryNameWithOwner: input.claim.lockRepositoryNameWithOwner,
+    defaultBranchOid: input.claim.lockDefaultBranchOid,
+    defaultBranchTreeOid: input.claim.lockDefaultBranchTreeOid,
+  };
   let lastError: unknown;
   for (let attempt = 0; attempt < PROJECT_ISSUE_CLAIM_LOCK_DISPATCH_MARK_ATTEMPTS; attempt += 1) {
     try {
-      const lockOid = await createProjectIssueClaimLockCommit(status, {
+      const lockOid = await createProjectIssueClaimLockCommit(context, {
         issue: input.issue,
         agentSessionId: input.agentSessionId,
         branchName: input.branchName,
@@ -412,7 +442,7 @@ async function markProjectIssueClaimDispatched(
 }
 
 async function createProjectIssueClaimLockCommit(
-  status: ProjectItemStatus,
+  status: ProjectIssueClaimLockCommitContext,
   input: ProjectIssueClaimInput,
   fetchImpl: typeof fetch,
   auth: GitHubProjectAuthTokenProvider,
@@ -551,7 +581,7 @@ function parseProjectIssueClaimLockRef(refValue: unknown): ProjectIssueClaimLock
   }
   const message = typeof target.message === 'string' ? target.message : '';
   const metadata = parseClaimLockCommitMessage(message);
-  const createdAt = metadata?.createdAt ?? (typeof target.committedDate === 'string' ? target.committedDate : undefined);
+  const createdAt = typeof target.committedDate === 'string' ? target.committedDate : metadata?.createdAt;
   if (metadata === undefined || createdAt === undefined) {
     throw new Error('GitHub Project issue claim lock is missing Rainrail metadata');
   }

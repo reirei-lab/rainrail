@@ -33,6 +33,10 @@ export interface ProjectIssueClaim {
   commentBody?: string;
   commentUrl?: string;
   lockRefId?: string;
+  lockRepositoryNameWithOwner?: string;
+  lockDefaultBranchOid?: string;
+  lockDefaultBranchTreeOid?: string;
+  originalStatus?: string | null;
 }
 
 export interface TaskQueueProvider {
