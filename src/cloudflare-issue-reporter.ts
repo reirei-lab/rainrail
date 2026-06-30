@@ -30,6 +30,10 @@ export interface CloudflareErrorIssueStore {
   withFingerprintLock?<T>(input: { repository: string; fingerprint: string }, fn: () => Promise<T>): Promise<T>;
 }
 
+export interface CloudflareIssueReporterStorage extends RainrailBridgeRoomStorage {
+  compareAndSet(key: string, expected: unknown, value: unknown): Promise<boolean>;
+}
+
 export interface GitHubIssueClient {
   findOpenIssueByFingerprint(input: {
     repository: string;
@@ -264,7 +268,8 @@ export function createInMemoryCloudflareErrorIssueStore(): CloudflareErrorIssueS
   };
 }
 
-export function createStorageCloudflareErrorIssueStore(storage: RainrailBridgeRoomStorage): CloudflareErrorIssueStore {
+export function createStorageCloudflareErrorIssueStore(storage: CloudflareIssueReporterStorage): CloudflareErrorIssueStore {
+  assertCloudflareIssueReporterStorage(storage);
   return {
     async get(input) {
       return storedCloudflareErrorIssue(await storage.get(storageKey(input.repository, input.fingerprint)));
@@ -295,21 +300,11 @@ export function cloudflareErrorCandidateFromEvent(event: RainrailEventEnvelope):
   }
 
   const data = recordValue(event.payload);
-  const exception = Array.isArray(data.exceptions)
-    ? data.exceptions.map(recordOrUndefined).find((candidate) => {
-      const stack = stringValue(candidate?.stack);
-      return stack !== undefined && stack.trim().length > 0;
-    })
-    : undefined;
-  const stack = stringValue(exception?.stack);
-  if (exception === undefined || stack === undefined || stack.trim().length === 0) {
+  const exceptionWithStack = cloudflareExceptionWithUsableStack(data.exceptions);
+  if (exceptionWithStack === undefined) {
     return undefined;
   }
-
-  const stackSignature = normalizedStackSignature(stack);
-  if (stackSignature.length === 0) {
-    return undefined;
-  }
+  const { exception, stackSignature } = exceptionWithStack;
 
   const request = recordValue(recordValue(data.event).request);
   const response = recordValue(recordValue(data.event).response);
@@ -389,12 +384,43 @@ function cloudflareIssueBody(input: {
   ].join('\n');
 }
 
+function cloudflareExceptionWithUsableStack(value: unknown): {
+  exception: Record<string, unknown>;
+  stackSignature: string[];
+} | undefined {
+  if (!Array.isArray(value)) return undefined;
+  for (const candidate of value) {
+    const exception = recordOrUndefined(candidate);
+    if (exception === undefined) {
+      continue;
+    }
+    const stack = stringValue(exception?.stack);
+    if (stack === undefined || stack.trim().length === 0) {
+      continue;
+    }
+    const stackSignature = normalizedStackSignature(stack);
+    if (stackSignature.length > 0) {
+      return { exception, stackSignature };
+    }
+  }
+  return undefined;
+}
+
 function normalizedStackSignature(stack: string): string[] {
-  return stack
-    .split(/\r?\n/u)
-    .map((line) => normalizeStackFrame(line))
-    .filter((line): line is string => line !== undefined)
-    .slice(0, 3);
+  const frames: string[] = [];
+  let start = 0;
+  while (start <= stack.length && frames.length < 3) {
+    const newline = stack.indexOf('\n', start);
+    const end = newline === -1 ? stack.length : newline;
+    const rawLine = stack.slice(start, end).replace(/\r$/u, '');
+    const frame = normalizeStackFrame(rawLine);
+    if (frame !== undefined) {
+      frames.push(frame);
+    }
+    if (newline === -1) break;
+    start = newline + 1;
+  }
+  return frames;
 }
 
 function normalizeStackFrame(line: string): string | undefined {
@@ -473,7 +499,7 @@ async function withLocalFingerprintLock<T>(key: string, fn: () => Promise<T>): P
 }
 
 async function withStorageFingerprintLock<T>(
-  storage: RainrailBridgeRoomStorage,
+  storage: CloudflareIssueReporterStorage,
   input: { repository: string; fingerprint: string },
   fn: () => Promise<T>,
 ): Promise<T> {
@@ -481,9 +507,6 @@ async function withStorageFingerprintLock<T>(
     const key = `${storageKeyPrefix}lock:${input.repository}:${input.fingerprint}`;
     const owner = `${Date.now()}:${Math.random().toString(36).slice(2)}`;
     const value = { owner, expiresAt: Date.now() + storeHitGraceMs };
-    if (storage.compareAndSet === undefined) {
-      throw new Error('Cloudflare error fingerprint lock requires storage.compareAndSet');
-    }
     const current = await storage.get(key);
     if (storageLockRecord(current) !== undefined) {
       throw new Error('Cloudflare error fingerprint is already locked');
@@ -511,6 +534,14 @@ function storageLockRecord(value: unknown): { owner: string; expiresAt: number }
     return undefined;
   }
   return value.expiresAt <= Date.now() ? undefined : { owner: value.owner, expiresAt: value.expiresAt };
+}
+
+function assertCloudflareIssueReporterStorage(
+  storage: RainrailBridgeRoomStorage,
+): asserts storage is CloudflareIssueReporterStorage {
+  if (storage.compareAndSet === undefined) {
+    throw new TypeError('Cloudflare issue reporter storage requires compareAndSet');
+  }
 }
 
 function isRecentStoreHit(stored: StoredCloudflareErrorIssue): boolean {
@@ -551,10 +582,10 @@ function redactRawEventData(value: unknown, depth = 0): unknown {
     return value.length > maxRawArrayItems ? [...items, '[... truncated ...]'] : items;
   }
   if (typeof value === 'string') {
-    const bounded = value.length > maxRawStringLength
-      ? `${value.slice(0, maxRawStringLength)}\n... truncated ...`
-      : value;
-    return sanitizeSecretString(bounded);
+    const redacted = sanitizeSecretString(value);
+    return redacted.length > maxRawStringLength
+      ? `${redacted.slice(0, maxRawStringLength)}\n... truncated ...`
+      : redacted;
   }
   if (!isRecord(value)) return value;
 
@@ -592,6 +623,8 @@ function sanitizeSecretString(value: string): string {
     .replace(/(^|[{\s"'<>`,;])(["']?)([A-Za-z0-9_-]*(?:authorization|cookie|tokens?|secrets?|passwords?|keys?|codes?|resets?))\2(\s*:\s*)\[[^\]]*\]/giu, '$1$2$3$2$4[redacted]')
     .replace(/(["'])([A-Za-z0-9_-]*(?:authorization|cookie|tokens?|secrets?|passwords?|keys?|codes?|resets?|verification))\1(\s*:\s*)(["'])(?:\\.|(?!\4)[^\\])*\4/giu, '$1$2$1$3$4[redacted]$4')
     .replace(/(^|[{\s"'<>`,;])(["']?)([A-Za-z0-9_-]*(?:authorization|cookie|tokens?|secrets?|passwords?|keys?|codes?|resets?|verification))\2(\s*:\s*)(["'])(?:\\.|(?!\5)[^\\])*\5/giu, '$1$2$3$2$4$5[redacted]$5')
+    .replace(/(["'])([A-Za-z0-9_-]*(?:authorization|cookie|tokens?|secrets?|passwords?|keys?|codes?|resets?|verification))\1(\s*:\s*)(["'])(?:\\.|(?!\4)[^\\])*$/giu, '$1$2$1$3$4[redacted]$4')
+    .replace(/(^|[{\s"'<>`,;])(["']?)([A-Za-z0-9_-]*(?:authorization|cookie|tokens?|secrets?|passwords?|keys?|codes?|resets?|verification))\2(\s*:\s*)(["'])(?:\\.|(?!\5)[^\\])*$/giu, '$1$2$3$2$4$5[redacted]$5')
     .replace(/(^|[{\s"'<>`,;])(["']?)([A-Za-z0-9_-]*(?:authorization|cookie|tokens?|secrets?|passwords?|keys?|codes?|resets?))\2(\s*:\s*)(?!["'])([^,\s\r\n}\]]+)/giu, '$1$2$3$2$4[redacted]')
     .replace(/(^|[.?&\s"'<>`,;])([A-Za-z0-9_-]*authorization)=([^\r\n"'<>`,;]*?)(?=(?:\s+[A-Za-z0-9_-]*(?:authorization|cookie|set-cookie|tokens?|secrets?|passwords?|keys?|codes?|resets?)=)|[&\r\n"'<>`,;]|$)/giu, '$1$2=[redacted]')
     .replace(/(^|[.?&\s"'<>`,;])([A-Za-z0-9_-]*(?:cookie|set-cookie))=([^&\s"'<>`,;]+)/giu, '$1$2=[redacted]')

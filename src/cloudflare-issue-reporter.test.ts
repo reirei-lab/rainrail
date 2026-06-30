@@ -9,6 +9,7 @@ import {
   cloudflareErrorCandidateFromEvent,
   cloudflareErrorFingerprint,
   type CloudflareIssueReporterResult,
+  type CloudflareIssueReporterStorage,
   type GitHubIssueClient,
 } from './index.js';
 
@@ -436,6 +437,55 @@ describe('cloudflare issue reporter workflow', () => {
       stackSignature: ['resolveCurrentHumanAccount @ worker.js', 'handleCurrentHuman @ worker.js', 'Object.fetch @ worker.js'],
     });
   });
+
+  it('skips exceptions whose stack has no usable frames', () => {
+    const candidate = cloudflareErrorCandidateFromEvent(cloudflareErrorEvent({
+      exceptions: [
+        {
+          name: 'WrapperError',
+          message: 'wrapper stack without frames',
+          stack: [
+            'WrapperError: wrapper stack without frames',
+            'Caused by: TypeError: hidden',
+          ].join('\n'),
+        },
+        {
+          name: 'TypeError',
+          message: 'usable stack',
+          stack: [
+            'TypeError: usable stack',
+            '    at usableFrame (worker.js:12:34)',
+          ].join('\n'),
+        },
+      ],
+    }));
+
+    expect(candidate).toMatchObject({
+      exceptionName: 'TypeError',
+      stackSignature: ['usableFrame @ worker.js'],
+    });
+  });
+
+  it('requires compare-and-set storage for storage-backed fingerprint locks at construction time', () => {
+    const storage = {
+      get: async (_key: string) => undefined,
+      put: async (_key: string, _value: unknown) => undefined,
+    };
+
+    expect(() =>
+      createStorageCloudflareErrorIssueStore(storage as unknown as CloudflareIssueReporterStorage)
+    ).toThrow('compareAndSet');
+  });
+
+  it('accepts storage-backed fingerprint stores with explicit compare-and-set storage', () => {
+    const storage: CloudflareIssueReporterStorage = {
+      get: async (_key) => undefined,
+      put: async (_key, _value) => undefined,
+      compareAndSet: async (_key, _expected, _value) => true,
+    };
+
+    expect(createStorageCloudflareErrorIssueStore(storage).withFingerprintLock).toBeDefined();
+  });
 });
 
 describe('cloudflareErrorFingerprint', () => {
@@ -480,6 +530,7 @@ function cloudflareErrorEvent(overrides: {
   message?: string;
   stack?: string;
   rawData?: Record<string, unknown>;
+  exceptions?: Array<Record<string, unknown>>;
   leadingStacklessException?: boolean;
 } = {}) {
   const line = overrides.line ?? 1510;
@@ -503,7 +554,7 @@ function cloudflareErrorEvent(overrides: {
       scriptName: 'asme-site',
       method: 'GET',
       url: overrides.url ?? 'https://asme.dev/me?debug=1',
-      exceptions: [
+      exceptions: overrides.exceptions ?? [
         ...(overrides.leadingStacklessException ? [{
           name: 'Error',
           message: 'wrapper without stack',
@@ -737,6 +788,34 @@ describe('cloudflare issue redaction', () => {
     expect(createdIssues[0]?.body).toContain('"code": "[redacted]"');
     expect(createdIssues[0]?.body).toContain('"resetCode": "[redacted]"');
     expect(createdIssues[0]?.body).toContain('"verification_code": "[redacted]"');
+  });
+
+  it('redacts raw strings before truncating long quoted secret values', async () => {
+    const createdIssues: Array<{ body: string }> = [];
+    const workflow = createCloudflareIssueReporterWorkflow({
+      repository: 'reirei-lab/rainrail',
+      store: createInMemoryCloudflareErrorIssueStore(),
+      issues: {
+        findOpenIssueByFingerprint: async () => undefined,
+        createIssue: async (input) => {
+          createdIssues.push(input);
+          return {
+            number: 131,
+            url: 'https://github.com/reirei-lab/rainrail/issues/131',
+          };
+        },
+      },
+    });
+    const longSecret = `secret-prefix-${'s'.repeat(2_500)}`;
+
+    await expect(workflow.handle(cloudflareErrorEvent({
+      message: `serialized input {"password":"${longSecret}"}`,
+    }), runtimeContext())).resolves.toMatchObject({
+      handled: true,
+    });
+
+    expect(createdIssues[0]?.body).not.toContain('secret-prefix');
+    expect(createdIssues[0]?.body).toContain('\\"password\\":\\"[redacted]\\"');
   });
 
   it('redacts serialized Cookie and non-Bearer Authorization headers', async () => {
