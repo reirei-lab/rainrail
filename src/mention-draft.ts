@@ -98,15 +98,16 @@ function requestFromComment(input: {
 }): MentionDraftRequest | undefined {
   const comment = commentRecord(input.payload);
   const resource = recordValue(input.payload.resource);
+  const pullRequest = pullRequestRecord(input.payload);
   const body = stringValue(comment.body);
-  const commentUrl = stringValue(comment.url);
+  const commentUrl = stringValue(comment.url) ?? stringValue(comment.html_url);
   if (body === undefined || commentUrl === undefined || !mentionsLogin(body, input.agentLogin)) {
     return undefined;
   }
 
   const repository = repositoryName(input.payload) ?? input.event.source.repository;
-  const number = numberValue(resource.number) ?? numberFromSubject(input.event);
-  const sourceTitle = stringValue(resource.title);
+  const number = numberValue(resource.number) ?? numberValue(pullRequest.number) ?? numberFromSubject(input.event);
+  const sourceTitle = stringValue(resource.title) ?? stringValue(pullRequest.title);
   const titlePrefix = repository !== undefined && number !== undefined
     ? `${repository}#${number}`
     : 'GitHub mention';
@@ -127,7 +128,16 @@ function requestFromComment(input: {
 function commentRecord(payload: Record<string, unknown>): Record<string, unknown> {
   const comment = recordValue(payload.comment);
   if (Object.keys(comment).length > 0) return comment;
-  return recordValue(payload.review);
+  const review = recordValue(payload.review);
+  if (Object.keys(review).length > 0) return review;
+  const resource = recordValue(payload.resource);
+  return resource.type === 'review' ? resource : {};
+}
+
+function pullRequestRecord(payload: Record<string, unknown>): Record<string, unknown> {
+  const normalized = recordValue(payload.pullRequest);
+  if (Object.keys(normalized).length > 0) return normalized;
+  return recordValue(payload.pull_request);
 }
 
 function draftBody(mention: MentionDraftRequest): string {

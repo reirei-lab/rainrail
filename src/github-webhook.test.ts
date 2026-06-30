@@ -1891,6 +1891,7 @@ describe('GitHub webhook source handling', () => {
           review: {
             id: 4594627585,
             state: 'approved',
+            body: '@reirei-agent please follow up',
             html_url: 'https://github.com/reirei-lab/rainrail/pull/39#pullrequestreview-4594627585',
           },
         },
@@ -1909,6 +1910,7 @@ describe('GitHub webhook source handling', () => {
           type: 'review',
           id: '4594627585',
           state: 'approved',
+          body: '@reirei-agent please follow up',
           url: 'https://github.com/reirei-lab/rainrail/pull/39#pullrequestreview-4594627585',
         },
         pullRequest: {

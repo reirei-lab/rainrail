@@ -100,6 +100,30 @@ describe('mention draft workflow', () => {
       number: 18,
     });
   });
+
+  it('extracts submitted pull request review bodies that mention the agent', () => {
+    const mention = mentionDraftRequestFromEvent(githubSubmittedReviewEvent(), 'reirei-agent');
+
+    expect(mention).toMatchObject({
+      commentUrl: 'https://github.com/reirei-lab/rainrail/pull/19#pullrequestreview-2',
+      title: 'Respond to reirei-lab/rainrail#19: Mention handling',
+      repository: 'reirei-lab/rainrail',
+      number: 19,
+      body: 'Could you take a look, @reirei-agent?',
+    });
+  });
+
+  it('extracts normalized submitted review resources that mention the agent', () => {
+    const mention = mentionDraftRequestFromEvent(githubNormalizedSubmittedReviewEvent(), 'reirei-agent');
+
+    expect(mention).toMatchObject({
+      commentUrl: 'https://github.com/reirei-lab/rainrail/pull/20#pullrequestreview-3',
+      title: 'Respond to reirei-lab/rainrail#20: Normalized mention handling',
+      repository: 'reirei-lab/rainrail',
+      number: 20,
+      body: 'Please respond, @reirei-agent.',
+    });
+  });
 });
 
 function githubMentionEvent(overrides: {
@@ -187,6 +211,90 @@ function githubReviewCommentEvent() {
     rawPayload: {
       kind: 'inline-redacted',
       reference: 'github://deliveries/delivery-review-comment-1',
+    },
+  });
+}
+
+function githubSubmittedReviewEvent() {
+  return createEventEnvelope({
+    source: { type: 'github', name: 'github-webhook', repository: 'reirei-lab/rainrail' },
+    name: 'github.review',
+    delivery: {
+      id: 'delivery-review-1',
+      receivedAt: '2026-06-06T06:20:00.000Z',
+    },
+    occurredAt: '2026-06-06T06:20:00.000Z',
+    subject: {
+      type: 'review',
+      id: '2',
+      url: 'https://github.com/reirei-lab/rainrail/pull/19#pullrequestreview-2',
+    },
+    payload: {
+      provider: 'github',
+      event: 'pull_request_review',
+      action: 'submitted',
+      actor: { login: 'hiragram' },
+      repository: {
+        full_name: 'reirei-lab/rainrail',
+      },
+      pull_request: {
+        number: 19,
+        title: 'Mention handling',
+        html_url: 'https://github.com/reirei-lab/rainrail/pull/19',
+      },
+      review: {
+        id: '2',
+        body: 'Could you take a look, @reirei-agent?',
+        html_url: 'https://github.com/reirei-lab/rainrail/pull/19#pullrequestreview-2',
+        user: { login: 'hiragram' },
+      },
+    },
+    rawPayload: {
+      kind: 'inline-redacted',
+      reference: 'github://deliveries/delivery-review-1',
+    },
+  });
+}
+
+function githubNormalizedSubmittedReviewEvent() {
+  return createEventEnvelope({
+    source: { type: 'github', name: 'github-webhook', repository: 'reirei-lab/rainrail' },
+    name: 'github.review',
+    delivery: {
+      id: 'delivery-review-normalized-1',
+      receivedAt: '2026-06-06T06:20:00.000Z',
+    },
+    occurredAt: '2026-06-06T06:20:00.000Z',
+    subject: {
+      type: 'review',
+      id: '3',
+      url: 'https://github.com/reirei-lab/rainrail/pull/20#pullrequestreview-3',
+    },
+    payload: {
+      provider: 'github',
+      event: 'pull_request_review',
+      action: 'submitted',
+      actor: { login: 'hiragram' },
+      resource: {
+        type: 'review',
+        id: '3',
+        body: 'Please respond, @reirei-agent.',
+        url: 'https://github.com/reirei-lab/rainrail/pull/20#pullrequestreview-3',
+      },
+      pullRequest: {
+        type: 'pull_request',
+        id: '20',
+        number: 20,
+        title: 'Normalized mention handling',
+        url: 'https://github.com/reirei-lab/rainrail/pull/20',
+      },
+      repository: {
+        fullName: 'reirei-lab/rainrail',
+      },
+    },
+    rawPayload: {
+      kind: 'inline-redacted',
+      reference: 'github://deliveries/delivery-review-normalized-1',
     },
   });
 }

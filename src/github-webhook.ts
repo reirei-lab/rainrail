@@ -1417,6 +1417,7 @@ function resourceFromReview(review: GitHubWebhookRecord): NormalizedGitHubResour
     id: String(review.id ?? 'unknown'),
     ...optionalStringProperty('state', stringField(review, 'state')),
     ...optionalStringProperty('url', stringField(review, 'html_url')),
+    ...optionalStringProperty('body', stringField(review, 'body')),
   };
 }
 
