@@ -1271,6 +1271,40 @@ describe('GitHub webhook source handling', () => {
 
     await expect(
       createGitHubWebhookEvent({
+        githubEvent: 'workflow_job',
+        deliveryId: 'delivery-workflow-job-regular-1',
+        payload: {
+          action: 'queued',
+          repository: { full_name: 'reirei-lab/rainrail' },
+          workflow_job: {
+            id: 1001,
+            run_id: 2001,
+            name: 'typecheck',
+            status: 'queued',
+            labels: ['ubuntu-latest'],
+            head_sha: 'ciabc',
+            head_branch: 'feature/ci',
+            html_url: 'https://github.com/reirei-lab/rainrail/actions/runs/2001/job/1001',
+          },
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.workflow_job',
+      payload: {
+        resource: {
+          type: 'workflow_job',
+          id: '1001',
+          runId: '2001',
+          headSha: 'ciabc',
+          headRef: 'feature/ci',
+        },
+      },
+    });
+
+    await expect(
+      createGitHubWebhookEvent({
         githubEvent: 'code_scanning_alert',
         deliveryId: 'delivery-alert-1',
         payload: {
@@ -2083,6 +2117,7 @@ describe('GitHub webhook source handling', () => {
           workflow_job_run: {
             id: 9101,
             environment: 'production',
+            html_url: 'https://github.com/reirei-lab/rainrail/actions/runs/9001/job/9101',
           },
           environment: 'production',
           requester: { login: 'octocat' },
@@ -2095,8 +2130,9 @@ describe('GitHub webhook source handling', () => {
       payload: {
         resource: {
           type: 'deployment_review',
-          id: '9101:production',
-          runId: '9101',
+          id: '9001:production',
+          runId: '9001',
+          jobId: '9101',
           environment: 'production',
           requester: 'octocat',
         },
@@ -2841,6 +2877,35 @@ describe('GitHub webhook source handling', () => {
           login: 'octocat',
           teamSlug: 'agents',
           teamName: 'Agents',
+        },
+      },
+    });
+
+    await expect(
+      createGitHubWebhookEvent({
+        githubEvent: 'member',
+        deliveryId: 'delivery-member-null-1',
+        payload: {
+          action: 'removed',
+          repository: {
+            id: 3001,
+            full_name: 'reirei-lab/rainrail',
+          },
+          member: null as unknown as Record<string, unknown>,
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.member',
+      subject: {
+        type: 'repository',
+        id: 'reirei-lab/rainrail',
+      },
+      payload: {
+        resource: {
+          type: 'repository',
+          id: 'reirei-lab/rainrail',
         },
       },
     });

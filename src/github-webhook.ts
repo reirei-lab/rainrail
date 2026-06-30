@@ -398,6 +398,7 @@ export interface NormalizedGitHubResource {
   environment?: string;
   statusId?: string;
   runId?: string;
+  jobId?: string;
   startDate?: string;
   targetDate?: string;
   tagName?: string;
@@ -1522,7 +1523,8 @@ function resourceFromWorkflowJob(workflowJob: GitHubWebhookRecord): NormalizedGi
     ...optionalStringArrayProperty('labels', stringArrayField(workflowJob, 'labels')),
     ...optionalStringProperty('environment', stringField(deployment, 'environment')),
     ...optionalStringProperty('ref', stringField(deployment, 'ref')),
-    ...optionalStringProperty('headSha', stringField(deployment, 'sha')),
+    ...optionalStringProperty('headRef', stringField(workflowJob, 'head_branch')),
+    ...optionalStringProperty('headSha', stringField(deployment, 'sha') ?? stringField(workflowJob, 'head_sha')),
     ...optionalStringProperty('url', stringField(workflowJob, 'html_url')),
   };
 }
@@ -1530,7 +1532,8 @@ function resourceFromWorkflowJob(workflowJob: GitHubWebhookRecord): NormalizedGi
 function resourceFromDeploymentReview(payload: GitHubWebhookPayload): NormalizedGitHubResource {
   const workflowRun = payload.workflow_run;
   const workflowJobRun = payload.workflow_job_run ?? arrayField(payload, 'workflow_job_runs')[0];
-  const runId = idField(workflowRun, 'id') ?? idField(workflowJobRun, 'id');
+  const jobId = idField(workflowJobRun, 'id');
+  const runId = idField(workflowRun, 'id') ?? workflowRunIdFromJobUrl(stringField(workflowJobRun, 'html_url'));
   const environment = stringField(workflowJobRun, 'environment') ?? stringField(payload, 'environment') ?? 'unknown';
   const reviewerLogins = arrayField(payload, 'reviewers')
     .map((wrapper) => {
@@ -1541,8 +1544,9 @@ function resourceFromDeploymentReview(payload: GitHubWebhookPayload): Normalized
 
   return {
     type: 'deployment_review',
-    id: `${runId ?? 'unknown'}:${environment}`,
+    id: `${runId ?? jobId ?? 'unknown'}:${environment}`,
     ...optionalStringProperty('runId', runId),
+    ...optionalStringProperty('jobId', jobId),
     ...optionalStringProperty('environment', environment === 'unknown' ? undefined : environment),
     ...optionalStringArrayProperty('reviewerLogins', reviewerLogins),
     ...optionalStringProperty('approver', stringField(payload.approver, 'login')),
@@ -2278,6 +2282,10 @@ function deploymentReviewComment(comment: unknown): string | undefined {
   return stringField(comment, 'body');
 }
 
+function workflowRunIdFromJobUrl(url: string | undefined): string | undefined {
+  return url?.match(/\/actions\/runs\/([^/]+)\/job\//)?.[1];
+}
+
 function normalizedRequestedAction(
   requestedAction: GitHubWebhookRecord | undefined,
 ): NormalizedGitHubRequestedAction | undefined {
@@ -2475,7 +2483,7 @@ function isOrganizationInvitationPayload(payload: GitHubWebhookPayload): boolean
 }
 
 function isMemberTeamPayload(payload: GitHubWebhookPayload): boolean {
-  return payload.member !== undefined || payload.team !== undefined;
+  return recordField(payload, 'member') !== undefined || recordField(payload, 'team') !== undefined;
 }
 
 function isInstallationTargetPayload(payload: GitHubWebhookPayload): boolean {

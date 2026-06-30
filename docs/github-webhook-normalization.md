@@ -30,9 +30,9 @@ workflow plugin が受け取る `event.payload` は Rainrail 側で安定させ�
 - `status` は branches と description も commit status resource に残す。
 - `deployment` / `deployment_status` は deployment id/ref/environment と status state を deployment resource として正規化する。
 - `deployment_protection_rule` は environment/ref/sha/callback URL を deployment protection rule resource として正規化し、関連 PR は `event.payload.pullRequests` に残す。
-- `deployment_review` は requested delivery の top-level environment/requester と、nested reviewers / approver / string comment を deployment review resource として正規化する。`workflow_run` が null の場合は `workflow_job_run.id` を run id に使う。
+- `deployment_review` は requested delivery の top-level environment/requester と、nested reviewers / approver / string comment を deployment review resource として正規化する。`workflow_run` が null の場合は `workflow_job_run.html_url` から run id を読み、`workflow_job_run.id` は job id として分けて残す。
 - `merge_group` は merge queue の head SHA/ref と base ref を resource に残す。
-- `workflow_job` は job id/run id/status/conclusion/labels と deployment environment/ref/sha を workflow job resource として正規化する。
+- `workflow_job` は job id/run id/status/conclusion/labels、通常ジョブの head branch/SHA、deployment environment/ref/sha を workflow job resource として正規化する。
 - `branch_protection_rule` は rule id/name と changes を branch protection rule resource として正規化する。
 - branch protection や repository rename/transfer などの changes では nested field path、空文字、string 配列、user login を `from` / `to` に残す。
 - `milestone` webhook は top-level milestone を milestone resource と `event.payload.milestone` に残す。
