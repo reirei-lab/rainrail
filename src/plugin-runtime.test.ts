@@ -6825,6 +6825,168 @@ describe('plugin runtime contract', () => {
     ]);
   });
 
+  it('treats missing workflow timeoutMs as an undefined snapshot before accepts can add it', async () => {
+    vi.useFakeTimers();
+    try {
+      const event = createEventEnvelope({
+        source: { type: 'github', name: 'github-webhook' },
+        name: 'github.issue',
+        delivery: { id: 'delivery-accepts-added-timeout', receivedAt: '2026-06-29T14:00:00.000Z' },
+        occurredAt: '2026-06-29T14:00:00.000Z',
+        subject: { type: 'issue', id: '13' },
+        payload: { action: 'opened' },
+        rawPayload: { kind: 'external-reference', reference: 'github://deliveries/delivery-accepts-added-timeout' },
+      });
+      const workflow = {
+        name: 'accepts-added-timeout-handler',
+        accepts: () => {
+          (workflow as WorkflowPlugin).timeoutMs = 60_000;
+          return true;
+        },
+        handle: async () => new Promise(() => undefined),
+      } satisfies WorkflowPlugin;
+      const dispatcher = createRuntimeDispatcher({
+        workflows: [workflow],
+        defaultTimeoutMs: 25,
+        runtime: mockRuntimeContext(),
+      });
+
+      const dispatchPromise = dispatcher.dispatch(event);
+      await vi.advanceTimersByTimeAsync(25);
+      const result = await Promise.race([dispatchPromise, Promise.resolve('still-pending')]);
+
+      expect(result).toMatchObject([
+        {
+          pluginName: 'accepts-added-timeout-handler',
+          eventId: 'github-webhook:delivery-accepts-added-timeout:github.issue',
+          status: 'rejected',
+        },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('preserves Array brand for capability metadata arrays', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: { id: 'delivery-array-capability-metadata', receivedAt: '2026-06-29T14:00:00.000Z' },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: { kind: 'external-reference', reference: 'github://deliveries/delivery-array-capability-metadata' },
+    });
+    const loader = createPluginLoader({
+      runtime: mockRuntimeContext({
+        capabilities: {
+          provider: 'codex',
+          items: ['alpha', 'beta'],
+        } as RuntimeCapabilities,
+      }),
+    });
+
+    loader.on(
+      'github.issue',
+      (_handledEvent, context) => {
+        const items = (context.capabilities as unknown as { items: string[] }).items;
+        return { isArray: Array.isArray(items), json: JSON.stringify(items), first: items[0] };
+      },
+      { name: 'array-capability-metadata-handler' },
+    );
+
+    await expect(loader.dispatch(event)).resolves.toEqual([
+      {
+        pluginName: 'array-capability-metadata-handler',
+        eventId: 'github-webhook:delivery-array-capability-metadata:github.issue',
+        status: 'fulfilled',
+        value: { isArray: true, json: '["alpha","beta"]', first: 'alpha' },
+      },
+    ]);
+  });
+
+  it('does not read dispatchAgent getters when reading unrelated capability helpers', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: { id: 'delivery-unrelated-helper-dispatch-getter', receivedAt: '2026-06-29T14:00:00.000Z' },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: { kind: 'external-reference', reference: 'github://deliveries/delivery-unrelated-helper-dispatch-getter' },
+    });
+    let dispatchAgentReads = 0;
+    const loader = createPluginLoader({
+      runtime: mockRuntimeContext({
+        capabilities: {
+          provider: 'codex',
+          describe: () => 'metadata',
+          get dispatchAgent(): never {
+            dispatchAgentReads += 1;
+            throw new Error('dispatchAgent should not be read');
+          },
+        },
+      }),
+    });
+
+    loader.on(
+      'github.issue',
+      (_handledEvent, context) => ({
+        helperType: typeof (context.capabilities as unknown as { describe: () => string }).describe,
+      }),
+      { name: 'unrelated-helper-dispatch-getter-handler' },
+    );
+
+    await expect(loader.dispatch(event)).resolves.toEqual([
+      {
+        pluginName: 'unrelated-helper-dispatch-getter-handler',
+        eventId: 'github-webhook:delivery-unrelated-helper-dispatch-getter:github.issue',
+        status: 'fulfilled',
+        value: { helperType: 'function' },
+      },
+    ]);
+    expect(dispatchAgentReads).toBe(0);
+  });
+
+  it('exposes missing optional dispatchAgent capabilities as undefined', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: { id: 'delivery-missing-dispatch-agent', receivedAt: '2026-06-29T14:00:00.000Z' },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: { kind: 'external-reference', reference: 'github://deliveries/delivery-missing-dispatch-agent' },
+    });
+    const loader = createPluginLoader({
+      runtime: mockRuntimeContext({
+        capabilities: {
+          provider: 'codex',
+        },
+      }),
+    });
+
+    loader.on(
+      'github.issue',
+      (handledEvent, context) =>
+        context.capabilities?.dispatchAgent?.({
+          event: handledEvent,
+          workflow: 'missing-dispatch-agent-handler',
+          runId: context.runId,
+        }) ?? { skipped: true },
+      { name: 'missing-dispatch-agent-handler' },
+    );
+
+    await expect(loader.dispatch(event)).resolves.toEqual([
+      {
+        pluginName: 'missing-dispatch-agent-handler',
+        eventId: 'github-webhook:delivery-missing-dispatch-agent:github.issue',
+        status: 'fulfilled',
+        value: { skipped: true },
+      },
+    ]);
+  });
+
   it('checks provider lifecycle denial before reading late provider getters', async () => {
     const event = createEventEnvelope({
       source: { type: 'github', name: 'github-webhook' },

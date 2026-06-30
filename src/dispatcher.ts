@@ -145,7 +145,7 @@ function createWorkflowExecutionRecord(workflow: WorkflowPlugin): WorkflowExecut
     workflow,
     policy: fallbackPolicy,
     policySnapshot: true,
-    timeoutSnapshot: false,
+    timeoutSnapshot: true,
   };
   if (nameMetadata.error !== undefined) {
     record.policyError = nameMetadata.error;
@@ -167,11 +167,14 @@ function createWorkflowExecutionRecord(workflow: WorkflowPlugin): WorkflowExecut
   }
 
   const timeoutDescriptor = findPropertyDescriptor(workflow, 'timeoutMs');
-  if (timeoutDescriptor !== undefined && 'value' in timeoutDescriptor) {
-    if (timeoutDescriptor.value !== undefined) {
-      record.timeoutMs = timeoutDescriptor.value as number;
+  if (timeoutDescriptor !== undefined) {
+    if ('value' in timeoutDescriptor) {
+      if (timeoutDescriptor.value !== undefined) {
+        record.timeoutMs = timeoutDescriptor.value as number;
+      }
+    } else {
+      record.timeoutSnapshot = false;
     }
-    record.timeoutSnapshot = true;
   }
 
   return record;
@@ -445,10 +448,18 @@ function createDispatchAgentCapabilityProxy(
     typeof value === 'object' && value !== null
       ? sourceCache.get(value) ?? value
       : value;
+  const hasDispatchAgentProperty = (source: object): boolean => {
+    const descriptor = findPropertyDescriptor(source, 'dispatchAgent');
+    return descriptor !== undefined && (!('value' in descriptor) || descriptor.value !== undefined);
+  };
 
   const isDispatchAgentFunction = (value: Function, property?: string | symbol): boolean => {
     if (property === 'dispatchAgent') {
       return true;
+    }
+
+    if (property !== 'startAgent') {
+      return false;
     }
 
     const rawDispatchAgent = getRawDispatchAgent();
@@ -570,9 +581,13 @@ function createDispatchAgentCapabilityProxy(
       return {
         configurable: true,
         enumerable: descriptor.enumerable ?? false,
-        value: dispatchAgent,
+        value: hasDispatchAgentProperty(source) ? dispatchAgent : undefined,
         writable: false,
       };
+    }
+
+    if (Array.isArray(source) && property === 'length') {
+      return descriptor;
     }
 
     return {
@@ -594,11 +609,11 @@ function createDispatchAgentCapabilityProxy(
     }
 
     const view = new Proxy(
-      {},
+      Array.isArray(source) ? source : {},
       {
         get(_target, property) {
           if (property === 'dispatchAgent') {
-            return dispatchAgent;
+            return hasDispatchAgentProperty(source) ? dispatchAgent : undefined;
           }
 
           return readCapabilityProperty(source, property);
@@ -981,6 +996,10 @@ function normalizeCapabilityHelperResult(
   wrapObject: (object: object) => object,
 ): unknown {
   if (value === capabilities) {
+    return safeReceiver;
+  }
+
+  if (value === safeReceiver) {
     return safeReceiver;
   }
 
