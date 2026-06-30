@@ -110,6 +110,50 @@ describe('Cloudflare tail source', () => {
     expect(createdIssues[0]?.body).toContain('resolveCurrentHumanAccount @ worker.js');
   });
 
+  it('keeps usable stack frames when bounding a multi-line exception message', async () => {
+    const event = await createCloudflareTailEvent({
+      tailEvent: cloudflareTailFixture({
+        outcome: 'exception',
+        exceptions: [{
+          name: 'TypeError',
+          message: 'multi-line exception message',
+          stack: [
+            'TypeError: multi-line exception message',
+            ...Array.from({ length: 12 }, (_, index) => `message detail ${index}`),
+            '    at resolveCurrentHumanAccount (worker.js:1510:24)',
+            '    at handleCurrentHuman (worker.js:1377:18)',
+            '    at Object.fetch (worker.js:42:7)',
+            ...Array.from({ length: 80 }, (_, index) => `    at extraFrame${index} (worker.js:${index}:1)`),
+          ].join('\n'),
+        }],
+      }),
+      receivedAt: new Date('2026-06-15T08:12:01.000Z'),
+    });
+    const createdIssues: Array<{ title: string; body: string }> = [];
+    const workflow = createCloudflareIssueReporterWorkflow({
+      repository: 'reirei-lab/rainrail',
+      store: createInMemoryCloudflareErrorIssueStore(),
+      issues: {
+        findOpenIssueByFingerprint: async () => undefined,
+        createIssue: async (input) => {
+          createdIssues.push(input);
+          return {
+            number: 25,
+            url: 'https://github.com/reirei-lab/rainrail/issues/25',
+          };
+        },
+      },
+    });
+
+    await expect(workflow.handle(event, runtimeContext())).resolves.toMatchObject({
+      handled: true,
+      reason: 'created_cloudflare_error_issue',
+    });
+    expect(event.payload.exceptions[0]?.stack).toContain('resolveCurrentHumanAccount');
+    expect(event.payload.exceptions[0]?.stack).toContain('... truncated ...');
+    expect(createdIssues[0]?.title).toBe('[asme-site] TypeError in resolveCurrentHumanAccount');
+  });
+
   it('normalizes successful Cloudflare Worker invocations as cloudflare.tail events', async () => {
     const event = await createCloudflareTailEvent({
       tailEvent: cloudflareTailFixture({ outcome: 'ok', status: 200, cfRay: 'ray-2' }),

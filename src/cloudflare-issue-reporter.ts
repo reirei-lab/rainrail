@@ -615,7 +615,7 @@ function isUrlKey(key: string): boolean {
 }
 
 function sanitizeSecretString(value: string): string {
-  return redactSecretArrays(value)
+  return redactSecretStructuredValues(value)
     .replace(/https?:\/\/[^\s"'<>`]+/giu, (url) => sanitizeUrlString(url))
     .replace(/\b(cookie|set-cookie)\s*:\s*[^\r\n]+/giu, '$1: [redacted]')
     .replace(/\bauthorization\s*:\s*[^\r\n]+/giu, 'authorization: [redacted]')
@@ -630,28 +630,28 @@ function sanitizeSecretString(value: string): string {
     .replace(/\bBearer\s+[A-Za-z0-9._~+/-]+=*/giu, 'Bearer [redacted]');
 }
 
-function redactSecretArrays(value: string): string {
-  const keyPattern = /(^|[{\s"'<>`,;])(["']?)([A-Za-z0-9_-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification)[A-Za-z0-9_-]*)\2(\s*:\s*)\[/giu;
+function redactSecretStructuredValues(value: string): string {
+  const keyPattern = /(^|[{\s"'<>`,;])(["']?)([A-Za-z0-9_-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification)[A-Za-z0-9_-]*)\2(\s*[:=]\s*)([\[{])/giu;
   let redacted = '';
   let cursor = 0;
   for (const match of value.matchAll(keyPattern)) {
     const matchText = match[0];
     const matchIndex = match.index;
     if (matchIndex < cursor) continue;
-    const arrayStart = matchIndex + matchText.length - 1;
-    const arrayEnd = findJsonArrayEnd(value, arrayStart);
+    const valueStart = matchIndex + matchText.length - 1;
+    const valueEnd = findBalancedStructuredValueEnd(value, valueStart);
     redacted += value.slice(cursor, matchIndex);
     redacted += `${match[1] ?? ''}${match[2] ?? ''}${match[3] ?? ''}${match[2] ?? ''}${match[4] ?? ''}[redacted]`;
-    cursor = arrayEnd === undefined ? value.length : arrayEnd + 1;
+    cursor = valueEnd === undefined ? value.length : valueEnd + 1;
   }
   return redacted + value.slice(cursor);
 }
 
-function findJsonArrayEnd(value: string, arrayStart: number): number | undefined {
-  let depth = 0;
+function findBalancedStructuredValueEnd(value: string, valueStart: number): number | undefined {
+  const stack: string[] = [];
   let quote: string | undefined;
   let escaped = false;
-  for (let index = arrayStart; index < value.length; index += 1) {
+  for (let index = valueStart; index < value.length; index += 1) {
     const char = value[index];
     if (quote !== undefined) {
       if (escaped) {
@@ -666,10 +666,17 @@ function findJsonArrayEnd(value: string, arrayStart: number): number | undefined
     if (char === '"' || char === "'") {
       quote = char;
     } else if (char === '[') {
-      depth += 1;
+      stack.push(']');
+    } else if (char === '{') {
+      stack.push('}');
     } else if (char === ']') {
-      depth -= 1;
-      if (depth === 0) return index;
+      if (stack.at(-1) !== ']') return undefined;
+      stack.pop();
+      if (stack.length === 0) return index;
+    } else if (char === '}') {
+      if (stack.at(-1) !== '}') return undefined;
+      stack.pop();
+      if (stack.length === 0) return index;
     }
   }
   return undefined;

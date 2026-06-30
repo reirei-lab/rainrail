@@ -915,7 +915,7 @@ async function releaseProjectIssue(
 ): Promise<void> {
   const current = await loadProjectItemStatus(input.issue.id, fetchImpl, auth, config);
   const canReleaseCurrentClaim = shouldReleaseCurrentClaim(current, input, config)
-    || await isRetryablePartialReleaseCurrentClaim(current, input, fetchImpl, auth);
+    || await isRetryablePartialReleaseCurrentClaim(config, current, input, fetchImpl, auth);
   if (!canReleaseCurrentClaim) {
     await deleteProjectIssueClaimLocksIfOwned(current.repositoryId ?? input.claim.lockRepositoryId, input, fetchImpl, auth);
     return;
@@ -1415,12 +1415,13 @@ async function loadOwnedProjectIssueClaimLock(
 }
 
 async function isRetryablePartialReleaseCurrentClaim(
+  config: GitHubProjectTaskQueueConfig,
   status: ProjectItemStatus,
   input: ProjectIssueReleaseInput,
   fetchImpl: typeof fetch,
   auth: GitHubProjectAuthTokenProvider,
 ): Promise<boolean> {
-  if (normalizeToken(status.status ?? '') !== 'inprogress') {
+  if (normalizeToken(status.status ?? '') !== normalizeToken(config.inProgressStatus)) {
     return false;
   }
   const session = status.agentSessionId?.trim() ?? '';
@@ -1433,7 +1434,7 @@ async function isRetryablePartialReleaseCurrentClaim(
   if (session === input.agentSessionId || branch === input.branchName) {
     return true;
   }
-  const lock = await loadOwnedProjectIssueClaimLock(status.repositoryId, input, fetchImpl, auth);
+  const lock = await loadOwnedProjectIssueClaimLock(status.repositoryId ?? input.claim.lockRepositoryId, input, fetchImpl, auth);
   return lock !== undefined;
 }
 

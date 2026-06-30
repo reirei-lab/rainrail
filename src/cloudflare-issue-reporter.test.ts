@@ -823,7 +823,8 @@ describe('cloudflare issue redaction', () => {
 
     await expect(workflow.handle(cloudflareErrorEvent({
       message: [
-        'serialized {"apiKeyValue":"api-key-value-secret","tokens":["abc]def"],"password_hash":"hash-secret"}',
+        'serialized {"apiKeyValue":"api-key-value-secret","tokens":["abc]def"],"password_hash":"hash-secret","token":{"meta":{},"value":"nested-object-secret"}}',
+        'tokens=["kv-array-secret-1","kv-array-secret-2"] passwords=[kv-password-1,kv-password-2]',
         'secretValue=secret-value-secret',
         'cookie=session=session-secret; csrf=csrf-secret',
       ].join(' '),
@@ -835,12 +836,20 @@ describe('cloudflare issue redaction', () => {
     expect(createdIssues[0]?.body).not.toContain('abc');
     expect(createdIssues[0]?.body).not.toContain('def');
     expect(createdIssues[0]?.body).not.toContain('hash-secret');
+    expect(createdIssues[0]?.body).not.toContain('nested-object-secret');
+    expect(createdIssues[0]?.body).not.toContain('kv-array-secret-1');
+    expect(createdIssues[0]?.body).not.toContain('kv-array-secret-2');
+    expect(createdIssues[0]?.body).not.toContain('kv-password-1');
+    expect(createdIssues[0]?.body).not.toContain('kv-password-2');
     expect(createdIssues[0]?.body).not.toContain('secret-value-secret');
     expect(createdIssues[0]?.body).not.toContain('session-secret');
     expect(createdIssues[0]?.body).not.toContain('csrf-secret');
     expect(createdIssues[0]?.body).toContain('\\"apiKeyValue\\":\\"[redacted]\\"');
     expect(createdIssues[0]?.body).toContain('\\"tokens\\":[redacted]');
     expect(createdIssues[0]?.body).toContain('\\"password_hash\\":\\"[redacted]\\"');
+    expect(createdIssues[0]?.body).toContain('\\"token\\":[redacted]');
+    expect(createdIssues[0]?.body).toContain('tokens=[redacted]');
+    expect(createdIssues[0]?.body).toContain('passwords=[redacted]');
     expect(createdIssues[0]?.body).toContain('secretValue=[redacted]');
     expect(createdIssues[0]?.body).toContain('cookie=[redacted]');
   });

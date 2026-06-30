@@ -308,7 +308,7 @@ function optionalField(record: Record<string, unknown>, key: 'name' | 'message' 
 function boundedExceptionField(key: 'name' | 'message' | 'stack', value: string): string {
   if (key === 'name') return truncateText(value, MAX_EXCEPTION_NAME_LENGTH);
   if (key === 'message') return truncateText(value, MAX_EXCEPTION_MESSAGE_LENGTH);
-  return truncateText(truncateLines(value, MAX_EXCEPTION_STACK_LINES), MAX_EXCEPTION_STACK_LENGTH);
+  return truncateText(truncateStackLines(value, MAX_EXCEPTION_STACK_LINES), MAX_EXCEPTION_STACK_LENGTH);
 }
 
 function truncateText(value: string, maxLength: number): string {
@@ -325,6 +325,56 @@ function truncateLines(value: string, maxLines: number): string {
     lines.push(line);
   }
   return value;
+}
+
+function truncateStackLines(value: string, maxLines: number): string {
+  const fallbackLines: string[] = [];
+  const keptLines: string[] = [];
+  let frameSeen = false;
+  let truncated = false;
+  let cursor = 0;
+
+  while (cursor <= value.length) {
+    const nextLineBreak = value.indexOf('\n', cursor);
+    const lineEnd = nextLineBreak === -1 ? value.length : nextLineBreak;
+    const line = value.slice(cursor, lineEnd).replace(/\r$/u, '');
+
+    if (fallbackLines.length < maxLines) {
+      fallbackLines.push(line);
+    } else {
+      truncated = true;
+    }
+
+    if (isUsableStackFrameLine(line)) {
+      frameSeen = true;
+      if (keptLines.length < maxLines) {
+        keptLines.push(line);
+      } else {
+        truncated = true;
+      }
+    } else if (!frameSeen) {
+      if (keptLines.length < Math.min(2, maxLines)) {
+        keptLines.push(line);
+      } else {
+        truncated = true;
+      }
+    } else if (keptLines.length < maxLines) {
+      keptLines.push(line);
+    } else {
+      truncated = true;
+    }
+
+    if (nextLineBreak === -1) break;
+    cursor = nextLineBreak + 1;
+  }
+
+  const lines = frameSeen ? keptLines : fallbackLines;
+  if (!truncated) return value;
+  return `${lines.join('\n')}\n... truncated ...`;
+}
+
+function isUsableStackFrameLine(line: string): boolean {
+  return /^\s*at\s+\S+/u.test(line);
 }
 
 function optionalTimestampField(value: unknown): { timestamp: string } | {} {
