@@ -98,10 +98,17 @@ function createRegisteredWorkflow(plugin: WorkflowPlugin): WorkflowPlugin {
     timeoutError = reason;
   }
 
-  const workflow: WorkflowPlugin = {
-    name: plugin.name,
+  const workflow = {
     handle: (event, context) => plugin.handle.call(plugin, event, context),
-  };
+  } as WorkflowPlugin;
+
+  Object.defineProperty(workflow, 'name', {
+    configurable: true,
+    enumerable: true,
+    get() {
+      return plugin.name;
+    },
+  });
 
   if ('accepts' in plugin) {
     workflow.accepts = (event) => {

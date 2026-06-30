@@ -407,7 +407,7 @@ function createDispatchAgentCapabilityProxy(
     }
 
     const wrapped = (...args: unknown[]) =>
-      callCapabilityFunctionWithDispatchAgentShadow(value, capabilities, dispatchAgent, createCapabilityView(capabilities), args);
+      callCapabilityFunction(value, capabilities, dispatchAgent, rawDispatchAgent, createCapabilityView(capabilities), args);
     functionCache.set(value, wrapped);
     return wrapped;
   };
@@ -431,7 +431,12 @@ function createDispatchAgentCapabilityProxy(
     }
 
     if (property === 'constructor') {
-      return createCapabilityConstructorView(Reflect.get(source, property, capabilities), capabilities, dispatchAgent);
+      return createCapabilityConstructorView(
+        Reflect.get(source, property, capabilities),
+        capabilities,
+        dispatchAgent,
+        rawDispatchAgent,
+      );
     }
 
     const value = Reflect.get(source, property, capabilities);
@@ -443,7 +448,7 @@ function createDispatchAgentCapabilityProxy(
       return bindCapabilityFunction(value);
     }
 
-    return normalizeCapabilityHelperResult(value, capabilities, createCapabilityView(source));
+    return normalizeCapabilityHelperResult(value, capabilities, createCapabilityView(source), rawDispatchAgent, dispatchAgent);
   };
 
   const describeCapabilityProperty = (source: object, property: string | symbol): PropertyDescriptor | undefined => {
@@ -512,6 +517,7 @@ function createCapabilityConstructorView(
   constructorValue: unknown,
   capabilities: NonNullable<PluginRuntimeContext['capabilities']>,
   dispatchAgent: DispatchAgentCapability,
+  rawDispatchAgent: DispatchAgentCapability,
 ): unknown {
   if (typeof constructorValue !== 'function') {
     return constructorValue;
@@ -536,10 +542,14 @@ function createCapabilityConstructorView(
         }
 
         const value = Reflect.get(prototype, property, capabilities);
+        if (value === rawDispatchAgent) {
+          return dispatchAgent;
+        }
+
         return typeof value === 'function'
           ? (...args: unknown[]) =>
-              callCapabilityFunctionWithDispatchAgentShadow(value, capabilities, dispatchAgent, prototypeView, args)
-          : value;
+              callCapabilityFunction(value, capabilities, dispatchAgent, rawDispatchAgent, prototypeView, args)
+          : normalizeCapabilityHelperResult(value, capabilities, prototypeView, rawDispatchAgent, dispatchAgent);
       },
       getOwnPropertyDescriptor(_target, property): PropertyDescriptor | undefined {
         const descriptor = Reflect.getOwnPropertyDescriptor(prototype, property);
@@ -555,7 +565,7 @@ function createCapabilityConstructorView(
               ? dispatchAgent
               : property === 'constructor'
                 ? constructorView
-                : Reflect.get(prototype, property, capabilities),
+                : Reflect.get(prototype, property, prototypeView),
           writable: false,
         };
       },
@@ -574,6 +584,10 @@ function createCapabilityConstructorView(
         }
 
         const value = Reflect.get(constructorValue, property, constructorView);
+        if (value === rawDispatchAgent) {
+          return dispatchAgent;
+        }
+
         return typeof value === 'function' ? value.bind(constructorView) : value;
       },
       getOwnPropertyDescriptor(_target, property): PropertyDescriptor | undefined {
@@ -607,93 +621,37 @@ function createCapabilityConstructorView(
   return constructorView;
 }
 
-function callCapabilityFunctionWithDispatchAgentShadow(
+function callCapabilityFunction(
   helper: Function,
   capabilities: NonNullable<PluginRuntimeContext['capabilities']>,
   dispatchAgent: DispatchAgentCapability,
+  rawDispatchAgent: DispatchAgentCapability,
   safeReceiver: object,
   args: unknown[],
 ): unknown {
-  const restore = startDispatchAgentShadow(capabilities, dispatchAgent);
-  if (restore !== undefined) {
-    try {
-      const result = Reflect.apply(helper, capabilities, args);
-      if (isPromiseLike(result)) {
-        return Promise.resolve(result)
-          .then((value) => normalizeCapabilityHelperResult(value, capabilities, safeReceiver))
-          .finally(restore);
-      }
-
-      restore();
-      return normalizeCapabilityHelperResult(result, capabilities, safeReceiver);
-    } catch (reason) {
-      restore();
+  try {
+    return normalizeCapabilityFunctionResult(
+      Reflect.apply(helper, safeReceiver, args),
+      capabilities,
+      safeReceiver,
+      rawDispatchAgent,
+      dispatchAgent,
+    );
+  } catch (reason) {
+    if (!isPrivateReceiverError(reason)) {
       throw reason;
     }
-  }
 
-  const result = Reflect.apply(helper, safeReceiver, args);
-  if (isPromiseLike(result)) {
-    return Promise.resolve(result).then((value) => normalizeCapabilityHelperResult(value, capabilities, safeReceiver));
-  }
-
-  return normalizeCapabilityHelperResult(result, capabilities, safeReceiver);
-}
-
-interface DispatchAgentShadowState {
-  depth: number;
-  descriptor: PropertyDescriptor | undefined;
-}
-
-const dispatchAgentShadowStates = new WeakMap<object, DispatchAgentShadowState>();
-
-function startDispatchAgentShadow(
-  capabilities: NonNullable<PluginRuntimeContext['capabilities']>,
-  dispatchAgent: DispatchAgentCapability,
-): (() => void) | undefined {
-  const existing = dispatchAgentShadowStates.get(capabilities);
-  if (existing !== undefined) {
-    existing.depth += 1;
-    return () => restoreDispatchAgentShadow(capabilities);
-  }
-
-  const descriptor = Reflect.getOwnPropertyDescriptor(capabilities, 'dispatchAgent');
-  if (!Object.isExtensible(capabilities) && descriptor === undefined) {
-    return undefined;
-  }
-
-  if (descriptor !== undefined && descriptor.configurable !== true) {
-    return undefined;
-  }
-
-  Object.defineProperty(capabilities, 'dispatchAgent', {
-    configurable: true,
-    enumerable: descriptor?.enumerable ?? true,
-    value: dispatchAgent,
-    writable: true,
-  });
-  dispatchAgentShadowStates.set(capabilities, { depth: 1, descriptor });
-  return () => restoreDispatchAgentShadow(capabilities);
-}
-
-function restoreDispatchAgentShadow(capabilities: object): void {
-  const state = dispatchAgentShadowStates.get(capabilities);
-  if (state === undefined) {
-    return;
-  }
-
-  state.depth -= 1;
-  if (state.depth > 0) {
-    return;
-  }
-
-  dispatchAgentShadowStates.delete(capabilities);
-  if (state.descriptor === undefined) {
-    Reflect.deleteProperty(capabilities, 'dispatchAgent');
-  } else {
-    Object.defineProperty(capabilities, 'dispatchAgent', state.descriptor);
+    return normalizeCapabilityFunctionResult(
+      Reflect.apply(helper, capabilities, args),
+      capabilities,
+      safeReceiver,
+      rawDispatchAgent,
+      dispatchAgent,
+    );
   }
 }
+
 
 function isPromiseLike(value: unknown): value is Promise<unknown> {
   return (
@@ -704,12 +662,42 @@ function isPromiseLike(value: unknown): value is Promise<unknown> {
   );
 }
 
+function normalizeCapabilityFunctionResult(
+  value: unknown,
+  capabilities: NonNullable<PluginRuntimeContext['capabilities']>,
+  safeReceiver: object,
+  rawDispatchAgent: DispatchAgentCapability,
+  dispatchAgent: DispatchAgentCapability,
+): unknown {
+  if (isPromiseLike(value)) {
+    return Promise.resolve(value).then((resolved) =>
+      normalizeCapabilityHelperResult(resolved, capabilities, safeReceiver, rawDispatchAgent, dispatchAgent),
+    );
+  }
+
+  return normalizeCapabilityHelperResult(value, capabilities, safeReceiver, rawDispatchAgent, dispatchAgent);
+}
+
 function normalizeCapabilityHelperResult(
   value: unknown,
   capabilities: NonNullable<PluginRuntimeContext['capabilities']>,
   safeReceiver: object,
+  rawDispatchAgent: DispatchAgentCapability,
+  dispatchAgent: DispatchAgentCapability,
 ): unknown {
-  return value === capabilities ? safeReceiver : value;
+  if (value === capabilities) {
+    return safeReceiver;
+  }
+
+  if (value === rawDispatchAgent) {
+    return dispatchAgent;
+  }
+
+  return value;
+}
+
+function isPrivateReceiverError(reason: unknown): boolean {
+  return reason instanceof TypeError && reason.message.includes('private');
 }
 
 async function callDispatchAgent(
@@ -1027,7 +1015,6 @@ async function runWorkflow<T>(
 ): Promise<T> {
   let timeout: NodeJS.Timeout | undefined;
   let removeAbortListener: (() => void) | undefined;
-  const disposeQueueMicrotaskGuard = installQueueMicrotaskDeferral();
   try {
     const abortPromise = new Promise<never>((_resolve, reject) => {
       const rejectAbort = () => reject(abort.controller.signal.reason ?? new Error('Plugin runtime signal aborted'));
@@ -1069,7 +1056,6 @@ async function runWorkflow<T>(
     ]);
   } finally {
     lifecycle.closeSideEffects();
-    disposeQueueMicrotaskGuard();
 
     if (timeout !== undefined) {
       clearTimeout(timeout);
@@ -1083,25 +1069,4 @@ async function runWorkflow<T>(
 
     abort.dispose();
   }
-}
-
-let originalQueueMicrotask: typeof queueMicrotask | undefined;
-let queueMicrotaskDeferralDepth = 0;
-
-function installQueueMicrotaskDeferral(): () => void {
-  if (originalQueueMicrotask === undefined) {
-    originalQueueMicrotask = globalThis.queueMicrotask;
-    globalThis.queueMicrotask = (callback) => {
-      setTimeout(callback, 0);
-    };
-  }
-
-  queueMicrotaskDeferralDepth += 1;
-  return () => {
-    queueMicrotaskDeferralDepth -= 1;
-    if (queueMicrotaskDeferralDepth === 0 && originalQueueMicrotask !== undefined) {
-      globalThis.queueMicrotask = originalQueueMicrotask;
-      originalQueueMicrotask = undefined;
-    }
-  };
 }
