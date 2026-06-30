@@ -53,7 +53,8 @@ replay では allowlist 済み shallow metadata に縮約される。
 batch publish helper は入力順に 1 件ずつ publish する。`cf-ray` が無い batch では
 fallback delivery id に batch index を混ぜ、同一 ms の Cron/Queue tail でも batch 内の
 別 event として配信できるようにする。Cloudflare delivery reference の path segment は
-`:` を含まない文字集合へ正規化し、`eventTimestamp` が欠落または壊れている場合は
+`:` を含まない文字集合へ正規化する。正規化や切り詰めで別 delivery id が衝突しないよう、
+元の suffix 由来の安定 hash も混ぜる。`eventTimestamp` が欠落または壊れている場合は
 `receivedAt` を occurredAt / delivery id の時刻要素として使う。
 
 ## Task provider

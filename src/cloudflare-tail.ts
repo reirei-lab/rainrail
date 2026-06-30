@@ -209,7 +209,7 @@ function buildCloudflareTailDeliveryId({
   const compactedTimestamp = compactTimestamp(occurredAt);
   const fixedLength = 'tail'.length + compactedTimestamp.length + 3;
   const remainingLength = Math.max(2, maxLength - fixedLength);
-  const suffixLength = Math.min(32, Math.max(8, Math.floor(remainingLength / 2)));
+  const suffixLength = Math.min(32, Math.max(1, Math.floor(remainingLength / 2)));
   const scriptLength = Math.max(1, remainingLength - suffixLength);
 
   return [
@@ -333,12 +333,37 @@ function safeDeliveryReferenceSegment(
     .toLowerCase()
     .replace(/[^a-z0-9_.-]+/gu, '-')
     .replace(/^-+|-+$/gu, '');
-  const truncatedRaw = options.preserveEnd === true
-    ? normalized.slice(-maxLength)
-    : normalized.slice(0, maxLength);
+  const needsHash = normalized !== value.trim().toLowerCase().replace(/^-+|-+$/gu, '') || normalized.length > maxLength;
+  const hash = stableHash(value);
+  const hashSuffix = needsHash ? `-${hash}` : '';
+  const readableLength = Math.max(0, maxLength - hashSuffix.length);
+  const truncatedRaw = readableLength <= 0
+    ? ''
+    : options.preserveEnd === true
+      ? normalized.slice(-readableLength)
+      : normalized.slice(0, readableLength);
   const truncated = truncatedRaw
     .replace(/^[^a-z0-9]+/u, '')
     .replace(/[^a-z0-9]+$/u, '');
 
-  return truncated.length > 0 && /^[a-z0-9]/u.test(truncated) ? truncated : fallback;
+  if (truncated.length > 0 && /^[a-z0-9]/u.test(truncated)) {
+    return `${truncated}${hashSuffix}`;
+  }
+
+  if (needsHash) {
+    return hash.slice(0, maxLength);
+  }
+
+  return fallback;
+}
+
+function stableHash(value: string): string {
+  let hash = 0x811c9dc5;
+
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+
+  return (hash >>> 0).toString(36);
 }

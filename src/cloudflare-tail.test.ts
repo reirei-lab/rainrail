@@ -278,7 +278,8 @@ describe('Cloudflare tail source', () => {
     });
 
     expect(result[0]?.ok).toBe(true);
-    expect(storage.storedEvents()[0]?.rawPayload.reference).toBe('cloudflare://deliveries/tail-asme-site-20260615T081200000Z-queue-delivery-1-0');
+    expect(storage.storedEvents()[0]?.rawPayload.reference).toContain('queue-delivery-1-0');
+    expect(storage.storedEvents()[0]?.rawPayload.reference).not.toContain(':delivery');
   });
 
   it('keeps retry ids stable when eventTimestamp is missing', async () => {
@@ -318,6 +319,44 @@ describe('Cloudflare tail source', () => {
     expect(result[0]?.ok).toBe(true);
     expect(result[0]?.id.length).toBeLessThanOrEqual(128);
     expect(storage.storedEvents()).toHaveLength(1);
+  });
+
+  it('keeps error event ids publishable when source names leave only 34 delivery id characters', async () => {
+    const storage = fakeState();
+    const room = new RainrailBridgeRoom(storage, { publishToken: TEST_PUBLISH_TOKEN, replayLimit: 10 });
+    const sourceName = 'a'.repeat(76);
+    const result = await publishCloudflareTailEvents([
+      cloudflareTailFixture({
+        outcome: 'exception',
+        cfRay: null,
+      }),
+    ], {
+      sourceName,
+      receivedAt: new Date('2026-06-15T08:12:01.000Z'),
+      fallbackDeliveryId: 'stable-delivery-without-cf-ray',
+      publish: (event) => room.fetch(publishRequest(event)),
+    });
+
+    expect(result[0]?.ok).toBe(true);
+    expect(result[0]?.id.length).toBeLessThanOrEqual(128);
+    expect(storage.storedEvents()).toHaveLength(1);
+  });
+
+  it('keeps distinct fallback delivery ids distinct after reference-safe encoding', async () => {
+    const withColon = await createCloudflareTailEvent({
+      tailEvent: cloudflareTailFixture({ outcome: 'ok', cfRay: null }),
+      receivedAt: new Date('2026-06-15T08:12:01.000Z'),
+      fallbackDeliveryId: 'queue:delivery:1',
+    });
+    const withDash = await createCloudflareTailEvent({
+      tailEvent: cloudflareTailFixture({ outcome: 'ok', cfRay: null }),
+      receivedAt: new Date('2026-06-15T08:12:01.000Z'),
+      fallbackDeliveryId: 'queue-delivery-1',
+    });
+
+    expect(withColon.delivery.id).not.toBe(withDash.delivery.id);
+    expect(withColon.id).not.toBe(withDash.id);
+    expect(withColon.rawPayload.reference).not.toBe(withDash.rawPayload.reference);
   });
 
   it('does not collapse long fallback suffixes to unknown when preserving their ends', async () => {
