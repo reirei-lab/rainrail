@@ -208,6 +208,28 @@ describe('createOpenClawRuntimeProvider', () => {
     expect(first.metadata?.logPath).not.toBe(second.metadata?.logPath);
   });
 
+  it('generates distinct start sessions and logs when tasks omit agent session ids', async () => {
+    const spawnProcess = vi.fn(() => ({ pid: 4242, unref: vi.fn() }));
+    const logDirectory = temporaryDirectory();
+    const provider = createOpenClawRuntimeProvider({
+      enabled: true,
+      command: 'openclaw',
+      agentId: 'main',
+      sessionKeyPrefix: 'rainrail',
+      timeoutSeconds: 900,
+      logDirectory,
+      spawnProcess,
+    });
+
+    const first = await provider.startRun(runtimeRequest({ agentSessionId: null, deliveryId: 'delivery-run-a' }));
+    const second = await provider.startRun(runtimeRequest({ agentSessionId: null, deliveryId: 'delivery-run-b' }));
+
+    expect(first.id).toContain('delivery-run-a');
+    expect(second.id).toContain('delivery-run-b');
+    expect(first.id).not.toBe(second.id);
+    expect(first.metadata?.logPath).not.toBe(second.metadata?.logPath);
+  });
+
   it('passes top-level task issue fields into the start prompt', async () => {
     const spawnProcess = vi.fn(() => ({ pid: 4242, unref: vi.fn() }));
     const provider = createOpenClawRuntimeProvider({
@@ -325,6 +347,41 @@ describe('createOpenClawRuntimeProvider', () => {
     ]), expect.anything());
   });
 
+  it('does not treat bare fallback-looking text as a resume session marker', async () => {
+    const spawnProcess = vi.fn(() => ({ pid: 5151, unref: vi.fn() }));
+    const logDirectory = temporaryDirectory();
+    const logPath = `${logDirectory}/task.log`;
+    writeFileSync(logPath, 'user pasted gateway-fallback-not-a-runtime-session in the issue body', 'utf8');
+    const provider = createOpenClawRuntimeProvider({
+      enabled: true,
+      command: 'openclaw',
+      agentId: 'main',
+      sessionKeyPrefix: 'rainrail',
+      timeoutSeconds: 900,
+      logDirectory,
+      spawnProcess,
+    });
+
+    await provider.resumeRun?.({
+      run: { id: 'agent:main:intended-session', provider: 'openclaw', status: 'stopped' },
+      task: {
+        id: 'agent_task_reirei-lab-rainrail_22',
+        title: 'OpenClaw runtime',
+        agentSessionId: 'agent:main:intended-session',
+        branchName: 'agent/reirei-lab-rainrail-22',
+        logPath,
+        resumeAttempts: [],
+      },
+      attemptId: 'agent_task_reirei-lab-rainrail_22_resume_01',
+      requestedBy: 'reirei-agent',
+    });
+
+    expect(spawnProcess).toHaveBeenCalledWith('openclaw', expect.arrayContaining([
+      '--session-key',
+      'agent:main:intended-session',
+    ]), expect.anything());
+  });
+
   it('handles asynchronous spawn errors instead of leaving them unobserved', async () => {
     const child = new EventEmitter() as EventEmitter & { pid: number; unref: () => void };
     child.pid = 6262;
@@ -378,6 +435,11 @@ describe('runtime task completion and resume helpers', () => {
       status: 'ok',
       finalAssistantVisibleText: 'Outcome: split_recommended',
     }))).toMatchObject({ status: 'split_recommended', outcome: 'split_recommended' });
+
+    expect(readRuntimeRunCompletionFromLog(JSON.stringify({
+      payloads: [{ text: '修正して PR を更新しました。\n\nOutcome: implemented' }],
+      meta: { agentMeta: { sessionId: 'session-1' } },
+    }))).toMatchObject({ status: 'succeeded', outcome: 'implemented' });
 
     expect(readRuntimeRunCompletionFromLog(
       'GatewayClientRequestError: Error: CLI transcript compaction failed for openai/gpt-5.5: Compaction timed out',
@@ -473,11 +535,11 @@ function statMode(path: string): number {
   return statSync(path).mode & 0o777;
 }
 
-function runtimeRequest(overrides: { agentSessionId?: string } = {}) {
+function runtimeRequest(overrides: { agentSessionId?: string | null; deliveryId?: string } = {}) {
   const event = createEventEnvelope({
     source: { type: 'github', name: 'github-project', repository: 'reirei-lab/rainrail' },
     name: 'github.issue',
-    delivery: { id: 'delivery-22', receivedAt: '2026-06-30T15:07:29.000Z' },
+    delivery: { id: overrides.deliveryId ?? 'delivery-22', receivedAt: '2026-06-30T15:07:29.000Z' },
     occurredAt: '2026-06-30T15:07:29.000Z',
     subject: { type: 'issue', id: '22' },
     payload: { action: 'queued' },
@@ -490,7 +552,9 @@ function runtimeRequest(overrides: { agentSessionId?: string } = {}) {
     task: {
       id: 'agent_task_reirei-lab-rainrail_22',
       title: 'OpenClaw runtime',
-      agentSessionId: overrides.agentSessionId ?? 'agent:main:rainrail-agent_task_reirei-lab-rainrail_22-run-22',
+      ...(overrides.agentSessionId === null
+        ? {}
+        : { agentSessionId: overrides.agentSessionId ?? 'agent:main:rainrail-agent_task_reirei-lab-rainrail_22-run-22' }),
       branchName: 'agent/reirei-lab-rainrail-22-openclaw-runtime-run-22',
       issue: {
         id: 'item_22',

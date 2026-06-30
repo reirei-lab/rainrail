@@ -45,6 +45,88 @@ describe('agent timeline', () => {
     }
   });
 
+  it('does not prefer fallback-looking text without the embedded fallback marker', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'rainrail-non-fallback-timeline-'));
+    const logPath = join(directory, 'agent.log');
+    writeFileSync(logPath, [
+      'issue body mentioned gateway-fallback-example but no runtime fallback happened',
+      JSON.stringify({ result: { meta: { agentMeta: { sessionId: 'intended-session' } } } }),
+    ].join('\n'), 'utf8');
+    writeFileSync(join(directory, 'intended-session.trajectory.jsonl'), [
+      JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:08:00.000Z', seq: 1 }),
+    ].join('\n'), 'utf8');
+
+    try {
+      const timeline = await readRuntimeTimeline(
+        { logPath, agentSessionId: 'agent:main:routing-key' },
+        { sessionsDirectory: directory },
+      );
+      expect(timeline.sessionId).toBe('intended-session');
+      expect(timeline.fallback).toBe(false);
+      expect(timeline.missing).toBe(false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('follows relocated trajectory pointers for timeline reads', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'rainrail-relocated-timeline-'));
+    const relocatedDirectory = join(directory, 'runtime-sidecar');
+    const sessionId = 'relocated-session';
+    const logPath = join(directory, 'agent.log');
+    const runtimeFile = join(relocatedDirectory, `${sessionId}.trajectory.jsonl`);
+    mkdirSync(relocatedDirectory, { recursive: true });
+    writeFileSync(logPath, JSON.stringify({
+      result: { meta: { agentMeta: { sessionId } } },
+    }), 'utf8');
+    writeFileSync(join(directory, `${sessionId}.trajectory-path.json`), JSON.stringify({
+      traceSchema: 'openclaw-trajectory-pointer',
+      schemaVersion: 1,
+      sessionId,
+      runtimeFile,
+    }), 'utf8');
+    writeFileSync(runtimeFile, [
+      JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:08:00.000Z', seq: 1 }),
+    ].join('\n'), 'utf8');
+
+    try {
+      const timeline = await readRuntimeTimeline(
+        { logPath, agentSessionId: sessionId },
+        { sessionsDirectory: directory },
+      );
+      expect(timeline.trajectoryPath).toBe(runtimeFile);
+      expect(timeline.missing).toBe(false);
+      expect(timeline.entries).toEqual([expect.objectContaining({ summary: 'session.started' })]);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('resolves session keys through sessions.json before reading live trajectories', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'rainrail-session-key-timeline-'));
+    const logPath = join(directory, 'agent.log');
+    const sessionKey = 'agent:main:routing-key';
+    const sessionId = 'actual-session-id';
+    writeFileSync(logPath, '', 'utf8');
+    writeFileSync(join(directory, 'sessions.json'), JSON.stringify({
+      [sessionKey]: { sessionId },
+    }), 'utf8');
+    writeFileSync(join(directory, `${sessionId}.trajectory.jsonl`), [
+      JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:08:00.000Z', seq: 1 }),
+    ].join('\n'), 'utf8');
+
+    try {
+      const timeline = await readRuntimeTimeline(
+        { logPath, agentSessionId: sessionKey },
+        { sessionsDirectory: directory },
+      );
+      expect(timeline.sessionId).toBe(sessionId);
+      expect(timeline.missing).toBe(false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('reports ended trajectory status for stale process detection', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'rainrail-ended-timeline-'));
     const logPath = join(directory, 'agent.log');

@@ -59,7 +59,7 @@ export async function readRuntimeTimeline(
   task: RuntimeTaskForTimeline,
   options: RuntimeTimelineReadOptions = {},
 ): Promise<RuntimeTimelineResult> {
-  const session = await readRuntimeSession(task);
+  const session = await readRuntimeSession(task, options);
   const result: RuntimeTimelineResult = {
     logPath: task.logPath,
     sessionId: session.sessionId,
@@ -71,7 +71,7 @@ export async function readRuntimeTimeline(
     return { ...result, missing: true, error: 'agent session id was not found in the task log' };
   }
 
-  const trajectoryPath = runtimeTrajectoryPathForSessionId(session.sessionId, options);
+  const trajectoryPath = await resolveRuntimeTrajectoryPathForSessionId(session.sessionId, options);
   try {
     return {
       ...result,
@@ -92,7 +92,7 @@ export async function readRuntimeTimelineStatus(
   task: RuntimeTaskForTimeline,
   options: RuntimeTimelineReadOptions = {},
 ): Promise<RuntimeTimelineStatus> {
-  const session = await readRuntimeSession(task);
+  const session = await readRuntimeSession(task, options);
   const status: RuntimeTimelineStatus = {
     sessionId: session.sessionId,
     fallback: session.fallback,
@@ -101,7 +101,7 @@ export async function readRuntimeTimelineStatus(
   if (session.sessionId === undefined) {
     return status;
   }
-  const trajectoryPath = runtimeTrajectoryPathForSessionId(session.sessionId, options);
+  const trajectoryPath = await resolveRuntimeTrajectoryPathForSessionId(session.sessionId, options);
   status.trajectoryPath = trajectoryPath;
   let contents: string;
   try {
@@ -133,7 +133,7 @@ export async function readRuntimeJsonl(
   task: RuntimeTaskForTimeline,
   options: RuntimeTimelineReadOptions & { maxBytes?: number } = {},
 ): Promise<{ logPath: string; sessionId?: string | undefined; fallback: boolean; trajectoryPath?: string | undefined; raw: string; missing: boolean; truncated: boolean; error?: string | undefined }> {
-  const session = await readRuntimeSession(task);
+  const session = await readRuntimeSession(task, options);
   const result = {
     logPath: task.logPath,
     sessionId: session.sessionId,
@@ -145,7 +145,7 @@ export async function readRuntimeJsonl(
   if (session.sessionId === undefined) {
     return { ...result, missing: true, error: 'agent session id was not found in the task log' };
   }
-  const trajectoryPath = runtimeTrajectoryPathForSessionId(session.sessionId, options);
+  const trajectoryPath = await resolveRuntimeTrajectoryPathForSessionId(session.sessionId, options);
   try {
     const tail = await readTailText(trajectoryPath, options.maxBytes ?? maxJsonlBytes);
     return { ...result, trajectoryPath, raw: tail.text, truncated: tail.truncated };
@@ -175,9 +175,8 @@ export function extractRuntimeSessionId(log: string): string | undefined {
 }
 
 export function extractRuntimeFallbackSessionId(log: string): string | undefined {
-  const match = log.match(/EMBEDDED FALLBACK:[^\n\r]*fresh session\s+(gateway-fallback-[A-Za-z0-9._-]+)/i)
-    ?? log.match(/\bgateway-fallback-[A-Za-z0-9._-]+/);
-  return match?.[1] ?? match?.[0];
+  const match = log.match(/EMBEDDED FALLBACK:[^\n\r]*fresh session\s+(gateway-fallback-[A-Za-z0-9._-]+)/i);
+  return match?.[1];
 }
 
 export function runtimeTrajectoryPathForSessionId(
@@ -232,17 +231,37 @@ export function classifyRuntimeToolCall(toolName: string, command: string): {
   return { phase: '実行', summary: normalizedCommand === '' ? '処理を実行' : truncate(normalizedCommand, 80) };
 }
 
-async function readRuntimeSession(task: RuntimeTaskForTimeline): Promise<{ sessionId?: string | undefined; fallback: boolean }> {
+async function readRuntimeSession(
+  task: RuntimeTaskForTimeline,
+  options: RuntimeTimelineReadOptions,
+): Promise<{ sessionId?: string | undefined; fallback: boolean }> {
   try {
     const log = await readFile(task.logPath, 'utf8');
     const fallbackSessionId = extractRuntimeFallbackSessionId(log);
     return {
-      sessionId: fallbackSessionId ?? extractRuntimeSessionId(log) ?? extractTrajectorySessionId(task.agentSessionId),
+      sessionId: fallbackSessionId ?? extractRuntimeSessionId(log) ?? await resolveTrajectorySessionId(task.agentSessionId, options),
       fallback: fallbackSessionId !== undefined,
     };
   } catch {
-    return { sessionId: extractTrajectorySessionId(task.agentSessionId), fallback: false };
+    return { sessionId: await resolveTrajectorySessionId(task.agentSessionId, options), fallback: false };
   }
+}
+
+async function resolveRuntimeTrajectoryPathForSessionId(
+  sessionId: string,
+  options: RuntimeTimelineReadOptions = {},
+): Promise<string> {
+  const directPath = runtimeTrajectoryPathForSessionId(sessionId, options);
+  const pointerPath = directPath.replace(/\.trajectory\.jsonl$/, '.trajectory-path.json');
+  try {
+    const pointer = JSON.parse(await readFile(pointerPath, 'utf8')) as unknown;
+    if (isRecord(pointer) && typeof pointer.runtimeFile === 'string' && pointer.runtimeFile.trim() !== '') {
+      return pointer.runtimeFile;
+    }
+  } catch {
+    // Older OpenClaw runs store the trajectory directly beside the session file.
+  }
+  return directPath;
 }
 
 async function readTailText(path: string, maxBytes: number): Promise<{ text: string; truncated: boolean }> {
@@ -342,15 +361,45 @@ function formatToolCallSummary(toolName: string, command: string): string {
   return toolName.trim() === '' ? 'tool.call' : `${toolName} call`;
 }
 
-function extractTrajectorySessionId(value: string | undefined): string | undefined {
+async function resolveTrajectorySessionId(
+  value: string | undefined,
+  options: RuntimeTimelineReadOptions,
+): Promise<string | undefined> {
   if (value === undefined) {
     return undefined;
+  }
+  const mapped = await readMappedRuntimeSessionId(value, options);
+  if (mapped !== undefined) {
+    return mapped;
   }
   const runMatch = value.match(/:run:([^:]+)$/);
   if (runMatch !== null) {
     return runMatch[1];
   }
-  return /^[A-Za-z0-9._:-]+$/.test(value) ? value : undefined;
+  if (value.includes(':')) {
+    return undefined;
+  }
+  return /^[A-Za-z0-9._-]+$/.test(value) ? value : undefined;
+}
+
+async function readMappedRuntimeSessionId(
+  sessionKey: string,
+  options: RuntimeTimelineReadOptions,
+): Promise<string | undefined> {
+  try {
+    const sessions = JSON.parse(await readFile(join(runtimeSessionsDirectory(options), 'sessions.json'), 'utf8')) as unknown;
+    if (!isRecord(sessions)) {
+      return undefined;
+    }
+    const entry = sessions[sessionKey];
+    if (!isRecord(entry)) {
+      return undefined;
+    }
+    const sessionId = entry.sessionId;
+    return typeof sessionId === 'string' && sessionId.trim() !== '' ? sessionId : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function timelineEntryId(event: TrajectoryEvent, index: number): string {
@@ -392,4 +441,8 @@ function runtimeSessionsDirectory(options: RuntimeTimelineReadOptions): string {
     return options.sessionsDirectory;
   }
   return join(options.openClawHome ?? join(homedir(), '.openclaw'), 'agents', options.agentId ?? 'main', 'sessions');
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

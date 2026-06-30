@@ -149,7 +149,7 @@ export async function startOpenClawRun(
 
   const task = runtimeAgentTaskInput(request.task);
   ensurePrivateLogDirectory(options.logDirectory);
-  const agentSessionId = task.agentSessionId ?? `agent:${options.agentId}:${options.sessionKeyPrefix}-${task.id}`;
+  const agentSessionId = task.agentSessionId ?? generatedAgentSessionId(options, request, task);
   const logPath = join(options.logDirectory, `${safeFileName(agentSessionId)}.log`);
   const outputFd = openPrivateLogFile(logPath, 'w');
   const args = [
@@ -311,6 +311,9 @@ function runtimeStatusFromPayload(
   if (outcome === 'needs_human' || outcome === 'split_recommended') {
     return outcome;
   }
+  if (outcome === 'implemented' || outcome === 'updated_issue') {
+    return 'succeeded';
+  }
   if (explicitStatus === 'ok') {
     return 'succeeded';
   }
@@ -428,9 +431,16 @@ function runtimeResumeSessionId(task: RuntimeAgentTask): string {
 }
 
 function extractFallbackRuntimeSessionId(log: string): string | undefined {
-  const match = log.match(/EMBEDDED FALLBACK:[^\n\r]*fresh session\s+(gateway-fallback-[A-Za-z0-9._-]+)/i)
-    ?? log.match(/\bgateway-fallback-[A-Za-z0-9._-]+/);
-  return match?.[1] ?? match?.[0];
+  const match = log.match(/EMBEDDED FALLBACK:[^\n\r]*fresh session\s+(gateway-fallback-[A-Za-z0-9._-]+)/i);
+  return match?.[1];
+}
+
+function generatedAgentSessionId(
+  options: OpenClawRuntimeProviderOptions,
+  request: RuntimeRunRequest,
+  task: RuntimeAgentTaskInput,
+): string {
+  return `agent:${options.agentId}:${options.sessionKeyPrefix}-${task.id}-${request.event.delivery.id}`;
 }
 
 function findJsonObjectEnd(raw: string, start: number): number | undefined {
