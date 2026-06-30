@@ -183,6 +183,46 @@ describe('mention draft workflow', () => {
     expect(JSON.stringify(storedPayload)).not.toContain('internal-note');
     expect(JSON.stringify(storedPayload)).not.toContain('credential=secret');
   });
+
+  it('keeps later agent mentions after the first twenty mentioned logins through bridge storage', async () => {
+    const storage = fakeState();
+    const room = new RainrailBridgeRoom(storage, { publishToken: 'test-publish-token', replayLimit: 10 });
+    const addMentionDraftItem = vi.fn(async () => ({
+      projectItemId: 'PVTI_late_mention',
+      created: true,
+    }));
+    const workflow = createMentionDraftWorkflow({
+      assigneeLogin: 'reirei-agent',
+      addMentionDraftItem,
+    });
+    const earlierMentions = Array.from({ length: 20 }, (_, index) => `@other-agent-${index + 1}`).join(' ');
+
+    const publishResponse = await room.fetch(new Request('https://rainrail.test/publish', {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer test-publish-token',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(githubMentionEvent({
+        body: `${earlierMentions} please route this to @reirei-agent`,
+      })),
+    }));
+
+    expect(publishResponse.status).toBe(200);
+    const stored = storage.storedEvents()[0];
+    expect(stored?.payload).toMatchObject({
+      comment: {
+        mentionedLogins: expect.arrayContaining(['other-agent-20', 'reirei-agent']),
+      },
+    });
+    expect(JSON.stringify(stored?.payload)).not.toContain('@reirei-agent');
+    await expect(workflow.handle(stored!, runtimeContext())).resolves.toMatchObject({
+      handled: true,
+      draftItem: {
+        projectItemId: 'PVTI_late_mention',
+      },
+    });
+  });
 });
 
 function githubMentionEvent(overrides: {

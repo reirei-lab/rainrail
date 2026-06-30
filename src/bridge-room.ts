@@ -711,7 +711,6 @@ function mentionedLoginsFromComment(value: Record<string, unknown>): { mentioned
   if (Array.isArray(existing)) {
     for (const login of existing) {
       if (typeof login === 'string' && isSafeGitHubLogin(login)) mentions.add(login);
-      if (mentions.size >= 20) break;
     }
   }
 
@@ -720,7 +719,6 @@ function mentionedLoginsFromComment(value: Record<string, unknown>): { mentioned
     for (const match of body.matchAll(/(^|[^\w-])@([A-Za-z0-9-]{1,39})(?=$|[^\w-])/gu)) {
       const login = match[2];
       if (login !== undefined && isSafeGitHubLogin(login)) mentions.add(login);
-      if (mentions.size >= 20) break;
     }
   }
 
