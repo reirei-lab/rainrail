@@ -10,7 +10,8 @@ const ALLOWED_URL_PROTOCOLS = new Set(['https:', 'github:', 'cloudflare:']);
 const SAFE_DELIVERY_REFERENCE_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 const SAFE_IDENTIFIER_TOKEN = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/;
 const SAFE_METADATA_TOKEN = /^[a-z0-9][a-z0-9._:-]{0,63}$/i;
-const SAFE_REPOSITORY_NAME = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+const SAFE_REPOSITORY_NAME = /^[A-Za-z0-9_.-]{1,64}\/[A-Za-z0-9_.-]{1,64}$/;
+const SAFE_UTC_ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/;
 const claimedStorages = new WeakSet<RainrailBridgeRoomStorage>();
 
 type PublishEventResult =
@@ -44,13 +45,14 @@ export class RainrailBridgeRoom {
 
   constructor(state: RainrailBridgeRoomState, options: RainrailBridgeRoomOptions) {
     const publishToken = expectPublishToken(options?.publishToken);
+    const replayLimit = expectReplayLimit(options?.replayLimit ?? DEFAULT_REPLAY_LIMIT);
 
     this.#state = state;
     claimStorage(state.storage);
     this.#publishToken = publishToken;
-    this.#replayLimit = options?.replayLimit ?? DEFAULT_REPLAY_LIMIT;
+    this.#replayLimit = replayLimit;
     this.#bus = createRainrailEventBus(
-      options?.replayLimit === undefined ? {} : { replayLimit: options.replayLimit },
+      options?.replayLimit === undefined ? {} : { replayLimit },
     );
     this.#keepAliveIntervalMs = options?.keepAliveIntervalMs;
   }
@@ -235,7 +237,7 @@ function validatePublishEnvelope(value: unknown): RainrailEventEnvelope {
   const id = expectIdentifier(value, 'id');
   const schemaVersion = expectString(value, 'schemaVersion');
   const name = expectIdentifier(value, 'name');
-  const occurredAt = expectString(value, 'occurredAt');
+  const occurredAt = expectTimestamp(value, 'occurredAt');
   const source = expectRecord(value, 'source');
   const delivery = expectRecord(value, 'delivery');
   const subject = expectRecord(value, 'subject');
@@ -248,7 +250,7 @@ function validatePublishEnvelope(value: unknown): RainrailEventEnvelope {
   const sourceType = expectIdentifier(source, 'type');
   const sourceName = expectIdentifier(source, 'name');
   const deliveryId = expectIdentifier(delivery, 'id');
-  const deliveryReceivedAt = expectString(delivery, 'receivedAt');
+  const deliveryReceivedAt = expectTimestamp(delivery, 'receivedAt');
   const subjectType = expectIdentifier(subject, 'type');
   const subjectId = expectIdentifier(subject, 'id');
   const rawPayloadKind = expectRawPayloadKind(rawPayload);
@@ -311,6 +313,15 @@ function expectIdentifier(record: Record<string, unknown>, key: string): string 
   const value = expectString(record, key);
   if (!isSafeIdentifier(value)) {
     throw new TypeError(`${key} must be a safe identifier`);
+  }
+
+  return value;
+}
+
+function expectTimestamp(record: Record<string, unknown>, key: string): string {
+  const value = expectString(record, key);
+  if (!SAFE_UTC_ISO_TIMESTAMP.test(value) || Number.isNaN(Date.parse(value))) {
+    throw new TypeError(`${key} must be a UTC ISO timestamp`);
   }
 
   return value;
@@ -511,6 +522,14 @@ function claimStorage(storage: RainrailBridgeRoomStorage): void {
 function expectPublishToken(value: unknown): string {
   if (typeof value !== 'string' || value.length === 0) {
     throw new TypeError('publishToken must be a non-empty string');
+  }
+
+  return value;
+}
+
+function expectReplayLimit(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || !Number.isInteger(value) || value < 0) {
+    throw new RangeError('replayLimit must be a finite non-negative integer');
   }
 
   return value;

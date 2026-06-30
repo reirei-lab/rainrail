@@ -162,6 +162,13 @@ describe('Rainrail bridge room', () => {
     expect(() => createTestRoom(storage, { replayLimit: 10 })).toThrow('single room');
   });
 
+  it('does not reserve storage when constructor option validation fails', () => {
+    const storage = fakeState();
+
+    expect(() => createTestRoom(storage, { replayLimit: Number.NaN })).toThrow('replayLimit');
+    expect(() => createTestRoom(storage, { replayLimit: 10 })).not.toThrow();
+  });
+
   it('serializes subscribe refresh with publish delivery', async () => {
     const storage = fakeDelayedSecondGetState();
     const room = createTestRoom(storage.state, { replayLimit: 10 });
@@ -686,6 +693,47 @@ describe('Rainrail bridge room', () => {
 
     expect(subjectResponse.status).toBe(400);
     expect(subjectStorage.storedEvents()).toEqual([]);
+  });
+
+  it('bounds repository-shaped identifiers before storage', async () => {
+    const storage = fakeState();
+    const room = createTestRoom(storage, { replayLimit: 10 });
+    const unsafeSubjectEvent = {
+      ...fixtureEvent('delivery-1', 'github.issue'),
+      id: 'safe-event-id',
+      subject: { type: 'repository', id: `owner/${'r'.repeat(200)}` },
+    };
+
+    const response = await room.fetch(publishRequest(unsafeSubjectEvent));
+
+    expect(response.status).toBe(400);
+    expect(storage.storedEvents()).toEqual([]);
+  });
+
+  it('rejects non-ISO timestamps before storage', async () => {
+    const occurredAtStorage = fakeState();
+    const occurredAtRoom = createTestRoom(occurredAtStorage, { replayLimit: 10 });
+    const unsafeOccurredAtEvent = {
+      ...fixtureEvent('delivery-1', 'github.issue'),
+      occurredAt: 'token=secret-occurred-at',
+    };
+
+    const occurredAtResponse = await occurredAtRoom.fetch(publishRequest(unsafeOccurredAtEvent));
+
+    expect(occurredAtResponse.status).toBe(400);
+    expect(occurredAtStorage.storedEvents()).toEqual([]);
+
+    const receivedAtStorage = fakeState();
+    const receivedAtRoom = createTestRoom(receivedAtStorage, { replayLimit: 10 });
+    const unsafeReceivedAtEvent = {
+      ...fixtureEvent('delivery-2', 'github.issue'),
+      delivery: { id: 'delivery-2', receivedAt: 'token=secret-received-at' },
+    };
+
+    const receivedAtResponse = await receivedAtRoom.fetch(publishRequest(unsafeReceivedAtEvent));
+
+    expect(receivedAtResponse.status).toBe(400);
+    expect(receivedAtStorage.storedEvents()).toEqual([]);
   });
 
   it('normalizes raw payload content types before storage and SSE delivery', async () => {

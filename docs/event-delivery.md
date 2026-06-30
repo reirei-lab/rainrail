@@ -96,6 +96,9 @@ storage の key は `rainrail:recent-events`。保存するのは正規化済み
 受け付ける。任意の `source.repository` は `owner/repo` 形式だけ、
 `source.account` / `source.environment` は短い安全な identifier だけ保存し、
 それ以外の任意 metadata は落とす。
+repository id は owner / repo の各 segment を短く制限し、数 MB の identifier を
+`owner/<long repo>` 形式で持ち込ませない。`occurredAt` と `delivery.receivedAt` は
+UTC ISO timestamp 形式だけを受け付ける。
 object payload も allowlist された shallow metadata（`action` / `status` /
 `conclusion`）のうち、短い token 文字列または `null` だけに縮約し、object でない payload は
 空 object にする。任意 URL や query を
