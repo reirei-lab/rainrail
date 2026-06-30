@@ -52,7 +52,10 @@ describe('cloudflare issue reporter workflow', () => {
     expect(createdIssues[0]?.body).toContain('"authorization": "[redacted]"');
     expect(createdIssues[0]?.body).not.toContain('secret-token');
     expect(createdIssues[0]?.body).not.toContain('reset=secret-reset-code');
-    expect(result.fingerprint === undefined ? undefined : store.get(result.fingerprint)).toMatchObject({
+    expect(result.fingerprint === undefined ? undefined : store.get({
+      repository: 'reirei-lab/rainrail',
+      fingerprint: result.fingerprint,
+    })).toMatchObject({
       issueNumber: 123,
       issueUrl: 'https://github.com/reirei-lab/rainrail/issues/123',
     });
@@ -147,9 +150,56 @@ describe('cloudflare issue reporter workflow', () => {
       },
     });
     expect(createIssue).toHaveBeenCalledOnce();
-    expect(first.fingerprint === undefined ? undefined : store.get(first.fingerprint)).toMatchObject({
+    expect(first.fingerprint === undefined ? undefined : store.get({
+      repository: 'reirei-lab/rainrail',
+      fingerprint: first.fingerprint,
+    })).toMatchObject({
       issueNumber: 124,
     });
+  });
+
+  it('does not let recent store hits suppress another repository', async () => {
+    const store = createInMemoryCloudflareErrorIssueStore();
+    const firstWorkflow = createCloudflareIssueReporterWorkflow({
+      repository: 'reirei-lab/rainrail',
+      store,
+      issues: {
+        findOpenIssueByFingerprint: async () => undefined,
+        createIssue: async () => ({
+          number: 123,
+          url: 'https://github.com/reirei-lab/rainrail/issues/123',
+        }),
+      },
+    });
+    const otherRepositoryCreateIssue = vi.fn(async () => ({
+      number: 456,
+      url: 'https://github.com/reirei-lab/other/issues/456',
+    }));
+    const otherRepositoryWorkflow = createCloudflareIssueReporterWorkflow({
+      repository: 'reirei-lab/other',
+      store,
+      issues: {
+        findOpenIssueByFingerprint: async () => undefined,
+        createIssue: otherRepositoryCreateIssue,
+      },
+    });
+
+    const first = await firstWorkflow.handle(cloudflareErrorEvent(), runtimeContext()) as CloudflareIssueReporterResult;
+    const second = await otherRepositoryWorkflow.handle(cloudflareErrorEvent({
+      id: 'event-other-repository',
+      deliveryId: 'tail-other-repository',
+    }), runtimeContext()) as CloudflareIssueReporterResult;
+
+    expect(first.fingerprint).toBe(second.fingerprint);
+    expect(second).toMatchObject({
+      handled: true,
+      reason: 'created_cloudflare_error_issue',
+      issue: {
+        repository: 'reirei-lab/other',
+        number: 456,
+      },
+    });
+    expect(otherRepositoryCreateIssue).toHaveBeenCalledOnce();
   });
 
   it('keeps a stored fingerprint quiet when the GitHub issue is still open', async () => {
@@ -311,7 +361,7 @@ describe('cloudflare issue reporter workflow', () => {
       provider: 'github',
       repository: 'reirei-lab/rainrail',
     }));
-    expect([...values.keys()][0]).toMatch(/^rainrail:cloudflare-error-issue:sha256:/u);
+    expect([...values.keys()][0]).toMatch(/^rainrail:cloudflare-error-issue:reirei-lab\/rainrail:sha256:/u);
   });
 
   it('uses the first exception with a usable stack', () => {
@@ -343,6 +393,19 @@ describe('cloudflareErrorFingerprint', () => {
     expect(second).not.toBeUndefined();
     expect(cloudflareErrorFingerprint(first!)).toBe(cloudflareErrorFingerprint(second!));
   });
+
+  it('ignores dynamic exception messages for the same stack', () => {
+    const first = cloudflareErrorCandidateFromEvent(cloudflareErrorEvent({
+      message: 'failed for user alice@example.com and slug lunch-menu-alpha',
+    }));
+    const second = cloudflareErrorCandidateFromEvent(cloudflareErrorEvent({
+      message: 'failed for user bob@example.com and slug dinner-menu-beta',
+    }));
+
+    expect(first).not.toBeUndefined();
+    expect(second).not.toBeUndefined();
+    expect(cloudflareErrorFingerprint(first!)).toBe(cloudflareErrorFingerprint(second!));
+  });
 });
 
 function cloudflareErrorEvent(overrides: {
@@ -351,6 +414,7 @@ function cloudflareErrorEvent(overrides: {
   url?: string;
   line?: number;
   column?: number;
+  message?: string;
   leadingStacklessException?: boolean;
 } = {}) {
   const line = overrides.line ?? 1510;
@@ -381,7 +445,7 @@ function cloudflareErrorEvent(overrides: {
         }] : []),
         {
           name: 'TypeError',
-          message: "Cannot read properties of null (reading 'toAuth') reset=secret-reset-code",
+          message: overrides.message ?? "Cannot read properties of null (reading 'toAuth') reset=secret-reset-code",
           stack: [
             "TypeError: Cannot read properties of null (reading 'toAuth')",
             `    at resolveCurrentHumanAccount (worker.js:${line}:${column})`,
@@ -409,6 +473,39 @@ function cloudflareErrorEvent(overrides: {
     },
   });
 }
+
+describe('cloudflare issue redaction', () => {
+  it('redacts path secrets and malformed URL fragments without recursion', async () => {
+    const createdIssues: Array<{ body: string }> = [];
+    const workflow = createCloudflareIssueReporterWorkflow({
+      repository: 'reirei-lab/rainrail',
+      store: createInMemoryCloudflareErrorIssueStore(),
+      issues: {
+        findOpenIssueByFingerprint: async () => undefined,
+        createIssue: async (input) => {
+          createdIssues.push(input);
+          return {
+            number: 125,
+            url: 'https://github.com/reirei-lab/rainrail/issues/125',
+          };
+        },
+      },
+    });
+
+    await expect(workflow.handle(cloudflareErrorEvent({
+      url: 'https://asme.dev/reset/secret-reset-token/magic-link/secret-code?token=secret-token',
+      message: 'bad url https://% reset=secret-reset-code',
+    }), runtimeContext())).resolves.toMatchObject({
+      handled: true,
+    });
+
+    expect(createdIssues[0]?.body).not.toContain('secret-reset-token');
+    expect(createdIssues[0]?.body).not.toContain('secret-code');
+    expect(createdIssues[0]?.body).not.toContain('secret-token');
+    expect(createdIssues[0]?.body).not.toContain('https://%');
+    expect(createdIssues[0]?.body).toContain('[redacted-url]');
+  });
+});
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));

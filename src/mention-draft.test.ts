@@ -5,7 +5,9 @@ import {
   createMentionDraftWorkflow,
   mentionDraftMarker,
   mentionDraftRequestFromEvent,
+  RainrailBridgeRoom,
   type MentionDraftItemInput,
+  type RainrailEventEnvelope,
   type TaskQueueProvider,
 } from './index.js';
 
@@ -109,6 +111,49 @@ describe('mention draft workflow', () => {
       title: 'Respond to reirei-lab/rainrail#18: Mention handling',
       repository: 'reirei-lab/rainrail',
       number: 18,
+    });
+  });
+
+  it('keeps issue comment mention fields when the event passes through the bridge', async () => {
+    const storage = fakeState();
+    const room = new RainrailBridgeRoom(storage, { publishToken: 'test-publish-token', replayLimit: 10 });
+    const addMentionDraftItem = vi.fn(async () => ({
+      projectItemId: 'PVTI_bridge_mention',
+      created: true,
+    }));
+    const workflow = createMentionDraftWorkflow({
+      assigneeLogin: 'reirei-agent',
+      addMentionDraftItem,
+    });
+
+    const publishResponse = await room.fetch(new Request('https://rainrail.test/publish', {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer test-publish-token',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(githubMentionEvent()),
+    }));
+    expect(publishResponse.status).toBe(200);
+    const stored = storage.storedEvents()[0];
+
+    expect(stored?.payload).toMatchObject({
+      action: 'created',
+      repository: { fullName: 'reirei-lab/rainrail' },
+      resource: {
+        number: 17,
+        title: 'React to mentions',
+      },
+      comment: {
+        body: '@reirei-agent please handle this',
+        url: 'https://github.com/reirei-lab/rainrail/issues/17#issuecomment-1',
+      },
+    });
+    await expect(workflow.handle(stored!, runtimeContext())).resolves.toMatchObject({
+      handled: true,
+      draftItem: {
+        projectItemId: 'PVTI_bridge_mention',
+      },
     });
   });
 });
@@ -280,5 +325,18 @@ function queueProvider() {
     kind: 'task-queue-provider' as const,
     listProjectIssues: async () => [],
     claimProjectIssue: async () => ({ projectItemId: 'unused' }),
+  };
+}
+
+function fakeState() {
+  const map = new Map<string, unknown>();
+  return {
+    storage: {
+      get: async (key: string) => map.get(key),
+      put: async (key: string, value: unknown) => {
+        map.set(key, value);
+      },
+    },
+    storedEvents: () => (map.get('rainrail:recent-events') ?? []) as RainrailEventEnvelope[],
   };
 }

@@ -25,7 +25,7 @@ export interface StoredCloudflareErrorIssue {
 }
 
 export interface CloudflareErrorIssueStore {
-  get(fingerprint: string): StoredCloudflareErrorIssue | undefined | Promise<StoredCloudflareErrorIssue | undefined>;
+  get(input: { repository: string; fingerprint: string }): StoredCloudflareErrorIssue | undefined | Promise<StoredCloudflareErrorIssue | undefined>;
   record(input: Omit<StoredCloudflareErrorIssue, 'createdAt'> & { createdAt?: string }): StoredCloudflareErrorIssue | Promise<StoredCloudflareErrorIssue>;
 }
 
@@ -113,7 +113,7 @@ async function handleCloudflareIssueReporterCandidate(
   candidate: CloudflareErrorCandidate,
   fingerprint: string,
 ): Promise<CloudflareIssueReporterResult> {
-  const stored = await options.store.get(fingerprint);
+  const stored = await options.store.get({ repository: options.repository, fingerprint });
   const title = cloudflareIssueTitle(candidate);
   if (stored !== undefined && isRecentStoreHit(stored)) {
     return {
@@ -241,13 +241,13 @@ export function createTaskProviderGitHubIssueClient(provider: TaskProvider): Git
 export function createInMemoryCloudflareErrorIssueStore(): CloudflareErrorIssueStore {
   const issues = new Map<string, StoredCloudflareErrorIssue>();
   return {
-    get: (fingerprint) => issues.get(fingerprint),
+    get: (input) => issues.get(storageKey(input.repository, input.fingerprint)),
     record(input) {
       const stored = {
         ...input,
         createdAt: input.createdAt ?? new Date().toISOString(),
       };
-      issues.set(input.fingerprint, stored);
+      issues.set(storageKey(input.repository, input.fingerprint), stored);
       return stored;
     },
   };
@@ -255,15 +255,15 @@ export function createInMemoryCloudflareErrorIssueStore(): CloudflareErrorIssueS
 
 export function createStorageCloudflareErrorIssueStore(storage: RainrailBridgeRoomStorage): CloudflareErrorIssueStore {
   return {
-    async get(fingerprint) {
-      return storedCloudflareErrorIssue(await storage.get(storageKey(fingerprint)));
+    async get(input) {
+      return storedCloudflareErrorIssue(await storage.get(storageKey(input.repository, input.fingerprint)));
     },
     async record(input) {
       const stored = {
         ...input,
         createdAt: input.createdAt ?? new Date().toISOString(),
       };
-      await storage.put(storageKey(input.fingerprint), stored);
+      await storage.put(storageKey(input.repository, input.fingerprint), stored);
       return stored;
     },
   };
@@ -274,7 +274,6 @@ export function cloudflareErrorFingerprint(candidate: CloudflareErrorCandidate):
     scriptName: candidate.scriptName,
     eventName: candidate.eventName,
     exceptionName: candidate.exceptionName,
-    normalizedExceptionMessage: candidate.normalizedExceptionMessage,
     stackSignature: candidate.stackSignature,
   })).digest('hex')}`;
 }
@@ -441,7 +440,7 @@ function isRecentStoreHit(stored: StoredCloudflareErrorIssue): boolean {
 
 function safePathname(url: string): string | undefined {
   try {
-    return new URL(url).pathname || '/';
+    return sanitizePathname(new URL(url).pathname || '/');
   } catch {
     return undefined;
   }
@@ -485,12 +484,32 @@ function sanitizeUrlString(value: string): string {
     const url = new URL(value);
     url.username = '';
     url.password = '';
+    url.pathname = sanitizePathname(url.pathname);
     url.search = '';
     url.hash = '';
     return url.toString();
   } catch {
-    return sanitizeSecretString(value);
+    return '[redacted-url]';
   }
+}
+
+function sanitizePathname(pathname: string): string {
+  const segments = pathname.split('/');
+  return segments.map((segment, index) => {
+    if (segment.length === 0) return segment;
+    const previous = segments[index - 1]?.toLowerCase() ?? '';
+    return isSecretPathSegment(segment, previous) ? '[redacted]' : segment;
+  }).join('/') || '/';
+}
+
+function isSecretPathSegment(segment: string, previousSegment: string): boolean {
+  if (/^(token|secret|password|code|reset|magic-link|invite|session|auth|verify|verification)$/iu.test(previousSegment)) {
+    return true;
+  }
+  if (/^(token|secret|password|code|reset)$/iu.test(segment)) {
+    return true;
+  }
+  return /^[A-Za-z0-9_-]{16,}$/u.test(segment) && /[A-Za-z]/u.test(segment) && /\d/u.test(segment);
 }
 
 function truncate(value: string, maxLength: number): string {
@@ -523,8 +542,8 @@ function statusNumber(value: unknown): number | undefined {
   return Number(value);
 }
 
-function storageKey(fingerprint: string): string {
-  return `${storageKeyPrefix}${fingerprint}`;
+function storageKey(repository: string, fingerprint: string): string {
+  return `${storageKeyPrefix}${repository}:${fingerprint}`;
 }
 
 function storedCloudflareErrorIssue(value: unknown): StoredCloudflareErrorIssue | undefined {
