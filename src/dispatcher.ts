@@ -79,6 +79,7 @@ export function createRuntimeDispatcher(options: RuntimeDispatcherOptions): Runt
         workflows.map(async (record) => {
           const { workflow } = record;
           let policy = record.policy;
+          let metadataResolved = false;
           const audit = (action: WorkflowAuditEntry['action'], result: WorkflowAuditResult, reason?: unknown) =>
             recordAudit(options, policy, event, action, result, reason);
 
@@ -89,6 +90,7 @@ export function createRuntimeDispatcher(options: RuntimeDispatcherOptions): Runt
 
             const metadata = resolveWorkflowExecutionMetadata(record);
             policy = metadata.policy;
+            metadataResolved = true;
 
             if (metadata.policyError !== undefined) {
               throw metadata.policyError;
@@ -122,9 +124,11 @@ export function createRuntimeDispatcher(options: RuntimeDispatcherOptions): Runt
               value,
             } satisfies WorkflowPluginResult;
           } catch (reason) {
-            const metadata = resolveWorkflowExecutionMetadata(record);
-            if (metadata.policyError === undefined) {
-              policy = metadata.policy;
+            if (!metadataResolved) {
+              const metadata = resolveWorkflowExecutionMetadata(record);
+              if (metadata.policyError === undefined) {
+                policy = metadata.policy;
+              }
             }
 
             await audit('plugin.handle', reason instanceof PluginTimeoutError ? 'timeout' : 'rejected', reason);
@@ -184,7 +188,17 @@ function createWorkflowExecutionRecord(workflow: WorkflowPlugin): WorkflowExecut
       }
     } else {
       const timeoutReceiver = createWorkflowMetadataReceiverSnapshot(workflow);
-      record.timeoutAccessor = () => timeoutDescriptor.get?.call(timeoutReceiver) as number | undefined;
+      record.timeoutAccessor = () => {
+        try {
+          return timeoutDescriptor.get?.call(timeoutReceiver) as number | undefined;
+        } catch (reason) {
+          if (!isPrivateReceiverError(reason)) {
+            throw reason;
+          }
+
+          return timeoutDescriptor.get?.call(workflow) as number | undefined;
+        }
+      };
       record.timeoutReceiver = timeoutReceiver;
       if (workflow.accepts !== undefined && functionSourceMentions(workflow.accepts, 'timeout')) {
         try {
@@ -518,7 +532,7 @@ function createDispatchAgentCapabilityProxy(
     return descriptor !== undefined && (!('value' in descriptor) || descriptor.value !== undefined);
   };
 
-  const isDispatchAgentFunction = (value: Function, property?: string | symbol): boolean => {
+  const isDispatchAgentFunction = (source: object, value: Function, property?: string | symbol): boolean => {
     if (property === 'dispatchAgent') {
       return true;
     }
@@ -528,7 +542,11 @@ function createDispatchAgentCapabilityProxy(
       return value === rawDispatchAgent || isBoundDispatchAgentAlias(value, property, rawDispatchAgent);
     }
 
-    const rawDispatchAgent = property === 'startAgent' ? getRawDispatchAgent() : peekRawDispatchAgent();
+    const propertyDescriptor = property === undefined ? undefined : findPropertyDescriptor(source, property);
+    const shouldResolveAccessorAlias = propertyDescriptor !== undefined && !('value' in propertyDescriptor);
+    const rawDispatchAgent = property === 'startAgent' || shouldResolveAccessorAlias
+      ? getRawDispatchAgent()
+      : peekRawDispatchAgent();
     if (value === rawDispatchAgent) {
       return true;
     }
@@ -536,8 +554,13 @@ function createDispatchAgentCapabilityProxy(
     return isBoundDispatchAgentAlias(value, property, rawDispatchAgent);
   };
 
-  const bindCapabilityFunction = (value: Function, safeReceiver: object, property?: string | symbol): Function => {
-    if (isDispatchAgentFunction(value, property)) {
+  const bindCapabilityFunction = (
+    source: object,
+    value: Function,
+    safeReceiver: object,
+    property?: string | symbol,
+  ): Function => {
+    if (isDispatchAgentFunction(source, value, property)) {
       return dispatchAgent;
     }
 
@@ -616,7 +639,7 @@ function createDispatchAgentCapabilityProxy(
         );
       }
 
-      return bindCapabilityFunction(value, safeReceiver, property);
+      return bindCapabilityFunction(source, value, safeReceiver, property);
     }
 
     if (isPromiseLike(value)) {
@@ -1175,7 +1198,9 @@ function helperMayResolveDispatchAgent(helper: Function): boolean {
     return (
       /this\s*(?:(?:\?\.|\.)\s*(?:dispatchAgent|startAgent)|(?:\?\.|\s*)\[[^\]]*(?:dispatch|start)[^\]]*Agent[^\]]*\])/u.test(
         source,
-      ) || (/\bthis\b/u.test(source) && /\b(?:dispatchAgent|startAgent)\b/u.test(source))
+      ) ||
+      (/\bthis\b/u.test(source) && /\b(?:dispatchAgent|startAgent)\b/u.test(source)) ||
+      (/this\s*(?:\?\.|\s*)\[/u.test(source) && /\b(?:dispatch|start)\b/u.test(source) && /\bAgent\b/u.test(source))
     );
   } catch {
     return true;
@@ -1221,6 +1246,10 @@ function shouldWrapCapabilityObject(value: unknown): value is object {
     return true;
   }
 
+  if (findPropertyDescriptor(value, 'dispatchAgent') !== undefined) {
+    return true;
+  }
+
   const prototype = Reflect.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
 }
@@ -1245,7 +1274,7 @@ function isBoundDispatchAgentAlias(
     return true;
   }
 
-  return false;
+  return rawDispatchAgent !== undefined && rawDispatchAgent.name === '' && value.name === 'bound ';
 }
 
 async function callDispatchAgent(
