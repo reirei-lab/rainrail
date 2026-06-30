@@ -157,7 +157,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
     expect(calls.filter((call) => call.query?.includes('RainrailProjectItemStatus'))).toHaveLength(2);
     expect(calls.find((call) => call.query?.includes('RainrailCreateProjectIssueClaimLock'))?.variables).toMatchObject({
       repositoryId: 'R_repo',
-      name: 'refs/heads/rainrail/locks/reirei-lab-rainrail-21-item-21',
+      name: 'refs/rainrail/locks/reirei-lab-rainrail-21-item-21',
       oid: 'lock_sha',
     });
     expect(fetchImpl).toHaveBeenCalledWith(
@@ -1343,7 +1343,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
 
     expect(calls.find((call) =>
       call.query?.includes('RainrailCreateProjectIssueClaimLock')
-      && String(call.variables?.name).includes('rainrail/dispatched-locks/')
+      && String(call.variables?.name).includes('refs/rainrail/dispatched-locks/')
     )).toBeDefined();
     expect(calls.find((call) =>
       call.query?.includes('RainrailDeleteProjectIssueClaimLock')
@@ -1425,11 +1425,13 @@ describe('createGitHubProjectTaskQueueProvider', () => {
   });
 
   it('treats todo items with active starting locks as in progress while listing', async () => {
+    const calls: Array<{ query?: string; variables?: Record<string, unknown> }> = [];
     const provider = createGitHubProjectTaskQueueProvider({
       config: projectConfig(),
       auth: { getAuthToken: async () => ({ token: 'project-token', provider: 'configured-token', fallback: false }) },
       fetch: (async (_url, init) => {
         const request = JSON.parse(String(init?.body)) as { query?: string; variables?: Record<string, unknown> };
+        calls.push(request);
         if (request.query?.includes('RainrailProjectIssues')) {
           return jsonResponse({
             data: {
@@ -1466,6 +1468,9 @@ describe('createGitHubProjectTaskQueueProvider', () => {
     await expect(provider.listProjectIssues()).resolves.toMatchObject([
       { id: 'item_21', status: 'In Progress' },
     ]);
+    expect(calls.find((call) => call.query?.includes('RainrailProjectIssueClaimLock'))?.variables).toMatchObject({
+      qualifiedName: 'rainrail/locks/reirei-lab-rainrail-21-item-21',
+    });
   });
 
   it('restores status-only dispatched claims while listing', async () => {

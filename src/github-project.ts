@@ -1195,13 +1195,13 @@ function sameLogin(left: string, right: string): boolean {
 function projectIssueLockRefName(issue: ProjectIssue): string {
   const repo = slug(issue.repository ?? 'repo');
   const issueId = issue.number === undefined ? slug(issue.id) : String(issue.number);
-  return `refs/heads/rainrail/locks/${repo}-${issueId}-${slug(issue.id)}`;
+  return `refs/rainrail/locks/${repo}-${issueId}-${slug(issue.id)}`;
 }
 
 function projectIssueDispatchedLockRefName(issue: ProjectIssue): string {
   const repo = slug(issue.repository ?? 'repo');
   const issueId = issue.number === undefined ? slug(issue.id) : String(issue.number);
-  return `refs/heads/rainrail/dispatched-locks/${repo}-${issueId}-${slug(issue.id)}`;
+  return `refs/rainrail/dispatched-locks/${repo}-${issueId}-${slug(issue.id)}`;
 }
 
 function isRecoverableStaleLock(lock: ProjectIssueClaimLock, input: Pick<ProjectIssueClaimInput, 'issue'>): boolean {
@@ -1294,7 +1294,7 @@ function splitRepositoryNameWithOwner(nameWithOwner: string): [string, string] {
 }
 
 function qualifiedRefName(name: string): string {
-  return name.startsWith('refs/heads/') ? name.slice('refs/heads/'.length) : name;
+  return name.startsWith('refs/') ? name.slice('refs/'.length) : name;
 }
 
 function isReferenceAlreadyExistsError(error: unknown): boolean {
