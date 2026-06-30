@@ -8441,6 +8441,48 @@ describe('plugin runtime contract', () => {
     expect(dispatchAgent).not.toHaveBeenCalled();
   });
 
+  it('keeps callable capability descriptors compatible with function invariants', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: { id: 'delivery-callable-capabilities-descriptors', receivedAt: '2026-06-29T14:00:00.000Z' },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: { kind: 'external-reference', reference: 'github://deliveries/callable-capabilities-descriptors' },
+    });
+    const dispatchAgent = vi.fn(async () => ({ sessionKey: 'agent:main:callable-capabilities-descriptors' }));
+    function capabilities() {
+      return 'callable:ok';
+    }
+    Object.assign(capabilities, {
+      provider: 'codex',
+      dispatchAgent,
+    });
+    const loader = createPluginLoader({
+      runtime: mockRuntimeContext({ capabilities: capabilities as unknown as RuntimeCapabilities }),
+    });
+
+    loader.on(
+      'github.issue',
+      (_handledEvent, context) => ({
+        keys: Object.keys(context.capabilities as unknown as object),
+        prototypeDescriptor: Object.getOwnPropertyDescriptor(context.capabilities, 'prototype')?.configurable,
+      }),
+      { name: 'callable-capabilities-descriptors-handler' },
+    );
+
+    await expect(loader.dispatch(event)).resolves.toMatchObject([
+      {
+        pluginName: 'callable-capabilities-descriptors-handler',
+        eventId: 'github-webhook:delivery-callable-capabilities-descriptors:github.issue',
+        status: 'fulfilled',
+        value: { keys: ['provider', 'dispatchAgent'], prototypeDescriptor: true },
+      },
+    ]);
+    expect(dispatchAgent).not.toHaveBeenCalled();
+  });
+
   it('does not retry private capability helpers with dispatch requests on the raw receiver', async () => {
     const event = createEventEnvelope({
       source: { type: 'github', name: 'github-webhook' },
@@ -8540,6 +8582,59 @@ describe('plugin runtime contract', () => {
     expect(dispatchAgent).not.toHaveBeenCalled();
   });
 
+  it('does not leak raw receivers through private helper callbacks', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: { id: 'delivery-private-helper-callback-receiver', receivedAt: '2026-06-29T14:00:00.000Z' },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: { kind: 'external-reference', reference: 'github://deliveries/private-helper-callback-receiver' },
+    });
+    const dispatchAgent = vi.fn(async () => ({ sessionKey: 'agent:main:private-helper-callback-receiver' }));
+    class RuntimeCapabilityBag {
+      #token = 'private';
+      provider = 'codex';
+      dispatchAgent = dispatchAgent;
+
+      expose(callback: (receiver: RuntimeCapabilities) => void) {
+        callback(this as unknown as RuntimeCapabilities);
+        return this.#token;
+      }
+    }
+    const loader = createPluginLoader({
+      runtime: mockRuntimeContext({
+        capabilities: new RuntimeCapabilityBag() as unknown as RuntimeCapabilities,
+      }),
+    });
+
+    loader.on(
+      'github.issue',
+      (handledEvent, context) => {
+        let leaked: RuntimeCapabilities | undefined;
+        (context.capabilities as unknown as { expose: RuntimeCapabilityBag['expose'] }).expose((receiver) => {
+          leaked = receiver;
+        });
+        return leaked?.dispatchAgent?.({
+          event: handledEvent,
+          workflow: 'private-helper-callback-receiver-handler',
+          runId: context.runId,
+        });
+      },
+      { name: 'private-helper-callback-receiver-handler' },
+    );
+
+    const [result] = await loader.dispatch(event);
+
+    expect(result).toMatchObject({
+      pluginName: 'private-helper-callback-receiver-handler',
+      eventId: 'github-webhook:delivery-private-helper-callback-receiver:github.issue',
+      status: 'rejected',
+    });
+    expect(dispatchAgent).not.toHaveBeenCalled();
+  });
+
   it('gates private helper closures that capture dispatchAgent', async () => {
     const event = createEventEnvelope({
       source: { type: 'github', name: 'github-webhook' },
@@ -8585,6 +8680,53 @@ describe('plugin runtime contract', () => {
     expect(result).toMatchObject({
       pluginName: 'private-helper-closure-alias-handler',
       eventId: 'github-webhook:delivery-private-helper-closure-alias:github.issue',
+      status: 'rejected',
+    });
+    expect(dispatchAgent).not.toHaveBeenCalled();
+  });
+
+  it('gates closures returned from public helpers when called with dispatch requests', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: { id: 'delivery-public-helper-closure-alias', receivedAt: '2026-06-29T14:00:00.000Z' },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: { kind: 'external-reference', reference: 'github://deliveries/public-helper-closure-alias' },
+    });
+    const dispatchAgent = vi.fn(async (_request: Parameters<NonNullable<RuntimeCapabilities['dispatchAgent']>>[0]) => ({
+      sessionKey: 'agent:main:public-helper-closure-alias',
+    }));
+    const loader = createPluginLoader({
+      runtime: mockRuntimeContext({
+        capabilities: {
+          provider: 'codex',
+          dispatchAgent,
+          getStarter() {
+            const rawDispatchAgent = dispatchAgent;
+            return (request: Parameters<NonNullable<RuntimeCapabilities['dispatchAgent']>>[0]) => rawDispatchAgent(request);
+          },
+        } as RuntimeCapabilities & { getStarter: () => NonNullable<RuntimeCapabilities['dispatchAgent']> },
+      }),
+    });
+
+    loader.on(
+      'github.issue',
+      (handledEvent, context) =>
+        (context.capabilities as unknown as { getStarter: () => RuntimeCapabilities['dispatchAgent'] }).getStarter()?.({
+          event: handledEvent,
+          workflow: 'public-helper-closure-alias-handler',
+          runId: context.runId,
+        }),
+      { name: 'public-helper-closure-alias-handler' },
+    );
+
+    const [result] = await loader.dispatch(event);
+
+    expect(result).toMatchObject({
+      pluginName: 'public-helper-closure-alias-handler',
+      eventId: 'github-webhook:delivery-public-helper-closure-alias:github.issue',
       status: 'rejected',
     });
     expect(dispatchAgent).not.toHaveBeenCalled();
@@ -8821,6 +8963,93 @@ describe('plugin runtime contract', () => {
       },
     ]);
     expect(dispatchAgentReads).toBe(0);
+  });
+
+  it('does not read dispatchAgent getters for unrelated constructor metadata', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: { id: 'delivery-constructor-name-dispatch-getter', receivedAt: '2026-06-29T14:00:00.000Z' },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: { kind: 'external-reference', reference: 'github://deliveries/constructor-name-dispatch-getter' },
+    });
+    let dispatchAgentReads = 0;
+    class RuntimeCapabilityBag {
+      provider = 'codex';
+      get dispatchAgent(): never {
+        dispatchAgentReads += 1;
+        throw new Error('dispatchAgent is not configured');
+      }
+    }
+    const loader = createPluginLoader({
+      runtime: mockRuntimeContext({
+        capabilities: new RuntimeCapabilityBag() as unknown as RuntimeCapabilities,
+      }),
+    });
+
+    loader.on(
+      'github.issue',
+      (_handledEvent, context) => context.capabilities?.constructor.name,
+      { name: 'constructor-name-dispatch-getter-handler' },
+    );
+
+    await expect(loader.dispatch(event)).resolves.toMatchObject([
+      {
+        pluginName: 'constructor-name-dispatch-getter-handler',
+        eventId: 'github-webhook:delivery-constructor-name-dispatch-getter:github.issue',
+        status: 'fulfilled',
+        value: 'RuntimeCapabilityBag',
+      },
+    ]);
+    expect(dispatchAgentReads).toBe(0);
+  });
+
+  it('wraps dispatchAgent properties on built-in capability objects', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: { id: 'delivery-builtin-dispatch-agent-property', receivedAt: '2026-06-29T14:00:00.000Z' },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: { kind: 'external-reference', reference: 'github://deliveries/builtin-dispatch-agent-property' },
+    });
+    const dispatchAgent = vi.fn(async () => ({ sessionKey: 'agent:main:builtin-dispatch-agent-property' }));
+    const metadata = Object.assign(new Date('2026-06-29T14:00:00.000Z'), { dispatchAgent });
+    const loader = createPluginLoader({
+      runtime: mockRuntimeContext({
+        capabilities: {
+          provider: 'codex',
+          metadata,
+        } as unknown as RuntimeCapabilities & { metadata: Date & { dispatchAgent: RuntimeCapabilities['dispatchAgent'] } },
+      }),
+    });
+
+    loader.on(
+      'github.issue',
+      (handledEvent, context) =>
+        (
+          context.capabilities as unknown as {
+            metadata: Date & { dispatchAgent?: RuntimeCapabilities['dispatchAgent'] };
+          }
+        ).metadata.dispatchAgent?.({
+          event: handledEvent,
+          workflow: 'builtin-dispatch-agent-property-handler',
+          runId: context.runId,
+        }),
+      { name: 'builtin-dispatch-agent-property-handler' },
+    );
+
+    const [result] = await loader.dispatch(event);
+
+    expect(result).toMatchObject({
+      pluginName: 'builtin-dispatch-agent-property-handler',
+      eventId: 'github-webhook:delivery-builtin-dispatch-agent-property:github.issue',
+      status: 'rejected',
+    });
+    expect(dispatchAgent).not.toHaveBeenCalled();
   });
 
   it('preserves instanceof checks for capability prototype helpers', async () => {

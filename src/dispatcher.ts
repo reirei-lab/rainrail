@@ -610,6 +610,7 @@ function createDispatchAgentCapabilityProxy(
             capabilities,
             dispatchAgent,
             getRawDispatchAgent,
+            peekRawDispatchAgent,
             (object) => createCapabilityView(object),
           )
         : normalizeCapabilityHelperResult(
@@ -706,7 +707,7 @@ function createDispatchAgentCapabilityProxy(
 
     let view: object;
     const viewTarget = typeof source === 'function'
-      ? source
+      ? (() => undefined)
       : Array.isArray(source)
         ? new Array(source.length)
         : {};
@@ -782,6 +783,7 @@ function createCapabilityConstructorView(
   capabilities: NonNullable<PluginRuntimeContext['capabilities']>,
   dispatchAgent: DispatchAgentCapability,
   getRawDispatchAgent: () => DispatchAgentCapability | undefined,
+  peekRawDispatchAgent: () => DispatchAgentCapability | undefined,
   wrapObject: (object: object) => object,
 ): unknown {
   if (typeof constructorValue !== 'function') {
@@ -804,7 +806,9 @@ function createCapabilityConstructorView(
     }
 
     const value = readCapabilityValue(prototype, property, prototypeView, capabilities);
-    const rawDispatchAgent = getRawDispatchAgent();
+    const shouldResolveDispatchAgent =
+      isDispatchAgentAliasProperty(property) || (typeof value === 'function' && isDispatchAgentLikeProperty(property));
+    const rawDispatchAgent = shouldResolveDispatchAgent ? getRawDispatchAgent() : peekRawDispatchAgent();
     if (
       value === rawDispatchAgent ||
       (typeof value === 'function' && isBoundDispatchAgentAlias(value, property, rawDispatchAgent))
@@ -819,7 +823,7 @@ function createCapabilityConstructorView(
             capabilities,
             dispatchAgent,
             getRawDispatchAgent,
-            getRawDispatchAgent,
+            shouldResolveDispatchAgent ? getRawDispatchAgent : peekRawDispatchAgent,
             prototype,
             prototypeView,
             args,
@@ -863,6 +867,7 @@ function createCapabilityConstructorView(
           prototypeView,
           capabilities,
           getRawDispatchAgent,
+          peekRawDispatchAgent,
           dispatchAgent,
           wrapObject,
         );
@@ -892,6 +897,7 @@ function createCapabilityConstructorView(
             prototypeView,
             capabilities,
             getRawDispatchAgent,
+            peekRawDispatchAgent,
             dispatchAgent,
             wrapObject,
           ),
@@ -914,6 +920,7 @@ function readConstructorProperty(
   prototypeView: object,
   capabilities: NonNullable<PluginRuntimeContext['capabilities']>,
   getRawDispatchAgent: () => DispatchAgentCapability | undefined,
+  peekRawDispatchAgent: () => DispatchAgentCapability | undefined,
   dispatchAgent: DispatchAgentCapability,
   wrapObject: (object: object) => object,
 ): unknown {
@@ -922,7 +929,9 @@ function readConstructorProperty(
   }
 
   const value = Reflect.get(constructorValue, property, constructorView);
-  const rawDispatchAgent = getRawDispatchAgent();
+  const shouldResolveDispatchAgent =
+    isDispatchAgentAliasProperty(property) || (typeof value === 'function' && isDispatchAgentLikeProperty(property));
+  const rawDispatchAgent = shouldResolveDispatchAgent ? getRawDispatchAgent() : peekRawDispatchAgent();
   if (
     value === rawDispatchAgent ||
     (typeof value === 'function' && isBoundDispatchAgentAlias(value, property, rawDispatchAgent))
@@ -937,13 +946,20 @@ function readConstructorProperty(
           capabilities,
           dispatchAgent,
           getRawDispatchAgent,
-          getRawDispatchAgent,
+          shouldResolveDispatchAgent ? getRawDispatchAgent : peekRawDispatchAgent,
           constructorValue,
           constructorView,
           args,
           wrapObject,
         )
-    : normalizeCapabilityHelperResult(value, capabilities, constructorView, () => rawDispatchAgent, dispatchAgent, wrapObject);
+    : normalizeCapabilityHelperResult(
+        value,
+        capabilities,
+        constructorView,
+        () => rawDispatchAgent,
+        dispatchAgent,
+        wrapObject,
+      );
 }
 
 function callCapabilityCollectionMethod(
@@ -1095,7 +1111,19 @@ function callCapabilityFunction(
     }
 
     return normalizeCapabilityFunctionResult(
-      Reflect.apply(helper, privateReceiver, args),
+      Reflect.apply(
+        helper,
+        privateReceiver,
+        sanitizePrivateRetryArgs(
+          args,
+          capabilities,
+          privateReceiver,
+          safeReceiver,
+          getRawDispatchAgent,
+          dispatchAgent,
+          wrapObject,
+        ),
+      ),
       capabilities,
       safeReceiver,
       getRawDispatchAgent,
@@ -1130,6 +1158,7 @@ function callCapabilityFunction(
       dispatchAgent,
       retryWithPrivateReceiver,
       wrapObject,
+      true,
     );
   } catch (reason) {
     if (!isPrivateReceiverError(reason)) {
@@ -1138,6 +1167,42 @@ function callCapabilityFunction(
 
     return retryWithPrivateReceiver(reason);
   }
+}
+
+function sanitizePrivateRetryArgs(
+  args: unknown[],
+  capabilities: NonNullable<PluginRuntimeContext['capabilities']>,
+  privateReceiver: object,
+  safeReceiver: object,
+  getRawDispatchAgent: DispatchAgentResolver,
+  dispatchAgent: DispatchAgentCapability,
+  wrapObject: (object: object) => object,
+): unknown[] {
+  const normalizeCallbackValue = (value: unknown): unknown => {
+    if (value === privateReceiver || value === capabilities) {
+      return safeReceiver;
+    }
+
+    return normalizeCapabilityHelperResult(
+      value,
+      capabilities,
+      safeReceiver,
+      getRawDispatchAgent,
+      dispatchAgent,
+      wrapObject,
+      true,
+    );
+  };
+
+  return args.map((arg) => {
+    if (typeof arg !== 'function') {
+      return normalizeCallbackValue(arg);
+    }
+
+    return function privateRetryCallback(this: unknown, ...callbackArgs: unknown[]) {
+      return Reflect.apply(arg, normalizeCallbackValue(this), callbackArgs.map(normalizeCallbackValue));
+    };
+  });
 }
 
 function prototypeMayExposeDispatchAgent(prototype: object): boolean {
@@ -1394,6 +1459,10 @@ function shouldWrapCapabilityObject(value: unknown): value is object {
     return false;
   }
 
+  if (findPropertyDescriptor(value, 'dispatchAgent') !== undefined) {
+    return true;
+  }
+
   if (
     value instanceof Date ||
     value instanceof RegExp ||
@@ -1417,10 +1486,6 @@ function shouldWrapCapabilityObject(value: unknown): value is object {
 
   const tag = Object.prototype.toString.call(value);
   if (tag === '[object Object]') {
-    return true;
-  }
-
-  if (findPropertyDescriptor(value, 'dispatchAgent') !== undefined) {
     return true;
   }
 
