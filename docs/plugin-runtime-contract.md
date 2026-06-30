@@ -77,7 +77,21 @@ project、comment、status、proposal の操作は provider 実装に閉じ込�
 Runtime provider は OpenClaw、devteam、Codex などの実行基盤を表す。
 `startRun(request)` は workflow 名、event、任意の task、requestedBy、
 追加 input を受け取り、queued/running/succeeded/failed/canceled などの
-run status を返す。
+run status を返す。agent task runtime では stopped/timed_out/compaction_failed/
+needs_human/split_recommended も status として表現できる。
+
+OpenClaw runtime provider は実 agent 起動を `enabled: true` の capability gate の
+背後に置く。通常の workflow test では `RuntimeProvider` mock を注入し、
+`createAgentAssignmentRuntimeFromProvider()` 経由で agent assignment を検証する。
+実起動では `openclaw agent --agent ... --session-key ... --timeout ... --json` を
+spawn し、log path、pid、agent session、branch を run metadata に残す。
+
+completion/resume/timeline は provider 境界の情報として扱う。completion parser は
+Codex/OpenClaw の JSON completion と transcript compaction failure を区別し、
+`Outcome: implemented | updated_issue | needs_human | split_recommended` を
+取り出せる。resume helper は running pid を確認し、安定した resume attempt id を
+生成する。timeline reader は OpenClaw trajectory jsonl を読み、Codex activity 表示に
+必要な時刻、phase、summary、status、redacted excerpt を返す。
 
 secret や provider 固有 token は runtime provider の実装が保持し、
 contract には含めない。

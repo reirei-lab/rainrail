@@ -31,10 +31,12 @@ describe('parseConfig', () => {
       },
       runtimeProviders: {
         openclaw: {
+          enabled: true,
           command: 'openclaw',
           agentId: 'main',
           sessionKeyPrefix: 'rainrail',
           timeoutSeconds: 600,
+          logDirectory: 'var/agent-task-logs',
         },
       },
     });
@@ -51,10 +53,12 @@ describe('parseConfig', () => {
       },
     });
     expect(config.runtimeProviders.openclaw).toEqual({
+      enabled: true,
       command: 'openclaw',
       agentId: 'main',
       sessionKeyPrefix: 'rainrail',
       timeoutSeconds: 600,
+      logDirectory: 'var/agent-task-logs',
     });
   });
 
