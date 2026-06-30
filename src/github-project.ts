@@ -62,6 +62,7 @@ interface ProjectMetadata {
   statusFieldId: string;
   statusOptionId: string;
   todoStatusOptionId: string;
+  backlogStatusOptionId: string;
   agentSessionIdFieldId: string;
   branchFieldId: string;
 }
@@ -179,7 +180,7 @@ async function claimProjectIssue(
       { subjectId: input.issue.contentId, body: input.commentBody },
     );
   } catch (error) {
-    if (statusUpdated) {
+    if (statusUpdated && shouldRollbackClaimFailure(error)) {
       await releaseProjectIssue(config, {
         issue: input.issue,
         claim: { projectId: metadata.projectId, projectItemId: input.issue.id },
@@ -211,8 +212,11 @@ async function releaseProjectIssue(
   auth: GitHubProjectAuthTokenProvider,
 ): Promise<void> {
   const metadata = await loadProjectMetadata(config, fetchImpl, auth);
+  const releaseStatusOptionId = normalizeToken(input.issue.status ?? config.todoStatus) === normalizeToken(config.backlogStatus)
+    ? metadata.backlogStatusOptionId
+    : metadata.todoStatusOptionId;
   await updateProjectField(fetchImpl, auth, metadata.projectId, input.issue.id, metadata.statusFieldId, {
-    singleSelectOptionId: metadata.todoStatusOptionId,
+    singleSelectOptionId: releaseStatusOptionId,
   });
   await updateProjectField(fetchImpl, auth, metadata.projectId, input.issue.id, metadata.agentSessionIdFieldId, {
     text: '',
@@ -254,6 +258,7 @@ async function loadProjectMetadata(
   const branchField = fields.find((field) => fieldName(field) === config.branchFieldName);
   const statusOptionId = singleSelectOptionId(statusField, config.inProgressStatus);
   const todoStatusOptionId = singleSelectOptionId(statusField, config.todoStatus);
+  const backlogStatusOptionId = singleSelectOptionId(statusField, config.backlogStatus);
   const statusFieldId = fieldId(statusField, config.statusFieldName);
 
   return {
@@ -261,6 +266,7 @@ async function loadProjectMetadata(
     statusFieldId,
     statusOptionId,
     todoStatusOptionId,
+    backlogStatusOptionId,
     agentSessionIdFieldId: fieldId(agentSessionIdField, config.agentSessionIdFieldName),
     branchFieldId: fieldId(branchField, config.branchFieldName),
   };
@@ -329,6 +335,10 @@ function assertClaimMatches(
   ) {
     throw new Error('GitHub Project item claim was overwritten by another assignment');
   }
+}
+
+function shouldRollbackClaimFailure(error: unknown): boolean {
+  return !(error instanceof Error && error.message === 'GitHub Project item claim was overwritten by another assignment');
 }
 
 async function updateProjectField(
@@ -438,7 +448,7 @@ function assigneeLogins(content: Record<string, unknown>): string[] {
 }
 
 function fieldValue(item: Record<string, unknown>, name: string): string | undefined {
-  const directValue = fieldValueByName(item, name);
+  const directValue = fixedAliasFieldValue(item, 'status') ?? fieldValueByName(item, name);
   if (directValue !== undefined) {
     return directValue;
   }

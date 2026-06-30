@@ -215,6 +215,64 @@ describe('createGitHubProjectTaskQueueProvider', () => {
     ]);
   });
 
+  it('rolls back partial backlog child claims to backlog status', async () => {
+    const calls: Array<{ query?: string; variables?: Record<string, unknown> }> = [];
+    const provider = createGitHubProjectTaskQueueProvider({
+      config: projectConfig(),
+      auth: { getAuthToken: async () => ({ token: 'project-token', provider: 'configured-token', fallback: false }) },
+      fetch: (async (_url, init) => {
+        const request = JSON.parse(String(init?.body)) as { query?: string; variables?: Record<string, unknown> };
+        calls.push(request);
+        if (request.query?.includes('RainrailProjectItemStatus')) {
+          return jsonResponse({
+            data: {
+              node: projectItem({
+                id: 'item_22',
+                contentId: 'issue_node_22',
+                number: 22,
+                title: 'Child issue',
+                status: 'Backlog',
+                assignees: [],
+              }),
+            },
+          });
+        }
+        if (request.query?.includes('RainrailProjectMetadata')) {
+          return projectMetadataResponse();
+        }
+        if (
+          request.query?.includes('updateProjectV2ItemFieldValue')
+          && JSON.stringify(request.variables?.value).includes('agent:main:rainrail-22')
+        ) {
+          return new Response(JSON.stringify({ errors: [{ message: 'field update failed' }] }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
+        return jsonResponse({ data: { updateProjectV2ItemFieldValue: { projectV2Item: { id: 'item_22' } } } });
+      }) as typeof fetch,
+    });
+
+    await expect(provider.claimProjectIssue({
+      issue: {
+        id: 'item_22',
+        contentId: 'issue_node_22',
+        contentType: 'Issue',
+        title: 'Child issue',
+        status: 'Backlog',
+        assigneeLogins: [],
+      },
+      agentSessionId: 'agent:main:rainrail-22',
+      branchName: 'agent/reirei-lab-rainrail-22-child-issue',
+      commentBody: 'started',
+    })).rejects.toThrow('field update failed');
+
+    expect(calls.find((call) =>
+      call.query?.includes('updateProjectV2ItemFieldValue')
+      && JSON.stringify(call.variables?.value).includes('status_backlog')
+    )).toBeDefined();
+  });
+
   it('allows claiming a selected backlog child issue', async () => {
     const provider = createGitHubProjectTaskQueueProvider({
       config: projectConfig(),
@@ -413,6 +471,93 @@ describe('createGitHubProjectTaskQueueProvider', () => {
     ]);
   });
 
+  it('uses the fixed status alias when listing custom status fields', async () => {
+    const provider = createGitHubProjectTaskQueueProvider({
+      config: projectConfig({ statusFieldName: 'Queue Status' }),
+      auth: { getAuthToken: async () => ({ token: 'project-token', provider: 'configured-token', fallback: false }) },
+      fetch: (async () => jsonResponse({
+        data: {
+          organization: {
+            projectV2: {
+              items: {
+                nodes: [
+                  {
+                    ...projectItem({
+                      id: 'item_21',
+                      contentId: 'issue_node_21',
+                      number: 21,
+                      title: 'Project issue selection',
+                      status: 'Todo',
+                      assignees: ['reirei-agent'],
+                    }) as Record<string, unknown>,
+                    fieldValues: { nodes: [] },
+                  },
+                ],
+                pageInfo: { hasNextPage: false, endCursor: null },
+              },
+            },
+          },
+        },
+      })) as typeof fetch,
+    });
+
+    await expect(provider.listProjectIssues()).resolves.toMatchObject([
+      { id: 'item_21', status: 'Todo' },
+    ]);
+  });
+
+  it('does not release a claim after another runner overwrites it', async () => {
+    const calls: Array<{ query?: string; variables?: Record<string, unknown> }> = [];
+    const provider = createGitHubProjectTaskQueueProvider({
+      config: projectConfig(),
+      auth: { getAuthToken: async () => ({ token: 'project-token', provider: 'configured-token', fallback: false }) },
+      fetch: (async (_url, init) => {
+        const request = JSON.parse(String(init?.body)) as { query?: string; variables?: Record<string, unknown> };
+        calls.push(request);
+        if (request.query?.includes('RainrailProjectItemStatus')) {
+          const updateCount = calls.filter((call) => call.query?.includes('updateProjectV2ItemFieldValue')).length;
+          return jsonResponse({
+            data: {
+              node: projectItem({
+                id: 'item_21',
+                contentId: 'issue_node_21',
+                number: 21,
+                title: 'Project issue selection',
+                status: updateCount === 0 ? 'Todo' : 'In Progress',
+                assignees: ['reirei-agent'],
+                agentSessionId: updateCount === 0 ? '' : 'agent:main:other-runner',
+                branchName: updateCount === 0 ? '' : 'agent/reirei-lab-rainrail-21-other-runner',
+              }),
+            },
+          });
+        }
+        if (request.query?.includes('RainrailProjectMetadata')) {
+          return projectMetadataResponse();
+        }
+        return jsonResponse({ data: { updateProjectV2ItemFieldValue: { projectV2Item: { id: 'item_21' } } } });
+      }) as typeof fetch,
+    });
+
+    await expect(provider.claimProjectIssue({
+      issue: {
+        id: 'item_21',
+        contentId: 'issue_node_21',
+        contentType: 'Issue',
+        title: 'Project issue selection',
+        status: 'Todo',
+        assigneeLogins: ['reirei-agent'],
+      },
+      agentSessionId: 'agent:main:rainrail-21',
+      branchName: 'agent/reirei-lab-rainrail-21-project-issue-selection',
+      commentBody: 'started',
+    })).rejects.toThrow('GitHub Project item claim was overwritten by another assignment');
+
+    expect(calls.filter((call) =>
+      call.query?.includes('updateProjectV2ItemFieldValue')
+      && JSON.stringify(call.variables?.value).includes('status_todo')
+    )).toHaveLength(0);
+  });
+
   it('loads paginated Project field metadata before claiming an issue', async () => {
     const metadataRequests: Array<Record<string, unknown> | undefined> = [];
     const provider = createGitHubProjectTaskQueueProvider({
@@ -466,6 +611,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
                         name: 'Status',
                         options: [
                           { id: 'status_todo', name: 'Todo' },
+                          { id: 'status_backlog', name: 'Backlog' },
                           { id: 'status_in_progress', name: 'In Progress' },
                         ],
                       },
@@ -545,6 +691,7 @@ function projectMetadataResponse(overrides: {
                 name: statusFieldName,
                 options: [
                   { id: 'status_todo', name: 'Todo' },
+                  { id: 'status_backlog', name: 'Backlog' },
                   { id: 'status_in_progress', name: 'In Progress' },
                 ],
               },
