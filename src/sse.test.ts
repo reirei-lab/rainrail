@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { createEventEnvelope, formatRainrailSseEvent, rainrailSseHeaders } from './index.js';
+import { createEventEnvelope, formatRainrailSseComment, formatRainrailSseEvent, rainrailSseHeaders } from './index.js';
 
 describe('Rainrail SSE formatting', () => {
   it('formats a Rainrail event envelope with its neutral event name', () => {
@@ -87,5 +87,10 @@ describe('Rainrail SSE formatting', () => {
     });
 
     expect(() => formatRainrailSseEvent(event)).toThrow(/SSE field "id"/);
+  });
+
+  it('rejects CR/LF in SSE comments', () => {
+    expect(() => formatRainrailSseComment('ok\ndata: forged')).toThrow(/SSE comment/);
+    expect(() => formatRainrailSseComment('ok\rid: forged')).toThrow(/SSE comment/);
   });
 });

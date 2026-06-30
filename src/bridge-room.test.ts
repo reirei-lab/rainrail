@@ -391,6 +391,38 @@ describe('Rainrail bridge room', () => {
     ]);
   });
 
+  it('drops GitHub URLs with oversized owner, repository, or numeric id segments before storage', async () => {
+    const ownerStorage = fakeState();
+    const ownerRoom = createTestRoom(ownerStorage, { replayLimit: 10 });
+    const ownerEvent = {
+      ...fixtureEvent('delivery-1', 'github.issue'),
+      subject: { type: 'issue', id: '1', url: `https://github.com/${'o'.repeat(65)}/rainrail/issues/1` },
+    };
+
+    expect((await ownerRoom.fetch(publishRequest(ownerEvent))).status).toBe(200);
+    expect(ownerStorage.storedEvents()[0]?.subject).not.toHaveProperty('url');
+
+    const repoStorage = fakeState();
+    const repoRoom = createTestRoom(repoStorage, { replayLimit: 10 });
+    const repoEvent = {
+      ...fixtureEvent('delivery-2', 'github.issue'),
+      subject: { type: 'issue', id: '1', url: `https://github.com/reirei-lab/${'r'.repeat(65)}/issues/1` },
+    };
+
+    expect((await repoRoom.fetch(publishRequest(repoEvent))).status).toBe(200);
+    expect(repoStorage.storedEvents()[0]?.subject).not.toHaveProperty('url');
+
+    const idStorage = fakeState();
+    const idRoom = createTestRoom(idStorage, { replayLimit: 10 });
+    const idEvent = {
+      ...fixtureEvent('delivery-3', 'github.issue'),
+      subject: { type: 'issue', id: '1', url: `https://github.com/reirei-lab/rainrail/issues/${'1'.repeat(21)}` },
+    };
+
+    expect((await idRoom.fetch(publishRequest(idEvent))).status).toBe(200);
+    expect(idStorage.storedEvents()[0]?.subject).not.toHaveProperty('url');
+  });
+
   it('rejects unsafe delivery reference paths before storage', async () => {
     const secretPathStorage = fakeState();
     const secretPathRoom = createTestRoom(secretPathStorage, { replayLimit: 10 });
@@ -695,6 +727,36 @@ describe('Rainrail bridge room', () => {
     expect(subjectStorage.storedEvents()).toEqual([]);
   });
 
+  it('accepts safe ref subject identifiers with slashes before storage', async () => {
+    const createStorage = fakeState();
+    const createRoom = createTestRoom(createStorage, { replayLimit: 10 });
+    const createEvent = {
+      ...fixtureEvent('delivery-1', 'github.issue'),
+      id: 'safe-create-event-id',
+      name: 'github.create',
+      subject: { type: 'ref', id: 'branch:feature/foo' },
+    };
+
+    const createResponse = await createRoom.fetch(publishRequest(createEvent));
+
+    expect(createResponse.status).toBe(200);
+    expect(createStorage.storedEvents()[0]?.subject.id).toBe('branch:feature/foo');
+
+    const pushStorage = fakeState();
+    const pushRoom = createTestRoom(pushStorage, { replayLimit: 10 });
+    const pushEvent = {
+      ...fixtureEvent('delivery-2', 'github.issue'),
+      id: 'safe-push-event-id',
+      name: 'github.push',
+      subject: { type: 'push', id: 'refs/heads/feature/foo' },
+    };
+
+    const pushResponse = await pushRoom.fetch(publishRequest(pushEvent));
+
+    expect(pushResponse.status).toBe(200);
+    expect(pushStorage.storedEvents()[0]?.subject.id).toBe('refs/heads/feature/foo');
+  });
+
   it('bounds repository-shaped identifiers before storage', async () => {
     const storage = fakeState();
     const room = createTestRoom(storage, { replayLimit: 10 });
@@ -731,6 +793,32 @@ describe('Rainrail bridge room', () => {
     };
 
     const receivedAtResponse = await receivedAtRoom.fetch(publishRequest(unsafeReceivedAtEvent));
+
+    expect(receivedAtResponse.status).toBe(400);
+    expect(receivedAtStorage.storedEvents()).toEqual([]);
+  });
+
+  it('rejects impossible UTC timestamps before storage', async () => {
+    const occurredAtStorage = fakeState();
+    const occurredAtRoom = createTestRoom(occurredAtStorage, { replayLimit: 10 });
+    const impossibleDateEvent = {
+      ...fixtureEvent('delivery-1', 'github.issue'),
+      occurredAt: '2026-02-31T00:00:00.000Z',
+    };
+
+    const occurredAtResponse = await occurredAtRoom.fetch(publishRequest(impossibleDateEvent));
+
+    expect(occurredAtResponse.status).toBe(400);
+    expect(occurredAtStorage.storedEvents()).toEqual([]);
+
+    const receivedAtStorage = fakeState();
+    const receivedAtRoom = createTestRoom(receivedAtStorage, { replayLimit: 10 });
+    const impossibleTimeEvent = {
+      ...fixtureEvent('delivery-2', 'github.issue'),
+      delivery: { id: 'delivery-2', receivedAt: '2026-01-01T24:00:00Z' },
+    };
+
+    const receivedAtResponse = await receivedAtRoom.fetch(publishRequest(impossibleTimeEvent));
 
     expect(receivedAtResponse.status).toBe(400);
     expect(receivedAtStorage.storedEvents()).toEqual([]);

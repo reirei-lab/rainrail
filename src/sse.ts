@@ -14,6 +14,10 @@ export function formatRainrailSseEvent(event: RainrailEventEnvelope): string {
 }
 
 export function formatRainrailSseComment(comment: string): string {
+  if (/[\r\n]/u.test(comment)) {
+    throw new TypeError('SSE comment must not contain CR or LF');
+  }
+
   return `: ${comment}\n\n`;
 }
 

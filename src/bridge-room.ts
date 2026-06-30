@@ -11,7 +11,10 @@ const SAFE_DELIVERY_REFERENCE_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 const SAFE_IDENTIFIER_TOKEN = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/;
 const SAFE_METADATA_TOKEN = /^[a-z0-9][a-z0-9._:-]{0,63}$/i;
 const SAFE_REPOSITORY_NAME = /^[A-Za-z0-9_.-]{1,64}\/[A-Za-z0-9_.-]{1,64}$/;
-const SAFE_UTC_ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/;
+const SAFE_REF_SUBJECT_ID = /^(?:(?:branch|tag):|refs\/(?:heads|tags)\/)[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$/;
+const SAFE_GITHUB_URL_SEGMENT = /^[A-Za-z0-9_.-]{1,64}$/;
+const SAFE_GITHUB_NUMERIC_ID = /^\d{1,20}$/;
+const SAFE_UTC_ISO_TIMESTAMP = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,3}))?Z$/;
 const claimedStorages = new WeakSet<RainrailBridgeRoomStorage>();
 
 type PublishEventResult =
@@ -252,7 +255,7 @@ function validatePublishEnvelope(value: unknown): RainrailEventEnvelope {
   const deliveryId = expectIdentifier(delivery, 'id');
   const deliveryReceivedAt = expectTimestamp(delivery, 'receivedAt');
   const subjectType = expectIdentifier(subject, 'type');
-  const subjectId = expectIdentifier(subject, 'id');
+  const subjectId = expectSubjectIdentifier(subject);
   const rawPayloadKind = expectRawPayloadKind(rawPayload);
   const rawPayloadReference = expectString(rawPayload, 'reference');
 
@@ -318,13 +321,34 @@ function expectIdentifier(record: Record<string, unknown>, key: string): string 
   return value;
 }
 
+function expectSubjectIdentifier(record: Record<string, unknown>): string {
+  const value = expectString(record, 'id');
+  if (!isSafeIdentifier(value) && !SAFE_REF_SUBJECT_ID.test(value)) {
+    throw new TypeError('id must be a safe identifier');
+  }
+
+  return value;
+}
+
 function expectTimestamp(record: Record<string, unknown>, key: string): string {
   const value = expectString(record, key);
-  if (!SAFE_UTC_ISO_TIMESTAMP.test(value) || Number.isNaN(Date.parse(value))) {
+  if (!isValidUtcIsoTimestamp(value)) {
     throw new TypeError(`${key} must be a UTC ISO timestamp`);
   }
 
   return value;
+}
+
+function isValidUtcIsoTimestamp(value: string): boolean {
+  const match = SAFE_UTC_ISO_TIMESTAMP.exec(value);
+  if (match === null) return false;
+
+  const parsed = Date.parse(value);
+  if (Number.isNaN(parsed)) return false;
+
+  const [, seconds, milliseconds] = match;
+  const canonical = `${seconds}.${(milliseconds ?? '').padEnd(3, '0')}Z`;
+  return new Date(parsed).toISOString() === canonical;
 }
 
 function expectRecord(record: Record<string, unknown>, key: string): Record<string, unknown> {
@@ -426,15 +450,15 @@ function isAllowedGitHubUrl(url: URL): boolean {
   if (parts.length < 2) return false;
 
   const [, , resource, id] = parts;
-  if (!/^[A-Za-z0-9_.-]+$/.test(parts[0] ?? '') || !/^[A-Za-z0-9_.-]+$/.test(parts[1] ?? '')) {
+  if (!SAFE_GITHUB_URL_SEGMENT.test(parts[0] ?? '') || !SAFE_GITHUB_URL_SEGMENT.test(parts[1] ?? '')) {
     return false;
   }
 
   return (
     parts.length === 2 ||
-    ((resource === 'issues' || resource === 'pull') && /^\d+$/.test(id ?? '') && parts.length === 4) ||
-    (resource === 'runs' && /^\d+$/.test(id ?? '') && parts.length === 4) ||
-    (resource === 'actions' && parts[3] === 'runs' && /^\d+$/.test(parts[4] ?? '') && parts.length === 5)
+    ((resource === 'issues' || resource === 'pull') && SAFE_GITHUB_NUMERIC_ID.test(id ?? '') && parts.length === 4) ||
+    (resource === 'runs' && SAFE_GITHUB_NUMERIC_ID.test(id ?? '') && parts.length === 4) ||
+    (resource === 'actions' && parts[3] === 'runs' && SAFE_GITHUB_NUMERIC_ID.test(parts[4] ?? '') && parts.length === 5)
   );
 }
 
