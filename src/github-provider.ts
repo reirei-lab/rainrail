@@ -6,7 +6,15 @@ import {
   type GitHubAuthConfig,
 } from './github-auth.js';
 import { recordGitHubRateLimit } from './github-rate-limit.js';
-import type { TaskComment, TaskCommentInput, TaskIssue, TaskIssueRef, TaskProvider } from './task-provider.js';
+import type {
+  TaskComment,
+  TaskCommentInput,
+  TaskIssue,
+  TaskIssueCreateInput,
+  TaskIssueRef,
+  TaskIssueSearchInput,
+  TaskProvider,
+} from './task-provider.js';
 
 export interface GitHubAuthTokenProvider {
   getAuthToken(): Promise<GitHubAuthToken | undefined>;
@@ -32,6 +40,10 @@ interface GitHubCommentResponse {
   node_id?: unknown;
   id?: unknown;
   html_url?: unknown;
+}
+
+interface GitHubSearchIssuesResponse {
+  items?: unknown;
 }
 
 export function createGitHubTaskProvider(options: GitHubTaskProviderOptions = {}): TaskProvider {
@@ -60,6 +72,54 @@ export function createGitHubTaskProvider(options: GitHubTaskProviderOptions = {}
       }
 
       return mapGitHubIssue(repository, await response.json() as GitHubIssueResponse);
+    },
+    async createIssue(input: TaskIssueCreateInput): Promise<TaskIssue> {
+      const repository = requireRepository(input);
+      const authToken = await auth.getAuthToken();
+      const response = await fetchImpl(
+        `https://api.github.com/repos/${repository}/issues`,
+        {
+          method: 'POST',
+          headers: requestHeaders(authToken),
+          body: JSON.stringify({
+            title: input.title,
+            body: input.body,
+            ...(input.labels === undefined ? {} : { labels: input.labels }),
+          }),
+        },
+      );
+      recordGitHubRateLimit('rest', response.headers, authToken === undefined
+        ? undefined
+        : { authProvider: authToken.provider, fallback: authToken.fallback });
+      if (!response.ok) {
+        throw new Error(`GitHub issue create request failed with HTTP ${response.status}`);
+      }
+
+      return mapGitHubIssue(repository, await response.json() as GitHubIssueResponse);
+    },
+    async searchIssues(input: TaskIssueSearchInput): Promise<TaskIssue[]> {
+      const repository = requireRepository(input);
+      const authToken = await auth.getAuthToken();
+      const query = [
+        `repo:${repository}`,
+        'is:issue',
+        input.state === undefined || input.state === 'all' ? undefined : `is:${input.state}`,
+        input.query,
+      ].filter((part): part is string => part !== undefined && part.length > 0).join(' ');
+      const url = new URL('https://api.github.com/search/issues');
+      url.searchParams.set('q', query);
+      const response = await fetchImpl(url, { headers: requestHeaders(authToken) });
+      recordGitHubRateLimit('rest', response.headers, authToken === undefined
+        ? undefined
+        : { authProvider: authToken.provider, fallback: authToken.fallback });
+      if (!response.ok) {
+        throw new Error(`GitHub issue search request failed with HTTP ${response.status}`);
+      }
+
+      const payload = await response.json() as GitHubSearchIssuesResponse;
+      return Array.isArray(payload.items)
+        ? payload.items.map((item) => mapGitHubIssue(repository, item as GitHubIssueResponse))
+        : [];
     },
     async createComment(input: TaskCommentInput): Promise<TaskComment> {
       const repository = requireRepository(input.target);

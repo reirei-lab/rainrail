@@ -111,6 +111,83 @@ describe('createGitHubTaskProvider', () => {
     ]);
   });
 
+  it('creates issues and searches open issues through the GitHub task provider', async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        node_id: 'issue-created-node-id',
+        number: 24,
+        title: 'Cloudflare issue',
+        state: 'open',
+        body: 'Issue body',
+        html_url: 'https://github.com/reirei-lab/rainrail/issues/24',
+      }), {
+        status: 201,
+        headers: { 'content-type': 'application/json' },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        items: [{
+          node_id: 'issue-found-node-id',
+          number: 99,
+          title: 'Existing Cloudflare issue',
+          state: 'open',
+          html_url: 'https://github.com/reirei-lab/rainrail/issues/99',
+        }],
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }));
+    const provider = createGitHubTaskProvider({
+      auth: {
+        getAuthToken: async () => ({
+          token: 'issue-token',
+          provider: 'configured-token',
+          fallback: false,
+        }),
+      },
+      fetch: fetchImpl as unknown as typeof fetch,
+    });
+
+    await expect(provider.createIssue?.({
+      provider: 'github',
+      repository: 'reirei-lab/rainrail',
+      title: 'Cloudflare issue',
+      body: 'Issue body',
+      labels: ['automated-error'],
+    })).resolves.toMatchObject({
+      id: 'issue-created-node-id',
+      number: 24,
+      url: 'https://github.com/reirei-lab/rainrail/issues/24',
+    });
+    await expect(provider.searchIssues?.({
+      provider: 'github',
+      repository: 'reirei-lab/rainrail',
+      state: 'open',
+      query: '"<!-- error-fingerprint: sha256:abc"',
+    })).resolves.toMatchObject([
+      {
+        id: 'issue-found-node-id',
+        number: 99,
+      },
+    ]);
+
+    expect(fetchImpl).toHaveBeenNthCalledWith(
+      1,
+      'https://api.github.com/repos/reirei-lab/rainrail/issues',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          title: 'Cloudflare issue',
+          body: 'Issue body',
+          labels: ['automated-error'],
+        }),
+      }),
+    );
+    const searchUrl = fetchImpl.mock.calls[1]?.[0] as URL;
+    expect(searchUrl.toString()).toContain('https://api.github.com/search/issues?q=');
+    expect(searchUrl.searchParams.get('q')).toBe('repo:reirei-lab/rainrail is:issue is:open "<!-- error-fingerprint: sha256:abc"');
+  });
+
   it('falls back to env auth when default GitHub App auth cannot mint a token', async () => {
     vi.stubEnv('GH_TOKEN', 'fallback-token');
     const directory = mkdtempSync(join(tmpdir(), 'rainrail-provider-fallback-'));

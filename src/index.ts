@@ -1,4 +1,5 @@
 export * from './bridge-room.js';
+export * from './cloudflare-issue-reporter.js';
 export * from './cloudflare-tail.js';
 export * from './config.js';
 export * from './agent-assignment.js';
@@ -13,6 +14,7 @@ export * from './github-rate-limit.js';
 export * from './github-webhook.js';
 export * from './http-app.js';
 export * from './http-utils.js';
+export * from './mention-draft.js';
 export * from './node-server.js';
 export * from './plugins.js';
 export * from './project-issues.js';

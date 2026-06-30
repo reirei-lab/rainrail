@@ -31,6 +31,7 @@ export interface CloudflareTailEvent {
 export interface CloudflareTailException {
   name?: string;
   message?: string;
+  stack?: string;
   timestamp?: string;
 }
 
@@ -288,12 +289,13 @@ function normalizeExceptions(value: unknown): CloudflareTailException[] {
     return [{
       ...optionalField(record, 'name'),
       ...optionalField(record, 'message'),
+      ...optionalField(record, 'stack'),
       ...optionalTimestampField(record.timestamp),
     }];
   });
 }
 
-function optionalField(record: Record<string, unknown>, key: 'name' | 'message'): Record<typeof key, string> | {} {
+function optionalField(record: Record<string, unknown>, key: 'name' | 'message' | 'stack'): Record<typeof key, string> | {} {
   const value = optionalString(record[key]);
   return value === null ? {} : { [key]: value };
 }

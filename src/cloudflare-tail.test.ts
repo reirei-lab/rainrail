@@ -2,11 +2,14 @@ import { describe, expect, it } from 'vitest';
 
 import {
   RainrailBridgeRoom,
+  createCloudflareIssueReporterWorkflow,
   createCloudflareTailEvent,
   createCloudflareTailSourcePlugin,
+  createInMemoryCloudflareErrorIssueStore,
   publishCloudflareTailEvents,
   type RainrailEventEnvelope,
   type RainrailBridgeRoomState,
+  type TaskQueueProvider,
 } from './index.js';
 
 const TEST_PUBLISH_TOKEN = 'test-publish-token';
@@ -61,6 +64,50 @@ describe('Cloudflare tail source', () => {
     expect(event.id).toBe('cloudflare-tail:tail-asme-site-20260615T081200000Z-ray-1:cloudflare.error');
     expect(event.delivery.id).toBe('tail-asme-site-20260615T081200000Z-ray-1');
     expect(event.rawPayload.reference).toBe('cloudflare://deliveries/tail-asme-site-20260615T081200000Z-ray-1');
+  });
+
+  it('keeps exception stacks usable by the Cloudflare issue reporter workflow', async () => {
+    const event = await createCloudflareTailEvent({
+      tailEvent: cloudflareTailFixture({
+        outcome: 'exception',
+        exceptions: [{
+          name: 'TypeError',
+          message: "Cannot read properties of null (reading 'toAuth')",
+          stack: [
+            "TypeError: Cannot read properties of null (reading 'toAuth')",
+            '    at resolveCurrentHumanAccount (worker.js:1510:24)',
+            '    at handleCurrentHuman (worker.js:1377:18)',
+          ].join('\n'),
+        }],
+      }),
+      receivedAt: new Date('2026-06-15T08:12:01.000Z'),
+    });
+    const createdIssues: Array<{ title: string; body: string }> = [];
+    const workflow = createCloudflareIssueReporterWorkflow({
+      repository: 'reirei-lab/rainrail',
+      store: createInMemoryCloudflareErrorIssueStore(),
+      issues: {
+        findOpenIssueByFingerprint: async () => undefined,
+        createIssue: async (input) => {
+          createdIssues.push(input);
+          return {
+            number: 24,
+            url: 'https://github.com/reirei-lab/rainrail/issues/24',
+          };
+        },
+      },
+    });
+
+    await expect(workflow.handle(event, runtimeContext())).resolves.toMatchObject({
+      handled: true,
+      reason: 'created_cloudflare_error_issue',
+      issue: {
+        number: 24,
+      },
+    });
+    expect(event.payload.exceptions[0]?.stack).toContain('resolveCurrentHumanAccount');
+    expect(createdIssues[0]?.title).toBe('[asme-site] TypeError in resolveCurrentHumanAccount');
+    expect(createdIssues[0]?.body).toContain('resolveCurrentHumanAccount @ worker.js');
   });
 
   it('normalizes successful Cloudflare Worker invocations as cloudflare.tail events', async () => {
@@ -481,7 +528,7 @@ function cloudflareTailFixture({
   outcome: string;
   status?: number;
   cfRay?: string | null;
-  exceptions?: Array<{ name?: string; message?: string; timestamp?: number | string }>;
+  exceptions?: Array<{ name?: string; message?: string; stack?: string; timestamp?: number | string }>;
   scriptName?: string;
   eventTimestamp?: number | string | null;
 }) {
@@ -503,6 +550,42 @@ function cloudflareTailFixture({
         status,
       },
     },
+  };
+}
+
+function runtimeContext() {
+  return {
+    runId: 'run-cloudflare-tail',
+    now: () => new Date('2026-06-15T08:12:01.000Z'),
+    providers: {
+      tasks: {
+        name: 'mock-tasks',
+        kind: 'task-provider' as const,
+        getIssue: async () => {
+          throw new Error('not used');
+        },
+        createComment: async () => {
+          throw new Error('not used');
+        },
+      },
+      queue: queueProvider(),
+    },
+    runtime: {
+      name: 'mock-runtime',
+      kind: 'runtime-provider' as const,
+      startRun: async () => {
+        throw new Error('not used');
+      },
+    },
+  };
+}
+
+function queueProvider(): TaskQueueProvider {
+  return {
+    name: 'mock-queue',
+    kind: 'task-queue-provider',
+    listProjectIssues: async () => [],
+    claimProjectIssue: async () => ({ projectItemId: 'unused' }),
   };
 }
 
