@@ -533,7 +533,7 @@ describe('cloudflare issue redaction', () => {
     });
 
     expect(createdIssues[0]?.body).not.toContain('lowercase-secret-token');
-    expect(createdIssues[0]?.body).toContain('Bearer [redacted]');
+    expect(createdIssues[0]?.body).toContain('authorization: [redacted]');
   });
 
   it('redacts underscore-prefixed secret parameters in exception strings', async () => {
@@ -627,6 +627,40 @@ describe('cloudflare issue redaction', () => {
     expect(createdIssues[0]?.body).toContain('\\"password\\":\\"[redacted]\\"');
     expect(createdIssues[0]?.body).toContain('\\"access_token\\":\\"[redacted]\\"');
     expect(createdIssues[0]?.body).toContain('\\"api_key\\":\\"[redacted]\\"');
+  });
+
+  it('redacts serialized Cookie and non-Bearer Authorization headers', async () => {
+    const createdIssues: Array<{ body: string }> = [];
+    const workflow = createCloudflareIssueReporterWorkflow({
+      repository: 'reirei-lab/rainrail',
+      store: createInMemoryCloudflareErrorIssueStore(),
+      issues: {
+        findOpenIssueByFingerprint: async () => undefined,
+        createIssue: async (input) => {
+          createdIssues.push(input);
+          return {
+            number: 132,
+            url: 'https://github.com/reirei-lab/rainrail/issues/132',
+          };
+        },
+      },
+    });
+
+    await expect(workflow.handle(cloudflareErrorEvent({
+      message: [
+        'upstream failed',
+        'Cookie: session=session-secret; refresh=refresh-secret',
+        'authorization: Basic basic-secret',
+      ].join('\n'),
+    }), runtimeContext())).resolves.toMatchObject({
+      handled: true,
+    });
+
+    expect(createdIssues[0]?.body).not.toContain('session-secret');
+    expect(createdIssues[0]?.body).not.toContain('refresh-secret');
+    expect(createdIssues[0]?.body).not.toContain('basic-secret');
+    expect(createdIssues[0]?.body).toContain('Cookie: [redacted]');
+    expect(createdIssues[0]?.body).toContain('authorization: [redacted]');
   });
 
   it('redacts exception names before writing issue titles and summaries', async () => {

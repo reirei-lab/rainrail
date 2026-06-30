@@ -79,6 +79,59 @@ describe('createGitHubProjectTaskQueueProvider', () => {
     await expect(provider.listProjectIssues()).rejects.toThrow('GitHub Project items response is missing project items');
   });
 
+  it('adds mention drafts as GitHub Project draft items', async () => {
+    const calls: Array<{ query?: string; variables?: Record<string, unknown> }> = [];
+    const provider = createGitHubProjectTaskQueueProvider({
+      config: projectConfig(),
+      auth: { getAuthToken: async () => ({ token: 'project-token', provider: 'configured-token', fallback: false }) },
+      fetch: (async (_url, init) => {
+        const request = JSON.parse(String(init?.body)) as { query?: string; variables?: Record<string, unknown> };
+        calls.push(request);
+        if (request.query?.includes('RainrailProjectMetadata')) {
+          return projectMetadataResponse();
+        }
+        if (request.query?.includes('RainrailAddProjectDraftIssue')) {
+          return jsonResponse({
+            data: {
+              addProjectV2DraftIssue: {
+                projectItem: {
+                  id: 'PVTI_draft',
+                },
+              },
+            },
+          });
+        }
+        return jsonResponse({ data: { updateProjectV2ItemFieldValue: { projectV2Item: { id: 'PVTI_draft' } } } });
+      }) as typeof fetch,
+    });
+
+    expect(provider.addMentionDraftItem).toBeDefined();
+    await expect(provider.addMentionDraftItem?.({
+      title: 'Respond to reirei-lab/rainrail#24',
+      body: '<!-- rainrail mention-draft -->\nMention URL: https://github.com/reirei-lab/rainrail/issues/24#issuecomment-1',
+      commentUrl: 'https://github.com/reirei-lab/rainrail/issues/24#issuecomment-1',
+      repository: 'reirei-lab/rainrail',
+      number: 24,
+    })).resolves.toEqual({
+      projectId: 'PVT_project',
+      projectItemId: 'PVTI_draft',
+      statusFieldId: 'PVTSSF_status',
+      statusOptionId: 'status_todo',
+      created: true,
+    });
+    expect(calls.find((call) => call.query?.includes('RainrailAddProjectDraftIssue'))?.variables).toMatchObject({
+      projectId: 'PVT_project',
+      title: 'Respond to reirei-lab/rainrail#24',
+      body: expect.stringContaining('Mention URL: https://github.com/reirei-lab/rainrail/issues/24#issuecomment-1'),
+    });
+    expect(calls.find((call) => call.query?.includes('updateProjectV2ItemFieldValue'))?.variables).toMatchObject({
+      projectId: 'PVT_project',
+      itemId: 'PVTI_draft',
+      fieldId: 'PVTSSF_status',
+      value: { singleSelectOptionId: 'status_todo' },
+    });
+  });
+
   it('claims a project issue with a starting lock before updating Project fields', async () => {
     const calls: Array<{ query?: string; variables?: Record<string, unknown> }> = [];
     const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {

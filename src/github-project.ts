@@ -17,6 +17,8 @@ import type {
   ProjectIssueClaimInput,
   ProjectIssueFinalizeInput,
   ProjectIssueReleaseInput,
+  ProjectMentionDraftInput,
+  ProjectMentionDraftItem,
   TaskQueueProvider,
 } from './task-queue.js';
 
@@ -126,6 +128,14 @@ interface ProjectMetadataData {
   };
 }
 
+interface AddProjectDraftIssueData {
+  addProjectV2DraftIssue?: {
+    projectItem?: {
+      id?: unknown;
+    };
+  };
+}
+
 export function createGitHubProjectTaskQueueProvider(
   options: GitHubProjectTaskQueueOptions,
 ): TaskQueueProvider {
@@ -149,6 +159,7 @@ export function createGitHubProjectTaskQueueProvider(
     selection,
     listProjectIssues: async () => fetchProjectIssues(options.config, fetchImpl, auth),
     claimProjectIssue: async (input) => claimProjectIssue(options.config, input, fetchImpl, auth),
+    addMentionDraftItem: async (input) => addMentionDraftItem(options.config, input, fetchImpl, auth),
     finalizeProjectIssueClaim: async (input) => finalizeProjectIssueClaim(options.config, input, fetchImpl, auth),
     releaseProjectIssue: async (input) => releaseProjectIssue(options.config, input, fetchImpl, auth),
   };
@@ -183,6 +194,41 @@ async function fetchProjectIssues(
   } while (after !== undefined);
 
   return issues;
+}
+
+async function addMentionDraftItem(
+  config: GitHubProjectTaskQueueConfig,
+  input: ProjectMentionDraftInput,
+  fetchImpl: typeof fetch,
+  auth: GitHubProjectAuthTokenProvider,
+): Promise<ProjectMentionDraftItem> {
+  const metadata = await loadProjectMetadata(config, fetchImpl, auth);
+  const payload = await runGraphql<AddProjectDraftIssueData>(fetchImpl, auth, addProjectDraftIssueMutation, {
+    projectId: metadata.projectId,
+    title: input.title,
+    body: input.body,
+  });
+  const projectItemId = payload.addProjectV2DraftIssue?.projectItem?.id;
+  if (typeof projectItemId !== 'string' || projectItemId.length === 0) {
+    throw new Error('GitHub Project draft issue response is missing project item id');
+  }
+
+  await updateProjectFieldWithRetry(
+    fetchImpl,
+    auth,
+    metadata.projectId,
+    projectItemId,
+    metadata.statusFieldId,
+    { singleSelectOptionId: metadata.todoStatusOptionId },
+  );
+
+  return {
+    projectId: metadata.projectId,
+    projectItemId,
+    statusFieldId: metadata.statusFieldId,
+    statusOptionId: metadata.todoStatusOptionId,
+    created: true,
+  };
 }
 
 async function reconcileProjectIssueClaimState(
@@ -1999,6 +2045,14 @@ const updateProjectFieldMutation = `
       value: $value
     }) {
       projectV2Item { id }
+    }
+  }
+`;
+
+const addProjectDraftIssueMutation = `
+  mutation RainrailAddProjectDraftIssue($projectId: ID!, $title: String!, $body: String!) {
+    addProjectV2DraftIssue(input: { projectId: $projectId, title: $title, body: $body }) {
+      projectItem { id }
     }
   }
 `;

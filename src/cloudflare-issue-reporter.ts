@@ -482,6 +482,8 @@ function isUrlKey(key: string): boolean {
 function sanitizeSecretString(value: string): string {
   return value
     .replace(/https?:\/\/[^\s"'<>`]+/giu, (url) => sanitizeUrlString(url))
+    .replace(/\b(cookie|set-cookie)\s*:\s*[^\r\n]+/giu, '$1: [redacted]')
+    .replace(/\bauthorization\s*:\s*[^\r\n]+/giu, 'authorization: [redacted]')
     .replace(/(["'])([A-Za-z0-9_-]*(?:authorization|cookie|token|secret|password|key|code|reset))\1(\s*:\s*)(["'])[^"']*\4/giu, '$1$2$1$3$4[redacted]$4')
     .replace(/(^|[?&\s"'<>`,;])([A-Za-z0-9_-]*(?:token|secret|password|code|reset))=([^&\s"'<>`,;]+)/giu, '$1$2=[redacted]')
     .replace(/\bBearer\s+[A-Za-z0-9._~+/-]+=*/giu, 'Bearer [redacted]');

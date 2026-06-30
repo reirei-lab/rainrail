@@ -699,6 +699,8 @@ function sanitizePayloadPathname(pathname: string): string {
 function sanitizePayloadText(value: string): string {
   return value
     .replace(/https?:\/\/[^\s"'<>`]+/giu, (url) => sanitizePayloadUrl(url) ?? '[redacted-url]')
+    .replace(/\b(cookie|set-cookie)\s*:\s*[^\r\n]+/giu, '$1: [redacted]')
+    .replace(/\bauthorization\s*:\s*[^\r\n]+/giu, 'authorization: [redacted]')
     .replace(/(["'])([A-Za-z0-9_-]*(?:authorization|cookie|token|secret|password|key|code|reset))\1(\s*:\s*)(["'])[^"']*\4/giu, '$1$2$1$3$4[redacted]$4')
     .replace(/(^|[?&\s"'<>`,;])([A-Za-z0-9_-]*(?:token|secret|password|code|reset))=([^&\s"'<>`,;]+)/giu, '$1$2=[redacted]')
     .replace(/\bBearer\s+[A-Za-z0-9._~+/-]+=*/giu, 'Bearer [redacted]');
@@ -711,7 +713,6 @@ function mentionedLoginsFromComment(value: Record<string, unknown>): { mentioned
   if (Array.isArray(existing)) {
     for (const login of existing) {
       if (typeof login === 'string' && isSafeGitHubLogin(login)) mentions.add(login);
-      if (mentions.size >= 20) break;
     }
   }
 
@@ -720,7 +721,6 @@ function mentionedLoginsFromComment(value: Record<string, unknown>): { mentioned
     for (const match of body.matchAll(/(^|[^\w-])@([A-Za-z0-9-]{1,39})(?=$|[^\w-])/gu)) {
       const login = match[2];
       if (login !== undefined && isSafeGitHubLogin(login)) mentions.add(login);
-      if (mentions.size >= 20) break;
     }
   }
 

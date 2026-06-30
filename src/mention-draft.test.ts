@@ -183,6 +183,32 @@ describe('mention draft workflow', () => {
     expect(JSON.stringify(storedPayload)).not.toContain('internal-note');
     expect(JSON.stringify(storedPayload)).not.toContain('credential=secret');
   });
+
+  it('keeps the configured agent mention after many unrelated mentions when passing through the bridge', async () => {
+    const storage = fakeState();
+    const room = new RainrailBridgeRoom(storage, { publishToken: 'test-publish-token', replayLimit: 10 });
+    const unrelatedMentions = Array.from({ length: 25 }, (_, index) => `@other-agent-${index}`).join(' ');
+
+    const publishResponse = await room.fetch(new Request('https://rainrail.test/publish', {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer test-publish-token',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(githubMentionEvent({ body: `${unrelatedMentions} @reirei-agent please handle this` })),
+    }));
+
+    expect(publishResponse.status).toBe(200);
+    const stored = storage.storedEvents()[0];
+    expect(stored?.payload).toMatchObject({
+      comment: {
+        mentionedLogins: expect.arrayContaining(['reirei-agent']),
+      },
+    });
+    expect(mentionDraftRequestFromEvent(stored!, 'reirei-agent')).toMatchObject({
+      commentUrl: 'https://github.com/reirei-lab/rainrail/issues/17#issuecomment-1',
+    });
+  });
 });
 
 function githubMentionEvent(overrides: {
