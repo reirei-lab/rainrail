@@ -554,6 +554,7 @@ function createDispatchAgentCapabilityProxy(
     const descriptor = findPropertyDescriptor(source, 'dispatchAgent');
     return descriptor !== undefined && !('value' in descriptor);
   };
+  const rootHasDispatchAgentAccessor = hasDispatchAgentAccessor(capabilities);
 
   const isDispatchAgentFunction = (source: object, value: Function, property?: string | symbol): boolean => {
     if (property === 'dispatchAgent') {
@@ -696,7 +697,13 @@ function createDispatchAgentCapabilityProxy(
           );
       }
 
-      return bindCapabilityFunction(source, value, safeReceiver, property, hasDispatchAgentAccessor(source));
+      return bindCapabilityFunction(
+        source,
+        value,
+        safeReceiver,
+        property,
+        rootHasDispatchAgentAccessor || hasDispatchAgentAccessor(source),
+      );
     }
 
     if (isPromiseLike(value)) {
@@ -1590,18 +1597,10 @@ function dispatchAgentAccessorReturnsUndefined(receiver: object, descriptor: Pro
       return true;
     }
 
-    if (/\bthrow\b/u.test(getterSource) || !dispatchAgentAccessorMayReturnUndefined(getterSource)) {
-      return false;
-    }
-
-    return Reflect.get(receiver, 'dispatchAgent', receiver) === undefined;
+    return false;
   } catch {
     return false;
   }
-}
-
-function dispatchAgentAccessorMayReturnUndefined(source: string): boolean {
-  return /\?\.|&&|\bundefined\b|\bvoid\s+0\b/u.test(source);
 }
 
 function functionSourceMentions(helper: Function, token: string): boolean {
@@ -1641,12 +1640,11 @@ function shouldWrapCapabilityObject(value: unknown): value is object {
     return true;
   }
 
-  if (
-    isBuiltinCapabilityObject(value) ||
-    value instanceof Promise ||
-    ArrayBuffer.isView(value) ||
-    value instanceof ArrayBuffer
-  ) {
+  if (isBuiltinCapabilityObject(value)) {
+    return true;
+  }
+
+  if (value instanceof Promise || ArrayBuffer.isView(value) || value instanceof ArrayBuffer) {
     return false;
   }
 
@@ -1694,6 +1692,10 @@ function isBoundDispatchAgentAlias(
   }
 
   if (rawDispatchAgent?.name && value.name === `bound ${rawDispatchAgent.name}`) {
+    return true;
+  }
+
+  if (rawDispatchAgent?.name.startsWith('bound ') && value.name === rawDispatchAgent.name) {
     return true;
   }
 
