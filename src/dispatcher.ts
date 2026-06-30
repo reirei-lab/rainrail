@@ -80,12 +80,19 @@ export function createRuntimeDispatcher(options: RuntimeDispatcherOptions): Runt
           const { workflow } = record;
           let policy = record.policy;
           let metadataResolved = false;
+          let acceptsStarted = false;
+          let acceptsCompleted = false;
           const audit = (action: WorkflowAuditEntry['action'], result: WorkflowAuditResult, reason?: unknown) =>
             recordAudit(options, policy, event, action, result, reason);
 
           try {
-            if (workflow.accepts && !workflow.accepts(event)) {
-              return undefined;
+            if (workflow.accepts) {
+              acceptsStarted = true;
+              const accepted = workflow.accepts(event);
+              acceptsCompleted = true;
+              if (!accepted) {
+                return undefined;
+              }
             }
 
             const metadata = resolveWorkflowExecutionMetadata(record);
@@ -124,7 +131,9 @@ export function createRuntimeDispatcher(options: RuntimeDispatcherOptions): Runt
               value,
             } satisfies WorkflowPluginResult;
           } catch (reason) {
-            if (!metadataResolved) {
+            if (acceptsStarted && !acceptsCompleted) {
+              policy = withSecretRedactionCapability(policy);
+            } else if (!metadataResolved) {
               const metadata = resolveWorkflowExecutionMetadata(record);
               if (metadata.policyError === undefined) {
                 policy = metadata.policy;
@@ -146,6 +155,15 @@ export function createRuntimeDispatcher(options: RuntimeDispatcherOptions): Runt
       return results.filter((result): result is WorkflowPluginResult => result !== undefined);
     },
   };
+}
+
+function withSecretRedactionCapability(policy: WorkflowExecutionPolicy): WorkflowExecutionPolicy {
+  return policy.capabilities.has('secret:access')
+    ? policy
+    : {
+        ...policy,
+        capabilities: new Set([...policy.capabilities, 'secret:access']),
+      };
 }
 
 function createWorkflowExecutionRecord(workflow: WorkflowPlugin): WorkflowExecutionRecord {
@@ -539,8 +557,7 @@ function createDispatchAgentCapabilityProxy(
     }
 
     if (isDispatchAgentAliasProperty(property)) {
-      const rawDispatchAgent = getRawDispatchAgent();
-      return value === rawDispatchAgent || isBoundDispatchAgentAlias(value, property, rawDispatchAgent);
+      return false;
     }
 
     const propertyDescriptor = property === undefined ? undefined : findPropertyDescriptor(source, property);
@@ -585,6 +602,7 @@ function createDispatchAgentCapabilityProxy(
         safeReceiver,
         args,
         (object) => createCapabilityView(object),
+        property,
       );
     sourceCache.set(wrapped, value);
     return wrapped;
@@ -1133,9 +1151,10 @@ function callCapabilityFunction(
   safeReceiver: object,
   args: unknown[],
   wrapObject: (object: object) => object,
+  property?: string | symbol,
 ): unknown {
   const retryWithPrivateReceiver = (reason: unknown) => {
-    if (isDispatchAgentRequest(args[0]) || helperMayResolveDispatchAgent(helper)) {
+    if (isDispatchAgentRequest(args[0]) || isStarterAliasProperty(property) || helperMayResolveDispatchAgent(helper)) {
       throw reason;
     }
 

@@ -5314,6 +5314,57 @@ describe('plugin runtime contract', () => {
     expect(dispatchAgentReads).toBe(0);
   });
 
+  it('checks runtime:start capability before reading dispatchAgent getters through starter aliases', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: {
+        id: 'delivery-denied-dispatch-agent-alias-getter',
+        receivedAt: '2026-06-29T14:00:00.000Z',
+      },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'github://deliveries/delivery-denied-dispatch-agent-alias-getter',
+      },
+    });
+    let dispatchAgentReads = 0;
+    const loader = createPluginLoader({
+      runtime: mockRuntimeContext({
+        capabilities: {
+          provider: 'codex',
+          get dispatchAgent(): never {
+            dispatchAgentReads += 1;
+            throw new Error('dispatchAgent should not be read before alias denial');
+          },
+          startAgent: async () => ({ sessionKey: 'agent:main:should-not-start' }),
+        } as unknown as RuntimeCapabilities & { startAgent: RuntimeCapabilities['dispatchAgent'] },
+      }),
+    });
+
+    loader.on(
+      'github.issue',
+      async (handledEvent, context) =>
+        (context.capabilities as unknown as { startAgent: RuntimeCapabilities['dispatchAgent'] }).startAgent?.({
+          event: handledEvent,
+          workflow: 'denied-dispatch-agent-alias-getter-handler',
+          runId: context.runId,
+        }),
+      { name: 'denied-dispatch-agent-alias-getter-handler' },
+    );
+
+    const [result] = await loader.dispatch(event);
+
+    expect(result).toMatchObject({
+      pluginName: 'denied-dispatch-agent-alias-getter-handler',
+      eventId: 'github-webhook:delivery-denied-dispatch-agent-alias-getter:github.issue',
+      status: 'rejected',
+    });
+    expect(dispatchAgentReads).toBe(0);
+  });
+
   it('keeps dispatchAgent gated through asynchronous capability helpers', async () => {
     const event = createEventEnvelope({
       source: { type: 'github', name: 'github-webhook' },
@@ -8185,6 +8236,53 @@ describe('plugin runtime contract', () => {
     );
   });
 
+  it('redacts accepts failures with the pre-accepts secret capability state', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'local', name: 'local-runtime' },
+      name: 'system.secret-requested',
+      delivery: { id: 'delivery-secret-accepts-mutated-error', receivedAt: '2026-06-29T14:00:00.000Z' },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'secret', id: 'api-token' },
+      payload: { action: 'read' },
+      rawPayload: { kind: 'external-reference', reference: 'redacted://delivery-secret-accepts-mutated-error' },
+    });
+    const auditEntries: unknown[] = [];
+    let currentCapabilities: RuntimeCapabilityName[] = ['secret:access'];
+    const workflow: WorkflowPlugin = {
+      name: 'secret-accepts-mutated-error-handler',
+      get capabilities() {
+        return currentCapabilities;
+      },
+      accepts: () => {
+        currentCapabilities = [];
+        throw new Error('accepts saw token=super-secret-value');
+      },
+      handle: async () => ({ ok: true }),
+    };
+    const dispatcher = createRuntimeDispatcher({
+      workflows: [workflow],
+      runtime: mockRuntimeContext(),
+      audit: {
+        record: (entry) => {
+          auditEntries.push(entry);
+        },
+      },
+    });
+
+    await expect(dispatcher.dispatch(event)).resolves.toMatchObject([
+      { pluginName: 'secret-accepts-mutated-error-handler', status: 'rejected' },
+    ]);
+    expect(JSON.stringify(auditEntries)).not.toContain('super-secret-value');
+    expect(auditEntries).toContainEqual(
+      expect.objectContaining({
+        pluginId: 'secret-accepts-mutated-error-handler',
+        action: 'plugin.handle',
+        result: 'rejected',
+        reason: 'Error: redacted secret-capable plugin failure',
+      }),
+    );
+  });
+
   it('gates anonymous bound dispatchAgent aliases', async () => {
     const event = createEventEnvelope({
       source: { type: 'github', name: 'github-webhook' },
@@ -9067,6 +9165,55 @@ describe('plugin runtime contract', () => {
     expect(result).toMatchObject({
       pluginName: 'private-run-agent-helper-handler',
       eventId: 'github-webhook:delivery-private-run-agent-helper:github.issue',
+      status: 'rejected',
+    });
+    expect(dispatchAgent).not.toHaveBeenCalled();
+  });
+
+  it('does not retry private starter helpers with arbitrary private aliases', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: { id: 'delivery-private-starter-helper-arbitrary-alias', receivedAt: '2026-06-29T14:00:00.000Z' },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: { kind: 'external-reference', reference: 'github://deliveries/private-starter-helper-arbitrary-alias' },
+    });
+    const dispatchAgent = vi.fn(async (_request: Parameters<NonNullable<RuntimeCapabilities['dispatchAgent']>>[0]) => ({
+      sessionKey: 'agent:main:private-starter-helper-arbitrary-alias',
+    }));
+    class RuntimeCapabilityBag {
+      #fn = dispatchAgent;
+      provider = 'codex';
+      dispatchAgent = dispatchAgent;
+
+      run() {
+        return this.#fn({
+          event,
+          workflow: 'private-starter-helper-arbitrary-alias-handler',
+          runId: 'run-1',
+        });
+      }
+    }
+    const loader = createPluginLoader({
+      runtime: mockRuntimeContext({
+        capabilities: new RuntimeCapabilityBag() as unknown as RuntimeCapabilities,
+      }),
+    });
+
+    loader.on(
+      'github.issue',
+      (_handledEvent, context) =>
+        (context.capabilities as unknown as { run: RuntimeCapabilityBag['run'] }).run(),
+      { name: 'private-starter-helper-arbitrary-alias-handler' },
+    );
+
+    const [result] = await loader.dispatch(event);
+
+    expect(result).toMatchObject({
+      pluginName: 'private-starter-helper-arbitrary-alias-handler',
+      eventId: 'github-webhook:delivery-private-starter-helper-arbitrary-alias:github.issue',
       status: 'rejected',
     });
     expect(dispatchAgent).not.toHaveBeenCalled();
