@@ -1,7 +1,14 @@
 import { createEventEnvelope, type RainrailEventEnvelope } from './events.js';
 import { defineSourcePlugin, type SourcePlugin, type SourcePluginNormalizeContext } from './source-plugin.js';
 
-const FAILURE_OUTCOMES = new Set(['exception', 'exceededCpu', 'exceededMemory', 'canceled', 'scriptNotFound']);
+const FAILURE_OUTCOMES = new Set([
+  'exception',
+  'exceededCpu',
+  'exceededMemory',
+  'scriptNotFound',
+  'canceled',
+  'responseStreamDisconnected',
+]);
 
 export interface CloudflareTailEvent {
   eventTimestamp?: number | string;

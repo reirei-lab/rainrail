@@ -156,6 +156,24 @@ describe('Cloudflare tail source', () => {
     });
   });
 
+  it('routes response stream disconnects as cloudflare.error', async () => {
+    const event = await createCloudflareTailEvent({
+      tailEvent: cloudflareTailFixture({
+        outcome: 'responseStreamDisconnected',
+        status: 200,
+        exceptions: [],
+      }),
+      receivedAt: new Date('2026-06-15T08:12:01.000Z'),
+    });
+
+    expect(event.name).toBe('cloudflare.error');
+    expect(event.payload).toMatchObject({
+      action: 'responseStreamDisconnected',
+      status: '200',
+      conclusion: 'failure',
+    });
+  });
+
   it('publishes Cloudflare tail batches into the Rainrail events stream', async () => {
     const storage = fakeState();
     const room = new RainrailBridgeRoom(storage, { publishToken: TEST_PUBLISH_TOKEN, replayLimit: 10 });
