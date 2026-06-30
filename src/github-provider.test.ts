@@ -176,6 +176,42 @@ describe('createGitHubTaskProvider', () => {
     );
   });
 
+  it('does not start comment fetches when the signal aborts while waiting for auth', async () => {
+    const controller = new AbortController();
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
+      node_id: 'comment-node-id',
+    }), {
+      status: 201,
+      headers: { 'content-type': 'application/json' },
+    }));
+    const provider = createGitHubTaskProvider({
+      auth: {
+        getAuthToken: async () => {
+          controller.abort(new Error('comment creation timed out'));
+          return {
+            token: 'comment-token',
+            provider: 'env-token' as const,
+            fallback: false,
+          };
+        },
+      },
+      fetch: fetchImpl as unknown as typeof fetch,
+    });
+
+    await expect(provider.createComment(
+      {
+        target: {
+          provider: 'github',
+          repository: 'reirei-lab/rainrail',
+          number: 20,
+        },
+        body: 'Queued run:20',
+      },
+      { signal: controller.signal },
+    )).rejects.toThrow('comment creation timed out');
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it('keeps GitHub App token fetches independent from task context abort signals', async () => {
     const controller = new AbortController();
     const directory = mkdtempSync(join(tmpdir(), 'rainrail-provider-auth-signal-'));

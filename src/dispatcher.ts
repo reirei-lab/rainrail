@@ -501,7 +501,7 @@ function createGatedRuntimeCapabilities(
 
   let normalizeDispatchAgentResult = (value: unknown): unknown => value;
   const dispatchAgent = ((request, context) => {
-    if (policy.capabilities.has('runtime:start')) {
+    if (policy.capabilities.has('runtime:start') && !lifecycle.isSideEffectClosed()) {
       try {
         if (getRawDispatchAgent() === undefined) {
           return undefined;
@@ -613,6 +613,7 @@ function createDispatchAgentCapabilityProxy(
         (object) => createCapabilityView(object),
         property,
         gateDispatchRequests,
+        safeReceiver,
       );
     sourceCache.set(wrapped, value);
     return wrapped;
@@ -1189,6 +1190,85 @@ function createNormalizingIterator<TInput, TOutput>(
   };
 }
 
+function isCapabilityIterator(value: unknown): value is Iterator<unknown> {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as { next?: unknown }).next === 'function' &&
+    typeof (value as { [Symbol.iterator]?: unknown })[Symbol.iterator] === 'function'
+  );
+}
+
+function isCapabilityAsyncIterator(value: unknown): value is AsyncIterator<unknown> {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as { next?: unknown }).next === 'function' &&
+    typeof (value as { [Symbol.asyncIterator]?: unknown })[Symbol.asyncIterator] === 'function'
+  );
+}
+
+function normalizeIteratorResult(
+  result: IteratorResult<unknown>,
+  normalize: (value: unknown) => unknown,
+): IteratorResult<unknown> {
+  return result.done === true
+    ? { done: true, value: normalize(result.value) }
+    : { done: false, value: normalize(result.value) };
+}
+
+function createNormalizingCapabilityIterator(
+  iterator: Iterator<unknown>,
+  normalize: (value: unknown) => unknown,
+): IterableIterator<unknown> {
+  return {
+    next(...args: [] | [unknown]) {
+      return normalizeIteratorResult(iterator.next(...args), normalize);
+    },
+    return(value?: unknown) {
+      return typeof iterator.return === 'function'
+        ? normalizeIteratorResult(iterator.return(value), normalize)
+        : { done: true, value: normalize(value) };
+    },
+    throw(error?: unknown) {
+      if (typeof iterator.throw !== 'function') {
+        throw error;
+      }
+
+      return normalizeIteratorResult(iterator.throw(error), normalize);
+    },
+    [Symbol.iterator]() {
+      return this;
+    },
+  };
+}
+
+function createNormalizingAsyncIterator(
+  iterator: AsyncIterator<unknown>,
+  normalize: (value: unknown) => unknown,
+): AsyncIterableIterator<unknown> {
+  return {
+    async next(...args: [] | [unknown]) {
+      return normalizeIteratorResult(await iterator.next(...args), normalize);
+    },
+    async return(value?: unknown) {
+      return typeof iterator.return === 'function'
+        ? normalizeIteratorResult(await iterator.return(value), normalize)
+        : { done: true, value: normalize(value) };
+    },
+    async throw(error?: unknown) {
+      if (typeof iterator.throw !== 'function') {
+        throw error;
+      }
+
+      return normalizeIteratorResult(await iterator.throw(error), normalize);
+    },
+    [Symbol.asyncIterator]() {
+      return this;
+    },
+  };
+}
+
 function callCapabilityFunction(
   helper: Function,
   capabilities: NonNullable<PluginRuntimeContext['capabilities']>,
@@ -1201,6 +1281,7 @@ function callCapabilityFunction(
   wrapObject: (object: object) => object,
   property?: string | symbol,
   gateDispatchRequests = false,
+  exposedReceiver: object = safeReceiver,
 ): unknown {
   const helperIsRawDispatchAgent = () => {
     try {
@@ -1222,7 +1303,7 @@ function callCapabilityFunction(
       return normalizeCapabilityFunctionResult(
         dispatchAgent(args[0], args[1] as Parameters<DispatchAgentCapability>[1]),
         capabilities,
-        safeReceiver,
+        exposedReceiver,
         getRawDispatchAgent,
         dispatchAgent,
         retryWithPrivateReceiver,
@@ -1242,14 +1323,14 @@ function callCapabilityFunction(
           args,
           capabilities,
           privateReceiver,
-          safeReceiver,
+          exposedReceiver,
           getRawDispatchAgent,
           dispatchAgent,
           wrapObject,
         ),
       ),
       capabilities,
-      safeReceiver,
+      exposedReceiver,
       getRawDispatchAgent,
       dispatchAgent,
       retryWithPrivateReceiver,
@@ -1263,7 +1344,7 @@ function callCapabilityFunction(
       return normalizeCapabilityFunctionResult(
         dispatchAgent(args[0], args[1] as Parameters<DispatchAgentCapability>[1]),
         capabilities,
-        safeReceiver,
+        exposedReceiver,
         getRawDispatchAgent,
         dispatchAgent,
         retryWithPrivateReceiver,
@@ -1274,7 +1355,7 @@ function callCapabilityFunction(
     return normalizeCapabilityFunctionResult(
       Reflect.apply(helper, safeReceiver, args),
       capabilities,
-      safeReceiver,
+      exposedReceiver,
       peekRawDispatchAgent,
       dispatchAgent,
       retryWithPrivateReceiver,
@@ -1462,6 +1543,34 @@ function normalizeCapabilityHelperResult(
     );
   }
 
+  if (isCapabilityAsyncIterator(value)) {
+    return createNormalizingAsyncIterator(value, (resolved) =>
+      normalizeCapabilityHelperResult(
+        resolved,
+        capabilities,
+        safeReceiver,
+        getRawDispatchAgent,
+        dispatchAgent,
+        wrapObject,
+        gateUnknownDispatchRequests,
+      ),
+    );
+  }
+
+  if (isCapabilityIterator(value)) {
+    return createNormalizingCapabilityIterator(value, (resolved) =>
+      normalizeCapabilityHelperResult(
+        resolved,
+        capabilities,
+        safeReceiver,
+        getRawDispatchAgent,
+        dispatchAgent,
+        wrapObject,
+        gateUnknownDispatchRequests,
+      ),
+    );
+  }
+
   if (shouldWrapCapabilityObject(value)) {
     return wrapObject(value);
   }
@@ -1580,6 +1689,7 @@ function helperMayResolveDispatchAgent(helper: Function): boolean {
       ) ||
       (/\bthis\b/u.test(source) && /\b(?:dispatchAgent|startAgent|runAgent)\b/u.test(source)) ||
       (/this\s*(?:\?\.|\s*)\[/u.test(source) && /\b(?:dispatch|start|run)\b/u.test(source) && /\bAgent\b/u.test(source)) ||
+      /this\s*(?:\?\.|\.)\s*#[\p{ID_Start}\p{ID_Continue}]*\s*\([^)]*\)\s*\(/u.test(source) ||
       /this\s*(?:\?\.|\s*)\[\s*this\s*\.\s*#[\p{ID_Start}\p{ID_Continue}]*/u.test(source) ||
       /#[\p{ID_Start}\p{ID_Continue}]*(?:(?:dispatch|start|launch)[\p{ID_Continue}]*|run[\p{ID_Continue}]*Agent[\p{ID_Continue}]*)/iu.test(
         source,

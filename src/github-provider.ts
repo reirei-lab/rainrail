@@ -78,6 +78,7 @@ export function createGitHubTaskProvider(options: GitHubTaskProviderOptions = {}
       const number = requireIssueNumber(input.target);
       throwIfAborted(context?.signal);
       const authToken = await auth.getAuthToken(context);
+      throwIfAborted(context?.signal);
       const init: RequestInit = {
         method: 'POST',
         headers: requestHeaders(authToken),
