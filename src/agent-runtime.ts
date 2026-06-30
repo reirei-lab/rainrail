@@ -23,12 +23,25 @@ export interface OpenClawRuntimeProviderOptions {
   timeoutSeconds: number;
   logDirectory: string;
   spawnProcess?: SpawnProcess;
+  onSpawnError?: (event: OpenClawSpawnErrorEvent) => void;
 }
 
 type SpawnProcess = (command: string, args: string[], options: {
   detached: boolean;
   stdio: unknown[];
-}) => { pid?: number; unref?: () => void };
+}) => SpawnedChild;
+
+interface SpawnedChild {
+  pid?: number | undefined;
+  unref?: (() => void) | undefined;
+  on?: ((event: 'error', listener: (error: Error) => void) => unknown) | undefined;
+}
+
+export interface OpenClawSpawnErrorEvent {
+  command: string;
+  phase: 'start' | 'resume';
+  error: Error;
+}
 
 type RuntimeAgentTaskInput = {
   id: string;
@@ -104,6 +117,7 @@ export function createOpenClawRuntimeProvider(options: OpenClawRuntimeProviderOp
           detached: true,
           stdio: ['ignore', outputFd, outputFd],
         });
+        attachSpawnErrorHandler(child, options, 'resume');
         child.unref?.();
         return {
           id: request.task.agentSessionId,
@@ -155,6 +169,7 @@ export async function startOpenClawRun(
       detached: true,
       stdio: ['ignore', outputFd, outputFd],
     });
+    attachSpawnErrorHandler(child, options, 'start');
     child.unref?.();
     return {
       id: agentSessionId,
@@ -382,8 +397,22 @@ function findJsonObjectEnd(raw: string, start: number): number | undefined {
   return undefined;
 }
 
-function defaultSpawnProcess(command: string, args: string[], options: { detached: boolean; stdio: unknown[] }) {
-  return spawn(command, args, options as never);
+function defaultSpawnProcess(command: string, args: string[], options: { detached: boolean; stdio: unknown[] }): SpawnedChild {
+  return spawn(command, args, options as never) as SpawnedChild;
+}
+
+function attachSpawnErrorHandler(
+  child: SpawnedChild,
+  options: OpenClawRuntimeProviderOptions,
+  phase: OpenClawSpawnErrorEvent['phase'],
+): void {
+  child.on?.('error', (error) => {
+    options.onSpawnError?.({
+      command: options.command,
+      phase,
+      error,
+    });
+  });
 }
 
 function safeFileName(value: string): string {

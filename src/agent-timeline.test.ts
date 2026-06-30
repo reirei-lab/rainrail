@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -69,19 +69,52 @@ describe('agent timeline', () => {
     }
   });
 
+  it('uses the configured agent id when deriving the default trajectory directory', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'rainrail-agent-id-timeline-'));
+    const openClawHome = join(directory, '.openclaw');
+    const sessionsDirectory = join(openClawHome, 'agents', 'worker-a', 'sessions');
+    const logPath = join(directory, 'agent.log');
+    mkdirSync(sessionsDirectory, { recursive: true });
+    writeFileSync(logPath, '', 'utf8');
+    writeFileSync(join(sessionsDirectory, 'worker-session.trajectory.jsonl'), [
+      JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:08:00.000Z', seq: 1 }),
+    ].join('\n'), 'utf8');
+
+    try {
+      await expect(readRuntimeTimeline(
+        { logPath, agentSessionId: 'worker-session' },
+        { agentId: 'worker-a', openClawHome },
+      )).resolves.toMatchObject({
+        sessionId: 'worker-session',
+        missing: false,
+        entries: [expect.objectContaining({ summary: 'session.started' })],
+      });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('renders trajectory rows and redacts sensitive output for Codex activity display', () => {
     const timeline = parseRuntimeTrajectoryTimeline([
       JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:08:00.000Z', seq: 1 }),
       JSON.stringify({ type: 'tool.call', ts: '2026-06-30T15:09:00.000Z', seq: 2, data: { name: 'bash', arguments: { command: 'pnpm test' } } }),
-      JSON.stringify({ type: 'tool.result', ts: '2026-06-30T15:09:10.000Z', seq: 3, data: { name: 'bash', status: 'completed', output: 'ok token=secret-value' } }),
+      JSON.stringify({ type: 'tool.call', ts: '2026-06-30T15:09:05.000Z', seq: 3, data: { name: 'bash', arguments: { command: 'gh api -H "Authorization: Bearer ghs_secretValue" repos/reirei-lab/rainrail' } } }),
+      JSON.stringify({ type: 'tool.result', ts: '2026-06-30T15:09:10.000Z', seq: 4, data: { name: 'bash', status: 'completed', output: 'ok token=secret-value' } }),
+      JSON.stringify({ type: 'tool.result', ts: '2026-06-30T15:09:20.000Z', seq: 5, data: { name: 'bash', status: 'completed', contentItems: [{ token: 'secret-json-token', apiKey: 'secret-json-key', password: 'secret-json-password' }] } }),
     ].join('\n'));
 
     expect(timeline.map((entry) => [entry.phase, entry.summary])).toEqual([
       ['session.started', 'session.started'],
-      ['tool.call', 'pnpm test'],
+      ['確認', 'pnpm test'],
+      ['調査', 'gh api -H "Authorization: Bearer [redacted-token]" repos/reirei-lab/rainrail'],
+      ['tool.result', 'bash completed'],
       ['tool.result', 'bash completed'],
     ]);
-    expect(timeline[2]!.excerpt).toContain('token=[redacted]');
+    expect(timeline[2]!.detail).toContain('Bearer [redacted-token]');
+    expect(timeline[3]!.excerpt).toContain('token=[redacted]');
+    expect(timeline[4]!.excerpt).toContain('"token": "[redacted]"');
+    expect(timeline[4]!.excerpt).toContain('"apiKey": "[redacted]"');
+    expect(timeline[4]!.excerpt).toContain('"password": "[redacted]"');
   });
 
   it('classifies common commands into dashboard phases', () => {

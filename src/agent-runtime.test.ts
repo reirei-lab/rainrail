@@ -1,4 +1,5 @@
 import { mkdirSync, rmSync } from 'node:fs';
+import { EventEmitter } from 'node:events';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -193,6 +194,36 @@ describe('createOpenClawRuntimeProvider', () => {
       expect.stringContaining('Existing task log: var/agent-task-logs/task.log'),
       '--json',
     ]), expect.anything());
+  });
+
+  it('handles asynchronous spawn errors instead of leaving them unobserved', async () => {
+    const child = new EventEmitter() as EventEmitter & { pid: number; unref: () => void };
+    child.pid = 6262;
+    child.unref = vi.fn();
+    const onSpawnError = vi.fn();
+    const provider = createOpenClawRuntimeProvider({
+      enabled: true,
+      command: 'missing-openclaw',
+      agentId: 'main',
+      sessionKeyPrefix: 'rainrail',
+      timeoutSeconds: 900,
+      logDirectory: temporaryDirectory(),
+      spawnProcess: vi.fn(() => child),
+      onSpawnError,
+    });
+
+    await expect(provider.startRun(runtimeRequest())).resolves.toMatchObject({
+      status: 'running',
+      metadata: { pid: 6262 },
+    });
+
+    child.emit('error', new Error('spawn missing-openclaw ENOENT'));
+
+    expect(onSpawnError).toHaveBeenCalledWith(expect.objectContaining({
+      command: 'missing-openclaw',
+      phase: 'start',
+      error: expect.any(Error),
+    }));
   });
 });
 

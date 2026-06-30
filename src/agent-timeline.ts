@@ -38,6 +38,12 @@ interface RuntimeTaskForTimeline {
   agentSessionId?: string;
 }
 
+interface RuntimeTimelineReadOptions {
+  sessionsDirectory?: string;
+  agentId?: string;
+  openClawHome?: string;
+}
+
 interface TrajectoryEvent {
   type?: string;
   ts?: string;
@@ -51,7 +57,7 @@ const maxJsonlBytes = 400 * 1024;
 
 export async function readRuntimeTimeline(
   task: RuntimeTaskForTimeline,
-  options: { sessionsDirectory?: string } = {},
+  options: RuntimeTimelineReadOptions = {},
 ): Promise<RuntimeTimelineResult> {
   const session = await readRuntimeSession(task);
   const result: RuntimeTimelineResult = {
@@ -65,7 +71,7 @@ export async function readRuntimeTimeline(
     return { ...result, missing: true, error: 'agent session id was not found in the task log' };
   }
 
-  const trajectoryPath = runtimeTrajectoryPathForSessionId(session.sessionId, options.sessionsDirectory);
+  const trajectoryPath = runtimeTrajectoryPathForSessionId(session.sessionId, options);
   try {
     return {
       ...result,
@@ -84,7 +90,7 @@ export async function readRuntimeTimeline(
 
 export async function readRuntimeTimelineStatus(
   task: RuntimeTaskForTimeline,
-  options: { sessionsDirectory?: string } = {},
+  options: RuntimeTimelineReadOptions = {},
 ): Promise<RuntimeTimelineStatus> {
   const session = await readRuntimeSession(task);
   const status: RuntimeTimelineStatus = {
@@ -95,7 +101,7 @@ export async function readRuntimeTimelineStatus(
   if (session.sessionId === undefined) {
     return status;
   }
-  const trajectoryPath = runtimeTrajectoryPathForSessionId(session.sessionId, options.sessionsDirectory);
+  const trajectoryPath = runtimeTrajectoryPathForSessionId(session.sessionId, options);
   status.trajectoryPath = trajectoryPath;
   let contents: string;
   try {
@@ -122,7 +128,7 @@ export async function readRuntimeTimelineStatus(
 
 export async function readRuntimeJsonl(
   task: RuntimeTaskForTimeline,
-  options: { sessionsDirectory?: string; maxBytes?: number } = {},
+  options: RuntimeTimelineReadOptions & { maxBytes?: number } = {},
 ): Promise<{ logPath: string; sessionId?: string | undefined; fallback: boolean; trajectoryPath?: string | undefined; raw: string; missing: boolean; truncated: boolean; error?: string | undefined }> {
   const session = await readRuntimeSession(task);
   const result = {
@@ -136,7 +142,7 @@ export async function readRuntimeJsonl(
   if (session.sessionId === undefined) {
     return { ...result, missing: true, error: 'agent session id was not found in the task log' };
   }
-  const trajectoryPath = runtimeTrajectoryPathForSessionId(session.sessionId, options.sessionsDirectory);
+  const trajectoryPath = runtimeTrajectoryPathForSessionId(session.sessionId, options);
   try {
     const tail = await readTailText(trajectoryPath, options.maxBytes ?? maxJsonlBytes);
     return { ...result, trajectoryPath, raw: tail.text, truncated: tail.truncated };
@@ -171,7 +177,11 @@ export function extractRuntimeFallbackSessionId(log: string): string | undefined
   return match?.[1] ?? match?.[0];
 }
 
-export function runtimeTrajectoryPathForSessionId(sessionId: string, sessionsDirectory = defaultSessionsDirectory()): string {
+export function runtimeTrajectoryPathForSessionId(
+  sessionId: string,
+  options: string | RuntimeTimelineReadOptions = {},
+): string {
+  const sessionsDirectory = typeof options === 'string' ? options : runtimeSessionsDirectory(options);
   return join(sessionsDirectory, `${sessionId.replace(/[^A-Za-z0-9._:-]/g, '_')}.trajectory.jsonl`);
 }
 
@@ -273,11 +283,12 @@ function timelineEntryForEvent(event: TrajectoryEvent, index: number): RuntimeTi
 function timelineEntryForToolCall(event: TrajectoryEvent, index: number): RuntimeTimelineEntry {
   const toolName = stringField(event.data, 'name') ?? '';
   const command = extractToolCommand(event.data);
+  const classified = classifyRuntimeToolCall(toolName, command);
   const detailParts = [toolName, command].filter((part) => part.trim() !== '');
   return {
     id: timelineEntryId(event, index),
     timestamp: event.ts ?? '',
-    phase: event.type ?? 'tool.call',
+    phase: classified.phase,
     summary: formatToolCallSummary(toolName, command),
     detail: detailParts.length === 0 ? undefined : truncate(redactSensitiveText(detailParts.join(': ')), detailLength),
   };
@@ -323,7 +334,7 @@ function extractToolCommand(data: Record<string, unknown> | undefined): string {
 function formatToolCallSummary(toolName: string, command: string): string {
   const normalizedCommand = command.replace(/\s+/g, ' ').trim();
   if (normalizedCommand !== '') {
-    return truncate(normalizedCommand, 140);
+    return truncate(redactSensitiveText(normalizedCommand), 140);
   }
   return toolName.trim() === '' ? 'tool.call' : `${toolName} call`;
 }
@@ -362,6 +373,7 @@ function redactSensitiveText(value: string): string {
   return value
     .replace(/(gh[pousr]_[A-Za-z0-9_]+)/g, '[redacted-token]')
     .replace(/(sk-[A-Za-z0-9_-]{20,})/g, '[redacted-token]')
+    .replace(/("(?:token|apiKey|api_key|password|secret)"\s*:\s*)"[^"]*"/gi, '$1"[redacted]"')
     .replace(/((?:token|api[_-]?key|password|secret)\s*[:=]\s*)[^\s'",}]+/gi, '$1[redacted]');
 }
 
@@ -369,6 +381,9 @@ function truncate(value: string, maxLength: number): string {
   return value.length <= maxLength ? value : `${value.slice(0, maxLength)}...`;
 }
 
-function defaultSessionsDirectory(): string {
-  return join(homedir(), '.openclaw', 'agents', 'main', 'sessions');
+function runtimeSessionsDirectory(options: RuntimeTimelineReadOptions): string {
+  if (options.sessionsDirectory !== undefined) {
+    return options.sessionsDirectory;
+  }
+  return join(options.openClawHome ?? join(homedir(), '.openclaw'), 'agents', options.agentId ?? 'main', 'sessions');
 }
