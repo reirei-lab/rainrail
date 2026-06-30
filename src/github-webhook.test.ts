@@ -1283,13 +1283,15 @@ describe('GitHub webhook source handling', () => {
             state: 'open',
             html_url: 'https://github.com/reirei-lab/rainrail/security/code-scanning/7',
             rule: { severity: 'warning' },
-            most_recent_instance: {
-              location: {
-                path: 'src/github-webhook.ts',
-                start_line: 10,
-                end_line: 12,
+            instances: [
+              {
+                location: {
+                  path: 'src/github-webhook.ts',
+                  start_line: 10,
+                  end_line: 12,
+                },
               },
-            },
+            ],
           },
         },
         rawBody: '{}',
@@ -1358,13 +1360,13 @@ describe('GitHub webhook source handling', () => {
           issue: {
             number: 16,
             html_url: 'https://github.com/reirei-lab/rainrail/issues/16',
-            milestone: {
-              id: 300,
-              number: 2,
-              title: 'v1',
-              due_on: '2026-07-31T00:00:00Z',
-              html_url: 'https://github.com/reirei-lab/rainrail/milestone/2',
-            },
+          },
+          milestone: {
+            id: 300,
+            number: 2,
+            title: 'v1',
+            due_on: '2026-07-31T00:00:00Z',
+            html_url: 'https://github.com/reirei-lab/rainrail/milestone/2',
           },
         },
         rawBody: '{}',
@@ -1373,6 +1375,12 @@ describe('GitHub webhook source handling', () => {
     ).resolves.toMatchObject({
       name: 'github.issue',
       payload: {
+        resource: {
+          type: 'issue',
+          id: '16',
+          number: 16,
+          url: 'https://github.com/reirei-lab/rainrail/issues/16',
+        },
         milestone: {
           id: '300',
           number: 2,
@@ -1976,6 +1984,45 @@ describe('GitHub webhook source handling', () => {
 
     await expect(
       createGitHubWebhookEvent({
+        githubEvent: 'repository',
+        deliveryId: 'delivery-repository-renamed-1',
+        payload: {
+          action: 'renamed',
+          repository: { full_name: 'reirei-lab/new-rainrail' },
+          changes: {
+            repository: {
+              name: {
+                from: 'rainrail',
+              },
+            },
+            description: {
+              from: '',
+              to: 'Rainrail routes development events',
+            },
+          },
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.repository',
+      payload: {
+        changes: [
+          {
+            field: 'repository.name',
+            from: 'rainrail',
+          },
+          {
+            field: 'description',
+            from: '',
+            to: 'Rainrail routes development events',
+          },
+        ],
+      },
+    });
+
+    await expect(
+      createGitHubWebhookEvent({
         githubEvent: 'deployment_review',
         deliveryId: 'delivery-deployment-review-1',
         payload: {
@@ -2400,6 +2447,44 @@ describe('GitHub webhook source handling', () => {
           id: '111',
           login: 'octocat',
           role: 'member',
+        },
+      },
+    });
+
+    await expect(
+      createGitHubWebhookEvent({
+        githubEvent: 'organization',
+        deliveryId: 'delivery-organization-invited-1',
+        payload: {
+          action: 'member_invited',
+          organization: { login: 'reirei-lab' },
+          invitation: {
+            id: 114,
+            email: 'octocat@example.com',
+          },
+          user: {
+            id: 115,
+            login: 'octocat',
+            html_url: 'https://github.com/octocat',
+          },
+        },
+        rawBody: '{}',
+        receivedAt: new Date('2026-06-29T13:00:44.000Z'),
+      }),
+    ).resolves.toMatchObject({
+      name: 'github.organization',
+      subject: {
+        type: 'organization_invitation',
+        id: '115',
+      },
+      payload: {
+        resource: {
+          type: 'organization_invitation',
+          id: '115',
+          invitationId: '114',
+          login: 'octocat',
+          email: 'octocat@example.com',
+          url: 'https://github.com/octocat',
         },
       },
     });

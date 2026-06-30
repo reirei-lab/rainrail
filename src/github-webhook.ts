@@ -442,6 +442,8 @@ export interface NormalizedGitHubResource {
   owner?: string;
   permissions?: unknown;
   login?: string;
+  email?: string;
+  invitationId?: string;
   teamSlug?: string;
   teamName?: string;
   role?: string;
@@ -565,7 +567,7 @@ function findGitHubSubject(payload: GitHubWebhookPayload, name: RainrailEventNam
     return subjectFromResource(resourceFromLabel(payload.label));
   }
 
-  if (payload.milestone) {
+  if (payload.milestone && !payload.issue && !payload.pull_request) {
     return subjectFromResource(resourceFromMilestone(payload.milestone));
   }
 
@@ -595,6 +597,10 @@ function findGitHubSubject(payload: GitHubWebhookPayload, name: RainrailEventNam
 
   if (payload.membership) {
     return subjectFromResource(resourceFromOrganizationMembership(payload.membership));
+  }
+
+  if (isOrganizationInvitationPayload(payload)) {
+    return subjectFromResource(resourceFromOrganizationInvitation(payload));
   }
 
   if (isInstallationTargetPayload(payload)) {
@@ -1158,7 +1164,7 @@ function normalizedResource(githubEvent: string, payload: GitHubWebhookPayload):
     return resourceFromIssueRelation(payload);
   }
 
-  if (payload.milestone) {
+  if (payload.milestone && !payload.issue && !payload.pull_request) {
     return resourceFromMilestone(payload.milestone);
   }
 
@@ -1192,6 +1198,10 @@ function normalizedResource(githubEvent: string, payload: GitHubWebhookPayload):
 
   if (payload.membership) {
     return resourceFromOrganizationMembership(payload.membership);
+  }
+
+  if (isOrganizationInvitationPayload(payload)) {
+    return resourceFromOrganizationInvitation(payload);
   }
 
   if (isInstallationTargetPayload(payload)) {
@@ -1546,7 +1556,9 @@ function resourceFromSecurityAlert(payload: GitHubWebhookPayload): NormalizedGit
   const alert = payload.alert ?? {};
   const location = payload.location;
   const locationDetails = recordField(location, 'details');
-  const codeScanningLocation = recordField(recordField(alert, 'most_recent_instance'), 'location');
+  const codeScanningLocation =
+    recordField(recordField(alert, 'most_recent_instance'), 'location') ??
+    recordField(arrayField(alert, 'instances')[0], 'location');
   const dependency = recordField(alert, 'dependency');
   const dependencyPackage = recordField(dependency, 'package');
 
@@ -1748,6 +1760,20 @@ function resourceFromOrganizationMembership(membership: GitHubWebhookRecord): No
     id: idField(user, 'id') ?? stringField(user, 'login') ?? 'unknown',
     ...optionalStringProperty('login', stringField(user, 'login')),
     ...optionalStringProperty('role', stringField(membership, 'role')),
+    ...optionalStringProperty('url', stringField(user, 'html_url')),
+  };
+}
+
+function resourceFromOrganizationInvitation(payload: GitHubWebhookPayload): NormalizedGitHubResource {
+  const user = recordField(payload, 'user');
+  const invitation = recordField(payload, 'invitation');
+
+  return {
+    type: 'organization_invitation',
+    id: idField(user, 'id') ?? idField(invitation, 'id') ?? stringField(user, 'login') ?? stringField(invitation, 'email') ?? 'unknown',
+    ...optionalStringProperty('invitationId', idField(invitation, 'id')),
+    ...optionalStringProperty('login', stringField(user, 'login')),
+    ...optionalStringProperty('email', stringField(invitation, 'email')),
     ...optionalStringProperty('url', stringField(user, 'html_url')),
   };
 }
@@ -2124,20 +2150,45 @@ function normalizedChanges(changes: GitHubWebhookRecord | undefined): Normalized
     return [];
   }
 
-  return Object.entries(changes).map(([field, value]) => {
+  return normalizedChangeEntries(changes);
+}
+
+function normalizedChangeEntries(changes: GitHubWebhookRecord, prefix?: string): NormalizedGitHubChange[] {
+  return Object.entries(changes).flatMap(([field, value]) => {
+    const fieldPath = prefix ? `${prefix}.${field}` : field;
     const change = value && typeof value === 'object' && !Array.isArray(value)
       ? (value as GitHubWebhookRecord)
       : undefined;
 
-    return {
-      field,
+    if (!change) {
+      return [{ field: fieldPath }];
+    }
+
+    if (!isChangeLeaf(change)) {
+      const nestedChanges = normalizedChangeEntries(change, fieldPath);
+      return nestedChanges.length > 0 ? nestedChanges : [{ field: fieldPath }];
+    }
+
+    return [{
+      field: fieldPath,
       ...optionalStringProperty('fieldNodeId', stringField(change, 'field_node_id')),
       ...optionalStringProperty('fieldName', stringField(change, 'field_name') ?? stringField(change, 'name')),
       ...optionalStringProperty('fieldType', stringField(change, 'field_type') ?? stringField(change, 'type')),
-      ...optionalStringProperty('from', normalizedChangeValue(change?.from)),
-      ...optionalStringProperty('to', normalizedChangeValue(change?.to)),
-    };
+      ...optionalStringProperty('from', normalizedChangeValue(change.from)),
+      ...optionalStringProperty('to', normalizedChangeValue(change.to)),
+    }];
   });
+}
+
+function isChangeLeaf(change: GitHubWebhookRecord): boolean {
+  return (
+    Object.hasOwn(change, 'from') ||
+    Object.hasOwn(change, 'to') ||
+    Object.hasOwn(change, 'field_node_id') ||
+    Object.hasOwn(change, 'field_name') ||
+    Object.hasOwn(change, 'field_type') ||
+    Object.hasOwn(change, 'type')
+  );
 }
 
 function normalizedCustomPropertyChanges(payload: GitHubWebhookPayload): NormalizedGitHubChange[] {
@@ -2194,7 +2245,7 @@ function normalizedChangeValue(value: unknown): string | undefined {
     return JSON.stringify(value);
   }
 
-  if (typeof value === 'string' && value.trim()) {
+  if (typeof value === 'string') {
     return value;
   }
 
@@ -2404,6 +2455,14 @@ function isInstallationRepositoriesPayload(payload: GitHubWebhookPayload): boole
 
 function isOrganizationResourcePayload(payload: GitHubWebhookPayload): boolean {
   return payload.organization !== undefined && payload.repository === undefined && payload.membership === undefined;
+}
+
+function isOrganizationInvitationPayload(payload: GitHubWebhookPayload): boolean {
+  return (
+    payload.organization !== undefined &&
+    payload.repository === undefined &&
+    (payload.invitation !== undefined || payload.user !== undefined)
+  );
 }
 
 function isMemberTeamPayload(payload: GitHubWebhookPayload): boolean {
