@@ -415,6 +415,80 @@ describe('plugin runtime contract', () => {
     );
   });
 
+  it('does not read unused provider getters when creating workflow contexts', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook', repository: 'reirei-lab/rainrail' },
+      name: 'github.issue',
+      delivery: {
+        id: 'delivery-unused-provider-getter',
+        receivedAt: '2026-06-29T13:00:44.000Z',
+      },
+      occurredAt: '2026-06-29T13:00:44.000Z',
+      subject: { type: 'issue', id: '14' },
+      payload: { action: 'opened' },
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'github://deliveries/delivery-unused-provider-getter',
+      },
+    });
+    const getIssue = vi.fn(async () => ({
+      id: 'issue:14',
+      provider: 'github' as const,
+      repository: 'reirei-lab/rainrail',
+      number: 14,
+      title: 'Lazy providers',
+    }));
+    let forgejoReads = 0;
+    const providers: RuntimeDispatcherContext['providers'] = {
+      tasks: {
+        name: 'mock-github',
+        kind: 'task-provider',
+        getIssue,
+        createComment: async () => ({ id: 'comment:unused' }),
+      },
+      get forgejo(): never {
+        forgejoReads += 1;
+        throw new Error('forgejo provider is not configured');
+      },
+    };
+    const dispatcher = createRuntimeDispatcher({
+      workflows: [
+        defineWorkflowPlugin({
+          name: 'lazy-provider-handler',
+          accepts: (candidate) => candidate.name === 'github.issue',
+          async handle(_handledEvent, context) {
+            return context.providers.tasks.getIssue({
+              provider: 'github',
+              repository: 'reirei-lab/rainrail',
+              number: 14,
+            });
+          },
+        }),
+      ],
+      runtime: mockRuntimeContext({
+        runId: 'dispatch-14',
+        now: () => new Date('2026-06-29T13:01:00.000Z'),
+        providers,
+      }),
+    });
+
+    await expect(dispatcher.dispatch(event)).resolves.toEqual([
+      {
+        pluginName: 'lazy-provider-handler',
+        eventId: 'github-webhook:delivery-unused-provider-getter:github.issue',
+        status: 'fulfilled',
+        value: {
+          id: 'issue:14',
+          provider: 'github',
+          repository: 'reirei-lab/rainrail',
+          number: 14,
+          title: 'Lazy providers',
+        },
+      },
+    ]);
+    expect(forgejoReads).toBe(0);
+  });
+
   it('loads packaged plugins and local handlers into the same event runtime', async () => {
     const event = createEventEnvelope({
       source: { type: 'github', name: 'github-webhook' },
@@ -4053,6 +4127,69 @@ describe('plugin runtime contract', () => {
     expect(dispatchAgent).not.toHaveBeenCalled();
   });
 
+  it('normalizes constructor static helper return values', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: {
+        id: 'delivery-constructor-static-helper-return',
+        receivedAt: '2026-06-29T14:00:00.000Z',
+      },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'github://deliveries/delivery-constructor-static-helper-return',
+      },
+    });
+    const dispatchAgent = vi.fn(async () => ({ sessionKey: 'agent:main:constructor-static-helper-return' }));
+    class RuntimeCapabilityBag {
+      provider = 'codex';
+
+      static getStarter() {
+        return {
+          dispatchAgent: RuntimeCapabilityBag.prototype.dispatchAgent,
+        };
+      }
+
+      dispatchAgent() {
+        return dispatchAgent();
+      }
+    }
+    const loader = createPluginLoader({
+      runtime: mockRuntimeContext({
+        runId: 'run-13',
+        now: () => new Date('2026-06-29T14:01:00.000Z'),
+        capabilities: new RuntimeCapabilityBag() as unknown as RuntimeCapabilities,
+      }),
+    });
+
+    loader.on(
+      'github.issue',
+      async (handledEvent, context) =>
+        (
+          context.capabilities?.constructor as unknown as {
+            getStarter: () => { dispatchAgent?: RuntimeCapabilities['dispatchAgent'] };
+          }
+        ).getStarter().dispatchAgent?.({
+          event: handledEvent,
+          workflow: 'constructor-static-helper-return-handler',
+          runId: context.runId,
+        }),
+      { name: 'constructor-static-helper-return-handler' },
+    );
+
+    const [result] = await loader.dispatch(event);
+
+    expect(result).toMatchObject({
+      pluginName: 'constructor-static-helper-return-handler',
+      eventId: 'github-webhook:delivery-constructor-static-helper-return:github.issue',
+      status: 'rejected',
+    });
+    expect(dispatchAgent).not.toHaveBeenCalled();
+  });
+
   it('does not apply __defineGetter__ to raw capabilities', async () => {
     const event = createEventEnvelope({
       source: { type: 'github', name: 'github-webhook' },
@@ -4770,6 +4907,61 @@ describe('plugin runtime contract', () => {
       {
         pluginName: 'nested-helper-receiver-handler',
         eventId: 'github-webhook:delivery-nested-helper-receiver:github.issue',
+        status: 'fulfilled',
+        value: 'nested',
+      },
+    ]);
+  });
+
+  it('evaluates nested capability accessors with the nested receiver', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: {
+        id: 'delivery-nested-accessor-receiver',
+        receivedAt: '2026-06-29T14:00:00.000Z',
+      },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'github://deliveries/delivery-nested-accessor-receiver',
+      },
+    });
+    const nestedAgents: { name: string; readonly prefix: string } = {
+      name: 'nested',
+      get prefix() {
+        return this.name;
+      },
+    };
+    const loader = createPluginLoader({
+      runtime: mockRuntimeContext({
+        runId: 'run-13',
+        now: () => new Date('2026-06-29T14:01:00.000Z'),
+        capabilities: {
+          provider: 'codex',
+          dispatchAgent: async () => ({ sessionKey: 'agent:main:nested-accessor-receiver' }),
+          agents: nestedAgents,
+        } as RuntimeCapabilities,
+      }),
+    });
+
+    loader.on(
+      'github.issue',
+      (_handledEvent, context) =>
+        (
+          context.capabilities as unknown as {
+            agents: { prefix: string };
+          }
+        ).agents.prefix,
+      { name: 'nested-accessor-receiver-handler', capabilities: ['runtime:start'] },
+    );
+
+    await expect(loader.dispatch(event)).resolves.toEqual([
+      {
+        pluginName: 'nested-accessor-receiver-handler',
+        eventId: 'github-webhook:delivery-nested-accessor-receiver:github.issue',
         status: 'fulfilled',
         value: 'nested',
       },

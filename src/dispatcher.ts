@@ -447,8 +447,8 @@ function createDispatchAgentCapabilityProxy(
       );
     }
 
-    const value = Reflect.get(source, property, capabilities);
     const safeReceiver = createCapabilityView(source);
+    const value = Reflect.get(source, property, safeReceiver);
     if (typeof value === 'function') {
       const rawDispatchAgent = getRawDispatchAgent();
       if (value === rawDispatchAgent) {
@@ -598,8 +598,10 @@ function createCapabilityConstructorView(
           property,
           constructorView,
           prototypeView,
+          capabilities,
           getRawDispatchAgent,
           dispatchAgent,
+          wrapObject,
         );
       },
       getOwnPropertyDescriptor(_target, property): PropertyDescriptor | undefined {
@@ -625,8 +627,10 @@ function createCapabilityConstructorView(
             property,
             constructorView,
             prototypeView,
+            capabilities,
             getRawDispatchAgent,
             dispatchAgent,
+            wrapObject,
           ),
           writable: false,
         };
@@ -645,8 +649,10 @@ function readConstructorProperty(
   property: string | symbol,
   constructorView: object,
   prototypeView: object,
+  capabilities: NonNullable<PluginRuntimeContext['capabilities']>,
   getRawDispatchAgent: () => DispatchAgentCapability | undefined,
   dispatchAgent: DispatchAgentCapability,
+  wrapObject: (object: object) => object,
 ): unknown {
   if (property === 'prototype') {
     return prototypeView;
@@ -658,7 +664,10 @@ function readConstructorProperty(
     return dispatchAgent;
   }
 
-  return typeof value === 'function' ? value.bind(constructorView) : value;
+  return typeof value === 'function'
+    ? (...args: unknown[]) =>
+        callCapabilityFunction(value, capabilities, dispatchAgent, getRawDispatchAgent, constructorView, args, wrapObject)
+    : normalizeCapabilityHelperResult(value, capabilities, constructorView, rawDispatchAgent, dispatchAgent, wrapObject);
 }
 
 function callCapabilityFunction(
@@ -888,18 +897,58 @@ function createGuardedProviders(
   lifecycle: WorkflowLifecycle,
 ): TaskProviderRegistry {
   const providers = options.runtime.providers ?? unavailableProviders;
-  const guardedProviders: TaskProviderRegistry = {
-    ...providers,
-    tasks: createGuardedTaskProvider(options, policy, event, lifecycle, providers.tasks, 'tasks'),
+  const guardedProviderCache = new Map<string, unknown>();
+  const readProvider = (property: string | symbol): unknown => {
+    if (property === 'tasks') {
+      let guardedTasks = guardedProviderCache.get('tasks') as TaskProvider | undefined;
+      if (guardedTasks === undefined) {
+        guardedTasks = createGuardedTaskProvider(options, policy, event, lifecycle, providers.tasks, 'tasks');
+        guardedProviderCache.set('tasks', guardedTasks);
+      }
+
+      return guardedTasks;
+    }
+
+    const providerName = String(property);
+    if (guardedProviderCache.has(providerName)) {
+      return guardedProviderCache.get(providerName);
+    }
+
+    const provider = Reflect.get(providers, property, providers);
+    const guardedProvider = isTaskProvider(provider)
+      ? createGuardedTaskProvider(options, policy, event, lifecycle, provider, providerName)
+      : provider;
+    guardedProviderCache.set(providerName, guardedProvider);
+    return guardedProvider;
   };
 
-  for (const [name, provider] of Object.entries(providers)) {
-    if (name !== 'tasks' && isTaskProvider(provider)) {
-      guardedProviders[name] = createGuardedTaskProvider(options, policy, event, lifecycle, provider, name);
-    }
-  }
+  return new Proxy(
+    {},
+    {
+      get(_target, property) {
+        return readProvider(property);
+      },
+      getOwnPropertyDescriptor(_target, property): PropertyDescriptor | undefined {
+        const descriptor = Reflect.getOwnPropertyDescriptor(providers, property);
+        if (descriptor === undefined) {
+          return undefined;
+        }
 
-  return guardedProviders;
+        return {
+          configurable: true,
+          enumerable: descriptor.enumerable ?? false,
+          value: readProvider(property),
+          writable: false,
+        };
+      },
+      has(_target, property) {
+        return property in providers;
+      },
+      ownKeys() {
+        return Reflect.ownKeys(providers);
+      },
+    },
+  ) as TaskProviderRegistry;
 }
 
 function isTaskProvider(provider: unknown): provider is TaskProvider {
