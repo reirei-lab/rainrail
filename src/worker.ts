@@ -19,6 +19,10 @@ export interface RainrailWorkerBridgeRoom {
   fetch(request: Request): Response | Promise<Response>;
 }
 
+export interface RainrailWorkerExecutionContext {
+  waitUntil(promise: Promise<unknown>): void;
+}
+
 export class RainrailBridgeRoomDurableObject implements RainrailWorkerBridgeRoom {
   readonly #room: CoreRainrailBridgeRoom;
 
@@ -40,8 +44,8 @@ export default {
     return workerApp(env).fetch(request);
   },
 
-  async tail(events: CloudflareTailEvent[], env: RainrailWorkerEnv) {
-    return workerApp(env).tail?.(events);
+  tail(events: CloudflareTailEvent[], env: RainrailWorkerEnv, ctx: RainrailWorkerExecutionContext): void {
+    ctx.waitUntil(workerApp(env).tail?.(events) ?? Promise.resolve([]));
   },
 };
 

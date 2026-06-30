@@ -30,6 +30,7 @@ export function createRainrailNodeServer(options: RainrailNodeServerOptions): Ra
     ...(options.eventsBearerToken === undefined ? {} : { eventsBearerToken: options.eventsBearerToken }),
     runtime: options.runtime ?? 'node',
     ...(options.githubSourceName === undefined ? {} : { githubSourceName: options.githubSourceName }),
+    ...(options.maxWebhookBodyBytes === undefined ? {} : { maxWebhookBodyBytes: options.maxWebhookBodyBytes }),
   });
 
   const server = http.createServer(async (request, response) => {
@@ -41,7 +42,7 @@ export function createRainrailNodeServer(options: RainrailNodeServerOptions): Ra
     try {
       await writeFetchResponse(
         response,
-        await app.fetch(await toFetchRequest(request, options.maxBodyBytes, abortController.signal)),
+        await app.fetch(await toFetchRequest(request, options, abortController.signal)),
         { signal: abortController.signal },
       );
     } catch (error) {
@@ -73,7 +74,7 @@ export function createInMemoryBridgeRoomState(): RainrailBridgeRoomState {
 
 async function toFetchRequest(
   request: IncomingMessage,
-  maxBodyBytes: number | undefined,
+  options: Pick<RainrailNodeServerOptions, 'maxBodyBytes' | 'maxWebhookBodyBytes'>,
   signal: AbortSignal,
 ): Promise<Request> {
   const host = request.headers.host ?? '127.0.0.1';
@@ -97,8 +98,8 @@ async function toFetchRequest(
     signal,
   };
 
-  if (request.method !== undefined && !['GET', 'HEAD'].includes(request.method)) {
-    init.body = await readRequestBody(request, maxBodyBytes);
+  if (request.method === 'POST' && url.pathname === '/webhooks/github') {
+    init.body = await readRequestBody(request, options.maxWebhookBodyBytes ?? options.maxBodyBytes);
   }
 
   return new Request(url, init);

@@ -26,7 +26,8 @@ describe('Rainrail Cloudflare Worker entrypoint', () => {
     }), env);
     expect(webhook.status).toBe(202);
 
-    const tailResults = await rainrailWorker.tail?.([{
+    const waitUntilPromises: Promise<unknown>[] = [];
+    const tailResult = rainrailWorker.tail?.([{
       eventTimestamp: '2026-06-30T12:00:00.000Z',
       outcome: 'ok',
       scriptName: 'rainrail-worker',
@@ -38,8 +39,14 @@ describe('Rainrail Cloudflare Worker entrypoint', () => {
         },
         response: { status: 200 },
       },
-    }], env);
-    expect(tailResults).toEqual([
+    }], env, {
+      waitUntil(promise) {
+        waitUntilPromises.push(promise);
+      },
+    });
+    expect(tailResult).toBeUndefined();
+    expect(waitUntilPromises).toHaveLength(1);
+    await expect(waitUntilPromises[0]).resolves.toEqual([
       {
         ok: true,
         id: 'cloudflare-tail:tail-rainrail-worker-20260630T120000000Z-ray-worker-19:cloudflare.tail',

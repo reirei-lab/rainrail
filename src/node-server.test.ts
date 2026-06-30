@@ -101,6 +101,68 @@ describe('Rainrail Node server', () => {
   it('defaults the Node request body limit to the GitHub webhook payload cap', () => {
     expect(DEFAULT_MAX_REQUEST_BODY_BYTES).toBe(25 * 1024 * 1024);
   });
+
+  it('applies maxWebhookBodyBytes to Node GitHub webhook requests', async () => {
+    const { server } = createRainrailNodeServer({
+      githubWebhookSecret: 'secret',
+      publishToken: 'test-publish-token',
+      eventsBearerToken: 'events-token',
+      maxWebhookBodyBytes: 4,
+    });
+
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const address = server.address();
+    if (address === null || typeof address === 'string') {
+      throw new Error('expected TCP server address');
+    }
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${address.port}/webhooks/github`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-github-event': 'issues',
+          'x-github-delivery': 'oversized-node-webhook',
+          'x-hub-signature-256': 'sha256=invalid',
+        },
+        body: '{"too":"large"}',
+      });
+
+      expect(response.status).toBe(413);
+      await expect(response.json()).resolves.toEqual({ error: 'request_body_too_large' });
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it('does not read bodies for non-webhook routes before method handling', async () => {
+    const { server } = createRainrailNodeServer({
+      githubWebhookSecret: 'secret',
+      publishToken: 'test-publish-token',
+      eventsBearerToken: 'events-token',
+      maxBodyBytes: 4,
+    });
+
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const address = server.address();
+    if (address === null || typeof address === 'string') {
+      throw new Error('expected TCP server address');
+    }
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${address.port}/healthz`, {
+        method: 'POST',
+        body: '{"too":"large"}',
+      });
+
+      expect(response.status).toBe(405);
+      await expect(response.json()).resolves.toEqual({ error: 'method_not_allowed' });
+    } finally {
+      await closeServer(server);
+    }
+  });
 });
 
 async function readUntil(reader: ReadableStreamDefaultReader<Uint8Array>, expected: string): Promise<string> {
