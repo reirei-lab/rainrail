@@ -190,6 +190,8 @@ async function githubAppInstallationToken(
     return waitForSignal(cached.pending, signal);
   }
 
+  throwIfAborted(signal);
+
   const pending = createInstallationToken(config, fetchImpl)
     .then(({ token, expiresAtMs }) => {
       installationTokenCache.set(cacheKey, { token, expiresAtMs });

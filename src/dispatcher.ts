@@ -473,6 +473,10 @@ function createDispatchAgentCapabilityProxy(
   };
 
   const readCapabilityProperty = (source: object, property: string | symbol): unknown => {
+    if (property === 'then') {
+      return undefined;
+    }
+
     if (property === '__lookupGetter__') {
       return (lookupProperty: string | symbol) => (lookupProperty === 'dispatchAgent' ? () => dispatchAgent : undefined);
     }
@@ -515,15 +519,17 @@ function createDispatchAgentCapabilityProxy(
     const value = readCapabilityValue(source, property, safeReceiver);
     if (typeof value === 'function') {
       if (isBuiltinCapabilityCollection(source)) {
-        return (...args: unknown[]) =>
-          normalizeCapabilityHelperResult(
-            Reflect.apply(value, source, args),
-            capabilities,
-            safeReceiver,
-            getRawDispatchAgent(),
-            dispatchAgent,
-            (object) => createCapabilityView(object),
-          );
+        return (...args: unknown[]) => callCapabilityCollectionMethod(
+          source,
+          property,
+          value,
+          args,
+          capabilities,
+          safeReceiver,
+          getRawDispatchAgent(),
+          dispatchAgent,
+          (object) => createCapabilityView(object),
+        );
       }
 
       return bindCapabilityFunction(value, safeReceiver, property);
@@ -762,6 +768,105 @@ function readConstructorProperty(
     : normalizeCapabilityHelperResult(value, capabilities, constructorView, rawDispatchAgent, dispatchAgent, wrapObject);
 }
 
+function callCapabilityCollectionMethod(
+  source: Map<unknown, unknown> | Set<unknown> | WeakMap<object, unknown> | WeakSet<object>,
+  property: string | symbol,
+  method: Function,
+  args: unknown[],
+  capabilities: NonNullable<PluginRuntimeContext['capabilities']>,
+  safeReceiver: object,
+  rawDispatchAgent: DispatchAgentCapability | undefined,
+  dispatchAgent: DispatchAgentCapability,
+  wrapObject: (object: object) => object,
+): unknown {
+  const normalize = (value: unknown) =>
+    normalizeCapabilityHelperResult(value, capabilities, safeReceiver, rawDispatchAgent, dispatchAgent, wrapObject);
+
+  if (source instanceof Map) {
+    if (property === 'get') {
+      return normalize(source.get(args[0]));
+    }
+
+    if (property === 'forEach') {
+      const callback = args[0];
+      if (typeof callback !== 'function') {
+        return Reflect.apply(method, source, args);
+      }
+
+      return source.forEach((value, key) => {
+        Reflect.apply(callback, args[1], [normalize(value), normalize(key), safeReceiver]);
+      });
+    }
+
+    if (property === 'values') {
+      return createNormalizingIterator(source.values(), normalize);
+    }
+
+    if (property === 'keys') {
+      return createNormalizingIterator(source.keys(), normalize);
+    }
+
+    if (property === 'entries' || property === Symbol.iterator) {
+      return createNormalizingIterator(source.entries(), ([key, value]) => [normalize(key), normalize(value)]);
+    }
+  }
+
+  if (source instanceof Set) {
+    if (property === 'forEach') {
+      const callback = args[0];
+      if (typeof callback !== 'function') {
+        return Reflect.apply(method, source, args);
+      }
+
+      return source.forEach((value) => {
+        const normalized = normalize(value);
+        Reflect.apply(callback, args[1], [normalized, normalized, safeReceiver]);
+      });
+    }
+
+    if (property === 'values' || property === 'keys' || property === Symbol.iterator) {
+      return createNormalizingIterator(source.values(), normalize);
+    }
+
+    if (property === 'entries') {
+      return createNormalizingIterator(source.values(), (value) => {
+        const normalized = normalize(value);
+        return [normalized, normalized];
+      });
+    }
+  }
+
+  if (source instanceof WeakMap && property === 'get') {
+    return normalize(source.get(args[0] as object));
+  }
+
+  return normalizeCapabilityHelperResult(
+    Reflect.apply(method, source, args),
+    capabilities,
+    safeReceiver,
+    rawDispatchAgent,
+    dispatchAgent,
+    wrapObject,
+  );
+}
+
+function createNormalizingIterator<TInput, TOutput>(
+  iterator: Iterator<TInput>,
+  normalize: (value: TInput) => TOutput,
+): IterableIterator<TOutput> {
+  return {
+    next(...args: [] | [undefined]) {
+      const result = iterator.next(...args);
+      return result.done === true
+        ? { done: true, value: undefined }
+        : { done: false, value: normalize(result.value) };
+    },
+    [Symbol.iterator]() {
+      return this;
+    },
+  };
+}
+
 function callCapabilityFunction(
   helper: Function,
   capabilities: NonNullable<PluginRuntimeContext['capabilities']>,
@@ -858,6 +963,10 @@ function normalizeCapabilityHelperResult(
     return dispatchAgent;
   }
 
+  if (typeof value === 'function' && isBoundDispatchAgentAlias(value, undefined, rawDispatchAgent)) {
+    return dispatchAgent;
+  }
+
   if (isPromiseLike(value)) {
     return normalizeCapabilityPromiseResult(value, capabilities, safeReceiver, rawDispatchAgent, dispatchAgent, wrapObject);
   }
@@ -919,7 +1028,7 @@ function capabilityAccessorMayResolveDispatchAgent(source: object, property: str
 
 function helperMayResolveDispatchAgent(helper: Function): boolean {
   try {
-    return /this\s*(?:\.\s*(?:dispatchAgent|startAgent)|\[[^\]]*(?:dispatch|start)[^\]]*Agent[^\]]*\])/u.test(
+    return /this\s*(?:(?:\?\.|\.)\s*(?:dispatchAgent|startAgent)|(?:\?\.|\s*)\[[^\]]*(?:dispatch|start)[^\]]*Agent[^\]]*\])/u.test(
       Function.prototype.toString.call(helper),
     );
   } catch {
@@ -933,12 +1042,19 @@ function shouldWrapCapabilityObject(value: unknown): value is object {
   }
 
   const tag = Object.prototype.toString.call(value);
-  return tag === '[object Object]' || tag === '[object Array]' || tag === '[object Map]' || tag === '[object Set]';
+  return tag === '[object Object]'
+    || tag === '[object Array]'
+    || tag === '[object Map]'
+    || tag === '[object Set]'
+    || tag === '[object WeakMap]'
+    || tag === '[object WeakSet]';
 }
 
-function isBuiltinCapabilityCollection(value: object): value is Map<unknown, unknown> | Set<unknown> {
+function isBuiltinCapabilityCollection(
+  value: object,
+): value is Map<unknown, unknown> | Set<unknown> | WeakMap<object, unknown> | WeakSet<object> {
   const tag = Object.prototype.toString.call(value);
-  return tag === '[object Map]' || tag === '[object Set]';
+  return tag === '[object Map]' || tag === '[object Set]' || tag === '[object WeakMap]' || tag === '[object WeakSet]';
 }
 
 function isBoundDispatchAgentAlias(
@@ -948,10 +1064,6 @@ function isBoundDispatchAgentAlias(
 ): boolean {
   if (!value.name.startsWith('bound ')) {
     return false;
-  }
-
-  if (typeof property === 'string' && /(?:dispatch|start).*agent/i.test(property)) {
-    return true;
   }
 
   if (rawDispatchAgent?.name && value.name === `bound ${rawDispatchAgent.name}`) {
@@ -983,14 +1095,12 @@ async function callDispatchAgent(
     throw reason;
   }
 
-  const dispatchAgent = getDispatchAgent();
-  if (dispatchAgent === undefined) {
-    const reason = new Error('Runtime capability dispatchAgent is not available');
-    await recordAudit(options, policy, event, 'startRuntime', 'rejected', reason);
-    throw reason;
-  }
-
   try {
+    const dispatchAgent = getDispatchAgent();
+    if (dispatchAgent === undefined) {
+      throw new Error('Runtime capability dispatchAgent is not available');
+    }
+
     const value = await dispatchAgent.call(capabilities, request, {
       signal: combineAbortSignals(lifecycle.signal, callerSignal),
     });

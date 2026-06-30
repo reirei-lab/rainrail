@@ -127,6 +127,31 @@ describe('getGitHubToken', () => {
     }
   });
 
+  it('does not start a GitHub App token request when the caller signal is already aborted', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'rainrail-github-app-'));
+    const keyPath = join(directory, 'private-key.pem');
+    const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+    writeFileSync(keyPath, privateKey.export({ type: 'pkcs1', format: 'pem' }), 'utf8');
+    const controller = new AbortController();
+    controller.abort(new Error('workflow already aborted'));
+
+    try {
+      const config = {
+        githubApp: {
+          appId: '12345',
+          installationId: '67890',
+          privateKeyPath: keyPath,
+        },
+      };
+      const fetchImpl = vi.fn(async () => new Response('{}', { status: 201 })) as typeof fetch;
+
+      await expect(getGitHubToken(config, fetchImpl, controller.signal)).rejects.toThrow('workflow already aborted');
+      expect(fetchImpl).not.toHaveBeenCalled();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('prefers explicitly configured tokens over GitHub App auth', async () => {
     let requestCount = 0;
     const token = await getGitHubToken({
