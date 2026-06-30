@@ -45,6 +45,7 @@ export interface RuntimeDispatcher {
 
 type DispatchAgentCapability = NonNullable<NonNullable<PluginRuntimeContext['capabilities']>['dispatchAgent']>;
 type DispatchAgentResolver = () => DispatchAgentCapability | undefined;
+const maxTimerDelayMs = 2 ** 31 - 1;
 
 interface WorkflowExecutionPolicy {
   name: string;
@@ -106,7 +107,7 @@ export function createRuntimeDispatcher(options: RuntimeDispatcherOptions): Runt
             try {
               const lifecycle = createWorkflowLifecycle(abort.controller.signal);
               const context = createWorkflowContext(options, policy, event, lifecycle);
-              const workflowTimeoutMs = metadata.timeoutMs ?? options.defaultTimeoutMs;
+              const workflowTimeoutMs = normalizeTimeoutMs(metadata.timeoutMs ?? options.defaultTimeoutMs);
               workflowStarted = true;
               value = await runWorkflow(() => workflow.handle(event, context), workflowTimeoutMs, abort, lifecycle);
             } finally {
@@ -194,8 +195,9 @@ function createWorkflowExecutionRecord(workflow: WorkflowPlugin): WorkflowExecut
   const timeoutDescriptor = findPropertyDescriptor(workflow, 'timeoutMs');
   if (timeoutDescriptor !== undefined) {
     if ('value' in timeoutDescriptor) {
-      if (timeoutDescriptor.value !== undefined) {
-        record.timeoutMs = timeoutDescriptor.value as number;
+      const timeoutMs = normalizeTimeoutMs(timeoutDescriptor.value);
+      if (timeoutMs !== undefined) {
+        record.timeoutMs = timeoutMs;
       }
     } else {
       const timeoutReceiver = createWorkflowMetadataReceiverSnapshot(workflow);
@@ -211,18 +213,7 @@ function createWorkflowExecutionRecord(workflow: WorkflowPlugin): WorkflowExecut
         }
       };
       record.timeoutReceiver = timeoutReceiver;
-      if (workflow.accepts !== undefined && functionSourceMentions(workflow.accepts, 'timeout')) {
-        try {
-          const timeoutMs = record.timeoutAccessor();
-          if (timeoutMs !== undefined) {
-            record.timeoutMs = timeoutMs;
-          }
-        } catch (timeoutError) {
-          record.timeoutError = timeoutError;
-        }
-      } else {
-        record.timeoutSnapshot = false;
-      }
+      record.timeoutSnapshot = false;
     }
   }
 
@@ -244,8 +235,9 @@ function resolveWorkflowExecutionMetadata(record: WorkflowExecutionRecord): Work
   if (!resolved.timeoutSnapshot) {
     try {
       const timeoutMs = record.timeoutAccessor === undefined ? record.workflow.timeoutMs : record.timeoutAccessor();
-      if (timeoutMs !== undefined) {
-        resolved.timeoutMs = timeoutMs;
+      const normalizedTimeoutMs = normalizeTimeoutMs(timeoutMs);
+      if (normalizedTimeoutMs !== undefined) {
+        resolved.timeoutMs = normalizedTimeoutMs;
       }
     } catch (timeoutError) {
       resolved.timeoutError = timeoutError;
@@ -254,6 +246,12 @@ function resolveWorkflowExecutionMetadata(record: WorkflowExecutionRecord): Work
   }
 
   return resolved;
+}
+
+function normalizeTimeoutMs(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= maxTimerDelayMs
+    ? value
+    : undefined;
 }
 
 function findPropertyDescriptor(target: object, property: string | symbol): PropertyDescriptor | undefined {
@@ -1355,7 +1353,7 @@ function isBoundDispatchAgentAlias(
     return true;
   }
 
-  return false;
+  return rawDispatchAgent !== undefined && isDispatchAgentAliasProperty(property) && value.name === 'bound ';
 }
 
 async function callDispatchAgent(

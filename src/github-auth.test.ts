@@ -77,7 +77,7 @@ describe('getGitHubToken', () => {
     }
   });
 
-  it('does not bind shared GitHub App token fetches to caller abort signals', async () => {
+  it('passes the caller abort signal to GitHub App token fetches', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'rainrail-github-app-'));
     const keyPath = join(directory, 'private-key.pem');
     const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
@@ -121,7 +121,7 @@ describe('getGitHubToken', () => {
       await expect(first).rejects.toThrow('first workflow timed out');
       await expect(second).resolves.toBe('installation-token');
       expect(fetchImpl).toHaveBeenCalledOnce();
-      expect(requests[0]?.signal).toBeUndefined();
+      expect(requests[0]?.signal).toBe(firstController.signal);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
@@ -195,7 +195,13 @@ describe('getGitHubToken', () => {
 
   it('applies caller abort signals while waiting for gh CLI fallback tokens', async () => {
     const controller = new AbortController();
-    const cliRunner = vi.fn(async () => new Promise<{ stdout: string; stderr: string }>(() => undefined));
+    let runnerSignal: AbortSignal | undefined;
+    const cliRunner = vi.fn(
+      async (_file: string, _args: string[], options: { maxBuffer: number; signal?: AbortSignal }) => {
+      runnerSignal = options.signal;
+        return await new Promise<{ stdout: string; stderr: string }>(() => undefined);
+      },
+    );
     const token = getGitHubFallbackAuthToken({
       githubApp: {
         appId: '12345',
@@ -204,10 +210,11 @@ describe('getGitHubToken', () => {
       },
     }, cliRunner, controller.signal);
 
+    await vi.waitFor(() => expect(cliRunner).toHaveBeenCalledOnce());
     controller.abort(new Error('fallback lookup aborted'));
 
     await expect(token).rejects.toThrow('fallback lookup aborted');
-    expect(cliRunner).toHaveBeenCalledOnce();
+    expect(runnerSignal).toBe(controller.signal);
   });
 
   it('does not start gh CLI fallback lookup when the caller signal is already aborted', async () => {

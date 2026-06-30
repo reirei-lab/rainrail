@@ -176,7 +176,7 @@ describe('createGitHubTaskProvider', () => {
     );
   });
 
-  it('keeps GitHub App token fetches independent from task context abort signals', async () => {
+  it('passes task context abort signals to GitHub App token fetches', async () => {
     const controller = new AbortController();
     const directory = mkdtempSync(join(tmpdir(), 'rainrail-provider-auth-signal-'));
     const keyPath = join(directory, 'private-key.pem');
@@ -223,7 +223,7 @@ describe('createGitHubTaskProvider', () => {
       expect(fetchImpl).toHaveBeenNthCalledWith(
         1,
         'https://api.github.com/app/installations/67890/access_tokens',
-        expect.not.objectContaining({
+        expect.objectContaining({
           signal: controller.signal,
         }),
       );
