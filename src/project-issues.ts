@@ -79,7 +79,10 @@ export function getUpcomingProjectIssueCandidate(
         isRunnableForAgent(candidate, resolved.assigneeLogin)
         && !isClosedProjectIssue(candidate)
         && !hasUnfinishedBlocker(candidate)
-        && normalizeToken(candidate.status) === normalizeToken(resolved.backlogStatus)
+        && (
+          normalizeToken(candidate.status) === normalizeToken(resolved.backlogStatus)
+          || normalizeToken(candidate.status) === normalizeToken(resolved.todoStatus)
+        )
       );
       if (child !== undefined) {
         return child;
@@ -120,8 +123,14 @@ export function getInProgressProjectIssues(
     && isRunnableForAgent(issue, resolved.assigneeLogin)
     && assignedTodoParents.some((parent) => isChildOf(issue, parent))
   );
+  const runnableChildInProgressIssues = issues.filter((issue) =>
+    issue.parent !== undefined
+    && !isClosedProjectIssue(issue)
+    && normalizeToken(issue.status) === inProgressStatus
+    && isRunnableForAgent(issue, resolved.assigneeLogin)
+  );
 
-  return uniqueIssues([...assignedInProgressIssues, ...childInProgressIssues]);
+  return uniqueIssues([...assignedInProgressIssues, ...childInProgressIssues, ...runnableChildInProgressIssues]);
 }
 
 export function isProjectIssueAssignedTo(issue: ProjectIssue, assigneeLogin: string): boolean {

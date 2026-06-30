@@ -199,15 +199,15 @@ async function reconcileProjectIssueClaimState(
     const lock = await loadProjectIssueClaimLockForIssue(issue, fetchImpl, auth);
     if (lock?.dispatchedAt !== undefined && lock.projectItemId === issue.id) {
       const current = await loadProjectItemStatus(issue.id, fetchImpl, auth, config);
-      if (!isRestorableDispatchedClaimStatus(current, config)) {
-        return { ...issue, ...(current.status === undefined ? {} : { status: current.status }) };
+      if (!isRestorableDispatchedClaimStatus(current, config) || !isProjectIssueStillStartable(current, issue, config)) {
+        return projectIssueWithCurrentStatus(issue, current);
       }
       if (isFinalizedProjectIssueClaim(current, lock, issue)) {
         if (lock.startingLockReadFailed === true) {
-          return issue;
+          return projectIssueWithCurrentStatus(issue, current);
         }
         await deleteProjectIssueClaimLocks(dispatchedLockClaim(issue, lock), fetchImpl, auth).catch(() => undefined);
-        return issue;
+        return projectIssueWithCurrentStatus(issue, current);
       }
       return restoreDispatchedProjectIssueClaim(config, issue, lock, fetchImpl, auth);
     }
@@ -1191,6 +1191,32 @@ function assertProjectIssueExecutionConditions(status: ProjectItemStatus, issue:
   if (hasUnfinishedBlocker(status.blockedBy)) {
     throw new Error('GitHub Project item is no longer claimable');
   }
+}
+
+function isProjectIssueStillStartable(
+  status: ProjectItemStatus,
+  issue: ProjectIssue,
+  config: GitHubProjectTaskQueueConfig,
+): boolean {
+  try {
+    assertProjectIssueExecutionConditions(status, issue);
+  } catch {
+    return false;
+  }
+  return isStillOwnedByAgent(status.assigneeLogins, issue.assigneeLogins, config.assigneeLogin);
+}
+
+function projectIssueWithCurrentStatus(issue: ProjectIssue, current: ProjectItemStatus): ProjectIssue {
+  const { parent: _parent, blockedBy: _blockedBy, ...rest } = issue;
+  return {
+    ...rest,
+    ...(current.status === undefined ? {} : { status: current.status }),
+    ...(current.contentType === undefined ? {} : { contentType: current.contentType }),
+    ...(current.state === undefined ? {} : { state: current.state }),
+    ...(current.parent === undefined ? {} : { parent: current.parent }),
+    blockedBy: current.blockedBy ?? [],
+    assigneeLogins: current.assigneeLogins,
+  };
 }
 
 async function assertParentIssueExecutionConditions(

@@ -108,6 +108,26 @@ describe('project issue selection', () => {
     ])).toEqual(fallback);
   });
 
+  it('selects a ready todo child before its parent', () => {
+    const child = issue('child', {
+      status: 'Todo',
+      assigneeLogins: ['reirei-agent'],
+      repository: 'reirei-lab/rainrail',
+      number: 22,
+      parent: { repository: 'reirei-lab/rainrail', number: 21 },
+    });
+
+    expect(getNextProjectIssueToStart([
+      issue('parent', {
+        status: 'Todo',
+        assigneeLogins: ['reirei-agent'],
+        repository: 'reirei-lab/rainrail',
+        number: 21,
+      }),
+      child,
+    ])).toEqual(child);
+  });
+
   it('does not start a backlog child while a sibling is already in progress', () => {
     const fallback = issue('issue_30', {
       status: 'Todo',
@@ -139,6 +159,24 @@ describe('project issue selection', () => {
       }),
       fallback,
     ], { maxConcurrentAgentTasks: 2 })).toEqual(fallback);
+  });
+
+  it('counts unassigned in-progress children even after the parent leaves todo', () => {
+    expect(getInProgressProjectIssues([
+      issue('parent', {
+        status: 'Done',
+        assigneeLogins: ['other-agent'],
+        repository: 'reirei-lab/rainrail',
+        number: 21,
+      }),
+      issue('child', {
+        status: 'In Progress',
+        assigneeLogins: [],
+        repository: 'reirei-lab/rainrail',
+        number: 22,
+        parent: { repository: 'reirei-lab/rainrail', number: 21 },
+      }),
+    ])).toHaveLength(1);
   });
 
   it('does not select children assigned to another agent', () => {
