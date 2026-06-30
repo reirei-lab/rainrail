@@ -37,6 +37,9 @@ routing できる。
 Cloudflare tail source は Worker tail payload の `exceptions` が空でない場合に
 `cloudflare.error` に正規化する。`outcome` が `exception` の場合も、例外配列が
 欠落していても error として routing できるよう `cloudflare.error` にする。
+`exceededCpu`、`exceededMemory`、`canceled`、`scriptNotFound` などの失敗 outcome も
+`cloudflare.error` とし、`payload.action` には Cloudflare outcome の camelCase 表記を
+保つ。
 それ以外は `cloudflare.tail` に正規化する。`subject` は `worker` で、
 `scriptName` から短い安全な id を作る。delivery id と
 `cloudflare://deliveries/...` 参照も storage allowlist に通る短い token にし、

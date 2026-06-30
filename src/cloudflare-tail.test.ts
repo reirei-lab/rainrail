@@ -138,6 +138,24 @@ describe('Cloudflare tail source', () => {
     });
   });
 
+  it('preserves failure outcome spelling and routes it as cloudflare.error', async () => {
+    const event = await createCloudflareTailEvent({
+      tailEvent: cloudflareTailFixture({
+        outcome: 'exceededCpu',
+        status: 200,
+        exceptions: [],
+      }),
+      receivedAt: new Date('2026-06-15T08:12:01.000Z'),
+    });
+
+    expect(event.name).toBe('cloudflare.error');
+    expect(event.payload).toMatchObject({
+      action: 'exceededCpu',
+      status: '200',
+      conclusion: 'failure',
+    });
+  });
+
   it('publishes Cloudflare tail batches into the Rainrail events stream', async () => {
     const storage = fakeState();
     const room = new RainrailBridgeRoom(storage, { publishToken: TEST_PUBLISH_TOKEN, replayLimit: 10 });
@@ -282,6 +300,23 @@ describe('Cloudflare tail source', () => {
     expect(result[0]?.ok).toBe(true);
     expect(result[0]?.id.length).toBeLessThanOrEqual(128);
     expect(storage.storedEvents()).toHaveLength(1);
+  });
+
+  it('does not collapse long fallback suffixes to unknown when preserving their ends', async () => {
+    const first = await createCloudflareTailEvent({
+      tailEvent: cloudflareTailFixture({ outcome: 'ok', cfRay: null }),
+      receivedAt: new Date('2026-06-15T08:12:01.000Z'),
+      fallbackDeliveryId: `${'a'.repeat(40)}-${'b'.repeat(31)}`,
+    });
+    const second = await createCloudflareTailEvent({
+      tailEvent: cloudflareTailFixture({ outcome: 'ok', cfRay: null }),
+      receivedAt: new Date('2026-06-15T08:12:01.000Z'),
+      fallbackDeliveryId: `${'c'.repeat(40)}-${'d'.repeat(31)}`,
+    });
+
+    expect(first.delivery.id).not.toContain('unknown-ray');
+    expect(second.delivery.id).not.toContain('unknown-ray');
+    expect(second.id).not.toBe(first.id);
   });
 });
 

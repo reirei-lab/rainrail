@@ -1,6 +1,8 @@
 import { createEventEnvelope, type RainrailEventEnvelope } from './events.js';
 import { defineSourcePlugin, type SourcePlugin, type SourcePluginNormalizeContext } from './source-plugin.js';
 
+const FAILURE_OUTCOMES = new Set(['exception', 'exceededCpu', 'exceededMemory', 'canceled', 'scriptNotFound']);
+
 export interface CloudflareTailEvent {
   eventTimestamp?: number | string;
   outcome?: unknown;
@@ -227,11 +229,11 @@ function randomDeliverySuffix(): string {
 function normalizeAction(outcome: unknown, exceptions: CloudflareTailException[]): string {
   if (exceptions.length > 0) return 'exception';
 
-  return safeIdentifierSegment(optionalString(outcome) ?? 'invocation', 'unknown');
+  return safeActionToken(optionalString(outcome) ?? 'invocation', 'unknown');
 }
 
 function isCloudflareError(action: string, exceptions: CloudflareTailException[]): boolean {
-  return exceptions.length > 0 || action === 'exception';
+  return exceptions.length > 0 || FAILURE_OUTCOMES.has(action);
 }
 
 function inferConclusion(
@@ -239,7 +241,7 @@ function inferConclusion(
   status: string | null,
   exceptions: CloudflareTailException[],
 ): CloudflareTailPayload['conclusion'] {
-  if (exceptions.length > 0 || action === 'exception') return 'failure';
+  if (isCloudflareError(action, exceptions)) return 'failure';
 
   const statusCode = status === null ? undefined : Number.parseInt(status, 10);
   if (statusCode !== undefined && statusCode >= 500) return 'failure';
@@ -304,6 +306,15 @@ function safeIdentifierSegment(value: string, fallback: string, maxLength = 64):
   return normalized.length > 0 && /^[a-z0-9]/u.test(normalized) ? normalized : fallback;
 }
 
+function safeActionToken(value: string, fallback: string): string {
+  const normalized = value
+    .trim()
+    .replace(/[^A-Za-z0-9_.:-]+/gu, '-')
+    .replace(/^-+|-+$/gu, '');
+
+  return normalized.length > 0 && /^[A-Za-z0-9]/u.test(normalized) ? normalized : fallback;
+}
+
 function safeDeliveryReferenceSegment(
   value: string,
   fallback: string,
@@ -315,9 +326,12 @@ function safeDeliveryReferenceSegment(
     .toLowerCase()
     .replace(/[^a-z0-9_.-]+/gu, '-')
     .replace(/^-+|-+$/gu, '');
-  const truncated = options.preserveEnd === true
+  const truncatedRaw = options.preserveEnd === true
     ? normalized.slice(-maxLength)
     : normalized.slice(0, maxLength);
+  const truncated = truncatedRaw
+    .replace(/^[^a-z0-9]+/u, '')
+    .replace(/[^a-z0-9]+$/u, '');
 
   return truncated.length > 0 && /^[a-z0-9]/u.test(truncated) ? truncated : fallback;
 }
