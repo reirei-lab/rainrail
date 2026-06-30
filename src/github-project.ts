@@ -1038,6 +1038,7 @@ function blockedBy(content: Record<string, unknown>): ProjectIssueReference[] {
   if (!isRecord(blockedByIssues) || !Array.isArray(blockedByIssues.nodes)) {
     return [];
   }
+  const openBlockerCount = openBlockedByCount(content);
   const blockers = blockedByIssues.nodes.flatMap((node) => {
     if (!isRecord(node)) {
       return [];
@@ -1045,14 +1046,25 @@ function blockedBy(content: Record<string, unknown>): ProjectIssueReference[] {
     const reference = issueReference(node);
     return reference === undefined ? [] : [reference];
   });
-  if (
-    typeof blockedByIssues.totalCount === 'number'
-    && blockedByIssues.totalCount > blockers.length
-    && !blockers.some((blocker) => blocker.state?.trim().toLowerCase() !== 'closed')
-  ) {
-    blockers.push({ state: 'OPEN' });
+  const openBlockers = blockers.filter((blocker) => blocker.state?.trim().toLowerCase() !== 'closed');
+  if (openBlockerCount === undefined) {
+    return openBlockers;
   }
-  return blockers;
+  if (openBlockerCount <= 0) {
+    return [];
+  }
+  if (openBlockers.length >= openBlockerCount) {
+    return openBlockers;
+  }
+  return [...openBlockers, { state: 'OPEN' }];
+}
+
+function openBlockedByCount(content: Record<string, unknown>): number | undefined {
+  const summary = content.issueDependenciesSummary;
+  if (!isRecord(summary) || typeof summary.blockedBy !== 'number') {
+    return undefined;
+  }
+  return summary.blockedBy;
 }
 
 function issueReference(issue: Record<string, unknown>): ProjectIssueReference | undefined {
@@ -1290,7 +1302,8 @@ const projectIssuesQuery = `
                 assignees(first: 20) { nodes { login } }
                 parent { number title state url repository { nameWithOwner } }
                 subIssuesSummary { total }
-                blockedBy(first: 100, states: [OPEN]) { totalCount nodes { number title state url repository { nameWithOwner } } }
+                issueDependenciesSummary { blockedBy }
+                blockedBy(first: 100) { totalCount nodes { number title state url repository { nameWithOwner } } }
               }
               ... on DraftIssue {
                 id

@@ -1971,7 +1971,9 @@ describe('createGitHubProjectTaskQueueProvider', () => {
     const issues = await provider.listProjectIssues();
     expect(issues).toMatchObject([{ id: 'item_21' }]);
     expect(issues[0]?.blockedBy).toBeUndefined();
-    expect(calls[0]?.query).toContain('blockedBy(first: 100, states: [OPEN])');
+    expect(calls[0]?.query).toContain('issueDependenciesSummary { blockedBy }');
+    expect(calls[0]?.query).toContain('blockedBy(first: 100)');
+    expect(calls[0]?.query).not.toContain('states: [OPEN]');
   });
 
   it('uses the fixed status alias when listing custom status fields', async () => {
@@ -2389,8 +2391,9 @@ function projectItem(input: {
         defaultBranchRef: { target: { oid: 'base_sha', tree: { oid: 'base_tree' } } },
       },
       assignees: { nodes: input.assignees.map((login) => ({ login })) },
+      issueDependenciesSummary: { blockedBy: input.blockedByOpenTotal ?? 0 },
       blockedBy: {
-        totalCount: input.blockedByOpenTotal ?? 0,
+        totalCount: 101,
         nodes: [],
       },
     },
