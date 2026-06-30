@@ -100,9 +100,14 @@ export class RainrailBridgeRoom {
         }
 
         const { event } = eventResult;
-        if (!this.#hasRecentEventId(event.id)) {
-          await this.#state.storage.put(RECENT_EVENTS_KEY, this.#nextRecentEvents(event));
+        const recentEvents = await this.#loadCurrentRecentEvents();
+        if (!recentEvents.some((recentEvent) => recentEvent.id === event.id)) {
+          const nextRecentEvents = this.#nextRecentEvents(recentEvents, event);
+          await this.#state.storage.put(RECENT_EVENTS_KEY, nextRecentEvents);
+          this.#bus.loadReplay(nextRecentEvents.slice(0, -1));
           this.#bus.publish(event);
+        } else {
+          this.#bus.loadReplay(recentEvents);
         }
       } catch {
         return new Response('publish failed\n', { status: 500 });
@@ -162,14 +167,17 @@ export class RainrailBridgeRoom {
     return this.#loading;
   }
 
-  #nextRecentEvents(event: RainrailEventEnvelope): RainrailEventEnvelope[] {
-    if (this.#replayLimit <= 0) return [];
+  async #loadCurrentRecentEvents(): Promise<RainrailEventEnvelope[]> {
+    const stored = await this.#state.storage.get(RECENT_EVENTS_KEY);
+    const storedRecentEvents = Array.isArray(stored) ? stored.flatMap(validateStoredReplayEvent) : [];
 
-    return [...this.#bus.recentEvents, event].slice(-this.#replayLimit);
+    return mergeRecentEvents([...storedRecentEvents, ...this.#bus.recentEvents], this.#replayLimit);
   }
 
-  #hasRecentEventId(id: string): boolean {
-    return this.#bus.recentEvents.some((event) => event.id === id);
+  #nextRecentEvents(recentEvents: RainrailEventEnvelope[], event: RainrailEventEnvelope): RainrailEventEnvelope[] {
+    if (this.#replayLimit <= 0) return [];
+
+    return mergeRecentEvents([...recentEvents, event], this.#replayLimit);
   }
 }
 
@@ -223,12 +231,12 @@ function validatePublishEnvelope(value: unknown): RainrailEventEnvelope {
     subject: {
       type: subjectType,
       id: subjectId,
-      ...optionalString(subject, 'url'),
+      ...optionalUrl(subject, 'url'),
     },
     payload: normalizePayload(value.payload),
     rawPayload: {
       kind: rawPayloadKind,
-      reference: rawPayloadReference,
+      reference: sanitizeUrl(rawPayloadReference),
       ...optionalString(rawPayload, 'contentType'),
       ...optionalString(rawPayload, 'sha256'),
     },
@@ -271,6 +279,27 @@ function optionalString(record: Record<string, unknown>, key: string): Record<st
   return { [key]: record[key] };
 }
 
+function optionalUrl(record: Record<string, unknown>, key: string): Record<string, string> {
+  if (!(key in record)) return {};
+
+  if (typeof record[key] !== 'string') {
+    throw new TypeError(`${key} must be a string`);
+  }
+
+  return { [key]: sanitizeUrl(record[key]) };
+}
+
+function sanitizeUrl(value: string): string {
+  try {
+    const url = new URL(value);
+    url.search = '';
+    url.hash = '';
+    return url.toString();
+  } catch {
+    return value;
+  }
+}
+
 function normalizePayload(value: unknown): unknown {
   if (!isRecord(value)) {
     return {};
@@ -308,4 +337,15 @@ function abortedPublishResponse(): Response {
 
 function storageRestoreFailedResponse(): Response {
   return new Response('storage restore failed\n', { status: 500 });
+}
+
+function mergeRecentEvents(events: RainrailEventEnvelope[], replayLimit: number): RainrailEventEnvelope[] {
+  if (replayLimit <= 0) return [];
+
+  const merged = new Map<string, RainrailEventEnvelope>();
+  for (const event of events) {
+    merged.set(event.id, event);
+  }
+
+  return [...merged.values()].slice(-replayLimit);
 }

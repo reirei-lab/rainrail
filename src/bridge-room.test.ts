@@ -158,6 +158,20 @@ describe('Rainrail bridge room', () => {
     await reader?.cancel();
   });
 
+  it('merges the latest storage snapshot before publishing from a stale room', async () => {
+    const storage = fakeState();
+    const staleRoom = new RainrailBridgeRoom(storage, { replayLimit: 10 });
+    const otherRoom = new RainrailBridgeRoom(storage, { replayLimit: 10 });
+    const first = fixtureEvent('delivery-1', 'github.issue');
+    const second = fixtureEvent('delivery-2', 'cloudflare.tail');
+
+    expect((await staleRoom.fetch(new Request('https://rainrail.local/healthz'))).status).toBe(200);
+    expect((await otherRoom.fetch(publishRequest(first))).status).toBe(200);
+    expect((await staleRoom.fetch(publishRequest(second))).status).toBe(200);
+
+    expect(storage.storedEvents().map((event) => event.id)).toEqual([first.id, second.id]);
+  });
+
   it('returns stable 500 responses when storage restore fails for GET endpoints', async () => {
     const room = new RainrailBridgeRoom(failingGetState(), { replayLimit: 10 });
 
@@ -292,6 +306,11 @@ describe('Rainrail bridge room', () => {
     const room = new RainrailBridgeRoom(storage, { replayLimit: 10 });
     const event = {
       ...fixtureEvent('delivery-1', 'github.issue'),
+      subject: {
+        type: 'issue',
+        id: 'delivery-1',
+        url: 'https://github.com/reirei-lab/rainrail/issues/17?token=secret-subject-token#secret-fragment',
+      },
       links: { raw: 'https://example.test/webhook?token=secret-link-token' },
       payload: {
         action: 'opened',
@@ -308,7 +327,7 @@ describe('Rainrail bridge room', () => {
       rawBody: 'secret raw webhook body',
       rawPayload: {
         kind: 'external-reference',
-        reference: 'test://delivery-1',
+        reference: 'https://example.test/raw/delivery-1?token=secret-reference-token#secret-fragment',
         secret: 'token-like value',
       },
     };
@@ -319,11 +338,13 @@ describe('Rainrail bridge room', () => {
     expect(storage.storedEvents()).toHaveLength(1);
     expect(storage.storedEvents()[0]).not.toHaveProperty('rawBody');
     expect(storage.storedEvents()[0]).not.toHaveProperty('links');
+    expect(storage.storedEvents()[0]?.subject.url).toBe('https://github.com/reirei-lab/rainrail/issues/17');
     expect(storage.storedEvents()[0]?.payload).toEqual({
       action: 'opened',
       status: 'queued',
       conclusion: null,
     });
+    expect(storage.storedEvents()[0]?.rawPayload.reference).toBe('https://example.test/raw/delivery-1');
     expect(storage.storedEvents()[0]?.rawPayload).not.toHaveProperty('secret');
 
     const eventsResponse = await room.fetch(new Request('https://rainrail.local/events'));
@@ -333,6 +354,9 @@ describe('Rainrail bridge room', () => {
     await reader?.cancel();
 
     expect(chunk).not.toContain('secret raw webhook body');
+    expect(chunk).not.toContain('secret-subject-token');
+    expect(chunk).not.toContain('secret-reference-token');
+    expect(chunk).not.toContain('secret-fragment');
     expect(chunk).not.toContain('secret-link-token');
     expect(chunk).not.toContain('secret top-level body');
     expect(chunk).not.toContain('secret top-level token');

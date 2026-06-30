@@ -77,10 +77,11 @@ adapter/runtime の未処理例外として落とさず、呼び出し元に安�
 storage の key は `rainrail:recent-events`。保存するのは正規化済み envelope だけで、
 object payload も allowlist された shallow JSON scalar metadata（`action` / `status` /
 `conclusion`）に縮約し、object でない payload は空 object にする。任意 URL や query を
-持ち込める `links` は保存しない。secret、token、credential、生 webhook payload、
-issue/comment body のような provider object 本文は core 側では保持しない。storage から
-復元する replay 要素も `RainrailEventEnvelope` と SSE field として検証し、壊れた要素や
-古い schema の要素は replay buffer に入れない。
+持ち込める `links` は保存しない。`subject.url` と `rawPayload.reference` は URL として
+parse できる場合に query / fragment を除去してから保存する。secret、token、credential、
+生 webhook payload、issue/comment body のような provider object 本文は core 側では
+保持しない。storage から復元する replay 要素も `RainrailEventEnvelope` と SSE field
+として検証し、壊れた要素や古い schema の要素は replay buffer に入れない。
 
 `POST /publish` は request body の読み込み開始直後に publish queue の枠を確保する。
 これにより、大きい body や streaming body の parse 完了順に左右されず、`fetch`
@@ -92,7 +93,10 @@ workflow が重複起動することを避けるため。
 
 初回 storage 復元と publish 永続化は room 内で直列化する。これにより、複数の
 `POST /publish` が同時に来ても古い snapshot で replay buffer や storage を
-上書きしない。storage への保存に失敗した event は subscriber へ broadcast せず、
+上書きしない。publish 直前にも storage の最新 snapshot を読み、別 room / process が
+保存した event と room 内 replay buffer を id で merge してから保存する。これにより、
+古い room の in-memory snapshot だけで共有 storage を上書きしない。storage への保存に
+失敗した event は subscriber へ broadcast せず、
 HTTP 結果と live 配信済み副作用が食い違わないようにする。500 応答は generic な
 文言にし、storage backend の接続文字列や内部 endpoint などを呼び出し元へ返さない。
 
