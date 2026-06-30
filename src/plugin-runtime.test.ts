@@ -10564,6 +10564,53 @@ describe('plugin runtime contract', () => {
     expect(dispatchAgent).not.toHaveBeenCalled();
   });
 
+  it('gates anonymous bound dispatchAgent aliases regardless of property name', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: { id: 'delivery-anonymous-bound-launcher', receivedAt: '2026-06-29T14:00:00.000Z' },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: { kind: 'external-reference', reference: 'github://deliveries/anonymous-bound-launcher' },
+    });
+    const dispatchAgent: NonNullable<RuntimeCapabilities['dispatchAgent']> = vi.fn(async () => ({
+      sessionKey: 'agent:main:anonymous-bound-launcher',
+    }));
+    Object.defineProperty(dispatchAgent, 'name', { value: '' });
+    const launcher = dispatchAgent.bind(undefined) as RuntimeCapabilities['dispatchAgent'];
+    const loader = createPluginLoader({
+      runtime: mockRuntimeContext({
+        capabilities: {
+          provider: 'codex',
+          dispatchAgent,
+          launcher,
+        } as unknown as RuntimeCapabilities & { launcher: RuntimeCapabilities['dispatchAgent'] },
+      }),
+    });
+
+    loader.on(
+      'github.issue',
+      (handledEvent, context) =>
+        (context.capabilities as unknown as { launcher?: RuntimeCapabilities['dispatchAgent'] }).launcher?.({
+          event: handledEvent,
+          workflow: 'anonymous-bound-launcher-handler',
+          runId: context.runId,
+        }),
+      { name: 'anonymous-bound-launcher-handler' },
+    );
+
+    const [result] = await loader.dispatch(event);
+
+    expect(launcher?.name).toBe('bound ');
+    expect(result).toMatchObject({
+      pluginName: 'anonymous-bound-launcher-handler',
+      eventId: 'github-webhook:delivery-anonymous-bound-launcher:github.issue',
+      status: 'rejected',
+    });
+    expect(dispatchAgent).not.toHaveBeenCalled();
+  });
+
   it('retries benign private method helpers', async () => {
     const event = createEventEnvelope({
       source: { type: 'github', name: 'github-webhook' },

@@ -1667,7 +1667,11 @@ function isBoundDispatchAgentAlias(
     return true;
   }
 
-  return rawDispatchAgent !== undefined && isDispatchAgentAliasProperty(property) && value.name === 'bound ';
+  if (rawDispatchAgent !== undefined && value.name === 'bound ') {
+    return !rawDispatchAgent.name || isDispatchAgentAliasProperty(property);
+  }
+
+  return false;
 }
 
 async function callDispatchAgent(
