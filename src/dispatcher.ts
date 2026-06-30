@@ -752,7 +752,7 @@ function createDispatchAgentCapabilityProxy(
             return descriptor.value === undefined ? undefined : dispatchAgent;
           }
 
-          return source === capabilities && dispatchAgentAccessorReturnsUndefined(descriptor)
+          return source === capabilities && dispatchAgentAccessorReturnsUndefined(source, descriptor)
             ? undefined
             : dispatchAgent;
         }
@@ -1255,6 +1255,16 @@ function prototypeMayExposeDispatchAgent(prototype: object): boolean {
     return true;
   }
 
+  const constructorDescriptor = Reflect.getOwnPropertyDescriptor(prototype, 'constructor');
+  if (
+    constructorDescriptor !== undefined &&
+    'value' in constructorDescriptor &&
+    typeof constructorDescriptor.value === 'function' &&
+    objectMayExposeDispatchAgent(constructorDescriptor.value)
+  ) {
+    return true;
+  }
+
   return Reflect.ownKeys(prototype).some((property) => {
     if (!isDispatchAgentLikeProperty(property) && !isStarterAliasProperty(property)) {
       return false;
@@ -1481,21 +1491,30 @@ function helperMayResolveDispatchAgent(helper: Function): boolean {
       (/this\s*(?:\?\.|\s*)\[/u.test(source) && /\b(?:dispatch|start|run)\b/u.test(source) && /\bAgent\b/u.test(source)) ||
       /#[\p{ID_Start}\p{ID_Continue}]*(?:(?:dispatch|start|launch)[\p{ID_Continue}]*|run[\p{ID_Continue}]*Agent[\p{ID_Continue}]*)/iu.test(
         source,
-      )
+      ) ||
+      (/\bworkflow\b/u.test(source) && /\brunId\b/u.test(source))
     );
   } catch {
     return true;
   }
 }
 
-function dispatchAgentAccessorReturnsUndefined(descriptor: PropertyDescriptor): boolean {
+function dispatchAgentAccessorReturnsUndefined(receiver: object, descriptor: PropertyDescriptor): boolean {
   if (typeof descriptor.get !== 'function') {
     return false;
   }
 
   try {
-    const source = Function.prototype.toString.call(descriptor.get);
-    return /\breturn\s+(?:undefined|void 0)\b/u.test(source) && !/\bthrow\b/u.test(source);
+    const getterSource = Function.prototype.toString.call(descriptor.get);
+    if (/\breturn\s+(?:undefined|void 0)\b/u.test(getterSource) && !/\bthrow\b/u.test(getterSource)) {
+      return true;
+    }
+
+    if (!/\?\./u.test(getterSource) || /\bthrow\b/u.test(getterSource)) {
+      return false;
+    }
+
+    return Reflect.get(receiver, 'dispatchAgent', receiver) === undefined;
   } catch {
     return false;
   }

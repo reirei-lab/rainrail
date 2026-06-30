@@ -115,7 +115,9 @@ function createRegisteredWorkflow(plugin: WorkflowPlugin): WorkflowPlugin {
     timeoutSnapshot = true;
   }
   const hasAccessorTimeout = timeoutDescriptor !== undefined && !('value' in timeoutDescriptor);
-  if (timeoutDescriptor !== undefined && 'value' in timeoutDescriptor) {
+  if (timeoutDescriptor === undefined && timeoutError === undefined) {
+    timeoutSnapshot = true;
+  } else if (timeoutDescriptor !== undefined && 'value' in timeoutDescriptor) {
     timeoutMs = timeoutDescriptor.value;
     timeoutSnapshot = true;
   }
