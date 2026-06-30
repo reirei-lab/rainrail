@@ -449,12 +449,14 @@ function stringifyField(record: Record<string, unknown> | undefined, key: string
 
 function redactSensitiveText(value: string): string {
   return value
+    .replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, '[redacted-private-key]')
     .replace(/\bgithub_pat_[A-Za-z0-9_]+\b/g, '[redacted-token]')
     .replace(/(gh[pousr]_[A-Za-z0-9_]+)/g, '[redacted-token]')
     .replace(/(sk-[A-Za-z0-9_-]{20,})/g, '[redacted-token]')
     .replace(/(Authorization:\s*[A-Za-z][A-Za-z0-9._-]*\s+)[^\s'",}]+/gi, '$1[redacted-token]')
-    .replace(/("[^"]*(?:token|secret|password|api[_-]?key|private[_-]?key)[^"]*"\s*:\s*)"[^"]*"/gi, '$1"[redacted]"')
-    .replace(/([A-Za-z0-9_-]*(?:token|secret|password|api[_-]?key|private[_-]?key)[A-Za-z0-9_-]*\s*[:=]\s*)(["'])(.*?)\2/gi, '$1$2[redacted]$2')
+    .replace(/("[^"]*(?:token|secret|password|api[_-]?key|private[_-]?key|authorization)[^"]*"\s*:\s*)"(?:(?:\\.)|[^"\\])*"/gi, '$1"[redacted]"')
+    .replace(/([A-Za-z0-9_-]*(?:token|secret|password|api[_-]?key|private[_-]?key)[A-Za-z0-9_-]*\s*[:=]\s*)"(?:(?:\\.)|[^"\\])*"/gi, '$1"[redacted]"')
+    .replace(/([A-Za-z0-9_-]*(?:token|secret|password|api[_-]?key|private[_-]?key)[A-Za-z0-9_-]*\s*[:=]\s*)'(?:(?:\\.)|[^'\\])*'/gi, "$1'[redacted]'")
     .replace(/([A-Za-z0-9_-]*(?:token|secret|password|api[_-]?key|private[_-]?key)[A-Za-z0-9_-]*\s*[:=]\s*)[^\s'",}]+/gi, '$1[redacted]');
 }
 

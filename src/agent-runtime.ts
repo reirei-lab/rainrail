@@ -200,7 +200,9 @@ export function readRuntimeRunCompletionFromLog(raw: string): RuntimeRunCompleti
 
 function runtimeRunCompletionFromPayload(payload: Record<string, unknown>): RuntimeRunCompletion | undefined {
   const completionPayload = completionPayloadFromResponse(payload);
-  const explicitStatus = stringValue(completionPayload.status) ?? stringValue(payload.status);
+  const topLevelStatus = stringValue(payload.status);
+  const completionStatus = stringValue(completionPayload.status);
+  const explicitStatus = isFailureStatus(topLevelStatus) ? topLevelStatus : completionStatus ?? topLevelStatus;
   const outcome = outcomeFromPayload(completionPayload);
   const status = runtimeStatusFromPayload(completionPayload, explicitStatus, outcome);
   if (status === undefined) {
@@ -365,26 +367,33 @@ function isCanonicalRuntimeRunStatus(status: string | undefined): status is Runt
 }
 
 function outcomeFromPayload(payload: Record<string, unknown>): string | undefined {
-  const text = stringValue(payload.finalAssistantVisibleText) ?? completionSummaryFromPayload(payload);
-  return text?.match(/\bOutcome:\s*(implemented|updated_issue|needs_human|split_recommended)\b/)?.[1];
+  for (const text of completionTextsFromPayload(payload).reverse()) {
+    const outcome = text.match(/\bOutcome:\s*(implemented|updated_issue|needs_human|split_recommended)\b/)?.[1];
+    if (outcome !== undefined) {
+      return outcome;
+    }
+  }
+  return undefined;
 }
 
 function completionSummaryFromPayload(payload: Record<string, unknown>): string | undefined {
-  const finalText = stringValue(payload.finalAssistantVisibleText) ?? stringValue(payload.finalAssistantRawText);
-  if (finalText !== undefined) {
-    return finalText;
-  }
+  return completionTextsFromPayload(payload)[0];
+}
+
+function completionTextsFromPayload(payload: Record<string, unknown>): string[] {
+  const texts = [stringValue(payload.finalAssistantVisibleText) ?? stringValue(payload.finalAssistantRawText)]
+    .filter((text): text is string => text !== undefined);
   const payloads = payload.payloads;
   if (!Array.isArray(payloads)) {
-    return undefined;
+    return texts;
   }
   for (const item of payloads) {
     const text = stringValue(recordValue(item)?.text);
     if (text !== undefined) {
-      return text;
+      texts.push(text);
     }
   }
-  return undefined;
+  return texts;
 }
 
 function completionPayloadFromResponse(payload: Record<string, unknown>): Record<string, unknown> {
@@ -540,6 +549,10 @@ function stringValue(value: unknown): string | undefined {
 
 function booleanValue(value: unknown): boolean | undefined {
   return typeof value === 'boolean' ? value : undefined;
+}
+
+function isFailureStatus(status: string | undefined): boolean {
+  return status === 'error' || status === 'timeout' || isFailureRuntimeRunStatus(status);
 }
 
 function normalize(value: unknown): string {

@@ -485,7 +485,10 @@ describe('runtime task completion and resume helpers', () => {
 
     expect(readRuntimeRunCompletionFromLog(JSON.stringify({
       result: {
-        payloads: [{ text: 'Issue に調査結果を追記しました。\n\nOutcome: updated_issue' }],
+        payloads: [
+          { text: 'Issue に調査結果を追記しました。' },
+          { text: 'Outcome: updated_issue' },
+        ],
         meta: { agentMeta: { sessionId: 'session-2' } },
       },
     }))).toMatchObject({ status: 'succeeded', outcome: 'updated_issue' });
@@ -514,6 +517,14 @@ describe('runtime task completion and resume helpers', () => {
       result: {
         status: 'failed',
         payloads: [{ text: '途中で失敗しました。\n\nOutcome: implemented' }],
+      },
+    }))).toMatchObject({ status: 'failed', outcome: 'implemented' });
+
+    expect(readRuntimeRunCompletionFromLog(JSON.stringify({
+      status: 'failed',
+      result: {
+        status: 'ok',
+        payloads: [{ text: 'Outcome: implemented' }],
       },
     }))).toMatchObject({ status: 'failed', outcome: 'implemented' });
   });
