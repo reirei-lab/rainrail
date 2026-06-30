@@ -103,8 +103,11 @@ function createRegisteredWorkflow(plugin: WorkflowPlugin): WorkflowPlugin {
     handle: (event, context) => plugin.handle.call(plugin, event, context),
   };
 
-  if (plugin.accepts !== undefined) {
-    workflow.accepts = (event) => plugin.accepts?.call(plugin, event) ?? false;
+  if ('accepts' in plugin) {
+    workflow.accepts = (event) => {
+      const accepts = plugin.accepts;
+      return accepts === undefined ? true : accepts.call(plugin, event);
+    };
   }
 
   Object.defineProperty(workflow, 'capabilities', {

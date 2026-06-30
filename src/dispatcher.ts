@@ -443,7 +443,7 @@ function createDispatchAgentCapabilityProxy(
       return bindCapabilityFunction(value);
     }
 
-    return value;
+    return normalizeCapabilityHelperResult(value, capabilities, createCapabilityView(source));
   };
 
   const describeCapabilityProperty = (source: object, property: string | symbol): PropertyDescriptor | undefined => {
@@ -614,23 +614,8 @@ function callCapabilityFunctionWithDispatchAgentShadow(
   safeReceiver: object,
   args: unknown[],
 ): unknown {
-  const ownDescriptor = Reflect.getOwnPropertyDescriptor(capabilities, 'dispatchAgent');
-  if (Object.isExtensible(capabilities) && (ownDescriptor === undefined || ownDescriptor.configurable === true)) {
-    const restore = () => {
-      if (ownDescriptor === undefined) {
-        Reflect.deleteProperty(capabilities, 'dispatchAgent');
-      } else {
-        Object.defineProperty(capabilities, 'dispatchAgent', ownDescriptor);
-      }
-    };
-
-    Object.defineProperty(capabilities, 'dispatchAgent', {
-      configurable: true,
-      enumerable: ownDescriptor?.enumerable ?? true,
-      value: dispatchAgent,
-      writable: true,
-    });
-
+  const restore = startDispatchAgentShadow(capabilities, dispatchAgent);
+  if (restore !== undefined) {
     try {
       const result = Reflect.apply(helper, capabilities, args);
       if (isPromiseLike(result)) {
@@ -653,6 +638,61 @@ function callCapabilityFunctionWithDispatchAgentShadow(
   }
 
   return normalizeCapabilityHelperResult(result, capabilities, safeReceiver);
+}
+
+interface DispatchAgentShadowState {
+  depth: number;
+  descriptor: PropertyDescriptor | undefined;
+}
+
+const dispatchAgentShadowStates = new WeakMap<object, DispatchAgentShadowState>();
+
+function startDispatchAgentShadow(
+  capabilities: NonNullable<PluginRuntimeContext['capabilities']>,
+  dispatchAgent: DispatchAgentCapability,
+): (() => void) | undefined {
+  const existing = dispatchAgentShadowStates.get(capabilities);
+  if (existing !== undefined) {
+    existing.depth += 1;
+    return () => restoreDispatchAgentShadow(capabilities);
+  }
+
+  const descriptor = Reflect.getOwnPropertyDescriptor(capabilities, 'dispatchAgent');
+  if (!Object.isExtensible(capabilities) && descriptor === undefined) {
+    return undefined;
+  }
+
+  if (descriptor !== undefined && descriptor.configurable !== true) {
+    return undefined;
+  }
+
+  Object.defineProperty(capabilities, 'dispatchAgent', {
+    configurable: true,
+    enumerable: descriptor?.enumerable ?? true,
+    value: dispatchAgent,
+    writable: true,
+  });
+  dispatchAgentShadowStates.set(capabilities, { depth: 1, descriptor });
+  return () => restoreDispatchAgentShadow(capabilities);
+}
+
+function restoreDispatchAgentShadow(capabilities: object): void {
+  const state = dispatchAgentShadowStates.get(capabilities);
+  if (state === undefined) {
+    return;
+  }
+
+  state.depth -= 1;
+  if (state.depth > 0) {
+    return;
+  }
+
+  dispatchAgentShadowStates.delete(capabilities);
+  if (state.descriptor === undefined) {
+    Reflect.deleteProperty(capabilities, 'dispatchAgent');
+  } else {
+    Object.defineProperty(capabilities, 'dispatchAgent', state.descriptor);
+  }
 }
 
 function isPromiseLike(value: unknown): value is Promise<unknown> {
@@ -987,7 +1027,7 @@ async function runWorkflow<T>(
 ): Promise<T> {
   let timeout: NodeJS.Timeout | undefined;
   let removeAbortListener: (() => void) | undefined;
-  const disposeQueueMicrotaskGuard = installQueueMicrotaskLifecycleGuard(lifecycle);
+  const disposeQueueMicrotaskGuard = installQueueMicrotaskDeferral();
   try {
     const abortPromise = new Promise<never>((_resolve, reject) => {
       const rejectAbort = () => reject(abort.controller.signal.reason ?? new Error('Plugin runtime signal aborted'));
@@ -1045,28 +1085,21 @@ async function runWorkflow<T>(
   }
 }
 
-const guardedMicrotaskLifecycles = new Set<WorkflowLifecycle>();
 let originalQueueMicrotask: typeof queueMicrotask | undefined;
+let queueMicrotaskDeferralDepth = 0;
 
-function installQueueMicrotaskLifecycleGuard(lifecycle: WorkflowLifecycle): () => void {
+function installQueueMicrotaskDeferral(): () => void {
   if (originalQueueMicrotask === undefined) {
     originalQueueMicrotask = globalThis.queueMicrotask;
     globalThis.queueMicrotask = (callback) => {
-      const scheduledLifecycles = [...guardedMicrotaskLifecycles];
-      originalQueueMicrotask?.(() => {
-        for (const scheduledLifecycle of scheduledLifecycles) {
-          scheduledLifecycle.closeSideEffects();
-        }
-
-        callback();
-      });
+      setTimeout(callback, 0);
     };
   }
 
-  guardedMicrotaskLifecycles.add(lifecycle);
+  queueMicrotaskDeferralDepth += 1;
   return () => {
-    guardedMicrotaskLifecycles.delete(lifecycle);
-    if (guardedMicrotaskLifecycles.size === 0 && originalQueueMicrotask !== undefined) {
+    queueMicrotaskDeferralDepth -= 1;
+    if (queueMicrotaskDeferralDepth === 0 && originalQueueMicrotask !== undefined) {
       globalThis.queueMicrotask = originalQueueMicrotask;
       originalQueueMicrotask = undefined;
     }

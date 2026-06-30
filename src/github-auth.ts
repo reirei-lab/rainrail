@@ -71,6 +71,7 @@ export async function getGitHubAuthToken(
 export async function getGitHubFallbackAuthToken(
   config: GitHubAuthConfig,
   cliRunner: GitHubCliTokenRunner = defaultGhCliTokenRunner,
+  signal?: AbortSignal,
 ): Promise<GitHubAuthToken | undefined> {
   if (config.token !== undefined && config.token.length > 0) {
     return undefined;
@@ -82,7 +83,7 @@ export async function getGitHubFallbackAuthToken(
   if (envToken !== undefined) {
     return { ...envToken, fallback: true };
   }
-  const ghCliToken = await getGhCliAuthToken(cliRunner);
+  const ghCliToken = await waitForSignal(getGhCliAuthToken(cliRunner), signal);
   return ghCliToken === undefined ? undefined : { ...ghCliToken, fallback: true };
 }
 

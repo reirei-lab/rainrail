@@ -115,7 +115,7 @@ async function getDefaultGitHubAuthToken(
       throw error;
     }
     throwIfAborted(signal);
-    const fallbackToken = await getGitHubFallbackAuthToken(config);
+    const fallbackToken = await getGitHubFallbackAuthToken(config, undefined, signal);
     if (fallbackToken === undefined) {
       throw error;
     }
