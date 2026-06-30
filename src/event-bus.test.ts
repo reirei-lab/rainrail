@@ -168,6 +168,26 @@ describe('Rainrail event bus', () => {
     }
   });
 
+  it('ignores keepalive intervals outside the safe timer delay range', async () => {
+    vi.useFakeTimers();
+    try {
+      for (const keepAliveIntervalMs of [0.5, 2_147_483_648]) {
+        const bus = createRainrailEventBus({ replayLimit: 10 });
+        const stream = bus.createReadableStream({ keepAliveIntervalMs });
+        const reader = stream.getReader();
+
+        expect(await readNext(reader)).toBe(': connected\n\n');
+        await vi.advanceTimersByTimeAsync(5);
+        const next = readNextOrTimeout(reader);
+        await vi.advanceTimersByTimeAsync(20);
+        await expect(next).resolves.toBe('timeout');
+        await reader.cancel();
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('does not load replay events that fail SSE validation', () => {
     const bus = createRainrailEventBus({ replayLimit: 10 });
     const valid = fixtureEvent('github-webhook', 'delivery-1', 'github.issue', 'issue', '17');

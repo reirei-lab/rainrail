@@ -305,6 +305,17 @@ describe('Rainrail bridge room', () => {
     expect(referenceStorage.storedEvents()).toEqual([]);
   });
 
+  it('accepts Cloudflare delivery references', async () => {
+    const storage = fakeState();
+    const room = createTestRoom(storage, { replayLimit: 10 });
+    const event = fixtureEvent('delivery-1', 'cloudflare.tail');
+
+    const response = await room.fetch(publishRequest(event));
+
+    expect(response.status).toBe(200);
+    expect(storage.storedEvents()[0]?.rawPayload.reference).toBe('cloudflare://deliveries/delivery-1');
+  });
+
   it('captures JSON parse failures while the publish waits in queue', async () => {
     const storage = fakeControllableState();
     const room = createTestRoom(storage.state, { replayLimit: 10 });
@@ -612,6 +623,8 @@ async function readNextOrTimeout(reader: ReadableStreamDefaultReader<Uint8Array>
 }
 
 function fixtureEvent(deliveryId: string, name: 'github.issue' | 'cloudflare.tail') {
+  const deliveryScheme = name.startsWith('cloudflare') ? 'cloudflare' : 'github';
+
   return createEventEnvelope({
     source: { type: name.startsWith('cloudflare') ? 'cloudflare' : 'github', name: `${name}-source` },
     name,
@@ -624,7 +637,7 @@ function fixtureEvent(deliveryId: string, name: 'github.issue' | 'cloudflare.tai
     payload: { deliveryId },
     rawPayload: {
       kind: 'external-reference',
-      reference: `github://deliveries/${deliveryId}`,
+      reference: `${deliveryScheme}://deliveries/${deliveryId}`,
     },
   });
 }

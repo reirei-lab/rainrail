@@ -2,6 +2,7 @@ import type { RainrailEventEnvelope } from './events.js';
 import { formatRainrailSseComment, formatRainrailSseEvent } from './sse.js';
 
 const encoder = new TextEncoder();
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
 export interface RainrailEventBusOptions {
   replayLimit?: number;
@@ -225,7 +226,9 @@ function normalizeReplayLimit(replayLimit: number | undefined): number {
 function normalizeKeepAliveInterval(keepAliveIntervalMs: number | undefined): number | undefined {
   if (keepAliveIntervalMs === undefined) return undefined;
 
-  return Number.isFinite(keepAliveIntervalMs) && keepAliveIntervalMs > 0 ? keepAliveIntervalMs : undefined;
+  return Number.isInteger(keepAliveIntervalMs) && keepAliveIntervalMs >= 1 && keepAliveIntervalMs <= MAX_TIMER_DELAY_MS
+    ? keepAliveIntervalMs
+    : undefined;
 }
 
 function closeSubscriber(subscriber: RainrailEventBusSubscriber): void {

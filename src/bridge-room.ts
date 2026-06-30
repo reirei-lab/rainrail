@@ -5,7 +5,7 @@ import { formatRainrailSseEvent, rainrailSseHeaders } from './sse.js';
 const RECENT_EVENTS_KEY = 'rainrail:recent-events';
 const DEFAULT_REPLAY_LIMIT = 100;
 const ALLOWED_PAYLOAD_KEYS = new Set(['action', 'status', 'conclusion']);
-const ALLOWED_URL_PROTOCOLS = new Set(['https:', 'github:']);
+const ALLOWED_URL_PROTOCOLS = new Set(['https:', 'github:', 'cloudflare:']);
 const claimedStorages = new WeakSet<RainrailBridgeRoomStorage>();
 
 type PublishEventResult =
@@ -345,7 +345,7 @@ function sanitizeUrl(value: string): string | undefined {
 function isAllowedUrl(url: URL): boolean {
   if (!ALLOWED_URL_PROTOCOLS.has(url.protocol)) return false;
 
-  return url.protocol !== 'github:' || url.hostname === 'deliveries';
+  return (url.protocol !== 'github:' && url.protocol !== 'cloudflare:') || url.hostname === 'deliveries';
 }
 
 function expectSanitizedUrl(value: string, key: string): string {

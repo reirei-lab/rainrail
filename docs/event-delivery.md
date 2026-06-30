@@ -45,8 +45,9 @@ SSE response は次の header を使う。
 ReadableStream subscriber は `: keep-alive` comment を周期送信する。interval を
 指定しない場合、core は keepalive timer を作らない。これはテストや短命の local
 consumer を不要な timer で維持しないためで、runtime/entrypoint が必要に応じて
-policy を渡す。`keepAliveIntervalMs` は正の有限値だけを有効化し、`0` / 負数 / `NaN`
-などは timer を作らない。
+policy を渡す。`keepAliveIntervalMs` は Node / Web timer が 1ms に丸めない安全な整数範囲
+（`1` から `2147483647`）だけを有効化し、`0` / 負数 / 小数 / `NaN` / 範囲外の値では
+timer を作らない。
 
 shared Fetch header では HTTP/2/HTTP/3 で禁止される hop-by-hop header を出さない。
 HTTP/1.1 の Node adapter が `Connection: keep-alive` を必要とする場合は adapter 側で
@@ -93,7 +94,8 @@ storage の key は `rainrail:recent-events`。保存するのは正規化済み
 object payload も allowlist された shallow JSON scalar metadata（`action` / `status` /
 `conclusion`）に縮約し、object でない payload は空 object にする。任意 URL や query を
 持ち込める `links` は保存しない。`subject.url` と `rawPayload.reference` は URL として
-parse でき、scheme が `https:` または `github://deliveries/...` の場合だけ、
+parse でき、scheme が `https:`、`github://deliveries/...`、または
+`cloudflare://deliveries/...` の場合だけ、
 userinfo / query / fragment を除去してから保存する。
 URL として parse できない optional `subject.url` は保存せず、必須の
 `rawPayload.reference` が parse できない、または allowlist 外 scheme の場合は publish を
