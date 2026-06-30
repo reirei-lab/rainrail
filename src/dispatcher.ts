@@ -144,7 +144,7 @@ function createWorkflowExecutionRecord(workflow: WorkflowPlugin): WorkflowExecut
   const record: WorkflowExecutionRecord = {
     workflow,
     policy: fallbackPolicy,
-    policySnapshot: false,
+    policySnapshot: true,
     timeoutSnapshot: false,
   };
   if (nameMetadata.error !== undefined) {
@@ -164,7 +164,6 @@ function createWorkflowExecutionRecord(workflow: WorkflowPlugin): WorkflowExecut
     } catch (policyError) {
       record.policyError = policyError;
     }
-    record.policySnapshot = true;
   }
 
   const timeoutDescriptor = findPropertyDescriptor(workflow, 'timeoutMs');
@@ -515,7 +514,30 @@ function createDispatchAgentCapabilityProxy(
     const safeReceiver = createCapabilityView(source);
     const value = readCapabilityValue(source, property, safeReceiver);
     if (typeof value === 'function') {
+      if (isBuiltinCapabilityCollection(source)) {
+        return (...args: unknown[]) =>
+          normalizeCapabilityHelperResult(
+            Reflect.apply(value, source, args),
+            capabilities,
+            safeReceiver,
+            getRawDispatchAgent(),
+            dispatchAgent,
+            (object) => createCapabilityView(object),
+          );
+      }
+
       return bindCapabilityFunction(value, safeReceiver, property);
+    }
+
+    if (isPromiseLike(value)) {
+      return normalizeCapabilityHelperResult(
+        value,
+        capabilities,
+        safeReceiver,
+        getRawDispatchAgent(),
+        dispatchAgent,
+        (object) => createCapabilityView(object),
+      );
     }
 
     if (shouldWrapCapabilityObject(value)) {
@@ -619,7 +641,10 @@ function createCapabilityConstructorView(
 
     const value = readCapabilityValue(prototype, property, prototypeView, capabilities);
     const rawDispatchAgent = getRawDispatchAgent();
-    if (value === rawDispatchAgent) {
+    if (
+      value === rawDispatchAgent ||
+      (typeof value === 'function' && isBoundDispatchAgentAlias(value, property, rawDispatchAgent))
+    ) {
       return dispatchAgent;
     }
 
@@ -803,16 +828,14 @@ function normalizeCapabilityFunctionResult(
   wrapObject: (object: object) => object,
 ): unknown {
   if (isPromiseLike(value)) {
-    return Promise.resolve(value).then(
-      (resolved) =>
-        normalizeCapabilityHelperResult(resolved, capabilities, safeReceiver, rawDispatchAgent, dispatchAgent, wrapObject),
-      (reason: unknown) => {
-        if (!isPrivateReceiverError(reason)) {
-          throw reason;
-        }
-
-        return retryPrivateReceiver(reason);
-      },
+    return normalizeCapabilityPromiseResult(
+      value,
+      capabilities,
+      safeReceiver,
+      rawDispatchAgent,
+      dispatchAgent,
+      wrapObject,
+      retryPrivateReceiver,
     );
   }
 
@@ -835,11 +858,37 @@ function normalizeCapabilityHelperResult(
     return dispatchAgent;
   }
 
+  if (isPromiseLike(value)) {
+    return normalizeCapabilityPromiseResult(value, capabilities, safeReceiver, rawDispatchAgent, dispatchAgent, wrapObject);
+  }
+
   if (shouldWrapCapabilityObject(value)) {
     return wrapObject(value);
   }
 
   return value;
+}
+
+function normalizeCapabilityPromiseResult(
+  value: Promise<unknown>,
+  capabilities: NonNullable<PluginRuntimeContext['capabilities']>,
+  safeReceiver: object,
+  rawDispatchAgent: DispatchAgentCapability | undefined,
+  dispatchAgent: DispatchAgentCapability,
+  wrapObject: (object: object) => object,
+  retryPrivateReceiver?: (reason: unknown) => unknown,
+): Promise<unknown> {
+  return Promise.resolve(value).then(
+    (resolved) =>
+      normalizeCapabilityHelperResult(resolved, capabilities, safeReceiver, rawDispatchAgent, dispatchAgent, wrapObject),
+    (reason: unknown) => {
+      if (retryPrivateReceiver === undefined || !isPrivateReceiverError(reason)) {
+        throw reason;
+      }
+
+      return retryPrivateReceiver(reason);
+    },
+  );
 }
 
 function readCapabilityValue(
@@ -884,7 +933,12 @@ function shouldWrapCapabilityObject(value: unknown): value is object {
   }
 
   const tag = Object.prototype.toString.call(value);
-  return tag === '[object Object]' || tag === '[object Array]';
+  return tag === '[object Object]' || tag === '[object Array]' || tag === '[object Map]' || tag === '[object Set]';
+}
+
+function isBuiltinCapabilityCollection(value: object): value is Map<unknown, unknown> | Set<unknown> {
+  const tag = Object.prototype.toString.call(value);
+  return tag === '[object Map]' || tag === '[object Set]';
 }
 
 function isBoundDispatchAgentAlias(
@@ -993,15 +1047,13 @@ async function callGatedAction<TRequest>(
     throw reason;
   }
 
-  const actions = options.runtime.actions;
-  const implementation = actions?.[action];
-  if (!implementation) {
-    const reason = new Error(`Runtime action ${action} is not available`);
-    await recordAudit(options, policy, event, action, 'rejected', reason);
-    throw reason;
-  }
-
   try {
+    const actions = options.runtime.actions;
+    const implementation = actions?.[action];
+    if (!implementation) {
+      throw new Error(`Runtime action ${action} is not available`);
+    }
+
     const value = await implementation.call(actions, request as never, { signal: lifecycle.signal });
     await recordAudit(options, policy, event, action, 'fulfilled');
     return value;
@@ -1017,13 +1069,13 @@ function createGuardedProviders(
   event: RainrailEventEnvelope,
   lifecycle: WorkflowLifecycle,
 ): TaskProviderRegistry {
-  const providers = options.runtime.providers ?? unavailableProviders;
   const guardedProviderCache = new Map<string, unknown>();
+  const getProviders = () => options.runtime.providers ?? unavailableProviders;
   const readProvider = (property: string | symbol): unknown => {
     if (property === 'tasks') {
       let guardedTasks = guardedProviderCache.get('tasks') as TaskProvider | undefined;
       if (guardedTasks === undefined) {
-        guardedTasks = createGuardedTaskProvider(options, policy, event, lifecycle, providers.tasks, 'tasks');
+        guardedTasks = createGuardedTaskProvider(options, policy, event, lifecycle, () => getProviders().tasks, 'tasks');
         guardedProviderCache.set('tasks', guardedTasks);
       }
 
@@ -1035,9 +1087,27 @@ function createGuardedProviders(
       return guardedProviderCache.get(providerName);
     }
 
+    if (lifecycle.isSideEffectClosed()) {
+      const guardedProvider = createGuardedTaskProvider(
+        options,
+        policy,
+        event,
+        lifecycle,
+        () => {
+          const providers = getProviders();
+          const provider = Reflect.get(providers, property, providers);
+          return isTaskProvider(provider) ? provider : unavailableProviders.tasks;
+        },
+        providerName,
+      );
+      guardedProviderCache.set(providerName, guardedProvider);
+      return guardedProvider;
+    }
+
+    const providers = getProviders();
     const provider = Reflect.get(providers, property, providers);
     const guardedProvider = isTaskProvider(provider)
-      ? createGuardedTaskProvider(options, policy, event, lifecycle, provider, providerName)
+      ? createGuardedTaskProvider(options, policy, event, lifecycle, () => provider, providerName)
       : provider;
     guardedProviderCache.set(providerName, guardedProvider);
     return guardedProvider;
@@ -1050,6 +1120,7 @@ function createGuardedProviders(
         return readProvider(property);
       },
       getOwnPropertyDescriptor(_target, property): PropertyDescriptor | undefined {
+        const providers = getProviders();
         const descriptor = Reflect.getOwnPropertyDescriptor(providers, property);
         if (descriptor === undefined) {
           return undefined;
@@ -1063,10 +1134,10 @@ function createGuardedProviders(
         };
       },
       has(_target, property) {
-        return property in providers;
+        return property in getProviders();
       },
       ownKeys() {
-        return Reflect.ownKeys(providers);
+        return Reflect.ownKeys(getProviders());
       },
     },
   ) as TaskProviderRegistry;
@@ -1087,19 +1158,24 @@ function createGuardedTaskProvider(
   policy: WorkflowExecutionPolicy,
   event: RainrailEventEnvelope,
   lifecycle: WorkflowLifecycle,
-  tasks: TaskProvider,
+  getTasks: () => TaskProvider,
   actionPrefix: string,
 ): TaskProvider {
   const auditAction = (name: string) => `${actionPrefix}.${name}` as WorkflowAuditEntry['action'];
   const guardedTasks: TaskProvider = {
-    name: tasks.name,
-    kind: tasks.kind,
+    get name() {
+      return getTasks().name;
+    },
+    get kind() {
+      return getTasks().kind;
+    },
     getIssue: async (ref, context) => {
       const denied = getDeniedProviderCallReason(options, policy, event, lifecycle, auditAction('getIssue'));
       if (denied !== undefined) {
         throw denied;
       }
 
+      const tasks = getTasks();
       return tasks.getIssue.call(tasks, ref, { signal: combineAbortSignals(lifecycle.signal, context?.signal) });
     },
     createComment: async (input, context) => {
@@ -1108,21 +1184,14 @@ function createGuardedTaskProvider(
         throw denied;
       }
 
+      const tasks = getTasks();
       return tasks.createComment.call(tasks, input, { signal: combineAbortSignals(lifecycle.signal, context?.signal) });
     },
   };
 
-  if ('addToProject' in tasks) {
-    defineOptionalGuardedTaskMethod(guardedTasks, 'addToProject', tasks, options, policy, event, lifecycle, auditAction);
-  }
-
-  if ('setStatus' in tasks) {
-    defineOptionalGuardedTaskMethod(guardedTasks, 'setStatus', tasks, options, policy, event, lifecycle, auditAction);
-  }
-
-  if ('createProposal' in tasks) {
-    defineOptionalGuardedTaskMethod(guardedTasks, 'createProposal', tasks, options, policy, event, lifecycle, auditAction);
-  }
+  defineOptionalGuardedTaskMethod(guardedTasks, 'addToProject', getTasks, options, policy, event, lifecycle, auditAction);
+  defineOptionalGuardedTaskMethod(guardedTasks, 'setStatus', getTasks, options, policy, event, lifecycle, auditAction);
+  defineOptionalGuardedTaskMethod(guardedTasks, 'createProposal', getTasks, options, policy, event, lifecycle, auditAction);
 
   return guardedTasks;
 }
@@ -1130,7 +1199,7 @@ function createGuardedTaskProvider(
 function defineOptionalGuardedTaskMethod<TKey extends 'addToProject' | 'setStatus' | 'createProposal'>(
   guardedTasks: TaskProvider,
   key: TKey,
-  tasks: TaskProvider,
+  getTasks: () => TaskProvider,
   options: RuntimeDispatcherOptions,
   policy: WorkflowExecutionPolicy,
   event: RainrailEventEnvelope,
@@ -1141,15 +1210,23 @@ function defineOptionalGuardedTaskMethod<TKey extends 'addToProject' | 'setStatu
     configurable: true,
     enumerable: true,
     get() {
+      if (lifecycle.isSideEffectClosed()) {
+        return async () => {
+          const denied = getDeniedProviderCallReason(options, policy, event, lifecycle, auditAction(key));
+          throw denied ?? new PluginLifecycleEndedError();
+        };
+      }
+
+      const tasks = getTasks();
+      const implementation = tasks[key];
+      if (implementation === undefined) {
+        return undefined;
+      }
+
       return async (input: never, context?: { signal?: AbortSignal }) => {
         const denied = getDeniedProviderCallReason(options, policy, event, lifecycle, auditAction(key));
         if (denied !== undefined) {
           throw denied;
-        }
-
-        const implementation = tasks[key];
-        if (implementation === undefined) {
-          throw new Error(`Task provider method ${key} is not available`);
         }
 
         return implementation.call(tasks, input, { signal: combineAbortSignals(lifecycle.signal, context?.signal) });
