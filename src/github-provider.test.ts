@@ -111,6 +111,194 @@ describe('createGitHubTaskProvider', () => {
     ]);
   });
 
+  it('passes task context abort signals to issue fetches', async () => {
+    const controller = new AbortController();
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
+      node_id: 'issue-node-id',
+      number: 20,
+      title: 'Signal-aware issue',
+    }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    }));
+    const provider = createGitHubTaskProvider({
+      auth: { getAuthToken: async () => undefined },
+      fetch: fetchImpl as unknown as typeof fetch,
+    });
+
+    await provider.getIssue(
+      {
+        provider: 'github',
+        repository: 'reirei-lab/rainrail',
+        number: 20,
+      },
+      { signal: controller.signal },
+    );
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      'https://api.github.com/repos/reirei-lab/rainrail/issues/20',
+      expect.objectContaining({
+        signal: controller.signal,
+      }),
+    );
+  });
+
+  it('does not start issue fetches when auth resolves after task abort', async () => {
+    const controller = new AbortController();
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
+      node_id: 'issue-node-id',
+      number: 20,
+      title: 'Late issue',
+    }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    }));
+    const provider = createGitHubTaskProvider({
+      auth: {
+        getAuthToken: async () => {
+          controller.abort(new Error('issue lookup aborted after auth'));
+          return undefined;
+        },
+      },
+      fetch: fetchImpl as unknown as typeof fetch,
+    });
+
+    await expect(provider.getIssue(
+      {
+        provider: 'github',
+        repository: 'reirei-lab/rainrail',
+        number: 20,
+      },
+      { signal: controller.signal },
+    )).rejects.toThrow('issue lookup aborted after auth');
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('passes task context abort signals to comment fetches', async () => {
+    const controller = new AbortController();
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
+      node_id: 'comment-node-id',
+    }), {
+      status: 201,
+      headers: { 'content-type': 'application/json' },
+    }));
+    const provider = createGitHubTaskProvider({
+      auth: { getAuthToken: async () => undefined },
+      fetch: fetchImpl as unknown as typeof fetch,
+    });
+
+    await provider.createComment(
+      {
+        target: {
+          provider: 'github',
+          repository: 'reirei-lab/rainrail',
+          number: 20,
+        },
+        body: 'Queued run:20',
+      },
+      { signal: controller.signal },
+    );
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      'https://api.github.com/repos/reirei-lab/rainrail/issues/20/comments',
+      expect.objectContaining({
+        signal: controller.signal,
+      }),
+    );
+  });
+
+  it('does not start comment fetches when the signal aborts while waiting for auth', async () => {
+    const controller = new AbortController();
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
+      node_id: 'comment-node-id',
+    }), {
+      status: 201,
+      headers: { 'content-type': 'application/json' },
+    }));
+    const provider = createGitHubTaskProvider({
+      auth: {
+        getAuthToken: async () => {
+          controller.abort(new Error('comment creation timed out'));
+          return {
+            token: 'comment-token',
+            provider: 'env-token' as const,
+            fallback: false,
+          };
+        },
+      },
+      fetch: fetchImpl as unknown as typeof fetch,
+    });
+
+    await expect(provider.createComment(
+      {
+        target: {
+          provider: 'github',
+          repository: 'reirei-lab/rainrail',
+          number: 20,
+        },
+        body: 'Queued run:20',
+      },
+      { signal: controller.signal },
+    )).rejects.toThrow('comment creation timed out');
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('keeps GitHub App token fetches independent from task context abort signals', async () => {
+    const controller = new AbortController();
+    const directory = mkdtempSync(join(tmpdir(), 'rainrail-provider-auth-signal-'));
+    const keyPath = join(directory, 'private-key.pem');
+    const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+    writeFileSync(keyPath, privateKey.export({ type: 'pkcs1', format: 'pem' }), 'utf8');
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        token: 'installation-token',
+        expires_at: '2026-06-29T15:00:00.000Z',
+      }), {
+        status: 201,
+        headers: { 'content-type': 'application/json' },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        node_id: 'issue-node-id',
+        number: 20,
+        title: 'Signal-aware auth issue',
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }));
+    const provider = createGitHubTaskProvider({
+      config: {
+        githubApp: {
+          appId: '12345',
+          installationId: '67890',
+          privateKeyPath: keyPath,
+        },
+      },
+      fetch: fetchImpl as unknown as typeof fetch,
+    });
+
+    try {
+      await provider.getIssue(
+        {
+          provider: 'github',
+          repository: 'reirei-lab/rainrail',
+          number: 20,
+        },
+        { signal: controller.signal },
+      );
+
+      expect(fetchImpl).toHaveBeenNthCalledWith(
+        1,
+        'https://api.github.com/app/installations/67890/access_tokens',
+        expect.not.objectContaining({
+          signal: controller.signal,
+        }),
+      );
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('falls back to env auth when default GitHub App auth cannot mint a token', async () => {
     vi.stubEnv('GH_TOKEN', 'fallback-token');
     const directory = mkdtempSync(join(tmpdir(), 'rainrail-provider-fallback-'));

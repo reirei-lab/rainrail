@@ -14,6 +14,7 @@ export * from './github-webhook.js';
 export * from './http-app.js';
 export * from './http-utils.js';
 export * from './node-server.js';
+export * from './plugin-loader.js';
 export * from './plugins.js';
 export * from './project-issues.js';
 export * from './runtime-provider.js';

@@ -6,10 +6,17 @@ import {
   type GitHubAuthConfig,
 } from './github-auth.js';
 import { recordGitHubRateLimit } from './github-rate-limit.js';
-import type { TaskComment, TaskCommentInput, TaskIssue, TaskIssueRef, TaskProvider } from './task-provider.js';
+import type {
+  TaskComment,
+  TaskCommentInput,
+  TaskIssue,
+  TaskIssueRef,
+  TaskProvider,
+  TaskProviderContext,
+} from './task-provider.js';
 
 export interface GitHubAuthTokenProvider {
-  getAuthToken(): Promise<GitHubAuthToken | undefined>;
+  getAuthToken(context?: TaskProviderContext): Promise<GitHubAuthToken | undefined>;
 }
 
 export interface GitHubTaskProviderOptions {
@@ -37,20 +44,26 @@ interface GitHubCommentResponse {
 export function createGitHubTaskProvider(options: GitHubTaskProviderOptions = {}): TaskProvider {
   const fetchImpl = options.fetch ?? fetch;
   const auth = options.auth ?? {
-    getAuthToken: () => getDefaultGitHubAuthToken(options.config ?? {}, fetchImpl),
+    getAuthToken: (context?: TaskProviderContext) => getDefaultGitHubAuthToken(options.config ?? {}, fetchImpl, context?.signal),
   };
 
   return {
     name: 'github',
     kind: 'task-provider',
-    async getIssue(ref: TaskIssueRef): Promise<TaskIssue> {
+    async getIssue(ref: TaskIssueRef, context?: TaskProviderContext): Promise<TaskIssue> {
       const repository = requireRepository(ref);
       const number = requireIssueNumber(ref);
-      const authToken = await auth.getAuthToken();
+      throwIfAborted(context?.signal);
+      const authToken = await auth.getAuthToken(context);
+      throwIfAborted(context?.signal);
       const headers = requestHeaders(authToken);
+      const init: RequestInit = { headers };
+      if (context?.signal !== undefined) {
+        init.signal = context.signal;
+      }
       const response = await fetchImpl(
         `https://api.github.com/repos/${repository}/issues/${number}`,
-        { headers },
+        init,
       );
       recordGitHubRateLimit('rest', response.headers, authToken === undefined
         ? undefined
@@ -61,17 +74,23 @@ export function createGitHubTaskProvider(options: GitHubTaskProviderOptions = {}
 
       return mapGitHubIssue(repository, await response.json() as GitHubIssueResponse);
     },
-    async createComment(input: TaskCommentInput): Promise<TaskComment> {
+    async createComment(input: TaskCommentInput, context?: TaskProviderContext): Promise<TaskComment> {
       const repository = requireRepository(input.target);
       const number = requireIssueNumber(input.target);
-      const authToken = await auth.getAuthToken();
+      throwIfAborted(context?.signal);
+      const authToken = await auth.getAuthToken(context);
+      throwIfAborted(context?.signal);
+      const init: RequestInit = {
+        method: 'POST',
+        headers: requestHeaders(authToken),
+        body: JSON.stringify({ body: input.body }),
+      };
+      if (context?.signal !== undefined) {
+        init.signal = context.signal;
+      }
       const response = await fetchImpl(
         `https://api.github.com/repos/${repository}/issues/${number}/comments`,
-        {
-          method: 'POST',
-          headers: requestHeaders(authToken),
-          body: JSON.stringify({ body: input.body }),
-        },
+        init,
       );
       recordGitHubRateLimit('rest', response.headers, authToken === undefined
         ? undefined
@@ -88,18 +107,27 @@ export function createGitHubTaskProvider(options: GitHubTaskProviderOptions = {}
 async function getDefaultGitHubAuthToken(
   config: GitHubAuthConfig,
   fetchImpl: typeof fetch,
+  signal: AbortSignal | undefined,
 ): Promise<GitHubAuthToken | undefined> {
   try {
-    return await getGitHubAuthToken(config, fetchImpl);
+    throwIfAborted(signal);
+    return await getGitHubAuthToken(config, fetchImpl, signal);
   } catch (error) {
     if (!isGitHubAuthFallbackEligibleError(error)) {
       throw error;
     }
-    const fallbackToken = await getGitHubFallbackAuthToken(config);
+    throwIfAborted(signal);
+    const fallbackToken = await getGitHubFallbackAuthToken(config, undefined, signal);
     if (fallbackToken === undefined) {
       throw error;
     }
     return fallbackToken;
+  }
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) {
+    throw signal.reason ?? new Error('GitHub task provider operation aborted');
   }
 }
 

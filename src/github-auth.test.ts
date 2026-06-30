@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   clearGitHubAppTokenCache,
@@ -13,6 +13,11 @@ import {
   isGitHubRateLimitResponse,
 } from './github-auth.js';
 import { clearGitHubRateLimitSnapshots, getGitHubRateLimitSnapshots } from './github-rate-limit.js';
+
+beforeEach(() => {
+  vi.stubEnv('GH_TOKEN', '');
+  vi.stubEnv('GITHUB_TOKEN', '');
+});
 
 afterEach(() => {
   clearGitHubAppTokenCache();
@@ -72,6 +77,81 @@ describe('getGitHubToken', () => {
     }
   });
 
+  it('does not bind shared GitHub App token fetches to caller abort signals', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'rainrail-github-app-'));
+    const keyPath = join(directory, 'private-key.pem');
+    const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+    writeFileSync(keyPath, privateKey.export({ type: 'pkcs1', format: 'pem' }), 'utf8');
+    const firstController = new AbortController();
+    const secondController = new AbortController();
+    let resolveFetch: ((response: Response) => void) | undefined;
+    const requests: RequestInit[] = [];
+
+    try {
+      const config = {
+        githubApp: {
+          appId: '12345',
+          installationId: '67890',
+          privateKeyPath: keyPath,
+        },
+      };
+      const fetchImpl = vi.fn((async (_url: string | URL | Request, init?: RequestInit) => {
+        requests.push(init ?? {});
+        return await new Promise<Response>((resolve) => {
+          resolveFetch = resolve;
+        });
+      }) as typeof fetch);
+
+      const first = getGitHubToken(config, fetchImpl, firstController.signal);
+      const second = getGitHubToken(config, fetchImpl, secondController.signal);
+      await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledOnce());
+      firstController.abort(new Error('first workflow timed out'));
+      resolveFetch?.(new Response(JSON.stringify({
+        token: 'installation-token',
+        expires_at: new Date(Date.now() + 60 * 60_000).toISOString(),
+      }), {
+        status: 201,
+        headers: {
+          'content-type': 'application/json',
+          'x-ratelimit-limit': '5000',
+          'x-ratelimit-remaining': '4999',
+        },
+      }));
+
+      await expect(first).rejects.toThrow('first workflow timed out');
+      await expect(second).resolves.toBe('installation-token');
+      expect(fetchImpl).toHaveBeenCalledOnce();
+      expect(requests[0]?.signal).toBeUndefined();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('does not start a GitHub App token request when the caller signal is already aborted', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'rainrail-github-app-'));
+    const keyPath = join(directory, 'private-key.pem');
+    const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+    writeFileSync(keyPath, privateKey.export({ type: 'pkcs1', format: 'pem' }), 'utf8');
+    const controller = new AbortController();
+    controller.abort(new Error('workflow already aborted'));
+
+    try {
+      const config = {
+        githubApp: {
+          appId: '12345',
+          installationId: '67890',
+          privateKeyPath: keyPath,
+        },
+      };
+      const fetchImpl = vi.fn(async () => new Response('{}', { status: 201 })) as typeof fetch;
+
+      await expect(getGitHubToken(config, fetchImpl, controller.signal)).rejects.toThrow('workflow already aborted');
+      expect(fetchImpl).not.toHaveBeenCalled();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('prefers explicitly configured tokens over GitHub App auth', async () => {
     let requestCount = 0;
     const token = await getGitHubToken({
@@ -111,6 +191,47 @@ describe('getGitHubToken', () => {
       provider: 'configured-token',
       fallback: false,
     });
+  });
+
+  it('applies caller abort signals while waiting for gh CLI fallback tokens', async () => {
+    const controller = new AbortController();
+    let runnerSignal: AbortSignal | undefined;
+    const cliRunner = vi.fn(
+      async (_file: string, _args: string[], options: { maxBuffer: number; signal?: AbortSignal }) => {
+      runnerSignal = options.signal;
+        return await new Promise<{ stdout: string; stderr: string }>(() => undefined);
+      },
+    );
+    const token = getGitHubFallbackAuthToken({
+      githubApp: {
+        appId: '12345',
+        installationId: '67890',
+        privateKeyPath: '/does/not/matter',
+      },
+    }, cliRunner, controller.signal);
+
+    await vi.waitFor(() => expect(cliRunner).toHaveBeenCalledOnce());
+    controller.abort(new Error('fallback lookup aborted'));
+
+    await expect(token).rejects.toThrow('fallback lookup aborted');
+    expect(runnerSignal).toBe(controller.signal);
+  });
+
+  it('does not start gh CLI fallback lookup when the caller signal is already aborted', async () => {
+    const controller = new AbortController();
+    controller.abort(new Error('fallback already aborted'));
+    const cliRunner = vi.fn(async () => ({ stdout: 'gh-cli-token\n', stderr: '' }));
+
+    const token = getGitHubFallbackAuthToken({
+      githubApp: {
+        appId: '12345',
+        installationId: '67890',
+        privateKeyPath: '/does/not/matter',
+      },
+    }, cliRunner, controller.signal);
+
+    await expect(token).rejects.toThrow('fallback already aborted');
+    expect(cliRunner).not.toHaveBeenCalled();
   });
 
   it('falls back to GITHUB_TOKEN when GH_TOKEN is defined but empty', async () => {
