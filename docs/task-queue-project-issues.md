@@ -21,7 +21,10 @@ Project item は Todo/Backlog のままにする。starting lock には作成時
 相当の session/branch、元 Status を含め、dispatch が durable に始まったら
 `dispatchedAt` を追記する。TTL を過ぎた未dispatch lock は次回の claim/list 時に
 安全に回収するが、`dispatchedAt` つき lock は起動済み agent の保護として
-自動回収しない。
+自動回収しない。`dispatchedAt` 追記後に Project field 更新が途中で失敗した
+場合、list 時に lock metadata から `In Progress` / session / branch を復元する。
+復元が一時失敗しても selector には In Progress 相当として返し、同じ issue の
+重複 dispatch を防ぐ。
 
 ## closed issue handling
 

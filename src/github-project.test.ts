@@ -63,7 +63,9 @@ describe('createGitHubProjectTaskQueueProvider', () => {
       { id: 'item_1', contentId: 'issue_node_1', status: 'Done', number: 1 },
       { id: 'item_2', contentId: 'issue_node_2', status: 'Todo', number: 2 },
     ]);
-    expect(requests.map((request) => request.variables?.after)).toEqual([undefined, 'cursor_page_2']);
+    expect(requests
+      .filter((request) => request.variables?.projectNumber === 1)
+      .map((request) => request.variables?.after)).toEqual([undefined, 'cursor_page_2']);
     expect(requests[0]?.variables).toMatchObject({ organization: 'reirei-lab', projectNumber: 1 });
   });
 
@@ -1111,6 +1113,239 @@ describe('createGitHubProjectTaskQueueProvider', () => {
     expect(calls.some((call) => JSON.stringify(call).includes('dispatchedAt'))).toBe(true);
   });
 
+  it('retries recording the dispatched marker before finalizing a claim', async () => {
+    const calls: Array<{ query?: string; variables?: Record<string, unknown> }> = [];
+    const provider = createGitHubProjectTaskQueueProvider({
+      config: projectConfig(),
+      auth: { getAuthToken: async () => ({ token: 'project-token', provider: 'configured-token', fallback: false }) },
+      fetch: (async (_url, init) => {
+        const request = JSON.parse(String(init?.body)) as { query?: string; variables?: Record<string, unknown> };
+        calls.push(request);
+        if (isCreateLockCommitRequest(_url)) {
+          return lockCommitResponse(`lock_sha_${calls.length}`);
+        }
+        if (request.query?.includes('RainrailProjectItemStatus')) {
+          const updateCount = calls.filter((call) => call.query?.includes('updateProjectV2ItemFieldValue')).length;
+          return jsonResponse({
+            data: {
+              node: projectItem({
+                id: 'item_21',
+                contentId: 'issue_node_21',
+                number: 21,
+                title: 'Project issue selection',
+                status: updateCount === 0 ? 'Todo' : 'In Progress',
+                assignees: ['reirei-agent'],
+                agentSessionId: updateCount < 2 ? '' : 'agent:main:rainrail-21',
+                branchName: updateCount < 3 ? '' : 'agent/reirei-lab-rainrail-21-project-issue-selection',
+              }),
+            },
+          });
+        }
+        if (request.query?.includes('RainrailProjectMetadata')) {
+          return projectMetadataResponse();
+        }
+        if (request.query?.includes('RainrailCreateProjectIssueClaimLock')) {
+          return jsonResponse({ data: { createRef: { ref: { id: 'REF_lock' } } } });
+        }
+        if (request.query?.includes('RainrailUpdateProjectIssueClaimLock')) {
+          const markerAttempts = calls.filter((call) => call.query?.includes('RainrailUpdateProjectIssueClaimLock')).length;
+          if (markerAttempts === 1) {
+            return new Response(JSON.stringify({ errors: [{ message: 'updateRef rate limited' }] }), {
+              status: 200,
+              headers: { 'content-type': 'application/json' },
+            });
+          }
+          return jsonResponse({ data: { updateRef: { ref: { id: 'REF_lock' } } } });
+        }
+        if (request.query?.includes('RainrailDeleteProjectIssueClaimLock')) {
+          return jsonResponse({ data: { deleteRef: { clientMutationId: null } } });
+        }
+        if (request.query?.includes('addComment')) {
+          return jsonResponse({ data: { addComment: { commentEdge: { node: { id: 'comment_1' } } } } });
+        }
+        return jsonResponse({ data: { updateProjectV2ItemFieldValue: { projectV2Item: { id: 'item_21' } } } });
+      }) as typeof fetch,
+    });
+
+    const issue = {
+      id: 'item_21',
+      contentId: 'issue_node_21',
+      contentType: 'Issue' as const,
+      title: 'Project issue selection',
+      status: 'Todo',
+      assigneeLogins: ['reirei-agent'],
+    };
+    const claim = await provider.claimProjectIssue({
+      issue,
+      agentSessionId: 'agent:main:rainrail-21',
+      branchName: 'agent/reirei-lab-rainrail-21-project-issue-selection',
+      commentBody: 'started',
+    });
+
+    await expect(provider.finalizeProjectIssueClaim?.({
+      issue,
+      claim,
+      agentSessionId: 'agent:main:rainrail-21',
+      branchName: 'agent/reirei-lab-rainrail-21-project-issue-selection',
+    })).resolves.toBeUndefined();
+
+    expect(calls.filter((call) => call.query?.includes('RainrailUpdateProjectIssueClaimLock'))).toHaveLength(2);
+  });
+
+  it('treats todo items with dispatched locks as in progress while listing', async () => {
+    const calls: Array<{ query?: string; variables?: Record<string, unknown> }> = [];
+    const provider = createGitHubProjectTaskQueueProvider({
+      config: projectConfig(),
+      auth: { getAuthToken: async () => ({ token: 'project-token', provider: 'configured-token', fallback: false }) },
+      fetch: (async (_url, init) => {
+        const request = JSON.parse(String(init?.body)) as { query?: string; variables?: Record<string, unknown> };
+        calls.push(request);
+        if (request.query?.includes('RainrailProjectIssues')) {
+          return jsonResponse({
+            data: {
+              organization: {
+                projectV2: {
+                  items: {
+                    nodes: [
+                      projectItem({
+                        id: 'item_21',
+                        contentId: 'issue_node_21',
+                        number: 21,
+                        title: 'Project issue selection',
+                        status: 'Todo',
+                        assignees: ['reirei-agent'],
+                      }),
+                    ],
+                    pageInfo: { hasNextPage: false, endCursor: null },
+                  },
+                },
+              },
+            },
+          });
+        }
+        if (request.query?.includes('RainrailProjectItemStatus')) {
+          return jsonResponse({
+            data: {
+              node: projectItem({
+                id: 'item_21',
+                contentId: 'issue_node_21',
+                number: 21,
+                title: 'Project issue selection',
+                status: 'Todo',
+                assignees: ['reirei-agent'],
+              }),
+            },
+          });
+        }
+        if (request.query?.includes('RainrailProjectIssueClaimLock')) {
+          return lockRefByRepositoryResponse({
+            id: 'REF_lock_dispatched',
+            createdAt: '2000-01-01T00:00:00.000Z',
+            dispatchedAt: '2000-01-01T00:01:00.000Z',
+            agentSessionId: 'agent:main:rainrail-21',
+            branchName: 'agent/reirei-lab-rainrail-21-project-issue-selection',
+          });
+        }
+        if (request.query?.includes('RainrailProjectMetadata')) {
+          return projectMetadataResponse();
+        }
+        if (request.query?.includes('RainrailDeleteProjectIssueClaimLock')) {
+          return jsonResponse({ data: { deleteRef: { clientMutationId: null } } });
+        }
+        return jsonResponse({ data: { updateProjectV2ItemFieldValue: { projectV2Item: { id: 'item_21' } } } });
+      }) as typeof fetch,
+    });
+
+    await expect(provider.listProjectIssues()).resolves.toMatchObject([
+      { id: 'item_21', status: 'In Progress' },
+    ]);
+    expect(calls.find((call) =>
+      call.query?.includes('updateProjectV2ItemFieldValue')
+      && JSON.stringify(call.variables?.value).includes('status_in_progress')
+    )).toBeDefined();
+  });
+
+  it('restores status-only dispatched claims while listing', async () => {
+    const calls: Array<{ query?: string; variables?: Record<string, unknown> }> = [];
+    const provider = createGitHubProjectTaskQueueProvider({
+      config: projectConfig(),
+      auth: { getAuthToken: async () => ({ token: 'project-token', provider: 'configured-token', fallback: false }) },
+      fetch: (async (_url, init) => {
+        const request = JSON.parse(String(init?.body)) as { query?: string; variables?: Record<string, unknown> };
+        calls.push(request);
+        if (request.query?.includes('RainrailProjectIssues')) {
+          return jsonResponse({
+            data: {
+              organization: {
+                projectV2: {
+                  items: {
+                    nodes: [
+                      projectItem({
+                        id: 'item_21',
+                        contentId: 'issue_node_21',
+                        number: 21,
+                        title: 'Project issue selection',
+                        status: 'In Progress',
+                        assignees: ['reirei-agent'],
+                        agentSessionId: '',
+                        branchName: '',
+                      }),
+                    ],
+                    pageInfo: { hasNextPage: false, endCursor: null },
+                  },
+                },
+              },
+            },
+          });
+        }
+        if (request.query?.includes('RainrailProjectItemStatus')) {
+          return jsonResponse({
+            data: {
+              node: projectItem({
+                id: 'item_21',
+                contentId: 'issue_node_21',
+                number: 21,
+                title: 'Project issue selection',
+                status: 'In Progress',
+                assignees: ['reirei-agent'],
+                agentSessionId: '',
+                branchName: '',
+              }),
+            },
+          });
+        }
+        if (request.query?.includes('RainrailProjectIssueClaimLock')) {
+          return lockRefResponse({
+            id: 'REF_lock_dispatched',
+            createdAt: '2000-01-01T00:00:00.000Z',
+            dispatchedAt: '2000-01-01T00:01:00.000Z',
+            agentSessionId: 'agent:main:rainrail-21',
+            branchName: 'agent/reirei-lab-rainrail-21-project-issue-selection',
+          });
+        }
+        if (request.query?.includes('RainrailProjectMetadata')) {
+          return projectMetadataResponse();
+        }
+        if (request.query?.includes('RainrailDeleteProjectIssueClaimLock')) {
+          return jsonResponse({ data: { deleteRef: { clientMutationId: null } } });
+        }
+        return jsonResponse({ data: { updateProjectV2ItemFieldValue: { projectV2Item: { id: 'item_21' } } } });
+      }) as typeof fetch,
+    });
+
+    await expect(provider.listProjectIssues()).resolves.toMatchObject([
+      { id: 'item_21', status: 'In Progress' },
+    ]);
+    expect(calls.find((call) =>
+      call.query?.includes('updateProjectV2ItemFieldValue')
+      && JSON.stringify(call.variables?.value).includes('agent:main:rainrail-21')
+    )).toBeDefined();
+    expect(calls.find((call) =>
+      call.query?.includes('updateProjectV2ItemFieldValue')
+      && JSON.stringify(call.variables?.value).includes('agent/reirei-lab-rainrail-21-project-issue-selection')
+    )).toBeDefined();
+  });
+
   it('does not delete expired locks that already dispatched an agent', async () => {
     const calls: Array<{ query?: string; variables?: Record<string, unknown> }> = [];
     const provider = createGitHubProjectTaskQueueProvider({
@@ -1455,6 +1690,44 @@ function lockRefResponse(input: {
   return jsonResponse({
     data: {
       node: {
+        ref: {
+          id: input.id ?? 'REF_lock_existing',
+          target: {
+            oid: 'lock_sha_existing',
+            committedDate: createdAt,
+            message: [
+              'Rainrail project issue claim lock',
+              '',
+              JSON.stringify({
+                version: 1,
+                createdAt,
+                agentSessionId: input.agentSessionId ?? 'agent:main:other-runner',
+                branchName: input.branchName ?? 'agent/reirei-lab-rainrail-21-other-runner',
+                projectItemId: input.projectItemId ?? 'item_21',
+                originalStatus: input.originalStatus ?? 'Todo',
+                ...(input.dispatchedAt === undefined ? {} : { dispatchedAt: input.dispatchedAt }),
+              }),
+            ].join('\n'),
+          },
+        },
+      },
+    },
+  });
+}
+
+function lockRefByRepositoryResponse(input: {
+  id?: string;
+  createdAt?: string;
+  dispatchedAt?: string;
+  agentSessionId?: string;
+  branchName?: string;
+  projectItemId?: string;
+  originalStatus?: string;
+} = {}): Response {
+  const createdAt = input.createdAt ?? new Date().toISOString();
+  return jsonResponse({
+    data: {
+      repository: {
         ref: {
           id: input.id ?? 'REF_lock_existing',
           target: {

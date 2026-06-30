@@ -16,6 +16,7 @@ import type {
 } from './task-queue.js';
 
 const PROJECT_ISSUE_CLAIM_LOCK_TTL_MS = 15 * 60 * 1000;
+const PROJECT_ISSUE_CLAIM_LOCK_DISPATCH_MARK_ATTEMPTS = 3;
 const PROJECT_ISSUE_CLAIM_LOCK_COMMIT_PREFIX = 'Rainrail project issue claim lock';
 
 export interface GitHubProjectTaskQueueConfig {
@@ -156,7 +157,7 @@ async function fetchProjectIssues(
     }
     const pageIssues = items.nodes.flatMap((item) => mapProjectIssueItem(item, config));
     for (const issue of pageIssues) {
-      issues.push(await recoverStalePartialClaim(config, issue, fetchImpl, auth));
+      issues.push(await reconcileProjectIssueClaimState(config, issue, fetchImpl, auth));
     }
     after = items?.pageInfo?.hasNextPage === true && typeof items.pageInfo.endCursor === 'string'
       ? items.pageInfo.endCursor
@@ -166,13 +167,24 @@ async function fetchProjectIssues(
   return issues;
 }
 
-async function recoverStalePartialClaim(
+async function reconcileProjectIssueClaimState(
   config: GitHubProjectTaskQueueConfig,
   issue: ProjectIssue,
   fetchImpl: typeof fetch,
   auth: GitHubProjectAuthTokenProvider,
 ): Promise<ProjectIssue> {
-  if (normalizeToken(issue.status ?? '') !== normalizeToken(config.inProgressStatus)) {
+  const normalizedStatus = normalizeToken(issue.status ?? '');
+  if (
+    normalizedStatus === normalizeToken(config.todoStatus)
+    || normalizedStatus === normalizeToken(config.backlogStatus)
+  ) {
+    const lock = await loadProjectIssueClaimLockForIssue(issue, fetchImpl, auth);
+    if (lock?.dispatchedAt !== undefined && lock.projectItemId === issue.id) {
+      return restoreDispatchedProjectIssueClaim(config, issue, lock, fetchImpl, auth);
+    }
+    return issue;
+  }
+  if (normalizedStatus !== normalizeToken(config.inProgressStatus)) {
     return issue;
   }
   const current = await loadProjectItemStatus(issue.id, fetchImpl, auth, config);
@@ -185,6 +197,9 @@ async function recoverStalePartialClaim(
     return issue;
   }
   const lock = await loadProjectIssueClaimLock(current.repositoryId, projectIssueLockRefName(issue), fetchImpl, auth).catch(() => undefined);
+  if (lock?.dispatchedAt !== undefined && lock.projectItemId === issue.id) {
+    return restoreDispatchedProjectIssueClaim(config, issue, lock, fetchImpl, auth);
+  }
   if (lock === undefined || !isRecoverableStaleLock(lock, { issue })) {
     return issue;
   }
@@ -201,6 +216,36 @@ async function recoverStalePartialClaim(
   });
   await deleteProjectIssueClaimLock({ projectItemId: issue.id, lockRefId: lock.id }, fetchImpl, auth);
   return { ...issue, status: releaseStatus };
+}
+
+async function restoreDispatchedProjectIssueClaim(
+  config: GitHubProjectTaskQueueConfig,
+  issue: ProjectIssue,
+  lock: ProjectIssueClaimLock,
+  fetchImpl: typeof fetch,
+  auth: GitHubProjectAuthTokenProvider,
+): Promise<ProjectIssue> {
+  if (lock.agentSessionId === undefined || lock.branchName === undefined) {
+    return { ...issue, status: config.inProgressStatus };
+  }
+  try {
+    const metadata = await loadProjectMetadata(config, fetchImpl, auth);
+    if (normalizeToken(issue.status ?? '') !== normalizeToken(config.inProgressStatus)) {
+      await updateProjectField(fetchImpl, auth, metadata.projectId, issue.id, metadata.statusFieldId, {
+        singleSelectOptionId: metadata.statusOptionId,
+      });
+    }
+    await updateProjectField(fetchImpl, auth, metadata.projectId, issue.id, metadata.agentSessionIdFieldId, {
+      text: lock.agentSessionId,
+    });
+    await updateProjectField(fetchImpl, auth, metadata.projectId, issue.id, metadata.branchFieldId, {
+      text: lock.branchName,
+    });
+    await deleteProjectIssueClaimLock({ projectItemId: issue.id, lockRefId: lock.id }, fetchImpl, auth).catch(() => undefined);
+  } catch {
+    return { ...issue, status: config.inProgressStatus };
+  }
+  return { ...issue, status: config.inProgressStatus };
 }
 
 async function claimProjectIssue(
@@ -348,13 +393,22 @@ async function markProjectIssueClaimDispatched(
   if (input.claim.lockRefId === undefined) {
     return;
   }
-  const lockOid = await createProjectIssueClaimLockCommit(status, {
-    issue: input.issue,
-    agentSessionId: input.agentSessionId,
-    branchName: input.branchName,
-    commentBody: input.claim.commentBody ?? '',
-  }, fetchImpl, auth, { dispatchedAt: new Date().toISOString() });
-  await updateProjectIssueClaimLock(input.claim.lockRefId, lockOid, fetchImpl, auth);
+  let lastError: unknown;
+  for (let attempt = 0; attempt < PROJECT_ISSUE_CLAIM_LOCK_DISPATCH_MARK_ATTEMPTS; attempt += 1) {
+    try {
+      const lockOid = await createProjectIssueClaimLockCommit(status, {
+        issue: input.issue,
+        agentSessionId: input.agentSessionId,
+        branchName: input.branchName,
+        commentBody: input.claim.commentBody ?? '',
+      }, fetchImpl, auth, { dispatchedAt: new Date().toISOString() });
+      await updateProjectIssueClaimLock(input.claim.lockRefId, lockOid, fetchImpl, auth);
+      return;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
 async function createProjectIssueClaimLockCommit(
@@ -447,7 +501,50 @@ async function loadProjectIssueClaimLock(
       qualifiedName: qualifiedRefName(name),
     },
   );
-  const ref = isRecord(payload.node) && isRecord(payload.node.ref) ? payload.node.ref : undefined;
+  return parseProjectIssueClaimLockRef(isRecord(payload.node) ? payload.node.ref : undefined);
+}
+
+async function loadProjectIssueClaimLockForIssue(
+  issue: ProjectIssue,
+  fetchImpl: typeof fetch,
+  auth: GitHubProjectAuthTokenProvider,
+): Promise<ProjectIssueClaimLock | undefined> {
+  if (issue.repository === undefined) {
+    return undefined;
+  }
+  let owner: string;
+  let repo: string;
+  try {
+    [owner, repo] = splitRepositoryNameWithOwner(issue.repository);
+  } catch {
+    return undefined;
+  }
+  return loadProjectIssueClaimLockByRepositoryName(owner, repo, projectIssueLockRefName(issue), fetchImpl, auth)
+    .catch(() => undefined);
+}
+
+async function loadProjectIssueClaimLockByRepositoryName(
+  owner: string,
+  repo: string,
+  name: string,
+  fetchImpl: typeof fetch,
+  auth: GitHubProjectAuthTokenProvider,
+): Promise<ProjectIssueClaimLock> {
+  const payload = await runGraphql<{ repository?: unknown }>(
+    fetchImpl,
+    auth,
+    projectIssueClaimLockByRepositoryQuery,
+    {
+      owner,
+      repo,
+      qualifiedName: qualifiedRefName(name),
+    },
+  );
+  return parseProjectIssueClaimLockRef(isRecord(payload.repository) ? payload.repository.ref : undefined);
+}
+
+function parseProjectIssueClaimLockRef(refValue: unknown): ProjectIssueClaimLock {
+  const ref = isRecord(refValue) ? refValue : undefined;
   const target = isRecord(ref?.target) ? ref.target : undefined;
   if (!isRecord(ref) || typeof ref.id !== 'string' || !isRecord(target)) {
     throw new Error('GitHub Project issue claim lock response is missing existing ref');
@@ -1205,6 +1302,23 @@ const projectIssueClaimLockQuery = `
               committedDate
               message
             }
+          }
+        }
+      }
+    }
+  }
+`;
+
+const projectIssueClaimLockByRepositoryQuery = `
+  query RainrailProjectIssueClaimLockByRepository($owner: String!, $repo: String!, $qualifiedName: String!) {
+    repository(owner: $owner, name: $repo) {
+      ref(qualifiedName: $qualifiedName) {
+        id
+        target {
+          oid
+          ... on Commit {
+            committedDate
+            message
           }
         }
       }
