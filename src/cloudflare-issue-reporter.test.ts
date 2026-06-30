@@ -427,6 +427,38 @@ describe('cloudflare issue reporter workflow', () => {
     expect(criticalSection).not.toHaveBeenCalled();
   });
 
+  it('does not overwrite a newer storage fingerprint lock while releasing', async () => {
+    const values = new Map<string, unknown>();
+    const lockKey = 'rainrail:cloudflare-error-issue:lock:reirei-lab/rainrail:sha256:storage-lock-release-race';
+    const store = createStorageCloudflareErrorIssueStore({
+      get: async (key) => values.get(key),
+      put: async (key, value) => {
+        if (key === lockKey && isLockReleaseValue(value)) {
+          values.set(key, { owner: 'new-runner', expiresAt: Date.now() + 60_000 });
+        }
+        values.set(key, value);
+      },
+      compareAndSet: async (key, expected, value) => {
+        if (key === lockKey && isLockReleaseValue(value)) {
+          values.set(key, { owner: 'new-runner', expiresAt: Date.now() + 60_000 });
+          return false;
+        }
+        if (!Object.is(values.get(key), expected)) return false;
+        values.set(key, value);
+        return true;
+      },
+    });
+
+    await expect(store.withFingerprintLock?.({
+      repository: 'reirei-lab/rainrail',
+      fingerprint: 'sha256:storage-lock-release-race',
+    }, async () => 'locked')).resolves.toBe('locked');
+
+    expect(values.get(lockKey)).toMatchObject({
+      owner: 'new-runner',
+    });
+  });
+
   it('uses the first exception with a usable stack', () => {
     const candidate = cloudflareErrorCandidateFromEvent(cloudflareErrorEvent({
       leadingStacklessException: true,
@@ -823,8 +855,8 @@ describe('cloudflare issue redaction', () => {
 
     await expect(workflow.handle(cloudflareErrorEvent({
       message: [
-        'serialized {"apiKeyValue":"api-key-value-secret","tokens":["abc]def"],"password_hash":"hash-secret","token":{"meta":{},"value":"nested-object-secret"}}',
-        'tokens=["kv-array-secret-1","kv-array-secret-2"] passwords=[kv-password-1,kv-password-2]',
+        'serialized {"apiKeyValue":"api-key-value-secret","auth.token":"dot-token-secret","tokens":["abc]def"],"password.hash":"dot-hash-secret","password_hash":"hash-secret","token":{"meta":{},"value":"nested-object-secret"}}',
+        'tokens=["kv-array-secret-1","kv-array-secret-2"] passwords=[kv-password-1,kv-password-2] token="quoted-token-secret" password=\'quoted-password-secret\'',
         'secretValue=secret-value-secret',
         'cookie=session=session-secret; csrf=csrf-secret',
       ].join(' '),
@@ -833,23 +865,31 @@ describe('cloudflare issue redaction', () => {
     });
 
     expect(createdIssues[0]?.body).not.toContain('api-key-value-secret');
+    expect(createdIssues[0]?.body).not.toContain('dot-token-secret');
     expect(createdIssues[0]?.body).not.toContain('abc');
     expect(createdIssues[0]?.body).not.toContain('def');
+    expect(createdIssues[0]?.body).not.toContain('dot-hash-secret');
     expect(createdIssues[0]?.body).not.toContain('hash-secret');
     expect(createdIssues[0]?.body).not.toContain('nested-object-secret');
     expect(createdIssues[0]?.body).not.toContain('kv-array-secret-1');
     expect(createdIssues[0]?.body).not.toContain('kv-array-secret-2');
     expect(createdIssues[0]?.body).not.toContain('kv-password-1');
     expect(createdIssues[0]?.body).not.toContain('kv-password-2');
+    expect(createdIssues[0]?.body).not.toContain('quoted-token-secret');
+    expect(createdIssues[0]?.body).not.toContain('quoted-password-secret');
     expect(createdIssues[0]?.body).not.toContain('secret-value-secret');
     expect(createdIssues[0]?.body).not.toContain('session-secret');
     expect(createdIssues[0]?.body).not.toContain('csrf-secret');
     expect(createdIssues[0]?.body).toContain('\\"apiKeyValue\\":\\"[redacted]\\"');
+    expect(createdIssues[0]?.body).toContain('\\"auth.token\\":\\"[redacted]\\"');
     expect(createdIssues[0]?.body).toContain('\\"tokens\\":[redacted]');
+    expect(createdIssues[0]?.body).toContain('\\"password.hash\\":\\"[redacted]\\"');
     expect(createdIssues[0]?.body).toContain('\\"password_hash\\":\\"[redacted]\\"');
     expect(createdIssues[0]?.body).toContain('\\"token\\":[redacted]');
     expect(createdIssues[0]?.body).toContain('tokens=[redacted]');
     expect(createdIssues[0]?.body).toContain('passwords=[redacted]');
+    expect(createdIssues[0]?.body).toContain('token=[redacted]');
+    expect(createdIssues[0]?.body).toContain('password=[redacted]');
     expect(createdIssues[0]?.body).toContain('secretValue=[redacted]');
     expect(createdIssues[0]?.body).toContain('cookie=[redacted]');
   });
@@ -1194,6 +1234,14 @@ describe('cloudflare issue redaction', () => {
     expect(createdIssues[0]?.body.length).toBeLessThan(20_000);
   });
 });
+
+function isLockReleaseValue(value: unknown): boolean {
+  return typeof value === 'object'
+    && value !== null
+    && !Array.isArray(value)
+    && 'expiresAt' in value
+    && value.expiresAt === 0;
+}
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));

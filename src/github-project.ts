@@ -217,20 +217,63 @@ async function addMentionDraftItem(
   fetchImpl: typeof fetch,
   auth: GitHubProjectAuthTokenProvider,
 ): Promise<ProjectMentionDraftItem> {
+  const normalizedInput = normalizeMentionDraftInput(input);
   const metadata = await loadProjectMetadata(config, fetchImpl, auth);
-  const existing = await findExistingMentionDraftItem(config, input, fetchImpl, auth);
+  const existing = await findExistingMentionDraftItem(config, normalizedInput, fetchImpl, auth);
   if (existing !== undefined) {
     return reuseMentionDraftItem(config, metadata, existing, fetchImpl, auth);
   }
 
-  return withMentionDraftCreationLock(config, input, fetchImpl, auth, async () => {
-    const lockedExisting = await findExistingMentionDraftItem(config, input, fetchImpl, auth);
+  return withMentionDraftCreationLock(config, normalizedInput, fetchImpl, auth, async () => {
+    const lockedExisting = await findExistingMentionDraftItem(config, normalizedInput, fetchImpl, auth);
     if (lockedExisting !== undefined) {
       return reuseMentionDraftItem(config, metadata, lockedExisting, fetchImpl, auth);
     }
 
-    return createMentionDraftItem(metadata, input, fetchImpl, auth);
+    return createMentionDraftItem(metadata, normalizedInput, fetchImpl, auth);
   });
+}
+
+function normalizeMentionDraftInput(input: ProjectMentionDraftInput): ProjectMentionDraftInput {
+  const fromUrl = mentionDraftRepositoryFromUrl(input.commentUrl);
+  const repository = input.repository ?? fromUrl?.repository;
+  const number = input.number ?? fromUrl?.number;
+  if (repository === undefined) {
+    throw new Error('Mention draft repository is required');
+  }
+  return {
+    ...input,
+    repository,
+    ...(number === undefined ? {} : { number }),
+    body: mentionDraftBodyWithRepository(input.body, repository, number),
+  };
+}
+
+function mentionDraftRepositoryFromUrl(value: string): { repository: string; number?: number } | undefined {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'https:' || url.hostname !== 'github.com') return undefined;
+    const parts = url.pathname.split('/').filter((part) => part.length > 0);
+    if (parts.length < 4 || parts[2] !== 'issues') return undefined;
+    const number = Number.parseInt(parts[3] ?? '', 10);
+    return {
+      repository: `${parts[0]}/${parts[1]}`,
+      ...(Number.isInteger(number) ? { number } : {}),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function mentionDraftBodyWithRepository(body: string, repository: string, number: number | undefined): string {
+  const lines = body.split('\n');
+  if (!lines.some((line) => /^Repository:/iu.test(line))) {
+    lines.push(`Repository: ${repository}`);
+  }
+  if (number !== undefined && !lines.some((line) => /^Number:/iu.test(line))) {
+    lines.push(`Number: ${number}`);
+  }
+  return lines.join('\n');
 }
 
 async function reuseMentionDraftItem(

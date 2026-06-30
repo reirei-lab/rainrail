@@ -584,8 +584,8 @@ function normalizeCloudflareExceptionString(key: 'name' | 'message' | 'stack', v
     return truncatePayloadText(sanitized, MAX_CLOUDFLARE_EXCEPTION_MESSAGE_LENGTH);
   }
   if (key === 'stack') {
-    return truncatePayloadText(
-      truncatePayloadLines(sanitized, MAX_CLOUDFLARE_EXCEPTION_STACK_LINES),
+    return truncatePayloadStackText(
+      truncatePayloadStackLines(sanitized, MAX_CLOUDFLARE_EXCEPTION_STACK_LINES),
       MAX_CLOUDFLARE_EXCEPTION_STACK_LENGTH,
     );
   }
@@ -720,19 +720,20 @@ function sanitizePayloadText(value: string): string {
     .replace(/https?:\/\/[^\s"'<>`]+/giu, (url) => sanitizePayloadUrl(url) ?? '[redacted-url]')
     .replace(/\b(cookie|set-cookie)\s*:\s*[^\r\n]+/giu, '$1: [redacted]')
     .replace(/\bauthorization\s*:\s*[^\r\n]+/giu, 'authorization: [redacted]')
-    .replace(/(["'])([A-Za-z0-9_-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification)[A-Za-z0-9_-]*)\1(\s*:\s*)(["'])(?:\\.|(?!\4)[^\\])*\4/giu, '$1$2$1$3$4[redacted]$4')
-    .replace(/(^|[{\s"'<>`,;])(["']?)([A-Za-z0-9_-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification)[A-Za-z0-9_-]*)\2(\s*:\s*)(["'])(?:\\.|(?!\5)[^\\])*\5/giu, '$1$2$3$2$4$5[redacted]$5')
-    .replace(/(["'])([A-Za-z0-9_-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification)[A-Za-z0-9_-]*)\1(\s*:\s*)(["'])(?:\\.|(?!\4)[^\\])*$/giu, '$1$2$1$3$4[redacted]$4')
-    .replace(/(^|[{\s"'<>`,;])(["']?)([A-Za-z0-9_-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification)[A-Za-z0-9_-]*)\2(\s*:\s*)(["'])(?:\\.|(?!\5)[^\\])*$/giu, '$1$2$3$2$4$5[redacted]$5')
-    .replace(/(^|[{\s"'<>`,;])(["']?)([A-Za-z0-9_-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification)[A-Za-z0-9_-]*)\2(\s*:\s*)(?!["'])([^,\s\r\n}\]]+)/giu, '$1$2$3$2$4[redacted]')
-    .replace(/(^|[.?&\s"'<>`,;])([A-Za-z0-9_-]*authorization[A-Za-z0-9_-]*)=([^\r\n"'<>`,;]*?)(?=(?:\s+[A-Za-z0-9_-]*(?:authorization|cookie|set-cookie|token|secret|password|key|code|reset|verification)[A-Za-z0-9_-]*=)|[&\r\n"'<>`,;]|$)/giu, '$1$2=[redacted]')
-    .replace(/(^|[.?&\s"'<>`,;])([A-Za-z0-9_-]*(?:cookie|set-cookie)[A-Za-z0-9_-]*)=([^;\s\r\n"'<>`,]*(?:;\s*[^=;\s\r\n"'<>`,]+=[^;\s\r\n"'<>`,]*)*)/giu, '$1$2=[redacted]')
-    .replace(/(^|[.?&\s"'<>`,;])([A-Za-z0-9_-]*(?:token|secret|password|key|code|reset|verification)[A-Za-z0-9_-]*)=([^&\s"'<>`,;]+)/giu, '$1$2=[redacted]')
+    .replace(/(["'])([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification)[A-Za-z0-9_.-]*)\1(\s*:\s*)(["'])(?:\\.|(?!\4)[^\\])*\4/giu, '$1$2$1$3$4[redacted]$4')
+    .replace(/(^|[{\s"'<>`,;])(["']?)([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification)[A-Za-z0-9_.-]*)\2(\s*:\s*)(["'])(?:\\.|(?!\5)[^\\])*\5/giu, '$1$2$3$2$4$5[redacted]$5')
+    .replace(/(["'])([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification)[A-Za-z0-9_.-]*)\1(\s*:\s*)(["'])(?:\\.|(?!\4)[^\\])*$/giu, '$1$2$1$3$4[redacted]$4')
+    .replace(/(^|[{\s"'<>`,;])(["']?)([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification)[A-Za-z0-9_.-]*)\2(\s*:\s*)(["'])(?:\\.|(?!\5)[^\\])*$/giu, '$1$2$3$2$4$5[redacted]$5')
+    .replace(/(^|[{\s"'<>`,;])(["']?)([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification)[A-Za-z0-9_.-]*)\2(\s*:\s*)(?!["'])([^,\s\r\n}\]]+)/giu, '$1$2$3$2$4[redacted]')
+    .replace(/(^|[.?&\s"'<>`,;])(["']?)([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification)[A-Za-z0-9_.-]*)\2=(["'])(?:\\.|(?!\4)[^\\])*\4/giu, '$1$2$3$2=[redacted]')
+    .replace(/(^|[.?&\s"'<>`,;])([A-Za-z0-9_.-]*authorization[A-Za-z0-9_.-]*)=([^\r\n"'<>`,;]*?)(?=(?:\s+[A-Za-z0-9_.-]*(?:authorization|cookie|set-cookie|token|secret|password|key|code|reset|verification)[A-Za-z0-9_.-]*=)|[&\r\n"'<>`,;]|$)/giu, '$1$2=[redacted]')
+    .replace(/(^|[.?&\s"'<>`,;])([A-Za-z0-9_.-]*(?:cookie|set-cookie)[A-Za-z0-9_.-]*)=([^;\s\r\n"'<>`,]*(?:;\s*[^=;\s\r\n"'<>`,]+=[^;\s\r\n"'<>`,]*)*)/giu, '$1$2=[redacted]')
+    .replace(/(^|[.?&\s"'<>`,;])([A-Za-z0-9_.-]*(?:token|secret|password|key|code|reset|verification)[A-Za-z0-9_.-]*)=([^&\s"'<>`,;]+)/giu, '$1$2=[redacted]')
     .replace(/\bBearer\s+[A-Za-z0-9._~+/-]+=*/giu, 'Bearer [redacted]');
 }
 
 function redactPayloadSecretStructuredValues(value: string): string {
-  const keyPattern = /(^|[{\s"'<>`,;])(["']?)([A-Za-z0-9_-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification)[A-Za-z0-9_-]*)\2(\s*[:=]\s*)([\[{])/giu;
+  const keyPattern = /(^|[{\s"'<>`,;])(["']?)([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification)[A-Za-z0-9_.-]*)\2(\s*[:=]\s*)([\[{])/giu;
   let redacted = '';
   let cursor = 0;
   for (const match of value.matchAll(keyPattern)) {
@@ -817,6 +818,70 @@ function truncatePayloadLines(value: string, maxLines: number): string {
   const lines = value.split(/\r?\n/u);
   if (lines.length <= maxLines) return value;
   return `${lines.slice(0, maxLines).join('\n')}\n... truncated ...`;
+}
+
+function truncatePayloadStackLines(value: string, maxLines: number): string {
+  const fallbackLines: string[] = [];
+  const keptLines: string[] = [];
+  let frameSeen = false;
+  let truncated = false;
+  let cursor = 0;
+
+  while (cursor <= value.length) {
+    const nextLineBreak = value.indexOf('\n', cursor);
+    const lineEnd = nextLineBreak === -1 ? value.length : nextLineBreak;
+    const line = value.slice(cursor, lineEnd).replace(/\r$/u, '');
+    if (fallbackLines.length < maxLines) {
+      fallbackLines.push(line);
+    } else {
+      truncated = true;
+    }
+    if (isPayloadStackFrameLine(line)) {
+      frameSeen = true;
+      if (keptLines.length < maxLines) {
+        keptLines.push(line);
+      } else {
+        truncated = true;
+      }
+    } else if (!frameSeen) {
+      if (keptLines.length < Math.min(2, maxLines)) {
+        keptLines.push(truncatePayloadStackContextLine(line));
+      } else {
+        truncated = true;
+      }
+    } else if (keptLines.length < maxLines) {
+      keptLines.push(line);
+    } else {
+      truncated = true;
+    }
+    if (nextLineBreak === -1) break;
+    cursor = nextLineBreak + 1;
+  }
+
+  const lines = frameSeen ? keptLines : fallbackLines;
+  if (!truncated) return value;
+  return `${lines.join('\n')}\n... truncated ...`;
+}
+
+function truncatePayloadStackText(value: string, maxLength: number): string {
+  if (value.length <= maxLength) return value;
+  const lines = value.split('\n');
+  const kept = lines
+    .filter((line, index) => index < 2 || isPayloadStackFrameLine(line) || line === '... truncated ...')
+    .map((line) => isPayloadStackFrameLine(line) || line === '... truncated ...' ? line : truncatePayloadStackContextLine(line));
+  const output = kept.join('\n');
+  if (output.length <= maxLength) return output.includes('... truncated ...') ? output : `${output}\n... truncated ...`;
+  return `${output.slice(0, maxLength - '\n... truncated ...'.length)}\n... truncated ...`;
+}
+
+function isPayloadStackFrameLine(line: string): boolean {
+  return /^\s*at\s+\S+/u.test(line);
+}
+
+function truncatePayloadStackContextLine(line: string): string {
+  const maxLength = 200;
+  if (line.length <= maxLength) return line;
+  return `${line.slice(0, maxLength)} ... truncated ...`;
 }
 
 function isSafePayloadMetadata(value: unknown): value is string | null {

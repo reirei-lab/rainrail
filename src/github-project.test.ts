@@ -147,6 +147,71 @@ describe('createGitHubProjectTaskQueueProvider', () => {
     });
   });
 
+  it('fills mention draft repository metadata from the comment URL before creating', async () => {
+    const calls: Array<{ query?: string; variables?: Record<string, unknown> }> = [];
+    const provider = createGitHubProjectTaskQueueProvider({
+      config: projectConfig(),
+      auth: { getAuthToken: async () => ({ token: 'project-token', provider: 'configured-token', fallback: false }) },
+      fetch: (async (_url, init) => {
+        const request = JSON.parse(String(init?.body)) as { query?: string; variables?: Record<string, unknown> };
+        calls.push(request);
+        if (request.query?.includes('RainrailProjectMetadata')) {
+          return projectMetadataResponse();
+        }
+        if (request.query?.includes('RainrailMentionDraftItems')) {
+          return mentionDraftItemsResponse([]);
+        }
+        if (request.query?.includes('RainrailAddProjectDraftIssue')) {
+          return jsonResponse({ data: { addProjectV2DraftIssue: { projectItem: { id: 'PVTI_draft' } } } });
+        }
+        return jsonResponse({ data: { updateProjectV2ItemFieldValue: { projectV2Item: { id: 'PVTI_draft' } } } });
+      }) as typeof fetch,
+    });
+
+    await expect(provider.addMentionDraftItem?.({
+      title: 'Respond to reirei-lab/rainrail#24',
+      body: '<!-- rainrail mention-draft -->\nMention URL: https://github.com/reirei-lab/rainrail/issues/24#issuecomment-1\nAgent: reirei-agent',
+      commentUrl: 'https://github.com/reirei-lab/rainrail/issues/24#issuecomment-1',
+    })).resolves.toMatchObject({
+      projectItemId: 'PVTI_draft',
+      created: true,
+    });
+
+    const createVariables = calls.find((call) => call.query?.includes('RainrailAddProjectDraftIssue'))?.variables;
+    expect(createVariables?.body).toContain('Repository: reirei-lab/rainrail');
+    expect(createVariables?.body).toContain('Number: 24');
+  });
+
+  it('does not create mention drafts when the repository cannot be recovered', async () => {
+    const calls: Array<{ query?: string; variables?: Record<string, unknown> }> = [];
+    const provider = createGitHubProjectTaskQueueProvider({
+      config: projectConfig(),
+      auth: { getAuthToken: async () => ({ token: 'project-token', provider: 'configured-token', fallback: false }) },
+      fetch: (async (_url, init) => {
+        const request = JSON.parse(String(init?.body)) as { query?: string; variables?: Record<string, unknown> };
+        calls.push(request);
+        if (request.query?.includes('RainrailProjectMetadata')) {
+          return projectMetadataResponse();
+        }
+        if (request.query?.includes('RainrailMentionDraftItems')) {
+          return mentionDraftItemsResponse([]);
+        }
+        if (request.query?.includes('RainrailAddProjectDraftIssue')) {
+          throw new Error('should not create draft');
+        }
+        return jsonResponse({ data: {} });
+      }) as typeof fetch,
+    });
+
+    await expect(provider.addMentionDraftItem?.({
+      title: 'Respond to an unknown mention',
+      body: '<!-- rainrail mention-draft -->\nMention URL: https://example.test/comment/1\nAgent: reirei-agent',
+      commentUrl: 'https://example.test/comment/1',
+    })).rejects.toThrow('repository');
+
+    expect(calls.some((call) => call.query?.includes('RainrailAddProjectDraftIssue'))).toBe(false);
+  });
+
   it('rechecks mention draft existence under a repository lock before creating', async () => {
     const calls: Array<{ query?: string; variables?: Record<string, unknown> }> = [];
     let mentionDraftReads = 0;

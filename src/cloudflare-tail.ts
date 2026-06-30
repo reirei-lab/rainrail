@@ -104,7 +104,8 @@ export async function createCloudflareTailEvent({
   const scriptName = optionalString(tailEvent.scriptName);
   const scriptVersion = optionalString(tailEvent.scriptVersion?.id);
   const method = optionalString(request.method);
-  const url = optionalString(request.url);
+  const rawUrl = optionalString(request.url);
+  const url = rawUrl === null ? null : sanitizeTailUrl(rawUrl);
   const status = optionalStatus(response.status);
   const exceptions = normalizeExceptions(tailEvent.exceptions);
   const action = normalizeAction(tailEvent.outcome, exceptions);
@@ -302,13 +303,13 @@ function normalizeExceptions(value: unknown): CloudflareTailException[] {
 function optionalField(record: Record<string, unknown>, key: 'name' | 'message' | 'stack'): Record<typeof key, string> | {} {
   const value = optionalString(record[key]);
   if (value === null) return {};
-  return { [key]: boundedExceptionField(key, value) };
+  return { [key]: boundedExceptionField(key, sanitizeTailSecretString(value)) };
 }
 
 function boundedExceptionField(key: 'name' | 'message' | 'stack', value: string): string {
   if (key === 'name') return truncateText(value, MAX_EXCEPTION_NAME_LENGTH);
   if (key === 'message') return truncateText(value, MAX_EXCEPTION_MESSAGE_LENGTH);
-  return truncateText(truncateStackLines(value, MAX_EXCEPTION_STACK_LINES), MAX_EXCEPTION_STACK_LENGTH);
+  return truncateStackText(truncateStackLines(value, MAX_EXCEPTION_STACK_LINES), MAX_EXCEPTION_STACK_LENGTH);
 }
 
 function truncateText(value: string, maxLength: number): string {
@@ -354,7 +355,7 @@ function truncateStackLines(value: string, maxLines: number): string {
       }
     } else if (!frameSeen) {
       if (keptLines.length < Math.min(2, maxLines)) {
-        keptLines.push(line);
+        keptLines.push(truncateStackContextLine(line));
       } else {
         truncated = true;
       }
@@ -375,6 +376,67 @@ function truncateStackLines(value: string, maxLines: number): string {
 
 function isUsableStackFrameLine(line: string): boolean {
   return /^\s*at\s+\S+/u.test(line);
+}
+
+function truncateStackText(value: string, maxLength: number): string {
+  if (value.length <= maxLength) return value;
+  const lines = value.split('\n');
+  const kept = lines
+    .filter((line, index) => index < 2 || isUsableStackFrameLine(line) || line === '... truncated ...')
+    .map((line) => isUsableStackFrameLine(line) || line === '... truncated ...' ? line : truncateStackContextLine(line));
+  const output = kept.join('\n');
+  if (output.length <= maxLength) return output.includes('... truncated ...') ? output : `${output}\n... truncated ...`;
+  return `${output.slice(0, maxLength - '\n... truncated ...'.length)}\n... truncated ...`;
+}
+
+function truncateStackContextLine(line: string): string {
+  const maxLength = 200;
+  if (line.length <= maxLength) return line;
+  return `${line.slice(0, maxLength)} ... truncated ...`;
+}
+
+function sanitizeTailUrl(value: string): string | null {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'https:') return null;
+    url.username = '';
+    url.password = '';
+    url.pathname = sanitizeTailPathname(url.pathname);
+    url.search = '';
+    url.hash = '';
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
+function sanitizeTailPathname(pathname: string): string {
+  const segments = pathname.split('/');
+  return segments.map((segment, index) => {
+    if (segment.length === 0) return segment;
+    const previous = segments[index - 1]?.toLowerCase() ?? '';
+    if (/^(token|secret|password|code|reset|magic-link|invite|session|auth|verify|verification)$/iu.test(previous)) {
+      return '[redacted]';
+    }
+    if (/^(token|secret|password|code|reset)$/iu.test(segment)) {
+      return '[redacted]';
+    }
+    return /^[A-Za-z0-9_-]{16,}$/u.test(segment) && /[A-Za-z]/u.test(segment) && /\d/u.test(segment)
+      ? '[redacted]'
+      : segment;
+  }).join('/') || '/';
+}
+
+function sanitizeTailSecretString(value: string): string {
+  return value
+    .replace(/https?:\/\/[^\s"'<>`]+/giu, (url) => sanitizeTailUrl(url) ?? '[redacted-url]')
+    .replace(/\b(cookie|set-cookie)\s*:\s*[^\r\n]+/giu, '$1: [redacted]')
+    .replace(/\bauthorization\s*:\s*[^\r\n]+/giu, 'authorization: [redacted]')
+    .replace(/(^|[.?&\s"'<>`,;])(["']?)([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification)[A-Za-z0-9_.-]*)\2=(["'])(?:\\.|(?!\4)[^\\])*\4/giu, '$1$2$3$2=[redacted]')
+    .replace(/(^|[.?&\s"'<>`,;])([A-Za-z0-9_.-]*authorization[A-Za-z0-9_.-]*)=([^\r\n"'<>`,;]*?)(?=(?:\s+[A-Za-z0-9_.-]*(?:authorization|cookie|set-cookie|token|secret|password|key|code|reset|verification)[A-Za-z0-9_.-]*=)|[&\r\n"'<>`,;]|$)/giu, '$1$2=[redacted]')
+    .replace(/(^|[.?&\s"'<>`,;])([A-Za-z0-9_.-]*(?:cookie|set-cookie)[A-Za-z0-9_.-]*)=([^;\s\r\n"'<>`,]*(?:;\s*[^=;\s\r\n"'<>`,]+=[^;\s\r\n"'<>`,]*)*)/giu, '$1$2=[redacted]')
+    .replace(/(^|[.?&\s"'<>`,;])([A-Za-z0-9_.-]*(?:token|secret|password|key|code|reset|verification)[A-Za-z0-9_.-]*)=([^&\s"'<>`,;]+)/giu, '$1$2=[redacted]')
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/-]+=*/giu, 'Bearer [redacted]');
 }
 
 function optionalTimestampField(value: unknown): { timestamp: string } | {} {

@@ -154,6 +154,36 @@ describe('Cloudflare tail source', () => {
     expect(createdIssues[0]?.title).toBe('[asme-site] TypeError in resolveCurrentHumanAccount');
   });
 
+  it('redacts tail URLs and exception strings before publishing while keeping stack frames', async () => {
+    const event = await createCloudflareTailEvent({
+      tailEvent: cloudflareTailFixture({
+        outcome: 'exception',
+        url: 'https://asme.dev/token/secret-path-value/me?token=tail-url-secret#access_token=fragment-secret',
+        exceptions: [{
+          name: 'TypeError token=tail-name-secret',
+          message: 'failed token="tail-message-secret" authorization: Bearer tail-auth-secret',
+          stack: [
+            `TypeError: ${'x'.repeat(1_500)} token=tail-stack-secret`,
+            '    at resolveCurrentHumanAccount (worker.js:1510:24)',
+            '    at handleCurrentHuman (worker.js:1377:18)',
+          ].join('\n'),
+        }],
+      }),
+      receivedAt: new Date('2026-06-15T08:12:01.000Z'),
+    });
+
+    expect(event.payload.url).toBe('https://asme.dev/[redacted]/[redacted]/me');
+    expect(JSON.stringify(event.payload)).not.toContain('tail-url-secret');
+    expect(JSON.stringify(event.payload)).not.toContain('fragment-secret');
+    expect(JSON.stringify(event.payload)).not.toContain('tail-name-secret');
+    expect(JSON.stringify(event.payload)).not.toContain('tail-message-secret');
+    expect(JSON.stringify(event.payload)).not.toContain('tail-auth-secret');
+    expect(JSON.stringify(event.payload)).not.toContain('tail-stack-secret');
+    expect(event.payload.exceptions[0]?.message).toContain('token=[redacted]');
+    expect(event.payload.exceptions[0]?.stack).toContain('resolveCurrentHumanAccount');
+    expect(event.payload.exceptions[0]?.stack).toContain('... truncated ...');
+  });
+
   it('normalizes successful Cloudflare Worker invocations as cloudflare.tail events', async () => {
     const event = await createCloudflareTailEvent({
       tailEvent: cloudflareTailFixture({ outcome: 'ok', status: 200, cfRay: 'ray-2' }),
