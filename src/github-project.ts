@@ -165,7 +165,7 @@ async function claimProjectIssue(
   let statusUpdated = false;
   let comment: { addComment?: { commentEdge?: { node?: { url?: unknown } } } };
   try {
-    const lockRefId = await acquireProjectIssueClaimLock(before, input, fetchImpl, auth);
+    const lockRefId = await acquireProjectIssueClaimLock(before, input, config, fetchImpl, auth);
     claim = {
       projectId: metadata.projectId,
       projectItemId: input.issue.id,
@@ -197,13 +197,17 @@ async function claimProjectIssue(
     );
   } catch (error) {
     if (claim !== undefined) {
-      await releaseProjectIssue(config, {
-        issue: input.issue,
-        claim,
-        agentSessionId: input.agentSessionId,
-        branchName: input.branchName,
-        reason: error instanceof Error ? error.message : String(error),
-      }, fetchImpl, auth);
+      if (statusUpdated) {
+        await releaseProjectIssue(config, {
+          issue: input.issue,
+          claim,
+          agentSessionId: input.agentSessionId,
+          branchName: input.branchName,
+          reason: error instanceof Error ? error.message : String(error),
+        }, fetchImpl, auth);
+      } else {
+        await deleteProjectIssueClaimLock(claim, fetchImpl, auth);
+      }
     }
     throw error;
   }
@@ -239,14 +243,14 @@ async function releaseProjectIssue(
   const releaseStatusOptionId = normalizeToken(input.issue.status ?? config.todoStatus) === normalizeToken(config.backlogStatus)
     ? metadata.backlogStatusOptionId
     : metadata.todoStatusOptionId;
-  await updateProjectField(fetchImpl, auth, metadata.projectId, input.issue.id, metadata.statusFieldId, {
-    singleSelectOptionId: releaseStatusOptionId,
-  });
   await updateProjectField(fetchImpl, auth, metadata.projectId, input.issue.id, metadata.agentSessionIdFieldId, {
     text: '',
   });
   await updateProjectField(fetchImpl, auth, metadata.projectId, input.issue.id, metadata.branchFieldId, {
     text: '',
+  });
+  await updateProjectField(fetchImpl, auth, metadata.projectId, input.issue.id, metadata.statusFieldId, {
+    singleSelectOptionId: releaseStatusOptionId,
   });
   await deleteProjectIssueClaimLock(input.claim, fetchImpl, auth);
 }
@@ -254,20 +258,42 @@ async function releaseProjectIssue(
 async function acquireProjectIssueClaimLock(
   status: ProjectItemStatus,
   input: ProjectIssueClaimInput,
+  config: GitHubProjectTaskQueueConfig,
   fetchImpl: typeof fetch,
   auth: GitHubProjectAuthTokenProvider,
 ): Promise<string> {
   if (status.repositoryId === undefined || status.defaultBranchOid === undefined) {
     throw new Error('GitHub Project issue claim requires repository lock metadata');
   }
+  const name = projectIssueLockRefName(input.issue);
+  try {
+    return await createProjectIssueClaimLock(status.repositoryId, name, status.defaultBranchOid, fetchImpl, auth);
+  } catch (error) {
+    if (!isReferenceAlreadyExistsError(error)) {
+      throw error;
+    }
+    assertClaimable(await loadProjectItemStatus(input.issue.id, fetchImpl, auth, config), input, config);
+    const staleLockRefId = await loadProjectIssueClaimLockRefId(status.repositoryId, name, fetchImpl, auth);
+    await deleteProjectIssueClaimLock({ projectItemId: input.issue.id, lockRefId: staleLockRefId }, fetchImpl, auth);
+    return createProjectIssueClaimLock(status.repositoryId, name, status.defaultBranchOid, fetchImpl, auth);
+  }
+}
+
+async function createProjectIssueClaimLock(
+  repositoryId: string,
+  name: string,
+  oid: string,
+  fetchImpl: typeof fetch,
+  auth: GitHubProjectAuthTokenProvider,
+): Promise<string> {
   const payload = await runGraphql<{ createRef?: { ref?: { id?: unknown } } }>(
     fetchImpl,
     auth,
     createProjectIssueClaimLockMutation,
     {
-      repositoryId: status.repositoryId,
-      name: projectIssueLockRefName(input.issue),
-      oid: status.defaultBranchOid,
+      repositoryId,
+      name,
+      oid,
     },
   );
   const refId = payload.createRef?.ref?.id;
@@ -275,6 +301,27 @@ async function acquireProjectIssueClaimLock(
     throw new Error('GitHub Project issue claim lock response is missing ref id');
   }
   return refId;
+}
+
+async function loadProjectIssueClaimLockRefId(
+  repositoryId: string,
+  name: string,
+  fetchImpl: typeof fetch,
+  auth: GitHubProjectAuthTokenProvider,
+): Promise<string> {
+  const payload = await runGraphql<{ node?: unknown }>(
+    fetchImpl,
+    auth,
+    projectIssueClaimLockQuery,
+    {
+      repositoryId,
+      qualifiedName: qualifiedRefName(name),
+    },
+  );
+  if (!isRecord(payload.node) || !isRecord(payload.node.ref) || typeof payload.node.ref.id !== 'string') {
+    throw new Error('GitHub Project issue claim lock response is missing existing ref id');
+  }
+  return payload.node.ref.id;
 }
 
 async function deleteProjectIssueClaimLock(
@@ -722,6 +769,14 @@ function projectIssueLockRefName(issue: ProjectIssue): string {
   return `refs/heads/rainrail/locks/${repo}-${issueId}`;
 }
 
+function qualifiedRefName(name: string): string {
+  return name.startsWith('refs/heads/') ? name.slice('refs/heads/'.length) : name;
+}
+
+function isReferenceAlreadyExistsError(error: unknown): boolean {
+  return error instanceof Error && error.message.includes('Reference already exists');
+}
+
 function camelCaseFieldName(name: string): string {
   const words = name.trim().split(/[\s_-]+/u).filter((word) => word.length > 0);
   return words.map((word, index) => {
@@ -856,6 +911,16 @@ const createProjectIssueClaimLockMutation = `
   mutation RainrailCreateProjectIssueClaimLock($repositoryId: ID!, $name: String!, $oid: GitObjectID!) {
     createRef(input: { repositoryId: $repositoryId, name: $name, oid: $oid }) {
       ref { id }
+    }
+  }
+`;
+
+const projectIssueClaimLockQuery = `
+  query RainrailProjectIssueClaimLock($repositoryId: ID!, $qualifiedName: String!) {
+    node(id: $repositoryId) {
+      ... on Repository {
+        ref(qualifiedName: $qualifiedName) { id }
+      }
     }
   }
 `;
