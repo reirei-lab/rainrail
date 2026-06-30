@@ -33,6 +33,8 @@ export interface ProjectIssueClaim {
   commentBody?: string;
   commentUrl?: string;
   lockRefId?: string;
+  dispatchedLockRefId?: string;
+  lockRepositoryId?: string;
   lockRepositoryNameWithOwner?: string;
   lockDefaultBranchOid?: string;
   lockDefaultBranchTreeOid?: string;

@@ -85,6 +85,7 @@ interface ProjectItemStatus {
 
 interface ProjectIssueClaimLock {
   id: string;
+  startingLockRefId?: string;
   createdAt: string;
   dispatchedAt?: string;
   agentSessionId?: string;
@@ -188,6 +189,9 @@ async function reconcileProjectIssueClaimState(
     if (lock?.dispatchedAt !== undefined && lock.projectItemId === issue.id) {
       return restoreDispatchedProjectIssueClaim(config, issue, lock, fetchImpl, auth);
     }
+    if (lock !== undefined && lock.projectItemId === issue.id && !isRecoverableStaleLock(lock, { issue })) {
+      return { ...issue, status: config.inProgressStatus };
+    }
     return issue;
   }
   if (normalizedStatus !== normalizeToken(config.inProgressStatus)) {
@@ -203,6 +207,7 @@ async function reconcileProjectIssueClaimState(
   const hasAgentSessionId = hasText(current.agentSessionId);
   const hasBranchName = hasText(current.branchName);
   if (hasAgentSessionId && hasBranchName) {
+    await cleanupDispatchedProjectIssueLocks(issue, current.repositoryId, fetchImpl, auth);
     return issue;
   }
   const lock = await loadProjectIssueClaimLock(current.repositoryId, projectIssueLockRefName(issue), fetchImpl, auth).catch(() => undefined);
@@ -253,11 +258,32 @@ async function restoreDispatchedProjectIssueClaim(
     await updateProjectField(fetchImpl, auth, metadata.projectId, issue.id, metadata.branchFieldId, {
       text: lock.branchName,
     });
-    await deleteProjectIssueClaimLock({ projectItemId: issue.id, lockRefId: lock.id }, fetchImpl, auth).catch(() => undefined);
+    await deleteProjectIssueClaimLocks({
+      projectItemId: issue.id,
+      lockRefId: lock.id,
+      ...(lock.startingLockRefId === undefined ? {} : { dispatchedLockRefId: lock.startingLockRefId }),
+    }, fetchImpl, auth)
+      .catch(() => undefined);
   } catch {
     return { ...issue, status: config.inProgressStatus };
   }
   return { ...issue, status: config.inProgressStatus };
+}
+
+async function cleanupDispatchedProjectIssueLocks(
+  issue: ProjectIssue,
+  repositoryId: string,
+  fetchImpl: typeof fetch,
+  auth: GitHubProjectAuthTokenProvider,
+): Promise<void> {
+  const lock = await loadProjectIssueClaimLock(repositoryId, projectIssueLockRefName(issue), fetchImpl, auth).catch(() => undefined);
+  const dispatchedLock = await loadProjectIssueClaimLock(repositoryId, projectIssueDispatchedLockRefName(issue), fetchImpl, auth).catch(() => undefined);
+  if (lock?.dispatchedAt !== undefined && lock.projectItemId === issue.id) {
+    await deleteProjectIssueClaimLock({ projectItemId: issue.id, lockRefId: lock.id }, fetchImpl, auth).catch(() => undefined);
+  }
+  if (dispatchedLock?.dispatchedAt !== undefined && dispatchedLock.projectItemId === issue.id) {
+    await deleteProjectIssueClaimLock({ projectItemId: issue.id, lockRefId: dispatchedLock.id }, fetchImpl, auth).catch(() => undefined);
+  }
 }
 
 async function claimProjectIssue(
@@ -286,6 +312,7 @@ async function claimProjectIssue(
       contentId: input.issue.contentId,
       commentBody: input.commentBody,
       lockRefId,
+      ...(before.repositoryId === undefined ? {} : { lockRepositoryId: before.repositoryId }),
       ...(before.repositoryNameWithOwner === undefined ? {} : { lockRepositoryNameWithOwner: before.repositoryNameWithOwner }),
       ...(before.defaultBranchOid === undefined ? {} : { lockDefaultBranchOid: before.defaultBranchOid }),
       ...(before.defaultBranchTreeOid === undefined ? {} : { lockDefaultBranchTreeOid: before.defaultBranchTreeOid }),
@@ -343,7 +370,7 @@ async function finalizeProjectIssueClaim(
       ).catch(() => undefined);
     }
   } finally {
-    await deleteProjectIssueClaimLock(input.claim, fetchImpl, auth);
+    await deleteProjectIssueClaimLocks(input.claim, fetchImpl, auth);
   }
 }
 
@@ -355,7 +382,7 @@ async function releaseProjectIssue(
 ): Promise<void> {
   const current = await loadProjectItemStatus(input.issue.id, fetchImpl, auth, config);
   if (!shouldReleaseCurrentClaim(current, input, config)) {
-    await deleteProjectIssueClaimLock(input.claim, fetchImpl, auth);
+    await deleteProjectIssueClaimLocks(input.claim, fetchImpl, auth);
     return;
   }
   const metadata = await loadProjectMetadata(config, fetchImpl, auth);
@@ -371,7 +398,7 @@ async function releaseProjectIssue(
   await updateProjectField(fetchImpl, auth, metadata.projectId, input.issue.id, metadata.statusFieldId, {
     singleSelectOptionId: releaseStatusOptionId,
   });
-  await deleteProjectIssueClaimLock(input.claim, fetchImpl, auth);
+  await deleteProjectIssueClaimLocks(input.claim, fetchImpl, auth);
 }
 
 async function acquireProjectIssueClaimLock(
@@ -393,6 +420,11 @@ async function acquireProjectIssueClaimLock(
       throw error;
     }
     const existingLock = await loadProjectIssueClaimLock(status.repositoryId, name, fetchImpl, auth).catch(() => undefined);
+    const dispatchedLock = await loadProjectIssueClaimLock(status.repositoryId, projectIssueDispatchedLockRefName(input.issue), fetchImpl, auth)
+      .catch(() => undefined);
+    if (dispatchedLock?.dispatchedAt !== undefined && dispatchedLock.projectItemId === input.issue.id) {
+      throw error;
+    }
     if (existingLock === undefined || !isRecoverableStaleLock(existingLock, input)) {
       throw error;
     }
@@ -412,7 +444,8 @@ async function markProjectIssueClaimDispatched(
     return;
   }
   if (
-    input.claim.lockRepositoryNameWithOwner === undefined
+    input.claim.lockRepositoryId === undefined
+    || input.claim.lockRepositoryNameWithOwner === undefined
     || input.claim.lockDefaultBranchOid === undefined
     || input.claim.lockDefaultBranchTreeOid === undefined
   ) {
@@ -438,7 +471,24 @@ async function markProjectIssueClaimDispatched(
       lastError = error;
     }
   }
-  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+  try {
+    const lockOid = await createProjectIssueClaimLockCommit(context, {
+      issue: input.issue,
+      agentSessionId: input.agentSessionId,
+      branchName: input.branchName,
+      commentBody: input.claim.commentBody ?? '',
+    }, fetchImpl, auth, { dispatchedAt: new Date().toISOString() });
+    input.claim.dispatchedLockRefId = await createProjectIssueClaimLock(
+      input.claim.lockRepositoryId,
+      projectIssueDispatchedLockRefName(input.issue),
+      lockOid,
+      fetchImpl,
+      auth,
+    );
+    return;
+  } catch {
+    throw lastError instanceof Error ? lastError : new Error(String(lastError));
+  }
 }
 
 async function createProjectIssueClaimLockCommit(
@@ -549,8 +599,17 @@ async function loadProjectIssueClaimLockForIssue(
   } catch {
     return undefined;
   }
-  return loadProjectIssueClaimLockByRepositoryName(owner, repo, projectIssueLockRefName(issue), fetchImpl, auth)
+  const lock = await loadProjectIssueClaimLockByRepositoryName(owner, repo, projectIssueLockRefName(issue), fetchImpl, auth)
     .catch(() => undefined);
+  if (lock?.dispatchedAt !== undefined) {
+    return lock;
+  }
+  const dispatchedLock = await loadProjectIssueClaimLockByRepositoryName(owner, repo, projectIssueDispatchedLockRefName(issue), fetchImpl, auth)
+    .catch(() => undefined);
+  if (dispatchedLock?.dispatchedAt !== undefined && dispatchedLock.projectItemId === issue.id) {
+    return { ...dispatchedLock, ...(lock === undefined ? {} : { startingLockRefId: lock.id }) };
+  }
+  return lock;
 }
 
 async function loadProjectIssueClaimLockByRepositoryName(
@@ -607,6 +666,29 @@ async function deleteProjectIssueClaimLock(
   await runGraphql(fetchImpl, auth, deleteProjectIssueClaimLockMutation, {
     refId: claim.lockRefId,
   });
+}
+
+async function deleteProjectIssueClaimLocks(
+  claim: ProjectIssueClaim,
+  fetchImpl: typeof fetch,
+  auth: GitHubProjectAuthTokenProvider,
+): Promise<void> {
+  let firstError: unknown;
+  try {
+    await deleteProjectIssueClaimLock(claim, fetchImpl, auth);
+  } catch (error) {
+    firstError = error;
+  }
+  if (claim.dispatchedLockRefId !== undefined) {
+    try {
+      await deleteProjectIssueClaimLock({ ...claim, lockRefId: claim.dispatchedLockRefId }, fetchImpl, auth);
+    } catch (error) {
+      firstError ??= error;
+    }
+  }
+  if (firstError !== undefined) {
+    throw firstError;
+  }
 }
 
 async function loadProjectMetadata(
@@ -1069,6 +1151,12 @@ function projectIssueLockRefName(issue: ProjectIssue): string {
   return `refs/heads/rainrail/locks/${repo}-${issueId}-${slug(issue.id)}`;
 }
 
+function projectIssueDispatchedLockRefName(issue: ProjectIssue): string {
+  const repo = slug(issue.repository ?? 'repo');
+  const issueId = issue.number === undefined ? slug(issue.id) : String(issue.number);
+  return `refs/heads/rainrail/dispatched-locks/${repo}-${issueId}-${slug(issue.id)}`;
+}
+
 function isRecoverableStaleLock(lock: ProjectIssueClaimLock, input: Pick<ProjectIssueClaimInput, 'issue'>): boolean {
   if (lock.projectItemId !== input.issue.id) {
     return false;
@@ -1202,7 +1290,7 @@ const projectIssuesQuery = `
                 assignees(first: 20) { nodes { login } }
                 parent { number title state url repository { nameWithOwner } }
                 subIssuesSummary { total }
-                blockedBy(first: 100) { totalCount nodes { number title state url repository { nameWithOwner } } }
+                blockedBy(first: 100, states: [OPEN]) { totalCount nodes { number title state url repository { nameWithOwner } } }
               }
               ... on DraftIssue {
                 id
