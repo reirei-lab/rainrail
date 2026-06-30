@@ -110,6 +110,44 @@ describe('project issue selection', () => {
     ])).toEqual(unassignedChild);
   });
 
+  it('starts a todo parent when its sub-issues are not present in the Project queue', () => {
+    const parent = issue('parent', {
+      status: 'Todo',
+      assigneeLogins: ['reirei-agent'],
+      repository: 'reirei-lab/rainrail',
+      number: 21,
+      subIssueCount: 2,
+    });
+
+    expect(getNextProjectIssueToStart([parent])).toEqual(parent);
+  });
+
+  it('does not count in-progress children assigned to another agent', () => {
+    const next = issue('issue_30', {
+      status: 'Todo',
+      assigneeLogins: ['reirei-agent'],
+      repository: 'reirei-lab/rainrail',
+      number: 30,
+    });
+
+    expect(getNextProjectIssueToStart([
+      issue('parent', {
+        status: 'Todo',
+        assigneeLogins: ['reirei-agent'],
+        repository: 'reirei-lab/rainrail',
+        number: 21,
+      }),
+      issue('child', {
+        status: 'In Progress',
+        assigneeLogins: ['other-agent'],
+        repository: 'reirei-lab/rainrail',
+        number: 22,
+        parent: { repository: 'reirei-lab/rainrail', number: 21 },
+      }),
+      next,
+    ])).toEqual(next);
+  });
+
   it('normalizes status spellings and assignee login case', () => {
     const next = issue('issue_1', {
       status: ' To Do ',

@@ -64,13 +64,13 @@ export function getUpcomingProjectIssueCandidate(
       continue;
     }
 
-    if (hasChildIssues(issue, issues)) {
+    const projectChildren = childIssuesOf(issue, issues);
+    if (projectChildren.length > 0) {
       if (hasUnfinishedBlocker(issue)) {
         continue;
       }
-      const child = issues.find((candidate) =>
-        isChildOf(candidate, issue)
-        && (candidate.assigneeLogins.length === 0 || isProjectIssueAssignedTo(candidate, resolved.assigneeLogin))
+      const child = projectChildren.find((candidate) =>
+        isRunnableForAgent(candidate, resolved.assigneeLogin)
         && !isClosedProjectIssue(candidate)
         && !hasUnfinishedBlocker(candidate)
         && normalizeToken(candidate.status) === normalizeToken(resolved.backlogStatus)
@@ -104,11 +104,12 @@ export function getInProgressProjectIssues(
     isProjectIssueAssignedTo(issue, resolved.assigneeLogin)
     && !isClosedProjectIssue(issue)
     && normalizeToken(issue.status) === normalizeToken(resolved.todoStatus)
-    && hasChildIssues(issue, issues)
+    && childIssuesOf(issue, issues).length > 0
   );
   const childInProgressIssues = issues.filter((issue) =>
     !isClosedProjectIssue(issue)
     && normalizeToken(issue.status) === inProgressStatus
+    && isRunnableForAgent(issue, resolved.assigneeLogin)
     && assignedTodoParents.some((parent) => isChildOf(issue, parent))
   );
 
@@ -124,8 +125,12 @@ export function isClosedProjectIssue(issue: Pick<ProjectIssue, 'contentType' | '
   return issue.contentType === 'Issue' && issue.state?.trim().toLowerCase() === 'closed';
 }
 
-function hasChildIssues(issue: ProjectIssue, issues: readonly ProjectIssue[]): boolean {
-  return (issue.subIssueCount ?? 0) > 0 || issues.some((candidate) => isChildOf(candidate, issue));
+function childIssuesOf(issue: ProjectIssue, issues: readonly ProjectIssue[]): ProjectIssue[] {
+  return issues.filter((candidate) => isChildOf(candidate, issue));
+}
+
+function isRunnableForAgent(issue: ProjectIssue, assigneeLogin: string): boolean {
+  return issue.assigneeLogins.length === 0 || isProjectIssueAssignedTo(issue, assigneeLogin);
 }
 
 function isChildOf(issue: ProjectIssue, parent: ProjectIssue): boolean {

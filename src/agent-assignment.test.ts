@@ -35,17 +35,48 @@ describe('assignNextProjectIssueToAgent', () => {
       reason: 'started',
       task: {
         id: 'agent_task_reirei-lab-rainrail_21',
-        agentSessionId: 'agent:main:rainrail-agent_task_reirei-lab-rainrail_21',
-        branchName: 'agent/reirei-lab-rainrail-21-project-issue-selection',
+        agentSessionId: 'agent:main:rainrail-agent_task_reirei-lab-rainrail_21-run-21',
+        branchName: 'agent/reirei-lab-rainrail-21-project-issue-selection-run-21',
       },
     });
     expect(calls).toEqual(['claim', 'dispatch']);
     expect(claimProjectIssue).toHaveBeenCalledWith(expect.objectContaining({
       issue,
-      agentSessionId: 'agent:main:rainrail-agent_task_reirei-lab-rainrail_21',
-      branchName: 'agent/reirei-lab-rainrail-21-project-issue-selection',
+      agentSessionId: 'agent:main:rainrail-agent_task_reirei-lab-rainrail_21-run-21',
+      branchName: 'agent/reirei-lab-rainrail-21-project-issue-selection-run-21',
       commentBody: expect.stringContaining('started an agent to process this issue'),
     }));
+  });
+
+  it('uses run-specific claim identifiers for the same issue', async () => {
+    const issue = projectIssue({ number: 21, title: 'Project issue selection' });
+    const started: string[] = [];
+
+    for (const runId of ['manual-run', 'schedule-run']) {
+      await assignNextProjectIssueToAgent({
+        queue: {
+          name: 'github-project',
+          kind: 'task-queue-provider',
+          listProjectIssues: async () => [issue],
+          claimProjectIssue: async ({ agentSessionId, branchName }) => {
+            started.push(`${agentSessionId} ${branchName}`);
+            return { projectItemId: 'item_21' };
+          },
+        },
+        runtime: {
+          runId,
+          workflow: 'project-issue-selection',
+          agentId: 'main',
+          sessionKeyPrefix: 'rainrail',
+          dispatchAgent: async () => ({ sessionKey: `agent:main:${runId}` }),
+        },
+      });
+    }
+
+    expect(started).toEqual([
+      'agent:main:rainrail-agent_task_reirei-lab-rainrail_21-manual-run agent/reirei-lab-rainrail-21-project-issue-selection-manual-run',
+      'agent:main:rainrail-agent_task_reirei-lab-rainrail_21-schedule-run agent/reirei-lab-rainrail-21-project-issue-selection-schedule-run',
+    ]);
   });
 
   it('releases a claimed issue when dispatch fails', async () => {
@@ -81,8 +112,8 @@ describe('assignNextProjectIssueToAgent', () => {
     expect(releaseProjectIssue).toHaveBeenCalledWith({
       issue,
       claim,
-      agentSessionId: 'agent:main:rainrail-agent_task_reirei-lab-rainrail_21',
-      branchName: 'agent/reirei-lab-rainrail-21-project-issue-selection',
+      agentSessionId: 'agent:main:rainrail-agent_task_reirei-lab-rainrail_21-run-21',
+      branchName: 'agent/reirei-lab-rainrail-21-project-issue-selection-run-21',
       reason: 'runtime unavailable',
     });
   });

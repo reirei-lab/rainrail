@@ -100,20 +100,21 @@ export async function assignNextProjectIssueToAgent(
 
 function agentTaskForIssue(issue: ProjectIssue, runtime: AgentAssignmentRuntime): AgentAssignmentTask {
   const taskId = `agent_task_${slug(issue.repository ?? 'unknown')}_${issue.number ?? slug(issue.id)}`;
+  const runSlug = slug(runtime.runId);
   return {
     id: taskId,
     title: issue.title,
-    agentSessionId: `agent:${runtime.agentId}:${runtime.sessionKeyPrefix}-${taskId}`,
-    branchName: branchNameForIssue(issue),
+    agentSessionId: `agent:${runtime.agentId}:${runtime.sessionKeyPrefix}-${taskId}-${runSlug}`,
+    branchName: branchNameForIssue(issue, runSlug),
     issue,
   };
 }
 
-function branchNameForIssue(issue: ProjectIssue): string {
+function branchNameForIssue(issue: ProjectIssue, runSlug: string): string {
   const repo = slug(issue.repository ?? 'repo');
   const number = issue.number === undefined ? slug(issue.id) : String(issue.number);
   const title = slug(issue.title).slice(0, 48);
-  return `agent/${repo}-${number}${title.length === 0 ? '' : `-${title}`}`;
+  return `agent/${repo}-${number}${title.length === 0 ? '' : `-${title}`}-${runSlug}`;
 }
 
 function issueStartComment(task: AgentAssignmentTask): string {
