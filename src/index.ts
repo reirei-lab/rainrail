@@ -17,6 +17,7 @@ export * from './node-server.js';
 export * from './plugin-loader.js';
 export * from './plugins.js';
 export * from './project-issues.js';
+export * from './route-workflow.js';
 export * from './runtime-provider.js';
 export * from './source-plugin.js';
 export * from './sse.js';
