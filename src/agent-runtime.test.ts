@@ -150,6 +150,31 @@ describe('createOpenClawRuntimeProvider', () => {
     }));
   });
 
+  it('uses a run-specific start log path for repeated starts of the same issue task', async () => {
+    const spawnProcess = vi.fn(() => ({ pid: 4242, unref: vi.fn() }));
+    const logDirectory = temporaryDirectory();
+    const provider = createOpenClawRuntimeProvider({
+      enabled: true,
+      command: 'openclaw',
+      agentId: 'main',
+      sessionKeyPrefix: 'rainrail',
+      timeoutSeconds: 900,
+      logDirectory,
+      spawnProcess,
+    });
+
+    const first = await provider.startRun(runtimeRequest({
+      agentSessionId: 'agent:main:rainrail-agent_task_reirei-lab-rainrail_22-run-a',
+    }));
+    const second = await provider.startRun(runtimeRequest({
+      agentSessionId: 'agent:main:rainrail-agent_task_reirei-lab-rainrail_22-run-b',
+    }));
+
+    expect(first.metadata?.logPath).toContain('run-a');
+    expect(second.metadata?.logPath).toContain('run-b');
+    expect(first.metadata?.logPath).not.toBe(second.metadata?.logPath);
+  });
+
   it('resumes OpenClaw agent tasks in the existing session with an attempt log', async () => {
     const spawnProcess = vi.fn(() => ({ pid: 5151, unref: vi.fn() }));
     const logDirectory = temporaryDirectory();
@@ -235,12 +260,31 @@ describe('runtime task completion and resume helpers', () => {
       completion: { finishReason: 'stop' },
     }))).toMatchObject({ status: 'succeeded', outcome: 'implemented' });
 
+    expect(readRuntimeRunCompletionFromLog(JSON.stringify({
+      status: 'ok',
+      finalAssistantVisibleText: 'Outcome: needs_human',
+    }))).toMatchObject({ status: 'needs_human', outcome: 'needs_human' });
+
+    expect(readRuntimeRunCompletionFromLog(JSON.stringify({
+      status: 'ok',
+      finalAssistantVisibleText: 'Outcome: split_recommended',
+    }))).toMatchObject({ status: 'split_recommended', outcome: 'split_recommended' });
+
     expect(readRuntimeRunCompletionFromLog(
       'GatewayClientRequestError: Error: CLI transcript compaction failed for openai/gpt-5.5: Compaction timed out',
     )).toMatchObject({
       status: 'compaction_failed',
       summary: expect.stringContaining('Compaction timed out'),
     });
+  });
+
+  it('accepts canonical runtime completion statuses from JSON logs', () => {
+    for (const status of ['failed', 'canceled', 'stopped', 'timed_out', 'compaction_failed'] as const) {
+      expect(readRuntimeRunCompletionFromLog(JSON.stringify({ status, summary: `${status} run` }))).toMatchObject({
+        status,
+        summary: `${status} run`,
+      });
+    }
   });
 
   it('detects running task attempts and creates stable resume attempt ids', () => {
@@ -269,7 +313,7 @@ function temporaryDirectory(): string {
   return directory;
 }
 
-function runtimeRequest() {
+function runtimeRequest(overrides: { agentSessionId?: string } = {}) {
   const event = createEventEnvelope({
     source: { type: 'github', name: 'github-project', repository: 'reirei-lab/rainrail' },
     name: 'github.issue',
@@ -286,7 +330,7 @@ function runtimeRequest() {
     task: {
       id: 'agent_task_reirei-lab-rainrail_22',
       title: 'OpenClaw runtime',
-      agentSessionId: 'agent:main:rainrail-agent_task_reirei-lab-rainrail_22-run-22',
+      agentSessionId: overrides.agentSessionId ?? 'agent:main:rainrail-agent_task_reirei-lab-rainrail_22-run-22',
       branchName: 'agent/reirei-lab-rainrail-22-openclaw-runtime-run-22',
       issue: {
         id: 'item_22',

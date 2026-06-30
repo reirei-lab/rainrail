@@ -371,8 +371,10 @@ function stringifyField(record: Record<string, unknown> | undefined, key: string
 
 function redactSensitiveText(value: string): string {
   return value
+    .replace(/\bgithub_pat_[A-Za-z0-9_]+\b/g, '[redacted-token]')
     .replace(/(gh[pousr]_[A-Za-z0-9_]+)/g, '[redacted-token]')
     .replace(/(sk-[A-Za-z0-9_-]{20,})/g, '[redacted-token]')
+    .replace(/(Bearer\s+)[^\s'",}]+/gi, '$1[redacted-token]')
     .replace(/("(?:token|apiKey|api_key|password|secret)"\s*:\s*)"[^"]*"/gi, '$1"[redacted]"')
     .replace(/((?:token|api[_-]?key|password|secret)\s*[:=]\s*)[^\s'",}]+/gi, '$1[redacted]');
 }

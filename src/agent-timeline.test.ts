@@ -98,8 +98,8 @@ describe('agent timeline', () => {
     const timeline = parseRuntimeTrajectoryTimeline([
       JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:08:00.000Z', seq: 1 }),
       JSON.stringify({ type: 'tool.call', ts: '2026-06-30T15:09:00.000Z', seq: 2, data: { name: 'bash', arguments: { command: 'pnpm test' } } }),
-      JSON.stringify({ type: 'tool.call', ts: '2026-06-30T15:09:05.000Z', seq: 3, data: { name: 'bash', arguments: { command: 'gh api -H "Authorization: Bearer ghs_secretValue" repos/reirei-lab/rainrail' } } }),
-      JSON.stringify({ type: 'tool.result', ts: '2026-06-30T15:09:10.000Z', seq: 4, data: { name: 'bash', status: 'completed', output: 'ok token=secret-value' } }),
+      JSON.stringify({ type: 'tool.call', ts: '2026-06-30T15:09:05.000Z', seq: 3, data: { name: 'bash', arguments: { command: 'gh api -H "Authorization: Bearer github_pat_secretValue" repos/reirei-lab/rainrail' } } }),
+      JSON.stringify({ type: 'tool.result', ts: '2026-06-30T15:09:10.000Z', seq: 4, data: { name: 'bash', status: 'completed', output: 'ok token=secret-value Authorization: Bearer github_pat_outputSecret' } }),
       JSON.stringify({ type: 'tool.result', ts: '2026-06-30T15:09:20.000Z', seq: 5, data: { name: 'bash', status: 'completed', contentItems: [{ token: 'secret-json-token', apiKey: 'secret-json-key', password: 'secret-json-password' }] } }),
     ].join('\n'));
 
@@ -112,6 +112,7 @@ describe('agent timeline', () => {
     ]);
     expect(timeline[2]!.detail).toContain('Bearer [redacted-token]');
     expect(timeline[3]!.excerpt).toContain('token=[redacted]');
+    expect(timeline[3]!.excerpt).toContain('Bearer [redacted-token]');
     expect(timeline[4]!.excerpt).toContain('"token": "[redacted]"');
     expect(timeline[4]!.excerpt).toContain('"apiKey": "[redacted]"');
     expect(timeline[4]!.excerpt).toContain('"password": "[redacted]"');

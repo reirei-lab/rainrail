@@ -149,7 +149,7 @@ export async function startOpenClawRun(
   const task = runtimeAgentTaskInput(request.task);
   mkdirSync(options.logDirectory, { recursive: true });
   const agentSessionId = task.agentSessionId ?? `agent:${options.agentId}:${options.sessionKeyPrefix}-${task.id}`;
-  const logPath = join(options.logDirectory, `${safeFileName(task.id)}.log`);
+  const logPath = join(options.logDirectory, `${safeFileName(agentSessionId)}.log`);
   const outputFd = openSync(logPath, 'w');
   const args = [
     'agent',
@@ -204,14 +204,15 @@ export function readRuntimeRunCompletionFromLog(raw: string): RuntimeRunCompleti
   }
 
   const explicitStatus = stringValue(payload.status);
-  const status = runtimeStatusFromPayload(payload, explicitStatus);
+  const outcome = outcomeFromPayload(payload);
+  const status = runtimeStatusFromPayload(payload, explicitStatus, outcome);
   if (status === undefined) {
     return undefined;
   }
 
   return {
     status,
-    outcome: outcomeFromPayload(payload),
+    outcome,
     summary: stringValue(payload.summary) ?? completionSummaryFromPayload(payload),
     promptError: stringValue(payload.promptError),
     timedOut: booleanValue(payload.timedOut),
@@ -289,7 +290,17 @@ function runtimeAgentTaskInput(value: unknown): RuntimeAgentTaskInput {
   };
 }
 
-function runtimeStatusFromPayload(payload: Record<string, unknown>, explicitStatus: string | undefined): RuntimeRunStatus | undefined {
+function runtimeStatusFromPayload(
+  payload: Record<string, unknown>,
+  explicitStatus: string | undefined,
+  outcome = outcomeFromPayload(payload),
+): RuntimeRunStatus | undefined {
+  if (outcome === 'needs_human' || outcome === 'split_recommended') {
+    return outcome;
+  }
+  if (isCanonicalRuntimeRunStatus(explicitStatus)) {
+    return explicitStatus;
+  }
   if (explicitStatus === 'ok') {
     return 'succeeded';
   }
@@ -312,6 +323,19 @@ function runtimeStatusFromPayload(payload: Record<string, unknown>, explicitStat
     return 'succeeded';
   }
   return undefined;
+}
+
+function isCanonicalRuntimeRunStatus(status: string | undefined): status is RuntimeRunStatus {
+  return status === 'queued'
+    || status === 'running'
+    || status === 'succeeded'
+    || status === 'failed'
+    || status === 'canceled'
+    || status === 'stopped'
+    || status === 'timed_out'
+    || status === 'compaction_failed'
+    || status === 'needs_human'
+    || status === 'split_recommended';
 }
 
 function outcomeFromPayload(payload: Record<string, unknown>): string | undefined {

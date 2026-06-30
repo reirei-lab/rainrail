@@ -86,16 +86,20 @@ OpenClaw runtime provider は実 agent 起動を `enabled: true` の capability 
 実起動では `openclaw agent --agent ... --session-key ... --timeout ... --json` を
 spawn し、log path、pid、agent session、branch を run metadata に残す。spawn 後に
 Node が `error` を emit しても未処理例外で Rainrail を落とさないよう listener を置き、
-provider 利用側が `onSpawnError` で観測できるようにする。
+provider 利用側が `onSpawnError` で観測できるようにする。start run の log path は
+同じ issue task を別 run で再起動しても過去ログを切り詰めないよう、agent session id
+由来の一意な名前にする。
 
 completion/resume/timeline は provider 境界の情報として扱う。completion parser は
 Codex/OpenClaw の JSON completion と transcript compaction failure を区別し、
 `Outcome: implemented | updated_issue | needs_human | split_recommended` を
-取り出せる。resume helper は running pid を確認し、安定した resume attempt id を
-生成する。timeline reader は OpenClaw trajectory jsonl を読み、Codex activity 表示に
+取り出せる。`Outcome: needs_human` / `Outcome: split_recommended` は成功終了 JSON に
+含まれていても runtime status に反映し、failed/canceled/stopped/timed_out などの
+canonical status も completion として読める。resume helper は running pid を確認し、
+安定した resume attempt id を生成する。timeline reader は OpenClaw trajectory jsonl を読み、Codex activity 表示に
 必要な時刻、分類済み phase、redacted summary、status、redacted excerpt を返す。
 redaction は shell 風の `token=...` だけでなく JSON の `"token": "..."` /
-`"apiKey": "..."` / `"password": "..."` も対象にする。trajectory の既定 path は
+`"apiKey": "..."` / `"password": "..."`、`github_pat_...`、Bearer credential も対象にする。trajectory の既定 path は
 `agentId` ごとの `~/.openclaw/agents/<agentId>/sessions` を使い、`main` 以外の
 OpenClaw agent でも呼び出し側が毎回 sessionsDirectory を上書きしなくてよい。
 
