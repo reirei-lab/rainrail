@@ -363,6 +363,30 @@ describe('Cloudflare tail source', () => {
     expect(storage.storedEvents()).toHaveLength(1);
   });
 
+  it('keeps cf-ray suffixes distinct when long source names leave one suffix character', async () => {
+    const storage = fakeState();
+    const room = new RainrailBridgeRoom(storage, { publishToken: TEST_PUBLISH_TOKEN, replayLimit: 10 });
+    const sourceName = 'a'.repeat(100);
+    const result = await publishCloudflareTailEvents([
+      cloudflareTailFixture({
+        outcome: 'exception',
+        cfRay: 'ray-1',
+      }),
+      cloudflareTailFixture({
+        outcome: 'exception',
+        cfRay: 'ray-2',
+      }),
+    ], {
+      sourceName,
+      receivedAt: new Date('2026-06-15T08:12:01.000Z'),
+      publish: (event) => room.fetch(publishRequest(event)),
+    });
+
+    expect(result.every((item) => item.ok)).toBe(true);
+    expect(result[0]?.id).not.toBe(result[1]?.id);
+    expect(storage.storedEvents()).toHaveLength(2);
+  });
+
   it('keeps distinct fallback delivery ids distinct after reference-safe encoding', async () => {
     const withColon = await createCloudflareTailEvent({
       tailEvent: cloudflareTailFixture({ outcome: 'ok', cfRay: null }),
@@ -395,6 +419,23 @@ describe('Cloudflare tail source', () => {
     expect(upperCase.delivery.id).not.toBe(lowerCase.delivery.id);
     expect(upperCase.id).not.toBe(lowerCase.id);
     expect(upperCase.rawPayload.reference).not.toBe(lowerCase.rawPayload.reference);
+  });
+
+  it('keeps fallback delivery ids that differ by trailing punctuation distinct', async () => {
+    const withDot = await createCloudflareTailEvent({
+      tailEvent: cloudflareTailFixture({ outcome: 'ok', cfRay: null }),
+      receivedAt: new Date('2026-06-15T08:12:01.000Z'),
+      fallbackDeliveryId: 'deploy.',
+    });
+    const withoutDot = await createCloudflareTailEvent({
+      tailEvent: cloudflareTailFixture({ outcome: 'ok', cfRay: null }),
+      receivedAt: new Date('2026-06-15T08:12:01.000Z'),
+      fallbackDeliveryId: 'deploy',
+    });
+
+    expect(withDot.delivery.id).not.toBe(withoutDot.delivery.id);
+    expect(withDot.id).not.toBe(withoutDot.id);
+    expect(withDot.rawPayload.reference).not.toBe(withoutDot.rawPayload.reference);
   });
 
   it('keeps long worker names distinct when their first 64 characters match', async () => {

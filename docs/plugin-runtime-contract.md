@@ -47,8 +47,8 @@ subject が衝突し得る場合は、元の `scriptName` 由来の安定 hash �
 `cloudflare://deliveries/...` 参照も storage allowlist に通る短い token にし、
 `cf-ray` が無い tail では source plugin context の `deliveryId` を suffix として使う。
 これにより同じ delivery の retry でも event id が安定し、Bridge room の重複 no-op が効く。
-既定の `${source.name}:${delivery.id}:${name}` 形式の event id が 128 文字以内に収まるよう、
-長い worker 名や fallback delivery id は delivery id 生成時に短縮する。このため、
+delivery id は Bridge room の identifier 制限内に収まる範囲で worker 名や `cf-ray` /
+fallback delivery id を保持し、短縮が必要な場合も suffix の識別性を優先する。このため、
 元 tail payload の URL や例外本文は source payload にだけ置き、Bridge room の durable
 replay では allowlist 済み shallow metadata に縮約される。source name が長く既定形式では
 128 文字を超える場合は、同じ source/delivery/name から決定的に作る短い明示 event id を使う。
@@ -56,7 +56,7 @@ batch publish helper は入力順に 1 件ずつ publish する。`cf-ray` が�
 fallback delivery id に batch index を混ぜ、同一 ms の Cron/Queue tail でも batch 内の
 別 event として配信できるようにする。Cloudflare delivery reference の path segment は
 `:` を含まない文字集合へ正規化する。正規化や切り詰めで別 delivery id が衝突しないよう、
-大文字小文字だけが違う場合も含め、元の suffix 由来の安定 hash も混ぜる。
+大文字小文字だけが違う場合や末尾記号を落とす場合も含め、元の suffix 由来の安定 hash も混ぜる。
 `eventTimestamp` が欠落または壊れている場合は
 `receivedAt` を occurredAt / delivery id の時刻要素として使う。
 
