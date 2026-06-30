@@ -191,6 +191,22 @@ describe('Rainrail bridge room', () => {
     await reader?.cancel();
   });
 
+  it('keeps duplicate replay ids at their latest occurrence when enforcing replay limits', async () => {
+    const staleDuplicate = fixtureEvent('delivery-1', 'github.issue');
+    const other = fixtureEvent('delivery-2', 'cloudflare.tail');
+    const latestDuplicate = {
+      ...staleDuplicate,
+      occurredAt: '2026-06-29T18:18:22.000Z',
+      payload: { action: 'replayed-latest' },
+    };
+    const storage = fakeState([staleDuplicate, other, latestDuplicate]);
+    const room = createTestRoom(storage, { replayLimit: 1 });
+
+    expect((await room.fetch(publishRequest(latestDuplicate))).status).toBe(200);
+
+    expect(storage.storedEvents()).toEqual([staleDuplicate, other, latestDuplicate]);
+  });
+
   it('returns stable 500 responses when storage restore fails for GET endpoints', async () => {
     const room = createTestRoom(failingGetState(), { replayLimit: 10 });
 
@@ -264,6 +280,31 @@ describe('Rainrail bridge room', () => {
     expect(referenceStorage.storedEvents()).toEqual([]);
   });
 
+  it('rejects non-allowlisted URL schemes before storage', async () => {
+    const subjectStorage = fakeState();
+    const subjectRoom = createTestRoom(subjectStorage, { replayLimit: 10 });
+    const opaqueSubjectUrlEvent = {
+      ...fixtureEvent('delivery-1', 'github.issue'),
+      subject: { type: 'issue', id: 'delivery-1', url: 'data:text/plain,token=secret-subject-url' },
+    };
+
+    expect((await subjectRoom.fetch(publishRequest(opaqueSubjectUrlEvent))).status).toBe(200);
+    expect(subjectStorage.storedEvents()[0]?.subject).not.toHaveProperty('url');
+
+    const referenceStorage = fakeState();
+    const referenceRoom = createTestRoom(referenceStorage, { replayLimit: 10 });
+    const opaqueReferenceEvent = {
+      ...fixtureEvent('delivery-2', 'github.issue'),
+      rawPayload: { kind: 'external-reference', reference: 'javascript:token=secret-reference' },
+    };
+
+    const response = await referenceRoom.fetch(publishRequest(opaqueReferenceEvent));
+
+    expect(response.status).toBe(400);
+    await expect(response.text()).resolves.toContain('reference must be a valid URL');
+    expect(referenceStorage.storedEvents()).toEqual([]);
+  });
+
   it('captures JSON parse failures while the publish waits in queue', async () => {
     const storage = fakeControllableState();
     const room = createTestRoom(storage.state, { replayLimit: 10 });
@@ -274,7 +315,7 @@ describe('Rainrail bridge room', () => {
 
     storage.pauseNextPut();
     const firstPublish = room.fetch(publishRequest(fixtureEvent('delivery-1', 'github.issue')));
-    const secondPublish = room.fetch(rejectingJsonPublishRequest(new SyntaxError('bad json')));
+    const secondPublish = room.fetch(rejectingJsonPublishRequest(new SyntaxError('"secret-token" is not valid JSON')));
     const unhandledRejections: unknown[] = [];
     const onUnhandledRejection = (reason: unknown) => {
       unhandledRejections.push(reason);
@@ -290,7 +331,7 @@ describe('Rainrail bridge room', () => {
       const secondResponse = await secondPublish;
 
       expect(secondResponse.status).toBe(400);
-      await expect(secondResponse.text()).resolves.toContain('bad json');
+      await expect(secondResponse.text()).resolves.toBe('invalid event envelope: malformed JSON\n');
     } finally {
       process.off('unhandledRejection', onUnhandledRejection);
     }
@@ -528,8 +569,9 @@ function createTestRoom(
   return new RainrailBridgeRoom(state, { publishToken: TEST_PUBLISH_TOKEN, ...options });
 }
 
-function fakeState() {
+function fakeState(initialEvents: unknown[] = []) {
   const map = new Map<string, unknown>();
+  map.set('rainrail:recent-events', initialEvents);
 
   return {
     storage: {
@@ -582,7 +624,7 @@ function fixtureEvent(deliveryId: string, name: 'github.issue' | 'cloudflare.tai
     payload: { deliveryId },
     rawPayload: {
       kind: 'external-reference',
-      reference: `test://${deliveryId}`,
+      reference: `github://deliveries/${deliveryId}`,
     },
   });
 }

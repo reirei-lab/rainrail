@@ -5,6 +5,7 @@ import { formatRainrailSseEvent, rainrailSseHeaders } from './sse.js';
 const RECENT_EVENTS_KEY = 'rainrail:recent-events';
 const DEFAULT_REPLAY_LIMIT = 100;
 const ALLOWED_PAYLOAD_KEYS = new Set(['action', 'status', 'conclusion']);
+const ALLOWED_URL_PROTOCOLS = new Set(['https:', 'github:']);
 const claimedStorages = new WeakSet<RainrailBridgeRoomStorage>();
 
 type PublishEventResult =
@@ -101,7 +102,7 @@ export class RainrailBridgeRoom {
           return abortedPublishResponse();
         }
 
-        return new Response(`invalid event envelope: ${errorMessage(eventResult.error)}\n`, { status: 400 });
+        return new Response(`invalid event envelope: ${publishErrorMessage(eventResult.error)}\n`, { status: 400 });
       }
 
       try {
@@ -329,6 +330,8 @@ function optionalUrl(record: Record<string, unknown>, key: string): Record<strin
 function sanitizeUrl(value: string): string | undefined {
   try {
     const url = new URL(value);
+    if (!isAllowedUrl(url)) return undefined;
+
     url.username = '';
     url.password = '';
     url.search = '';
@@ -337,6 +340,12 @@ function sanitizeUrl(value: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+function isAllowedUrl(url: URL): boolean {
+  if (!ALLOWED_URL_PROTOCOLS.has(url.protocol)) return false;
+
+  return url.protocol !== 'github:' || url.hostname === 'deliveries';
 }
 
 function expectSanitizedUrl(value: string, key: string): string {
@@ -383,8 +392,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+function publishErrorMessage(error: unknown): string {
+  if (error instanceof SyntaxError) {
+    return 'malformed JSON';
+  }
+
+  if (error instanceof TypeError) {
+    return error.message;
+  }
+
+  return 'invalid request body';
 }
 
 function isAbortError(error: unknown): boolean {
@@ -445,6 +462,10 @@ function mergeRecentEvents(events: RainrailEventEnvelope[], replayLimit: number)
 
   const merged = new Map<string, RainrailEventEnvelope>();
   for (const event of events) {
+    if (merged.has(event.id)) {
+      merged.delete(event.id);
+    }
+
     merged.set(event.id, event);
   }
 

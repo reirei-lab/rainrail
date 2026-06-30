@@ -93,9 +93,11 @@ storage の key は `rainrail:recent-events`。保存するのは正規化済み
 object payload も allowlist された shallow JSON scalar metadata（`action` / `status` /
 `conclusion`）に縮約し、object でない payload は空 object にする。任意 URL や query を
 持ち込める `links` は保存しない。`subject.url` と `rawPayload.reference` は URL として
-parse できる場合に userinfo / query / fragment を除去してから保存する。
+parse でき、scheme が `https:` または `github://deliveries/...` の場合だけ、
+userinfo / query / fragment を除去してから保存する。
 URL として parse できない optional `subject.url` は保存せず、必須の
-`rawPayload.reference` が parse できない場合は publish を 400 で拒否する。
+`rawPayload.reference` が parse できない、または allowlist 外 scheme の場合は publish を
+400 で拒否する。
 `rawPayload.sha256` は 64 桁 hex digest の場合だけ保存する。secret、token、credential、
 生 webhook payload、issue/comment body のような provider object 本文は core 側では
 保持しない。storage から復元する replay 要素も `RainrailEventEnvelope` と SSE field
@@ -105,6 +107,7 @@ URL として parse できない optional `subject.url` は保存せず、必須
 これにより、大きい body や streaming body の parse 完了順に左右されず、`fetch`
 呼び出し順に storage / replay / broadcast を処理する。body parse や envelope 検証の
 失敗は queue 待機中でも即時に捕捉し、順番が来た時点で 400 応答へ変換する。
+JSON parse 失敗は request body 断片を応答に含めない generic message にする。
 ただし同じ `event.id` が replay buffer に既に存在する場合は、成功 no-op として扱い、
 storage 保存と live broadcast を行わない。同じ source delivery の retry で downstream
 workflow が重複起動することを避けるため。
