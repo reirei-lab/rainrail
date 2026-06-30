@@ -53,7 +53,9 @@ interface WorkflowExecutionPolicy {
 interface WorkflowExecutionRecord {
   workflow: WorkflowPlugin;
   policy: WorkflowExecutionPolicy;
+  policySnapshot: boolean;
   policyError?: unknown;
+  timeoutSnapshot: boolean;
   timeoutMs?: number;
   timeoutError?: unknown;
 }
@@ -64,7 +66,9 @@ export function createRuntimeDispatcher(options: RuntimeDispatcherOptions): Runt
   return {
     async dispatch(event): Promise<WorkflowPluginResult[]> {
       const results: Array<WorkflowPluginResult | undefined> = await Promise.all(
-        workflows.map(async ({ workflow, policy, policyError, timeoutMs, timeoutError }) => {
+        workflows.map(async (record) => {
+          const { workflow } = record;
+          let policy = record.policy;
           const audit = (action: WorkflowAuditEntry['action'], result: WorkflowAuditResult, reason?: unknown) =>
             recordAudit(options, policy, event, action, result, reason);
 
@@ -73,12 +77,15 @@ export function createRuntimeDispatcher(options: RuntimeDispatcherOptions): Runt
               return undefined;
             }
 
-            if (policyError !== undefined) {
-              throw policyError;
+            const metadata = resolveWorkflowExecutionMetadata(record);
+            policy = metadata.policy;
+
+            if (metadata.policyError !== undefined) {
+              throw metadata.policyError;
             }
 
-            if (timeoutError !== undefined) {
-              throw timeoutError;
+            if (metadata.timeoutError !== undefined) {
+              throw metadata.timeoutError;
             }
 
             const abort = createWorkflowAbortController(options.runtime.signal);
@@ -86,7 +93,7 @@ export function createRuntimeDispatcher(options: RuntimeDispatcherOptions): Runt
             let value: unknown;
             try {
               const context = createWorkflowContext(options, policy, event, abort.controller.signal);
-              const workflowTimeoutMs = timeoutMs ?? options.defaultTimeoutMs;
+              const workflowTimeoutMs = metadata.timeoutMs ?? options.defaultTimeoutMs;
               workflowStarted = true;
               value = await runWorkflow(
                 () => Promise.resolve(workflow.handle(event, context)),
@@ -130,31 +137,74 @@ function createWorkflowExecutionRecord(workflow: WorkflowPlugin): WorkflowExecut
     name: readWorkflowName(workflow),
     capabilities: new Set(),
   };
-  let timeoutMs: number | undefined;
-  let timeoutError: unknown;
-
-  try {
-    timeoutMs = workflow.timeoutMs;
-  } catch (reason) {
-    timeoutError = reason;
+  const record: WorkflowExecutionRecord = {
+    workflow,
+    policy: fallbackPolicy,
+    policySnapshot: false,
+    timeoutSnapshot: false,
+  };
+  const capabilitiesDescriptor = findPropertyDescriptor(workflow, 'capabilities');
+  if (capabilitiesDescriptor !== undefined && 'value' in capabilitiesDescriptor) {
+    try {
+      record.policy = {
+        name: readWorkflowName(workflow),
+        capabilities: new Set((capabilitiesDescriptor.value as RuntimeCapabilityName[] | undefined) ?? []),
+      };
+    } catch (policyError) {
+      record.policyError = policyError;
+    }
+    record.policySnapshot = true;
   }
 
-  try {
-    return {
-      workflow,
-      policy: snapshotWorkflowPolicy(workflow),
-      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-      ...(timeoutError !== undefined ? { timeoutError } : {}),
-    };
-  } catch (policyError) {
-    return {
-      workflow,
-      policy: fallbackPolicy,
-      policyError,
-      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-      ...(timeoutError !== undefined ? { timeoutError } : {}),
-    };
+  const timeoutDescriptor = findPropertyDescriptor(workflow, 'timeoutMs');
+  if (timeoutDescriptor !== undefined && 'value' in timeoutDescriptor) {
+    if (timeoutDescriptor.value !== undefined) {
+      record.timeoutMs = timeoutDescriptor.value as number;
+    }
+    record.timeoutSnapshot = true;
   }
+
+  return record;
+}
+
+function resolveWorkflowExecutionMetadata(record: WorkflowExecutionRecord): WorkflowExecutionRecord {
+  const resolved: WorkflowExecutionRecord = { ...record };
+
+  if (!resolved.policySnapshot) {
+    try {
+      resolved.policy = snapshotWorkflowPolicy(record.workflow);
+    } catch (policyError) {
+      resolved.policyError = policyError;
+    }
+    resolved.policySnapshot = true;
+  }
+
+  if (!resolved.timeoutSnapshot) {
+    try {
+      const timeoutMs = record.workflow.timeoutMs;
+      if (timeoutMs !== undefined) {
+        resolved.timeoutMs = timeoutMs;
+      }
+    } catch (timeoutError) {
+      resolved.timeoutError = timeoutError;
+    }
+    resolved.timeoutSnapshot = true;
+  }
+
+  return resolved;
+}
+
+function findPropertyDescriptor(target: object, property: string | symbol): PropertyDescriptor | undefined {
+  let current: object | null = target;
+  while (current !== null) {
+    const descriptor = Reflect.getOwnPropertyDescriptor(current, property);
+    if (descriptor !== undefined) {
+      return descriptor;
+    }
+    current = Reflect.getPrototypeOf(current);
+  }
+
+  return undefined;
 }
 
 function snapshotWorkflowPolicy(workflow: WorkflowPlugin): WorkflowExecutionPolicy {
@@ -351,9 +401,10 @@ function createDispatchAgentCapabilityProxy(
       return cached;
     }
 
-    const bound = value.bind(capabilities);
-    functionCache.set(value, bound);
-    return bound;
+    const wrapped = (...args: unknown[]) =>
+      callCapabilityFunctionWithDispatchAgentShadow(value, capabilities, dispatchAgent, createCapabilityView(capabilities), args);
+    functionCache.set(value, wrapped);
+    return wrapped;
   };
 
   const readCapabilityProperty = (source: object, property: string | symbol): unknown => {
@@ -476,7 +527,10 @@ function createCapabilityConstructorView(
         }
 
         const value = Reflect.get(prototype, property, capabilities);
-        return typeof value === 'function' ? value.bind(capabilities) : value;
+        return typeof value === 'function'
+          ? (...args: unknown[]) =>
+              callCapabilityFunctionWithDispatchAgentShadow(value, capabilities, dispatchAgent, prototypeView, args)
+          : value;
       },
       getOwnPropertyDescriptor(_target, property): PropertyDescriptor | undefined {
         const descriptor = Reflect.getOwnPropertyDescriptor(prototype, property);
@@ -542,6 +596,36 @@ function createCapabilityConstructorView(
   );
 
   return constructorView;
+}
+
+function callCapabilityFunctionWithDispatchAgentShadow(
+  helper: Function,
+  capabilities: NonNullable<PluginRuntimeContext['capabilities']>,
+  dispatchAgent: DispatchAgentCapability,
+  safeReceiver: object,
+  args: unknown[],
+): unknown {
+  const ownDescriptor = Reflect.getOwnPropertyDescriptor(capabilities, 'dispatchAgent');
+  if (ownDescriptor === undefined || ownDescriptor.configurable === true) {
+    Object.defineProperty(capabilities, 'dispatchAgent', {
+      configurable: true,
+      enumerable: ownDescriptor?.enumerable ?? true,
+      value: dispatchAgent,
+      writable: true,
+    });
+
+    try {
+      return Reflect.apply(helper, capabilities, args);
+    } finally {
+      if (ownDescriptor === undefined) {
+        Reflect.deleteProperty(capabilities, 'dispatchAgent');
+      } else {
+        Object.defineProperty(capabilities, 'dispatchAgent', ownDescriptor);
+      }
+    }
+  }
+
+  return Reflect.apply(helper, safeReceiver, args);
 }
 
 async function callDispatchAgent(

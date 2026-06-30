@@ -111,6 +111,71 @@ describe('createGitHubTaskProvider', () => {
     ]);
   });
 
+  it('passes task context abort signals to issue fetches', async () => {
+    const controller = new AbortController();
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
+      node_id: 'issue-node-id',
+      number: 20,
+      title: 'Signal-aware issue',
+    }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    }));
+    const provider = createGitHubTaskProvider({
+      auth: { getAuthToken: async () => undefined },
+      fetch: fetchImpl as unknown as typeof fetch,
+    });
+
+    await provider.getIssue(
+      {
+        provider: 'github',
+        repository: 'reirei-lab/rainrail',
+        number: 20,
+      },
+      { signal: controller.signal },
+    );
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      'https://api.github.com/repos/reirei-lab/rainrail/issues/20',
+      expect.objectContaining({
+        signal: controller.signal,
+      }),
+    );
+  });
+
+  it('passes task context abort signals to comment fetches', async () => {
+    const controller = new AbortController();
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
+      node_id: 'comment-node-id',
+    }), {
+      status: 201,
+      headers: { 'content-type': 'application/json' },
+    }));
+    const provider = createGitHubTaskProvider({
+      auth: { getAuthToken: async () => undefined },
+      fetch: fetchImpl as unknown as typeof fetch,
+    });
+
+    await provider.createComment(
+      {
+        target: {
+          provider: 'github',
+          repository: 'reirei-lab/rainrail',
+          number: 20,
+        },
+        body: 'Queued run:20',
+      },
+      { signal: controller.signal },
+    );
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      'https://api.github.com/repos/reirei-lab/rainrail/issues/20/comments',
+      expect.objectContaining({
+        signal: controller.signal,
+      }),
+    );
+  });
+
   it('falls back to env auth when default GitHub App auth cannot mint a token', async () => {
     vi.stubEnv('GH_TOKEN', 'fallback-token');
     const directory = mkdtempSync(join(tmpdir(), 'rainrail-provider-fallback-'));

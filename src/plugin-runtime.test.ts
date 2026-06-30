@@ -3667,4 +3667,111 @@ describe('plugin runtime contract', () => {
     });
     expect(dispatchAgent).not.toHaveBeenCalled();
   });
+
+  it('does not let capability helpers bypass the dispatchAgent wrapper', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: {
+        id: 'delivery-helper-dispatch-agent-bypass',
+        receivedAt: '2026-06-29T14:00:00.000Z',
+      },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'github://deliveries/delivery-helper-dispatch-agent-bypass',
+      },
+    });
+    const dispatchAgent = vi.fn(async (_request: Parameters<NonNullable<RuntimeCapabilities['dispatchAgent']>>[0]) => ({
+      sessionKey: 'agent:main:helper-bypass',
+    }));
+    class RuntimeCapabilityBag {
+      provider = 'codex';
+      dispatchAgent = dispatchAgent;
+
+      startAgent(request: Parameters<NonNullable<RuntimeCapabilities['dispatchAgent']>>[0]) {
+        return this.dispatchAgent(request);
+      }
+    }
+    const loader = createPluginLoader({
+      runtime: mockRuntimeContext({
+        runId: 'run-13',
+        now: () => new Date('2026-06-29T14:01:00.000Z'),
+        capabilities: new RuntimeCapabilityBag() as unknown as RuntimeCapabilities,
+      }),
+    });
+
+    loader.on(
+      'github.issue',
+      async (handledEvent, context) =>
+        (
+          context.capabilities as unknown as {
+            startAgent: (request: Parameters<NonNullable<RuntimeCapabilities['dispatchAgent']>>[0]) => Promise<unknown>;
+          }
+        ).startAgent({
+          event: handledEvent,
+          workflow: 'helper-dispatch-agent-handler',
+          runId: context.runId,
+        }),
+      { name: 'helper-dispatch-agent-handler' },
+    );
+
+    const [result] = await loader.dispatch(event);
+
+    expect(result).toMatchObject({
+      pluginName: 'helper-dispatch-agent-handler',
+      eventId: 'github-webhook:delivery-helper-dispatch-agent-bypass:github.issue',
+      status: 'rejected',
+    });
+    expect(dispatchAgent).not.toHaveBeenCalled();
+  });
+
+  it('does not read workflow metadata getters before accepts matches', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: {
+        id: 'delivery-skipped-metadata-getters',
+        receivedAt: '2026-06-29T14:00:00.000Z',
+      },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'github://deliveries/delivery-skipped-metadata-getters',
+      },
+    });
+    let capabilityReads = 0;
+    let timeoutReads = 0;
+    const skippedWorkflow = {
+      name: 'skipped-metadata-getter-handler',
+      accepts: () => false,
+      get capabilities(): never {
+        capabilityReads += 1;
+        throw new Error('capabilities should not be read');
+      },
+      get timeoutMs(): never {
+        timeoutReads += 1;
+        throw new Error('timeout should not be read');
+      },
+      handle: async () => ({ unreachable: true }),
+    } satisfies WorkflowPlugin;
+
+    const dispatcher = createRuntimeDispatcher({
+      workflows: [skippedWorkflow],
+      runtime: {
+        runId: 'run-13',
+        now: () => new Date('2026-06-29T14:01:00.000Z'),
+      },
+    });
+
+    expect(capabilityReads).toBe(0);
+    expect(timeoutReads).toBe(0);
+    await expect(dispatcher.dispatch(event)).resolves.toEqual([]);
+    expect(capabilityReads).toBe(0);
+    expect(timeoutReads).toBe(0);
+  });
 });
