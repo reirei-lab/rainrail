@@ -129,7 +129,7 @@ export function createGitHubProjectTaskQueueProvider(
     selection,
     listProjectIssues: async () => fetchProjectIssues(options.config, fetchImpl, auth),
     claimProjectIssue: async (input) => claimProjectIssue(options.config, input, fetchImpl, auth),
-    finalizeProjectIssueClaim: async (input) => finalizeProjectIssueClaim(input, fetchImpl, auth),
+    finalizeProjectIssueClaim: async (input) => finalizeProjectIssueClaim(options.config, input, fetchImpl, auth),
     releaseProjectIssue: async (input) => releaseProjectIssue(options.config, input, fetchImpl, auth),
   };
 }
@@ -216,8 +216,6 @@ async function claimProjectIssue(
   assertClaimable(before, input, config);
   const metadata = await loadProjectMetadata(config, fetchImpl, auth);
   let claim: ProjectIssueClaim | undefined;
-  let statusUpdated = false;
-  let comment: { addComment?: { commentEdge?: { node?: { url?: unknown } } } };
   try {
     const lockRefId = await acquireProjectIssueClaimLock(before, input, config, fetchImpl, auth);
     claim = {
@@ -227,58 +225,58 @@ async function claimProjectIssue(
       statusOptionId: metadata.statusOptionId,
       agentSessionIdFieldId: metadata.agentSessionIdFieldId,
       branchFieldId: metadata.branchFieldId,
+      contentId: input.issue.contentId,
+      commentBody: input.commentBody,
       lockRefId,
     };
     assertClaimable(await loadProjectItemStatus(input.issue.id, fetchImpl, auth, config), input, config);
-    await updateProjectField(fetchImpl, auth, metadata.projectId, input.issue.id, metadata.statusFieldId, {
-      singleSelectOptionId: metadata.statusOptionId,
-    });
-    statusUpdated = true;
-    await updateProjectField(fetchImpl, auth, metadata.projectId, input.issue.id, metadata.agentSessionIdFieldId, {
-      text: input.agentSessionId,
-    });
-    await updateProjectField(fetchImpl, auth, metadata.projectId, input.issue.id, metadata.branchFieldId, {
-      text: input.branchName,
-    });
-    const after = await loadProjectItemStatus(input.issue.id, fetchImpl, auth, config);
-    assertClaimMatches(after, input, config);
-
-    comment = await runGraphql<{ addComment?: { commentEdge?: { node?: { url?: unknown } } } }>(
-      fetchImpl,
-      auth,
-      addCommentMutation,
-      { subjectId: input.issue.contentId, body: input.commentBody },
-    );
   } catch (error) {
     if (claim !== undefined) {
-      if (statusUpdated) {
-        await releaseProjectIssue(config, {
-          issue: input.issue,
-          claim,
-          agentSessionId: input.agentSessionId,
-          branchName: input.branchName,
-          reason: error instanceof Error ? error.message : String(error),
-        }, fetchImpl, auth);
-      } else {
-        await deleteProjectIssueClaimLock(claim, fetchImpl, auth);
-      }
+      await deleteProjectIssueClaimLock(claim, fetchImpl, auth);
     }
     throw error;
   }
 
-  return {
-    ...claim,
-    ...(typeof comment.addComment?.commentEdge?.node?.url === 'string'
-      ? { commentUrl: comment.addComment.commentEdge.node.url }
-      : {}),
-  };
+  return claim;
 }
 
 async function finalizeProjectIssueClaim(
+  config: GitHubProjectTaskQueueConfig,
   input: ProjectIssueFinalizeInput,
   fetchImpl: typeof fetch,
   auth: GitHubProjectAuthTokenProvider,
 ): Promise<void> {
+  const metadata = await loadProjectMetadata(config, fetchImpl, auth);
+  assertClaimable(await loadProjectItemStatus(input.issue.id, fetchImpl, auth, config), {
+    issue: input.issue,
+    agentSessionId: input.agentSessionId,
+    branchName: input.branchName,
+    commentBody: input.claim.commentBody ?? '',
+  }, config);
+  await updateProjectField(fetchImpl, auth, metadata.projectId, input.issue.id, metadata.statusFieldId, {
+    singleSelectOptionId: metadata.statusOptionId,
+  });
+  await updateProjectField(fetchImpl, auth, metadata.projectId, input.issue.id, metadata.agentSessionIdFieldId, {
+    text: input.agentSessionId,
+  });
+  await updateProjectField(fetchImpl, auth, metadata.projectId, input.issue.id, metadata.branchFieldId, {
+    text: input.branchName,
+  });
+  const after = await loadProjectItemStatus(input.issue.id, fetchImpl, auth, config);
+  assertClaimMatches(after, {
+    issue: input.issue,
+    agentSessionId: input.agentSessionId,
+    branchName: input.branchName,
+    commentBody: input.claim.commentBody ?? '',
+  }, config);
+  if (input.claim.contentId !== undefined && input.claim.commentBody !== undefined) {
+    await runGraphql<{ addComment?: { commentEdge?: { node?: { url?: unknown } } } }>(
+      fetchImpl,
+      auth,
+      addCommentMutation,
+      { subjectId: input.claim.contentId, body: input.claim.commentBody },
+    );
+  }
   await deleteProjectIssueClaimLock(input.claim, fetchImpl, auth);
 }
 

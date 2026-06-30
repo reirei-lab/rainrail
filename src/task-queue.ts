@@ -29,6 +29,8 @@ export interface ProjectIssueClaim {
   statusOptionId?: string;
   agentSessionIdFieldId?: string;
   branchFieldId?: string;
+  contentId?: string;
+  commentBody?: string;
   commentUrl?: string;
   lockRefId?: string;
 }
