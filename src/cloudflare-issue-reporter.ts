@@ -77,6 +77,7 @@ export interface CloudflareErrorCandidate {
 
 const fingerprintMarkerPrefix = '<!-- error-fingerprint: ';
 const maxRawJsonLength = 50_000;
+const maxSummaryExceptionMessageLength = 1_000;
 const storageKeyPrefix = 'rainrail:cloudflare-error-issue:';
 const storeHitGraceMs = 5 * 60 * 1000;
 const fingerprintLocks = new Map<string, Promise<void>>();
@@ -323,9 +324,10 @@ export function cloudflareErrorCandidateFromEvent(event: RainrailEventEnvelope):
 
 function cloudflareIssueTitle(candidate: CloudflareErrorCandidate): string {
   const location = candidate.stackSignature[0]?.split(' @ ')[0] ?? candidate.requestPath;
+  const exceptionName = sanitizeSecretString(candidate.exceptionName);
   return [
     `[${candidate.scriptName}]`,
-    candidate.exceptionName,
+    exceptionName || 'Error',
     location === undefined ? undefined : `in ${location}`,
   ].filter((part): part is string => part !== undefined && part.length > 0).join(' ').slice(0, 180);
 }
@@ -336,7 +338,11 @@ function cloudflareIssueBody(input: {
   fingerprint: string;
 }): string {
   const rawJson = truncate(JSON.stringify(redact(input.candidate.rawData), null, 2), maxRawJsonLength);
-  const exceptionMessage = sanitizeSecretString(input.candidate.exceptionMessage);
+  const exceptionName = sanitizeSecretString(input.candidate.exceptionName);
+  const exceptionMessage = truncateSummaryText(
+    sanitizeSecretString(input.candidate.exceptionMessage),
+    maxSummaryExceptionMessageLength,
+  );
   const stackSignature = input.candidate.stackSignature.map(sanitizeSecretString);
   return [
     'Rainrail detected a new Cloudflare Worker server error.',
@@ -346,7 +352,7 @@ function cloudflareIssueBody(input: {
     '- Service: cloudflare',
     `- Worker: ${input.candidate.scriptName}`,
     `- Event: ${input.event.name}`,
-    `- Exception: ${input.candidate.exceptionName}`,
+    `- Exception: ${exceptionName || 'Error'}`,
     `- Message: ${exceptionMessage || '(empty)'}`,
     `- Request: ${[input.candidate.requestMethod, input.candidate.requestPath].filter(Boolean).join(' ') || '(unknown)'}`,
     `- Status: ${input.candidate.responseStatus ?? '(unknown)'}`,
@@ -476,6 +482,7 @@ function isUrlKey(key: string): boolean {
 function sanitizeSecretString(value: string): string {
   return value
     .replace(/https?:\/\/[^\s"'<>`]+/giu, (url) => sanitizeUrlString(url))
+    .replace(/(["'])([A-Za-z0-9_-]*(?:authorization|cookie|token|secret|password|key|code|reset))\1(\s*:\s*)(["'])[^"']*\4/giu, '$1$2$1$3$4[redacted]$4')
     .replace(/(^|[?&\s"'<>`,;])([A-Za-z0-9_-]*(?:token|secret|password|code|reset))=([^&\s"'<>`,;]+)/giu, '$1$2=[redacted]')
     .replace(/\bBearer\s+[A-Za-z0-9._~+/-]+=*/giu, 'Bearer [redacted]');
 }
@@ -516,6 +523,11 @@ function isSecretPathSegment(segment: string, previousSegment: string): boolean 
 function truncate(value: string, maxLength: number): string {
   if (value.length <= maxLength) return value;
   return `${value.slice(0, maxLength)}\n... truncated ...`;
+}
+
+function truncateSummaryText(value: string, maxLength: number): string {
+  if (value.length <= maxLength) return value;
+  return `${value.slice(0, maxLength)} ... truncated ...`;
 }
 
 function recordValue(value: unknown): Record<string, unknown> {

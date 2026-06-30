@@ -976,7 +976,7 @@ describe('Rainrail bridge room', () => {
         scriptName: 'asme-site',
         exceptions: [{
           name: 'Error',
-          message: `prefix ${'m'.repeat(2_000)} suffix`,
+          message: `prefix {"password":"storage-secret"} ${'m'.repeat(2_000)} suffix`,
           stack: Array.from({ length: 40 }, (_, index) => `    at frame${index} (worker.js:${index}:1)`).join('\n'),
         }],
       },
@@ -991,6 +991,7 @@ describe('Rainrail bridge room', () => {
     expect(publishResponse.status).toBe(200);
     const payload = storage.storedEvents()[0]?.payload as { exceptions?: Array<{ message: string; stack: string }> };
     const exception = payload.exceptions?.[0];
+    expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('storage-secret');
     expect(exception?.message.length).toBeLessThan(700);
     expect(exception?.stack.length).toBeLessThan(1_500);
     expect(exception?.message).toContain('... truncated ...');

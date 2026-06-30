@@ -415,6 +415,7 @@ function cloudflareErrorEvent(overrides: {
   url?: string;
   line?: number;
   column?: number;
+  exceptionName?: string;
   message?: string;
   stack?: string;
   leadingStacklessException?: boolean;
@@ -446,7 +447,7 @@ function cloudflareErrorEvent(overrides: {
           message: 'wrapper without stack',
         }] : []),
         {
-          name: 'TypeError',
+          name: overrides.exceptionName ?? 'TypeError',
           message: overrides.message ?? "Cannot read properties of null (reading 'toAuth') reset=secret-reset-code",
           stack: overrides.stack ?? [
             "TypeError: Cannot read properties of null (reading 'toAuth')",
@@ -595,6 +596,97 @@ describe('cloudflare issue redaction', () => {
     expect(createdIssues[0]?.body).not.toContain('user:password');
     expect(createdIssues[0]?.body).not.toContain('secret-reset-token');
     expect(createdIssues[0]?.body).toContain('resetHandler @ https://worker.example/[redacted]/[redacted]/worker.js');
+  });
+
+  it('redacts JSON-shaped secret values embedded in exception strings', async () => {
+    const createdIssues: Array<{ body: string }> = [];
+    const workflow = createCloudflareIssueReporterWorkflow({
+      repository: 'reirei-lab/rainrail',
+      store: createInMemoryCloudflareErrorIssueStore(),
+      issues: {
+        findOpenIssueByFingerprint: async () => undefined,
+        createIssue: async (input) => {
+          createdIssues.push(input);
+          return {
+            number: 129,
+            url: 'https://github.com/reirei-lab/rainrail/issues/129',
+          };
+        },
+      },
+    });
+
+    await expect(workflow.handle(cloudflareErrorEvent({
+      message: 'serialized input {"password":"json-secret","access_token":"oauth-secret","api_key":"key-secret"}',
+    }), runtimeContext())).resolves.toMatchObject({
+      handled: true,
+    });
+
+    expect(createdIssues[0]?.body).not.toContain('json-secret');
+    expect(createdIssues[0]?.body).not.toContain('oauth-secret');
+    expect(createdIssues[0]?.body).not.toContain('key-secret');
+    expect(createdIssues[0]?.body).toContain('\\"password\\":\\"[redacted]\\"');
+    expect(createdIssues[0]?.body).toContain('\\"access_token\\":\\"[redacted]\\"');
+    expect(createdIssues[0]?.body).toContain('\\"api_key\\":\\"[redacted]\\"');
+  });
+
+  it('redacts exception names before writing issue titles and summaries', async () => {
+    const createdIssues: Array<{ title: string; body: string }> = [];
+    const workflow = createCloudflareIssueReporterWorkflow({
+      repository: 'reirei-lab/rainrail',
+      store: createInMemoryCloudflareErrorIssueStore(),
+      issues: {
+        findOpenIssueByFingerprint: async () => undefined,
+        createIssue: async (input) => {
+          createdIssues.push(input);
+          return {
+            number: 130,
+            url: 'https://github.com/reirei-lab/rainrail/issues/130',
+          };
+        },
+      },
+    });
+
+    await expect(workflow.handle(cloudflareErrorEvent({
+      exceptionName: 'ApiError access_token=name-secret https://user:password@worker.example/reset/name-token',
+    }), runtimeContext())).resolves.toMatchObject({
+      handled: true,
+    });
+
+    expect(createdIssues[0]?.title).not.toContain('name-secret');
+    expect(createdIssues[0]?.title).not.toContain('user:password');
+    expect(createdIssues[0]?.title).not.toContain('name-token');
+    expect(createdIssues[0]?.body).not.toContain('name-secret');
+    expect(createdIssues[0]?.body).not.toContain('user:password');
+    expect(createdIssues[0]?.body).not.toContain('name-token');
+  });
+
+  it('truncates the summary exception message independently from raw data', async () => {
+    const createdIssues: Array<{ body: string }> = [];
+    const workflow = createCloudflareIssueReporterWorkflow({
+      repository: 'reirei-lab/rainrail',
+      store: createInMemoryCloudflareErrorIssueStore(),
+      issues: {
+        findOpenIssueByFingerprint: async () => undefined,
+        createIssue: async (input) => {
+          createdIssues.push(input);
+          return {
+            number: 131,
+            url: 'https://github.com/reirei-lab/rainrail/issues/131',
+          };
+        },
+      },
+    });
+
+    await expect(workflow.handle(cloudflareErrorEvent({
+      message: `large serialized response ${'m'.repeat(5_000)} summary-tail`,
+    }), runtimeContext())).resolves.toMatchObject({
+      handled: true,
+    });
+
+    const messageLine = createdIssues[0]?.body.split('\n').find((line) => line.startsWith('- Message: '));
+    expect(messageLine?.length).toBeLessThan(1_200);
+    expect(messageLine).toContain('... truncated ...');
+    expect(messageLine).not.toContain('summary-tail');
   });
 });
 

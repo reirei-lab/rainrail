@@ -699,6 +699,7 @@ function sanitizePayloadPathname(pathname: string): string {
 function sanitizePayloadText(value: string): string {
   return value
     .replace(/https?:\/\/[^\s"'<>`]+/giu, (url) => sanitizePayloadUrl(url) ?? '[redacted-url]')
+    .replace(/(["'])([A-Za-z0-9_-]*(?:authorization|cookie|token|secret|password|key|code|reset))\1(\s*:\s*)(["'])[^"']*\4/giu, '$1$2$1$3$4[redacted]$4')
     .replace(/(^|[?&\s"'<>`,;])([A-Za-z0-9_-]*(?:token|secret|password|code|reset))=([^&\s"'<>`,;]+)/giu, '$1$2=[redacted]')
     .replace(/\bBearer\s+[A-Za-z0-9._~+/-]+=*/giu, 'Bearer [redacted]');
 }
