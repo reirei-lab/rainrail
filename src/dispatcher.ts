@@ -61,7 +61,6 @@ interface WorkflowExecutionRecord {
   timeoutSnapshot: boolean;
   timeoutMs?: number;
   timeoutAccessor?: () => number | undefined;
-  timeoutReceiver?: object;
   timeoutError?: unknown;
 }
 
@@ -176,17 +175,8 @@ function createWorkflowExecutionRecord(workflow: WorkflowPlugin): WorkflowExecut
         record.policyError = policyError;
       }
     } else {
-      const capabilityReceiver = createWorkflowMetadataReceiverSnapshot(workflow);
       record.policyAccessor = () => {
-        try {
-          return capabilitiesDescriptor.get?.call(capabilityReceiver) as RuntimeCapabilityName[] | undefined;
-        } catch (reason) {
-          if (!isPrivateReceiverError(reason)) {
-            throw reason;
-          }
-
-          return capabilitiesDescriptor.get?.call(workflow) as RuntimeCapabilityName[] | undefined;
-        }
+        return capabilitiesDescriptor.get?.call(workflow) as RuntimeCapabilityName[] | undefined;
       };
       record.policySnapshot = false;
     }
@@ -200,19 +190,9 @@ function createWorkflowExecutionRecord(workflow: WorkflowPlugin): WorkflowExecut
         record.timeoutMs = timeoutMs;
       }
     } else {
-      const timeoutReceiver = createWorkflowMetadataReceiverSnapshot(workflow);
       record.timeoutAccessor = () => {
-        try {
-          return timeoutDescriptor.get?.call(timeoutReceiver) as number | undefined;
-        } catch (reason) {
-          if (!isPrivateReceiverError(reason)) {
-            throw reason;
-          }
-
-          return timeoutDescriptor.get?.call(workflow) as number | undefined;
-        }
+        return timeoutDescriptor.get?.call(workflow) as number | undefined;
       };
-      record.timeoutReceiver = timeoutReceiver;
       record.timeoutSnapshot = false;
     }
   }
@@ -265,23 +245,6 @@ function findPropertyDescriptor(target: object, property: string | symbol): Prop
   }
 
   return undefined;
-}
-
-function createWorkflowMetadataReceiverSnapshot(workflow: WorkflowPlugin): object {
-  const snapshot = Object.create(Reflect.getPrototypeOf(workflow)) as Record<PropertyKey, unknown>;
-
-  for (const property of Reflect.ownKeys(workflow)) {
-    if (property === 'accepts' || property === 'handle') {
-      continue;
-    }
-
-    const descriptor = Reflect.getOwnPropertyDescriptor(workflow, property);
-    if (descriptor !== undefined) {
-      Reflect.defineProperty(snapshot, property, descriptor);
-    }
-  }
-
-  return snapshot;
 }
 
 function snapshotWorkflowPolicy(
@@ -741,38 +704,52 @@ function createDispatchAgentCapabilityProxy(
       return cached;
     }
 
-    const viewTarget = Array.isArray(source) ? new Array(source.length) : {};
-    const view = new Proxy(
-      viewTarget,
-      {
-        get(_target, property) {
-          if (property === 'dispatchAgent') {
-            return hasDispatchAgentProperty(source) ? dispatchAgent : undefined;
-          }
+    let view: object;
+    const viewTarget = typeof source === 'function'
+      ? source
+      : Array.isArray(source)
+        ? new Array(source.length)
+        : {};
+    const viewHandler: ProxyHandler<object> = {
+      get(_target, property) {
+        if (property === 'dispatchAgent') {
+          return hasDispatchAgentProperty(source) ? dispatchAgent : undefined;
+        }
 
-          return readCapabilityProperty(source, property);
-        },
-        getOwnPropertyDescriptor(_target, property) {
-          return describeCapabilityProperty(source, property);
-        },
-        getPrototypeOf() {
-          const prototype = Reflect.getPrototypeOf(source);
-          return prototype === null || !prototypeMayExposeDispatchAgent(prototype)
-            ? prototype
-            : createCapabilityView(prototype);
-        },
-        has(_target, property) {
-          if (property === 'dispatchAgent') {
-            return hasDispatchAgentProperty(source);
-          }
-
-          return property in source;
-        },
-        ownKeys() {
-          return Reflect.ownKeys(source);
-        },
+        return readCapabilityProperty(source, property);
       },
-    );
+      getOwnPropertyDescriptor(_target, property) {
+        return describeCapabilityProperty(source, property);
+      },
+      getPrototypeOf() {
+        const prototype = Reflect.getPrototypeOf(source);
+        return prototype === null || !prototypeMayExposeDispatchAgent(prototype)
+          ? prototype
+          : createCapabilityView(prototype);
+      },
+      has(_target, property) {
+        if (property === 'dispatchAgent') {
+          return hasDispatchAgentProperty(source);
+        }
+
+        return property in source;
+      },
+      ownKeys() {
+        return Reflect.ownKeys(source);
+      },
+    };
+    if (typeof source === 'function') {
+      viewHandler.apply = (_target, thisArg, args) =>
+        normalizeCapabilityHelperResult(
+          Reflect.apply(source, thisArg, args),
+          capabilities,
+          view,
+          getRawDispatchAgent,
+          dispatchAgent,
+          (object) => createCapabilityView(object),
+        );
+    }
+    view = new Proxy(viewTarget, viewHandler);
 
     viewCache.set(source, view);
     sourceCache.set(view, source);
@@ -1125,6 +1102,7 @@ function callCapabilityFunction(
       dispatchAgent,
       retryWithPrivateReceiver,
       wrapObject,
+      true,
     );
   };
 
@@ -1205,6 +1183,7 @@ function normalizeCapabilityFunctionResult(
   dispatchAgent: DispatchAgentCapability,
   retryPrivateReceiver: (reason: unknown) => unknown,
   wrapObject: (object: object) => object,
+  gateUnknownDispatchRequests = false,
 ): unknown {
   if (isPromiseLike(value)) {
     return normalizeCapabilityPromiseResult(
@@ -1215,10 +1194,19 @@ function normalizeCapabilityFunctionResult(
       dispatchAgent,
       wrapObject,
       retryPrivateReceiver,
+      gateUnknownDispatchRequests,
     );
   }
 
-  return normalizeCapabilityHelperResult(value, capabilities, safeReceiver, getRawDispatchAgent, dispatchAgent, wrapObject);
+  return normalizeCapabilityHelperResult(
+    value,
+    capabilities,
+    safeReceiver,
+    getRawDispatchAgent,
+    dispatchAgent,
+    wrapObject,
+    gateUnknownDispatchRequests,
+  );
 }
 
 function normalizeCapabilityHelperResult(
@@ -1228,6 +1216,7 @@ function normalizeCapabilityHelperResult(
   getRawDispatchAgent: DispatchAgentResolver,
   dispatchAgent: DispatchAgentCapability,
   wrapObject: (object: object) => object,
+  gateUnknownDispatchRequests = false,
 ): unknown {
   if (value === capabilities) {
     return safeReceiver;
@@ -1238,11 +1227,28 @@ function normalizeCapabilityHelperResult(
   }
 
   if (typeof value === 'function') {
-    return createNormalizedCapabilityFunction(value, capabilities, safeReceiver, getRawDispatchAgent, dispatchAgent, wrapObject);
+    return createNormalizedCapabilityFunction(
+      value,
+      capabilities,
+      safeReceiver,
+      getRawDispatchAgent,
+      dispatchAgent,
+      wrapObject,
+      gateUnknownDispatchRequests,
+    );
   }
 
   if (isPromiseLike(value)) {
-    return normalizeCapabilityPromiseResult(value, capabilities, safeReceiver, getRawDispatchAgent, dispatchAgent, wrapObject);
+    return normalizeCapabilityPromiseResult(
+      value,
+      capabilities,
+      safeReceiver,
+      getRawDispatchAgent,
+      dispatchAgent,
+      wrapObject,
+      undefined,
+      gateUnknownDispatchRequests,
+    );
   }
 
   if (shouldWrapCapabilityObject(value)) {
@@ -1259,11 +1265,22 @@ function createNormalizedCapabilityFunction(
   getRawDispatchAgent: DispatchAgentResolver,
   dispatchAgent: DispatchAgentCapability,
   wrapObject: (object: object) => object,
+  gateUnknownDispatchRequests: boolean,
 ): Function {
   return function normalizedCapabilityFunction(this: unknown, ...args: unknown[]) {
     if (isDispatchAgentRequest(args[0])) {
-      const rawDispatchAgent = getRawDispatchAgent();
+      let rawDispatchAgent: DispatchAgentCapability | undefined;
+      try {
+        rawDispatchAgent = getRawDispatchAgent();
+      } catch (reason) {
+        if (!gateUnknownDispatchRequests) {
+          throw reason;
+        }
+      }
       if (value === rawDispatchAgent || isBoundDispatchAgentAlias(value, undefined, rawDispatchAgent)) {
+        return dispatchAgent(args[0], args[1] as Parameters<DispatchAgentCapability>[1]);
+      }
+      if (gateUnknownDispatchRequests) {
         return dispatchAgent(args[0], args[1] as Parameters<DispatchAgentCapability>[1]);
       }
     }
@@ -1278,6 +1295,7 @@ function createNormalizedCapabilityFunction(
         throw reason;
       },
       wrapObject,
+      gateUnknownDispatchRequests,
     );
   };
 }
@@ -1290,10 +1308,19 @@ function normalizeCapabilityPromiseResult(
   dispatchAgent: DispatchAgentCapability,
   wrapObject: (object: object) => object,
   retryPrivateReceiver?: (reason: unknown) => unknown,
+  gateUnknownDispatchRequests = false,
 ): Promise<unknown> {
   return Promise.resolve(value).then(
     (resolved) =>
-      normalizeCapabilityHelperResult(resolved, capabilities, safeReceiver, getRawDispatchAgent, dispatchAgent, wrapObject),
+      normalizeCapabilityHelperResult(
+        resolved,
+        capabilities,
+        safeReceiver,
+        getRawDispatchAgent,
+        dispatchAgent,
+        wrapObject,
+        gateUnknownDispatchRequests,
+      ),
     (reason: unknown) => {
       if (retryPrivateReceiver === undefined || !isPrivateReceiverError(reason)) {
         throw reason;
