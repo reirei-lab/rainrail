@@ -117,6 +117,11 @@ export function getInProgressProjectIssues(
     && normalizeToken(issue.status) === normalizeToken(resolved.todoStatus)
     && childIssuesOf(issue, issues).length > 0
   );
+  const assignedParents = issues.filter((issue) =>
+    isProjectIssueAssignedTo(issue, resolved.assigneeLogin)
+    && !isClosedProjectIssue(issue)
+    && childIssuesOf(issue, issues).length > 0
+  );
   const childInProgressIssues = issues.filter((issue) =>
     !isClosedProjectIssue(issue)
     && normalizeToken(issue.status) === inProgressStatus
@@ -128,6 +133,7 @@ export function getInProgressProjectIssues(
     && !isClosedProjectIssue(issue)
     && normalizeToken(issue.status) === inProgressStatus
     && isRunnableForAgent(issue, resolved.assigneeLogin)
+    && assignedParents.some((parent) => isChildOf(issue, parent))
   );
 
   return uniqueIssues([...assignedInProgressIssues, ...childInProgressIssues, ...runnableChildInProgressIssues]);

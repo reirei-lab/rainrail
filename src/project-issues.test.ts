@@ -165,7 +165,7 @@ describe('project issue selection', () => {
     expect(getInProgressProjectIssues([
       issue('parent', {
         status: 'Done',
-        assigneeLogins: ['other-agent'],
+        assigneeLogins: ['reirei-agent'],
         repository: 'reirei-lab/rainrail',
         number: 21,
       }),
@@ -177,6 +177,24 @@ describe('project issue selection', () => {
         parent: { repository: 'reirei-lab/rainrail', number: 21 },
       }),
     ])).toHaveLength(1);
+  });
+
+  it('does not count unassigned in-progress children owned by another agent parent', () => {
+    expect(getInProgressProjectIssues([
+      issue('parent', {
+        status: 'Done',
+        assigneeLogins: ['other-agent'],
+        repository: 'reirei-lab/rainrail',
+        number: 21,
+      }),
+      issue('child', {
+        status: 'In Progress',
+        assigneeLogins: [],
+        repository: 'reirei-lab/rainrail',
+        number: 22,
+        parent: { repository: 'reirei-lab/rainrail', number: 21 },
+      }),
+    ])).toHaveLength(0);
   });
 
   it('does not select children assigned to another agent', () => {

@@ -209,6 +209,9 @@ async function reconcileProjectIssueClaimState(
         await deleteProjectIssueClaimLocks(dispatchedLockClaim(issue, lock), fetchImpl, auth).catch(() => undefined);
         return projectIssueWithCurrentStatus(issue, current);
       }
+      if (!isRestorableDispatchedClaimOwner(current, lock)) {
+        return projectIssueWithCurrentStatus(issue, current);
+      }
       return restoreDispatchedProjectIssueClaim(config, issue, lock, fetchImpl, auth);
     }
     if (lock !== undefined && lock.projectItemId === issue.id && !isRecoverableStaleLock(lock, { issue })) {
@@ -217,7 +220,7 @@ async function reconcileProjectIssueClaimState(
     return issue;
   }
   if (normalizedStatus !== normalizeToken(config.inProgressStatus)) {
-    await cleanupDispatchedProjectIssueLocksForIssue(config, issue, fetchImpl, auth);
+    await cleanupDispatchedProjectIssueLocksForIssue(config, issue, fetchImpl, auth).catch(() => undefined);
     return issue;
   }
   const current = await loadProjectItemStatus(issue.id, fetchImpl, auth, config);
@@ -421,6 +424,7 @@ async function finalizeProjectIssueClaim(
     branchName: input.branchName,
     commentBody: input.claim.commentBody ?? '',
   }, config);
+  await assertParentIssueExecutionConditions(config, input.issue, fetchImpl, auth);
   await updateProjectField(fetchImpl, auth, metadata.projectId, input.issue.id, metadata.statusFieldId, {
     singleSelectOptionId: metadata.statusOptionId,
   });
@@ -1742,6 +1746,16 @@ function isFinalizedProjectIssueClaim(
     && lock.branchName !== undefined
     && status.agentSessionId === lock.agentSessionId
     && status.branchName === lock.branchName;
+}
+
+function isRestorableDispatchedClaimOwner(status: ProjectItemStatus, lock: ProjectIssueClaimLock): boolean {
+  const session = status.agentSessionId?.trim() ?? '';
+  const branch = status.branchName?.trim() ?? '';
+  if (session === '' && branch === '') {
+    return true;
+  }
+  return (session === '' || session === lock.agentSessionId)
+    && (branch === '' || branch === lock.branchName);
 }
 
 function isSameProjectIssueClaimLock(left: ProjectIssueClaimLock, right: ProjectIssueClaimLock): boolean {
