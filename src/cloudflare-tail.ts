@@ -1,0 +1,413 @@
+import { createEventEnvelope, type RainrailEventEnvelope } from './events.js';
+import { defineSourcePlugin, type SourcePlugin, type SourcePluginNormalizeContext } from './source-plugin.js';
+
+const FAILURE_OUTCOMES = new Set([
+  'exception',
+  'exceededCpu',
+  'exceededMemory',
+  'scriptNotFound',
+  'canceled',
+  'responseStreamDisconnected',
+]);
+
+export interface CloudflareTailEvent {
+  eventTimestamp?: number | string;
+  outcome?: unknown;
+  scriptName?: unknown;
+  scriptVersion?: { id?: unknown } | null;
+  exceptions?: unknown[];
+  event?: {
+    request?: {
+      method?: unknown;
+      url?: unknown;
+      headers?: Record<string, unknown> | null;
+    } | null;
+    response?: {
+      status?: unknown;
+    } | null;
+  } | null;
+}
+
+export interface CloudflareTailException {
+  name?: string;
+  message?: string;
+  timestamp?: string;
+}
+
+export interface CloudflareTailPayload {
+  action: string;
+  status: string | null;
+  conclusion: 'success' | 'failure' | 'neutral';
+  scriptName: string | null;
+  scriptVersion: string | null;
+  method: string | null;
+  url: string | null;
+  cfRay: string | null;
+  exceptions: CloudflareTailException[];
+}
+
+export interface CreateCloudflareTailEventInput {
+  tailEvent: CloudflareTailEvent;
+  receivedAt?: Date;
+  sourceName?: string;
+  account?: string;
+  environment?: string;
+  fallbackDeliveryId?: string;
+}
+
+export type CloudflareTailRainrailEvent = RainrailEventEnvelope<
+  CloudflareTailPayload,
+  'cloudflare.tail' | 'cloudflare.error'
+>;
+
+export interface PublishCloudflareTailEventsOptions extends Omit<CreateCloudflareTailEventInput, 'tailEvent'> {
+  publish(event: CloudflareTailRainrailEvent): Response | Promise<Response>;
+}
+
+export type PublishCloudflareTailEventResult =
+  | { ok: true; id: string }
+  | { ok: false; id: string; status: number };
+
+export function createCloudflareTailSourcePlugin(name = 'cloudflare-tail'): SourcePlugin<CloudflareTailEvent> {
+  return defineSourcePlugin({
+    name,
+    sourceType: 'cloudflare',
+    normalize(input, context) {
+      return createCloudflareTailEvent({
+        tailEvent: input,
+        sourceName: name,
+        receivedAt: new Date(context.receivedAt),
+        fallbackDeliveryId: context.deliveryId,
+        ...metadataFromContext(context),
+      });
+    },
+  });
+}
+
+export async function createCloudflareTailEvent({
+  tailEvent,
+  receivedAt = new Date(),
+  sourceName = 'cloudflare-tail',
+  account,
+  environment,
+  fallbackDeliveryId,
+}: CreateCloudflareTailEventInput): Promise<CloudflareTailRainrailEvent> {
+  const occurredAt = normalizeTimestamp(tailEvent.eventTimestamp, receivedAt);
+  const request = tailEvent.event?.request ?? {};
+  const response = tailEvent.event?.response ?? {};
+  const cfRay = optionalString(findHeader(request.headers, 'cf-ray'));
+  const scriptName = optionalString(tailEvent.scriptName);
+  const scriptVersion = optionalString(tailEvent.scriptVersion?.id);
+  const method = optionalString(request.method);
+  const url = optionalString(request.url);
+  const status = optionalStatus(response.status);
+  const exceptions = normalizeExceptions(tailEvent.exceptions);
+  const action = normalizeAction(tailEvent.outcome, exceptions);
+  const name = isCloudflareError(action, exceptions) ? 'cloudflare.error' : 'cloudflare.tail';
+  const deliveryId = buildCloudflareTailDeliveryId({
+    scriptName,
+    occurredAt,
+    suffix: cfRay ?? fallbackDeliveryId ?? randomDeliverySuffix(),
+    maxLength: maxDeliveryIdLength(),
+  });
+  const id = buildCloudflareTailEventId(sourceName, deliveryId, name);
+
+  return createEventEnvelope({
+    ...(id === undefined ? {} : { id }),
+    source: {
+      type: 'cloudflare',
+      name: sourceName,
+      ...(account === undefined ? {} : { account }),
+      ...(environment === undefined ? {} : { environment }),
+    },
+    name,
+    delivery: {
+      id: deliveryId,
+      receivedAt: receivedAt.toISOString(),
+    },
+    occurredAt: occurredAt.toISOString(),
+    subject: {
+      type: 'worker',
+      id: safeIdentifierSegment(scriptName ?? 'unknown-worker', 'unknown-worker', 128),
+    },
+    payload: {
+      action,
+      status,
+      conclusion: inferConclusion(action, status, exceptions),
+      scriptName,
+      scriptVersion,
+      method,
+      url,
+      cfRay,
+      exceptions,
+    },
+    rawPayload: {
+      kind: 'external-reference',
+      reference: `cloudflare://deliveries/${deliveryId}`,
+    },
+  });
+}
+
+export async function publishCloudflareTailEvents(
+  tailEvents: CloudflareTailEvent[],
+  options: PublishCloudflareTailEventsOptions,
+): Promise<PublishCloudflareTailEventResult[]> {
+  const results: PublishCloudflareTailEventResult[] = [];
+
+  for (const [index, tailEvent] of tailEvents.entries()) {
+    const event = await createCloudflareTailEvent({
+      tailEvent,
+      ...(options.receivedAt === undefined ? {} : { receivedAt: options.receivedAt }),
+      ...(options.sourceName === undefined ? {} : { sourceName: options.sourceName }),
+      ...(options.account === undefined ? {} : { account: options.account }),
+      ...(options.environment === undefined ? {} : { environment: options.environment }),
+      ...(options.fallbackDeliveryId === undefined ? {} : {
+        fallbackDeliveryId: `${options.fallbackDeliveryId}-${index}`,
+      }),
+    });
+    const response = await options.publish(event);
+
+    results.push(response.ok
+      ? { ok: true, id: event.id }
+      : { ok: false, id: event.id, status: response.status });
+  }
+
+  return results;
+}
+
+function metadataFromContext(context: SourcePluginNormalizeContext): Pick<CreateCloudflareTailEventInput, 'account' | 'environment'> {
+  return {
+    ...(typeof context.metadata.account === 'string' ? { account: context.metadata.account } : {}),
+    ...(typeof context.metadata.environment === 'string' ? { environment: context.metadata.environment } : {}),
+  };
+}
+
+function normalizeTimestamp(value: unknown, fallback: Date): Date {
+  if (typeof value === 'number') {
+    const milliseconds = value > 10_000_000_000 ? value : value * 1000;
+    const date = new Date(milliseconds);
+    if (!Number.isNaN(date.getTime())) return date;
+  }
+
+  if (typeof value === 'string') {
+    const date = new Date(value);
+    if (!Number.isNaN(date.getTime())) return date;
+  }
+
+  return fallback;
+}
+
+function buildCloudflareTailDeliveryId({
+  scriptName,
+  occurredAt,
+  suffix,
+  maxLength,
+}: {
+  scriptName: string | null;
+  occurredAt: Date;
+  suffix: string;
+  maxLength: number;
+}): string {
+  const compactedTimestamp = compactTimestamp(occurredAt);
+  const fixedLength = 'tail'.length + compactedTimestamp.length + 3;
+  const remainingLength = Math.max(2, maxLength - fixedLength);
+  const suffixLength = Math.min(32, Math.max(1, Math.floor(remainingLength / 2)));
+  const scriptLength = Math.max(1, remainingLength - suffixLength);
+
+  return [
+    'tail',
+    safeDeliveryReferenceSegment(scriptName ?? 'unknown-script', 'unknown-script', scriptLength),
+    compactedTimestamp,
+    safeDeliveryReferenceSegment(suffix, 'unknown-ray', suffixLength, { preserveEnd: true }),
+  ].join('-');
+}
+
+function maxDeliveryIdLength(): number {
+  return 95;
+}
+
+function buildCloudflareTailEventId(
+  sourceName: string,
+  deliveryId: string,
+  name: CloudflareTailRainrailEvent['name'],
+): string | undefined {
+  const defaultId = `${sourceName}:${deliveryId}:${name}`;
+  if (defaultId.length <= 128) return undefined;
+
+  const fixedLength = 'cf'.length + name.length + 3;
+  const remainingLength = 128 - fixedLength;
+  const sourceLength = Math.max(1, Math.floor(remainingLength / 3));
+  const deliveryLength = Math.max(1, remainingLength - sourceLength);
+
+  return [
+    'cf',
+    safeIdentifierSegment(sourceName, 'source', sourceLength),
+    safeIdentifierSegment(deliveryId, 'delivery', deliveryLength),
+    name,
+  ].join(':');
+}
+
+function compactTimestamp(date: Date): string {
+  return date.toISOString().replace(/[-:.]/g, '');
+}
+
+function randomDeliverySuffix(): string {
+  return globalThis.crypto.randomUUID();
+}
+
+function normalizeAction(outcome: unknown, exceptions: CloudflareTailException[]): string {
+  if (exceptions.length > 0) return 'exception';
+
+  return safeActionToken(optionalString(outcome) ?? 'invocation', 'unknown');
+}
+
+function isCloudflareError(action: string, exceptions: CloudflareTailException[]): boolean {
+  return exceptions.length > 0 || FAILURE_OUTCOMES.has(action);
+}
+
+function inferConclusion(
+  action: string,
+  status: string | null,
+  exceptions: CloudflareTailException[],
+): CloudflareTailPayload['conclusion'] {
+  if (isCloudflareError(action, exceptions)) return 'failure';
+
+  const statusCode = status === null ? undefined : Number.parseInt(status, 10);
+  if (statusCode !== undefined && statusCode >= 500) return 'failure';
+  if (action === 'ok' || (statusCode !== undefined && statusCode < 500)) return 'success';
+  return 'neutral';
+}
+
+function normalizeExceptions(value: unknown): CloudflareTailException[] {
+  if (!Array.isArray(value)) return [];
+
+  return value.flatMap((exception) => {
+    if (typeof exception !== 'object' || exception === null || Array.isArray(exception)) return [];
+
+    const record = exception as Record<string, unknown>;
+    return [{
+      ...optionalField(record, 'name'),
+      ...optionalField(record, 'message'),
+      ...optionalTimestampField(record.timestamp),
+    }];
+  });
+}
+
+function optionalField(record: Record<string, unknown>, key: 'name' | 'message'): Record<typeof key, string> | {} {
+  const value = optionalString(record[key]);
+  return value === null ? {} : { [key]: value };
+}
+
+function optionalTimestampField(value: unknown): { timestamp: string } | {} {
+  if (value === undefined || value === null) return {};
+
+  return { timestamp: normalizeTimestamp(value, new Date(0)).toISOString() };
+}
+
+function optionalStatus(value: unknown): string | null {
+  if (typeof value === 'number' && Number.isInteger(value)) return String(value);
+  if (typeof value === 'string' && /^\d{3}$/u.test(value)) return value;
+  return null;
+}
+
+function optionalString(value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+function findHeader(headers: Record<string, unknown> | null | undefined, name: string): unknown {
+  if (headers === null || headers === undefined) return undefined;
+
+  const expected = name.toLowerCase();
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === expected) return value;
+  }
+  return undefined;
+}
+
+function safeIdentifierSegment(value: string, fallback: string, maxLength = 64): string {
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_.:-]+/gu, '-')
+    .replace(/^-+|-+$/gu, '');
+  const original = value.trim();
+  const needsHash = normalized !== original || normalized.length > maxLength;
+  const hash = stableHash(value);
+  const hashSuffix = needsHash ? `-${hash}` : '';
+  const readableLength = Math.max(0, maxLength - hashSuffix.length);
+  const truncatedRaw = readableLength <= 0 ? '' : normalized.slice(0, readableLength);
+  const truncated = truncatedRaw
+    .replace(/^[^a-z0-9]+/u, '')
+    .replace(/[^a-z0-9]+$/u, '');
+
+  if (truncated.length > 0 && /^[a-z0-9]/u.test(truncated)) {
+    return `${truncated}${hashSuffix}`;
+  }
+
+  if (needsHash) {
+    return hash.slice(0, maxLength);
+  }
+
+  return fallback;
+}
+
+function safeActionToken(value: string, fallback: string): string {
+  const normalized = value
+    .trim()
+    .replace(/[^A-Za-z0-9_.:-]+/gu, '-')
+    .replace(/^-+|-+$/gu, '');
+
+  return normalized.length > 0 && /^[A-Za-z0-9]/u.test(normalized) ? normalized : fallback;
+}
+
+function safeDeliveryReferenceSegment(
+  value: string,
+  fallback: string,
+  maxLength = 64,
+  options: { preserveEnd?: boolean } = {},
+): string {
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_.-]+/gu, '-')
+    .replace(/^-+|-+$/gu, '');
+  const original = value.trim();
+  const normalizedWithoutEdgePunctuation = normalized
+    .replace(/^[^a-z0-9]+/u, '')
+    .replace(/[^a-z0-9]+$/u, '');
+  const needsHash = normalized !== original
+    || normalizedWithoutEdgePunctuation !== normalized
+    || normalized.length > maxLength;
+  const hash = stableHash(value);
+  const hashSuffix = needsHash ? `-${hash}` : '';
+  const readableLength = Math.max(0, maxLength - hashSuffix.length);
+  const truncatedRaw = readableLength <= 0
+    ? ''
+    : options.preserveEnd === true
+      ? normalized.slice(-readableLength)
+      : normalized.slice(0, readableLength);
+  const truncated = truncatedRaw
+    .replace(/^[^a-z0-9]+/u, '')
+    .replace(/[^a-z0-9]+$/u, '');
+
+  if (truncated.length > 0 && /^[a-z0-9]/u.test(truncated)) {
+    return `${truncated}${hashSuffix}`;
+  }
+
+  if (needsHash) {
+    return hash.slice(0, maxLength);
+  }
+
+  return fallback;
+}
+
+function stableHash(value: string): string {
+  let hash = 0x811c9dc5;
+
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+
+  return (hash >>> 0).toString(36);
+}

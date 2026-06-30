@@ -1153,8 +1153,20 @@ function callCapabilityFunction(
   wrapObject: (object: object) => object,
   property?: string | symbol,
 ): unknown {
+  const helperIsRawDispatchAgent = () => {
+    try {
+      return helper === peekRawDispatchAgent();
+    } catch {
+      return false;
+    }
+  };
+  const shouldGateDispatchRequest = () =>
+    helperIsRawDispatchAgent() ||
+    isDispatchAgentAliasProperty(property) ||
+    isStarterAliasProperty(property) ||
+    helperMayResolveDispatchAgent(helper);
   const retryWithPrivateReceiver = (reason: unknown) => {
-    if (isDispatchAgentRequest(args[0]) || isStarterAliasProperty(property) || helperMayResolveDispatchAgent(helper)) {
+    if ((isDispatchAgentRequest(args[0]) && shouldGateDispatchRequest()) || shouldGateDispatchRequest()) {
       throw reason;
     }
 
@@ -1183,7 +1195,7 @@ function callCapabilityFunction(
   };
 
   try {
-    if (isDispatchAgentRequest(args[0])) {
+    if (isDispatchAgentRequest(args[0]) && shouldGateDispatchRequest()) {
       return normalizeCapabilityFunctionResult(
         dispatchAgent(args[0], args[1] as Parameters<DispatchAgentCapability>[1]),
         capabilities,
@@ -1251,28 +1263,40 @@ function sanitizePrivateRetryArgs(
 }
 
 function prototypeMayExposeDispatchAgent(prototype: object): boolean {
-  if (findPropertyDescriptor(prototype, 'dispatchAgent') !== undefined) {
-    return true;
-  }
-
-  const constructorDescriptor = Reflect.getOwnPropertyDescriptor(prototype, 'constructor');
-  if (
-    constructorDescriptor !== undefined &&
-    'value' in constructorDescriptor &&
-    typeof constructorDescriptor.value === 'function' &&
-    objectMayExposeDispatchAgent(constructorDescriptor.value)
-  ) {
-    return true;
-  }
-
-  return Reflect.ownKeys(prototype).some((property) => {
-    if (!isDispatchAgentLikeProperty(property) && !isStarterAliasProperty(property)) {
-      return false;
+  let current: object | null = prototype;
+  while (current !== null) {
+    if (Reflect.getOwnPropertyDescriptor(current, 'dispatchAgent') !== undefined) {
+      return true;
     }
 
-    const descriptor = Reflect.getOwnPropertyDescriptor(prototype, property);
-    return descriptor !== undefined && (typeof descriptor.get === 'function' || typeof descriptor.value === 'function');
-  });
+    const constructorDescriptor = Reflect.getOwnPropertyDescriptor(current, 'constructor');
+    if (
+      constructorDescriptor !== undefined &&
+      'value' in constructorDescriptor &&
+      typeof constructorDescriptor.value === 'function' &&
+      objectMayExposeDispatchAgent(constructorDescriptor.value)
+    ) {
+      return true;
+    }
+
+    const currentPrototype = current;
+    if (
+      Reflect.ownKeys(currentPrototype).some((property) => {
+        if (!isDispatchAgentLikeProperty(property) && !isStarterAliasProperty(property)) {
+          return false;
+        }
+
+        const descriptor = Reflect.getOwnPropertyDescriptor(currentPrototype, property);
+        return descriptor !== undefined && (typeof descriptor.get === 'function' || typeof descriptor.value === 'function');
+      })
+    ) {
+      return true;
+    }
+
+    current = Reflect.getPrototypeOf(current);
+  }
+
+  return false;
 }
 
 
@@ -1492,7 +1516,7 @@ function helperMayResolveDispatchAgent(helper: Function): boolean {
       /#[\p{ID_Start}\p{ID_Continue}]*(?:(?:dispatch|start|launch)[\p{ID_Continue}]*|run[\p{ID_Continue}]*Agent[\p{ID_Continue}]*)/iu.test(
         source,
       ) ||
-      (/\bworkflow\b/u.test(source) && /\brunId\b/u.test(source))
+      /#[\p{ID_Start}\p{ID_Continue}]*\s*\(/u.test(source)
     );
   } catch {
     return true;

@@ -34,6 +34,54 @@ plugin 名、raw payload reference、provider メタデータを渡す。
 `payload` に閉じ込め、dispatcher は `name`、`source`、`subject` だけで
 routing できる。
 
+Cloudflare tail source は Worker tail payload の `exceptions` が空でない場合に
+`cloudflare.error` に正規化する。`outcome` が `exception` の場合も、例外配列が
+欠落していても error として routing できるよう `cloudflare.error` にする。
+`exceededCpu`、`exceededMemory`、`scriptNotFound`、`canceled`、
+`responseStreamDisconnected` などの失敗 outcome も
+`cloudflare.error` とし、`payload.action` には Cloudflare outcome の camelCase 表記を
+保つ。
+それ以外は `cloudflare.tail` に正規化する。`subject` は `worker` で、
+`scriptName` から安全な id を作る。長い Worker 名や大文字小文字の正規化で
+subject が衝突し得る場合は、元の `scriptName` 由来の安定 hash を混ぜる。delivery id と
+`cloudflare://deliveries/...` 参照も storage allowlist に通る短い token にし、
+`cf-ray` が無い tail では source plugin context の `deliveryId` を suffix として使う。
+これにより同じ delivery の retry でも event id が安定し、Bridge room の重複 no-op が効く。
+delivery id は Bridge room の identifier 制限内に収まる範囲で worker 名や `cf-ray` /
+fallback delivery id を保持し、短縮が必要な場合も suffix の識別性を優先する。このため、
+元 tail payload の URL や例外本文は source payload にだけ置き、Bridge room の durable
+replay では allowlist 済み shallow metadata に縮約される。source name が長く既定形式では
+128 文字を超える場合は、同じ source/delivery/name から決定的に作る短い明示 event id を使う。
+batch publish helper は入力順に 1 件ずつ publish する。`cf-ray` が無い batch では
+fallback delivery id に batch index を混ぜ、同一 ms の Cron/Queue tail でも batch 内の
+別 event として配信できるようにする。Cloudflare delivery reference の path segment は
+`:` を含まない文字集合へ正規化する。正規化や切り詰めで別 delivery id が衝突しないよう、
+大文字小文字だけが違う場合や末尾記号を落とす場合も含め、元の suffix 由来の安定 hash も混ぜる。
+`eventTimestamp` が欠落または壊れている場合は
+`receivedAt` を occurredAt / delivery id の時刻要素として使う。
+
+## Task provider
+
+Task provider は forge/task system の操作面を表す。初期 contract は
+GitHub と Forgejo の issue 操作を同じ workflow から使えるように、
+`getIssue`、`createComment`、`addToProject`、`setStatus`、`createProposal`
+を持つ。
+
+`TaskIssueRef` は provider、repository、id、number、url を持てる。
+Workflow plugin は GitHub webhook payload ではなく、中立 event の
+`source` と `subject` から `TaskIssueRef` を作る。これにより、issue、
+project、comment、status、proposal の操作は provider 実装に閉じ込められる。
+
+## Runtime provider
+
+Runtime provider は OpenClaw、devteam、Codex などの実行基盤を表す。
+`startRun(request)` は workflow 名、event、任意の task、requestedBy、
+追加 input を受け取り、queued/running/succeeded/failed/canceled などの
+run status を返す。
+
+secret や provider 固有 token は runtime provider の実装が保持し、
+contract には含めない。
+
 ## Workflow plugin
 
 Workflow plugin は `accepts(event)` で対象イベントを絞り込み、
