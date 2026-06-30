@@ -34,6 +34,13 @@ plugin 名、raw payload reference、provider メタデータを渡す。
 `payload` に閉じ込め、dispatcher は `name`、`source`、`subject` だけで
 routing できる。
 
+Cloudflare tail source は Worker tail payload の `exceptions` が空でない場合に
+`cloudflare.error`、それ以外を `cloudflare.tail` に正規化する。`subject` は
+`worker` で、`scriptName` から短い安全な id を作る。delivery id と
+`cloudflare://deliveries/...` 参照も storage allowlist に通る短い token にするため、
+元 tail payload の URL や例外本文は source payload にだけ置き、Bridge room の durable
+replay では allowlist 済み shallow metadata に縮約される。
+
 ## Task provider
 
 Task provider は forge/task system の操作面を表す。初期 contract は

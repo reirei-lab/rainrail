@@ -77,6 +77,10 @@ event だけを再送する。指定 id が buffer に無い場合は、consumer
 `Authorization: Bearer <token>` または `X-Rainrail-Publish-Token` を付ける。
 認証に失敗した request は body / storage を読む前に 401 として拒否し、
 storage / replay / workflow 起動や subscriber 枠消費の副作用を作らない。
+外側の `/events` entrypoint が eep-bridge-worker 互換の JSON error を返す必要がある場合は、
+`verifyRainrailEventsBearerToken()` で `Authorization: Bearer <token>` を検証する。
+missing bearer は `missing_bearer_token` の 401、token 不一致は `invalid_bearer_token`
+の 403、サーバ側未設定は `events_auth_not_configured` の 503 として扱う。
 
 `GET /healthz` と `GET /events` は storage 復元失敗を generic 500 応答に変換する。
 adapter/runtime の未処理例外として落とさず、呼び出し元に安定した失敗を返すため。
