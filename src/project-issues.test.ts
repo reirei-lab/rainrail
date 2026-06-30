@@ -122,6 +122,35 @@ describe('project issue selection', () => {
     expect(getNextProjectIssueToStart([parent])).toEqual(parent);
   });
 
+  it('starts a todo parent when Project children have no runnable backlog candidate', () => {
+    const parent = issue('parent', {
+      status: 'Todo',
+      assigneeLogins: ['reirei-agent'],
+      repository: 'reirei-lab/rainrail',
+      number: 21,
+      subIssueCount: 2,
+    });
+
+    expect(getNextProjectIssueToStart([
+      parent,
+      issue('done_child', {
+        status: 'Done',
+        assigneeLogins: [],
+        repository: 'reirei-lab/rainrail',
+        number: 22,
+        parent: { repository: 'reirei-lab/rainrail', number: 21 },
+      }),
+      issue('blocked_child', {
+        status: 'Backlog',
+        assigneeLogins: [],
+        repository: 'reirei-lab/rainrail',
+        number: 23,
+        parent: { repository: 'reirei-lab/rainrail', number: 21 },
+        blockedBy: [{ repository: 'reirei-lab/rainrail', number: 20, state: 'OPEN' }],
+      }),
+    ])).toEqual(parent);
+  });
+
   it('does not count in-progress children assigned to another agent', () => {
     const next = issue('issue_30', {
       status: 'Todo',

@@ -78,7 +78,12 @@ export function getUpcomingProjectIssueCandidate(
       if (child !== undefined) {
         return child;
       }
-      continue;
+      if (projectChildren.some((candidate) =>
+        !isClosedProjectIssue(candidate)
+        && normalizeToken(candidate.status) === normalizeToken(resolved.inProgressStatus)
+      )) {
+        continue;
+      }
     }
 
     if (!hasUnfinishedBlocker(issue)) {

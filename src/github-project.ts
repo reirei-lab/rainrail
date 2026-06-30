@@ -88,6 +88,7 @@ interface ProjectIssueClaimLock {
   agentSessionId?: string;
   branchName?: string;
   projectItemId?: string;
+  originalStatus?: string;
 }
 
 interface ProjectMetadataData {
@@ -152,13 +153,53 @@ async function fetchProjectIssues(
     if (items === undefined || !Array.isArray(items.nodes)) {
       throw new Error('GitHub Project items response is missing project items');
     }
-    issues.push(...items.nodes.flatMap((item) => mapProjectIssueItem(item, config)));
+    const pageIssues = items.nodes.flatMap((item) => mapProjectIssueItem(item, config));
+    for (const issue of pageIssues) {
+      issues.push(await recoverStalePartialClaim(config, issue, fetchImpl, auth));
+    }
     after = items?.pageInfo?.hasNextPage === true && typeof items.pageInfo.endCursor === 'string'
       ? items.pageInfo.endCursor
       : undefined;
   } while (after !== undefined);
 
   return issues;
+}
+
+async function recoverStalePartialClaim(
+  config: GitHubProjectTaskQueueConfig,
+  issue: ProjectIssue,
+  fetchImpl: typeof fetch,
+  auth: GitHubProjectAuthTokenProvider,
+): Promise<ProjectIssue> {
+  if (normalizeToken(issue.status ?? '') !== normalizeToken(config.inProgressStatus)) {
+    return issue;
+  }
+  const current = await loadProjectItemStatus(issue.id, fetchImpl, auth, config);
+  if (
+    normalizeToken(current.status ?? '') !== normalizeToken(config.inProgressStatus)
+    || hasText(current.agentSessionId)
+    || hasText(current.branchName)
+    || current.repositoryId === undefined
+  ) {
+    return issue;
+  }
+  const lock = await loadProjectIssueClaimLock(current.repositoryId, projectIssueLockRefName(issue), fetchImpl, auth).catch(() => undefined);
+  if (lock === undefined || !isRecoverableStaleLock(lock, { issue })) {
+    return issue;
+  }
+  const releaseStatus = recoverableOriginalStatus(lock.originalStatus, config);
+  if (releaseStatus === undefined) {
+    return issue;
+  }
+  const metadata = await loadProjectMetadata(config, fetchImpl, auth);
+  const releaseStatusOptionId = normalizeToken(releaseStatus) === normalizeToken(config.backlogStatus)
+    ? metadata.backlogStatusOptionId
+    : metadata.todoStatusOptionId;
+  await updateProjectField(fetchImpl, auth, metadata.projectId, issue.id, metadata.statusFieldId, {
+    singleSelectOptionId: releaseStatusOptionId,
+  });
+  await deleteProjectIssueClaimLock({ projectItemId: issue.id, lockRefId: lock.id }, fetchImpl, auth);
+  return { ...issue, status: releaseStatus };
 }
 
 async function claimProjectIssue(
@@ -322,6 +363,7 @@ async function createProjectIssueClaimLockCommit(
         agentSessionId: input.agentSessionId,
         branchName: input.branchName,
         projectItemId: input.issue.id,
+        originalStatus: input.issue.status ?? '',
       }),
       tree: status.defaultBranchTreeOid,
       parents: [status.defaultBranchOid],
@@ -389,6 +431,7 @@ async function loadProjectIssueClaimLock(
     ...(metadata.agentSessionId === undefined ? {} : { agentSessionId: metadata.agentSessionId }),
     ...(metadata.branchName === undefined ? {} : { branchName: metadata.branchName }),
     ...(metadata.projectItemId === undefined ? {} : { projectItemId: metadata.projectItemId }),
+    ...(metadata.originalStatus === undefined ? {} : { originalStatus: metadata.originalStatus }),
   };
 }
 
@@ -526,6 +569,9 @@ function shouldReleaseCurrentClaim(
   input: ProjectIssueReleaseInput,
   config: GitHubProjectTaskQueueConfig,
 ): boolean {
+  if (normalizeToken(status.status ?? '') !== normalizeToken(config.inProgressStatus)) {
+    return false;
+  }
   const session = status.agentSessionId?.trim() ?? '';
   const branch = status.branchName?.trim() ?? '';
   if (session === input.agentSessionId && branch === input.branchName) {
@@ -537,7 +583,7 @@ function shouldReleaseCurrentClaim(
   if (branch.length > 0 && branch !== input.branchName) {
     return false;
   }
-  return normalizeToken(status.status ?? '') === normalizeToken(config.inProgressStatus);
+  return true;
 }
 
 async function updateProjectField(
@@ -871,7 +917,7 @@ function projectIssueLockRefName(issue: ProjectIssue): string {
   return `refs/heads/rainrail/locks/${repo}-${issueId}`;
 }
 
-function isRecoverableStaleLock(lock: ProjectIssueClaimLock, input: ProjectIssueClaimInput): boolean {
+function isRecoverableStaleLock(lock: ProjectIssueClaimLock, input: Pick<ProjectIssueClaimInput, 'issue'>): boolean {
   if (lock.projectItemId !== input.issue.id) {
     return false;
   }
@@ -879,11 +925,26 @@ function isRecoverableStaleLock(lock: ProjectIssueClaimLock, input: ProjectIssue
   return Number.isFinite(createdAt) && Date.now() - createdAt >= PROJECT_ISSUE_CLAIM_LOCK_TTL_MS;
 }
 
+function recoverableOriginalStatus(
+  originalStatus: string | undefined,
+  config: GitHubProjectTaskQueueConfig,
+): string | undefined {
+  const normalized = normalizeToken(originalStatus ?? '');
+  if (normalized === normalizeToken(config.todoStatus)) {
+    return config.todoStatus;
+  }
+  if (normalized === normalizeToken(config.backlogStatus)) {
+    return config.backlogStatus;
+  }
+  return undefined;
+}
+
 function claimLockCommitMessage(input: {
   createdAt: string;
   agentSessionId: string;
   branchName: string;
   projectItemId: string;
+  originalStatus: string;
 }): string {
   return [
     PROJECT_ISSUE_CLAIM_LOCK_COMMIT_PREFIX,
@@ -894,6 +955,7 @@ function claimLockCommitMessage(input: {
       agentSessionId: input.agentSessionId,
       branchName: input.branchName,
       projectItemId: input.projectItemId,
+      originalStatus: input.originalStatus,
     }),
   ].join('\n');
 }
@@ -903,6 +965,7 @@ function parseClaimLockCommitMessage(message: string): {
   agentSessionId?: string;
   branchName?: string;
   projectItemId?: string;
+  originalStatus?: string;
 } | undefined {
   if (!message.startsWith(PROJECT_ISSUE_CLAIM_LOCK_COMMIT_PREFIX)) {
     return undefined;
@@ -921,6 +984,7 @@ function parseClaimLockCommitMessage(message: string): {
       ...(typeof parsed.agentSessionId === 'string' ? { agentSessionId: parsed.agentSessionId } : {}),
       ...(typeof parsed.branchName === 'string' ? { branchName: parsed.branchName } : {}),
       ...(typeof parsed.projectItemId === 'string' ? { projectItemId: parsed.projectItemId } : {}),
+      ...(typeof parsed.originalStatus === 'string' ? { originalStatus: parsed.originalStatus } : {}),
     };
   } catch {
     return undefined;
