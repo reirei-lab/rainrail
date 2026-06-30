@@ -70,6 +70,7 @@ interface ProjectItemStatus {
   status?: string;
   agentSessionId?: string;
   branchName?: string;
+  assigneeLogins: readonly string[];
 }
 
 interface ProjectMetadataData {
@@ -153,26 +154,42 @@ async function claimProjectIssue(
   }
 
   const before = await loadProjectItemStatus(input.issue.id, fetchImpl, auth, config);
-  assertClaimable(before, config);
+  assertClaimable(before, input, config);
   const metadata = await loadProjectMetadata(config, fetchImpl, auth);
-  await updateProjectField(fetchImpl, auth, metadata.projectId, input.issue.id, metadata.statusFieldId, {
-    singleSelectOptionId: metadata.statusOptionId,
-  });
-  await updateProjectField(fetchImpl, auth, metadata.projectId, input.issue.id, metadata.agentSessionIdFieldId, {
-    text: input.agentSessionId,
-  });
-  await updateProjectField(fetchImpl, auth, metadata.projectId, input.issue.id, metadata.branchFieldId, {
-    text: input.branchName,
-  });
-  const after = await loadProjectItemStatus(input.issue.id, fetchImpl, auth, config);
-  assertClaimMatches(after, input, config);
+  let statusUpdated = false;
+  let comment: { addComment?: { commentEdge?: { node?: { url?: unknown } } } };
+  try {
+    await updateProjectField(fetchImpl, auth, metadata.projectId, input.issue.id, metadata.statusFieldId, {
+      singleSelectOptionId: metadata.statusOptionId,
+    });
+    statusUpdated = true;
+    await updateProjectField(fetchImpl, auth, metadata.projectId, input.issue.id, metadata.agentSessionIdFieldId, {
+      text: input.agentSessionId,
+    });
+    await updateProjectField(fetchImpl, auth, metadata.projectId, input.issue.id, metadata.branchFieldId, {
+      text: input.branchName,
+    });
+    const after = await loadProjectItemStatus(input.issue.id, fetchImpl, auth, config);
+    assertClaimMatches(after, input, config);
 
-  const comment = await runGraphql<{ addComment?: { commentEdge?: { node?: { url?: unknown } } } }>(
-    fetchImpl,
-    auth,
-    addCommentMutation,
-    { subjectId: input.issue.contentId, body: input.commentBody },
-  );
+    comment = await runGraphql<{ addComment?: { commentEdge?: { node?: { url?: unknown } } } }>(
+      fetchImpl,
+      auth,
+      addCommentMutation,
+      { subjectId: input.issue.contentId, body: input.commentBody },
+    );
+  } catch (error) {
+    if (statusUpdated) {
+      await releaseProjectIssue(config, {
+        issue: input.issue,
+        claim: { projectId: metadata.projectId, projectItemId: input.issue.id },
+        agentSessionId: input.agentSessionId,
+        branchName: input.branchName,
+        reason: error instanceof Error ? error.message : String(error),
+      }, fetchImpl, auth);
+    }
+    throw error;
+  }
 
   return {
     projectId: metadata.projectId,
@@ -264,23 +281,39 @@ async function loadProjectItemStatus(
   if (!isRecord(payload.node)) {
     throw new Error('GitHub Project item status response is missing project item');
   }
-  const status = fieldValueByName(payload.node, config.statusFieldName);
-  const agentSessionId = fieldValueByName(payload.node, config.agentSessionIdFieldName);
-  const branchName = fieldValueByName(payload.node, config.branchFieldName);
+  const status = fixedAliasFieldValue(payload.node, 'status')
+    ?? fieldValueByName(payload.node, config.statusFieldName);
+  const agentSessionId = fixedAliasFieldValue(payload.node, 'agentSessionId')
+    ?? fieldValueByName(payload.node, config.agentSessionIdFieldName);
+  const branchName = fixedAliasFieldValue(payload.node, 'branch')
+    ?? fieldValueByName(payload.node, config.branchFieldName);
   return {
     ...(status === undefined ? {} : { status }),
     ...(agentSessionId === undefined ? {} : { agentSessionId }),
     ...(branchName === undefined ? {} : { branchName }),
+    assigneeLogins: projectItemAssigneeLogins(payload.node),
   };
 }
 
-function assertClaimable(status: ProjectItemStatus, config: GitHubProjectTaskQueueConfig): void {
+function assertClaimable(
+  status: ProjectItemStatus,
+  input: ProjectIssueClaimInput,
+  config: GitHubProjectTaskQueueConfig,
+): void {
+  const currentStatus = normalizeToken(status.status ?? '');
+  const expectedStatus = normalizeToken(input.issue.status ?? config.todoStatus);
+  const allowedQueueStatus = currentStatus === normalizeToken(config.todoStatus)
+    || currentStatus === normalizeToken(config.backlogStatus);
   if (
-    normalizeToken(status.status ?? '') !== normalizeToken(config.todoStatus)
+    currentStatus !== expectedStatus
+    || !allowedQueueStatus
     || hasText(status.agentSessionId)
     || hasText(status.branchName)
   ) {
     throw new Error('GitHub Project item is no longer claimable');
+  }
+  if (!isStillOwnedByAgent(status.assigneeLogins, input.issue.assigneeLogins, config.assigneeLogin)) {
+    throw new Error('GitHub Project item is no longer assigned to this agent');
   }
 }
 
@@ -428,7 +461,11 @@ function fieldValue(item: Record<string, unknown>, name: string): string | undef
 }
 
 function fieldValueByName(item: Record<string, unknown>, name: string): string | undefined {
-  const direct = item[camelCaseFieldName(name)];
+  return fixedAliasFieldValue(item, camelCaseFieldName(name));
+}
+
+function fixedAliasFieldValue(item: Record<string, unknown>, alias: string): string | undefined {
+  const direct = item[alias];
   if (!isRecord(direct)) {
     return undefined;
   }
@@ -439,6 +476,13 @@ function fieldValueByName(item: Record<string, unknown>, name: string): string |
     return direct.text;
   }
   return undefined;
+}
+
+function projectItemAssigneeLogins(item: Record<string, unknown>): string[] {
+  if (!isRecord(item.content)) {
+    return [];
+  }
+  return assigneeLogins(item.content);
 }
 
 function repositoryName(content: Record<string, unknown>): string | undefined {
@@ -552,6 +596,21 @@ function hasText(value: string | undefined): boolean {
   return value !== undefined && value.trim().length > 0;
 }
 
+function isStillOwnedByAgent(
+  currentAssignees: readonly string[],
+  selectedAssignees: readonly string[],
+  assigneeLogin: string,
+): boolean {
+  if (selectedAssignees.length === 0) {
+    return currentAssignees.length === 0 || currentAssignees.some((login) => sameLogin(login, assigneeLogin));
+  }
+  return currentAssignees.some((login) => sameLogin(login, assigneeLogin));
+}
+
+function sameLogin(left: string, right: string): boolean {
+  return left.trim().toLowerCase() === right.trim().toLowerCase();
+}
+
 function camelCaseFieldName(name: string): string {
   const words = name.trim().split(/[\s_-]+/u).filter((word) => word.length > 0);
   return words.map((word, index) => {
@@ -637,6 +696,12 @@ const projectItemStatusQuery = `
     node(id: $itemId) {
       __typename
       ... on ProjectV2Item {
+        content {
+          __typename
+          ... on Issue {
+            assignees(first: 20) { nodes { login } }
+          }
+        }
         status: fieldValueByName(name: $statusFieldName) {
           ... on ProjectV2ItemFieldSingleSelectValue { name }
           ... on ProjectV2ItemFieldTextValue { text }

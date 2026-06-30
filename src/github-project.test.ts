@@ -151,6 +151,154 @@ describe('createGitHubProjectTaskQueueProvider', () => {
     });
   });
 
+  it('rolls back partial claim updates when a later mutation fails', async () => {
+    const calls: Array<{ query?: string; variables?: Record<string, unknown> }> = [];
+    const provider = createGitHubProjectTaskQueueProvider({
+      config: projectConfig(),
+      auth: { getAuthToken: async () => ({ token: 'project-token', provider: 'configured-token', fallback: false }) },
+      fetch: (async (_url, init) => {
+        const request = JSON.parse(String(init?.body)) as { query?: string; variables?: Record<string, unknown> };
+        calls.push(request);
+        if (request.query?.includes('RainrailProjectItemStatus')) {
+          return jsonResponse({
+            data: {
+              node: projectItem({
+                id: 'item_21',
+                contentId: 'issue_node_21',
+                number: 21,
+                title: 'Project issue selection',
+                status: 'Todo',
+                assignees: ['reirei-agent'],
+              }),
+            },
+          });
+        }
+        if (request.query?.includes('RainrailProjectMetadata')) {
+          return projectMetadataResponse();
+        }
+        if (
+          request.query?.includes('updateProjectV2ItemFieldValue')
+          && JSON.stringify(request.variables?.value).includes('agent:main:rainrail-21')
+        ) {
+          return new Response(JSON.stringify({ errors: [{ message: 'field update failed' }] }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
+        return jsonResponse({ data: { updateProjectV2ItemFieldValue: { projectV2Item: { id: 'item_21' } } } });
+      }) as typeof fetch,
+    });
+
+    await expect(provider.claimProjectIssue({
+      issue: {
+        id: 'item_21',
+        contentId: 'issue_node_21',
+        contentType: 'Issue',
+        title: 'Project issue selection',
+        status: 'Todo',
+        assigneeLogins: ['reirei-agent'],
+      },
+      agentSessionId: 'agent:main:rainrail-21',
+      branchName: 'agent/reirei-lab-rainrail-21-project-issue-selection',
+      commentBody: 'started',
+    })).rejects.toThrow('field update failed');
+
+    const updateValues = calls
+      .filter((call) => call.query?.includes('updateProjectV2ItemFieldValue'))
+      .map((call) => JSON.stringify(call.variables?.value));
+    expect(updateValues).toEqual([
+      '{"singleSelectOptionId":"status_in_progress"}',
+      '{"text":"agent:main:rainrail-21"}',
+      '{"singleSelectOptionId":"status_todo"}',
+      '{"text":""}',
+      '{"text":""}',
+    ]);
+  });
+
+  it('allows claiming a selected backlog child issue', async () => {
+    const provider = createGitHubProjectTaskQueueProvider({
+      config: projectConfig(),
+      auth: { getAuthToken: async () => ({ token: 'project-token', provider: 'configured-token', fallback: false }) },
+      fetch: claimSuccessFetch({
+        beforeStatus: 'Backlog',
+        beforeAssignees: [],
+        afterAgentSessionId: 'agent:main:rainrail-22',
+        afterBranchName: 'agent/reirei-lab-rainrail-22-child-issue',
+      }),
+    });
+
+    await expect(provider.claimProjectIssue({
+      issue: {
+        id: 'item_22',
+        contentId: 'issue_node_22',
+        contentType: 'Issue',
+        title: 'Child issue',
+        status: 'Backlog',
+        assigneeLogins: [],
+      },
+      agentSessionId: 'agent:main:rainrail-22',
+      branchName: 'agent/reirei-lab-rainrail-22-child-issue',
+      commentBody: 'started',
+    })).resolves.toMatchObject({
+      projectItemId: 'item_22',
+      statusOptionId: 'status_in_progress',
+    });
+  });
+
+  it('reads fixed Project item status aliases when configured field names are custom', async () => {
+    const provider = createGitHubProjectTaskQueueProvider({
+      config: projectConfig({
+        statusFieldName: 'Queue Status',
+        branchFieldName: 'Agent Branch',
+      }),
+      auth: { getAuthToken: async () => ({ token: 'project-token', provider: 'configured-token', fallback: false }) },
+      fetch: claimSuccessFetch({
+        metadata: projectMetadataResponse({
+          statusFieldName: 'Queue Status',
+          branchFieldName: 'Agent Branch',
+        }),
+      }),
+    });
+
+    await expect(provider.claimProjectIssue({
+      issue: {
+        id: 'item_21',
+        contentId: 'issue_node_21',
+        contentType: 'Issue',
+        title: 'Project issue selection',
+        status: 'Todo',
+        assigneeLogins: ['reirei-agent'],
+      },
+      agentSessionId: 'agent:main:rainrail-21',
+      branchName: 'agent/reirei-lab-rainrail-21-project-issue-selection',
+      commentBody: 'started',
+    })).resolves.toMatchObject({ projectItemId: 'item_21' });
+  });
+
+  it('rejects claims when the issue was reassigned before claim confirmation', async () => {
+    const provider = createGitHubProjectTaskQueueProvider({
+      config: projectConfig(),
+      auth: { getAuthToken: async () => ({ token: 'project-token', provider: 'configured-token', fallback: false }) },
+      fetch: claimSuccessFetch({
+        beforeAssignees: ['other-agent'],
+      }),
+    });
+
+    await expect(provider.claimProjectIssue({
+      issue: {
+        id: 'item_21',
+        contentId: 'issue_node_21',
+        contentType: 'Issue',
+        title: 'Project issue selection',
+        status: 'Todo',
+        assigneeLogins: ['reirei-agent'],
+      },
+      agentSessionId: 'agent:main:rainrail-21',
+      branchName: 'agent/reirei-lab-rainrail-21-project-issue-selection',
+      commentBody: 'started',
+    })).rejects.toThrow('GitHub Project item is no longer assigned to this agent');
+  });
+
   it('rejects stale claims when the item is no longer todo or already has an agent session', async () => {
     const provider = createGitHubProjectTaskQueueProvider({
       config: projectConfig(),
@@ -378,7 +526,12 @@ function jsonResponse(payload: unknown): Response {
   });
 }
 
-function projectMetadataResponse(): Response {
+function projectMetadataResponse(overrides: {
+  statusFieldName?: string;
+  branchFieldName?: string;
+} = {}): Response {
+  const statusFieldName = overrides.statusFieldName ?? 'Status';
+  const branchFieldName = overrides.branchFieldName ?? 'Branch';
   return jsonResponse({
     data: {
       organization: {
@@ -389,20 +542,58 @@ function projectMetadataResponse(): Response {
               {
                 __typename: 'ProjectV2SingleSelectField',
                 id: 'PVTSSF_status',
-                name: 'Status',
+                name: statusFieldName,
                 options: [
                   { id: 'status_todo', name: 'Todo' },
                   { id: 'status_in_progress', name: 'In Progress' },
                 ],
               },
               { __typename: 'ProjectV2Field', id: 'PVTF_session', name: 'Agent session ID', dataType: 'TEXT' },
-              { __typename: 'ProjectV2Field', id: 'PVTF_branch', name: 'Branch', dataType: 'TEXT' },
+              { __typename: 'ProjectV2Field', id: 'PVTF_branch', name: branchFieldName, dataType: 'TEXT' },
             ],
           },
         },
       },
     },
   });
+}
+
+function claimSuccessFetch(input: {
+  beforeStatus?: string;
+  beforeAssignees?: string[];
+  afterAgentSessionId?: string;
+  afterBranchName?: string;
+  metadata?: Response;
+} = {}): typeof fetch {
+  let updateCount = 0;
+  return (async (_url, init) => {
+    const request = JSON.parse(String(init?.body)) as { query?: string; variables?: Record<string, unknown> };
+    if (request.query?.includes('RainrailProjectItemStatus')) {
+      const before = updateCount === 0;
+      return jsonResponse({
+        data: {
+          node: projectItem({
+            id: 'item_21',
+            contentId: 'issue_node_21',
+            number: 21,
+            title: 'Project issue selection',
+            status: before ? input.beforeStatus ?? 'Todo' : 'In Progress',
+            assignees: before ? input.beforeAssignees ?? ['reirei-agent'] : ['reirei-agent'],
+            agentSessionId: before ? '' : input.afterAgentSessionId ?? 'agent:main:rainrail-21',
+            branchName: before ? '' : input.afterBranchName ?? 'agent/reirei-lab-rainrail-21-project-issue-selection',
+          }),
+        },
+      });
+    }
+    if (request.query?.includes('RainrailProjectMetadata')) {
+      return input.metadata ?? projectMetadataResponse();
+    }
+    if (request.query?.includes('addComment')) {
+      return jsonResponse({ data: { addComment: { commentEdge: { node: { id: 'comment_1' } } } } });
+    }
+    updateCount += 1;
+    return jsonResponse({ data: { updateProjectV2ItemFieldValue: { projectV2Item: { id: 'item_21' } } } });
+  }) as typeof fetch;
 }
 
 function projectItem(input: {
