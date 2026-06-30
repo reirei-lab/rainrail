@@ -591,6 +591,9 @@ function createDispatchAgentCapabilityProxy(
       return dispatchAgent;
     }
 
+    const receiver = functionSourceMentions(value, 'instanceof') && !helperMayResolveDispatchAgent(value)
+      ? source
+      : safeReceiver;
     const wrapped = (...args: unknown[]) =>
       callCapabilityFunction(
         value,
@@ -599,7 +602,7 @@ function createDispatchAgentCapabilityProxy(
         getRawDispatchAgent,
         peekRawDispatchAgent,
         source,
-        safeReceiver,
+        receiver,
         args,
         (object) => createCapabilityView(object),
         property,
@@ -653,7 +656,7 @@ function createDispatchAgentCapabilityProxy(
     }
 
     const safeReceiver = createCapabilityView(source);
-    const receiver = isBuiltinCapabilityCollection(source) ? source : safeReceiver;
+    const receiver = isBuiltinCapabilityCollection(source) || isBuiltinCapabilityObject(source) ? source : safeReceiver;
     const value = readCapabilityValue(source, property, receiver);
     if (typeof value === 'function') {
       if (isBuiltinCapabilityCollection(source)) {
@@ -669,6 +672,22 @@ function createDispatchAgentCapabilityProxy(
           (object) => createCapabilityView(object),
           unwrapCapabilityValue,
         );
+      }
+
+      if (isBuiltinCapabilityObject(source)) {
+        return (...args: unknown[]) =>
+          callCapabilityFunction(
+            value,
+            capabilities,
+            dispatchAgent,
+            getRawDispatchAgent,
+            peekRawDispatchAgent,
+            source,
+            source,
+            args,
+            (object) => createCapabilityView(object),
+            property,
+          );
       }
 
       return bindCapabilityFunction(source, value, safeReceiver, property);
@@ -764,9 +783,7 @@ function createDispatchAgentCapabilityProxy(
       },
       getPrototypeOf() {
         const prototype = Reflect.getPrototypeOf(source);
-        return prototype === null || !prototypeMayExposeDispatchAgent(prototype)
-          ? prototype
-          : createCapabilityView(prototype);
+        return prototype === null ? null : createCapabilityView(prototype);
       },
       has(_target, property) {
         if (property === 'dispatchAgent') {
@@ -1534,7 +1551,7 @@ function dispatchAgentAccessorReturnsUndefined(receiver: object, descriptor: Pro
       return true;
     }
 
-    if (!/\?\./u.test(getterSource) || /\bthrow\b/u.test(getterSource)) {
+    if (/\bthrow\b/u.test(getterSource)) {
       return false;
     }
 
@@ -1570,10 +1587,7 @@ function shouldWrapCapabilityObject(value: unknown): value is object {
   }
 
   if (
-    value instanceof Map ||
-    value instanceof Set ||
-    value instanceof WeakMap ||
-    value instanceof WeakSet ||
+    isBuiltinCapabilityCollection(value) ||
     Array.isArray(value)
   ) {
     return true;
@@ -1585,9 +1599,7 @@ function shouldWrapCapabilityObject(value: unknown): value is object {
   }
 
   if (
-    value instanceof Date ||
-    value instanceof RegExp ||
-    value instanceof Error ||
+    isBuiltinCapabilityObject(value) ||
     value instanceof Promise ||
     ArrayBuffer.isView(value) ||
     value instanceof ArrayBuffer
@@ -1623,6 +1635,10 @@ function isBuiltinCapabilityCollection(
 ): value is Map<unknown, unknown> | Set<unknown> | WeakMap<object, unknown> | WeakSet<object> {
   const tag = Object.prototype.toString.call(value);
   return tag === '[object Map]' || tag === '[object Set]' || tag === '[object WeakMap]' || tag === '[object WeakSet]';
+}
+
+function isBuiltinCapabilityObject(value: object): boolean {
+  return value instanceof Date || value instanceof RegExp || value instanceof Error;
 }
 
 function isBoundDispatchAgentAlias(

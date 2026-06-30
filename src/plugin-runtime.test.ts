@@ -10339,6 +10339,185 @@ describe('plugin runtime contract', () => {
     ]);
   });
 
+  it('does not expose raw constructors through capability prototypes', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: { id: 'delivery-raw-prototype-constructor', receivedAt: '2026-06-29T14:00:00.000Z' },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: { kind: 'external-reference', reference: 'github://deliveries/raw-prototype-constructor' },
+    });
+    const dispatchAgent: NonNullable<RuntimeCapabilities['dispatchAgent']> = vi.fn(async () => ({
+      sessionKey: 'agent:main:raw-prototype-constructor',
+    }));
+    class RuntimeCapabilityBag {
+      provider = 'codex';
+      dispatchAgent = dispatchAgent;
+    }
+    const loader = createPluginLoader({
+      runtime: mockRuntimeContext({
+        capabilities: new RuntimeCapabilityBag() as unknown as RuntimeCapabilities,
+      }),
+    });
+
+    loader.on(
+      'github.issue',
+      (handledEvent, context) => {
+        const Constructor = Object.getPrototypeOf(context.capabilities).constructor as new () => RuntimeCapabilityBag;
+        const raw = new Constructor();
+        return raw.dispatchAgent?.({
+          event: handledEvent,
+          workflow: 'raw-prototype-constructor-handler',
+          runId: context.runId,
+        });
+      },
+      { name: 'raw-prototype-constructor-handler' },
+    );
+
+    const [result] = await loader.dispatch(event);
+
+    expect(result).toMatchObject({
+      pluginName: 'raw-prototype-constructor-handler',
+      eventId: 'github-webhook:delivery-raw-prototype-constructor:github.issue',
+      status: 'rejected',
+    });
+    expect(dispatchAgent).not.toHaveBeenCalled();
+  });
+
+  it('preserves built-in capability method receivers while wrapping dispatchAgent', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: { id: 'delivery-builtin-method-receiver', receivedAt: '2026-06-29T14:00:00.000Z' },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: { kind: 'external-reference', reference: 'github://deliveries/builtin-method-receiver' },
+    });
+    const dispatchAgent = vi.fn(async () => ({ sessionKey: 'agent:main:builtin-method-receiver' }));
+    const metadata = Object.assign(new Date('2026-06-29T14:00:00.000Z'), { dispatchAgent });
+    const loader = createPluginLoader({
+      runtime: mockRuntimeContext({
+        capabilities: {
+          provider: 'codex',
+          metadata,
+        } as unknown as RuntimeCapabilities & { metadata: Date & { dispatchAgent: RuntimeCapabilities['dispatchAgent'] } },
+      }),
+    });
+
+    loader.on(
+      'github.issue',
+      (_handledEvent, context) =>
+        (context.capabilities as unknown as { metadata: Date }).metadata.toISOString(),
+      { name: 'builtin-method-receiver-handler' },
+    );
+
+    await expect(loader.dispatch(event)).resolves.toMatchObject([
+      {
+        pluginName: 'builtin-method-receiver-handler',
+        eventId: 'github-webhook:delivery-builtin-method-receiver:github.issue',
+        status: 'fulfilled',
+        value: '2026-06-29T14:00:00.000Z',
+      },
+    ]);
+    expect(dispatchAgent).not.toHaveBeenCalled();
+  });
+
+  it('preserves logically undefined dispatchAgent accessors for optional callers', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: { id: 'delivery-logical-undefined-dispatch-agent-accessor', receivedAt: '2026-06-29T14:00:00.000Z' },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: { kind: 'external-reference', reference: 'github://deliveries/logical-undefined-dispatch-agent-accessor' },
+    });
+    const capabilities = {
+      provider: 'codex',
+      client: undefined as { dispatchAgent?: RuntimeCapabilities['dispatchAgent'] } | undefined,
+      get dispatchAgent() {
+        return this.client && this.client.dispatchAgent;
+      },
+    };
+    const loader = createPluginLoader({
+      runtime: mockRuntimeContext({
+        capabilities: capabilities as unknown as RuntimeCapabilities,
+      }),
+    });
+
+    loader.on(
+      'github.issue',
+      (handledEvent, context) =>
+        context.capabilities?.dispatchAgent?.({
+          event: handledEvent,
+          workflow: 'logical-undefined-dispatch-agent-accessor-handler',
+          runId: context.runId,
+        }) ?? { skipped: true },
+      { name: 'logical-undefined-dispatch-agent-accessor-handler' },
+    );
+
+    await expect(loader.dispatch(event)).resolves.toMatchObject([
+      {
+        pluginName: 'logical-undefined-dispatch-agent-accessor-handler',
+        eventId: 'github-webhook:delivery-logical-undefined-dispatch-agent-accessor:github.issue',
+        status: 'fulfilled',
+        value: { skipped: true },
+      },
+    ]);
+  });
+
+  it('wraps raw dispatchAgent stored as a constructor function property', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: { id: 'delivery-constructor-function-dispatch-agent', receivedAt: '2026-06-29T14:00:00.000Z' },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: { kind: 'external-reference', reference: 'github://deliveries/constructor-function-dispatch-agent' },
+    });
+    const dispatchAgent = vi.fn(async () => ({ sessionKey: 'agent:main:constructor-function-dispatch-agent' }));
+    const metadata = {
+      constructor: dispatchAgent,
+    };
+    const loader = createPluginLoader({
+      runtime: mockRuntimeContext({
+        capabilities: {
+          provider: 'codex',
+          dispatchAgent,
+          metadata,
+        } as unknown as RuntimeCapabilities & { metadata: { constructor: RuntimeCapabilities['dispatchAgent'] } },
+      }),
+    });
+
+    loader.on(
+      'github.issue',
+      (handledEvent, context) =>
+        (
+          context.capabilities as unknown as {
+            metadata: { constructor?: RuntimeCapabilities['dispatchAgent'] };
+          }
+        ).metadata.constructor?.({
+          event: handledEvent,
+          workflow: 'constructor-function-dispatch-agent-handler',
+          runId: context.runId,
+        }),
+      { name: 'constructor-function-dispatch-agent-handler' },
+    );
+
+    const [result] = await loader.dispatch(event);
+
+    expect(result).toMatchObject({
+      pluginName: 'constructor-function-dispatch-agent-handler',
+      eventId: 'github-webhook:delivery-constructor-function-dispatch-agent:github.issue',
+      status: 'rejected',
+    });
+    expect(dispatchAgent).not.toHaveBeenCalled();
+  });
+
   it('freezes missing loader timeout metadata at registration time', async () => {
     vi.useFakeTimers();
     try {
