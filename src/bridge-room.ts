@@ -274,7 +274,7 @@ function validatePublishEnvelope(value: unknown): RainrailEventEnvelope {
     rawPayload: {
       kind: rawPayloadKind,
       reference: expectSanitizedUrl(rawPayloadReference, 'reference'),
-      ...optionalString(rawPayload, 'contentType'),
+      ...optionalContentType(rawPayload),
       ...optionalSha256(rawPayload),
     },
   };
@@ -325,6 +325,21 @@ function optionalUrl(record: Record<string, unknown>, key: string): Record<strin
 
   const sanitized = sanitizeUrl(record[key]);
   return sanitized === undefined ? {} : { [key]: sanitized };
+}
+
+function optionalContentType(record: Record<string, unknown>): Record<string, string> {
+  if (!('contentType' in record)) return {};
+
+  if (typeof record.contentType !== 'string') {
+    throw new TypeError('contentType must be a string');
+  }
+
+  const contentType = record.contentType.split(';', 1)[0]?.trim().toLowerCase();
+  if (contentType === undefined || !/^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/.test(contentType)) {
+    return {};
+  }
+
+  return { contentType };
 }
 
 function sanitizeUrl(value: string): string | undefined {

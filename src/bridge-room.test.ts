@@ -470,6 +470,7 @@ describe('Rainrail bridge room', () => {
       rawPayload: {
         kind: 'external-reference',
         reference: 'https://token:secret@example.test/raw/delivery-1?token=secret-reference-token#secret-fragment',
+        contentType: 'token=secret-content-type',
         sha256: 'token=secret-sha-value',
         secret: 'token-like value',
       },
@@ -488,6 +489,7 @@ describe('Rainrail bridge room', () => {
       conclusion: null,
     });
     expect(storage.storedEvents()[0]?.rawPayload.reference).toBe('https://example.test/raw/delivery-1');
+    expect(storage.storedEvents()[0]?.rawPayload).not.toHaveProperty('contentType');
     expect(storage.storedEvents()[0]?.rawPayload).not.toHaveProperty('secret');
     expect(storage.storedEvents()[0]?.rawPayload).not.toHaveProperty('sha256');
 
@@ -502,6 +504,7 @@ describe('Rainrail bridge room', () => {
     expect(chunk).not.toContain('secret-reference-token');
     expect(chunk).not.toContain('secret-fragment');
     expect(chunk).not.toContain('token:secret');
+    expect(chunk).not.toContain('secret-content-type');
     expect(chunk).not.toContain('token=secret-sha-value');
     expect(chunk).not.toContain('secret-link-token');
     expect(chunk).not.toContain('secret top-level body');
@@ -509,6 +512,33 @@ describe('Rainrail bridge room', () => {
     expect(chunk).not.toContain('secret issue body');
     expect(chunk).not.toContain('secret label');
     expect(chunk).not.toContain('token-like value');
+  });
+
+  it('normalizes raw payload content types before storage and SSE delivery', async () => {
+    const storage = fakeState();
+    const room = createTestRoom(storage, { replayLimit: 10 });
+    const event = {
+      ...fixtureEvent('delivery-1', 'github.issue'),
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'github://deliveries/delivery-1',
+        contentType: 'Application/JSON; token=secret-parameter',
+      },
+    };
+
+    const publishResponse = await room.fetch(publishRequest(event));
+
+    expect(publishResponse.status).toBe(200);
+    expect(storage.storedEvents()[0]?.rawPayload.contentType).toBe('application/json');
+
+    const eventsResponse = await room.fetch(eventsRequest());
+    const reader = eventsResponse.body?.getReader();
+    expect(reader).toBeDefined();
+    const chunk = await readUntil(reader!, 'github.issue');
+    await reader?.cancel();
+
+    expect(chunk).toContain('"contentType":"application/json"');
+    expect(chunk).not.toContain('secret-parameter');
   });
 
   it('normalizes scalar payloads to an empty object before storage and SSE delivery', async () => {

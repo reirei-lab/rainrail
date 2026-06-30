@@ -100,6 +100,8 @@ userinfo / query / fragment を除去してから保存する。
 URL として parse できない optional `subject.url` は保存せず、必須の
 `rawPayload.reference` が parse できない、または allowlist 外 scheme の場合は publish を
 400 で拒否する。
+`rawPayload.contentType` は MIME type の type/subtype として妥当な値だけを小文字で保存し、
+parameter は保持しない。
 `rawPayload.sha256` は 64 桁 hex digest の場合だけ保存する。secret、token、credential、
 生 webhook payload、issue/comment body のような provider object 本文は core 側では
 保持しない。storage から復元する replay 要素も `RainrailEventEnvelope` と SSE field
