@@ -138,6 +138,7 @@ describe('mention draft workflow', () => {
     const stored = storage.storedEvents()[0];
 
     expect(stored?.payload).toMatchObject({
+      provider: 'github',
       action: 'created',
       repository: { fullName: 'reirei-lab/rainrail' },
       resource: {

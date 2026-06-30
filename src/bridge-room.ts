@@ -14,6 +14,7 @@ const CLOUDFLARE_ERROR_PAYLOAD_KEYS = new Set([
   'exceptions',
 ]);
 const GITHUB_MENTION_PAYLOAD_KEYS = new Set([
+  'provider',
   'action',
   'event',
   'repository',
@@ -579,13 +580,15 @@ function sanitizePayloadUrl(value: string): string | undefined {
 }
 
 function isGitHubMentionPayload(value: Record<string, unknown>): boolean {
-  return value.provider === 'github'
-    && (value.event === 'issue_comment'
-      || value.event === 'pull_request_review_comment'
-      || value.event === 'pull_request_review');
+  return value.event === 'issue_comment'
+    || value.event === 'pull_request_review_comment'
+    || value.event === 'pull_request_review';
 }
 
 function normalizeGitHubMentionPayloadField(key: string, value: unknown): unknown {
+  if (key === 'provider') {
+    return value === 'github' ? value : undefined;
+  }
   if (key === 'action' || key === 'event') {
     return typeof value === 'string' && isSafePayloadMetadata(value) ? value : undefined;
   }
