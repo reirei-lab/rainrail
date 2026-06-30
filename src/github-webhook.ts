@@ -719,12 +719,12 @@ function findGitHubSubject(payload: GitHubWebhookPayload, name: RainrailEventNam
     return subjectFromResource(resourceFromDeployKey(payload.key));
   }
 
-  if (isInstallationResourcePayload(payload)) {
-    return subjectFromResource(resourceFromInstallation(payload.installation));
-  }
-
   if (isOrganizationResourcePayload(payload)) {
     return subjectFromResource(resourceFromOrganization(payload.organization));
+  }
+
+  if (isInstallationResourcePayload(payload)) {
+    return subjectFromResource(resourceFromInstallation(payload.installation));
   }
 
   if (payload.pages) {
@@ -1248,10 +1248,6 @@ function normalizedResource(githubEvent: string, payload: GitHubWebhookPayload):
     return resourceFromDeployKey(payload.key);
   }
 
-  if (isInstallationResourcePayload(payload)) {
-    return resourceFromInstallation(payload.installation);
-  }
-
   if (payload.pages) {
     return resourceFromWikiPage(arrayField(payload, 'pages')[0]);
   }
@@ -1318,6 +1314,10 @@ function normalizedResource(githubEvent: string, payload: GitHubWebhookPayload):
 
   if (isOrganizationResourcePayload(payload)) {
     return resourceFromOrganization(payload.organization);
+  }
+
+  if (isInstallationResourcePayload(payload)) {
+    return resourceFromInstallation(payload.installation);
   }
 
   return resourceFromRepository(payload.repository);
@@ -1530,7 +1530,7 @@ function resourceFromWorkflowJob(workflowJob: GitHubWebhookRecord): NormalizedGi
 function resourceFromDeploymentReview(payload: GitHubWebhookPayload): NormalizedGitHubResource {
   const workflowRun = payload.workflow_run;
   const workflowJobRun = payload.workflow_job_run ?? arrayField(payload, 'workflow_job_runs')[0];
-  const runId = idField(workflowRun, 'id');
+  const runId = idField(workflowRun, 'id') ?? idField(workflowJobRun, 'id');
   const environment = stringField(workflowJobRun, 'environment') ?? stringField(payload, 'environment') ?? 'unknown';
   const reviewerLogins = arrayField(payload, 'reviewers')
     .map((wrapper) => {
@@ -1608,11 +1608,15 @@ function resourceFromSecurityAdvisory(
 
 function normalizedAffectedPackage(vulnerability: GitHubWebhookRecord): NormalizedGitHubAffectedPackage | undefined {
   const advisoryPackage = recordField(vulnerability, 'package');
+  const firstPatchedVersion = recordField(vulnerability, 'first_patched_version');
   const normalized = {
     ...optionalStringProperty('ecosystem', stringField(advisoryPackage, 'ecosystem')),
     ...optionalStringProperty('name', stringField(advisoryPackage, 'name')),
     ...optionalStringProperty('vulnerableVersionRange', stringField(vulnerability, 'vulnerable_version_range')),
-    ...optionalStringProperty('patchedVersions', stringField(vulnerability, 'patched_versions')),
+    ...optionalStringProperty(
+      'patchedVersions',
+      stringField(vulnerability, 'patched_versions') ?? stringField(firstPatchedVersion, 'identifier'),
+    ),
   };
 
   return objectHasKeys(normalized) ? normalized : undefined;
@@ -1836,7 +1840,7 @@ function resourceFromMarketplacePurchase(payload: GitHubWebhookPayload): Normali
 function resourceFromSponsorship(sponsorship: GitHubWebhookRecord): NormalizedGitHubResource {
   return {
     type: 'sponsorship',
-    id: idField(sponsorship, 'id') ?? 'unknown',
+    id: idField(sponsorship, 'id') ?? idField(sponsorship, 'node_id') ?? 'unknown',
     ...optionalStringProperty('sponsorLogin', stringField(recordField(sponsorship, 'sponsor'), 'login')),
     ...optionalStringProperty('sponsorableLogin', stringField(recordField(sponsorship, 'sponsorable'), 'login')),
     ...optionalStringProperty('tierName', stringField(recordField(sponsorship, 'tier'), 'name')),
@@ -2255,7 +2259,12 @@ function normalizedChangeValue(value: unknown): string | undefined {
 
   if (value && typeof value === 'object' && !Array.isArray(value)) {
     const record = value as GitHubWebhookRecord;
-    return stringField(record, 'name') ?? stringField(record, 'title') ?? stringField(record, 'value') ?? idField(record, 'id');
+    return stringField(record, 'name') ??
+      stringField(record, 'title') ??
+      stringField(record, 'value') ??
+      stringField(record, 'login') ??
+      stringField(recordField(record, 'user'), 'login') ??
+      idField(record, 'id');
   }
 
   return undefined;

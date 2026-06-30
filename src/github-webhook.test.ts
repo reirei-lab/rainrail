@@ -1650,7 +1650,7 @@ describe('GitHub webhook source handling', () => {
               {
                 package: { ecosystem: 'npm', name: 'vite' },
                 vulnerable_version_range: '<5.0.0',
-                patched_versions: '5.0.0',
+                first_patched_version: { identifier: '5.0.0' },
               },
             ],
           },
@@ -1995,6 +1995,13 @@ describe('GitHub webhook source handling', () => {
                 from: 'rainrail',
               },
             },
+            owner: {
+              from: {
+                user: {
+                  login: 'old-owner',
+                },
+              },
+            },
             description: {
               from: '',
               to: 'Rainrail routes development events',
@@ -2011,6 +2018,10 @@ describe('GitHub webhook source handling', () => {
           {
             field: 'repository.name',
             from: 'rainrail',
+          },
+          {
+            field: 'owner',
+            from: 'old-owner',
           },
           {
             field: 'description',
@@ -2068,10 +2079,10 @@ describe('GitHub webhook source handling', () => {
         payload: {
           action: 'requested',
           repository: { full_name: 'reirei-lab/rainrail' },
-          workflow_run: {
-            id: 9001,
-            name: 'deploy',
-            html_url: 'https://github.com/reirei-lab/rainrail/actions/runs/9001',
+          workflow_run: null as unknown as Record<string, unknown>,
+          workflow_job_run: {
+            id: 9101,
+            environment: 'production',
           },
           environment: 'production',
           requester: { login: 'octocat' },
@@ -2084,8 +2095,8 @@ describe('GitHub webhook source handling', () => {
       payload: {
         resource: {
           type: 'deployment_review',
-          id: '9001:production',
-          runId: '9001',
+          id: '9101:production',
+          runId: '9101',
           environment: 'production',
           requester: 'octocat',
         },
@@ -2495,6 +2506,7 @@ describe('GitHub webhook source handling', () => {
         deliveryId: 'delivery-organization-deleted-1',
         payload: {
           action: 'deleted',
+          installation: { id: 12345 },
           organization: {
             id: 113,
             login: 'old-org',
@@ -2608,7 +2620,7 @@ describe('GitHub webhook source handling', () => {
         payload: {
           action: 'created',
           sponsorship: {
-            id: 114,
+            node_id: 'SP_kwDOExample',
             sponsor: { login: 'sponsor' },
             sponsorable: { login: 'maintainer' },
             tier: { name: 'Gold' },
@@ -2622,7 +2634,7 @@ describe('GitHub webhook source handling', () => {
       payload: {
         resource: {
           type: 'sponsorship',
-          id: '114',
+          id: 'SP_kwDOExample',
           sponsorLogin: 'sponsor',
           sponsorableLogin: 'maintainer',
           tierName: 'Gold',
