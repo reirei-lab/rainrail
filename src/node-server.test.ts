@@ -2,7 +2,7 @@ import { once } from 'node:events';
 
 import { describe, expect, it } from 'vitest';
 
-import { createGitHubWebhookSignature, createRainrailNodeServer } from './index.js';
+import { DEFAULT_MAX_REQUEST_BODY_BYTES, createGitHubWebhookSignature, createRainrailNodeServer } from './index.js';
 
 describe('Rainrail Node server', () => {
   it('adapts Node HTTP requests to the shared Rainrail HTTP app', async () => {
@@ -60,6 +60,47 @@ describe('Rainrail Node server', () => {
       await closeServer(server);
     }
   });
+
+  it('aborts the Fetch request when an SSE client disconnects', async () => {
+    const { server, room } = createRainrailNodeServer({
+      githubWebhookSecret: 'secret',
+      publishToken: 'test-publish-token',
+      eventsBearerToken: 'events-token',
+      runtime: 'node-test',
+      replayLimit: 10,
+      keepAliveIntervalMs: 10_000,
+    });
+
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const address = server.address();
+    if (address === null || typeof address === 'string') {
+      throw new Error('expected TCP server address');
+    }
+
+    try {
+      const events = await fetch(`http://127.0.0.1:${address.port}/events`, {
+        headers: { authorization: 'Bearer events-token' },
+      });
+      expect(events.status).toBe(200);
+
+      await events.body?.cancel();
+      await waitFor(async () => {
+        const health = await room.fetch(new Request('https://rainrail.local/healthz'));
+        const body = await health.json() as { clients: number };
+        return body.clients;
+      }, 0);
+
+      const health = await room.fetch(new Request('https://rainrail.local/healthz'));
+      await expect(health.json()).resolves.toMatchObject({ clients: 0 });
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it('defaults the Node request body limit to the GitHub webhook payload cap', () => {
+    expect(DEFAULT_MAX_REQUEST_BODY_BYTES).toBe(25 * 1024 * 1024);
+  });
 });
 
 async function readUntil(reader: ReadableStreamDefaultReader<Uint8Array>, expected: string): Promise<string> {
@@ -80,4 +121,11 @@ async function closeServer(server: { listening: boolean; closeAllConnections?: (
   if (!server.listening) return;
   server.closeAllConnections?.();
   await new Promise<void>((resolve) => server.close(resolve));
+}
+
+async function waitFor<T>(read: () => T | Promise<T>, expected: T): Promise<void> {
+  for (let index = 0; index < 20; index += 1) {
+    if (Object.is(await read(), expected)) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
 }

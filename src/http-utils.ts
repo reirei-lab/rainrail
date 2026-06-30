@@ -1,5 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
+export const DEFAULT_MAX_REQUEST_BODY_BYTES = 25 * 1024 * 1024;
+
 export const defaultCorsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
@@ -65,7 +67,7 @@ export function withCors(response: Response): Response {
   });
 }
 
-export async function readRequestBody(request: IncomingMessage, maxBytes = 1024 * 1024): Promise<Buffer> {
+export async function readRequestBody(request: IncomingMessage, maxBytes = DEFAULT_MAX_REQUEST_BODY_BYTES): Promise<Buffer> {
   const chunks: Buffer[] = [];
   let total = 0;
 
@@ -81,7 +83,11 @@ export async function readRequestBody(request: IncomingMessage, maxBytes = 1024 
   return Buffer.concat(chunks);
 }
 
-export async function writeFetchResponse(response: ServerResponse, fetchResponse: Response): Promise<void> {
+export async function writeFetchResponse(
+  response: ServerResponse,
+  fetchResponse: Response,
+  options: { signal?: AbortSignal } = {},
+): Promise<void> {
   response.writeHead(fetchResponse.status, Object.fromEntries(fetchResponse.headers));
 
   if (fetchResponse.body === null) {
@@ -90,6 +96,15 @@ export async function writeFetchResponse(response: ServerResponse, fetchResponse
   }
 
   const reader = fetchResponse.body.getReader();
+  const cancelReader = (): void => {
+    void reader.cancel().catch(() => {
+      // The reader may already be closed by normal response completion.
+    });
+  };
+
+  options.signal?.addEventListener('abort', cancelReader, { once: true });
+  response.once('close', cancelReader);
+
   try {
     while (true) {
       const { value, done } = await reader.read();
@@ -97,7 +112,11 @@ export async function writeFetchResponse(response: ServerResponse, fetchResponse
       response.write(value);
     }
   } finally {
-    response.end();
+    options.signal?.removeEventListener('abort', cancelReader);
+    response.off('close', cancelReader);
+    if (!response.destroyed && !response.writableEnded) {
+      response.end();
+    }
     reader.releaseLock();
   }
 }

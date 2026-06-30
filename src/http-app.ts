@@ -72,10 +72,8 @@ async function routeRainrailHttpRequest(request: Request, options: RainrailHttpA
   if (url.pathname === '/events') {
     if (request.method !== 'GET') return methodNotAllowedResponse(['GET', 'OPTIONS']);
 
-    if (options.eventsBearerToken !== undefined) {
-      const auth = verifyRainrailEventsBearerToken(request, options.eventsBearerToken);
-      if (!auth.ok) return rainrailEventsAuthErrorResponse(auth);
-    }
+    const auth = verifyRainrailEventsBearerToken(request, options.eventsBearerToken);
+    if (!auth.ok) return rainrailEventsAuthErrorResponse(auth);
 
     return options.room.fetch(new Request(`${INTERNAL_ROOM_ORIGIN}/events`, {
       headers: bridgeAuthorizationHeaders(request, options.publishToken),

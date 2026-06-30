@@ -33,8 +33,17 @@ export function createRainrailNodeServer(options: RainrailNodeServerOptions): Ra
   });
 
   const server = http.createServer(async (request, response) => {
+    const abortController = new AbortController();
+    response.once('close', () => {
+      abortController.abort();
+    });
+
     try {
-      await writeFetchResponse(response, await app.fetch(await toFetchRequest(request, options.maxBodyBytes)));
+      await writeFetchResponse(
+        response,
+        await app.fetch(await toFetchRequest(request, options.maxBodyBytes, abortController.signal)),
+        { signal: abortController.signal },
+      );
     } catch (error) {
       const status = isStatusCodeError(error) ? error.statusCode : 500;
       await writeFetchResponse(
@@ -62,7 +71,11 @@ export function createInMemoryBridgeRoomState(): RainrailBridgeRoomState {
   };
 }
 
-async function toFetchRequest(request: IncomingMessage, maxBodyBytes: number | undefined): Promise<Request> {
+async function toFetchRequest(
+  request: IncomingMessage,
+  maxBodyBytes: number | undefined,
+  signal: AbortSignal,
+): Promise<Request> {
   const host = request.headers.host ?? '127.0.0.1';
   const url = new URL(request.url ?? '/', `http://${host}`);
   const headers = new Headers();
@@ -81,6 +94,7 @@ async function toFetchRequest(request: IncomingMessage, maxBodyBytes: number | u
   const init: RequestInit = {
     method: request.method ?? 'GET',
     headers,
+    signal,
   };
 
   if (request.method !== undefined && !['GET', 'HEAD'].includes(request.method)) {

@@ -81,6 +81,15 @@ describe('Rainrail HTTP app', () => {
     await reader?.cancel();
   });
 
+  it('requires event stream auth configuration instead of opening events publicly', async () => {
+    const app = createTestApp(fakeState());
+
+    const response = await app.fetch(new Request('https://rainrail.local/events'));
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({ error: 'events_auth_not_configured' });
+  });
+
   it('handles CORS preflight, unsupported methods, and uncaught route errors consistently', async () => {
     const app = createTestApp(fakeState());
 
