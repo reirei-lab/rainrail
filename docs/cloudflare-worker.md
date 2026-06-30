@@ -19,6 +19,7 @@ pnpm exec wrangler secret put SSE_BEARER_TOKEN
 - `SSE_BEARER_TOKEN`: `GET /events` の購読用 bearer token。未設定の場合は event stream を公開せず `503` を返す。
 
 local dev では `.dev.vars` に同じ名前を置く。`.dev.vars` は gitignore 済みなので値は commit しない。
+環境別の `.dev.vars.<environment>` と `.env*` も secret ファイルとして扱い、同じく commit しない。
 
 ```sh
 GITHUB_WEBHOOK_SECRET=replace-with-local-secret
@@ -38,7 +39,8 @@ GitHub webhook の URL は `/webhooks/github`、health check は `/healthz`。
 
 ## Production Deploy
 
-deploy 前に secrets が登録済みであることを確認する。
+`wrangler.jsonc` の `secrets.required` は必要な secret 名を固定する。`pnpm cf:deploy` は
+`wrangler secret list` で Cloudflare 側の登録状況を確認し、欠落があれば deploy 前に止める。
 
 ```sh
 pnpm install --frozen-lockfile
@@ -57,10 +59,9 @@ GitHub webhook の delivery URL は production Worker の
 deploy 後、health endpoint と webhook endpoint を smoke する。
 
 ```sh
-RAINRAIL_WORKER_URL=https://<worker-host> \
-GITHUB_WEBHOOK_SECRET=<same-placeholder-secret-used-in-cloudflare> \
-pnpm cf:smoke
+RAINRAIL_WORKER_URL=https://<worker-host> pnpm cf:smoke
 ```
 
-smoke script は `GET /healthz` が successful response を返すことと、署名済みの
-sample GitHub issue webhook が `POST /webhooks/github` で `202` になることを確認する。
+smoke script は `GET /healthz` が successful response を返すことを確認する。
+`POST /webhooks/github` は `ping` event と意図的な署名不一致で `401 signature_mismatch`
+になることだけを確認し、production の Durable Object / SSE replay stream には publish しない。

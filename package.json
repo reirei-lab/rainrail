@@ -7,7 +7,7 @@
   "packageManager": "pnpm@10.12.1",
   "scripts": {
     "build": "node scripts/check-scripts.mjs",
-    "cf:deploy": "wrangler deploy",
+    "cf:deploy": "node scripts/validate-cloudflare-secrets.mjs && wrangler deploy",
     "cf:dev": "wrangler dev --local",
     "cf:smoke": "node scripts/smoke-cloudflare-worker.mjs",
     "test": "vitest run scripts src",

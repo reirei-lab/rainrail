@@ -1,34 +1,23 @@
-import { createHmac } from 'node:crypto';
-
 const workerUrl = requiredEnv('RAINRAIL_WORKER_URL').replace(/\/+$/u, '');
-const webhookSecret = requiredEnv('GITHUB_WEBHOOK_SECRET');
 
 const deliveryId = process.env.GITHUB_DELIVERY_ID ?? `smoke-${Date.now()}`;
 const payload = JSON.stringify({
-  action: 'opened',
-  repository: {
-    full_name: 'reirei-lab/rainrail',
-    html_url: 'https://github.com/reirei-lab/rainrail',
-  },
-  issue: {
-    number: 28,
-    title: 'Cloudflare Worker smoke',
-    html_url: 'https://github.com/reirei-lab/rainrail/issues/28',
-  },
+  zen: 'Rainrail webhook smoke avoids publishing production events.',
 });
+const invalidSignature = `sha256=${'0'.repeat(64)}`;
 
 await expectOk('health endpoint', fetch(`${workerUrl}/healthz`));
 
-await expectStatus('webhook endpoint', fetch(`${workerUrl}/webhooks/github`, {
+await expectJsonError('webhook endpoint', fetch(`${workerUrl}/webhooks/github`, {
   method: 'POST',
   headers: {
     'content-type': 'application/json',
-    'x-github-event': 'issues',
+    'x-github-event': 'ping',
     'x-github-delivery': deliveryId,
-    'x-hub-signature-256': githubSignature(webhookSecret, payload),
+    'x-hub-signature-256': invalidSignature,
   },
   body: payload,
-}), 202);
+}), 401, 'signature_mismatch');
 
 console.log(`Cloudflare Worker smoke passed for ${workerUrl}`);
 
@@ -60,19 +49,23 @@ async function expectOk(label, responsePromise) {
  * @param {string} label
  * @param {Promise<Response>} responsePromise
  * @param {number} expectedStatus
+ * @param {string} expectedError
  */
-async function expectStatus(label, responsePromise, expectedStatus) {
+async function expectJsonError(label, responsePromise, expectedStatus, expectedError) {
   const response = await responsePromise;
+  const bodyText = await response.text();
   if (response.status !== expectedStatus) {
-    throw new Error(`${label} returned ${response.status}, expected ${expectedStatus}: ${await response.text()}`);
+    throw new Error(`${label} returned ${response.status}, expected ${expectedStatus}: ${bodyText}`);
   }
-}
 
-/**
- * @param {string} secret
- * @param {string} body
- * @returns {string}
- */
-function githubSignature(secret, body) {
-  return `sha256=${createHmac('sha256', secret).update(body).digest('hex')}`;
+  let body;
+  try {
+    body = JSON.parse(bodyText);
+  } catch {
+    throw new Error(`${label} returned non-JSON body: ${bodyText}`);
+  }
+
+  if (body?.error !== expectedError) {
+    throw new Error(`${label} returned ${bodyText}, expected error ${expectedError}`);
+  }
 }

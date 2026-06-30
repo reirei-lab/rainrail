@@ -19,5 +19,12 @@
   ],
   "vars": {
     "BRIDGE_ID": "events"
+  },
+  "secrets": {
+    "required": [
+      "GITHUB_WEBHOOK_SECRET",
+      "RAINRAIL_PUBLISH_TOKEN",
+      "SSE_BEARER_TOKEN"
+    ]
   }
 }
