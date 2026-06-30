@@ -550,6 +550,10 @@ function createDispatchAgentCapabilityProxy(
 
     return true;
   };
+  const hasDispatchAgentAccessor = (source: object): boolean => {
+    const descriptor = findPropertyDescriptor(source, 'dispatchAgent');
+    return descriptor !== undefined && !('value' in descriptor);
+  };
 
   const isDispatchAgentFunction = (source: object, value: Function, property?: string | symbol): boolean => {
     if (property === 'dispatchAgent') {
@@ -586,6 +590,7 @@ function createDispatchAgentCapabilityProxy(
     value: Function,
     safeReceiver: object,
     property?: string | symbol,
+    gateDispatchRequests = false,
   ): Function => {
     if (isDispatchAgentFunction(source, value, property)) {
       return dispatchAgent;
@@ -606,6 +611,7 @@ function createDispatchAgentCapabilityProxy(
         args,
         (object) => createCapabilityView(object),
         property,
+        gateDispatchRequests,
       );
     sourceCache.set(wrapped, value);
     return wrapped;
@@ -690,7 +696,7 @@ function createDispatchAgentCapabilityProxy(
           );
       }
 
-      return bindCapabilityFunction(source, value, safeReceiver, property);
+      return bindCapabilityFunction(source, value, safeReceiver, property, hasDispatchAgentAccessor(source));
     }
 
     if (isPromiseLike(value)) {
@@ -856,6 +862,16 @@ function createCapabilityConstructorView(
 ): unknown {
   if (typeof constructorValue !== 'function') {
     return constructorValue;
+  }
+
+  let rawDispatchAgent: DispatchAgentCapability | undefined;
+  try {
+    rawDispatchAgent = peekRawDispatchAgent();
+  } catch {
+    rawDispatchAgent = undefined;
+  }
+  if (constructorValue === rawDispatchAgent || isBoundDispatchAgentAlias(constructorValue, 'constructor', rawDispatchAgent)) {
+    return dispatchAgent;
   }
 
   const prototype = constructorValue.prototype;
@@ -1173,6 +1189,7 @@ function callCapabilityFunction(
   args: unknown[],
   wrapObject: (object: object) => object,
   property?: string | symbol,
+  gateDispatchRequests = false,
 ): unknown {
   const helperIsRawDispatchAgent = () => {
     try {
@@ -1186,8 +1203,21 @@ function callCapabilityFunction(
     isDispatchAgentAliasProperty(property) ||
     isPotentialDispatchAgentAliasProperty(property) ||
     isStarterAliasProperty(property) ||
+    gateDispatchRequests ||
     helperMayResolveDispatchAgent(helper);
   const retryWithPrivateReceiver = (reason: unknown) => {
+    if (isDispatchAgentRequest(args[0])) {
+      return normalizeCapabilityFunctionResult(
+        dispatchAgent(args[0], args[1] as Parameters<DispatchAgentCapability>[1]),
+        capabilities,
+        safeReceiver,
+        getRawDispatchAgent,
+        dispatchAgent,
+        retryWithPrivateReceiver,
+        wrapObject,
+      );
+    }
+
     if ((isDispatchAgentRequest(args[0]) && shouldGateDispatchRequest()) || shouldGateDispatchRequest()) {
       throw reason;
     }
