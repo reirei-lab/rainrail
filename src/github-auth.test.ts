@@ -210,6 +210,23 @@ describe('getGitHubToken', () => {
     expect(cliRunner).toHaveBeenCalledOnce();
   });
 
+  it('does not start gh CLI fallback lookup when the caller signal is already aborted', async () => {
+    const controller = new AbortController();
+    controller.abort(new Error('fallback already aborted'));
+    const cliRunner = vi.fn(async () => ({ stdout: 'gh-cli-token\n', stderr: '' }));
+
+    const token = getGitHubFallbackAuthToken({
+      githubApp: {
+        appId: '12345',
+        installationId: '67890',
+        privateKeyPath: '/does/not/matter',
+      },
+    }, cliRunner, controller.signal);
+
+    await expect(token).rejects.toThrow('fallback already aborted');
+    expect(cliRunner).not.toHaveBeenCalled();
+  });
+
   it('falls back to GITHUB_TOKEN when GH_TOKEN is defined but empty', async () => {
     vi.stubEnv('GH_TOKEN', '');
     vi.stubEnv('GITHUB_TOKEN', 'github-token');

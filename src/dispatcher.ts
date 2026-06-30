@@ -152,17 +152,17 @@ function createWorkflowExecutionRecord(workflow: WorkflowPlugin): WorkflowExecut
   }
   const capabilitiesDescriptor = findPropertyDescriptor(workflow, 'capabilities');
   if (capabilitiesDescriptor !== undefined) {
-    try {
-      const capabilities =
-        'value' in capabilitiesDescriptor
-          ? (capabilitiesDescriptor.value as RuntimeCapabilityName[] | undefined)
-          : workflow.capabilities;
-      record.policy = {
-        name: nameMetadata.name,
-        capabilities: new Set(capabilities ?? []),
-      };
-    } catch (policyError) {
-      record.policyError = policyError;
+    if ('value' in capabilitiesDescriptor) {
+      try {
+        record.policy = {
+          name: nameMetadata.name,
+          capabilities: new Set((capabilitiesDescriptor.value as RuntimeCapabilityName[] | undefined) ?? []),
+        };
+      } catch (policyError) {
+        record.policyError = policyError;
+      }
+    } else {
+      record.policySnapshot = false;
     }
   }
 
@@ -440,6 +440,11 @@ function createDispatchAgentCapabilityProxy(
   getRawDispatchAgent: () => DispatchAgentCapability | undefined,
 ): PluginRuntimeContext['capabilities'] {
   const viewCache = new WeakMap<object, object>();
+  const sourceCache = new WeakMap<object, object>();
+  const unwrapCapabilityValue = (value: unknown): unknown =>
+    typeof value === 'object' && value !== null
+      ? sourceCache.get(value) ?? value
+      : value;
 
   const isDispatchAgentFunction = (value: Function, property?: string | symbol): boolean => {
     if (property === 'dispatchAgent') {
@@ -516,7 +521,8 @@ function createDispatchAgentCapabilityProxy(
     }
 
     const safeReceiver = createCapabilityView(source);
-    const value = readCapabilityValue(source, property, safeReceiver);
+    const receiver = isBuiltinCapabilityCollection(source) ? source : safeReceiver;
+    const value = readCapabilityValue(source, property, receiver);
     if (typeof value === 'function') {
       if (isBuiltinCapabilityCollection(source)) {
         return (...args: unknown[]) => callCapabilityCollectionMethod(
@@ -529,6 +535,7 @@ function createDispatchAgentCapabilityProxy(
           getRawDispatchAgent(),
           dispatchAgent,
           (object) => createCapabilityView(object),
+          unwrapCapabilityValue,
         );
       }
 
@@ -613,6 +620,7 @@ function createDispatchAgentCapabilityProxy(
     );
 
     viewCache.set(source, view);
+    sourceCache.set(view, source);
     return view;
   };
 
@@ -778,13 +786,22 @@ function callCapabilityCollectionMethod(
   rawDispatchAgent: DispatchAgentCapability | undefined,
   dispatchAgent: DispatchAgentCapability,
   wrapObject: (object: object) => object,
+  unwrapValue: (value: unknown) => unknown,
 ): unknown {
   const normalize = (value: unknown) =>
     normalizeCapabilityHelperResult(value, capabilities, safeReceiver, rawDispatchAgent, dispatchAgent, wrapObject);
 
   if (source instanceof Map) {
     if (property === 'get') {
-      return normalize(source.get(args[0]));
+      return normalize(source.get(unwrapValue(args[0])));
+    }
+
+    if (property === 'has') {
+      return source.has(unwrapValue(args[0]));
+    }
+
+    if (property === 'delete') {
+      return source.delete(unwrapValue(args[0]));
     }
 
     if (property === 'forEach') {
@@ -837,7 +854,15 @@ function callCapabilityCollectionMethod(
   }
 
   if (source instanceof WeakMap && property === 'get') {
-    return normalize(source.get(args[0] as object));
+    return normalize(source.get(unwrapValue(args[0]) as object));
+  }
+
+  if (source instanceof WeakMap && property === 'has') {
+    return source.has(unwrapValue(args[0]) as object);
+  }
+
+  if (source instanceof WeakMap && property === 'delete') {
+    return source.delete(unwrapValue(args[0]) as object);
   }
 
   return normalizeCapabilityHelperResult(
@@ -1041,13 +1066,34 @@ function shouldWrapCapabilityObject(value: unknown): value is object {
     return false;
   }
 
+  if (
+    value instanceof Date ||
+    value instanceof RegExp ||
+    value instanceof Error ||
+    value instanceof Promise ||
+    ArrayBuffer.isView(value) ||
+    value instanceof ArrayBuffer
+  ) {
+    return false;
+  }
+
+  if (
+    value instanceof Map ||
+    value instanceof Set ||
+    value instanceof WeakMap ||
+    value instanceof WeakSet ||
+    Array.isArray(value)
+  ) {
+    return true;
+  }
+
   const tag = Object.prototype.toString.call(value);
-  return tag === '[object Object]'
-    || tag === '[object Array]'
-    || tag === '[object Map]'
-    || tag === '[object Set]'
-    || tag === '[object WeakMap]'
-    || tag === '[object WeakSet]';
+  if (tag === '[object Object]') {
+    return true;
+  }
+
+  const prototype = Reflect.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
 }
 
 function isBuiltinCapabilityCollection(

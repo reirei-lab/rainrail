@@ -83,6 +83,7 @@ export async function getGitHubFallbackAuthToken(
   if (envToken !== undefined) {
     return { ...envToken, fallback: true };
   }
+  throwIfAborted(signal);
   const ghCliToken = await waitForSignal(getGhCliAuthToken(cliRunner), signal);
   return ghCliToken === undefined ? undefined : { ...ghCliToken, fallback: true };
 }
