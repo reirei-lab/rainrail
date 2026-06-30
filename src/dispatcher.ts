@@ -95,11 +95,7 @@ export function createRuntimeDispatcher(options: RuntimeDispatcherOptions): Runt
               const context = createWorkflowContext(options, policy, event, abort.controller.signal);
               const workflowTimeoutMs = metadata.timeoutMs ?? options.defaultTimeoutMs;
               workflowStarted = true;
-              value = await runWorkflow(
-                () => Promise.resolve(workflow.handle(event, context)),
-                workflowTimeoutMs,
-                abort,
-              );
+              value = await runWorkflow(() => workflow.handle(event, context), workflowTimeoutMs, abort);
             } finally {
               if (!workflowStarted) {
                 abort.dispose();
@@ -378,19 +374,21 @@ function createGatedRuntimeCapabilities(
     return undefined;
   }
 
-  if (capabilities.dispatchAgent === undefined) {
+  const rawDispatchAgent = capabilities.dispatchAgent;
+  if (rawDispatchAgent === undefined) {
     return capabilities;
   }
 
   const dispatchAgent: DispatchAgentCapability = (request, context) =>
     callDispatchAgent(options, policy, event, signal, request, context?.signal);
 
-  return createDispatchAgentCapabilityProxy(capabilities, dispatchAgent);
+  return createDispatchAgentCapabilityProxy(capabilities, dispatchAgent, rawDispatchAgent);
 }
 
 function createDispatchAgentCapabilityProxy(
   capabilities: NonNullable<PluginRuntimeContext['capabilities']>,
   dispatchAgent: DispatchAgentCapability,
+  rawDispatchAgent: DispatchAgentCapability,
 ): PluginRuntimeContext['capabilities'] {
   const functionCache = new WeakMap<Function, Function>();
   const viewCache = new WeakMap<object, object>();
@@ -430,6 +428,10 @@ function createDispatchAgentCapabilityProxy(
     }
 
     const value = Reflect.get(source, property, capabilities);
+    if (value === rawDispatchAgent) {
+      return dispatchAgent;
+    }
+
     if (typeof value === 'function') {
       return bindCapabilityFunction(value);
     }
@@ -607,6 +609,14 @@ function callCapabilityFunctionWithDispatchAgentShadow(
 ): unknown {
   const ownDescriptor = Reflect.getOwnPropertyDescriptor(capabilities, 'dispatchAgent');
   if (ownDescriptor === undefined || ownDescriptor.configurable === true) {
+    const restore = () => {
+      if (ownDescriptor === undefined) {
+        Reflect.deleteProperty(capabilities, 'dispatchAgent');
+      } else {
+        Object.defineProperty(capabilities, 'dispatchAgent', ownDescriptor);
+      }
+    };
+
     Object.defineProperty(capabilities, 'dispatchAgent', {
       configurable: true,
       enumerable: ownDescriptor?.enumerable ?? true,
@@ -615,17 +625,29 @@ function callCapabilityFunctionWithDispatchAgentShadow(
     });
 
     try {
-      return Reflect.apply(helper, capabilities, args);
-    } finally {
-      if (ownDescriptor === undefined) {
-        Reflect.deleteProperty(capabilities, 'dispatchAgent');
-      } else {
-        Object.defineProperty(capabilities, 'dispatchAgent', ownDescriptor);
+      const result = Reflect.apply(helper, capabilities, args);
+      if (isPromiseLike(result)) {
+        return result.finally(restore);
       }
+
+      restore();
+      return result;
+    } catch (reason) {
+      restore();
+      throw reason;
     }
   }
 
   return Reflect.apply(helper, safeReceiver, args);
+}
+
+function isPromiseLike(value: unknown): value is Promise<unknown> {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'then' in value &&
+    typeof (value as { then: unknown }).then === 'function'
+  );
 }
 
 async function callDispatchAgent(
@@ -929,7 +951,7 @@ function createWorkflowAbortController(parentSignal: AbortSignal | undefined): W
 }
 
 async function runWorkflow<T>(
-  start: () => Promise<T>,
+  start: () => T | Promise<T>,
   timeoutMs: number | undefined,
   abort: WorkflowAbortController,
 ): Promise<T> {
@@ -952,7 +974,12 @@ async function runWorkflow<T>(
       return await abortPromise;
     }
 
-    const promise = start();
+    const started = start();
+    if (!isPromiseLike(started)) {
+      return started;
+    }
+
+    const promise = started;
 
     if (timeoutMs === undefined) {
       return await Promise.race([promise, abortPromise]);

@@ -176,6 +176,62 @@ describe('createGitHubTaskProvider', () => {
     );
   });
 
+  it('passes task context abort signals to GitHub App token requests', async () => {
+    const controller = new AbortController();
+    const directory = mkdtempSync(join(tmpdir(), 'rainrail-provider-auth-signal-'));
+    const keyPath = join(directory, 'private-key.pem');
+    const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+    writeFileSync(keyPath, privateKey.export({ type: 'pkcs1', format: 'pem' }), 'utf8');
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        token: 'installation-token',
+        expires_at: '2026-06-29T15:00:00.000Z',
+      }), {
+        status: 201,
+        headers: { 'content-type': 'application/json' },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        node_id: 'issue-node-id',
+        number: 20,
+        title: 'Signal-aware auth issue',
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }));
+    const provider = createGitHubTaskProvider({
+      config: {
+        githubApp: {
+          appId: '12345',
+          installationId: '67890',
+          privateKeyPath: keyPath,
+        },
+      },
+      fetch: fetchImpl as unknown as typeof fetch,
+    });
+
+    try {
+      await provider.getIssue(
+        {
+          provider: 'github',
+          repository: 'reirei-lab/rainrail',
+          number: 20,
+        },
+        { signal: controller.signal },
+      );
+
+      expect(fetchImpl).toHaveBeenNthCalledWith(
+        1,
+        'https://api.github.com/app/installations/67890/access_tokens',
+        expect.objectContaining({
+          signal: controller.signal,
+        }),
+      );
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('falls back to env auth when default GitHub App auth cannot mint a token', async () => {
     vi.stubEnv('GH_TOKEN', 'fallback-token');
     const directory = mkdtempSync(join(tmpdir(), 'rainrail-provider-fallback-'));

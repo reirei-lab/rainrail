@@ -45,20 +45,22 @@ let cachedGhCliToken: string | undefined;
 export async function getGitHubToken(
   config: GitHubAuthConfig,
   fetchImpl: FetchLike = fetch,
+  signal?: AbortSignal,
 ): Promise<string | undefined> {
-  return (await getGitHubAuthToken(config, fetchImpl))?.token;
+  return (await getGitHubAuthToken(config, fetchImpl, signal))?.token;
 }
 
 export async function getGitHubAuthToken(
   config: GitHubAuthConfig,
   fetchImpl: FetchLike = fetch,
+  signal?: AbortSignal,
 ): Promise<GitHubAuthToken | undefined> {
   if (config.token !== undefined && config.token.length > 0) {
     return { token: config.token, provider: 'configured-token', fallback: false };
   }
   if (config.githubApp !== undefined) {
     return {
-      token: await githubAppInstallationToken(config.githubApp, fetchImpl),
+      token: await githubAppInstallationToken(config.githubApp, fetchImpl, signal),
       provider: 'github-app',
       fallback: false,
     };
@@ -170,6 +172,7 @@ function ghPathCandidates(): string[] {
 async function githubAppInstallationToken(
   config: GitHubAppAuthConfig,
   fetchImpl: FetchLike,
+  signal: AbortSignal | undefined,
 ): Promise<string> {
   const cacheKey = [
     config.appId,
@@ -185,7 +188,7 @@ async function githubAppInstallationToken(
     return cached.pending;
   }
 
-  const pending = createInstallationToken(config, fetchImpl)
+  const pending = createInstallationToken(config, fetchImpl, signal)
     .then(({ token, expiresAtMs }) => {
       installationTokenCache.set(cacheKey, { token, expiresAtMs });
       return token;
@@ -207,17 +210,23 @@ async function githubAppInstallationToken(
 async function createInstallationToken(
   config: GitHubAppAuthConfig,
   fetchImpl: FetchLike,
+  signal: AbortSignal | undefined,
 ): Promise<{ token: string; expiresAtMs: number }> {
+  const init: RequestInit = {
+    method: 'POST',
+    headers: {
+      Accept: 'application/vnd.github+json',
+      Authorization: `Bearer ${await createGitHubAppJwt(config)}`,
+      'X-GitHub-Api-Version': '2022-11-28',
+    },
+  };
+  if (signal !== undefined) {
+    init.signal = signal;
+  }
+
   const response = await fetchImpl(
     `https://api.github.com/app/installations/${encodeURIComponent(config.installationId)}/access_tokens`,
-    {
-      method: 'POST',
-      headers: {
-        Accept: 'application/vnd.github+json',
-        Authorization: `Bearer ${await createGitHubAppJwt(config)}`,
-        'X-GitHub-Api-Version': '2022-11-28',
-      },
-    },
+    init,
   );
   recordGitHubRateLimit('rest', response.headers, { authProvider: 'github-app' });
   if (!response.ok) {
