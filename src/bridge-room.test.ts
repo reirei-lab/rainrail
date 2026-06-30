@@ -921,6 +921,82 @@ describe('Rainrail bridge room', () => {
     expect(chunk).not.toContain('bad\\nid');
   });
 
+  it('preserves stored GitHub mentioned logins during replay restore', async () => {
+    const storedMention = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook', repository: 'reirei-lab/rainrail' },
+      name: 'github.issue_comment',
+      delivery: {
+        id: 'delivery-mention-1',
+        receivedAt: '2026-06-29T18:18:21.000Z',
+      },
+      occurredAt: '2026-06-29T18:18:20.000Z',
+      subject: { type: 'issue', id: '24' },
+      payload: {
+        provider: 'github',
+        event: 'issue_comment',
+        action: 'created',
+        comment: {
+          id: '123456',
+          url: 'https://github.com/reirei-lab/rainrail/issues/24#issuecomment-123456',
+          mentionedLogins: ['reirei-agent'],
+        },
+      },
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'github://deliveries/delivery-mention-1',
+      },
+    });
+    const room = createTestRoom(storedReplayState([storedMention]), { replayLimit: 10 });
+
+    const eventsResponse = await room.fetch(eventsRequest());
+    const reader = eventsResponse.body?.getReader();
+    expect(reader).toBeDefined();
+    const chunk = await readUntil(reader!, 'github.issue_comment');
+    await reader?.cancel();
+
+    expect(chunk).toContain('"mentionedLogins":["reirei-agent"]');
+  });
+
+  it('truncates Cloudflare exception details before storing replay events', async () => {
+    const storage = fakeState();
+    const room = createTestRoom(storage, { replayLimit: 10 });
+    const event = createEventEnvelope({
+      source: { type: 'cloudflare', name: 'cloudflare-tail' },
+      name: 'cloudflare.error',
+      delivery: {
+        id: 'tail-large-exception',
+        receivedAt: '2026-06-29T18:18:21.000Z',
+      },
+      occurredAt: '2026-06-29T18:18:20.000Z',
+      subject: { type: 'worker', id: 'asme-site' },
+      payload: {
+        action: 'exception',
+        status: '500',
+        conclusion: 'failure',
+        scriptName: 'asme-site',
+        exceptions: [{
+          name: 'Error',
+          message: `prefix ${'m'.repeat(2_000)} suffix`,
+          stack: Array.from({ length: 40 }, (_, index) => `    at frame${index} (worker.js:${index}:1)`).join('\n'),
+        }],
+      },
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'cloudflare://deliveries/tail-large-exception',
+      },
+    });
+
+    const publishResponse = await room.fetch(publishRequest(event));
+
+    expect(publishResponse.status).toBe(200);
+    const payload = storage.storedEvents()[0]?.payload as { exceptions?: Array<{ message: string; stack: string }> };
+    const exception = payload.exceptions?.[0];
+    expect(exception?.message.length).toBeLessThan(700);
+    expect(exception?.stack.length).toBeLessThan(1_500);
+    expect(exception?.message).toContain('... truncated ...');
+    expect(exception?.stack).toContain('... truncated ...');
+  });
+
   it('passes Last-Event-ID to the SSE replay policy', async () => {
     const room = createTestRoom(fakeState(), { replayLimit: 10 });
     const first = fixtureEvent('delivery-1', 'github.issue');

@@ -416,6 +416,7 @@ function cloudflareErrorEvent(overrides: {
   line?: number;
   column?: number;
   message?: string;
+  stack?: string;
   leadingStacklessException?: boolean;
 } = {}) {
   const line = overrides.line ?? 1510;
@@ -447,7 +448,7 @@ function cloudflareErrorEvent(overrides: {
         {
           name: 'TypeError',
           message: overrides.message ?? "Cannot read properties of null (reading 'toAuth') reset=secret-reset-code",
-          stack: [
+          stack: overrides.stack ?? [
             "TypeError: Cannot read properties of null (reading 'toAuth')",
             `    at resolveCurrentHumanAccount (worker.js:${line}:${column})`,
             '    at handleCurrentHuman (worker.js:1377:18)',
@@ -532,6 +533,68 @@ describe('cloudflare issue redaction', () => {
 
     expect(createdIssues[0]?.body).not.toContain('lowercase-secret-token');
     expect(createdIssues[0]?.body).toContain('Bearer [redacted]');
+  });
+
+  it('redacts underscore-prefixed secret parameters in exception strings', async () => {
+    const createdIssues: Array<{ body: string }> = [];
+    const workflow = createCloudflareIssueReporterWorkflow({
+      repository: 'reirei-lab/rainrail',
+      store: createInMemoryCloudflareErrorIssueStore(),
+      issues: {
+        findOpenIssueByFingerprint: async () => undefined,
+        createIssue: async (input) => {
+          createdIssues.push(input);
+          return {
+            number: 127,
+            url: 'https://github.com/reirei-lab/rainrail/issues/127',
+          };
+        },
+      },
+    });
+
+    await expect(workflow.handle(cloudflareErrorEvent({
+      message: 'oauth failed access_token=access-secret refresh_token=refresh-secret client_secret=client-secret',
+    }), runtimeContext())).resolves.toMatchObject({
+      handled: true,
+    });
+
+    expect(createdIssues[0]?.body).not.toContain('access-secret');
+    expect(createdIssues[0]?.body).not.toContain('refresh-secret');
+    expect(createdIssues[0]?.body).not.toContain('client-secret');
+    expect(createdIssues[0]?.body).toContain('access_token=[redacted]');
+    expect(createdIssues[0]?.body).toContain('refresh_token=[redacted]');
+    expect(createdIssues[0]?.body).toContain('client_secret=[redacted]');
+  });
+
+  it('redacts secret URL locations in the stack signature', async () => {
+    const createdIssues: Array<{ body: string }> = [];
+    const workflow = createCloudflareIssueReporterWorkflow({
+      repository: 'reirei-lab/rainrail',
+      store: createInMemoryCloudflareErrorIssueStore(),
+      issues: {
+        findOpenIssueByFingerprint: async () => undefined,
+        createIssue: async (input) => {
+          createdIssues.push(input);
+          return {
+            number: 128,
+            url: 'https://github.com/reirei-lab/rainrail/issues/128',
+          };
+        },
+      },
+    });
+
+    await expect(workflow.handle(cloudflareErrorEvent({
+      stack: [
+        'TypeError: failed',
+        '    at resetHandler (https://user:password@worker.example/reset/secret-reset-token/worker.js:1:1)',
+      ].join('\n'),
+    }), runtimeContext())).resolves.toMatchObject({
+      handled: true,
+    });
+
+    expect(createdIssues[0]?.body).not.toContain('user:password');
+    expect(createdIssues[0]?.body).not.toContain('secret-reset-token');
+    expect(createdIssues[0]?.body).toContain('resetHandler @ https://worker.example/[redacted]/[redacted]/worker.js');
   });
 });
 

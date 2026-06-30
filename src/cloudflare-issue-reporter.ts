@@ -337,6 +337,7 @@ function cloudflareIssueBody(input: {
 }): string {
   const rawJson = truncate(JSON.stringify(redact(input.candidate.rawData), null, 2), maxRawJsonLength);
   const exceptionMessage = sanitizeSecretString(input.candidate.exceptionMessage);
+  const stackSignature = input.candidate.stackSignature.map(sanitizeSecretString);
   return [
     'Rainrail detected a new Cloudflare Worker server error.',
     '',
@@ -356,7 +357,7 @@ function cloudflareIssueBody(input: {
     '## Stack Signature',
     '',
     '```text',
-    input.candidate.stackSignature.join('\n'),
+    stackSignature.join('\n'),
     '```',
     '',
     '## Raw Event Data',
@@ -403,7 +404,7 @@ function normalizeStackLocation(value: string): string | undefined {
     .replace(/:\d+:\d+\)?$/u, '')
     .replace(/:\d+\)?$/u, '')
     .replace(/^\(?/u, '');
-  return withoutLineColumn.length === 0 ? undefined : withoutLineColumn;
+  return withoutLineColumn.length === 0 ? undefined : sanitizeSecretString(withoutLineColumn);
 }
 
 function normalizeExceptionMessage(value: string): string {
@@ -475,7 +476,7 @@ function isUrlKey(key: string): boolean {
 function sanitizeSecretString(value: string): string {
   return value
     .replace(/https?:\/\/[^\s"'<>`]+/giu, (url) => sanitizeUrlString(url))
-    .replace(/\b(token|secret|password|code|reset)=([^&\s"'<>`]+)/giu, '$1=[redacted]')
+    .replace(/(^|[?&\s"'<>`,;])([A-Za-z0-9_-]*(?:token|secret|password|code|reset))=([^&\s"'<>`,;]+)/giu, '$1$2=[redacted]')
     .replace(/\bBearer\s+[A-Za-z0-9._~+/-]+=*/giu, 'Bearer [redacted]');
 }
 

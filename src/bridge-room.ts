@@ -34,6 +34,9 @@ const SAFE_REF_SUBJECT_ID = /^(?:(?:branch|tag):|refs\/(?:heads|tags)\/)[A-Za-z0
 const SAFE_GITHUB_URL_SEGMENT = /^[A-Za-z0-9_.-]{1,64}$/;
 const SAFE_GITHUB_NUMERIC_ID = /^\d{1,20}$/;
 const SAFE_UTC_ISO_TIMESTAMP = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,3}))?Z$/;
+const MAX_CLOUDFLARE_EXCEPTION_MESSAGE_LENGTH = 512;
+const MAX_CLOUDFLARE_EXCEPTION_STACK_LENGTH = 1_200;
+const MAX_CLOUDFLARE_EXCEPTION_STACK_LINES = 8;
 const claimedStorages = new WeakSet<RainrailBridgeRoomStorage>();
 
 type PublishEventResult =
@@ -556,12 +559,26 @@ function normalizeCloudflareExceptions(value: unknown): unknown[] | undefined {
     for (const key of ['name', 'message', 'stack'] as const) {
       const nestedValue = exception[key];
       if (typeof nestedValue === 'string' && nestedValue.length > 0) {
-        normalized[key] = sanitizePayloadText(nestedValue);
+        normalized[key] = normalizeCloudflareExceptionString(key, nestedValue);
       }
     }
     return Object.keys(normalized).length > 0 ? [normalized] : [];
   });
   return exceptions.length > 0 ? exceptions : undefined;
+}
+
+function normalizeCloudflareExceptionString(key: 'name' | 'message' | 'stack', value: string): string {
+  const sanitized = sanitizePayloadText(value);
+  if (key === 'message') {
+    return truncatePayloadText(sanitized, MAX_CLOUDFLARE_EXCEPTION_MESSAGE_LENGTH);
+  }
+  if (key === 'stack') {
+    return truncatePayloadText(
+      truncatePayloadLines(sanitized, MAX_CLOUDFLARE_EXCEPTION_STACK_LINES),
+      MAX_CLOUDFLARE_EXCEPTION_STACK_LENGTH,
+    );
+  }
+  return sanitized;
 }
 
 function sanitizePayloadUrl(value: string): string | undefined {
@@ -622,7 +639,7 @@ function normalizeGitHubComment(value: unknown): unknown {
   if (!isRecord(value)) return undefined;
   const normalized = {
     ...pickStringFields(value, ['id', 'url', 'author']),
-    ...mentionedLoginsFromBody(value.body),
+    ...mentionedLoginsFromComment(value),
   };
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
@@ -682,19 +699,46 @@ function sanitizePayloadPathname(pathname: string): string {
 function sanitizePayloadText(value: string): string {
   return value
     .replace(/https?:\/\/[^\s"'<>`]+/giu, (url) => sanitizePayloadUrl(url) ?? '[redacted-url]')
-    .replace(/\b(token|secret|password|code|reset)=([^&\s"'<>`]+)/giu, '$1=[redacted]')
+    .replace(/(^|[?&\s"'<>`,;])([A-Za-z0-9_-]*(?:token|secret|password|code|reset))=([^&\s"'<>`,;]+)/giu, '$1$2=[redacted]')
     .replace(/\bBearer\s+[A-Za-z0-9._~+/-]+=*/giu, 'Bearer [redacted]');
 }
 
-function mentionedLoginsFromBody(value: unknown): { mentionedLogins: string[] } | {} {
-  if (typeof value !== 'string' || value.length === 0) return {};
+function mentionedLoginsFromComment(value: Record<string, unknown>): { mentionedLogins: string[] } | {} {
   const mentions = new Set<string>();
-  for (const match of value.matchAll(/(^|[^\w-])@([A-Za-z0-9-]{1,39})(?=$|[^\w-])/gu)) {
-    const login = match[2];
-    if (login !== undefined) mentions.add(login);
-    if (mentions.size >= 20) break;
+
+  const existing = value.mentionedLogins;
+  if (Array.isArray(existing)) {
+    for (const login of existing) {
+      if (typeof login === 'string' && isSafeGitHubLogin(login)) mentions.add(login);
+      if (mentions.size >= 20) break;
+    }
   }
+
+  const body = value.body;
+  if (typeof body === 'string') {
+    for (const match of body.matchAll(/(^|[^\w-])@([A-Za-z0-9-]{1,39})(?=$|[^\w-])/gu)) {
+      const login = match[2];
+      if (login !== undefined && isSafeGitHubLogin(login)) mentions.add(login);
+      if (mentions.size >= 20) break;
+    }
+  }
+
   return mentions.size > 0 ? { mentionedLogins: [...mentions] } : {};
+}
+
+function isSafeGitHubLogin(value: string): boolean {
+  return /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/u.test(value);
+}
+
+function truncatePayloadText(value: string, maxLength: number): string {
+  if (value.length <= maxLength) return value;
+  return `${value.slice(0, maxLength)}\n... truncated ...`;
+}
+
+function truncatePayloadLines(value: string, maxLines: number): string {
+  const lines = value.split(/\r?\n/u);
+  if (lines.length <= maxLines) return value;
+  return `${lines.slice(0, maxLines).join('\n')}\n... truncated ...`;
 }
 
 function isSafePayloadMetadata(value: unknown): value is string | null {
