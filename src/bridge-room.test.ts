@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { createEventEnvelope, RainrailBridgeRoom, type RainrailBridgeRoomOptions, type RainrailBridgeRoomState } from './index.js';
+import {
+  createEventEnvelope,
+  mentionDraftRequestFromEvent,
+  RainrailBridgeRoom,
+  type RainrailBridgeRoomOptions,
+  type RainrailBridgeRoomState,
+} from './index.js';
 
 const TEST_PUBLISH_TOKEN = 'test-publish-token';
 
@@ -878,6 +884,151 @@ describe('Rainrail bridge room', () => {
     await reader?.cancel();
 
     expect(chunk).not.toContain('secret-action');
+  });
+
+  it('preserves sanitized GitHub mention payloads for downstream workflows', async () => {
+    const storage = fakeState();
+    const room = createTestRoom(storage, { replayLimit: 10 });
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook', repository: 'reirei-lab/rainrail' },
+      name: 'github.review',
+      delivery: {
+        id: 'delivery-review-comment-1',
+        receivedAt: '2026-06-29T18:18:21.000Z',
+      },
+      occurredAt: '2026-06-29T18:18:20.000Z',
+      subject: {
+        type: 'pull_request',
+        id: '49',
+        url: 'https://github.com/reirei-lab/rainrail/pull/49#secret-fragment',
+      },
+      payload: {
+        provider: 'github',
+        event: 'pull_request_review_comment',
+        action: 'created',
+        actor: { login: 'hiragram', token: 'secret-actor-token' },
+        repository: {
+          fullName: 'reirei-lab/rainrail',
+          secret: 'secret-repository-token',
+        },
+        resource: {
+          type: 'pull_request',
+          id: '49',
+          number: 49,
+          title: 'Mention workflow token=secret-title-token',
+          url: 'https://github.com/reirei-lab/rainrail/pull/49?token=secret-query',
+        },
+        comment: {
+          id: '3500091217',
+          body: 'Please handle this @reirei-agent token=secret-comment-token',
+          url: 'https://github.com/reirei-lab/rainrail/pull/49#discussion_r3500091217',
+          author: 'hiragram',
+          secret: 'secret-comment-field',
+        },
+        unexpected: { body: 'secret nested body' },
+      },
+      rawPayload: {
+        kind: 'inline-redacted',
+        reference: 'github://deliveries/delivery-review-comment-1',
+      },
+    });
+
+    const publishResponse = await room.fetch(publishRequest(event));
+
+    expect(publishResponse.status).toBe(200);
+    const storedEvent = storage.storedEvents()[0];
+    expect(storedEvent?.payload).toEqual({
+      provider: 'github',
+      event: 'pull_request_review_comment',
+      action: 'created',
+      actor: { login: 'hiragram' },
+      repository: { fullName: 'reirei-lab/rainrail' },
+      resource: {
+        type: 'pull_request',
+        id: '49',
+        number: 49,
+        title: 'Mention workflow token=[redacted]',
+        url: 'https://github.com/reirei-lab/rainrail/pull/49',
+      },
+      comment: {
+        id: '3500091217',
+        body: 'Please handle this @reirei-agent token=[redacted]',
+        url: 'https://github.com/reirei-lab/rainrail/pull/49#discussion_r3500091217',
+        author: 'hiragram',
+      },
+    });
+    expect(mentionDraftRequestFromEvent(storedEvent!, 'reirei-agent')).toMatchObject({
+      commentUrl: 'https://github.com/reirei-lab/rainrail/pull/49#discussion_r3500091217',
+      title: 'Respond to reirei-lab/rainrail#49: Mention workflow token=[redacted]',
+      repository: 'reirei-lab/rainrail',
+      number: 49,
+    });
+
+    const eventsResponse = await room.fetch(eventsRequest());
+    const reader = eventsResponse.body?.getReader();
+    expect(reader).toBeDefined();
+    const chunk = await readUntil(reader!, 'discussion_r3500091217');
+    await reader?.cancel();
+
+    expect(chunk).toContain('token=[redacted]');
+    expect(chunk).toContain('#discussion_r3500091217');
+    expect(chunk).not.toContain('secret-comment-token');
+    expect(chunk).not.toContain('secret-query');
+    expect(chunk).not.toContain('secret-actor-token');
+    expect(chunk).not.toContain('secret nested body');
+  });
+
+  it('preserves submitted GitHub review mentions through Bridge payload normalization', async () => {
+    const storage = fakeState();
+    const room = createTestRoom(storage, { replayLimit: 10 });
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook', repository: 'reirei-lab/rainrail' },
+      name: 'github.review',
+      delivery: {
+        id: 'delivery-review-1',
+        receivedAt: '2026-06-29T18:18:21.000Z',
+      },
+      occurredAt: '2026-06-29T18:18:20.000Z',
+      subject: {
+        type: 'review',
+        id: '4594627585',
+        url: 'https://github.com/reirei-lab/rainrail/pull/49#pullrequestreview-4594627585',
+      },
+      payload: {
+        provider: 'github',
+        event: 'pull_request_review',
+        action: 'submitted',
+        actor: { login: 'hiragram' },
+        repository: { fullName: 'reirei-lab/rainrail' },
+        resource: {
+          type: 'review',
+          id: '4594627585',
+          body: '@reirei-agent please address this review',
+          url: 'https://github.com/reirei-lab/rainrail/pull/49#pullrequestreview-4594627585',
+        },
+        pullRequest: {
+          type: 'pull_request',
+          id: '49',
+          number: 49,
+          title: 'Mention workflow',
+          url: 'https://github.com/reirei-lab/rainrail/pull/49',
+        },
+      },
+      rawPayload: {
+        kind: 'inline-redacted',
+        reference: 'github://deliveries/delivery-review-1',
+      },
+    });
+
+    const publishResponse = await room.fetch(publishRequest(event));
+
+    expect(publishResponse.status).toBe(200);
+    expect(mentionDraftRequestFromEvent(storage.storedEvents()[0]!, 'reirei-agent')).toMatchObject({
+      commentUrl: 'https://github.com/reirei-lab/rainrail/pull/49#pullrequestreview-4594627585',
+      title: 'Respond to reirei-lab/rainrail#49: Mention workflow',
+      repository: 'reirei-lab/rainrail',
+      number: 49,
+    });
   });
 
   it('normalizes scalar payloads to an empty object before storage and SSE delivery', async () => {

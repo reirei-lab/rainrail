@@ -292,7 +292,7 @@ function validatePublishEnvelope(value: unknown): RainrailEventEnvelope {
       id: subjectId,
       ...optionalUrl(subject, 'url'),
     },
-    payload: normalizePayload(value.payload),
+    payload: normalizePayload(value.payload, { sourceType, name }),
     rawPayload: {
       kind: rawPayloadKind,
       reference: expectSanitizedUrl(rawPayloadReference, 'reference'),
@@ -498,7 +498,7 @@ function optionalSha256(record: Record<string, unknown>): Record<string, string>
   return { sha256: record.sha256.toLowerCase() };
 }
 
-function normalizePayload(value: unknown): unknown {
+function normalizePayload(value: unknown, context: { sourceType: string; name: string }): unknown {
   if (!isRecord(value)) {
     return {};
   }
@@ -515,7 +515,133 @@ function normalizePayload(value: unknown): unknown {
     }
   }
 
+  if (context.sourceType === 'github' && (context.name === 'github.issue' || context.name === 'github.review')) {
+    Object.assign(payload, normalizeGitHubMentionPayload(value));
+  }
+
   return payload;
+}
+
+function normalizeGitHubMentionPayload(value: Record<string, unknown>): Record<string, unknown> {
+  const normalized: Record<string, unknown> = {};
+
+  const provider = stringPayloadMetadata(value.provider);
+  const event = stringPayloadMetadata(value.event);
+  const action = stringPayloadMetadata(value.action);
+  const actor = normalizeGitHubActor(recordOrUndefined(value.actor));
+  const repository = normalizeGitHubRepository(recordOrUndefined(value.repository));
+  const resource = normalizeGitHubResource(recordOrUndefined(value.resource));
+  const comment = normalizeGitHubComment(recordOrUndefined(value.comment));
+  const review = normalizeGitHubComment(recordOrUndefined(value.review));
+  const pullRequest = normalizeGitHubResource(recordOrUndefined(value.pullRequest));
+
+  if (provider !== undefined) normalized.provider = provider;
+  if (event !== undefined) normalized.event = event;
+  if (action !== undefined) normalized.action = action;
+  if (actor !== undefined) normalized.actor = actor;
+  if (repository !== undefined) normalized.repository = repository;
+  if (resource !== undefined) normalized.resource = resource;
+  if (comment !== undefined) normalized.comment = comment;
+  if (review !== undefined) normalized.review = review;
+  if (pullRequest !== undefined) normalized.pullRequest = pullRequest;
+
+  return normalized;
+}
+
+function normalizeGitHubActor(value: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+  if (value === undefined) return undefined;
+
+  const login = stringPayloadMetadata(value.login);
+  return login === undefined ? undefined : { login };
+}
+
+function normalizeGitHubRepository(value: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+  if (value === undefined) return undefined;
+
+  const fullName = repositoryPayloadMetadata(value.fullName)
+    ?? repositoryPayloadMetadata(value.full_name)
+    ?? repositoryPayloadMetadata(value.nameWithOwner);
+  return fullName === undefined ? undefined : { fullName };
+}
+
+function normalizeGitHubResource(value: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+  if (value === undefined) return undefined;
+
+  const normalized: Record<string, unknown> = {};
+  const type = stringPayloadMetadata(value.type);
+  const id = stringPayloadMetadata(value.id);
+  const number = numberPayloadMetadata(value.number);
+  const title = textPayloadMetadata(value.title);
+  const body = textPayloadMetadata(value.body);
+  const url = githubPayloadUrl(value.url);
+
+  if (type !== undefined) normalized.type = type;
+  if (id !== undefined) normalized.id = id;
+  if (number !== undefined) normalized.number = number;
+  if (title !== undefined) normalized.title = title;
+  if (body !== undefined) normalized.body = body;
+  if (url !== undefined) normalized.url = url;
+
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function normalizeGitHubComment(value: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+  if (value === undefined) return undefined;
+
+  const normalized: Record<string, unknown> = {};
+  const id = stringPayloadMetadata(value.id);
+  const body = textPayloadMetadata(value.body);
+  const url = githubPayloadUrl(value.url);
+  const author = stringPayloadMetadata(value.author);
+
+  if (id !== undefined) normalized.id = id;
+  if (body !== undefined) normalized.body = body;
+  if (url !== undefined) normalized.url = url;
+  if (author !== undefined) normalized.author = author;
+
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function recordOrUndefined(value: unknown): Record<string, unknown> | undefined {
+  return isRecord(value) ? value : undefined;
+}
+
+function stringPayloadMetadata(value: unknown): string | undefined {
+  return typeof value === 'string' && isSafePayloadMetadata(value) ? value : undefined;
+}
+
+function repositoryPayloadMetadata(value: unknown): string | undefined {
+  return typeof value === 'string' && SAFE_REPOSITORY_NAME.test(value) ? value : undefined;
+}
+
+function numberPayloadMetadata(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
+function textPayloadMetadata(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? sanitizePayloadText(value) : undefined;
+}
+
+function githubPayloadUrl(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'https:' || !isAllowedGitHubUrl(url) || !isSafeGitHubHash(url.hash)) {
+      return undefined;
+    }
+
+    url.username = '';
+    url.password = '';
+    url.search = '';
+    return url.toString();
+  } catch {
+    return undefined;
+  }
+}
+
+function isSafeGitHubHash(value: string): boolean {
+  return value === '' || /^#[A-Za-z0-9_-]{1,128}$/u.test(value);
 }
 
 function isCloudflareErrorPayload(value: Record<string, unknown>): boolean {
