@@ -706,19 +706,20 @@ function sanitizePayloadText(value: string): string {
 function mentionedLoginsFromComment(value: Record<string, unknown>): { mentionedLogins: string[] } | {} {
   const mentions = new Set<string>();
 
-  const existing = value.mentionedLogins;
-  if (Array.isArray(existing)) {
-    for (const login of existing) {
-      if (typeof login === 'string' && isSafeGitHubLogin(login)) mentions.add(login);
-      if (mentions.size >= 20) break;
-    }
-  }
-
   const body = value.body;
   if (typeof body === 'string') {
     for (const match of body.matchAll(/(^|[^\w-])@([A-Za-z0-9-]{1,39})(?=$|[^\w-])/gu)) {
       const login = match[2];
       if (login !== undefined && isSafeGitHubLogin(login)) mentions.add(login);
+      if (mentions.size >= 20) break;
+    }
+    return mentions.size > 0 ? { mentionedLogins: [...mentions] } : {};
+  }
+
+  const existing = value.mentionedLogins;
+  if (Array.isArray(existing)) {
+    for (const login of existing) {
+      if (typeof login === 'string' && isSafeGitHubLogin(login)) mentions.add(login);
       if (mentions.size >= 20) break;
     }
   }

@@ -957,6 +957,48 @@ describe('Rainrail bridge room', () => {
     expect(chunk).toContain('"mentionedLogins":["reirei-agent"]');
   });
 
+  it('does not merge stale GitHub mentioned logins when the comment body is available', async () => {
+    const room = createTestRoom(fakeState(), { replayLimit: 10 });
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook', repository: 'reirei-lab/rainrail' },
+      name: 'github.issue_comment',
+      delivery: {
+        id: 'delivery-stale-mention-1',
+        receivedAt: '2026-06-29T18:18:21.000Z',
+      },
+      occurredAt: '2026-06-29T18:18:20.000Z',
+      subject: { type: 'issue', id: '24' },
+      payload: {
+        provider: 'github',
+        event: 'issue_comment',
+        action: 'created',
+        comment: {
+          id: '123456',
+          url: 'https://github.com/reirei-lab/rainrail/issues/24#issuecomment-123456',
+          body: 'This comment mentions @octocat only.',
+          mentionedLogins: ['reirei-agent'],
+        },
+      },
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'github://deliveries/delivery-stale-mention-1',
+      },
+    });
+
+    const publishResponse = await room.fetch(publishRequest(event));
+
+    expect(publishResponse.status).toBe(200);
+
+    const eventsResponse = await room.fetch(eventsRequest());
+    const reader = eventsResponse.body?.getReader();
+    expect(reader).toBeDefined();
+    const chunk = await readUntil(reader!, 'github.issue_comment');
+    await reader?.cancel();
+
+    expect(chunk).toContain('"mentionedLogins":["octocat"]');
+    expect(chunk).not.toContain('reirei-agent');
+  });
+
   it('truncates Cloudflare exception details before storing replay events', async () => {
     const storage = fakeState();
     const room = createTestRoom(storage, { replayLimit: 10 });
