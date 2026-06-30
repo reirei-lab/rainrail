@@ -381,34 +381,41 @@ function createGatedRuntimeCapabilities(
     return undefined;
   }
 
-  const rawDispatchAgent = capabilities.dispatchAgent;
-  if (rawDispatchAgent === undefined) {
-    return capabilities;
-  }
+  let rawDispatchAgent: DispatchAgentCapability | undefined;
+  let rawDispatchAgentResolved = false;
+  const getRawDispatchAgent = () => {
+    if (!rawDispatchAgentResolved) {
+      rawDispatchAgent = capabilities.dispatchAgent;
+      rawDispatchAgentResolved = true;
+    }
+
+    return rawDispatchAgent;
+  };
 
   const dispatchAgent: DispatchAgentCapability = (request, context) =>
-    callDispatchAgent(options, policy, event, lifecycle, rawDispatchAgent, capabilities, request, context?.signal);
+    callDispatchAgent(options, policy, event, lifecycle, getRawDispatchAgent(), capabilities, request, context?.signal);
 
-  return createDispatchAgentCapabilityProxy(capabilities, dispatchAgent, rawDispatchAgent);
+  return createDispatchAgentCapabilityProxy(capabilities, dispatchAgent, getRawDispatchAgent);
 }
 
 function createDispatchAgentCapabilityProxy(
   capabilities: NonNullable<PluginRuntimeContext['capabilities']>,
   dispatchAgent: DispatchAgentCapability,
-  rawDispatchAgent: DispatchAgentCapability,
+  getRawDispatchAgent: () => DispatchAgentCapability | undefined,
 ): PluginRuntimeContext['capabilities'] {
-  const functionCache = new WeakMap<Function, Function>();
   const viewCache = new WeakMap<object, object>();
 
-  const bindCapabilityFunction = (value: Function): Function => {
-    const cached = functionCache.get(value);
-    if (cached !== undefined) {
-      return cached;
-    }
-
+  const bindCapabilityFunction = (value: Function, safeReceiver: object): Function => {
     const wrapped = (...args: unknown[]) =>
-      callCapabilityFunction(value, capabilities, dispatchAgent, rawDispatchAgent, createCapabilityView(capabilities), args);
-    functionCache.set(value, wrapped);
+      callCapabilityFunction(
+        value,
+        capabilities,
+        dispatchAgent,
+        getRawDispatchAgent,
+        safeReceiver,
+        args,
+        (object) => createCapabilityView(object),
+      );
     return wrapped;
   };
 
@@ -435,24 +442,27 @@ function createDispatchAgentCapabilityProxy(
         Reflect.get(source, property, capabilities),
         capabilities,
         dispatchAgent,
-        rawDispatchAgent,
+        getRawDispatchAgent,
+        (object) => createCapabilityView(object),
       );
     }
 
     const value = Reflect.get(source, property, capabilities);
-    if (value === rawDispatchAgent) {
-      return dispatchAgent;
-    }
-
+    const safeReceiver = createCapabilityView(source);
     if (typeof value === 'function') {
-      return bindCapabilityFunction(value);
+      const rawDispatchAgent = getRawDispatchAgent();
+      if (value === rawDispatchAgent) {
+        return dispatchAgent;
+      }
+
+      return bindCapabilityFunction(value, safeReceiver);
     }
 
     if (typeof value === 'object' && value !== null) {
       return createCapabilityView(value);
     }
 
-    return normalizeCapabilityHelperResult(value, capabilities, createCapabilityView(source), rawDispatchAgent, dispatchAgent);
+    return value;
   };
 
   const describeCapabilityProperty = (source: object, property: string | symbol): PropertyDescriptor | undefined => {
@@ -521,7 +531,8 @@ function createCapabilityConstructorView(
   constructorValue: unknown,
   capabilities: NonNullable<PluginRuntimeContext['capabilities']>,
   dispatchAgent: DispatchAgentCapability,
-  rawDispatchAgent: DispatchAgentCapability,
+  getRawDispatchAgent: () => DispatchAgentCapability | undefined,
+  wrapObject: (object: object) => object,
 ): unknown {
   if (typeof constructorValue !== 'function') {
     return constructorValue;
@@ -543,14 +554,15 @@ function createCapabilityConstructorView(
     }
 
     const value = Reflect.get(prototype, property, capabilities);
+    const rawDispatchAgent = getRawDispatchAgent();
     if (value === rawDispatchAgent) {
       return dispatchAgent;
     }
 
     return typeof value === 'function'
       ? (...args: unknown[]) =>
-          callCapabilityFunction(value, capabilities, dispatchAgent, rawDispatchAgent, prototypeView, args)
-      : normalizeCapabilityHelperResult(value, capabilities, prototypeView, rawDispatchAgent, dispatchAgent);
+          callCapabilityFunction(value, capabilities, dispatchAgent, getRawDispatchAgent, prototypeView, args, wrapObject)
+      : normalizeCapabilityHelperResult(value, capabilities, prototypeView, rawDispatchAgent, dispatchAgent, wrapObject);
   };
   const prototypeView: object = new Proxy(
     {},
@@ -581,7 +593,14 @@ function createCapabilityConstructorView(
     {},
     {
       get(_target, property) {
-        return readConstructorProperty(constructorValue, property, constructorView, prototypeView, rawDispatchAgent, dispatchAgent);
+        return readConstructorProperty(
+          constructorValue,
+          property,
+          constructorView,
+          prototypeView,
+          getRawDispatchAgent,
+          dispatchAgent,
+        );
       },
       getOwnPropertyDescriptor(_target, property): PropertyDescriptor | undefined {
         if (property === 'prototype') {
@@ -601,7 +620,14 @@ function createCapabilityConstructorView(
         return {
           configurable: true,
           enumerable: descriptor.enumerable ?? false,
-          value: readConstructorProperty(constructorValue, property, constructorView, prototypeView, rawDispatchAgent, dispatchAgent),
+          value: readConstructorProperty(
+            constructorValue,
+            property,
+            constructorView,
+            prototypeView,
+            getRawDispatchAgent,
+            dispatchAgent,
+          ),
           writable: false,
         };
       },
@@ -619,7 +645,7 @@ function readConstructorProperty(
   property: string | symbol,
   constructorView: object,
   prototypeView: object,
-  rawDispatchAgent: DispatchAgentCapability,
+  getRawDispatchAgent: () => DispatchAgentCapability | undefined,
   dispatchAgent: DispatchAgentCapability,
 ): unknown {
   if (property === 'prototype') {
@@ -627,6 +653,7 @@ function readConstructorProperty(
   }
 
   const value = Reflect.get(constructorValue, property, constructorView);
+  const rawDispatchAgent = getRawDispatchAgent();
   if (value === rawDispatchAgent) {
     return dispatchAgent;
   }
@@ -638,15 +665,17 @@ function callCapabilityFunction(
   helper: Function,
   capabilities: NonNullable<PluginRuntimeContext['capabilities']>,
   dispatchAgent: DispatchAgentCapability,
-  rawDispatchAgent: DispatchAgentCapability,
+  getRawDispatchAgent: () => DispatchAgentCapability | undefined,
   safeReceiver: object,
   args: unknown[],
+  wrapObject: (object: object) => object,
 ): unknown {
   const retryWithPrivateReceiver = (reason: unknown) => {
-    if (helperMayUseDispatchAgent(helper)) {
+    if (helperMayUsePublicThisProperty(helper)) {
       throw reason;
     }
 
+    const rawDispatchAgent = getRawDispatchAgent();
     return normalizeCapabilityFunctionResult(
       Reflect.apply(helper, capabilities, args),
       capabilities,
@@ -654,10 +683,12 @@ function callCapabilityFunction(
       rawDispatchAgent,
       dispatchAgent,
       retryWithPrivateReceiver,
+      wrapObject,
     );
   };
 
   try {
+    const rawDispatchAgent = getRawDispatchAgent();
     return normalizeCapabilityFunctionResult(
       Reflect.apply(helper, safeReceiver, args),
       capabilities,
@@ -665,6 +696,7 @@ function callCapabilityFunction(
       rawDispatchAgent,
       dispatchAgent,
       retryWithPrivateReceiver,
+      wrapObject,
     );
   } catch (reason) {
     if (!isPrivateReceiverError(reason)) {
@@ -689,13 +721,15 @@ function normalizeCapabilityFunctionResult(
   value: unknown,
   capabilities: NonNullable<PluginRuntimeContext['capabilities']>,
   safeReceiver: object,
-  rawDispatchAgent: DispatchAgentCapability,
+  rawDispatchAgent: DispatchAgentCapability | undefined,
   dispatchAgent: DispatchAgentCapability,
   retryPrivateReceiver: (reason: unknown) => unknown,
+  wrapObject: (object: object) => object,
 ): unknown {
   if (isPromiseLike(value)) {
     return Promise.resolve(value).then(
-      (resolved) => normalizeCapabilityHelperResult(resolved, capabilities, safeReceiver, rawDispatchAgent, dispatchAgent),
+      (resolved) =>
+        normalizeCapabilityHelperResult(resolved, capabilities, safeReceiver, rawDispatchAgent, dispatchAgent, wrapObject),
       (reason: unknown) => {
         if (!isPrivateReceiverError(reason)) {
           throw reason;
@@ -706,15 +740,16 @@ function normalizeCapabilityFunctionResult(
     );
   }
 
-  return normalizeCapabilityHelperResult(value, capabilities, safeReceiver, rawDispatchAgent, dispatchAgent);
+  return normalizeCapabilityHelperResult(value, capabilities, safeReceiver, rawDispatchAgent, dispatchAgent, wrapObject);
 }
 
 function normalizeCapabilityHelperResult(
   value: unknown,
   capabilities: NonNullable<PluginRuntimeContext['capabilities']>,
   safeReceiver: object,
-  rawDispatchAgent: DispatchAgentCapability,
+  rawDispatchAgent: DispatchAgentCapability | undefined,
   dispatchAgent: DispatchAgentCapability,
+  wrapObject: (object: object) => object,
 ): unknown {
   if (value === capabilities) {
     return safeReceiver;
@@ -724,6 +759,10 @@ function normalizeCapabilityHelperResult(
     return dispatchAgent;
   }
 
+  if (typeof value === 'object' && value !== null) {
+    return wrapObject(value);
+  }
+
   return value;
 }
 
@@ -731,9 +770,9 @@ function isPrivateReceiverError(reason: unknown): boolean {
   return reason instanceof TypeError && reason.message.includes('private');
 }
 
-function helperMayUseDispatchAgent(helper: Function): boolean {
+function helperMayUsePublicThisProperty(helper: Function): boolean {
   try {
-    return Function.prototype.toString.call(helper).includes('dispatchAgent');
+    return /this\s*(?:\.|\[)(?!#)/u.test(Function.prototype.toString.call(helper));
   } catch {
     return true;
   }
@@ -744,7 +783,7 @@ async function callDispatchAgent(
   policy: WorkflowExecutionPolicy,
   event: RainrailEventEnvelope,
   lifecycle: WorkflowLifecycle,
-  dispatchAgent: DispatchAgentCapability,
+  dispatchAgent: DispatchAgentCapability | undefined,
   capabilities: NonNullable<PluginRuntimeContext['capabilities']>,
   request: Parameters<NonNullable<NonNullable<PluginRuntimeContext['capabilities']>['dispatchAgent']>>[0],
   callerSignal: AbortSignal | undefined,
@@ -758,6 +797,12 @@ async function callDispatchAgent(
   if (!policy.capabilities.has('runtime:start')) {
     const reason = new CapabilityDeniedError('startRuntime', 'runtime:start', policy.name);
     await recordAudit(options, policy, event, 'startRuntime', 'denied', reason);
+    throw reason;
+  }
+
+  if (dispatchAgent === undefined) {
+    const reason = new Error('Runtime capability dispatchAgent is not available');
+    await recordAudit(options, policy, event, 'startRuntime', 'rejected', reason);
     throw reason;
   }
 

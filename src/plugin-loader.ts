@@ -83,14 +83,9 @@ export function createPluginLoader(options: PluginLoaderOptions): PluginLoader {
 function createRegisteredWorkflow(plugin: WorkflowPlugin): WorkflowPlugin {
   let capabilities: RuntimeCapabilityName[] | undefined;
   let capabilityError: unknown;
+  let capabilitySnapshot = false;
   let timeoutMs: number | undefined;
   let timeoutError: unknown;
-
-  try {
-    capabilities = plugin.capabilities === undefined ? undefined : [...plugin.capabilities];
-  } catch (reason) {
-    capabilityError = reason;
-  }
 
   try {
     timeoutMs = plugin.timeoutMs;
@@ -121,6 +116,15 @@ function createRegisteredWorkflow(plugin: WorkflowPlugin): WorkflowPlugin {
     configurable: true,
     enumerable: true,
     get() {
+      if (!capabilitySnapshot) {
+        try {
+          capabilities = plugin.capabilities === undefined ? undefined : [...plugin.capabilities];
+        } catch (reason) {
+          capabilityError = reason;
+        }
+        capabilitySnapshot = true;
+      }
+
       if (capabilityError !== undefined) {
         throw capabilityError;
       }
