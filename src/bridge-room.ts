@@ -13,6 +13,16 @@ const CLOUDFLARE_ERROR_PAYLOAD_KEYS = new Set([
   'cfRay',
   'exceptions',
 ]);
+const GITHUB_MENTION_PAYLOAD_KEYS = new Set([
+  'action',
+  'event',
+  'repository',
+  'actor',
+  'resource',
+  'pullRequest',
+  'comment',
+  'review',
+]);
 const ALLOWED_RAW_PAYLOAD_KINDS = new Set(['external-reference', 'inline-redacted']);
 const ALLOWED_URL_PROTOCOLS = new Set(['https:', 'github:', 'cloudflare:']);
 const SAFE_DELIVERY_REFERENCE_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
@@ -512,6 +522,11 @@ function normalizePayload(value: unknown, context: { sourceType: string; name: s
       if (normalized !== undefined) {
         payload[key] = normalized;
       }
+    } else if (isGitHubMentionPayload(value) && GITHUB_MENTION_PAYLOAD_KEYS.has(key)) {
+      const normalized = normalizeGitHubMentionPayloadField(key, nestedValue);
+      if (normalized !== undefined) {
+        payload[key] = normalized;
+      }
     }
   }
 
@@ -680,12 +695,108 @@ function sanitizePayloadUrl(value: string): string | undefined {
     if (url.protocol !== 'https:') return undefined;
     url.username = '';
     url.password = '';
+    url.pathname = sanitizePayloadPathname(url.pathname);
     url.search = '';
     url.hash = '';
     return url.toString();
   } catch {
     return undefined;
   }
+}
+
+function isGitHubMentionPayload(value: Record<string, unknown>): boolean {
+  return value.provider === 'github'
+    && (value.event === 'issue_comment'
+      || value.event === 'pull_request_review_comment'
+      || value.event === 'pull_request_review');
+}
+
+function normalizeGitHubMentionPayloadField(key: string, value: unknown): unknown {
+  if (key === 'action' || key === 'event') {
+    return typeof value === 'string' && isSafePayloadMetadata(value) ? value : undefined;
+  }
+  if (key === 'repository') return normalizeGitHubRepository(value);
+  if (key === 'actor') return normalizeGitHubActor(value);
+  if (key === 'resource' || key === 'pullRequest') return normalizeGitHubResource(value);
+  if (key === 'comment' || key === 'review') return normalizeGitHubComment(value);
+  return undefined;
+}
+
+function normalizeGitHubRepository(value: unknown): unknown {
+  if (!isRecord(value)) return undefined;
+  return pickStringFields(value, ['fullName', 'nameWithOwner']);
+}
+
+function normalizeGitHubActor(value: unknown): unknown {
+  if (!isRecord(value)) return undefined;
+  return pickStringFields(value, ['login']);
+}
+
+function normalizeGitHubResource(value: unknown): unknown {
+  if (!isRecord(value)) return undefined;
+  const normalized: Record<string, unknown> = {
+    ...pickStringFields(value, ['type', 'id', 'title', 'url']),
+    ...pickNumberFields(value, ['number']),
+  };
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function normalizeGitHubComment(value: unknown): unknown {
+  if (!isRecord(value)) return undefined;
+  const normalized = pickStringFields(value, ['id', 'body', 'url', 'author']);
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function pickStringFields(record: Record<string, unknown>, keys: string[]): Record<string, string> {
+  const normalized: Record<string, string> = {};
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'string' && value.length > 0) {
+      normalized[key] = key === 'url' ? sanitizeGitHubMentionUrl(value) ?? '' : sanitizePayloadText(value);
+    }
+  }
+  return Object.fromEntries(Object.entries(normalized).filter(([, value]) => value.length > 0));
+}
+
+function sanitizeGitHubMentionUrl(value: string): string | undefined {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'https:' || url.hostname !== 'github.com') return undefined;
+    url.username = '';
+    url.password = '';
+    url.search = '';
+    return url.toString();
+  } catch {
+    return undefined;
+  }
+}
+
+function pickNumberFields(record: Record<string, unknown>, keys: string[]): Record<string, number> {
+  const normalized: Record<string, number> = {};
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      normalized[key] = value;
+    }
+  }
+  return normalized;
+}
+
+function sanitizePayloadPathname(pathname: string): string {
+  const segments = pathname.split('/');
+  return segments.map((segment, index) => {
+    if (segment.length === 0) return segment;
+    const previous = segments[index - 1]?.toLowerCase() ?? '';
+    if (/^(token|secret|password|code|reset|magic-link|invite|session|auth|verify|verification)$/iu.test(previous)) {
+      return '[redacted]';
+    }
+    if (/^(token|secret|password|code|reset)$/iu.test(segment)) {
+      return '[redacted]';
+    }
+    return /^[A-Za-z0-9_-]{16,}$/u.test(segment) && /[A-Za-z]/u.test(segment) && /\d/u.test(segment)
+      ? '[redacted]'
+      : segment;
+  }).join('/') || '/';
 }
 
 function sanitizePayloadText(value: string): string {
