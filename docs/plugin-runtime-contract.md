@@ -35,9 +35,15 @@ plugin 名、raw payload reference、provider メタデータを渡す。
 routing できる。
 
 Cloudflare tail source は Worker tail payload の `exceptions` が空でない場合に
-`cloudflare.error`、それ以外を `cloudflare.tail` に正規化する。`subject` は
-`worker` で、`scriptName` から短い安全な id を作る。delivery id と
-`cloudflare://deliveries/...` 参照も storage allowlist に通る短い token にするため、
+`cloudflare.error` に正規化する。`outcome` が `exception` の場合も、例外配列が
+欠落していても error として routing できるよう `cloudflare.error` にする。
+それ以外は `cloudflare.tail` に正規化する。`subject` は `worker` で、
+`scriptName` から短い安全な id を作る。delivery id と
+`cloudflare://deliveries/...` 参照も storage allowlist に通る短い token にし、
+`cf-ray` が無い tail では source plugin context の `deliveryId` を suffix として使う。
+これにより同じ delivery の retry でも event id が安定し、Bridge room の重複 no-op が効く。
+既定の `${source.name}:${delivery.id}:${name}` 形式の event id が 128 文字以内に収まるよう、
+長い worker 名や fallback delivery id は delivery id 生成時に短縮する。このため、
 元 tail payload の URL や例外本文は source payload にだけ置き、Bridge room の durable
 replay では allowlist 済み shallow metadata に縮約される。
 

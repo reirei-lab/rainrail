@@ -105,6 +105,39 @@ describe('Cloudflare tail source', () => {
     expect(event.name).toBe('cloudflare.tail');
   });
 
+  it('uses source plugin context delivery ids when cf-ray is missing', async () => {
+    const plugin = createCloudflareTailSourcePlugin('worker-tail');
+    const context = {
+      pluginName: 'worker-tail',
+      deliveryId: 'stable-delivery-1',
+      receivedAt: '2026-06-15T08:12:02.000Z',
+      metadata: {},
+      rawPayload: {
+        kind: 'external-reference' as const,
+        reference: 'cloudflare://deliveries/stable-delivery-1',
+      },
+    };
+
+    const first = await plugin.normalize(cloudflareTailFixture({ outcome: 'ok', cfRay: null }), context);
+    const second = await plugin.normalize(cloudflareTailFixture({ outcome: 'ok', cfRay: null }), context);
+
+    expect(first.delivery.id).toBe('tail-asme-site-20260615T081200000Z-stable-delivery-1');
+    expect(second.id).toBe(first.id);
+  });
+
+  it('classifies outcome exception as cloudflare.error even without exception details', async () => {
+    const event = await createCloudflareTailEvent({
+      tailEvent: cloudflareTailFixture({ outcome: 'exception', exceptions: [] }),
+      receivedAt: new Date('2026-06-15T08:12:01.000Z'),
+    });
+
+    expect(event.name).toBe('cloudflare.error');
+    expect(event.payload).toMatchObject({
+      action: 'exception',
+      conclusion: 'failure',
+    });
+  });
+
   it('publishes Cloudflare tail batches into the Rainrail events stream', async () => {
     const storage = fakeState();
     const room = new RainrailBridgeRoom(storage, { publishToken: TEST_PUBLISH_TOKEN, replayLimit: 10 });
@@ -136,6 +169,27 @@ describe('Cloudflare tail source', () => {
       conclusion: 'failure',
     });
   });
+
+  it('keeps default event ids publishable for long worker names without cf-ray', async () => {
+    const storage = fakeState();
+    const room = new RainrailBridgeRoom(storage, { publishToken: TEST_PUBLISH_TOKEN, replayLimit: 10 });
+    const result = await publishCloudflareTailEvents([
+      cloudflareTailFixture({
+        outcome: 'exception',
+        cfRay: null,
+        scriptName: 'very-long-worker-name-that-used-to-overflow-rainrail-event-identifier-limits',
+      }),
+    ], {
+      receivedAt: new Date('2026-06-15T08:12:01.000Z'),
+      fallbackDeliveryId: 'stable-delivery-without-cf-ray',
+      publish: (event) => room.fetch(publishRequest(event)),
+    });
+
+    expect(result[0]?.ok).toBe(true);
+    expect(result[0]?.id).toContain('stable-delivery-without-cf-ray');
+    expect(result[0]?.id.length).toBeLessThanOrEqual(128);
+    expect(storage.storedEvents()).toHaveLength(1);
+  });
 });
 
 function cloudflareTailFixture({
@@ -143,25 +197,27 @@ function cloudflareTailFixture({
   status = 500,
   cfRay = 'ray-1',
   exceptions = [],
+  scriptName = 'asme-site',
 }: {
   outcome: string;
   status?: number;
-  cfRay?: string;
+  cfRay?: string | null;
   exceptions?: Array<{ name?: string; message?: string; timestamp?: number | string }>;
+  scriptName?: string;
 }) {
+  const headers = cfRay === null ? {} : { 'cf-ray': cfRay };
+
   return {
     eventTimestamp: Date.parse('2026-06-15T08:12:00.000Z'),
     outcome,
-    scriptName: 'asme-site',
+    scriptName,
     scriptVersion: { id: 'script-version-1' },
     exceptions,
     event: {
       request: {
         method: 'GET',
         url: 'https://asme.dev/me',
-        headers: {
-          'cf-ray': cfRay,
-        },
+        headers,
       },
       response: {
         status,
