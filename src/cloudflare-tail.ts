@@ -110,8 +110,10 @@ export async function createCloudflareTailEvent({
     suffix: cfRay ?? fallbackDeliveryId ?? randomDeliverySuffix(),
     maxLength: maxDeliveryIdLength(sourceName, name),
   });
+  const id = buildCloudflareTailEventId(sourceName, deliveryId, name);
 
   return createEventEnvelope({
+    ...(id === undefined ? {} : { id }),
     source: {
       type: 'cloudflare',
       name: sourceName,
@@ -126,7 +128,7 @@ export async function createCloudflareTailEvent({
     occurredAt: occurredAt.toISOString(),
     subject: {
       type: 'worker',
-      id: safeIdentifierSegment(scriptName ?? 'unknown-worker', 'unknown-worker'),
+      id: safeIdentifierSegment(scriptName ?? 'unknown-worker', 'unknown-worker', 128),
     },
     payload: {
       action,
@@ -225,6 +227,27 @@ function maxDeliveryIdLength(sourceName: string, name: CloudflareTailRainrailEve
   return Math.min(95, Math.max(minimumDeliveryIdLength, 128 - sourceName.length - name.length - 2));
 }
 
+function buildCloudflareTailEventId(
+  sourceName: string,
+  deliveryId: string,
+  name: CloudflareTailRainrailEvent['name'],
+): string | undefined {
+  const defaultId = `${sourceName}:${deliveryId}:${name}`;
+  if (defaultId.length <= 128) return undefined;
+
+  const fixedLength = 'cf'.length + name.length + 3;
+  const remainingLength = 128 - fixedLength;
+  const sourceLength = Math.max(1, Math.floor(remainingLength / 3));
+  const deliveryLength = Math.max(1, remainingLength - sourceLength);
+
+  return [
+    'cf',
+    safeIdentifierSegment(sourceName, 'source', sourceLength),
+    safeIdentifierSegment(deliveryId, 'delivery', deliveryLength),
+    name,
+  ].join(':');
+}
+
 function compactTimestamp(date: Date): string {
   return date.toISOString().replace(/[-:.]/g, '');
 }
@@ -307,10 +330,26 @@ function safeIdentifierSegment(value: string, fallback: string, maxLength = 64):
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9_.:-]+/gu, '-')
-    .replace(/^-+|-+$/gu, '')
-    .slice(0, maxLength);
+    .replace(/^-+|-+$/gu, '');
+  const original = value.trim().replace(/^-+|-+$/gu, '');
+  const needsHash = normalized !== original || normalized.length > maxLength;
+  const hash = stableHash(value);
+  const hashSuffix = needsHash ? `-${hash}` : '';
+  const readableLength = Math.max(0, maxLength - hashSuffix.length);
+  const truncatedRaw = readableLength <= 0 ? '' : normalized.slice(0, readableLength);
+  const truncated = truncatedRaw
+    .replace(/^[^a-z0-9]+/u, '')
+    .replace(/[^a-z0-9]+$/u, '');
 
-  return normalized.length > 0 && /^[a-z0-9]/u.test(normalized) ? normalized : fallback;
+  if (truncated.length > 0 && /^[a-z0-9]/u.test(truncated)) {
+    return `${truncated}${hashSuffix}`;
+  }
+
+  if (needsHash) {
+    return hash.slice(0, maxLength);
+  }
+
+  return fallback;
 }
 
 function safeActionToken(value: string, fallback: string): string {
@@ -333,7 +372,8 @@ function safeDeliveryReferenceSegment(
     .toLowerCase()
     .replace(/[^a-z0-9_.-]+/gu, '-')
     .replace(/^-+|-+$/gu, '');
-  const needsHash = normalized !== value.trim().toLowerCase().replace(/^-+|-+$/gu, '') || normalized.length > maxLength;
+  const original = value.trim().replace(/^-+|-+$/gu, '');
+  const needsHash = normalized !== original || normalized.length > maxLength;
   const hash = stableHash(value);
   const hashSuffix = needsHash ? `-${hash}` : '';
   const readableLength = Math.max(0, maxLength - hashSuffix.length);

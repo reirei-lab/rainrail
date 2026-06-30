@@ -342,6 +342,27 @@ describe('Cloudflare tail source', () => {
     expect(storage.storedEvents()).toHaveLength(1);
   });
 
+  it('uses explicit short event ids when source names leave too little room for delivery ids', async () => {
+    const storage = fakeState();
+    const room = new RainrailBridgeRoom(storage, { publishToken: TEST_PUBLISH_TOKEN, replayLimit: 10 });
+    const sourceName = 'a'.repeat(100);
+    const result = await publishCloudflareTailEvents([
+      cloudflareTailFixture({
+        outcome: 'exception',
+        cfRay: null,
+      }),
+    ], {
+      sourceName,
+      receivedAt: new Date('2026-06-15T08:12:01.000Z'),
+      fallbackDeliveryId: 'stable-delivery-without-cf-ray',
+      publish: (event) => room.fetch(publishRequest(event)),
+    });
+
+    expect(result[0]?.ok).toBe(true);
+    expect(result[0]?.id.length).toBeLessThanOrEqual(128);
+    expect(storage.storedEvents()).toHaveLength(1);
+  });
+
   it('keeps distinct fallback delivery ids distinct after reference-safe encoding', async () => {
     const withColon = await createCloudflareTailEvent({
       tailEvent: cloudflareTailFixture({ outcome: 'ok', cfRay: null }),
@@ -357,6 +378,37 @@ describe('Cloudflare tail source', () => {
     expect(withColon.delivery.id).not.toBe(withDash.delivery.id);
     expect(withColon.id).not.toBe(withDash.id);
     expect(withColon.rawPayload.reference).not.toBe(withDash.rawPayload.reference);
+  });
+
+  it('keeps fallback delivery ids that differ only by case distinct', async () => {
+    const upperCase = await createCloudflareTailEvent({
+      tailEvent: cloudflareTailFixture({ outcome: 'ok', cfRay: null }),
+      receivedAt: new Date('2026-06-15T08:12:01.000Z'),
+      fallbackDeliveryId: 'DeployA',
+    });
+    const lowerCase = await createCloudflareTailEvent({
+      tailEvent: cloudflareTailFixture({ outcome: 'ok', cfRay: null }),
+      receivedAt: new Date('2026-06-15T08:12:01.000Z'),
+      fallbackDeliveryId: 'deploya',
+    });
+
+    expect(upperCase.delivery.id).not.toBe(lowerCase.delivery.id);
+    expect(upperCase.id).not.toBe(lowerCase.id);
+    expect(upperCase.rawPayload.reference).not.toBe(lowerCase.rawPayload.reference);
+  });
+
+  it('keeps long worker names distinct when their first 64 characters match', async () => {
+    const sharedPrefix = 'worker-'.repeat(11);
+    const first = await createCloudflareTailEvent({
+      tailEvent: cloudflareTailFixture({ outcome: 'ok', scriptName: `${sharedPrefix}alpha` }),
+      receivedAt: new Date('2026-06-15T08:12:01.000Z'),
+    });
+    const second = await createCloudflareTailEvent({
+      tailEvent: cloudflareTailFixture({ outcome: 'ok', scriptName: `${sharedPrefix}bravo` }),
+      receivedAt: new Date('2026-06-15T08:12:01.000Z'),
+    });
+
+    expect(first.subject.id).not.toBe(second.subject.id);
   });
 
   it('does not collapse long fallback suffixes to unknown when preserving their ends', async () => {
