@@ -136,8 +136,9 @@ export function createRuntimeDispatcher(options: RuntimeDispatcherOptions): Runt
 }
 
 function createWorkflowExecutionRecord(workflow: WorkflowPlugin): WorkflowExecutionRecord {
+  const nameMetadata = readWorkflowNameMetadata(workflow);
   const fallbackPolicy: WorkflowExecutionPolicy = {
-    name: readWorkflowName(workflow),
+    name: nameMetadata.name,
     capabilities: new Set(),
   };
   const record: WorkflowExecutionRecord = {
@@ -146,12 +147,19 @@ function createWorkflowExecutionRecord(workflow: WorkflowPlugin): WorkflowExecut
     policySnapshot: false,
     timeoutSnapshot: false,
   };
+  if (nameMetadata.error !== undefined) {
+    record.policyError = nameMetadata.error;
+  }
   const capabilitiesDescriptor = findPropertyDescriptor(workflow, 'capabilities');
-  if (capabilitiesDescriptor !== undefined && 'value' in capabilitiesDescriptor) {
+  if (capabilitiesDescriptor !== undefined) {
     try {
+      const capabilities =
+        'value' in capabilitiesDescriptor
+          ? (capabilitiesDescriptor.value as RuntimeCapabilityName[] | undefined)
+          : workflow.capabilities;
       record.policy = {
-        name: readWorkflowName(workflow),
-        capabilities: new Set((capabilitiesDescriptor.value as RuntimeCapabilityName[] | undefined) ?? []),
+        name: nameMetadata.name,
+        capabilities: new Set(capabilities ?? []),
       };
     } catch (policyError) {
       record.policyError = policyError;
@@ -218,10 +226,14 @@ function snapshotWorkflowPolicy(workflow: WorkflowPlugin): WorkflowExecutionPoli
 }
 
 function readWorkflowName(workflow: WorkflowPlugin): string {
+  return readWorkflowNameMetadata(workflow).name;
+}
+
+function readWorkflowNameMetadata(workflow: WorkflowPlugin): { name: string; error?: unknown } {
   try {
-    return workflow.name;
-  } catch {
-    return 'unknown-workflow';
+    return { name: workflow.name };
+  } catch (error) {
+    return { name: 'unknown-workflow', error };
   }
 }
 
@@ -359,7 +371,7 @@ function createGatedRuntimeProvider(
       return getRuntime().kind;
     },
     startRun: (request, context) =>
-      callRuntimeStartRun(options, policy, event, lifecycle, getRuntime(), request, context?.signal),
+      callRuntimeStartRun(options, policy, event, lifecycle, getRuntime, request, context?.signal),
   };
 }
 
@@ -368,7 +380,7 @@ async function callRuntimeStartRun(
   policy: WorkflowExecutionPolicy,
   event: RainrailEventEnvelope,
   lifecycle: WorkflowLifecycle,
-  runtime: RuntimeProvider,
+  getRuntime: () => RuntimeProvider,
   request: Parameters<RuntimeProvider['startRun']>[0],
   callerSignal: AbortSignal | undefined,
 ): Promise<Awaited<ReturnType<RuntimeProvider['startRun']>>> {
@@ -385,6 +397,7 @@ async function callRuntimeStartRun(
   }
 
   try {
+    const runtime = getRuntime();
     const value = await runtime.startRun(request, { signal: combineAbortSignals(lifecycle.signal, callerSignal) });
     await recordAudit(options, policy, event, 'startRuntime', 'fulfilled');
     return value;
@@ -417,7 +430,7 @@ function createGatedRuntimeCapabilities(
   };
 
   const dispatchAgent: DispatchAgentCapability = (request, context) =>
-    callDispatchAgent(options, policy, event, lifecycle, getRawDispatchAgent(), capabilities, request, context?.signal);
+    callDispatchAgent(options, policy, event, lifecycle, getRawDispatchAgent, capabilities, request, context?.signal);
 
   return createDispatchAgentCapabilityProxy(capabilities, dispatchAgent, getRawDispatchAgent);
 }
@@ -480,7 +493,7 @@ function createDispatchAgentCapabilityProxy(
 
     if (property === 'constructor') {
       const safeReceiver = createCapabilityView(source);
-      const constructorValue = Reflect.get(source, property, safeReceiver);
+      const constructorValue = readCapabilityValue(source, property, safeReceiver);
       return typeof constructorValue === 'function'
         ? createCapabilityConstructorView(
             constructorValue,
@@ -500,7 +513,7 @@ function createDispatchAgentCapabilityProxy(
     }
 
     const safeReceiver = createCapabilityView(source);
-    const value = Reflect.get(source, property, safeReceiver);
+    const value = readCapabilityValue(source, property, safeReceiver);
     if (typeof value === 'function') {
       return bindCapabilityFunction(value, safeReceiver, property);
     }
@@ -604,7 +617,7 @@ function createCapabilityConstructorView(
       return constructorView;
     }
 
-    const value = Reflect.get(prototype, property, capabilities);
+    const value = readCapabilityValue(prototype, property, prototypeView, capabilities);
     const rawDispatchAgent = getRawDispatchAgent();
     if (value === rawDispatchAgent) {
       return dispatchAgent;
@@ -829,8 +842,30 @@ function normalizeCapabilityHelperResult(
   return value;
 }
 
+function readCapabilityValue(
+  source: object,
+  property: string | symbol,
+  safeReceiver: object,
+  privateReceiver: object = source,
+): unknown {
+  try {
+    return Reflect.get(source, property, safeReceiver);
+  } catch (reason) {
+    if (!isPrivateReceiverError(reason) || capabilityAccessorMayResolveDispatchAgent(source, property)) {
+      throw reason;
+    }
+
+    return Reflect.get(source, property, privateReceiver);
+  }
+}
+
 function isPrivateReceiverError(reason: unknown): boolean {
   return reason instanceof TypeError && reason.message.includes('private');
+}
+
+function capabilityAccessorMayResolveDispatchAgent(source: object, property: string | symbol): boolean {
+  const descriptor = findPropertyDescriptor(source, property);
+  return typeof descriptor?.get === 'function' && helperMayResolveDispatchAgent(descriptor.get);
 }
 
 function helperMayResolveDispatchAgent(helper: Function): boolean {
@@ -877,7 +912,7 @@ async function callDispatchAgent(
   policy: WorkflowExecutionPolicy,
   event: RainrailEventEnvelope,
   lifecycle: WorkflowLifecycle,
-  dispatchAgent: DispatchAgentCapability | undefined,
+  getDispatchAgent: () => DispatchAgentCapability | undefined,
   capabilities: NonNullable<PluginRuntimeContext['capabilities']>,
   request: Parameters<NonNullable<NonNullable<PluginRuntimeContext['capabilities']>['dispatchAgent']>>[0],
   callerSignal: AbortSignal | undefined,
@@ -894,6 +929,7 @@ async function callDispatchAgent(
     throw reason;
   }
 
+  const dispatchAgent = getDispatchAgent();
   if (dispatchAgent === undefined) {
     const reason = new Error('Runtime capability dispatchAgent is not available');
     await recordAudit(options, policy, event, 'startRuntime', 'rejected', reason);
@@ -1105,15 +1141,15 @@ function defineOptionalGuardedTaskMethod<TKey extends 'addToProject' | 'setStatu
     configurable: true,
     enumerable: true,
     get() {
-      const implementation = tasks[key];
-      if (implementation === undefined) {
-        return undefined;
-      }
-
       return async (input: never, context?: { signal?: AbortSignal }) => {
         const denied = getDeniedProviderCallReason(options, policy, event, lifecycle, auditAction(key));
         if (denied !== undefined) {
           throw denied;
+        }
+
+        const implementation = tasks[key];
+        if (implementation === undefined) {
+          throw new Error(`Task provider method ${key} is not available`);
         }
 
         return implementation.call(tasks, input, { signal: combineAbortSignals(lifecycle.signal, context?.signal) });

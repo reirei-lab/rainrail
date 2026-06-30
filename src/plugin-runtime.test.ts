@@ -9,6 +9,7 @@ import {
   type PluginRuntimeContext,
   type RainrailEventEnvelope,
   type RuntimeCapabilities,
+  type RuntimeCapabilityName,
   type RuntimeDispatcherContext,
   type TaskProvider,
   type WorkflowPlugin,
@@ -607,6 +608,87 @@ describe('plugin runtime contract', () => {
     expect(addToProjectReads).toBe(0);
   });
 
+  it('checks lifecycle before reading optional task provider method getters', async () => {
+    vi.useFakeTimers();
+    try {
+      const event = createEventEnvelope({
+        source: { type: 'github', name: 'github-webhook', repository: 'reirei-lab/rainrail' },
+        name: 'github.issue',
+        delivery: {
+          id: 'delivery-late-provider-method-getter',
+          receivedAt: '2026-06-29T13:00:44.000Z',
+        },
+        occurredAt: '2026-06-29T13:00:44.000Z',
+        subject: { type: 'issue', id: '14' },
+        payload: { action: 'opened' },
+        rawPayload: {
+          kind: 'external-reference',
+          reference: 'github://deliveries/delivery-late-provider-method-getter',
+        },
+      });
+      let addToProjectReads = 0;
+      const tasks = {
+        name: 'mock-github',
+        kind: 'task-provider' as const,
+        getIssue: async () => ({
+          id: 'issue:14',
+          provider: 'github' as const,
+          repository: 'reirei-lab/rainrail',
+          number: 14,
+          title: 'Late provider methods',
+        }),
+        createComment: async () => ({ id: 'comment:unused' }),
+        get addToProject(): never {
+          addToProjectReads += 1;
+          throw new Error('project integration is not configured');
+        },
+      } satisfies TaskProvider;
+      const lateErrors: unknown[] = [];
+      const dispatcher = createRuntimeDispatcher({
+        workflows: [
+          defineWorkflowPlugin({
+            name: 'late-provider-method-handler',
+            accepts: (candidate) => candidate.name === 'github.issue',
+            handle: (_handledEvent, context) => {
+              setTimeout(() => {
+                void (context.providers.tasks.addToProject?.({
+                  target: {
+                    provider: 'github',
+                    id: 'issue:14',
+                  },
+                  project: 'backlog',
+                }) as Promise<unknown> | undefined)?.catch((reason: unknown) => {
+                  lateErrors.push(reason);
+                });
+              }, 1);
+              return { queued: true };
+            },
+          }),
+        ],
+        runtime: mockRuntimeContext({
+          runId: 'dispatch-14',
+          now: () => new Date('2026-06-29T13:01:00.000Z'),
+          providers: { tasks },
+        }),
+      });
+
+      await expect(dispatcher.dispatch(event)).resolves.toEqual([
+        {
+          pluginName: 'late-provider-method-handler',
+          eventId: 'github-webhook:delivery-late-provider-method-getter:github.issue',
+          status: 'fulfilled',
+          value: { queued: true },
+        },
+      ]);
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(addToProjectReads).toBe(0);
+      expect(lateErrors).toEqual([expect.any(Error)]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('does not read unused runtime provider getters when creating workflow contexts', async () => {
     const event = createEventEnvelope({
       source: { type: 'github', name: 'github-webhook' },
@@ -651,6 +733,57 @@ describe('plugin runtime contract', () => {
         value: { ok: true },
       },
     ]);
+    expect(runtimeReads).toBe(0);
+  });
+
+  it('checks runtime:start capability before reading runtime provider getters', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: {
+        id: 'delivery-denied-runtime-provider-getter',
+        receivedAt: '2026-06-29T14:00:00.000Z',
+      },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'github://deliveries/delivery-denied-runtime-provider-getter',
+      },
+    });
+    let runtimeReads = 0;
+    const runtime = {
+      runId: 'run-13',
+      now: () => new Date('2026-06-29T14:01:00.000Z'),
+      get runtime(): never {
+        runtimeReads += 1;
+        throw new Error('runtime provider should not be read before denial');
+      },
+    } satisfies RuntimeDispatcherContext;
+    const dispatcher = createRuntimeDispatcher({
+      workflows: [
+        defineWorkflowPlugin({
+          name: 'denied-runtime-provider-getter-handler',
+          accepts: (candidate) => candidate.name === 'github.issue',
+          handle: (handledEvent, context) =>
+            context.runtime.startRun({
+              workflow: 'denied-runtime-provider-getter-handler',
+              event: handledEvent,
+              requestedBy: 'denied-runtime-provider-getter-handler',
+            }),
+        }),
+      ],
+      runtime,
+    });
+
+    const [result] = await dispatcher.dispatch(event);
+
+    expect(result).toMatchObject({
+      pluginName: 'denied-runtime-provider-getter-handler',
+      eventId: 'github-webhook:delivery-denied-runtime-provider-getter:github.issue',
+      status: 'rejected',
+    });
     expect(runtimeReads).toBe(0);
   });
 
@@ -3098,6 +3231,54 @@ describe('plugin runtime contract', () => {
     expect(mergePullRequest).not.toHaveBeenCalled();
   });
 
+  it('uses accessor capability snapshots captured before accepts can mutate workflow metadata', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.pull_request',
+      delivery: {
+        id: 'delivery-accepts-mutated-accessor-capability',
+        receivedAt: '2026-06-29T14:00:00.000Z',
+      },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'pull_request', id: '44' },
+      payload: { action: 'closed' },
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'github://deliveries/delivery-accepts-mutated-accessor-capability',
+      },
+    });
+    const mergePullRequest = vi.fn(async () => ({ merged: true }));
+    const declaredCapabilities: RuntimeCapabilityName[] = [];
+    const workflow = {
+      name: 'accepts-mutating-accessor-capability-handler',
+      get capabilities() {
+        return declaredCapabilities;
+      },
+      accepts: () => {
+        declaredCapabilities.push('merge');
+        return true;
+      },
+      handle: async (_event, context) => context.actions.mergePullRequest({ pullRequestId: '44' }),
+    } satisfies WorkflowPlugin;
+    const dispatcher = createRuntimeDispatcher({
+      workflows: [workflow],
+      runtime: {
+        runId: 'run-13',
+        now: () => new Date('2026-06-29T14:01:00.000Z'),
+        actions: { mergePullRequest },
+      },
+    });
+
+    const [result] = await dispatcher.dispatch(event);
+
+    expect(result).toMatchObject({
+      pluginName: 'accepts-mutating-accessor-capability-handler',
+      eventId: 'github-webhook:delivery-accepts-mutated-accessor-capability:github.pull_request',
+      status: 'rejected',
+    });
+    expect(mergePullRequest).not.toHaveBeenCalled();
+  });
+
   it('preserves runtime context prototype fields in the plugin context', async () => {
     const event = createEventEnvelope({
       source: { type: 'github', name: 'github-webhook' },
@@ -3643,7 +3824,7 @@ describe('plugin runtime contract', () => {
     expect(mergePullRequest).not.toHaveBeenCalled();
   });
 
-  it('does not read loader capability metadata before accepts matches', async () => {
+  it('snapshots loader accessor capability metadata before accepts can mutate it', async () => {
     const event = createEventEnvelope({
       source: { type: 'github', name: 'github-webhook' },
       name: 'github.issue',
@@ -3669,16 +3850,16 @@ describe('plugin runtime contract', () => {
     const skippedWorkflow = {
       name: 'loader-skipped-capability-handler',
       accepts: () => false,
-      get capabilities(): never {
+      get capabilities() {
         capabilityReads += 1;
-        throw new Error('capabilities should not be read');
+        return [];
       },
       handle: async () => ({ unreachable: true }),
     } satisfies WorkflowPlugin;
 
     expect(() => loader.register(skippedWorkflow)).not.toThrow();
     await expect(loader.dispatch(event)).resolves.toEqual([]);
-    expect(capabilityReads).toBe(0);
+    expect(capabilityReads).toBe(2);
   });
 
   it('does not expose raw dispatchAgent through __lookupGetter__', async () => {
@@ -4458,6 +4639,107 @@ describe('plugin runtime contract', () => {
     expect(dispatchAgent).not.toHaveBeenCalled();
   });
 
+  it('evaluates private field capability accessors with the raw receiver and normalizes the result', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: {
+        id: 'delivery-private-accessor-provider',
+        receivedAt: '2026-06-29T14:00:00.000Z',
+      },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'github://deliveries/delivery-private-accessor-provider',
+      },
+    });
+    class RuntimeCapabilityBag {
+      #provider = 'codex';
+
+      get provider() {
+        return this.#provider;
+      }
+    }
+    const loader = createPluginLoader({
+      runtime: mockRuntimeContext({
+        runId: 'run-13',
+        now: () => new Date('2026-06-29T14:01:00.000Z'),
+        capabilities: new RuntimeCapabilityBag() as unknown as RuntimeCapabilities,
+      }),
+    });
+
+    loader.on(
+      'github.issue',
+      (_handledEvent, context) => context.capabilities?.provider,
+      { name: 'private-accessor-provider-handler' },
+    );
+
+    await expect(loader.dispatch(event)).resolves.toEqual([
+      {
+        pluginName: 'private-accessor-provider-handler',
+        eventId: 'github-webhook:delivery-private-accessor-provider:github.issue',
+        status: 'fulfilled',
+        value: 'codex',
+      },
+    ]);
+  });
+
+  it('gates dispatchAgent reached from prototype accessors', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: {
+        id: 'delivery-prototype-accessor-dispatch-agent',
+        receivedAt: '2026-06-29T14:00:00.000Z',
+      },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'github://deliveries/delivery-prototype-accessor-dispatch-agent',
+      },
+    });
+    const dispatchAgent = vi.fn(async () => ({ sessionKey: 'agent:main:prototype-accessor' }));
+    class RuntimeCapabilityBag {
+      provider = 'codex';
+      dispatchAgent: NonNullable<RuntimeCapabilities['dispatchAgent']> = dispatchAgent;
+
+      get starter() {
+        return this.dispatchAgent({
+          event,
+          workflow: 'prototype-accessor-dispatch-agent-handler',
+          runId: 'run-13',
+        });
+      }
+    }
+    const loader = createPluginLoader({
+      runtime: mockRuntimeContext({
+        runId: 'run-13',
+        now: () => new Date('2026-06-29T14:01:00.000Z'),
+        capabilities: new RuntimeCapabilityBag() as unknown as RuntimeCapabilities,
+      }),
+    });
+
+    loader.on(
+      'github.issue',
+      (_handledEvent, context) =>
+        (context.capabilities?.constructor as { prototype: { starter: Promise<unknown> } }).prototype.starter,
+      { name: 'prototype-accessor-dispatch-agent-handler' },
+    );
+
+    const [result] = await loader.dispatch(event);
+
+    expect(result).toMatchObject({
+      pluginName: 'prototype-accessor-dispatch-agent-handler',
+      eventId: 'github-webhook:delivery-prototype-accessor-dispatch-agent:github.issue',
+      status: 'rejected',
+    });
+    expect(dispatchAgent).not.toHaveBeenCalled();
+  });
+
   it('does not apply __defineGetter__ to raw capabilities', async () => {
     const event = createEventEnvelope({
       source: { type: 'github', name: 'github-webhook' },
@@ -4764,7 +5046,7 @@ describe('plugin runtime contract', () => {
     ]);
   });
 
-  it('does not read workflow metadata getters before accepts matches', async () => {
+  it('snapshots accessor capability metadata before accepts matches', async () => {
     const event = createEventEnvelope({
       source: { type: 'github', name: 'github-webhook' },
       name: 'github.issue',
@@ -4785,9 +5067,9 @@ describe('plugin runtime contract', () => {
     const skippedWorkflow = {
       name: 'skipped-metadata-getter-handler',
       accepts: () => false,
-      get capabilities(): never {
+      get capabilities() {
         capabilityReads += 1;
-        throw new Error('capabilities should not be read');
+        return [];
       },
       get timeoutMs(): never {
         timeoutReads += 1;
@@ -4804,10 +5086,10 @@ describe('plugin runtime contract', () => {
       },
     });
 
-    expect(capabilityReads).toBe(0);
+    expect(capabilityReads).toBe(1);
     expect(timeoutReads).toBe(0);
     await expect(dispatcher.dispatch(event)).resolves.toEqual([]);
-    expect(capabilityReads).toBe(0);
+    expect(capabilityReads).toBe(1);
     expect(timeoutReads).toBe(0);
   });
 
@@ -4856,6 +5138,58 @@ describe('plugin runtime contract', () => {
         value: 'codex',
       },
     ]);
+    expect(dispatchAgentReads).toBe(0);
+  });
+
+  it('checks runtime:start capability before reading dispatchAgent getters', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: {
+        id: 'delivery-denied-dispatch-agent-getter',
+        receivedAt: '2026-06-29T14:00:00.000Z',
+      },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'github://deliveries/delivery-denied-dispatch-agent-getter',
+      },
+    });
+    let dispatchAgentReads = 0;
+    const loader = createPluginLoader({
+      runtime: mockRuntimeContext({
+        runId: 'run-13',
+        now: () => new Date('2026-06-29T14:01:00.000Z'),
+        capabilities: {
+          provider: 'codex',
+          get dispatchAgent(): never {
+            dispatchAgentReads += 1;
+            throw new Error('dispatchAgent should not be read before denial');
+          },
+        },
+      }),
+    });
+
+    loader.on(
+      'github.issue',
+      async (handledEvent, context) =>
+        context.capabilities?.dispatchAgent?.({
+          event: handledEvent,
+          workflow: 'denied-dispatch-agent-getter-handler',
+          runId: context.runId,
+        }),
+      { name: 'denied-dispatch-agent-getter-handler' },
+    );
+
+    const [result] = await loader.dispatch(event);
+
+    expect(result).toMatchObject({
+      pluginName: 'denied-dispatch-agent-getter-handler',
+      eventId: 'github-webhook:delivery-denied-dispatch-agent-getter:github.issue',
+      status: 'rejected',
+    });
     expect(dispatchAgentReads).toBe(0);
   });
 
