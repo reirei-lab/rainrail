@@ -97,7 +97,7 @@ function requestFromComment(input: {
   agentLogin: string;
 }): MentionDraftRequest | undefined {
   const comment = commentRecord(input.payload);
-  const resource = recordValue(input.payload.resource);
+  const resource = sourceResource(input.payload);
   const body = stringValue(comment.body);
   const commentUrl = stringValue(comment.url);
   if (body === undefined || commentUrl === undefined || !mentionsLogin(body, input.agentLogin)) {
@@ -127,7 +127,20 @@ function requestFromComment(input: {
 function commentRecord(payload: Record<string, unknown>): Record<string, unknown> {
   const comment = recordValue(payload.comment);
   if (Object.keys(comment).length > 0) return comment;
-  return recordValue(payload.review);
+  const review = recordValue(payload.review);
+  if (Object.keys(review).length > 0) return review;
+  const resource = recordValue(payload.resource);
+  if (resource.type === 'review') return resource;
+  return {};
+}
+
+function sourceResource(payload: Record<string, unknown>): Record<string, unknown> {
+  const resource = recordValue(payload.resource);
+  if (resource.type === 'review') {
+    const pullRequest = recordValue(payload.pullRequest);
+    if (Object.keys(pullRequest).length > 0) return pullRequest;
+  }
+  return resource;
 }
 
 function draftBody(mention: MentionDraftRequest): string {

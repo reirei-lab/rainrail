@@ -100,6 +100,17 @@ describe('mention draft workflow', () => {
       number: 18,
     });
   });
+
+  it('extracts submitted pull request reviews that mention the agent', () => {
+    const mention = mentionDraftRequestFromEvent(githubReviewEvent(), 'reirei-agent');
+
+    expect(mention).toMatchObject({
+      commentUrl: 'https://github.com/reirei-lab/rainrail/pull/18#pullrequestreview-2',
+      title: 'Respond to reirei-lab/rainrail#18: Mention handling',
+      repository: 'reirei-lab/rainrail',
+      number: 18,
+    });
+  });
 });
 
 function githubMentionEvent(overrides: {
@@ -187,6 +198,49 @@ function githubReviewCommentEvent() {
     rawPayload: {
       kind: 'inline-redacted',
       reference: 'github://deliveries/delivery-review-comment-1',
+    },
+  });
+}
+
+function githubReviewEvent() {
+  return createEventEnvelope({
+    source: { type: 'github', name: 'github-webhook', repository: 'reirei-lab/rainrail' },
+    name: 'github.review',
+    delivery: {
+      id: 'delivery-review-1',
+      receivedAt: '2026-06-06T06:20:00.000Z',
+    },
+    occurredAt: '2026-06-06T06:20:00.000Z',
+    subject: {
+      type: 'review',
+      id: '2',
+      url: 'https://github.com/reirei-lab/rainrail/pull/18#pullrequestreview-2',
+    },
+    payload: {
+      provider: 'github',
+      event: 'pull_request_review',
+      action: 'submitted',
+      actor: { login: 'hiragram' },
+      resource: {
+        type: 'review',
+        id: '2',
+        body: '@reirei-agent please check this review',
+        url: 'https://github.com/reirei-lab/rainrail/pull/18#pullrequestreview-2',
+      },
+      pullRequest: {
+        type: 'pull_request',
+        id: '18',
+        number: 18,
+        title: 'Mention handling',
+        url: 'https://github.com/reirei-lab/rainrail/pull/18',
+      },
+      repository: {
+        fullName: 'reirei-lab/rainrail',
+      },
+    },
+    rawPayload: {
+      kind: 'inline-redacted',
+      reference: 'github://deliveries/delivery-review-1',
     },
   });
 }

@@ -50,6 +50,8 @@ describe('cloudflare issue reporter workflow', () => {
     expect(createdIssues[0]?.body).toContain('resolveCurrentHumanAccount @ worker.js');
     expect(createdIssues[0]?.body).toContain('<!-- error-fingerprint: sha256:');
     expect(createdIssues[0]?.body).toContain('"authorization": "[redacted]"');
+    expect(createdIssues[0]?.body).not.toContain('secret-token');
+    expect(createdIssues[0]?.body).not.toContain('reset=secret-reset-code');
     expect(result.fingerprint === undefined ? undefined : store.get(result.fingerprint)).toMatchObject({
       issueNumber: 123,
       issueUrl: 'https://github.com/reirei-lab/rainrail/issues/123',
@@ -89,6 +91,139 @@ describe('cloudflare issue reporter workflow', () => {
     });
     expect(first.fingerprint).toBe(second.fingerprint);
     expect(createIssue).toHaveBeenCalledOnce();
+  });
+
+  it('creates a fresh issue when a stored fingerprint no longer has an open GitHub issue', async () => {
+    const store = createInMemoryCloudflareErrorIssueStore();
+    const firstWorkflow = createCloudflareIssueReporterWorkflow({
+      repository: 'reirei-lab/rainrail',
+      store,
+      issues: {
+        findOpenIssueByFingerprint: async () => undefined,
+        createIssue: async () => ({
+          number: 123,
+          url: 'https://github.com/reirei-lab/rainrail/issues/123',
+        }),
+      },
+    });
+    const first = await firstWorkflow.handle(cloudflareErrorEvent(), runtimeContext()) as CloudflareIssueReporterResult;
+    if (first.fingerprint !== undefined && first.issue !== undefined) {
+      store.record({
+        fingerprint: first.fingerprint,
+        eventId: 'old-event',
+        deliveryId: 'old-delivery',
+        repository: 'reirei-lab/rainrail',
+        issueNumber: first.issue.number,
+        issueUrl: first.issue.url,
+        title: first.issue.title,
+        createdAt: '2026-01-01T00:00:00.000Z',
+      });
+    }
+    const createIssue = vi.fn(async () => ({
+      number: 124,
+      url: 'https://github.com/reirei-lab/rainrail/issues/124',
+    }));
+    const secondWorkflow = createCloudflareIssueReporterWorkflow({
+      repository: 'reirei-lab/rainrail',
+      store,
+      issues: {
+        findOpenIssueByFingerprint: async () => undefined,
+        createIssue,
+      },
+    });
+
+    const second = await secondWorkflow.handle(cloudflareErrorEvent({
+      id: 'event-after-close',
+      deliveryId: 'tail-asme-site-after-close',
+    }), runtimeContext()) as CloudflareIssueReporterResult;
+
+    expect(first.fingerprint).toBe(second.fingerprint);
+    expect(second).toMatchObject({
+      handled: true,
+      reason: 'created_cloudflare_error_issue',
+      issue: {
+        number: 124,
+        created: true,
+      },
+    });
+    expect(createIssue).toHaveBeenCalledOnce();
+    expect(first.fingerprint === undefined ? undefined : store.get(first.fingerprint)).toMatchObject({
+      issueNumber: 124,
+    });
+  });
+
+  it('keeps a stored fingerprint quiet when the GitHub issue is still open', async () => {
+    const store = createInMemoryCloudflareErrorIssueStore();
+    const firstWorkflow = createCloudflareIssueReporterWorkflow({
+      repository: 'reirei-lab/rainrail',
+      store,
+      issues: {
+        findOpenIssueByFingerprint: async () => undefined,
+        createIssue: async () => ({
+          number: 123,
+          url: 'https://github.com/reirei-lab/rainrail/issues/123',
+        }),
+      },
+    });
+    await firstWorkflow.handle(cloudflareErrorEvent(), runtimeContext());
+    const createIssue = vi.fn(async () => {
+      throw new Error('not used');
+    });
+    const workflow = createCloudflareIssueReporterWorkflow({
+      repository: 'reirei-lab/rainrail',
+      store,
+      issues: {
+        findOpenIssueByFingerprint: async () => ({
+          number: 123,
+          url: 'https://github.com/reirei-lab/rainrail/issues/123',
+        }),
+        createIssue,
+      },
+    });
+
+    const result = await workflow.handle(cloudflareErrorEvent({
+      id: 'event-open-duplicate',
+      deliveryId: 'tail-asme-site-open-duplicate',
+    }), runtimeContext()) as CloudflareIssueReporterResult;
+
+    expect(result).toMatchObject({
+      handled: false,
+      reason: 'cloudflare_error_issue_exists_in_store',
+      issue: {
+        number: 123,
+        created: false,
+      },
+    });
+    expect(createIssue).not.toHaveBeenCalled();
+  });
+
+  it('serializes concurrent creation for the same fingerprint', async () => {
+    const store = createInMemoryCloudflareErrorIssueStore();
+    let createCount = 0;
+    const workflow = createCloudflareIssueReporterWorkflow({
+      repository: 'reirei-lab/rainrail',
+      store,
+      issues: {
+        findOpenIssueByFingerprint: async () => undefined,
+        createIssue: async () => {
+          createCount += 1;
+          await delay(5);
+          return {
+            number: 123,
+            url: 'https://github.com/reirei-lab/rainrail/issues/123',
+          };
+        },
+      },
+    });
+
+    const [first, second] = await Promise.all([
+      workflow.handle(cloudflareErrorEvent({ id: 'event-concurrent-1', deliveryId: 'tail-concurrent-1' }), runtimeContext()),
+      workflow.handle(cloudflareErrorEvent({ id: 'event-concurrent-2', deliveryId: 'tail-concurrent-2' }), runtimeContext()),
+    ]) as [CloudflareIssueReporterResult, CloudflareIssueReporterResult];
+
+    expect(createCount).toBe(1);
+    expect([first.reason, second.reason]).toContain('created_cloudflare_error_issue');
+    expect([first.reason, second.reason]).toContain('cloudflare_error_issue_exists_in_store');
   });
 
   it('uses an existing GitHub issue marker before creating a duplicate', async () => {
@@ -178,6 +313,17 @@ describe('cloudflare issue reporter workflow', () => {
     }));
     expect([...values.keys()][0]).toMatch(/^rainrail:cloudflare-error-issue:sha256:/u);
   });
+
+  it('uses the first exception with a usable stack', () => {
+    const candidate = cloudflareErrorCandidateFromEvent(cloudflareErrorEvent({
+      leadingStacklessException: true,
+    }));
+
+    expect(candidate).toMatchObject({
+      exceptionName: 'TypeError',
+      stackSignature: ['resolveCurrentHumanAccount @ worker.js', 'handleCurrentHuman @ worker.js', 'Object.fetch @ worker.js'],
+    });
+  });
 });
 
 describe('cloudflareErrorFingerprint', () => {
@@ -205,6 +351,7 @@ function cloudflareErrorEvent(overrides: {
   url?: string;
   line?: number;
   column?: number;
+  leadingStacklessException?: boolean;
 } = {}) {
   const line = overrides.line ?? 1510;
   const column = overrides.column ?? 24;
@@ -228,9 +375,13 @@ function cloudflareErrorEvent(overrides: {
       method: 'GET',
       url: overrides.url ?? 'https://asme.dev/me?debug=1',
       exceptions: [
+        ...(overrides.leadingStacklessException ? [{
+          name: 'Error',
+          message: 'wrapper without stack',
+        }] : []),
         {
           name: 'TypeError',
-          message: "Cannot read properties of null (reading 'toAuth')",
+          message: "Cannot read properties of null (reading 'toAuth') reset=secret-reset-code",
           stack: [
             "TypeError: Cannot read properties of null (reading 'toAuth')",
             `    at resolveCurrentHumanAccount (worker.js:${line}:${column})`,
@@ -242,7 +393,7 @@ function cloudflareErrorEvent(overrides: {
       event: {
         request: {
           method: 'GET',
-          url: overrides.url ?? 'https://asme.dev/me?debug=1',
+          url: overrides.url ?? 'https://asme.dev/me?token=secret-token&debug=1',
           headers: {
             authorization: 'Bearer secret',
           },
@@ -257,6 +408,10 @@ function cloudflareErrorEvent(overrides: {
       reference: `cloudflare://deliveries/${deliveryId}`,
     },
   });
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function runtimeContext() {

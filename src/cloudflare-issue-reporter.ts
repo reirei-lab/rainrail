@@ -78,6 +78,8 @@ export interface CloudflareErrorCandidate {
 const fingerprintMarkerPrefix = '<!-- error-fingerprint: ';
 const maxRawJsonLength = 50_000;
 const storageKeyPrefix = 'rainrail:cloudflare-error-issue:';
+const storeHitGraceMs = 5 * 60 * 1000;
+const fingerprintLocks = new Map<string, Promise<void>>();
 
 export function createCloudflareIssueReporterWorkflow(
   options: CloudflareIssueReporterWorkflowOptions,
@@ -101,8 +103,19 @@ export async function handleCloudflareIssueReporterEvent(
   }
 
   const fingerprint = cloudflareErrorFingerprint(candidate);
+
+  return withFingerprintLock(fingerprint, async () => handleCloudflareIssueReporterCandidate(options, event, candidate, fingerprint));
+}
+
+async function handleCloudflareIssueReporterCandidate(
+  options: CloudflareIssueReporterWorkflowOptions,
+  event: RainrailEventEnvelope,
+  candidate: CloudflareErrorCandidate,
+  fingerprint: string,
+): Promise<CloudflareIssueReporterResult> {
   const stored = await options.store.get(fingerprint);
-  if (stored !== undefined) {
+  const title = cloudflareIssueTitle(candidate);
+  if (stored !== undefined && isRecentStoreHit(stored)) {
     return {
       handled: false,
       reason: 'cloudflare_error_issue_exists_in_store',
@@ -117,11 +130,25 @@ export async function handleCloudflareIssueReporterEvent(
     };
   }
 
-  const title = cloudflareIssueTitle(candidate);
   const existing = await options.issues.findOpenIssueByFingerprint({
     repository: options.repository,
     fingerprint,
   });
+  if (stored !== undefined && existing !== undefined) {
+    return {
+      handled: false,
+      reason: 'cloudflare_error_issue_exists_in_store',
+      fingerprint,
+      issue: {
+        number: existing.number,
+        url: existing.url,
+        title: stored.title,
+        repository: stored.repository,
+        created: false,
+      },
+    };
+  }
+
   if (existing !== undefined) {
     await options.store.record({
       fingerprint,
@@ -259,7 +286,10 @@ export function cloudflareErrorCandidateFromEvent(event: RainrailEventEnvelope):
 
   const data = recordValue(event.payload);
   const exception = Array.isArray(data.exceptions)
-    ? data.exceptions.map(recordOrUndefined).find((candidate) => candidate !== undefined)
+    ? data.exceptions.map(recordOrUndefined).find((candidate) => {
+      const stack = stringValue(candidate?.stack);
+      return stack !== undefined && stack.trim().length > 0;
+    })
     : undefined;
   const stack = stringValue(exception?.stack);
   if (exception === undefined || stack === undefined || stack.trim().length === 0) {
@@ -307,6 +337,7 @@ function cloudflareIssueBody(input: {
   fingerprint: string;
 }): string {
   const rawJson = truncate(JSON.stringify(redact(input.candidate.rawData), null, 2), maxRawJsonLength);
+  const exceptionMessage = sanitizeSecretString(input.candidate.exceptionMessage);
   return [
     'Rainrail detected a new Cloudflare Worker server error.',
     '',
@@ -316,7 +347,7 @@ function cloudflareIssueBody(input: {
     `- Worker: ${input.candidate.scriptName}`,
     `- Event: ${input.event.name}`,
     `- Exception: ${input.candidate.exceptionName}`,
-    `- Message: ${input.candidate.exceptionMessage || '(empty)'}`,
+    `- Message: ${exceptionMessage || '(empty)'}`,
     `- Request: ${[input.candidate.requestMethod, input.candidate.requestPath].filter(Boolean).join(' ') || '(unknown)'}`,
     `- Status: ${input.candidate.responseStatus ?? '(unknown)'}`,
     `- Delivery: ${input.event.delivery.id}`,
@@ -385,6 +416,29 @@ function normalizeExceptionMessage(value: string): string {
     .trim();
 }
 
+async function withFingerprintLock<T>(fingerprint: string, fn: () => Promise<T>): Promise<T> {
+  let release!: () => void;
+  const previous = fingerprintLocks.get(fingerprint) ?? Promise.resolve();
+  const current = previous.catch(() => undefined).then(() => new Promise<void>((resolve) => {
+    release = resolve;
+  }));
+  fingerprintLocks.set(fingerprint, current);
+  await previous.catch(() => undefined);
+  try {
+    return await fn();
+  } finally {
+    release();
+    if (fingerprintLocks.get(fingerprint) === current) {
+      fingerprintLocks.delete(fingerprint);
+    }
+  }
+}
+
+function isRecentStoreHit(stored: StoredCloudflareErrorIssue): boolean {
+  const createdAt = Date.parse(stored.createdAt);
+  return Number.isFinite(createdAt) && Date.now() - createdAt < storeHitGraceMs;
+}
+
 function safePathname(url: string): string | undefined {
   try {
     return new URL(url).pathname || '/';
@@ -395,17 +449,48 @@ function safePathname(url: string): string | undefined {
 
 function redact(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(redact);
+  if (typeof value === 'string') return sanitizeSecretString(value);
   if (!isRecord(value)) return value;
 
   const redacted: Record<string, unknown> = {};
   for (const [key, nestedValue] of Object.entries(value)) {
-    redacted[key] = isSensitiveKey(key) ? '[redacted]' : redact(nestedValue);
+    if (isSensitiveKey(key)) {
+      redacted[key] = '[redacted]';
+    } else if (isUrlKey(key) && typeof nestedValue === 'string') {
+      redacted[key] = sanitizeUrlString(nestedValue);
+    } else {
+      redacted[key] = redact(nestedValue);
+    }
   }
   return redacted;
 }
 
 function isSensitiveKey(key: string): boolean {
   return /authorization|cookie|token|secret|password|key/iu.test(key);
+}
+
+function isUrlKey(key: string): boolean {
+  return /url|uri|href/iu.test(key);
+}
+
+function sanitizeSecretString(value: string): string {
+  return value
+    .replace(/https?:\/\/[^\s"'<>`]+/giu, (url) => sanitizeUrlString(url))
+    .replace(/\b(token|secret|password|code|reset)=([^&\s"'<>`]+)/giu, '$1=[redacted]')
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/-]+=*/gu, 'Bearer [redacted]');
+}
+
+function sanitizeUrlString(value: string): string {
+  try {
+    const url = new URL(value);
+    url.username = '';
+    url.password = '';
+    url.search = '';
+    url.hash = '';
+    return url.toString();
+  } catch {
+    return sanitizeSecretString(value);
+  }
 }
 
 function truncate(value: string, maxLength: number): string {

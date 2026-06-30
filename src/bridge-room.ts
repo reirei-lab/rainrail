@@ -5,6 +5,14 @@ import { formatRainrailSseEvent, rainrailSseHeaders } from './sse.js';
 const RECENT_EVENTS_KEY = 'rainrail:recent-events';
 const DEFAULT_REPLAY_LIMIT = 100;
 const ALLOWED_PAYLOAD_KEYS = new Set(['action', 'status', 'conclusion']);
+const CLOUDFLARE_ERROR_PAYLOAD_KEYS = new Set([
+  'scriptName',
+  'scriptVersion',
+  'method',
+  'url',
+  'cfRay',
+  'exceptions',
+]);
 const ALLOWED_RAW_PAYLOAD_KINDS = new Set(['external-reference', 'inline-redacted']);
 const ALLOWED_URL_PROTOCOLS = new Set(['https:', 'github:', 'cloudflare:']);
 const SAFE_DELIVERY_REFERENCE_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
@@ -495,14 +503,70 @@ function normalizePayload(value: unknown): unknown {
     return {};
   }
 
-  const payload: Record<string, string | number | boolean | null> = {};
+  const payload: Record<string, unknown> = {};
   for (const [key, nestedValue] of Object.entries(value)) {
     if (ALLOWED_PAYLOAD_KEYS.has(key) && isSafePayloadMetadata(nestedValue)) {
       payload[key] = nestedValue;
+    } else if (isCloudflareErrorPayload(value) && CLOUDFLARE_ERROR_PAYLOAD_KEYS.has(key)) {
+      const normalized = normalizeCloudflareErrorPayloadField(key, nestedValue);
+      if (normalized !== undefined) {
+        payload[key] = normalized;
+      }
     }
   }
 
   return payload;
+}
+
+function isCloudflareErrorPayload(value: Record<string, unknown>): boolean {
+  return value.action === 'exception'
+    || value.conclusion === 'failure'
+    || Array.isArray(value.exceptions);
+}
+
+function normalizeCloudflareErrorPayloadField(key: string, value: unknown): unknown {
+  if (key === 'exceptions') return normalizeCloudflareExceptions(value);
+  if (key === 'url') return typeof value === 'string' ? sanitizePayloadUrl(value) : undefined;
+  if (typeof value === 'string' && isSafePayloadMetadata(value)) return value;
+  return undefined;
+}
+
+function normalizeCloudflareExceptions(value: unknown): unknown[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+
+  const exceptions = value.flatMap((exception) => {
+    if (!isRecord(exception)) return [];
+    const normalized: Record<string, string> = {};
+    for (const key of ['name', 'message', 'stack'] as const) {
+      const nestedValue = exception[key];
+      if (typeof nestedValue === 'string' && nestedValue.length > 0) {
+        normalized[key] = sanitizePayloadText(nestedValue);
+      }
+    }
+    return Object.keys(normalized).length > 0 ? [normalized] : [];
+  });
+  return exceptions.length > 0 ? exceptions : undefined;
+}
+
+function sanitizePayloadUrl(value: string): string | undefined {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'https:') return undefined;
+    url.username = '';
+    url.password = '';
+    url.search = '';
+    url.hash = '';
+    return url.toString();
+  } catch {
+    return undefined;
+  }
+}
+
+function sanitizePayloadText(value: string): string {
+  return value
+    .replace(/https?:\/\/[^\s"'<>`]+/giu, (url) => sanitizePayloadUrl(url) ?? '[redacted-url]')
+    .replace(/\b(token|secret|password|code|reset)=([^&\s"'<>`]+)/giu, '$1=[redacted]')
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/-]+=*/gu, 'Bearer [redacted]');
 }
 
 function isSafePayloadMetadata(value: unknown): value is string | null {

@@ -246,11 +246,71 @@ describe('Cloudflare tail source', () => {
     expect(chunk).toContain('event: cloudflare.error\n');
     expect(chunk).toContain('"source":{"type":"cloudflare","name":"cloudflare-tail"}');
     expect(chunk).toContain('"subject":{"type":"worker","id":"asme-site"}');
-    expect(storage.storedEvents()[0]?.payload).toEqual({
+    expect(storage.storedEvents()[0]?.payload).toMatchObject({
       action: 'exception',
       status: '500',
       conclusion: 'failure',
+      scriptName: 'asme-site',
+      exceptions: [{
+        name: 'Error',
+        message: 'boom',
+      }],
     });
+  });
+
+  it('keeps sanitized Cloudflare error details when events pass through the bridge', async () => {
+    const storage = fakeState();
+    const room = new RainrailBridgeRoom(storage, { publishToken: TEST_PUBLISH_TOKEN, replayLimit: 10 });
+    const createdIssues: Array<{ title: string; body: string }> = [];
+    const workflow = createCloudflareIssueReporterWorkflow({
+      repository: 'reirei-lab/rainrail',
+      store: createInMemoryCloudflareErrorIssueStore(),
+      issues: {
+        findOpenIssueByFingerprint: async () => undefined,
+        createIssue: async (input) => {
+          createdIssues.push(input);
+          return {
+            number: 24,
+            url: 'https://github.com/reirei-lab/rainrail/issues/24',
+          };
+        },
+      },
+    });
+    const event = await createCloudflareTailEvent({
+      tailEvent: cloudflareTailFixture({
+        outcome: 'exception',
+        url: 'https://asme.dev/me?token=secret-token',
+        exceptions: [{
+          name: 'TypeError',
+          message: 'failed with token=secret-token',
+          stack: [
+            'TypeError: failed with token=secret-token',
+            '    at resolveCurrentHumanAccount (worker.js:1510:24)',
+          ].join('\n'),
+        }],
+      }),
+      receivedAt: new Date('2026-06-15T08:12:01.000Z'),
+    });
+
+    const publishResponse = await room.fetch(publishRequest(event));
+    expect(publishResponse.status).toBe(200);
+    const stored = storage.storedEvents()[0];
+
+    expect(stored?.payload).toMatchObject({
+      scriptName: 'asme-site',
+      url: 'https://asme.dev/me',
+      exceptions: [{
+        name: 'TypeError',
+        message: 'failed with token=[redacted]',
+        stack: expect.stringContaining('resolveCurrentHumanAccount'),
+      }],
+    });
+    expect(JSON.stringify(stored?.payload)).not.toContain('secret-token');
+    await expect(workflow.handle(stored!, runtimeContext())).resolves.toMatchObject({
+      handled: true,
+      reason: 'created_cloudflare_error_issue',
+    });
+    expect(createdIssues[0]?.title).toBe('[asme-site] TypeError in resolveCurrentHumanAccount');
   });
 
   it('keeps fallback delivery ids unique inside a cf-ray-less batch', async () => {
@@ -523,6 +583,7 @@ function cloudflareTailFixture({
   cfRay = 'ray-1',
   exceptions = [],
   scriptName = 'asme-site',
+  url = 'https://asme.dev/me',
   eventTimestamp = Date.parse('2026-06-15T08:12:00.000Z'),
 }: {
   outcome: string;
@@ -530,6 +591,7 @@ function cloudflareTailFixture({
   cfRay?: string | null;
   exceptions?: Array<{ name?: string; message?: string; stack?: string; timestamp?: number | string }>;
   scriptName?: string;
+  url?: string;
   eventTimestamp?: number | string | null;
 }) {
   const headers = cfRay === null ? {} : { 'cf-ray': cfRay };
@@ -543,7 +605,7 @@ function cloudflareTailFixture({
     event: {
       request: {
         method: 'GET',
-        url: 'https://asme.dev/me',
+        url,
         headers,
       },
       response: {
