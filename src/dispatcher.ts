@@ -511,10 +511,21 @@ function createGatedRuntimeCapabilities(
   };
 
   let normalizeDispatchAgentResult = (value: unknown): unknown => value;
-  const dispatchAgent: DispatchAgentCapability = async (request, context) =>
-    normalizeDispatchAgentResult(
-      await callDispatchAgent(options, policy, event, lifecycle, getRawDispatchAgent, capabilities, request, context?.signal),
-    );
+  const dispatchAgent = ((request, context) => {
+    if (policy.capabilities.has('runtime:start')) {
+      try {
+        if (getRawDispatchAgent() === undefined) {
+          return undefined;
+        }
+      } catch {
+        // Let callDispatchAgent classify and audit getter failures as startRuntime rejections.
+      }
+    }
+
+    return Promise.resolve(
+      callDispatchAgent(options, policy, event, lifecycle, getRawDispatchAgent, capabilities, request, context?.signal),
+    ).then((value) => normalizeDispatchAgentResult(value));
+  }) as DispatchAgentCapability;
 
   const proxy = createDispatchAgentCapabilityProxy(capabilities, dispatchAgent, getRawDispatchAgent, peekRawDispatchAgent);
   normalizeDispatchAgentResult = proxy.normalizeResult;
@@ -540,7 +551,15 @@ function createDispatchAgentCapabilityProxy(
       : value;
   const hasDispatchAgentProperty = (source: object): boolean => {
     const descriptor = findPropertyDescriptor(source, 'dispatchAgent');
-    return descriptor !== undefined && (!('value' in descriptor) || descriptor.value !== undefined);
+    if (descriptor === undefined) {
+      return false;
+    }
+
+    if ('value' in descriptor) {
+      return descriptor.value !== undefined;
+    }
+
+    return true;
   };
 
   const isDispatchAgentFunction = (source: object, value: Function, property?: string | symbol): boolean => {
@@ -741,6 +760,10 @@ function createDispatchAgentCapabilityProxy(
           return prototype === null ? null : createCapabilityView(prototype);
         },
         has(_target, property) {
+          if (property === 'dispatchAgent') {
+            return hasDispatchAgentProperty(source);
+          }
+
           return property in source;
         },
         ownKeys() {
@@ -1082,6 +1105,21 @@ function callCapabilityFunction(
   };
 
   try {
+    if (isDispatchAgentRequest(args[0])) {
+      const rawDispatchAgent = getRawDispatchAgent();
+      if (helper === rawDispatchAgent || isBoundDispatchAgentAlias(helper, undefined, rawDispatchAgent)) {
+        return normalizeCapabilityFunctionResult(
+          dispatchAgent(args[0], args[1] as Parameters<DispatchAgentCapability>[1]),
+          capabilities,
+          safeReceiver,
+          getRawDispatchAgent,
+          dispatchAgent,
+          retryWithPrivateReceiver,
+          wrapObject,
+        );
+      }
+    }
+
     return normalizeCapabilityFunctionResult(
       Reflect.apply(helper, safeReceiver, args),
       capabilities,
@@ -1100,6 +1138,16 @@ function callCapabilityFunction(
   }
 }
 
+
+function isDispatchAgentRequest(value: unknown): value is Parameters<DispatchAgentCapability>[0] {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'event' in value &&
+    'workflow' in value &&
+    'runId' in value
+  );
+}
 
 function isPromiseLike(value: unknown): value is Promise<unknown> {
   return (
@@ -1241,7 +1289,15 @@ function functionSourceMentions(helper: Function, token: string): boolean {
 }
 
 function shouldWrapCapabilityObject(value: unknown): value is object {
-  if (typeof value !== 'object' || value === null) {
+  if (value === null) {
+    return false;
+  }
+
+  if (typeof value === 'function') {
+    return findPropertyDescriptor(value, 'dispatchAgent') !== undefined;
+  }
+
+  if (typeof value !== 'object') {
     return false;
   }
 
