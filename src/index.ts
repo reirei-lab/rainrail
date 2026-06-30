@@ -1,6 +1,8 @@
+export * from './bridge-room.js';
 export * from './config.js';
 export * from './agent-assignment.js';
 export * from './dispatcher.js';
+export * from './event-bus.js';
 export * from './events.js';
 export * from './github-auth.js';
 export * from './github-project.js';
@@ -11,6 +13,7 @@ export * from './plugins.js';
 export * from './project-issues.js';
 export * from './runtime-provider.js';
 export * from './source-plugin.js';
+export * from './sse.js';
 export * from './task-queue.js';
 export * from './task-provider.js';
 export * from './workflow-plugin.js';
