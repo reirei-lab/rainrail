@@ -2183,6 +2183,7 @@ describe('GitHub webhook source handling', () => {
         deliveryId: 'delivery-installation-repositories-1',
         payload: {
           action: 'added',
+          organization: { id: 700, login: 'reirei-lab' },
           installation: { id: 123 },
           repositories_added: [
             {
@@ -2222,6 +2223,7 @@ describe('GitHub webhook source handling', () => {
         deliveryId: 'delivery-installation-created-1',
         payload: {
           action: 'created',
+          organization: { id: 700, login: 'reirei-lab' },
           installation: {
             id: 124,
             account: { login: 'reirei-lab' },
