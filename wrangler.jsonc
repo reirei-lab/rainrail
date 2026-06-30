@@ -1,0 +1,23 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "rainrail",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-06-30",
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "BRIDGE_ROOM",
+        "class_name": "RainrailBridgeRoomDurableObject"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["RainrailBridgeRoomDurableObject"]
+    }
+  ],
+  "vars": {
+    "BRIDGE_ID": "events"
+  }
+}
