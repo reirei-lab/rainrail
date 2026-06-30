@@ -67,6 +67,18 @@ export async function assignNextProjectIssueToAgent(
       workflow: options.runtime.workflow,
       runId: options.runtime.runId,
     });
+    if (options.queue.finalizeProjectIssueClaim !== undefined) {
+      try {
+        await options.queue.finalizeProjectIssueClaim({
+          issue: nextIssue,
+          claim,
+          agentSessionId: task.agentSessionId,
+          branchName: task.branchName,
+        });
+      } catch {
+        // The agent is already running; a stale lock is safer than rolling back its claim.
+      }
+    }
 
     return {
       assigned: true,

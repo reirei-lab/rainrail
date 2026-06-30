@@ -10,6 +10,7 @@ import type { ProjectIssue, ProjectIssueReference } from './project-issues.js';
 import type {
   ProjectIssueClaim,
   ProjectIssueClaimInput,
+  ProjectIssueFinalizeInput,
   ProjectIssueReleaseInput,
   TaskQueueProvider,
 } from './task-queue.js';
@@ -71,6 +72,8 @@ interface ProjectItemStatus {
   status?: string;
   agentSessionId?: string;
   branchName?: string;
+  repositoryId?: string;
+  defaultBranchOid?: string;
   assigneeLogins: readonly string[];
 }
 
@@ -112,6 +115,7 @@ export function createGitHubProjectTaskQueueProvider(
     selection,
     listProjectIssues: async () => fetchProjectIssues(options.config, fetchImpl, auth),
     claimProjectIssue: async (input) => claimProjectIssue(options.config, input, fetchImpl, auth),
+    finalizeProjectIssueClaim: async (input) => finalizeProjectIssueClaim(input, fetchImpl, auth),
     releaseProjectIssue: async (input) => releaseProjectIssue(options.config, input, fetchImpl, auth),
   };
 }
@@ -157,9 +161,21 @@ async function claimProjectIssue(
   const before = await loadProjectItemStatus(input.issue.id, fetchImpl, auth, config);
   assertClaimable(before, input, config);
   const metadata = await loadProjectMetadata(config, fetchImpl, auth);
+  let claim: ProjectIssueClaim | undefined;
   let statusUpdated = false;
   let comment: { addComment?: { commentEdge?: { node?: { url?: unknown } } } };
   try {
+    const lockRefId = await acquireProjectIssueClaimLock(before, input, fetchImpl, auth);
+    claim = {
+      projectId: metadata.projectId,
+      projectItemId: input.issue.id,
+      statusFieldId: metadata.statusFieldId,
+      statusOptionId: metadata.statusOptionId,
+      agentSessionIdFieldId: metadata.agentSessionIdFieldId,
+      branchFieldId: metadata.branchFieldId,
+      lockRefId,
+    };
+    assertClaimable(await loadProjectItemStatus(input.issue.id, fetchImpl, auth, config), input, config);
     await updateProjectField(fetchImpl, auth, metadata.projectId, input.issue.id, metadata.statusFieldId, {
       singleSelectOptionId: metadata.statusOptionId,
     });
@@ -180,10 +196,10 @@ async function claimProjectIssue(
       { subjectId: input.issue.contentId, body: input.commentBody },
     );
   } catch (error) {
-    if (statusUpdated && shouldRollbackClaimFailure(error)) {
+    if (claim !== undefined) {
       await releaseProjectIssue(config, {
         issue: input.issue,
-        claim: { projectId: metadata.projectId, projectItemId: input.issue.id },
+        claim,
         agentSessionId: input.agentSessionId,
         branchName: input.branchName,
         reason: error instanceof Error ? error.message : String(error),
@@ -193,16 +209,19 @@ async function claimProjectIssue(
   }
 
   return {
-    projectId: metadata.projectId,
-    projectItemId: input.issue.id,
-    statusFieldId: metadata.statusFieldId,
-    statusOptionId: metadata.statusOptionId,
-    agentSessionIdFieldId: metadata.agentSessionIdFieldId,
-    branchFieldId: metadata.branchFieldId,
+    ...claim,
     ...(typeof comment.addComment?.commentEdge?.node?.url === 'string'
       ? { commentUrl: comment.addComment.commentEdge.node.url }
       : {}),
   };
+}
+
+async function finalizeProjectIssueClaim(
+  input: ProjectIssueFinalizeInput,
+  fetchImpl: typeof fetch,
+  auth: GitHubProjectAuthTokenProvider,
+): Promise<void> {
+  await deleteProjectIssueClaimLock(input.claim, fetchImpl, auth);
 }
 
 async function releaseProjectIssue(
@@ -211,6 +230,11 @@ async function releaseProjectIssue(
   fetchImpl: typeof fetch,
   auth: GitHubProjectAuthTokenProvider,
 ): Promise<void> {
+  const current = await loadProjectItemStatus(input.issue.id, fetchImpl, auth, config);
+  if (!shouldReleaseCurrentClaim(current, input, config)) {
+    await deleteProjectIssueClaimLock(input.claim, fetchImpl, auth);
+    return;
+  }
   const metadata = await loadProjectMetadata(config, fetchImpl, auth);
   const releaseStatusOptionId = normalizeToken(input.issue.status ?? config.todoStatus) === normalizeToken(config.backlogStatus)
     ? metadata.backlogStatusOptionId
@@ -223,6 +247,46 @@ async function releaseProjectIssue(
   });
   await updateProjectField(fetchImpl, auth, metadata.projectId, input.issue.id, metadata.branchFieldId, {
     text: '',
+  });
+  await deleteProjectIssueClaimLock(input.claim, fetchImpl, auth);
+}
+
+async function acquireProjectIssueClaimLock(
+  status: ProjectItemStatus,
+  input: ProjectIssueClaimInput,
+  fetchImpl: typeof fetch,
+  auth: GitHubProjectAuthTokenProvider,
+): Promise<string> {
+  if (status.repositoryId === undefined || status.defaultBranchOid === undefined) {
+    throw new Error('GitHub Project issue claim requires repository lock metadata');
+  }
+  const payload = await runGraphql<{ createRef?: { ref?: { id?: unknown } } }>(
+    fetchImpl,
+    auth,
+    createProjectIssueClaimLockMutation,
+    {
+      repositoryId: status.repositoryId,
+      name: projectIssueLockRefName(input.issue),
+      oid: status.defaultBranchOid,
+    },
+  );
+  const refId = payload.createRef?.ref?.id;
+  if (typeof refId !== 'string') {
+    throw new Error('GitHub Project issue claim lock response is missing ref id');
+  }
+  return refId;
+}
+
+async function deleteProjectIssueClaimLock(
+  claim: ProjectIssueClaim,
+  fetchImpl: typeof fetch,
+  auth: GitHubProjectAuthTokenProvider,
+): Promise<void> {
+  if (claim.lockRefId === undefined) {
+    return;
+  }
+  await runGraphql(fetchImpl, auth, deleteProjectIssueClaimLockMutation, {
+    refId: claim.lockRefId,
   });
 }
 
@@ -293,10 +357,13 @@ async function loadProjectItemStatus(
     ?? fieldValueByName(payload.node, config.agentSessionIdFieldName);
   const branchName = fixedAliasFieldValue(payload.node, 'branch')
     ?? fieldValueByName(payload.node, config.branchFieldName);
+  const repository = projectItemRepository(payload.node);
   return {
     ...(status === undefined ? {} : { status }),
     ...(agentSessionId === undefined ? {} : { agentSessionId }),
     ...(branchName === undefined ? {} : { branchName }),
+    ...(repository?.id === undefined ? {} : { repositoryId: repository.id }),
+    ...(repository?.defaultBranchOid === undefined ? {} : { defaultBranchOid: repository.defaultBranchOid }),
     assigneeLogins: projectItemAssigneeLogins(payload.node),
   };
 }
@@ -337,8 +404,23 @@ function assertClaimMatches(
   }
 }
 
-function shouldRollbackClaimFailure(error: unknown): boolean {
-  return !(error instanceof Error && error.message === 'GitHub Project item claim was overwritten by another assignment');
+function shouldReleaseCurrentClaim(
+  status: ProjectItemStatus,
+  input: ProjectIssueReleaseInput,
+  config: GitHubProjectTaskQueueConfig,
+): boolean {
+  const session = status.agentSessionId?.trim() ?? '';
+  const branch = status.branchName?.trim() ?? '';
+  if (session === input.agentSessionId && branch === input.branchName) {
+    return true;
+  }
+  if (session.length > 0 && session !== input.agentSessionId) {
+    return false;
+  }
+  if (branch.length > 0 && branch !== input.branchName) {
+    return false;
+  }
+  return normalizeToken(status.status ?? '') === normalizeToken(config.inProgressStatus);
 }
 
 async function updateProjectField(
@@ -495,6 +577,19 @@ function projectItemAssigneeLogins(item: Record<string, unknown>): string[] {
   return assigneeLogins(item.content);
 }
 
+function projectItemRepository(item: Record<string, unknown>): { id?: string; defaultBranchOid?: string } | undefined {
+  if (!isRecord(item.content) || !isRecord(item.content.repository)) {
+    return undefined;
+  }
+  const repository = item.content.repository;
+  const defaultBranchRef = isRecord(repository.defaultBranchRef) ? repository.defaultBranchRef : undefined;
+  const target = isRecord(defaultBranchRef?.target) ? defaultBranchRef.target : undefined;
+  return {
+    ...(typeof repository.id === 'string' ? { id: repository.id } : {}),
+    ...(typeof target?.oid === 'string' ? { defaultBranchOid: target.oid } : {}),
+  };
+}
+
 function repositoryName(content: Record<string, unknown>): string | undefined {
   return isRecord(content.repository) && typeof content.repository.nameWithOwner === 'string'
     ? content.repository.nameWithOwner
@@ -621,12 +716,23 @@ function sameLogin(left: string, right: string): boolean {
   return left.trim().toLowerCase() === right.trim().toLowerCase();
 }
 
+function projectIssueLockRefName(issue: ProjectIssue): string {
+  const repo = slug(issue.repository ?? 'repo');
+  const issueId = issue.number === undefined ? slug(issue.id) : String(issue.number);
+  return `refs/heads/rainrail/locks/${repo}-${issueId}`;
+}
+
 function camelCaseFieldName(name: string): string {
   const words = name.trim().split(/[\s_-]+/u).filter((word) => word.length > 0);
   return words.map((word, index) => {
     const lower = word.toLowerCase();
     return index === 0 ? lower : `${lower[0]?.toUpperCase() ?? ''}${lower.slice(1)}`;
   }).join('');
+}
+
+function slug(value: string): string {
+  const normalized = value.trim().toLowerCase().replace(/[^a-z0-9]+/gu, '-').replace(/^-+|-+$/gu, '');
+  return normalized.length === 0 ? 'item' : normalized;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -709,6 +815,10 @@ const projectItemStatusQuery = `
         content {
           __typename
           ... on Issue {
+            repository {
+              id
+              defaultBranchRef { target { oid } }
+            }
             assignees(first: 20) { nodes { login } }
           }
         }
@@ -738,6 +848,22 @@ const updateProjectFieldMutation = `
       value: $value
     }) {
       projectV2Item { id }
+    }
+  }
+`;
+
+const createProjectIssueClaimLockMutation = `
+  mutation RainrailCreateProjectIssueClaimLock($repositoryId: ID!, $name: String!, $oid: GitObjectID!) {
+    createRef(input: { repositoryId: $repositoryId, name: $name, oid: $oid }) {
+      ref { id }
+    }
+  }
+`;
+
+const deleteProjectIssueClaimLockMutation = `
+  mutation RainrailDeleteProjectIssueClaimLock($refId: ID!) {
+    deleteRef(input: { refId: $refId }) {
+      clientMutationId
     }
   }
 `;

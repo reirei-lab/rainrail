@@ -79,6 +79,46 @@ describe('assignNextProjectIssueToAgent', () => {
     ]);
   });
 
+  it('finalizes a claimed issue after dispatch succeeds', async () => {
+    const issue = projectIssue({ number: 21, title: 'Project issue selection' });
+    const claim = { projectItemId: 'item_21', lockRefId: 'REF_lock' };
+    const calls: string[] = [];
+    const finalizeProjectIssueClaim = vi.fn(async () => {
+      calls.push('finalize');
+    });
+
+    await expect(assignNextProjectIssueToAgent({
+      queue: {
+        name: 'github-project',
+        kind: 'task-queue-provider',
+        listProjectIssues: async () => [issue],
+        claimProjectIssue: async () => {
+          calls.push('claim');
+          return claim;
+        },
+        finalizeProjectIssueClaim,
+      },
+      runtime: {
+        runId: 'run-21',
+        workflow: 'project-issue-selection',
+        agentId: 'main',
+        sessionKeyPrefix: 'rainrail',
+        dispatchAgent: async () => {
+          calls.push('dispatch');
+          return { sessionKey: 'agent:main:rainrail-21' };
+        },
+      },
+    })).resolves.toMatchObject({ assigned: true, reason: 'started' });
+
+    expect(calls).toEqual(['claim', 'dispatch', 'finalize']);
+    expect(finalizeProjectIssueClaim).toHaveBeenCalledWith({
+      issue,
+      claim,
+      agentSessionId: 'agent:main:rainrail-agent_task_reirei-lab-rainrail_21-run-21',
+      branchName: 'agent/reirei-lab-rainrail-21-project-issue-selection-run-21',
+    });
+  });
+
   it('releases a claimed issue when dispatch fails', async () => {
     const issue = projectIssue({ number: 21, title: 'Project issue selection' });
     const claim = { projectItemId: 'item_21' };
