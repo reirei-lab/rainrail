@@ -77,7 +77,7 @@ describe('getGitHubToken', () => {
     }
   });
 
-  it('passes the caller abort signal to GitHub App token fetches', async () => {
+  it('does not bind shared GitHub App token fetches to caller abort signals', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'rainrail-github-app-'));
     const keyPath = join(directory, 'private-key.pem');
     const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
@@ -121,7 +121,7 @@ describe('getGitHubToken', () => {
       await expect(first).rejects.toThrow('first workflow timed out');
       await expect(second).resolves.toBe('installation-token');
       expect(fetchImpl).toHaveBeenCalledOnce();
-      expect(requests[0]?.signal).toBe(firstController.signal);
+      expect(requests[0]?.signal).toBeUndefined();
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

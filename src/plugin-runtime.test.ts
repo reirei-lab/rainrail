@@ -8350,6 +8350,128 @@ describe('plugin runtime contract', () => {
     expect(dispatchAgent).not.toHaveBeenCalled();
   });
 
+  it('does not retry private capability helpers with dispatch requests on the raw receiver', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: { id: 'delivery-private-run-dispatch-request', receivedAt: '2026-06-29T14:00:00.000Z' },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: { kind: 'external-reference', reference: 'github://deliveries/private-run-dispatch-request' },
+    });
+    const dispatchAgent = vi.fn(async (_request: Parameters<NonNullable<RuntimeCapabilities['dispatchAgent']>>[0]) => ({
+      sessionKey: 'agent:main:private-run',
+    }));
+    class RuntimeCapabilityBag {
+      provider = 'codex';
+      dispatchAgent = dispatchAgent;
+      #run = dispatchAgent;
+
+      start(request: Parameters<NonNullable<RuntimeCapabilities['dispatchAgent']>>[0]) {
+        return this.#run(request);
+      }
+    }
+    const loader = createPluginLoader({
+      runtime: mockRuntimeContext({
+        capabilities: new RuntimeCapabilityBag() as unknown as RuntimeCapabilities,
+      }),
+    });
+
+    loader.on(
+      'github.issue',
+      (handledEvent, context) =>
+        (context.capabilities as unknown as { start: RuntimeCapabilityBag['start'] }).start({
+          event: handledEvent,
+          workflow: 'private-run-dispatch-request-handler',
+          runId: context.runId,
+        }),
+      { name: 'private-run-dispatch-request-handler' },
+    );
+
+    const [result] = await loader.dispatch(event);
+
+    expect(result).toMatchObject({
+      pluginName: 'private-run-dispatch-request-handler',
+      eventId: 'github-webhook:delivery-private-run-dispatch-request:github.issue',
+      status: 'rejected',
+    });
+    expect(dispatchAgent).not.toHaveBeenCalled();
+  });
+
+  it('reads registered accessor capabilities for each dispatch', async () => {
+    const firstEvent = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: { id: 'delivery-loader-accessor-capability-first', receivedAt: '2026-06-29T14:00:00.000Z' },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: { kind: 'external-reference', reference: 'github://deliveries/loader-accessor-capability-first' },
+    });
+    const secondEvent = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: { id: 'delivery-loader-accessor-capability-second', receivedAt: '2026-06-29T14:01:00.000Z' },
+      occurredAt: '2026-06-29T14:01:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'merge' },
+      rawPayload: { kind: 'external-reference', reference: 'github://deliveries/loader-accessor-capability-second' },
+    });
+    let currentCapabilities: RuntimeCapabilityName[] = [];
+    const mergePullRequest = vi.fn(async () => ({ id: 'merge:ok' }));
+    const loader = createPluginLoader({
+      runtime: mockRuntimeContext({
+        actions: {
+          mergePullRequest,
+          startRuntime: async () => ({ id: 'run:mock', provider: 'codex', status: 'queued' }),
+          readSecret: async () => 'secret',
+        },
+      }),
+    });
+
+    loader.register({
+      name: 'loader-accessor-capability-handler',
+      accepts(event) {
+        currentCapabilities = event.payload && typeof event.payload === 'object' && 'action' in event.payload && event.payload.action === 'merge'
+          ? ['merge']
+          : [];
+        return true;
+      },
+      get capabilities() {
+        return currentCapabilities;
+      },
+      async handle(event, context) {
+        if (event.payload && typeof event.payload === 'object' && 'action' in event.payload && event.payload.action === 'merge') {
+          await context.actions.mergePullRequest({
+            pullRequestId: 'github:reirei-lab/rainrail#36',
+          });
+          return { merged: true };
+        }
+
+        return { skipped: true };
+      },
+    });
+
+    await expect(loader.dispatch(firstEvent)).resolves.toMatchObject([
+      {
+        pluginName: 'loader-accessor-capability-handler',
+        eventId: 'github-webhook:delivery-loader-accessor-capability-first:github.issue',
+        status: 'fulfilled',
+        value: { skipped: true },
+      },
+    ]);
+    await expect(loader.dispatch(secondEvent)).resolves.toMatchObject([
+      {
+        pluginName: 'loader-accessor-capability-handler',
+        eventId: 'github-webhook:delivery-loader-accessor-capability-second:github.issue',
+        status: 'fulfilled',
+        value: { merged: true },
+      },
+    ]);
+    expect(mergePullRequest).toHaveBeenCalledOnce();
+  });
+
   it('treats timeout values outside the timer range as no timeout', async () => {
     vi.useFakeTimers();
     try {

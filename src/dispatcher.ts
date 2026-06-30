@@ -1087,7 +1087,7 @@ function callCapabilityFunction(
   wrapObject: (object: object) => object,
 ): unknown {
   const retryWithPrivateReceiver = (reason: unknown) => {
-    if (helperMayResolveDispatchAgent(helper)) {
+    if (isDispatchAgentRequest(args[0]) || helperMayResolveDispatchAgent(helper)) {
       throw reason;
     }
 

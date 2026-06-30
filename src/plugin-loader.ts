@@ -89,6 +89,7 @@ function createRegisteredWorkflow(plugin: WorkflowPlugin): WorkflowPlugin {
   let timeoutSnapshot = false;
 
   const capabilityDescriptor = findPropertyDescriptor(plugin, 'capabilities');
+  const hasAccessorCapabilities = capabilityDescriptor !== undefined && !('value' in capabilityDescriptor);
   if (capabilityDescriptor !== undefined && 'value' in capabilityDescriptor) {
     try {
       capabilities = capabilityDescriptor.value === undefined ? undefined : [...capabilityDescriptor.value];
@@ -127,6 +128,11 @@ function createRegisteredWorkflow(plugin: WorkflowPlugin): WorkflowPlugin {
     configurable: true,
     enumerable: true,
     get() {
+      if (hasAccessorCapabilities) {
+        const currentCapabilities = plugin.capabilities;
+        return currentCapabilities === undefined ? undefined : [...currentCapabilities];
+      }
+
       if (!capabilitySnapshot) {
         try {
           capabilities = plugin.capabilities === undefined ? undefined : [...plugin.capabilities];

@@ -202,7 +202,7 @@ async function githubAppInstallationToken(
 
   throwIfAborted(signal);
 
-  const pending = createInstallationToken(config, fetchImpl, signal)
+  const pending = createInstallationToken(config, fetchImpl)
     .then(({ token, expiresAtMs }) => {
       installationTokenCache.set(cacheKey, { token, expiresAtMs });
       return token;
@@ -224,7 +224,6 @@ async function githubAppInstallationToken(
 async function createInstallationToken(
   config: GitHubAppAuthConfig,
   fetchImpl: FetchLike,
-  signal: AbortSignal | undefined,
 ): Promise<{ token: string; expiresAtMs: number }> {
   const init: RequestInit = {
     method: 'POST',
@@ -234,9 +233,6 @@ async function createInstallationToken(
       'X-GitHub-Api-Version': '2022-11-28',
     },
   };
-  if (signal !== undefined) {
-    init.signal = signal;
-  }
 
   const response = await fetchImpl(
     `https://api.github.com/app/installations/${encodeURIComponent(config.installationId)}/access_tokens`,
