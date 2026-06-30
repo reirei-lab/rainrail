@@ -28,3 +28,8 @@ separate steps so failures identify the command that failed:
 - `pnpm typecheck`
 - `pnpm test`
 - `pnpm build`
+
+## Cloudflare Worker
+
+Cloudflare Worker として deploy する手順、required secrets、local dev と
+production smoke は `docs/cloudflare-worker.md` にまとめている。
