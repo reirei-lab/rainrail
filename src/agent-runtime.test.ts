@@ -309,11 +309,23 @@ describe('createOpenClawRuntimeProvider', () => {
     ]), expect.anything());
   });
 
-  it('resumes the fallback session recorded in the previous task log', async () => {
+  it('resumes the fallback session key recorded in the previous task log', async () => {
     const spawnProcess = vi.fn(() => ({ pid: 5151, unref: vi.fn() }));
     const logDirectory = temporaryDirectory();
     const logPath = `${logDirectory}/task.log`;
-    writeFileSync(logPath, 'EMBEDDED FALLBACK: Gateway timed out; running embedded agent with fresh session gateway-fallback-abc123', 'utf8');
+    writeFileSync(logPath, [
+      'EMBEDDED FALLBACK: Gateway timed out; running embedded agent with fresh session gateway-fallback-abc123',
+      JSON.stringify({
+        result: {
+          meta: {
+            agentMeta: {
+              sessionId: 'gateway-fallback-abc123',
+              fallbackSessionKey: 'agent:main:explicit:gateway-fallback-abc123',
+            },
+          },
+        },
+      }),
+    ].join('\n'), 'utf8');
     const provider = createOpenClawRuntimeProvider({
       enabled: true,
       command: 'openclaw',
@@ -337,13 +349,13 @@ describe('createOpenClawRuntimeProvider', () => {
       attemptId: 'agent_task_reirei-lab-rainrail_22_resume_01',
       requestedBy: 'reirei-agent',
     })).resolves.toMatchObject({
-      id: 'gateway-fallback-abc123',
-      metadata: { agentSessionId: 'gateway-fallback-abc123' },
+      id: 'agent:main:explicit:gateway-fallback-abc123',
+      metadata: { agentSessionId: 'agent:main:explicit:gateway-fallback-abc123' },
     });
 
     expect(spawnProcess).toHaveBeenCalledWith('openclaw', expect.arrayContaining([
       '--session-key',
-      'gateway-fallback-abc123',
+      'agent:main:explicit:gateway-fallback-abc123',
     ]), expect.anything());
   });
 

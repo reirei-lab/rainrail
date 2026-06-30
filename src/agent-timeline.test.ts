@@ -273,29 +273,37 @@ describe('agent timeline', () => {
     const timeline = parseRuntimeTrajectoryTimeline([
       JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:08:00.000Z', seq: 1 }),
       JSON.stringify({ type: 'tool.call', ts: '2026-06-30T15:09:00.000Z', seq: 2, data: { name: 'bash', arguments: { command: 'pnpm test' } } }),
-      JSON.stringify({ type: 'tool.call', ts: '2026-06-30T15:09:05.000Z', seq: 3, data: { name: 'bash', arguments: { command: 'curl -H "Authorization: Bearer github_pat_secretValue" -H "Authorization: Basic dXNlcjpwYXNz" token="quoted-secret" password="pa\\"ss"' } } }),
-      JSON.stringify({ type: 'tool.result', ts: '2026-06-30T15:09:10.000Z', seq: 4, data: { name: 'bash', status: 'completed', output: "ok token=secret-value AWS_SECRET_ACCESS_KEY=cloud-secret api_key='quoted-output-secret' Authorization: Bearer github_pat_outputSecret Authorization: Basic dXNlcjpwYXNz\n-----BEGIN OPENSSH PRIVATE KEY-----\nplaceholder\n-----END OPENSSH PRIVATE KEY-----" } }),
+      JSON.stringify({ type: 'tool.call', ts: '2026-06-30T15:09:05.000Z', seq: 3, data: { name: 'bash', arguments: { command: 'curl https://user:password@example.com/repo.git -H "Authorization: Bearer github_pat_secretValue" -H "Authorization: Basic dXNlcjpwYXNz" AUTHORIZATION="Bearer env-secret" token="quoted-secret" password="pa\\"ss"' } } }),
+      JSON.stringify({ type: 'tool.result', ts: '2026-06-30T15:09:10.000Z', seq: 4, data: { name: 'bash', status: 'completed', output: "ok https://user:password@example.com/repo.git token=secret-value AWS_SECRET_ACCESS_KEY=cloud-secret AUTHORIZATION=BasicEnvSecret api_key='quoted-output-secret' Authorization: Bearer github_pat_outputSecret Authorization: Basic dXNlcjpwYXNz\n-----BEGIN OPENSSH PRIVATE KEY-----\nplaceholder\n-----END OPENSSH PRIVATE KEY-----" } }),
       JSON.stringify({ type: 'tool.result', ts: '2026-06-30T15:09:20.000Z', seq: 5, data: { name: 'bash', status: 'completed', contentItems: [{ token: 'secret-json-token', apiKey: 'secret-json-key', password: 'pa\\"ss', Authorization: 'Basic dXNlcjpwYXNz', webhookSecret: 'secret-webhook', clientSecret: 'secret-client', apiToken: 'secret-api-token', privateKey: '-----BEGIN PRIVATE KEY-----\\nplaceholder\\n-----END PRIVATE KEY-----', private_key: 'private-key-material' }] } }),
     ].join('\n'));
 
     expect(timeline.map((entry) => [entry.phase, entry.summary])).toEqual([
       ['session.started', 'session.started'],
       ['確認', 'pnpm test'],
-      ['実行', 'curl -H "Authorization: Bearer [redacted-token]" -H "Authorization: Basic [redacted-token]" token="[redacted]" password="[redacted]"'],
+      ['実行', expect.stringContaining('curl https://[redacted]@example.com/repo.git')],
       ['tool.result', 'bash completed'],
       ['tool.result', 'bash completed'],
     ]);
     expect(timeline[2]!.detail).toContain('Bearer [redacted-token]');
     expect(timeline[2]!.detail).toContain('Basic [redacted-token]');
+    expect(timeline[2]!.detail).toContain('https://[redacted]@example.com/repo.git');
+    expect(timeline[2]!.detail).toContain('AUTHORIZATION="[redacted]"');
     expect(timeline[2]!.detail).toContain('token="[redacted]"');
     expect(timeline[2]!.detail).toContain('password="[redacted]"');
+    expect(timeline[2]!.detail).not.toContain('user:password');
+    expect(timeline[2]!.detail).not.toContain('env-secret');
     expect(timeline[2]!.detail).not.toContain('ss"');
     expect(timeline[3]!.excerpt).toContain('token=[redacted]');
     expect(timeline[3]!.excerpt).toContain('AWS_SECRET_ACCESS_KEY=[redacted]');
+    expect(timeline[3]!.excerpt).toContain('AUTHORIZATION=[redacted]');
+    expect(timeline[3]!.excerpt).toContain('https://[redacted]@example.com/repo.git');
     expect(timeline[3]!.excerpt).toContain("api_key='[redacted]'");
     expect(timeline[3]!.excerpt).toContain('Bearer [redacted-token]');
     expect(timeline[3]!.excerpt).toContain('Basic [redacted-token]');
     expect(timeline[3]!.excerpt).toContain('[redacted-private-key]');
+    expect(timeline[3]!.excerpt).not.toContain('BasicEnvSecret');
+    expect(timeline[3]!.excerpt).not.toContain('user:password');
     expect(timeline[3]!.excerpt).not.toContain('BEGIN OPENSSH PRIVATE KEY');
     expect(timeline[4]!.excerpt).toContain('"token": "[redacted]"');
     expect(timeline[4]!.excerpt).toContain('"apiKey": "[redacted]"');

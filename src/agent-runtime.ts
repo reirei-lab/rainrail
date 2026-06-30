@@ -448,9 +448,9 @@ function runtimeResumeSessionId(task: RuntimeAgentTask): string {
     task.logPath,
   ]) {
     try {
-      const fallbackSessionId = extractFallbackRuntimeSessionId(readFileSync(logPath, 'utf8'));
-      if (fallbackSessionId !== undefined) {
-        return fallbackSessionId;
+      const fallbackSessionKey = extractFallbackRuntimeSessionKey(readFileSync(logPath, 'utf8'));
+      if (fallbackSessionKey !== undefined) {
+        return fallbackSessionKey;
       }
     } catch {
       // Missing historical logs should not block a resume attempt.
@@ -459,9 +459,25 @@ function runtimeResumeSessionId(task: RuntimeAgentTask): string {
   return task.agentSessionId;
 }
 
+function extractFallbackRuntimeSessionKey(log: string): string | undefined {
+  const keyMatch = log.match(/"fallbackSessionKey"\s*:\s*"((?:\\.|[^"\\])*)"/);
+  if (keyMatch?.[1] !== undefined) {
+    return decodeJsonString(keyMatch[1]);
+  }
+  return extractFallbackRuntimeSessionId(log);
+}
+
 function extractFallbackRuntimeSessionId(log: string): string | undefined {
   const match = log.match(/EMBEDDED FALLBACK:[^\n\r]*fresh session\s+(gateway-fallback-[A-Za-z0-9._-]+)/i);
   return match?.[1];
+}
+
+function decodeJsonString(value: string): string {
+  try {
+    return JSON.parse(`"${value}"`) as string;
+  } catch {
+    return value;
+  }
 }
 
 function generatedAgentSessionId(
