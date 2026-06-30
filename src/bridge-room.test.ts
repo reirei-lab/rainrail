@@ -938,7 +938,6 @@ describe('Rainrail bridge room', () => {
     expect(publishResponse.status).toBe(200);
     const storedEvent = storage.storedEvents()[0];
     expect(storedEvent?.payload).toEqual({
-      provider: 'github',
       event: 'pull_request_review_comment',
       action: 'created',
       actor: { login: 'hiragram' },
@@ -1003,8 +1002,13 @@ describe('Rainrail bridge room', () => {
         resource: {
           type: 'review',
           id: '4594627585',
+          url: 'https://github.com/reirei-lab/rainrail/pull/49#pullrequestreview-4594627585',
+        },
+        review: {
+          id: '4594627585',
           body: '@reirei-agent please address this review',
           url: 'https://github.com/reirei-lab/rainrail/pull/49#pullrequestreview-4594627585',
+          author: 'hiragram',
         },
         pullRequest: {
           type: 'pull_request',
