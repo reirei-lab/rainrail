@@ -100,6 +100,7 @@ function createRegisteredWorkflow(plugin: WorkflowPlugin): WorkflowPlugin {
   }
 
   const timeoutDescriptor = findPropertyDescriptor(plugin, 'timeoutMs');
+  const hasAccessorTimeout = timeoutDescriptor !== undefined && !('value' in timeoutDescriptor);
   if (timeoutDescriptor !== undefined && 'value' in timeoutDescriptor) {
     timeoutMs = timeoutDescriptor.value;
     timeoutSnapshot = true;
@@ -154,6 +155,10 @@ function createRegisteredWorkflow(plugin: WorkflowPlugin): WorkflowPlugin {
     configurable: true,
     enumerable: true,
     get() {
+      if (hasAccessorTimeout) {
+        return plugin.timeoutMs;
+      }
+
       if (!timeoutSnapshot) {
         try {
           timeoutMs = plugin.timeoutMs;

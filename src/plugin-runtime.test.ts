@@ -8472,6 +8472,155 @@ describe('plugin runtime contract', () => {
     expect(mergePullRequest).toHaveBeenCalledOnce();
   });
 
+  it('reads registered accessor timeouts for each dispatch', async () => {
+    vi.useFakeTimers();
+    try {
+      const firstEvent = createEventEnvelope({
+        source: { type: 'github', name: 'github-webhook' },
+        name: 'github.issue',
+        delivery: { id: 'delivery-loader-accessor-timeout-first', receivedAt: '2026-06-29T14:00:00.000Z' },
+        occurredAt: '2026-06-29T14:00:00.000Z',
+        subject: { type: 'issue', id: '13' },
+        payload: { action: 'opened' },
+        rawPayload: { kind: 'external-reference', reference: 'github://deliveries/loader-accessor-timeout-first' },
+      });
+      const secondEvent = createEventEnvelope({
+        source: { type: 'github', name: 'github-webhook' },
+        name: 'github.issue',
+        delivery: { id: 'delivery-loader-accessor-timeout-second', receivedAt: '2026-06-29T14:01:00.000Z' },
+        occurredAt: '2026-06-29T14:01:00.000Z',
+        subject: { type: 'issue', id: '13' },
+        payload: { action: 'timeout' },
+        rawPayload: { kind: 'external-reference', reference: 'github://deliveries/loader-accessor-timeout-second' },
+      });
+      let currentTimeoutMs: number | undefined;
+      const loader = createPluginLoader({ runtime: mockRuntimeContext() });
+
+      loader.register({
+        name: 'loader-accessor-timeout-handler',
+        accepts(event: RainrailEventEnvelope) {
+          currentTimeoutMs = event.payload && typeof event.payload === 'object' && 'action' in event.payload && event.payload.action === 'timeout'
+            ? 25
+            : undefined;
+          return true;
+        },
+        get timeoutMs() {
+          return currentTimeoutMs;
+        },
+        handle(event: RainrailEventEnvelope) {
+          return event.payload && typeof event.payload === 'object' && 'action' in event.payload && event.payload.action === 'timeout'
+            ? new Promise(() => undefined)
+            : { skipped: true };
+        },
+      } as unknown as WorkflowPlugin);
+
+      await expect(loader.dispatch(firstEvent)).resolves.toMatchObject([
+        {
+          pluginName: 'loader-accessor-timeout-handler',
+          eventId: 'github-webhook:delivery-loader-accessor-timeout-first:github.issue',
+          status: 'fulfilled',
+          value: { skipped: true },
+        },
+      ]);
+
+      const secondDispatch = loader.dispatch(secondEvent);
+      await vi.advanceTimersByTimeAsync(25);
+      const secondResult = await Promise.race([secondDispatch, Promise.resolve('still-pending')]);
+      expect(secondResult).toMatchObject([
+        {
+          pluginName: 'loader-accessor-timeout-handler',
+          eventId: 'github-webhook:delivery-loader-accessor-timeout-second:github.issue',
+          status: 'rejected',
+        },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not read dispatchAgent getters for unrelated function helper results', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: { id: 'delivery-function-helper-result', receivedAt: '2026-06-29T14:00:00.000Z' },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: { kind: 'external-reference', reference: 'github://deliveries/function-helper-result' },
+    });
+    let dispatchAgentReads = 0;
+    const loader = createPluginLoader({
+      runtime: mockRuntimeContext({
+        capabilities: {
+          provider: 'codex',
+          get dispatchAgent(): never {
+            dispatchAgentReads += 1;
+            throw new Error('dispatchAgent is not configured');
+          },
+          getCallback: () => () => 'callback:ok',
+        } as unknown as RuntimeCapabilities & { getCallback: () => () => string },
+      }),
+    });
+
+    loader.on(
+      'github.issue',
+      (_handledEvent, context) =>
+        (context.capabilities as unknown as { getCallback: () => () => string }).getCallback()(),
+      { name: 'function-helper-result-handler' },
+    );
+
+    await expect(loader.dispatch(event)).resolves.toMatchObject([
+      {
+        pluginName: 'function-helper-result-handler',
+        eventId: 'github-webhook:delivery-function-helper-result:github.issue',
+        status: 'fulfilled',
+        value: 'callback:ok',
+      },
+    ]);
+    expect(dispatchAgentReads).toBe(0);
+  });
+
+  it('preserves instanceof checks for capability prototype helpers', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: { id: 'delivery-capability-instanceof-helper', receivedAt: '2026-06-29T14:00:00.000Z' },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: { kind: 'external-reference', reference: 'github://deliveries/capability-instanceof-helper' },
+    });
+    class RuntimeCapabilityBag {
+      provider = 'codex';
+      dispatchAgent = async () => ({ sessionKey: 'agent:main:instanceof-helper' });
+
+      lookupRuntime() {
+        return this instanceof RuntimeCapabilityBag ? 'runtime:ok' : 'runtime:bad';
+      }
+    }
+    const loader = createPluginLoader({
+      runtime: mockRuntimeContext({
+        capabilities: new RuntimeCapabilityBag() as unknown as RuntimeCapabilities,
+      }),
+    });
+
+    loader.on(
+      'github.issue',
+      (_handledEvent, context) =>
+        (context.capabilities as unknown as { lookupRuntime: () => string }).lookupRuntime(),
+      { name: 'capability-instanceof-helper-handler' },
+    );
+
+    await expect(loader.dispatch(event)).resolves.toMatchObject([
+      {
+        pluginName: 'capability-instanceof-helper-handler',
+        eventId: 'github-webhook:delivery-capability-instanceof-helper:github.issue',
+        status: 'fulfilled',
+        value: 'runtime:ok',
+      },
+    ]);
+  });
+
   it('treats timeout values outside the timer range as no timeout', async () => {
     vi.useFakeTimers();
     try {
