@@ -54,6 +54,31 @@ describe('Rainrail event bus', () => {
     expect(secondWrites.join('').split('event: github.issue\n').length - 1).toBe(1);
   });
 
+  it('replays from a snapshot when a subscriber publishes during initial replay', () => {
+    const bus = createRainrailEventBus({ replayLimit: 2 });
+    const first = fixtureEvent('github-webhook', 'delivery-1', 'github.issue', 'issue', '17');
+    const second = fixtureEvent('cloudflare-tail', 'delivery-2', 'cloudflare.tail', 'worker', 'api-worker');
+    const third = fixtureEvent('github-webhook', 'delivery-3', 'github.review', 'review', 'review-1');
+    const writes: string[] = [];
+    let publishedThird = false;
+
+    bus.loadReplay([first, second]);
+    bus.subscribe({
+      write: (chunk) => {
+        writes.push(chunk);
+        if (!publishedThird && chunk.includes(first.id)) {
+          publishedThird = true;
+          bus.publish(third);
+        }
+      },
+    });
+
+    const replay = writes.join('');
+    expect(replay).toContain(first.id);
+    expect(replay).toContain(second.id);
+    expect(replay).not.toContain(third.id);
+  });
+
   it('creates a Worker-compatible SSE stream with replay, keepalive, and abort cleanup', async () => {
     vi.useFakeTimers();
     try {

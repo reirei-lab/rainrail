@@ -177,7 +177,7 @@ class InMemoryRainrailEventBus implements RainrailEventBus {
 
   #replayEventsAfter(lastEventId: string | undefined): RainrailEventEnvelope[] {
     if (lastEventId === undefined) {
-      return this.#recent;
+      return this.#recent.slice();
     }
 
     let lastIndex = -1;
@@ -188,7 +188,7 @@ class InMemoryRainrailEventBus implements RainrailEventBus {
       }
     }
 
-    return lastIndex === -1 ? this.#recent : this.#recent.slice(lastIndex + 1);
+    return lastIndex === -1 ? this.#recent.slice() : this.#recent.slice(lastIndex + 1);
   }
 
   #disconnect(subscriber: RainrailEventBusSubscriber): void {

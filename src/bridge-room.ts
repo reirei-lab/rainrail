@@ -46,7 +46,11 @@ export class RainrailBridgeRoom {
     const url = new URL(request.url);
 
     if (request.method === 'GET' && url.pathname === '/healthz') {
-      await this.#loadRecentEvents();
+      try {
+        await this.#loadRecentEvents();
+      } catch {
+        return storageRestoreFailedResponse();
+      }
 
       return Response.json({
         ok: true,
@@ -96,8 +100,10 @@ export class RainrailBridgeRoom {
         }
 
         const { event } = eventResult;
-        await this.#state.storage.put(RECENT_EVENTS_KEY, this.#nextRecentEvents(event));
-        this.#bus.publish(event);
+        if (!this.#hasRecentEventId(event.id)) {
+          await this.#state.storage.put(RECENT_EVENTS_KEY, this.#nextRecentEvents(event));
+          this.#bus.publish(event);
+        }
       } catch {
         return new Response('publish failed\n', { status: 500 });
       }
@@ -119,7 +125,11 @@ export class RainrailBridgeRoom {
   }
 
   async #subscribe(request: Request): Promise<Response> {
-    await this.#loadRecentEvents();
+    try {
+      await this.#loadRecentEvents();
+    } catch {
+      return storageRestoreFailedResponse();
+    }
 
     const lastEventId = request.headers.get('Last-Event-ID');
 
@@ -156,6 +166,10 @@ export class RainrailBridgeRoom {
     if (this.#replayLimit <= 0) return [];
 
     return [...this.#bus.recentEvents, event].slice(-this.#replayLimit);
+  }
+
+  #hasRecentEventId(id: string): boolean {
+    return this.#bus.recentEvents.some((event) => event.id === id);
   }
 }
 
@@ -290,4 +304,8 @@ function isAbortError(error: unknown): boolean {
 
 function abortedPublishResponse(): Response {
   return new Response('request aborted\n', { status: 499 });
+}
+
+function storageRestoreFailedResponse(): Response {
+  return new Response('storage restore failed\n', { status: 500 });
 }

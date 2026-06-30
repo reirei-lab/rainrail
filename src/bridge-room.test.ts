@@ -139,6 +139,37 @@ describe('Rainrail bridge room', () => {
     await reader?.cancel();
   });
 
+  it('treats duplicate event ids as successful no-ops', async () => {
+    const storage = fakeState();
+    const room = new RainrailBridgeRoom(storage, { replayLimit: 10 });
+    const event = fixtureEvent('delivery-1', 'github.issue');
+
+    const eventsResponse = await room.fetch(new Request('https://rainrail.local/events'));
+    const reader = eventsResponse.body?.getReader();
+    expect(reader).toBeDefined();
+    expect(await readNext(reader!)).toBe(': connected\n\n');
+
+    expect((await room.fetch(publishRequest(event))).status).toBe(200);
+    expect(await readNext(reader!)).toContain(event.id);
+    expect((await room.fetch(publishRequest(event))).status).toBe(200);
+
+    expect(storage.storedEvents().map((storedEvent) => storedEvent.id)).toEqual([event.id]);
+    await expect(readNextOrTimeout(reader!)).resolves.toBe('timeout');
+    await reader?.cancel();
+  });
+
+  it('returns stable 500 responses when storage restore fails for GET endpoints', async () => {
+    const room = new RainrailBridgeRoom(failingGetState(), { replayLimit: 10 });
+
+    const health = await room.fetch(new Request('https://rainrail.local/healthz'));
+    const events = await room.fetch(new Request('https://rainrail.local/events'));
+
+    expect(health.status).toBe(500);
+    await expect(health.text()).resolves.toBe('storage restore failed\n');
+    expect(events.status).toBe(500);
+    await expect(events.text()).resolves.toBe('storage restore failed\n');
+  });
+
   it('rejects malformed publish envelopes before they reach storage or subscribers', async () => {
     const storage = fakeState();
     const room = new RainrailBridgeRoom(storage, { replayLimit: 10 });
@@ -483,6 +514,17 @@ function failingPutState() {
       put: async () => {
         throw new Error('storage unavailable');
       },
+    },
+  };
+}
+
+function failingGetState() {
+  return {
+    storage: {
+      get: async () => {
+        throw new Error('storage unavailable');
+      },
+      put: async () => undefined,
     },
   };
 }
