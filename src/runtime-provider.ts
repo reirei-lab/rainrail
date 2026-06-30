@@ -61,9 +61,13 @@ export interface RuntimeRun {
   metadata?: Record<string, unknown>;
 }
 
+export interface RuntimeProviderContext {
+  signal: AbortSignal;
+}
+
 export interface RuntimeProvider {
   name: string;
   kind: 'runtime-provider';
-  startRun(request: RuntimeRunRequest): RuntimeRun | Promise<RuntimeRun>;
+  startRun(request: RuntimeRunRequest, context?: RuntimeProviderContext): RuntimeRun | Promise<RuntimeRun>;
   resumeRun?: (request: RuntimeResumeRequest) => RuntimeRun | Promise<RuntimeRun>;
 }
