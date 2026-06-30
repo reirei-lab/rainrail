@@ -274,7 +274,6 @@ export function cloudflareErrorFingerprint(candidate: CloudflareErrorCandidate):
   return `sha256:${createHash('sha256').update(JSON.stringify({
     scriptName: candidate.scriptName,
     eventName: candidate.eventName,
-    exceptionName: candidate.exceptionName,
     stackSignature: candidate.stackSignature,
   })).digest('hex')}`;
 }
@@ -323,12 +322,12 @@ export function cloudflareErrorCandidateFromEvent(event: RainrailEventEnvelope):
 }
 
 function cloudflareIssueTitle(candidate: CloudflareErrorCandidate): string {
-  const location = candidate.stackSignature[0]?.split(' @ ')[0] ?? candidate.requestPath;
+  const location = sanitizeSecretString(candidate.stackSignature[0]?.split(' @ ')[0] ?? candidate.requestPath ?? '');
   const exceptionName = sanitizeSecretString(candidate.exceptionName);
   return [
     `[${candidate.scriptName}]`,
     exceptionName || 'Error',
-    location === undefined ? undefined : `in ${location}`,
+    location.length === 0 ? undefined : `in ${location}`,
   ].filter((part): part is string => part !== undefined && part.length > 0).join(' ').slice(0, 180);
 }
 
@@ -489,7 +488,8 @@ function sanitizeSecretString(value: string): string {
     .replace(/\b(cookie|set-cookie)\s*:\s*[^\r\n]+/giu, '$1: [redacted]')
     .replace(/\bauthorization\s*:\s*[^\r\n]+/giu, 'authorization: [redacted]')
     .replace(/(["'])([A-Za-z0-9_-]*(?:authorization|cookie|token|secret|password|key|code|reset))\1(\s*:\s*)(["'])[^"']*\4/giu, '$1$2$1$3$4[redacted]$4')
-    .replace(/(^|[?&\s"'<>`,;])([A-Za-z0-9_-]*(?:token|secret|password|key|code|reset))=([^&\s"'<>`,;]+)/giu, '$1$2=[redacted]')
+    .replace(/(^|[{\s"'<>`,;])(["']?)([A-Za-z0-9_-]*(?:authorization|cookie|token|secret|password|key|code|reset))\2(\s*:\s*)(?!["'])([^,\s\r\n}\]]+)/giu, '$1$2$3$2$4[redacted]')
+    .replace(/(^|[.?&\s"'<>`,;])([A-Za-z0-9_-]*(?:token|secret|password|key|code|reset))=([^&\s"'<>`,;]+)/giu, '$1$2=[redacted]')
     .replace(/\bBearer\s+[A-Za-z0-9._~+/-]+=*/giu, 'Bearer [redacted]');
 }
 

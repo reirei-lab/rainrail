@@ -694,6 +694,41 @@ describe('cloudflare issue redaction', () => {
     expect(createdIssues[0]?.body).toContain('public_key=[redacted]');
   });
 
+  it('redacts colon-separated secret scalars in exception strings', async () => {
+    const createdIssues: Array<{ body: string }> = [];
+    const workflow = createCloudflareIssueReporterWorkflow({
+      repository: 'reirei-lab/rainrail',
+      store: createInMemoryCloudflareErrorIssueStore(),
+      issues: {
+        findOpenIssueByFingerprint: async () => undefined,
+        createIssue: async (input) => {
+          createdIssues.push(input);
+          return {
+            number: 134,
+            url: 'https://github.com/reirei-lab/rainrail/issues/134',
+          };
+        },
+      },
+    });
+
+    await expect(workflow.handle(cloudflareErrorEvent({
+      message: [
+        'serialized input {"code":123456,"password":plain-secret}',
+        'x-api-key: header-key-secret',
+        'password: header-password-secret',
+      ].join('\n'),
+    }), runtimeContext())).resolves.toMatchObject({
+      handled: true,
+    });
+
+    expect(createdIssues[0]?.body).not.toContain('123456');
+    expect(createdIssues[0]?.body).not.toContain('plain-secret');
+    expect(createdIssues[0]?.body).not.toContain('header-key-secret');
+    expect(createdIssues[0]?.body).not.toContain('header-password-secret');
+    expect(createdIssues[0]?.body).toContain('x-api-key: [redacted]');
+    expect(createdIssues[0]?.body).toContain('password: [redacted]');
+  });
+
   it('uses only stack frames for the stack signature', async () => {
     const first = cloudflareErrorCandidateFromEvent(cloudflareErrorEvent({
       stack: [
@@ -711,6 +746,45 @@ describe('cloudflare issue redaction', () => {
     expect(first?.stackSignature).toEqual(['handler @ worker.js']);
     expect(second?.stackSignature).toEqual(['handler @ worker.js']);
     expect(cloudflareErrorFingerprint(first!)).toBe(cloudflareErrorFingerprint(second!));
+  });
+
+  it('ignores dynamic exception names for the same stack fingerprint', () => {
+    const first = cloudflareErrorCandidateFromEvent(cloudflareErrorEvent({
+      exceptionName: 'ApiError user alice',
+    }));
+    const second = cloudflareErrorCandidateFromEvent(cloudflareErrorEvent({
+      exceptionName: 'ApiError access_token=name-secret',
+    }));
+
+    expect(cloudflareErrorFingerprint(first!)).toBe(cloudflareErrorFingerprint(second!));
+  });
+
+  it('redacts stack function names before writing issue titles', async () => {
+    const createdIssues: Array<{ title: string; body: string }> = [];
+    const workflow = createCloudflareIssueReporterWorkflow({
+      repository: 'reirei-lab/rainrail',
+      store: createInMemoryCloudflareErrorIssueStore(),
+      issues: {
+        findOpenIssueByFingerprint: async () => undefined,
+        createIssue: async (input) => {
+          createdIssues.push(input);
+          return {
+            number: 135,
+            url: 'https://github.com/reirei-lab/rainrail/issues/135',
+          };
+        },
+      },
+    });
+
+    await expect(workflow.handle(cloudflareErrorEvent({
+      stack: '    at Object.access_token=title-secret (worker.js:10:1)',
+    }), runtimeContext())).resolves.toMatchObject({
+      handled: true,
+    });
+
+    expect(createdIssues[0]?.title).not.toContain('title-secret');
+    expect(createdIssues[0]?.body).not.toContain('title-secret');
+    expect(createdIssues[0]?.title).toContain('access_token=[redacted]');
   });
 
   it('redacts exception names before writing issue titles and summaries', async () => {
