@@ -132,7 +132,7 @@ export function createRuntimeDispatcher(options: RuntimeDispatcherOptions): Runt
             } satisfies WorkflowPluginResult;
           } catch (reason) {
             if (acceptsStarted && !acceptsCompleted) {
-              policy = withSecretRedactionCapability(policy);
+              policy = record.policySnapshot ? policy : withSecretRedactionCapability(policy);
             } else if (!metadataResolved) {
               const metadata = resolveWorkflowExecutionMetadata(record);
               if (metadata.policyError === undefined) {
@@ -694,6 +694,7 @@ function createDispatchAgentCapabilityProxy(
             args,
             (object) => createCapabilityView(object),
             property,
+            rootHasDispatchAgentAccessor || hasDispatchAgentAccessor(source),
           );
       }
 
@@ -856,7 +857,7 @@ function isDispatchAgentLikeProperty(property: string | symbol | undefined): boo
 }
 
 function isStarterAliasProperty(property: string | symbol | undefined): boolean {
-  return typeof property === 'string' && /^(?:run|start|launch)$/iu.test(property);
+  return typeof property === 'string' && /^(?:run|start|launch|startRun|runAgent)$/iu.test(property);
 }
 
 function createCapabilityConstructorView(
@@ -1067,18 +1068,20 @@ function callCapabilityCollectionMethod(
 ): unknown {
   const normalize = (value: unknown) =>
     normalizeCapabilityHelperResult(value, capabilities, safeReceiver, getRawDispatchAgent, dispatchAgent, wrapObject);
+  const collectionTag = Object.prototype.toString.call(source);
 
-  if (source instanceof Map) {
+  if (collectionTag === '[object Map]') {
+    const map = source as Map<unknown, unknown>;
     if (property === 'get') {
-      return normalize(source.get(unwrapValue(args[0])));
+      return normalize(map.get(unwrapValue(args[0])));
     }
 
     if (property === 'has') {
-      return source.has(unwrapValue(args[0]));
+      return map.has(unwrapValue(args[0]));
     }
 
     if (property === 'delete') {
-      return source.delete(unwrapValue(args[0]));
+      return map.delete(unwrapValue(args[0]));
     }
 
     if (property === 'forEach') {
@@ -1087,31 +1090,32 @@ function callCapabilityCollectionMethod(
         return Reflect.apply(method, source, args);
       }
 
-      return source.forEach((value, key) => {
+      return map.forEach((value, key) => {
         Reflect.apply(callback, args[1], [normalize(value), normalize(key), safeReceiver]);
       });
     }
 
     if (property === 'values') {
-      return createNormalizingIterator(source.values(), normalize);
+      return createNormalizingIterator(map.values(), normalize);
     }
 
     if (property === 'keys') {
-      return createNormalizingIterator(source.keys(), normalize);
+      return createNormalizingIterator(map.keys(), normalize);
     }
 
     if (property === 'entries' || property === Symbol.iterator) {
-      return createNormalizingIterator(source.entries(), ([key, value]) => [normalize(key), normalize(value)]);
+      return createNormalizingIterator(map.entries(), ([key, value]) => [normalize(key), normalize(value)]);
     }
   }
 
-  if (source instanceof Set) {
+  if (collectionTag === '[object Set]') {
+    const set = source as Set<unknown>;
     if (property === 'has') {
-      return source.has(unwrapValue(args[0]));
+      return set.has(unwrapValue(args[0]));
     }
 
     if (property === 'delete') {
-      return source.delete(unwrapValue(args[0]));
+      return set.delete(unwrapValue(args[0]));
     }
 
     if (property === 'forEach') {
@@ -1120,42 +1124,42 @@ function callCapabilityCollectionMethod(
         return Reflect.apply(method, source, args);
       }
 
-      return source.forEach((value) => {
+      return set.forEach((value) => {
         const normalized = normalize(value);
         Reflect.apply(callback, args[1], [normalized, normalized, safeReceiver]);
       });
     }
 
     if (property === 'values' || property === 'keys' || property === Symbol.iterator) {
-      return createNormalizingIterator(source.values(), normalize);
+      return createNormalizingIterator(set.values(), normalize);
     }
 
     if (property === 'entries') {
-      return createNormalizingIterator(source.values(), (value) => {
+      return createNormalizingIterator(set.values(), (value) => {
         const normalized = normalize(value);
         return [normalized, normalized];
       });
     }
   }
 
-  if (source instanceof WeakMap && property === 'get') {
-    return normalize(source.get(unwrapValue(args[0]) as object));
+  if (collectionTag === '[object WeakMap]' && property === 'get') {
+    return normalize((source as WeakMap<object, unknown>).get(unwrapValue(args[0]) as object));
   }
 
-  if (source instanceof WeakMap && property === 'has') {
-    return source.has(unwrapValue(args[0]) as object);
+  if (collectionTag === '[object WeakMap]' && property === 'has') {
+    return (source as WeakMap<object, unknown>).has(unwrapValue(args[0]) as object);
   }
 
-  if (source instanceof WeakMap && property === 'delete') {
-    return source.delete(unwrapValue(args[0]) as object);
+  if (collectionTag === '[object WeakMap]' && property === 'delete') {
+    return (source as WeakMap<object, unknown>).delete(unwrapValue(args[0]) as object);
   }
 
-  if (source instanceof WeakSet && property === 'has') {
-    return source.has(unwrapValue(args[0]) as object);
+  if (collectionTag === '[object WeakSet]' && property === 'has') {
+    return (source as WeakSet<object>).has(unwrapValue(args[0]) as object);
   }
 
-  if (source instanceof WeakSet && property === 'delete') {
-    return source.delete(unwrapValue(args[0]) as object);
+  if (collectionTag === '[object WeakSet]' && property === 'delete') {
+    return (source as WeakSet<object>).delete(unwrapValue(args[0]) as object);
   }
 
   return normalizeCapabilityHelperResult(
@@ -1200,7 +1204,8 @@ function callCapabilityFunction(
 ): unknown {
   const helperIsRawDispatchAgent = () => {
     try {
-      return helper === peekRawDispatchAgent();
+      const rawDispatchAgent = peekRawDispatchAgent();
+      return helper === rawDispatchAgent || isBoundDispatchAgentAlias(helper, property, rawDispatchAgent);
     } catch {
       return false;
     }
@@ -1213,7 +1218,7 @@ function callCapabilityFunction(
     gateDispatchRequests ||
     helperMayResolveDispatchAgent(helper);
   const retryWithPrivateReceiver = (reason: unknown) => {
-    if (isDispatchAgentRequest(args[0])) {
+    if (isDispatchAgentRequest(args[0]) && shouldGateDispatchRequest()) {
       return normalizeCapabilityFunctionResult(
         dispatchAgent(args[0], args[1] as Parameters<DispatchAgentCapability>[1]),
         capabilities,
@@ -1225,7 +1230,7 @@ function callCapabilityFunction(
       );
     }
 
-    if ((isDispatchAgentRequest(args[0]) && shouldGateDispatchRequest()) || shouldGateDispatchRequest()) {
+    if (shouldGateDispatchRequest()) {
       throw reason;
     }
 
@@ -1575,6 +1580,7 @@ function helperMayResolveDispatchAgent(helper: Function): boolean {
       ) ||
       (/\bthis\b/u.test(source) && /\b(?:dispatchAgent|startAgent|runAgent)\b/u.test(source)) ||
       (/this\s*(?:\?\.|\s*)\[/u.test(source) && /\b(?:dispatch|start|run)\b/u.test(source) && /\bAgent\b/u.test(source)) ||
+      /this\s*(?:\?\.|\s*)\[\s*this\s*\.\s*#[\p{ID_Start}\p{ID_Continue}]*/u.test(source) ||
       /#[\p{ID_Start}\p{ID_Continue}]*(?:(?:dispatch|start|launch)[\p{ID_Continue}]*|run[\p{ID_Continue}]*Agent[\p{ID_Continue}]*)/iu.test(
         source,
       ) ||

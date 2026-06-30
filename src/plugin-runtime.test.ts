@@ -1,3 +1,5 @@
+import { createContext, runInContext } from 'node:vm';
+
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -6658,6 +6660,59 @@ describe('plugin runtime contract', () => {
     ]);
   });
 
+  it('normalizes raw dispatchAgent values yielded by cross-realm capability Map iteration', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: { id: 'delivery-cross-realm-map-iteration-dispatch-agent', receivedAt: '2026-06-29T14:00:00.000Z' },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: { kind: 'external-reference', reference: 'github://deliveries/cross-realm-map-iteration-dispatch-agent' },
+    });
+    const dispatchAgent: NonNullable<RuntimeCapabilities['dispatchAgent']> = vi.fn(async () => ({
+      sessionKey: 'agent:main:cross-realm-map-iteration',
+    }));
+    const realm = createContext({ dispatchAgent });
+    const metadata = runInContext('new Map([["start", dispatchAgent]])', realm) as Map<
+      string,
+      RuntimeCapabilities['dispatchAgent']
+    >;
+    const loader = createPluginLoader({
+      runtime: mockRuntimeContext({
+        capabilities: {
+          provider: 'codex',
+          dispatchAgent,
+          metadata,
+        },
+      }),
+    });
+
+    loader.on(
+      'github.issue',
+      (handledEvent, context) =>
+        (
+          context.capabilities as unknown as {
+            metadata: Map<string, RuntimeCapabilities['dispatchAgent']>;
+          }
+        ).metadata.values().next().value?.({
+          event: handledEvent,
+          workflow: 'cross-realm-map-iteration-dispatch-agent-handler',
+          runId: context.runId,
+        }),
+      { name: 'cross-realm-map-iteration-dispatch-agent-handler' },
+    );
+
+    const [result] = await loader.dispatch(event);
+
+    expect(result).toMatchObject({
+      pluginName: 'cross-realm-map-iteration-dispatch-agent-handler',
+      eventId: 'github-webhook:delivery-cross-realm-map-iteration-dispatch-agent:github.issue',
+      status: 'rejected',
+    });
+    expect(dispatchAgent).not.toHaveBeenCalled();
+  });
+
   it('normalizes raw dispatchAgent values returned from capability WeakMaps', async () => {
     const event = createEventEnvelope({
       source: { type: 'github', name: 'github-webhook' },
@@ -8283,6 +8338,49 @@ describe('plugin runtime contract', () => {
     );
   });
 
+  it('keeps non-secret accepts failure reasons in audit entries', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: { id: 'delivery-non-secret-accepts-error', receivedAt: '2026-06-29T14:00:00.000Z' },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: { kind: 'external-reference', reference: 'github://deliveries/non-secret-accepts-error' },
+    });
+    const auditEntries: unknown[] = [];
+    const dispatcher = createRuntimeDispatcher({
+      workflows: [
+        {
+          name: 'non-secret-accepts-error-handler',
+          capabilities: [],
+          accepts: () => {
+            throw new Error('accepts route configuration failed');
+          },
+          handle: async () => ({ ok: true }),
+        },
+      ],
+      runtime: mockRuntimeContext(),
+      audit: {
+        record: (entry) => {
+          auditEntries.push(entry);
+        },
+      },
+    });
+
+    await expect(dispatcher.dispatch(event)).resolves.toMatchObject([
+      { pluginName: 'non-secret-accepts-error-handler', status: 'rejected' },
+    ]);
+    expect(auditEntries).toContainEqual(
+      expect.objectContaining({
+        pluginId: 'non-secret-accepts-error-handler',
+        action: 'plugin.handle',
+        result: 'rejected',
+        reason: 'Error: accepts route configuration failed',
+      }),
+    );
+  });
+
   it('gates anonymous bound dispatchAgent aliases', async () => {
     const event = createEventEnvelope({
       source: { type: 'github', name: 'github-webhook' },
@@ -9121,6 +9219,54 @@ describe('plugin runtime contract', () => {
     expect(dispatchAgent).not.toHaveBeenCalled();
   });
 
+  it('retries benign private helpers that accept request-shaped inputs', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: { id: 'delivery-private-request-shaped-helper', receivedAt: '2026-06-29T14:00:00.000Z' },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: { kind: 'external-reference', reference: 'github://deliveries/private-request-shaped-helper' },
+    });
+    class RuntimeCapabilityBag {
+      provider = 'codex';
+
+      #format(request: Parameters<NonNullable<RuntimeCapabilities['dispatchAgent']>>[0]) {
+        return `${request.workflow}:${request.runId}`;
+      }
+
+      buildInputs(request: Parameters<NonNullable<RuntimeCapabilities['dispatchAgent']>>[0]) {
+        return this.#format(request);
+      }
+    }
+    const loader = createPluginLoader({
+      runtime: mockRuntimeContext({
+        capabilities: new RuntimeCapabilityBag() as unknown as RuntimeCapabilities,
+      }),
+    });
+
+    loader.on(
+      'github.issue',
+      (handledEvent, context) =>
+        (context.capabilities as unknown as { buildInputs: RuntimeCapabilityBag['buildInputs'] }).buildInputs({
+          event: handledEvent,
+          workflow: 'private-request-shaped-helper-handler',
+          runId: context.runId,
+        }),
+      { name: 'private-request-shaped-helper-handler' },
+    );
+
+    await expect(loader.dispatch(event)).resolves.toMatchObject([
+      {
+        pluginName: 'private-request-shaped-helper-handler',
+        eventId: 'github-webhook:delivery-private-request-shaped-helper:github.issue',
+        status: 'fulfilled',
+        value: 'private-request-shaped-helper-handler:run-1',
+      },
+    ]);
+  });
+
   it('does not retry private runAgent helpers that start agents internally', async () => {
     const event = createEventEnvelope({
       source: { type: 'github', name: 'github-webhook' },
@@ -9832,6 +9978,102 @@ describe('plugin runtime contract', () => {
       status: 'rejected',
     });
     expect(dispatchAgent).not.toHaveBeenCalled();
+  });
+
+  it('gates bound dispatchAgent aliases on built-in capability objects', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: { id: 'delivery-builtin-bound-launcher', receivedAt: '2026-06-29T14:00:00.000Z' },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: { kind: 'external-reference', reference: 'github://deliveries/builtin-bound-launcher' },
+    });
+    const dispatchAgent: NonNullable<RuntimeCapabilities['dispatchAgent']> = vi.fn(async () => ({
+      sessionKey: 'agent:main:builtin-bound-launcher',
+    }));
+    const metadata = Object.assign(new Date('2026-06-29T14:00:00.000Z'), {
+      launcher: dispatchAgent.bind(undefined) as RuntimeCapabilities['dispatchAgent'],
+    });
+    const loader = createPluginLoader({
+      runtime: mockRuntimeContext({
+        capabilities: {
+          provider: 'codex',
+          dispatchAgent,
+          metadata,
+        } as unknown as RuntimeCapabilities & { metadata: Date & { launcher: RuntimeCapabilities['dispatchAgent'] } },
+      }),
+    });
+
+    loader.on(
+      'github.issue',
+      (handledEvent, context) =>
+        (
+          context.capabilities as unknown as {
+            metadata: Date & { launcher?: RuntimeCapabilities['dispatchAgent'] };
+          }
+        ).metadata.launcher?.({
+          event: handledEvent,
+          workflow: 'builtin-bound-launcher-handler',
+          runId: context.runId,
+        }),
+      { name: 'builtin-bound-launcher-handler' },
+    );
+
+    const [result] = await loader.dispatch(event);
+
+    expect(result).toMatchObject({
+      pluginName: 'builtin-bound-launcher-handler',
+      eventId: 'github-webhook:delivery-builtin-bound-launcher:github.issue',
+      status: 'rejected',
+    });
+    expect(dispatchAgent).not.toHaveBeenCalled();
+  });
+
+  it('gates startRun capability aliases without canonical dispatchAgent metadata', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: { id: 'delivery-start-run-capability-alias', receivedAt: '2026-06-29T14:00:00.000Z' },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: { kind: 'external-reference', reference: 'github://deliveries/start-run-capability-alias' },
+    });
+    const startRun = vi.fn(async () => ({ sessionKey: 'agent:main:start-run-capability-alias' }));
+    const loader = createPluginLoader({
+      runtime: mockRuntimeContext({
+        capabilities: {
+          provider: 'codex',
+          startRun,
+        } as unknown as RuntimeCapabilities & { startRun: RuntimeCapabilities['dispatchAgent'] },
+      }),
+    });
+
+    loader.on(
+      'github.issue',
+      (handledEvent, context) =>
+        (
+          context.capabilities as unknown as {
+            startRun?: RuntimeCapabilities['dispatchAgent'];
+          }
+        ).startRun?.({
+          event: handledEvent,
+          workflow: 'start-run-capability-alias-handler',
+          runId: context.runId,
+        }),
+      { name: 'start-run-capability-alias-handler' },
+    );
+
+    const [result] = await loader.dispatch(event);
+
+    expect(result).toMatchObject({
+      pluginName: 'start-run-capability-alias-handler',
+      eventId: 'github-webhook:delivery-start-run-capability-alias:github.issue',
+      status: 'rejected',
+    });
+    expect(startRun).not.toHaveBeenCalled();
   });
 
   it('retries benign private agent metadata helpers', async () => {
