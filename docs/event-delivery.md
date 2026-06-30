@@ -71,21 +71,31 @@ event だけを再送する。指定 id が buffer に無い場合は、consumer
   snapshot を storage に保存してから live subscriber へ publish する。
 - `GET /events`: storage から replay buffer を復元し、SSE stream を返す。
 
-`POST /publish` は capability token で保護する。adapter は `RainrailBridgeRoom` に
-`publishToken` を渡し、caller は `Authorization: Bearer <token>` または
-`X-Rainrail-Publish-Token` を付ける。認証に失敗した publish は body を読む前に
-401 として拒否し、storage / replay / workflow 起動の副作用を作らない。
+`POST /publish` と `GET /events` は capability token で保護する。adapter は
+`RainrailBridgeRoom` に `publishToken` を渡し、caller は
+`Authorization: Bearer <token>` または `X-Rainrail-Publish-Token` を付ける。
+認証に失敗した request は body / storage を読む前に 401 として拒否し、
+storage / replay / workflow 起動や subscriber 枠消費の副作用を作らない。
 
 `GET /healthz` と `GET /events` は storage 復元失敗を generic 500 応答に変換する。
 adapter/runtime の未処理例外として落とさず、呼び出し元に安定した失敗を返すため。
-`GET /events` は subscribe 直前に storage の最新 snapshot と room 内 replay buffer を
-merge し、別 room / process が保存した durable event も新規 subscriber へ replay する。
+`GET /events` は subscribe 直前に storage refresh を行い、room 内 replay buffer を
+最新化してから stream を返す。
+
+`RainrailBridgeRoom` は storage key ごとに single writer / single live fan-out として
+扱う。core storage contract は `get` / `put` だけで、CAS/append や cross-process
+pub/sub を要求しないため、複数 room / process で同じ storage key を共有して multi-writer
+運用してはならない。同一 process では同じ storage backend を複数 room に渡すと
+constructor が拒否する。Worker/Node adapter は同じ room へ sticky routing するか、
+room ごとに別 storage namespace を使う。
 
 storage の key は `rainrail:recent-events`。保存するのは正規化済み envelope だけで、
 object payload も allowlist された shallow JSON scalar metadata（`action` / `status` /
 `conclusion`）に縮約し、object でない payload は空 object にする。任意 URL や query を
 持ち込める `links` は保存しない。`subject.url` と `rawPayload.reference` は URL として
 parse できる場合に userinfo / query / fragment を除去してから保存する。
+URL として parse できない optional `subject.url` は保存せず、必須の
+`rawPayload.reference` が parse できない場合は publish を 400 で拒否する。
 `rawPayload.sha256` は 64 桁 hex digest の場合だけ保存する。secret、token、credential、
 生 webhook payload、issue/comment body のような provider object 本文は core 側では
 保持しない。storage から復元する replay 要素も `RainrailEventEnvelope` と SSE field
@@ -99,11 +109,11 @@ parse できる場合に userinfo / query / fragment を除去してから保存
 storage 保存と live broadcast を行わない。同じ source delivery の retry で downstream
 workflow が重複起動することを避けるため。
 
-初回 storage 復元と publish 永続化は room 内で直列化する。これにより、複数の
+初回 storage 復元、subscribe refresh、publish 永続化は room 内で直列化する。これにより、複数の
 `POST /publish` が同時に来ても古い snapshot で replay buffer や storage を
-上書きしない。publish 直前にも storage の最新 snapshot を読み、別 room / process が
-保存した event と room 内 replay buffer を id で merge してから保存する。これにより、
-古い room の in-memory snapshot だけで共有 storage を上書きしない。storage への保存に
+上書きしない。publish 直前にも storage の最新 snapshot を読み、room 内 replay buffer
+を id で merge してから保存する。subscribe refresh も同じ queue に入れ、refresh が
+古い snapshot で publish 済み replay を巻き戻さないようにする。storage への保存に
 失敗した event は subscriber へ broadcast せず、
 HTTP 結果と live 配信済み副作用が食い違わないようにする。500 応答は generic な
 文言にし、storage backend の接続文字列や内部 endpoint などを呼び出し元へ返さない。

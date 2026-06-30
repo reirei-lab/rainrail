@@ -5,6 +5,7 @@ import { formatRainrailSseEvent, rainrailSseHeaders } from './sse.js';
 const RECENT_EVENTS_KEY = 'rainrail:recent-events';
 const DEFAULT_REPLAY_LIMIT = 100;
 const ALLOWED_PAYLOAD_KEYS = new Set(['action', 'status', 'conclusion']);
+const claimedStorages = new WeakSet<RainrailBridgeRoomStorage>();
 
 type PublishEventResult =
   | { ok: true; event: RainrailEventEnvelope }
@@ -36,8 +37,11 @@ export class RainrailBridgeRoom {
   #loaded = false;
 
   constructor(state: RainrailBridgeRoomState, options: RainrailBridgeRoomOptions) {
+    const publishToken = expectPublishToken(options?.publishToken);
+
     this.#state = state;
-    this.#publishToken = expectPublishToken(options?.publishToken);
+    claimStorage(state.storage);
+    this.#publishToken = publishToken;
     this.#replayLimit = options?.replayLimit ?? DEFAULT_REPLAY_LIMIT;
     this.#bus = createRainrailEventBus(
       options?.replayLimit === undefined ? {} : { replayLimit: options.replayLimit },
@@ -71,6 +75,10 @@ export class RainrailBridgeRoom {
     }
 
     if (request.method === 'GET' && url.pathname === '/events') {
+      if (!isAuthorizedBridgeRequest(request, this.#publishToken)) {
+        return new Response('unauthorized\n', { status: 401 });
+      }
+
       return this.#subscribe(request);
     }
 
@@ -141,11 +149,23 @@ export class RainrailBridgeRoom {
   }
 
   async #subscribe(request: Request): Promise<Response> {
-    try {
-      await this.#refreshRecentEvents();
-    } catch {
-      return storageRestoreFailedResponse();
-    }
+    const refreshResult = this.#publishQueue.then(async () => {
+      try {
+        await this.#refreshRecentEvents();
+      } catch {
+        return storageRestoreFailedResponse();
+      }
+
+      return undefined;
+    });
+
+    this.#publishQueue = refreshResult.then(
+      () => undefined,
+      () => undefined,
+    );
+
+    const refreshError = await refreshResult;
+    if (refreshError !== undefined) return refreshError;
 
     const lastEventId = request.headers.get('Last-Event-ID');
 
@@ -252,7 +272,7 @@ function validatePublishEnvelope(value: unknown): RainrailEventEnvelope {
     payload: normalizePayload(value.payload),
     rawPayload: {
       kind: rawPayloadKind,
-      reference: sanitizeUrl(rawPayloadReference),
+      reference: expectSanitizedUrl(rawPayloadReference, 'reference'),
       ...optionalString(rawPayload, 'contentType'),
       ...optionalSha256(rawPayload),
     },
@@ -302,10 +322,11 @@ function optionalUrl(record: Record<string, unknown>, key: string): Record<strin
     throw new TypeError(`${key} must be a string`);
   }
 
-  return { [key]: sanitizeUrl(record[key]) };
+  const sanitized = sanitizeUrl(record[key]);
+  return sanitized === undefined ? {} : { [key]: sanitized };
 }
 
-function sanitizeUrl(value: string): string {
+function sanitizeUrl(value: string): string | undefined {
   try {
     const url = new URL(value);
     url.username = '';
@@ -314,8 +335,17 @@ function sanitizeUrl(value: string): string {
     url.hash = '';
     return url.toString();
   } catch {
-    return value;
+    return undefined;
   }
+}
+
+function expectSanitizedUrl(value: string, key: string): string {
+  const sanitized = sanitizeUrl(value);
+  if (sanitized === undefined) {
+    throw new TypeError(`${key} must be a valid URL`);
+  }
+
+  return sanitized;
 }
 
 function optionalSha256(record: Record<string, unknown>): Record<string, string> {
@@ -361,6 +391,14 @@ function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === 'AbortError';
 }
 
+function claimStorage(storage: RainrailBridgeRoomStorage): void {
+  if (claimedStorages.has(storage)) {
+    throw new TypeError('RainrailBridgeRoom storage must be owned by a single room');
+  }
+
+  claimedStorages.add(storage);
+}
+
 function expectPublishToken(value: unknown): string {
   if (typeof value !== 'string' || value.length === 0) {
     throw new TypeError('publishToken must be a non-empty string');
@@ -370,6 +408,10 @@ function expectPublishToken(value: unknown): string {
 }
 
 function isAuthorizedPublishRequest(request: Request, publishToken: string): boolean {
+  return isAuthorizedBridgeRequest(request, publishToken);
+}
+
+function isAuthorizedBridgeRequest(request: Request, publishToken: string): boolean {
   const authorization = request.headers.get('Authorization');
   if (authorization?.startsWith('Bearer ') && constantTimeStringEqual(authorization.slice('Bearer '.length), publishToken)) {
     return true;

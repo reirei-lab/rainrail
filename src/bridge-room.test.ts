@@ -33,7 +33,7 @@ describe('Rainrail bridge room', () => {
       clients: 0,
     });
 
-    const eventsResponse = await room.fetch(new Request('https://rainrail.local/events'));
+    const eventsResponse = await room.fetch(eventsRequest());
 
     expect(eventsResponse.status).toBe(200);
     expect(eventsResponse.headers.get('Content-Type')).toBe('text/event-stream');
@@ -123,7 +123,7 @@ describe('Rainrail bridge room', () => {
 
   it('does not broadcast when persistence fails', async () => {
     const room = createTestRoom(failingPutState(), { replayLimit: 10 });
-    const eventsResponse = await room.fetch(new Request('https://rainrail.local/events'));
+    const eventsResponse = await room.fetch(eventsRequest());
     const reader = eventsResponse.body?.getReader();
     expect(reader).toBeDefined();
     expect(await readNext(reader!)).toBe(': connected\n\n');
@@ -141,7 +141,7 @@ describe('Rainrail bridge room', () => {
     const room = createTestRoom(storage, { replayLimit: 10 });
     const event = fixtureEvent('delivery-1', 'github.issue');
 
-    const eventsResponse = await room.fetch(new Request('https://rainrail.local/events'));
+    const eventsResponse = await room.fetch(eventsRequest());
     const reader = eventsResponse.body?.getReader();
     expect(reader).toBeDefined();
     expect(await readNext(reader!)).toBe(': connected\n\n');
@@ -155,43 +155,47 @@ describe('Rainrail bridge room', () => {
     await reader?.cancel();
   });
 
-  it('merges the latest storage snapshot before publishing from a stale room', async () => {
+  it('rejects multiple rooms using the same storage backend', () => {
     const storage = fakeState();
-    const staleRoom = createTestRoom(storage, { replayLimit: 10 });
-    const otherRoom = createTestRoom(storage, { replayLimit: 10 });
-    const first = fixtureEvent('delivery-1', 'github.issue');
-    const second = fixtureEvent('delivery-2', 'cloudflare.tail');
+    createTestRoom(storage, { replayLimit: 10 });
 
-    expect((await staleRoom.fetch(new Request('https://rainrail.local/healthz'))).status).toBe(200);
-    expect((await otherRoom.fetch(publishRequest(first))).status).toBe(200);
-    expect((await staleRoom.fetch(publishRequest(second))).status).toBe(200);
-
-    expect(storage.storedEvents().map((event) => event.id)).toEqual([first.id, second.id]);
+    expect(() => createTestRoom(storage, { replayLimit: 10 })).toThrow('single room');
   });
 
-  it('reloads the latest storage snapshot before subscribing from a stale room', async () => {
-    const storage = fakeState();
-    const staleRoom = createTestRoom(storage, { replayLimit: 10 });
-    const otherRoom = createTestRoom(storage, { replayLimit: 10 });
+  it('serializes subscribe refresh with publish delivery', async () => {
+    const storage = fakeDelayedSecondGetState();
+    const room = createTestRoom(storage.state, { replayLimit: 10 });
     const event = fixtureEvent('delivery-1', 'github.issue');
+    const health = room.fetch(new Request('https://rainrail.local/healthz'));
+    expect(storage.getCalls).toBe(1);
+    storage.resolveNextGet([]);
+    await health;
 
-    expect((await staleRoom.fetch(new Request('https://rainrail.local/healthz'))).status).toBe(200);
-    expect((await otherRoom.fetch(publishRequest(event))).status).toBe(200);
+    const events = room.fetch(eventsRequest());
+    await flushMicrotasks();
+    expect(storage.getCalls).toBe(2);
+    expect(storage.pendingGetCount()).toBe(1);
 
-    const eventsResponse = await staleRoom.fetch(new Request('https://rainrail.local/events'));
+    const publish = room.fetch(publishRequest(event));
+    await flushMicrotasks();
+    expect(storage.storedEvents()).toBeUndefined();
+
+    storage.resolveNextGet([]);
+    const eventsResponse = await events;
     const reader = eventsResponse.body?.getReader();
     expect(reader).toBeDefined();
-    const chunk = await readUntil(reader!, event.id);
-    await reader?.cancel();
+    expect(await readNext(reader!)).toBe(': connected\n\n');
 
-    expect(chunk).toContain(event.id);
+    expect((await publish).status).toBe(200);
+    expect(await readNext(reader!)).toContain(event.id);
+    await reader?.cancel();
   });
 
   it('returns stable 500 responses when storage restore fails for GET endpoints', async () => {
     const room = createTestRoom(failingGetState(), { replayLimit: 10 });
 
     const health = await room.fetch(new Request('https://rainrail.local/healthz'));
-    const events = await room.fetch(new Request('https://rainrail.local/events'));
+    const events = await room.fetch(eventsRequest());
 
     expect(health.status).toBe(500);
     await expect(health.text()).resolves.toBe('storage restore failed\n');
@@ -222,6 +226,42 @@ describe('Rainrail bridge room', () => {
     await expect(missingToken.text()).resolves.toBe('unauthorized\n');
     expect(wrongToken.status).toBe(401);
     expect(storage.storedEvents()).toEqual([]);
+  });
+
+  it('rejects event subscriptions without the configured capability token', async () => {
+    const room = createTestRoom(failingGetState(), { replayLimit: 10 });
+
+    const missingToken = await room.fetch(eventsRequest(null));
+    const wrongToken = await room.fetch(eventsRequest('wrong-token'));
+
+    expect(missingToken.status).toBe(401);
+    await expect(missingToken.text()).resolves.toBe('unauthorized\n');
+    expect(wrongToken.status).toBe(401);
+  });
+
+  it('does not preserve invalid URL strings in normalized envelopes', async () => {
+    const subjectStorage = fakeState();
+    const subjectRoom = createTestRoom(subjectStorage, { replayLimit: 10 });
+    const invalidSubjectUrlEvent = {
+      ...fixtureEvent('delivery-1', 'github.issue'),
+      subject: { type: 'issue', id: 'delivery-1', url: 'token=secret-subject-url' },
+    };
+
+    expect((await subjectRoom.fetch(publishRequest(invalidSubjectUrlEvent))).status).toBe(200);
+    expect(subjectStorage.storedEvents()[0]?.subject).not.toHaveProperty('url');
+
+    const referenceStorage = fakeState();
+    const referenceRoom = createTestRoom(referenceStorage, { replayLimit: 10 });
+    const invalidReferenceEvent = {
+      ...fixtureEvent('delivery-2', 'github.issue'),
+      rawPayload: { kind: 'external-reference', reference: 'token=secret-reference' },
+    };
+
+    const response = await referenceRoom.fetch(publishRequest(invalidReferenceEvent));
+
+    expect(response.status).toBe(400);
+    await expect(response.text()).resolves.toContain('reference must be a valid URL');
+    expect(referenceStorage.storedEvents()).toEqual([]);
   });
 
   it('captures JSON parse failures while the publish waits in queue', async () => {
@@ -332,7 +372,7 @@ describe('Rainrail bridge room', () => {
     storage.resolveGet([]);
     await health;
 
-    const eventsResponse = await room.fetch(new Request('https://rainrail.local/events'));
+    const eventsResponse = await room.fetch(eventsRequest());
     const reader = eventsResponse.body?.getReader();
     expect(reader).toBeDefined();
     expect(await readNext(reader!)).toBe(': connected\n\n');
@@ -399,7 +439,7 @@ describe('Rainrail bridge room', () => {
     expect(storage.storedEvents()[0]?.rawPayload).not.toHaveProperty('secret');
     expect(storage.storedEvents()[0]?.rawPayload).not.toHaveProperty('sha256');
 
-    const eventsResponse = await room.fetch(new Request('https://rainrail.local/events'));
+    const eventsResponse = await room.fetch(eventsRequest());
     const reader = eventsResponse.body?.getReader();
     expect(reader).toBeDefined();
     const chunk = await readUntil(reader!, 'github.issue');
@@ -432,7 +472,7 @@ describe('Rainrail bridge room', () => {
     expect(publishResponse.status).toBe(200);
     expect(storage.storedEvents()[0]?.payload).toEqual({});
 
-    const eventsResponse = await room.fetch(new Request('https://rainrail.local/events'));
+    const eventsResponse = await room.fetch(eventsRequest());
     const reader = eventsResponse.body?.getReader();
     expect(reader).toBeDefined();
     const chunk = await readUntil(reader!, 'github.issue');
@@ -450,7 +490,7 @@ describe('Rainrail bridge room', () => {
     expect(health.status).toBe(200);
     await expect(health.json()).resolves.toMatchObject({ recent: 1 });
 
-    const eventsResponse = await room.fetch(new Request('https://rainrail.local/events'));
+    const eventsResponse = await room.fetch(eventsRequest());
     const reader = eventsResponse.body?.getReader();
     expect(reader).toBeDefined();
     const chunk = await readUntil(reader!, 'github.issue');
@@ -469,9 +509,7 @@ describe('Rainrail bridge room', () => {
     await room.fetch(publishRequest(second));
 
     const response = await room.fetch(
-      new Request('https://rainrail.local/events', {
-        headers: { 'Last-Event-ID': first.id },
-      }),
+      eventsRequest(TEST_PUBLISH_TOKEN, { 'Last-Event-ID': first.id }),
     );
     const reader = response.body?.getReader();
     expect(reader).toBeDefined();
@@ -558,6 +596,15 @@ function publishRequest(event: unknown, signal?: AbortSignal, publishToken: stri
   });
 }
 
+function eventsRequest(publishToken: string | null = TEST_PUBLISH_TOKEN, headers: Record<string, string> = {}): Request {
+  return new Request('https://rainrail.local/events', {
+    headers: {
+      ...headers,
+      ...(publishToken === null ? {} : { Authorization: `Bearer ${publishToken}` }),
+    },
+  });
+}
+
 function delayedJsonPublishRequest(event: unknown) {
   let resolve: (() => void) | undefined;
   const request = new Request('https://rainrail.local/publish', {
@@ -641,11 +688,11 @@ function fakeDelayedSecondGetState() {
       storage: {
         get: async () => {
           getCalls += 1;
-          if (getCalls === 1) {
+          if (getCalls <= 2) {
             return new Promise((resolve) => pendingGets.push(resolve));
           }
 
-          return new Promise((resolve) => pendingGets.push(resolve));
+          return stored;
         },
         put: async (_key: string, value: unknown) => {
           stored = value;
