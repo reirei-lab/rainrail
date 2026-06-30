@@ -1,4 +1,4 @@
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { EventEmitter } from 'node:events';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -148,6 +148,39 @@ describe('createOpenClawRuntimeProvider', () => {
       detached: true,
       stdio: expect.arrayContaining(['ignore']),
     }));
+  });
+
+  it('creates start and resume logs with private permissions', async () => {
+    const spawnProcess = vi.fn(() => ({ pid: 4242, unref: vi.fn() }));
+    const logDirectory = temporaryDirectory();
+    const provider = createOpenClawRuntimeProvider({
+      enabled: true,
+      command: 'openclaw',
+      agentId: 'main',
+      sessionKeyPrefix: 'rainrail',
+      timeoutSeconds: 900,
+      logDirectory,
+      spawnProcess,
+    });
+
+    const started = await provider.startRun(runtimeRequest());
+    const resumed = await provider.resumeRun?.({
+      run: started,
+      task: {
+        id: 'agent_task_reirei-lab-rainrail_22',
+        title: 'OpenClaw runtime',
+        agentSessionId: 'agent:main:rainrail-agent_task_reirei-lab-rainrail_22-run-22',
+        branchName: 'agent/reirei-lab-rainrail-22',
+        logPath: String(started.metadata?.logPath),
+        resumeAttempts: [],
+      },
+      attemptId: 'agent_task_reirei-lab-rainrail_22_resume_01',
+      requestedBy: 'reirei-agent',
+    });
+
+    expect(statMode(logDirectory)).toBe(0o700);
+    expect(statMode(String(started.metadata?.logPath))).toBe(0o600);
+    expect(statMode(String(resumed?.metadata?.logPath))).toBe(0o600);
   });
 
   it('uses a run-specific start log path for repeated starts of the same issue task', async () => {
@@ -333,6 +366,11 @@ describe('runtime task completion and resume helpers', () => {
 
     expect(readRuntimeRunCompletionFromLog(JSON.stringify({
       status: 'ok',
+      finalAssistantVisibleText: 'I investigated a log line saying CLI transcript compaction failed.',
+    }))).toMatchObject({ status: 'succeeded' });
+
+    expect(readRuntimeRunCompletionFromLog(JSON.stringify({
+      status: 'ok',
       finalAssistantVisibleText: 'Outcome: needs_human',
     }))).toMatchObject({ status: 'needs_human', outcome: 'needs_human' });
 
@@ -429,6 +467,10 @@ function temporaryDirectory(): string {
   mkdirSync(directory, { recursive: true });
   temporaryDirectories.push(directory);
   return directory;
+}
+
+function statMode(path: string): number {
+  return statSync(path).mode & 0o777;
 }
 
 function runtimeRequest(overrides: { agentSessionId?: string } = {}) {

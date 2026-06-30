@@ -126,7 +126,7 @@ describe('agent timeline', () => {
       JSON.stringify({ type: 'tool.call', ts: '2026-06-30T15:09:00.000Z', seq: 2, data: { name: 'bash', arguments: { command: 'pnpm test' } } }),
       JSON.stringify({ type: 'tool.call', ts: '2026-06-30T15:09:05.000Z', seq: 3, data: { name: 'bash', arguments: { command: 'gh api -H "Authorization: Bearer github_pat_secretValue" repos/reirei-lab/rainrail token="quoted-secret"' } } }),
       JSON.stringify({ type: 'tool.result', ts: '2026-06-30T15:09:10.000Z', seq: 4, data: { name: 'bash', status: 'completed', output: "ok token=secret-value api_key='quoted-output-secret' Authorization: Bearer github_pat_outputSecret" } }),
-      JSON.stringify({ type: 'tool.result', ts: '2026-06-30T15:09:20.000Z', seq: 5, data: { name: 'bash', status: 'completed', contentItems: [{ token: 'secret-json-token', apiKey: 'secret-json-key', password: 'secret-json-password' }] } }),
+      JSON.stringify({ type: 'tool.result', ts: '2026-06-30T15:09:20.000Z', seq: 5, data: { name: 'bash', status: 'completed', contentItems: [{ token: 'secret-json-token', apiKey: 'secret-json-key', password: 'secret-json-password', webhookSecret: 'secret-webhook', clientSecret: 'secret-client', apiToken: 'secret-api-token' }] } }),
     ].join('\n'));
 
     expect(timeline.map((entry) => [entry.phase, entry.summary])).toEqual([
@@ -144,6 +144,9 @@ describe('agent timeline', () => {
     expect(timeline[4]!.excerpt).toContain('"token": "[redacted]"');
     expect(timeline[4]!.excerpt).toContain('"apiKey": "[redacted]"');
     expect(timeline[4]!.excerpt).toContain('"password": "[redacted]"');
+    expect(timeline[4]!.excerpt).toContain('"webhookSecret": "[redacted]"');
+    expect(timeline[4]!.excerpt).toContain('"clientSecret": "[redacted]"');
+    expect(timeline[4]!.excerpt).toContain('"apiToken": "[redacted]"');
   });
 
   it('classifies common commands into dashboard phases', () => {

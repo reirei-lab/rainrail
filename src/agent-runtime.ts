@@ -1,4 +1,4 @@
-import { closeSync, mkdirSync, openSync, readFileSync } from 'node:fs';
+import { chmodSync, closeSync, mkdirSync, openSync, readFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 
@@ -97,9 +97,9 @@ export function createOpenClawRuntimeProvider(options: OpenClawRuntimeProviderOp
       if (!options.enabled) {
         throw new Error('OpenClaw runtime provider is disabled');
       }
-      mkdirSync(options.logDirectory, { recursive: true });
+      ensurePrivateLogDirectory(options.logDirectory);
       const logPath = join(options.logDirectory, `${safeFileName(request.attemptId)}.log`);
-      const outputFd = openSync(logPath, 'a');
+      const outputFd = openPrivateLogFile(logPath, 'a');
       const resumeSessionId = runtimeResumeSessionId(request.task);
       const args = [
         'agent',
@@ -148,10 +148,10 @@ export async function startOpenClawRun(
   }
 
   const task = runtimeAgentTaskInput(request.task);
-  mkdirSync(options.logDirectory, { recursive: true });
+  ensurePrivateLogDirectory(options.logDirectory);
   const agentSessionId = task.agentSessionId ?? `agent:${options.agentId}:${options.sessionKeyPrefix}-${task.id}`;
   const logPath = join(options.logDirectory, `${safeFileName(agentSessionId)}.log`);
-  const outputFd = openSync(logPath, 'w');
+  const outputFd = openPrivateLogFile(logPath, 'w');
   const args = [
     'agent',
     '--agent',
@@ -190,18 +190,9 @@ export async function startOpenClawRun(
 }
 
 export function readRuntimeRunCompletionFromLog(raw: string): RuntimeRunCompletion | undefined {
-  if (/CLI transcript compaction failed/i.test(raw)) {
-    return {
-      status: 'compaction_failed',
-      summary: lastNonEmptyLine(raw),
-      timedOut: /timed out/i.test(raw),
-      timeoutPhase: 'compaction',
-    };
-  }
-
   const payload = parseJsonFromLog(raw);
   if (!isRecord(payload)) {
-    return undefined;
+    return compactionFailureFromLog(raw);
   }
 
   const explicitStatus = stringValue(payload.status);
@@ -219,6 +210,18 @@ export function readRuntimeRunCompletionFromLog(raw: string): RuntimeRunCompleti
     timedOut: booleanValue(payload.timedOut),
     timeoutPhase: stringValue(payload.timeoutPhase),
     stopReason: stringValue(payload.stopReason) ?? stringValue(recordValue(payload.completion)?.stopReason),
+  };
+}
+
+function compactionFailureFromLog(raw: string): RuntimeRunCompletion | undefined {
+  if (!/CLI transcript compaction failed/i.test(raw)) {
+    return undefined;
+  }
+  return {
+    status: 'compaction_failed',
+    summary: lastNonEmptyLine(raw),
+    timedOut: /timed out/i.test(raw),
+    timeoutPhase: 'compaction',
   };
 }
 
@@ -462,6 +465,17 @@ function findJsonObjectEnd(raw: string, start: number): number | undefined {
 
 function defaultSpawnProcess(command: string, args: string[], options: { detached: boolean; stdio: unknown[] }): SpawnedChild {
   return spawn(command, args, options as never) as SpawnedChild;
+}
+
+function ensurePrivateLogDirectory(directory: string): void {
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  chmodSync(directory, 0o700);
+}
+
+function openPrivateLogFile(path: string, flags: 'a' | 'w'): number {
+  const fd = openSync(path, flags, 0o600);
+  chmodSync(path, 0o600);
+  return fd;
 }
 
 function attachSpawnErrorHandler(

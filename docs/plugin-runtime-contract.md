@@ -91,7 +91,8 @@ provider 利用側が `onSpawnError` で観測できるようにする。start r
 由来の一意な名前にする。resume run も session id を attempt id に含め、同じ issue
 task の別 session が同じ resume log に追記されないようにする。初回実行が gateway
 fallback session へ移った場合は、前回 log から fallback session id を検出して resume
-対象にする。
+対象にする。OpenClaw の raw stdout/stderr log は redaction 前の credential を含み得るため、
+log directory は `0700`、start/resume log file は `0600` で作成する。
 
 completion/resume/timeline は provider 境界の情報として扱う。completion parser は
 Codex/OpenClaw の JSON completion と transcript compaction failure を区別し、
@@ -101,11 +102,14 @@ Codex/OpenClaw の JSON completion と transcript compaction failure を区別�
 失敗 status は Outcome より優先し、failed/canceled/stopped/timed_out などの
 canonical status も completion として読める。banner 付き log から JSON completion を拾う時は
 top-level completion object を優先し、payload 内の nested JSON を run completion と誤認しない。
+JSON completion として解析できる場合は、本文に `CLI transcript compaction failed` という文字列が
+含まれていても JSON の status を優先し、実エラー行だけを compaction_failed とする。
 resume helper は running pid を確認し、
 安定した resume attempt id を生成する。timeline reader は OpenClaw trajectory jsonl を読み、Codex activity 表示に
 必要な時刻、分類済み phase、redacted summary、status、redacted excerpt を返す。
 redaction は shell 風の `token=...` だけでなく JSON の `"token": "..."` /
-`"apiKey": "..."` / `"password": "..."`、quoted shell assignment、`github_pat_...`、
+`"apiKey": "..."` / `"password": "..."`、`"webhookSecret"` / `"clientSecret"` /
+`"apiToken"` のような compound key、quoted shell assignment、`github_pat_...`、
 Bearer credential も対象にする。timeline status は最後の lifecycle/event row を見て
 ended を更新し、resume 後に追記された session を古い ended のまま扱わない。trajectory の既定 path は
 `agentId` ごとの `~/.openclaw/agents/<agentId>/sessions` を使い、`main` 以外の
