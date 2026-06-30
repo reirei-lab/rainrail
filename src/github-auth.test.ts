@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   clearGitHubAppTokenCache,
@@ -13,6 +13,11 @@ import {
   isGitHubRateLimitResponse,
 } from './github-auth.js';
 import { clearGitHubRateLimitSnapshots, getGitHubRateLimitSnapshots } from './github-rate-limit.js';
+
+beforeEach(() => {
+  vi.stubEnv('GH_TOKEN', '');
+  vi.stubEnv('GITHUB_TOKEN', '');
+});
 
 afterEach(() => {
   clearGitHubAppTokenCache();
