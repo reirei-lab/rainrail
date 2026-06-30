@@ -91,15 +91,17 @@ constructor が拒否する。Worker/Node adapter は同じ room へ sticky rout
 room ごとに別 storage namespace を使う。
 
 storage の key は `rainrail:recent-events`。保存するのは正規化済み envelope だけで、
-object payload も allowlist された shallow JSON scalar metadata（`action` / `status` /
-`conclusion`）に縮約し、object でない payload は空 object にする。任意 URL や query を
+object payload も allowlist された shallow metadata（`action` / `status` /
+`conclusion`）のうち、短い token 文字列または `null` だけに縮約し、object でない payload は
+空 object にする。任意 URL や query を
 持ち込める `links` は保存しない。`subject.url` と `rawPayload.reference` は URL として
-parse でき、scheme が `https:`、`github://deliveries/...`、または
+parse でき、scheme が GitHub provider URL、`github://deliveries/...`、または
 `cloudflare://deliveries/...` の場合だけ、
 userinfo / query / fragment を除去してから保存する。
 URL として parse できない optional `subject.url` は保存せず、必須の
 `rawPayload.reference` が parse できない、または allowlist 外 scheme の場合は publish を
 400 で拒否する。
+`rawPayload.kind` は `external-reference` または `inline-redacted` だけを保存する。
 `rawPayload.contentType` は MIME type の type/subtype として妥当な値だけを小文字で保存し、
 parameter は保持しない。
 `rawPayload.sha256` は 64 桁 hex digest の場合だけ保存する。secret、token、credential、

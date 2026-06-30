@@ -5,7 +5,9 @@ import { formatRainrailSseEvent, rainrailSseHeaders } from './sse.js';
 const RECENT_EVENTS_KEY = 'rainrail:recent-events';
 const DEFAULT_REPLAY_LIMIT = 100;
 const ALLOWED_PAYLOAD_KEYS = new Set(['action', 'status', 'conclusion']);
+const ALLOWED_RAW_PAYLOAD_KINDS = new Set(['external-reference', 'inline-redacted']);
 const ALLOWED_URL_PROTOCOLS = new Set(['https:', 'github:', 'cloudflare:']);
+const SAFE_METADATA_TOKEN = /^[a-z0-9][a-z0-9._:-]{0,63}$/i;
 const claimedStorages = new WeakSet<RainrailBridgeRoomStorage>();
 
 type PublishEventResult =
@@ -242,7 +244,7 @@ function validatePublishEnvelope(value: unknown): RainrailEventEnvelope {
   const deliveryReceivedAt = expectString(delivery, 'receivedAt');
   const subjectType = expectString(subject, 'type');
   const subjectId = expectString(subject, 'id');
-  const rawPayloadKind = expectString(rawPayload, 'kind');
+  const rawPayloadKind = expectRawPayloadKind(rawPayload);
   const rawPayloadReference = expectString(rawPayload, 'reference');
 
   if (!('payload' in value)) {
@@ -342,6 +344,15 @@ function optionalContentType(record: Record<string, unknown>): Record<string, st
   return { contentType };
 }
 
+function expectRawPayloadKind(record: Record<string, unknown>): string {
+  const kind = expectString(record, 'kind');
+  if (!ALLOWED_RAW_PAYLOAD_KINDS.has(kind)) {
+    throw new TypeError('kind must be a known raw payload kind');
+  }
+
+  return kind;
+}
+
 function sanitizeUrl(value: string): string | undefined {
   try {
     const url = new URL(value);
@@ -360,7 +371,28 @@ function sanitizeUrl(value: string): string | undefined {
 function isAllowedUrl(url: URL): boolean {
   if (!ALLOWED_URL_PROTOCOLS.has(url.protocol)) return false;
 
+  if (url.protocol === 'https:') {
+    return isAllowedGitHubUrl(url);
+  }
+
   return (url.protocol !== 'github:' && url.protocol !== 'cloudflare:') || url.hostname === 'deliveries';
+}
+
+function isAllowedGitHubUrl(url: URL): boolean {
+  if (url.hostname !== 'github.com') return false;
+
+  const parts = url.pathname.split('/').filter(Boolean);
+  if (parts.length < 4) return false;
+
+  const [, , resource, id] = parts;
+  if (!/^[A-Za-z0-9_.-]+$/.test(parts[0] ?? '') || !/^[A-Za-z0-9_.-]+$/.test(parts[1] ?? '')) {
+    return false;
+  }
+
+  return (
+    ((resource === 'issues' || resource === 'pull') && /^\d+$/.test(id ?? '') && parts.length === 4) ||
+    (resource === 'actions' && parts[3] === 'runs' && /^\d+$/.test(parts[4] ?? '') && parts.length === 5)
+  );
 }
 
 function expectSanitizedUrl(value: string, key: string): string {
@@ -391,7 +423,7 @@ function normalizePayload(value: unknown): unknown {
 
   const payload: Record<string, string | number | boolean | null> = {};
   for (const [key, nestedValue] of Object.entries(value)) {
-    if (ALLOWED_PAYLOAD_KEYS.has(key) && isJsonScalar(nestedValue)) {
+    if (ALLOWED_PAYLOAD_KEYS.has(key) && isSafePayloadMetadata(nestedValue)) {
       payload[key] = nestedValue;
     }
   }
@@ -399,8 +431,10 @@ function normalizePayload(value: unknown): unknown {
   return payload;
 }
 
-function isJsonScalar(value: unknown): value is string | number | boolean | null {
-  return value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean';
+function isSafePayloadMetadata(value: unknown): value is string | null {
+  if (value === null) return true;
+
+  return typeof value === 'string' && SAFE_METADATA_TOKEN.test(value);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

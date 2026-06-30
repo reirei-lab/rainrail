@@ -280,6 +280,31 @@ describe('Rainrail bridge room', () => {
     expect(referenceStorage.storedEvents()).toEqual([]);
   });
 
+  it('drops arbitrary HTTPS paths before storage', async () => {
+    const subjectStorage = fakeState();
+    const subjectRoom = createTestRoom(subjectStorage, { replayLimit: 10 });
+    const secretSubjectUrlEvent = {
+      ...fixtureEvent('delivery-1', 'github.issue'),
+      subject: { type: 'issue', id: 'delivery-1', url: 'https://storage.example/tokens/secret-subject-url' },
+    };
+
+    expect((await subjectRoom.fetch(publishRequest(secretSubjectUrlEvent))).status).toBe(200);
+    expect(subjectStorage.storedEvents()[0]?.subject).not.toHaveProperty('url');
+
+    const referenceStorage = fakeState();
+    const referenceRoom = createTestRoom(referenceStorage, { replayLimit: 10 });
+    const secretReferenceEvent = {
+      ...fixtureEvent('delivery-2', 'github.issue'),
+      rawPayload: { kind: 'external-reference', reference: 'https://storage.example/tokens/secret-reference' },
+    };
+
+    const response = await referenceRoom.fetch(publishRequest(secretReferenceEvent));
+
+    expect(response.status).toBe(400);
+    await expect(response.text()).resolves.toContain('reference must be a valid URL');
+    expect(referenceStorage.storedEvents()).toEqual([]);
+  });
+
   it('rejects non-allowlisted URL schemes before storage', async () => {
     const subjectStorage = fakeState();
     const subjectRoom = createTestRoom(subjectStorage, { replayLimit: 10 });
@@ -314,6 +339,24 @@ describe('Rainrail bridge room', () => {
 
     expect(response.status).toBe(200);
     expect(storage.storedEvents()[0]?.rawPayload.reference).toBe('cloudflare://deliveries/delivery-1');
+  });
+
+  it('rejects unknown raw payload kinds before storage', async () => {
+    const storage = fakeState();
+    const room = createTestRoom(storage, { replayLimit: 10 });
+    const event = {
+      ...fixtureEvent('delivery-1', 'github.issue'),
+      rawPayload: {
+        kind: 'token=secret-kind',
+        reference: 'github://deliveries/delivery-1',
+      },
+    };
+
+    const response = await room.fetch(publishRequest(event));
+
+    expect(response.status).toBe(400);
+    await expect(response.text()).resolves.toContain('kind must be a known raw payload kind');
+    expect(storage.storedEvents()).toEqual([]);
   });
 
   it('captures JSON parse failures while the publish waits in queue', async () => {
@@ -469,7 +512,7 @@ describe('Rainrail bridge room', () => {
       rawBody: 'secret raw webhook body',
       rawPayload: {
         kind: 'external-reference',
-        reference: 'https://token:secret@example.test/raw/delivery-1?token=secret-reference-token#secret-fragment',
+        reference: 'github://deliveries/delivery-1',
         contentType: 'token=secret-content-type',
         sha256: 'token=secret-sha-value',
         secret: 'token-like value',
@@ -488,7 +531,7 @@ describe('Rainrail bridge room', () => {
       status: 'queued',
       conclusion: null,
     });
-    expect(storage.storedEvents()[0]?.rawPayload.reference).toBe('https://example.test/raw/delivery-1');
+    expect(storage.storedEvents()[0]?.rawPayload.reference).toBe('github://deliveries/delivery-1');
     expect(storage.storedEvents()[0]?.rawPayload).not.toHaveProperty('contentType');
     expect(storage.storedEvents()[0]?.rawPayload).not.toHaveProperty('secret');
     expect(storage.storedEvents()[0]?.rawPayload).not.toHaveProperty('sha256');
@@ -501,7 +544,6 @@ describe('Rainrail bridge room', () => {
 
     expect(chunk).not.toContain('secret raw webhook body');
     expect(chunk).not.toContain('secret-subject-token');
-    expect(chunk).not.toContain('secret-reference-token');
     expect(chunk).not.toContain('secret-fragment');
     expect(chunk).not.toContain('token:secret');
     expect(chunk).not.toContain('secret-content-type');
@@ -539,6 +581,35 @@ describe('Rainrail bridge room', () => {
 
     expect(chunk).toContain('"contentType":"application/json"');
     expect(chunk).not.toContain('secret-parameter');
+  });
+
+  it('drops unsafe payload metadata values before storage and SSE delivery', async () => {
+    const storage = fakeState();
+    const room = createTestRoom(storage, { replayLimit: 10 });
+    const event = {
+      ...fixtureEvent('delivery-1', 'github.issue'),
+      payload: {
+        action: 'token=secret-action',
+        status: 'completed',
+        conclusion: 'success',
+      },
+    };
+
+    const publishResponse = await room.fetch(publishRequest(event));
+
+    expect(publishResponse.status).toBe(200);
+    expect(storage.storedEvents()[0]?.payload).toEqual({
+      status: 'completed',
+      conclusion: 'success',
+    });
+
+    const eventsResponse = await room.fetch(eventsRequest());
+    const reader = eventsResponse.body?.getReader();
+    expect(reader).toBeDefined();
+    const chunk = await readUntil(reader!, 'github.issue');
+    await reader?.cancel();
+
+    expect(chunk).not.toContain('secret-action');
   });
 
   it('normalizes scalar payloads to an empty object before storage and SSE delivery', async () => {
