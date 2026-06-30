@@ -286,7 +286,7 @@ async function findExistingMentionDraftItem(
       throw new Error('GitHub Project items response is missing project items');
     }
     for (const item of items.nodes) {
-      const draft = mentionDraftItemMatch(item, input.commentUrl, config);
+      const draft = mentionDraftItemMatch(item, input.commentUrl, input.targetAgentLogin ?? config.assigneeLogin, config);
       if (draft !== undefined) {
         return draft;
       }
@@ -299,7 +299,12 @@ async function findExistingMentionDraftItem(
   return undefined;
 }
 
-function mentionDraftItemMatch(item: unknown, commentUrl: string, config: GitHubProjectTaskQueueConfig): MentionDraftProjectItem | undefined {
+function mentionDraftItemMatch(
+  item: unknown,
+  commentUrl: string,
+  targetAgentLogin: string,
+  config: GitHubProjectTaskQueueConfig,
+): MentionDraftProjectItem | undefined {
   if (!isRecord(item) || typeof item.id !== 'string' || !isRecord(item.content)) {
     return undefined;
   }
@@ -307,7 +312,11 @@ function mentionDraftItemMatch(item: unknown, commentUrl: string, config: GitHub
   if (content.__typename !== 'DraftIssue' || typeof content.body !== 'string') {
     return undefined;
   }
-  if (!content.body.includes(mentionDraftMarker) || !hasExactMentionUrlLine(content.body, commentUrl)) {
+  if (
+    !content.body.includes(mentionDraftMarker)
+    || !hasExactMentionUrlLine(content.body, commentUrl)
+    || !hasMentionDraftTargetAgent(content.body, targetAgentLogin)
+  ) {
     return undefined;
   }
   const status = fieldValue(item, config.statusFieldName);
@@ -1770,6 +1779,9 @@ function mapProjectIssueItem(item: unknown, config: GitHubProjectTaskQueueConfig
   if (contentType === 'DraftIssue' && commentUrl === undefined) {
     return [];
   }
+  if (contentType === 'DraftIssue' && !hasMentionDraftTargetAgent(draftBody ?? '', config.assigneeLogin)) {
+    return [];
+  }
 
   const repository = draftBody === undefined ? repositoryName(content) : mentionDraftRepository(draftBody);
   if (contentType === 'DraftIssue' && repository === undefined) {
@@ -1830,6 +1842,7 @@ function projectItemAssigneeLogins(item: Record<string, unknown>, config: GitHub
     content.__typename === 'DraftIssue'
     && typeof content.body === 'string'
     && mentionDraftCommentUrl(content.body) !== undefined
+    && hasMentionDraftTargetAgent(content.body, config.assigneeLogin)
   ) {
     return [config.assigneeLogin];
   }
@@ -1847,6 +1860,11 @@ function mentionDraftCommentUrl(body: string): string | undefined {
 function mentionDraftRepository(body: string): string | undefined {
   const repository = mentionDraftLine(body, 'Repository');
   return repository !== undefined && /^[^/\s]+\/[^/\s]+$/u.test(repository) ? repository : undefined;
+}
+
+function hasMentionDraftTargetAgent(body: string, assigneeLogin: string): boolean {
+  const target = mentionDraftLine(body, 'Agent');
+  return target !== undefined && sameLogin(target, assigneeLogin);
 }
 
 function mentionDraftNumber(body: string): number | undefined {

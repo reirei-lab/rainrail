@@ -123,7 +123,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
     expect(provider.addMentionDraftItem).toBeDefined();
     await expect(provider.addMentionDraftItem?.({
       title: 'Respond to reirei-lab/rainrail#24',
-      body: '<!-- rainrail mention-draft -->\nMention URL: https://github.com/reirei-lab/rainrail/issues/24#issuecomment-1',
+      body: '<!-- rainrail mention-draft -->\nMention URL: https://github.com/reirei-lab/rainrail/issues/24#issuecomment-1\nAgent: reirei-agent',
       commentUrl: 'https://github.com/reirei-lab/rainrail/issues/24#issuecomment-1',
       repository: 'reirei-lab/rainrail',
       number: 24,
@@ -171,7 +171,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
                           __typename: 'DraftIssue',
                           id: 'DI_existing_draft',
                           title: 'Respond to reirei-lab/rainrail#24',
-                          body: '<!-- rainrail mention-draft -->\nMention URL: https://github.com/reirei-lab/rainrail/issues/24#issuecomment-1',
+                          body: '<!-- rainrail mention-draft -->\nMention URL: https://github.com/reirei-lab/rainrail/issues/24#issuecomment-1\nAgent: reirei-agent',
                         },
                         fieldValues: {
                           nodes: [
@@ -194,7 +194,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
 
     await expect(provider.addMentionDraftItem?.({
       title: 'Respond to reirei-lab/rainrail#24',
-      body: '<!-- rainrail mention-draft -->\nMention URL: https://github.com/reirei-lab/rainrail/issues/24#issuecomment-1',
+      body: '<!-- rainrail mention-draft -->\nMention URL: https://github.com/reirei-lab/rainrail/issues/24#issuecomment-1\nAgent: reirei-agent',
       commentUrl: 'https://github.com/reirei-lab/rainrail/issues/24#issuecomment-1',
       repository: 'reirei-lab/rainrail',
       number: 24,
@@ -229,7 +229,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
           return mentionDraftItemsResponse([{
             id: 'PVTI_existing_draft',
             title: 'Respond to reirei-lab/rainrail#24',
-            body: '<!-- rainrail mention-draft -->\nMention URL: https://github.com/reirei-lab/rainrail/issues/24#issuecomment-1234',
+            body: '<!-- rainrail mention-draft -->\nMention URL: https://github.com/reirei-lab/rainrail/issues/24#issuecomment-1234\nAgent: reirei-agent',
             status: 'Todo',
           }]);
         }
@@ -244,8 +244,56 @@ describe('createGitHubProjectTaskQueueProvider', () => {
 
     await expect(provider.addMentionDraftItem?.({
       title: 'Respond to reirei-lab/rainrail#24',
-      body: '<!-- rainrail mention-draft -->\nMention URL: https://github.com/reirei-lab/rainrail/issues/24#issuecomment-123',
+      body: '<!-- rainrail mention-draft -->\nMention URL: https://github.com/reirei-lab/rainrail/issues/24#issuecomment-123\nAgent: reirei-agent',
       commentUrl: 'https://github.com/reirei-lab/rainrail/issues/24#issuecomment-123',
+      repository: 'reirei-lab/rainrail',
+      number: 24,
+    })).resolves.toMatchObject({
+      projectItemId: 'PVTI_new_draft',
+      created: true,
+    });
+    expect(calls.some((call) => call.query?.includes('RainrailAddProjectDraftIssue'))).toBe(true);
+  });
+
+  it('scopes mention draft dedupe to the target agent login', async () => {
+    const calls: Array<{ query?: string; variables?: Record<string, unknown> }> = [];
+    const provider = createGitHubProjectTaskQueueProvider({
+      config: projectConfig(),
+      auth: { getAuthToken: async () => ({ token: 'project-token', provider: 'configured-token', fallback: false }) },
+      fetch: (async (_url, init) => {
+        const request = JSON.parse(String(init?.body)) as { query?: string; variables?: Record<string, unknown> };
+        calls.push(request);
+        if (request.query?.includes('RainrailProjectMetadata')) {
+          return projectMetadataResponse();
+        }
+        if (request.query?.includes('RainrailMentionDraftItems')) {
+          return mentionDraftItemsResponse([{
+            id: 'PVTI_other_agent_draft',
+            title: 'Respond to reirei-lab/rainrail#24',
+            body: [
+              '<!-- rainrail mention-draft -->',
+              'Mention URL: https://github.com/reirei-lab/rainrail/issues/24#issuecomment-1',
+              'Agent: other-agent',
+              'Repository: reirei-lab/rainrail',
+              'Number: 24',
+            ].join('\n'),
+            status: 'Todo',
+          }]);
+        }
+        if (request.query?.includes('RainrailAddProjectDraftIssue')) {
+          return jsonResponse({
+            data: { addProjectV2DraftIssue: { projectItem: { id: 'PVTI_new_draft' } } },
+          });
+        }
+        return jsonResponse({ data: { updateProjectV2ItemFieldValue: { projectV2Item: { id: 'PVTI_new_draft' } } } });
+      }) as typeof fetch,
+    });
+
+    await expect(provider.addMentionDraftItem?.({
+      title: 'Respond to reirei-lab/rainrail#24',
+      body: mentionDraftBody('https://github.com/reirei-lab/rainrail/issues/24#issuecomment-1'),
+      commentUrl: 'https://github.com/reirei-lab/rainrail/issues/24#issuecomment-1',
+      targetAgentLogin: 'reirei-agent',
       repository: 'reirei-lab/rainrail',
       number: 24,
     })).resolves.toMatchObject({
@@ -270,7 +318,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
           return mentionDraftItemsResponse([{
             id: 'PVTI_existing_draft',
             title: 'Respond to reirei-lab/rainrail#24',
-            body: '<!-- rainrail mention-draft -->\nMention URL: https://github.com/reirei-lab/rainrail/issues/24#issuecomment-1',
+            body: '<!-- rainrail mention-draft -->\nMention URL: https://github.com/reirei-lab/rainrail/issues/24#issuecomment-1\nAgent: reirei-agent',
             status: 'In Progress',
           }]);
         }
@@ -280,7 +328,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
 
     await expect(provider.addMentionDraftItem?.({
       title: 'Respond to reirei-lab/rainrail#24',
-      body: '<!-- rainrail mention-draft -->\nMention URL: https://github.com/reirei-lab/rainrail/issues/24#issuecomment-1',
+      body: '<!-- rainrail mention-draft -->\nMention URL: https://github.com/reirei-lab/rainrail/issues/24#issuecomment-1\nAgent: reirei-agent',
       commentUrl: 'https://github.com/reirei-lab/rainrail/issues/24#issuecomment-1',
       repository: 'reirei-lab/rainrail',
       number: 24,
@@ -387,6 +435,46 @@ describe('createGitHubProjectTaskQueueProvider', () => {
     });
     expect(calls.filter((call) => call.query?.includes('updateProjectV2ItemFieldValue'))).toHaveLength(0);
     expect(calls.some((call) => call.query?.includes('RainrailCreateProjectIssueClaimLock'))).toBe(true);
+  });
+
+  it('does not list mention draft items for a different target agent login', async () => {
+    const provider = createGitHubProjectTaskQueueProvider({
+      config: projectConfig(),
+      auth: { getAuthToken: async () => ({ token: 'project-token', provider: 'configured-token', fallback: false }) },
+      fetch: (async (_url, init) => {
+        const request = JSON.parse(String(init?.body)) as { query?: string; variables?: Record<string, unknown> };
+        if (request.query?.includes('RainrailProjectIssues')) {
+          return jsonResponse({
+            data: {
+              organization: {
+                projectV2: {
+                  items: {
+                    nodes: [
+                      mentionDraftProjectItem({
+                        id: 'PVTI_other_agent_draft',
+                        title: 'Respond to reirei-lab/rainrail#24',
+                        body: [
+                          '<!-- rainrail mention-draft -->',
+                          'Mention URL: https://github.com/reirei-lab/rainrail/issues/24#issuecomment-1',
+                          'Agent: other-agent',
+                          'Repository: reirei-lab/rainrail',
+                          'Number: 24',
+                        ].join('\n'),
+                        status: 'Todo',
+                      }),
+                    ],
+                    pageInfo: { hasNextPage: false, endCursor: null },
+                  },
+                },
+              },
+            },
+          });
+        }
+        return jsonResponse({ data: {} });
+      }) as typeof fetch,
+    });
+
+    await expect(provider.listProjectIssues()).resolves.toEqual([]);
   });
 
   it('rejects concurrent mention draft claims with the repository lock', async () => {
@@ -504,7 +592,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
               node: mentionDraftProjectItem({
                 id: 'PVTI_draft_queue',
                 title: 'Respond to reirei-lab/rainrail#24',
-                body: '<!-- rainrail mention-draft -->\nMention URL: https://github.com/reirei-lab/rainrail/issues/24#issuecomment-1',
+                body: '<!-- rainrail mention-draft -->\nMention URL: https://github.com/reirei-lab/rainrail/issues/24#issuecomment-1\nAgent: reirei-agent',
                 status: 'In Progress',
                 agentSessionId: 'agent:main:rainrail-draft',
                 branchName: 'agent/reirei-lab-rainrail-draft',
@@ -553,7 +641,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
               node: mentionDraftProjectItem({
                 id: 'PVTI_draft_queue',
                 title: 'Respond to reirei-lab/rainrail#24',
-                body: '<!-- rainrail mention-draft -->\nMention URL: https://github.com/reirei-lab/rainrail/issues/24#issuecomment-1',
+                body: '<!-- rainrail mention-draft -->\nMention URL: https://github.com/reirei-lab/rainrail/issues/24#issuecomment-1\nAgent: reirei-agent',
                 status: 'In Progress',
                 agentSessionId: updatedAgentSessionId ? 'agent:main:rainrail-draft' : '',
                 branchName: updatedBranch ? 'agent/reirei-lab-rainrail-draft' : '',
@@ -5801,6 +5889,7 @@ function mentionDraftBody(commentUrl: string): string {
   return [
     '<!-- rainrail mention-draft -->',
     `Mention URL: ${commentUrl}`,
+    'Agent: reirei-agent',
     'Repository: reirei-lab/rainrail',
     'Number: 24',
   ].join('\n');

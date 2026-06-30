@@ -47,6 +47,7 @@ type PublishEventResult =
 export interface RainrailBridgeRoomStorage {
   get(key: string): Promise<unknown>;
   put(key: string, value: unknown): Promise<void>;
+  compareAndSet?(key: string, expected: unknown, value: unknown): Promise<boolean>;
 }
 
 export interface RainrailBridgeRoomState {

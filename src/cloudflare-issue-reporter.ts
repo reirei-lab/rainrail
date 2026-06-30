@@ -480,11 +480,17 @@ async function withStorageFingerprintLock<T>(
   return withLocalFingerprintLock(storageKey(input.repository, input.fingerprint), async () => {
     const key = `${storageKeyPrefix}lock:${input.repository}:${input.fingerprint}`;
     const owner = `${Date.now()}:${Math.random().toString(36).slice(2)}`;
-    const now = Date.now();
-    if (storageLockRecord(await storage.get(key)) !== undefined) {
+    const value = { owner, expiresAt: Date.now() + storeHitGraceMs };
+    if (storage.compareAndSet === undefined) {
+      throw new Error('Cloudflare error fingerprint lock requires storage.compareAndSet');
+    }
+    const current = await storage.get(key);
+    if (storageLockRecord(current) !== undefined) {
       throw new Error('Cloudflare error fingerprint is already locked');
     }
-    await storage.put(key, { owner, expiresAt: now + storeHitGraceMs });
+    if (!await storage.compareAndSet(key, current, value)) {
+      throw new Error('Cloudflare error fingerprint is already locked');
+    }
     const lock = storageLockRecord(await storage.get(key));
     if (lock?.owner !== owner) {
       throw new Error('Cloudflare error fingerprint is already locked');
@@ -570,7 +576,7 @@ function redactRawEventData(value: unknown, depth = 0): unknown {
 }
 
 function isSensitiveKey(key: string): boolean {
-  return /authorization|cookie|token|secret|password|key/iu.test(key);
+  return /authorization|cookie|token|secret|password|key|code|reset|verification/iu.test(key);
 }
 
 function isUrlKey(key: string): boolean {
@@ -584,8 +590,8 @@ function sanitizeSecretString(value: string): string {
     .replace(/\bauthorization\s*:\s*[^\r\n]+/giu, 'authorization: [redacted]')
     .replace(/(["'])([A-Za-z0-9_-]*(?:authorization|cookie|tokens?|secrets?|passwords?|keys?|codes?|resets?))\1(\s*:\s*)\[[^\]]*\]/giu, '$1$2$1$3[redacted]')
     .replace(/(^|[{\s"'<>`,;])(["']?)([A-Za-z0-9_-]*(?:authorization|cookie|tokens?|secrets?|passwords?|keys?|codes?|resets?))\2(\s*:\s*)\[[^\]]*\]/giu, '$1$2$3$2$4[redacted]')
-    .replace(/(["'])([A-Za-z0-9_-]*(?:authorization|cookie|tokens?|secrets?|passwords?|keys?|codes?|resets?))\1(\s*:\s*)(["'])[^"']*\4/giu, '$1$2$1$3$4[redacted]$4')
-    .replace(/(^|[{\s"'<>`,;])(["']?)([A-Za-z0-9_-]*(?:authorization|cookie|tokens?|secrets?|passwords?|keys?|codes?|resets?))\2(\s*:\s*)(["'])[^"']*\5/giu, '$1$2$3$2$4$5[redacted]$5')
+    .replace(/(["'])([A-Za-z0-9_-]*(?:authorization|cookie|tokens?|secrets?|passwords?|keys?|codes?|resets?|verification))\1(\s*:\s*)(["'])(?:\\.|(?!\4)[^\\])*\4/giu, '$1$2$1$3$4[redacted]$4')
+    .replace(/(^|[{\s"'<>`,;])(["']?)([A-Za-z0-9_-]*(?:authorization|cookie|tokens?|secrets?|passwords?|keys?|codes?|resets?|verification))\2(\s*:\s*)(["'])(?:\\.|(?!\5)[^\\])*\5/giu, '$1$2$3$2$4$5[redacted]$5')
     .replace(/(^|[{\s"'<>`,;])(["']?)([A-Za-z0-9_-]*(?:authorization|cookie|tokens?|secrets?|passwords?|keys?|codes?|resets?))\2(\s*:\s*)(?!["'])([^,\s\r\n}\]]+)/giu, '$1$2$3$2$4[redacted]')
     .replace(/(^|[.?&\s"'<>`,;])([A-Za-z0-9_-]*authorization)=([^\r\n"'<>`,;]*?)(?=(?:\s+[A-Za-z0-9_-]*(?:authorization|cookie|set-cookie|tokens?|secrets?|passwords?|keys?|codes?|resets?)=)|[&\r\n"'<>`,;]|$)/giu, '$1$2=[redacted]')
     .replace(/(^|[.?&\s"'<>`,;])([A-Za-z0-9_-]*(?:cookie|set-cookie))=([^&\s"'<>`,;]+)/giu, '$1$2=[redacted]')

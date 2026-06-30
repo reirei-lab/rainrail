@@ -46,8 +46,9 @@ export function createMentionDraftWorkflow(options: MentionDraftWorkflowOptions)
 
       const draftItem = await addMentionDraftItem({
         title: mention.title,
-        body: draftBody(mention),
+        body: draftBody(mention, options.assigneeLogin),
         commentUrl: mention.commentUrl,
+        targetAgentLogin: options.assigneeLogin,
         ...(mention.repository === undefined ? {} : { repository: mention.repository }),
         ...(mention.number === undefined ? {} : { number: mention.number }),
       }, context, options.addMentionDraftItem);
@@ -147,10 +148,11 @@ function sourceResource(payload: Record<string, unknown>): Record<string, unknow
   return resource;
 }
 
-function draftBody(mention: MentionDraftRequest): string {
+function draftBody(mention: MentionDraftRequest, targetAgentLogin: string): string {
   return [
     mentionDraftMarker,
     `Mention URL: ${mention.commentUrl}`,
+    `Agent: ${targetAgentLogin}`,
     mention.repository === undefined ? undefined : `Repository: ${mention.repository}`,
     mention.number === undefined ? undefined : `Number: ${mention.number}`,
     mention.sourceTitle === undefined ? undefined : `Source title: ${mention.sourceTitle}`,

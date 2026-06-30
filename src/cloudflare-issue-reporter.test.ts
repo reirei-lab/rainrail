@@ -317,6 +317,11 @@ describe('cloudflare issue reporter workflow', () => {
       put: async (key, value) => {
         values.set(key, value);
       },
+      compareAndSet: async (key, expected, value) => {
+        if (!Object.is(values.get(key), expected)) return false;
+        values.set(key, value);
+        return true;
+      },
     });
     const searchIssues = vi.fn(async () => []);
     const createIssue = vi.fn(async () => ({
@@ -373,6 +378,11 @@ describe('cloudflare issue reporter workflow', () => {
       put: async (key, value) => {
         values.set(key, value);
       },
+      compareAndSet: async (key, expected, value) => {
+        if (!Object.is(values.get(key), expected)) return false;
+        values.set(key, value);
+        return true;
+      },
     });
 
     values.set(lockKey, { owner: 'other-runner', expiresAt: Date.now() + 60_000 });
@@ -386,6 +396,34 @@ describe('cloudflare issue reporter workflow', () => {
       repository: 'reirei-lab/rainrail',
       fingerprint: 'sha256:storage-lock',
     }, async () => 'released')).resolves.toBe('released');
+  });
+
+  it('does not enter a storage fingerprint lock when atomic reservation loses the race', async () => {
+    const values = new Map<string, unknown>();
+    const lockKey = 'rainrail:cloudflare-error-issue:lock:reirei-lab/rainrail:sha256:storage-lock-race';
+    const store = createStorageCloudflareErrorIssueStore({
+      get: async (key) => values.get(key),
+      put: async (key, value) => {
+        values.set(key, value);
+      },
+      compareAndSet: async (key, expected, value) => {
+        if (key === lockKey && expected === undefined) {
+          values.set(key, { owner: 'other-runner', expiresAt: Date.now() + 60_000 });
+          return false;
+        }
+        if (!Object.is(values.get(key), expected)) return false;
+        values.set(key, value);
+        return true;
+      },
+    });
+    const criticalSection = vi.fn(async () => 'locked');
+
+    await expect(store.withFingerprintLock?.({
+      repository: 'reirei-lab/rainrail',
+      fingerprint: 'sha256:storage-lock-race',
+    }, criticalSection)).rejects.toThrow('already locked');
+
+    expect(criticalSection).not.toHaveBeenCalled();
   });
 
   it('uses the first exception with a usable stack', () => {
@@ -441,6 +479,7 @@ function cloudflareErrorEvent(overrides: {
   exceptionName?: string;
   message?: string;
   stack?: string;
+  rawData?: Record<string, unknown>;
   leadingStacklessException?: boolean;
 } = {}) {
   const line = overrides.line ?? 1510;
@@ -492,6 +531,7 @@ function cloudflareErrorEvent(overrides: {
           status: 500,
         },
       },
+      ...(overrides.rawData ?? {}),
     },
     rawPayload: {
       kind: 'external-reference',
@@ -656,6 +696,47 @@ describe('cloudflare issue redaction', () => {
     expect(createdIssues[0]?.body).toContain('\\"tokens\\":[redacted]');
     expect(createdIssues[0]?.body).toContain('\\"apiKeys\\":[redacted]');
     expect(createdIssues[0]?.body).toContain('passwords: \\"[redacted]\\"');
+  });
+
+  it('redacts structured code keys and escaped quoted secret strings', async () => {
+    const createdIssues: Array<{ body: string }> = [];
+    const workflow = createCloudflareIssueReporterWorkflow({
+      repository: 'reirei-lab/rainrail',
+      store: createInMemoryCloudflareErrorIssueStore(),
+      issues: {
+        findOpenIssueByFingerprint: async () => undefined,
+        createIssue: async (input) => {
+          createdIssues.push(input);
+          return {
+            number: 130,
+            url: 'https://github.com/reirei-lab/rainrail/issues/130',
+          };
+        },
+      },
+    });
+
+    await expect(workflow.handle(cloudflareErrorEvent({
+      message: 'serialized input {"password":"abc\\"def","verification_code":"verify-secret"} resetCode: "reset-secret"',
+      rawData: {
+        code: 'plain-code-secret',
+        resetCode: 'reset-code-secret',
+        verification_code: 'verification-code-secret',
+      },
+    }), runtimeContext())).resolves.toMatchObject({
+      handled: true,
+    });
+
+    expect(createdIssues[0]?.body).not.toContain('abc');
+    expect(createdIssues[0]?.body).not.toContain('def');
+    expect(createdIssues[0]?.body).not.toContain('verify-secret');
+    expect(createdIssues[0]?.body).not.toContain('reset-secret');
+    expect(createdIssues[0]?.body).not.toContain('plain-code-secret');
+    expect(createdIssues[0]?.body).not.toContain('reset-code-secret');
+    expect(createdIssues[0]?.body).not.toContain('verification-code-secret');
+    expect(createdIssues[0]?.body).toContain('\\"password\\":\\"[redacted]\\"');
+    expect(createdIssues[0]?.body).toContain('"code": "[redacted]"');
+    expect(createdIssues[0]?.body).toContain('"resetCode": "[redacted]"');
+    expect(createdIssues[0]?.body).toContain('"verification_code": "[redacted]"');
   });
 
   it('redacts serialized Cookie and non-Bearer Authorization headers', async () => {

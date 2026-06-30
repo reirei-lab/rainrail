@@ -57,12 +57,14 @@ describe('mention draft workflow', () => {
       expect.objectContaining({
         title: 'Respond to reirei-lab/rainrail#17: React to mentions',
         commentUrl: 'https://github.com/reirei-lab/rainrail/issues/17#issuecomment-1',
+        targetAgentLogin: 'reirei-agent',
         repository: 'reirei-lab/rainrail',
         number: 17,
       }),
       expect.objectContaining({ runId: 'run-mention' }),
     );
     expect(addMentionDraftItem.mock.calls[0]?.[0].body).toContain(mentionDraftMarker);
+    expect(addMentionDraftItem.mock.calls[0]?.[0].body).toContain('Agent: reirei-agent');
     expect(addMentionDraftItem.mock.calls[0]?.[0].body).toContain('@reirei-agent please handle this');
   });
 

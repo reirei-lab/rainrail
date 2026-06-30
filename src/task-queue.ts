@@ -45,6 +45,7 @@ export interface ProjectMentionDraftInput {
   title: string;
   body: string;
   commentUrl: string;
+  targetAgentLogin?: string;
   repository?: string;
   number?: number;
 }
