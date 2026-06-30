@@ -175,8 +175,7 @@ export function extractRuntimeSessionId(log: string): string | undefined {
   } catch {
     // Partial logs are common, regex fallback handles them.
   }
-  const match = log.match(/"agentMeta"\s*:\s*\{[\s\S]*?"sessionId"\s*:\s*"([^"]+)"/)
-    ?? log.match(/"sessionId"\s*:\s*"([^"]+)"/);
+  const match = log.match(/"agentMeta"\s*:\s*\{[\s\S]*?"sessionId"\s*:\s*"([^"]+)"/);
   return match?.[1];
 }
 
@@ -246,7 +245,7 @@ async function readRuntimeSession(
     const log = await readFile(task.logPath, 'utf8');
     const fallbackSessionId = extractRuntimeFallbackSessionId(log);
     const logSessionId = extractRuntimeSessionId(log);
-    const sessionId = fallbackSessionId ?? logSessionId ?? mapped?.sessionId;
+    const sessionId = fallbackSessionId ?? mapped?.sessionId ?? logSessionId;
     return {
       sessionId,
       sessionFile: fallbackSessionId === undefined && sessionId === mapped?.sessionId ? mapped?.sessionFile : undefined,
@@ -455,6 +454,8 @@ function redactSensitiveText(value: string): string {
     .replace(/(sk-[A-Za-z0-9_-]{20,})/g, '[redacted-token]')
     .replace(/([A-Za-z][A-Za-z0-9+.-]*:\/\/)[^\s/@:]+:[^\s/@]+@/g, '$1[redacted]@')
     .replace(/(Authorization:\s*[A-Za-z][A-Za-z0-9._-]*\s+)[^\s'",}]+/gi, '$1[redacted-token]')
+    .replace(/\b(Set-Cookie:\s*)[^\n\r"]+/gi, '$1[redacted-cookie]')
+    .replace(/\b(Cookie:\s*)[^\n\r"]+?(?=\s+Set-Cookie:|[\n\r"]|$)/gi, '$1[redacted-cookie]')
     .replace(/("[^"]*(?:token|secret|password|api[_-]?key|private[_-]?key|authorization)[^"]*"\s*:\s*)"(?:(?:\\.)|[^"\\])*"/gi, '$1"[redacted]"')
     .replace(/([A-Za-z0-9_-]*(?:token|secret|password|api[_-]?key|private[_-]?key)[A-Za-z0-9_-]*\s*[:=]\s*)"(?:(?:\\.)|[^"\\])*"/gi, '$1"[redacted]"')
     .replace(/([A-Za-z0-9_-]*authorization[A-Za-z0-9_-]*\s*=\s*)"(?:(?:\\.)|[^"\\])*"/gi, '$1"[redacted]"')

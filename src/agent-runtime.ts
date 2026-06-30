@@ -460,7 +460,7 @@ function runtimeResumeSessionId(task: RuntimeAgentTask): string {
 }
 
 function extractFallbackRuntimeSessionKey(log: string): string | undefined {
-  const keyMatch = log.match(/"fallbackSessionKey"\s*:\s*"((?:\\.|[^"\\])*)"/);
+  const keyMatch = log.match(/"agentMeta"\s*:\s*\{[\s\S]*?"fallbackSessionKey"\s*:\s*"((?:\\.|[^"\\])*)"/);
   if (keyMatch?.[1] !== undefined) {
     return decodeJsonString(keyMatch[1]);
   }

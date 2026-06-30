@@ -405,7 +405,10 @@ describe('createOpenClawRuntimeProvider', () => {
     const spawnProcess = vi.fn(() => ({ pid: 5151, unref: vi.fn() }));
     const logDirectory = temporaryDirectory();
     const logPath = `${logDirectory}/task.log`;
-    writeFileSync(logPath, 'user pasted gateway-fallback-not-a-runtime-session in the issue body', 'utf8');
+    writeFileSync(logPath, [
+      'user pasted gateway-fallback-not-a-runtime-session in the issue body',
+      'tool output: {"fallbackSessionKey":"agent:main:other-session"}',
+    ].join('\n'), 'utf8');
     const provider = createOpenClawRuntimeProvider({
       enabled: true,
       command: 'openclaw',
