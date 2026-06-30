@@ -515,8 +515,9 @@ async function claimProjectIssue(
   await assertParentIssueExecutionConditions(config, input.issue, fetchImpl, auth);
   const metadata = await loadProjectMetadata(config, fetchImpl, auth);
   let claim: ProjectIssueClaim | undefined;
+  const useClaimLock = shouldUseProjectIssueClaimLock(before);
   try {
-    const lockRefId = shouldUseProjectIssueClaimLock(before)
+    const lockRefId = useClaimLock
       ? await acquireProjectIssueClaimLock(before, input, config, fetchImpl, auth)
       : undefined;
     claim = {
@@ -535,6 +536,10 @@ async function claimProjectIssue(
       ...(before.defaultBranchTreeOid === undefined ? {} : { lockDefaultBranchTreeOid: before.defaultBranchTreeOid }),
       ...(input.issue.status === undefined ? {} : { originalStatus: input.issue.status }),
     };
+    if (!useClaimLock) {
+      await claimDraftProjectIssue(config, input, claim, before, metadata, fetchImpl, auth);
+      return claim;
+    }
     assertClaimable(await loadProjectItemStatus(input.issue.id, fetchImpl, auth, config), input, config);
     await assertParentIssueExecutionConditions(config, input.issue, fetchImpl, auth);
     await assertProjectIssueSelectionStillAvailable(config, input.issue, fetchImpl, auth);
@@ -552,6 +557,60 @@ function shouldUseProjectIssueClaimLock(status: ProjectItemStatus): boolean {
   return status.contentType !== 'DraftIssue';
 }
 
+async function claimDraftProjectIssue(
+  config: GitHubProjectTaskQueueConfig,
+  input: ProjectIssueClaimInput,
+  claim: ProjectIssueClaim,
+  before: ProjectItemStatus,
+  metadata: ProjectMetadata,
+  fetchImpl: typeof fetch,
+  auth: GitHubProjectAuthTokenProvider,
+): Promise<void> {
+  try {
+    await updateProjectField(fetchImpl, auth, metadata.projectId, input.issue.id, metadata.statusFieldId, {
+      singleSelectOptionId: metadata.statusOptionId,
+    });
+    await updateProjectField(fetchImpl, auth, metadata.projectId, input.issue.id, metadata.agentSessionIdFieldId, {
+      text: input.agentSessionId,
+    });
+    await updateProjectField(fetchImpl, auth, metadata.projectId, input.issue.id, metadata.branchFieldId, {
+      text: input.branchName,
+    });
+    const after = await loadProjectItemStatus(input.issue.id, fetchImpl, auth, config);
+    assertClaimMatches(after, {
+      issue: input.issue,
+      agentSessionId: input.agentSessionId,
+      branchName: input.branchName,
+      commentBody: claim.commentBody ?? '',
+    }, config);
+  } catch (error) {
+    await rollbackDraftProjectIssueClaim(config, input.issue.id, before, metadata, fetchImpl, auth);
+    throw error;
+  }
+}
+
+async function rollbackDraftProjectIssueClaim(
+  config: GitHubProjectTaskQueueConfig,
+  projectItemId: string,
+  before: ProjectItemStatus,
+  metadata: ProjectMetadata,
+  fetchImpl: typeof fetch,
+  auth: GitHubProjectAuthTokenProvider,
+): Promise<void> {
+  const releaseStatusOptionId = normalizeToken(before.status ?? config.todoStatus) === normalizeToken(config.backlogStatus)
+    ? metadata.backlogStatusOptionId
+    : metadata.todoStatusOptionId;
+  await updateProjectField(fetchImpl, auth, metadata.projectId, projectItemId, metadata.agentSessionIdFieldId, {
+    text: before.agentSessionId ?? '',
+  }).catch(() => undefined);
+  await updateProjectField(fetchImpl, auth, metadata.projectId, projectItemId, metadata.branchFieldId, {
+    text: before.branchName ?? '',
+  }).catch(() => undefined);
+  await updateProjectField(fetchImpl, auth, metadata.projectId, projectItemId, metadata.statusFieldId, {
+    singleSelectOptionId: releaseStatusOptionId,
+  }).catch(() => undefined);
+}
+
 async function finalizeProjectIssueClaim(
   config: GitHubProjectTaskQueueConfig,
   input: ProjectIssueFinalizeInput,
@@ -567,6 +626,10 @@ async function finalizeProjectIssueClaim(
   }
   const metadata = await loadProjectMetadata(config, fetchImpl, auth);
   const before = await loadProjectItemStatus(input.issue.id, fetchImpl, auth, config);
+  if (input.issue.contentType === 'DraftIssue') {
+    await finalizeDraftProjectIssueClaim(config, input, before, metadata, fetchImpl, auth);
+    return;
+  }
   assertClaimable(before, {
     issue: input.issue,
     agentSessionId: input.agentSessionId,
@@ -602,6 +665,54 @@ async function finalizeProjectIssueClaim(
   } finally {
     await deleteProjectIssueClaimLocks(input.claim, fetchImpl, auth);
   }
+}
+
+async function finalizeDraftProjectIssueClaim(
+  config: GitHubProjectTaskQueueConfig,
+  input: ProjectIssueFinalizeInput,
+  before: ProjectItemStatus,
+  metadata: ProjectMetadata,
+  fetchImpl: typeof fetch,
+  auth: GitHubProjectAuthTokenProvider,
+): Promise<void> {
+  const currentStatus = normalizeToken(before.status ?? '');
+  if (currentStatus !== normalizeToken(config.inProgressStatus)) {
+    assertClaimable(before, {
+      issue: input.issue,
+      agentSessionId: input.agentSessionId,
+      branchName: input.branchName,
+      commentBody: input.claim.commentBody ?? '',
+    }, config);
+    await updateProjectField(fetchImpl, auth, metadata.projectId, input.issue.id, metadata.statusFieldId, {
+      singleSelectOptionId: metadata.statusOptionId,
+    });
+  } else if (!isRestorableDispatchedClaimOwner(before, {
+    id: input.claim.lockRefId ?? '',
+    projectItemId: input.issue.id,
+    createdAt: new Date(0).toISOString(),
+    agentSessionId: input.agentSessionId,
+    branchName: input.branchName,
+  })) {
+    throw new Error('GitHub Project item claim was overwritten by another assignment');
+  }
+
+  if (before.agentSessionId !== input.agentSessionId) {
+    await updateProjectField(fetchImpl, auth, metadata.projectId, input.issue.id, metadata.agentSessionIdFieldId, {
+      text: input.agentSessionId,
+    });
+  }
+  if (before.branchName !== input.branchName) {
+    await updateProjectField(fetchImpl, auth, metadata.projectId, input.issue.id, metadata.branchFieldId, {
+      text: input.branchName,
+    });
+  }
+  const after = await loadProjectItemStatus(input.issue.id, fetchImpl, auth, config);
+  assertClaimMatches(after, {
+    issue: input.issue,
+    agentSessionId: input.agentSessionId,
+    branchName: input.branchName,
+    commentBody: input.claim.commentBody ?? '',
+  }, config);
 }
 
 async function releaseProjectIssue(
@@ -1594,9 +1705,15 @@ function mapProjectIssueItem(item: unknown, config: GitHubProjectTaskQueueConfig
   if (title === undefined) {
     return [];
   }
+  const commentUrl = contentType === 'DraftIssue' && typeof content.body === 'string'
+    ? mentionDraftCommentUrl(content.body)
+    : undefined;
+  if (contentType === 'DraftIssue' && commentUrl === undefined) {
+    return [];
+  }
 
   const repository = repositoryName(content);
-  const assigneeLogins = contentType === 'DraftIssue' && isMentionDraftTitle(title)
+  const assigneeLogins = contentType === 'DraftIssue'
     ? [config.assigneeLogin]
     : projectItemAssigneeLogins(item, config);
   const subIssueCount = typeof content.subIssuesSummary === 'object' && content.subIssuesSummary !== null
@@ -1612,6 +1729,7 @@ function mapProjectIssueItem(item: unknown, config: GitHubProjectTaskQueueConfig
     ...(typeof content.state === 'string' ? { state: content.state } : {}),
     ...(typeof content.number === 'number' ? { number: content.number } : {}),
     ...(typeof content.url === 'string' ? { url: content.url } : {}),
+    ...(commentUrl === undefined ? {} : { commentUrl }),
     ...(repository === undefined ? {} : { repository }),
     ...(subIssueCount === undefined ? {} : { subIssueCount }),
   };
@@ -1652,6 +1770,15 @@ function projectItemAssigneeLogins(item: Record<string, unknown>, config: GitHub
 
 function isMentionDraftTitle(title: string): boolean {
   return title.trim().startsWith('Respond to ');
+}
+
+function mentionDraftCommentUrl(body: string): string | undefined {
+  if (!body.includes(mentionDraftMarker)) {
+    return undefined;
+  }
+  const line = body.split(/\r?\n/u).find((candidate) => candidate.trim().startsWith('Mention URL: '));
+  const url = line?.trim().slice('Mention URL: '.length).trim();
+  return url === undefined || url.length === 0 ? undefined : url;
 }
 
 function fieldValue(item: Record<string, unknown>, name: string): string | undefined {
@@ -2054,6 +2181,7 @@ const projectIssuesQuery = `
               ... on DraftIssue {
                 id
                 title
+                body
               }
             }
             fieldValues(first: 40) {

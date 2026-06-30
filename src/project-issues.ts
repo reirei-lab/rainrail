@@ -17,6 +17,7 @@ export interface ProjectIssue {
   repository?: string;
   number?: number;
   url?: string;
+  commentUrl?: string;
   parent?: ProjectIssueReference;
   subIssueCount?: number;
   blockedBy?: readonly ProjectIssueReference[];
