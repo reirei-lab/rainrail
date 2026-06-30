@@ -633,6 +633,13 @@ function createDispatchAgentCapabilityProxy(
     }
 
     if (property === 'valueOf') {
+      if (isBuiltinCapabilityObject(source)) {
+        const valueOf = Reflect.get(source, property, source);
+        if (typeof valueOf === 'function') {
+          return (...args: unknown[]) => Reflect.apply(valueOf, source, args);
+        }
+      }
+
       return () => createCapabilityView(source);
     }
 
@@ -733,10 +740,11 @@ function createDispatchAgentCapabilityProxy(
     }
 
     if (property === 'dispatchAgent') {
+      const dispatchAgentValue = readCapabilityValue(source, property, createCapabilityView(source));
       return {
         configurable: true,
         enumerable: descriptor.enumerable ?? false,
-        value: hasDispatchAgentProperty(source) ? dispatchAgent : undefined,
+        value: dispatchAgentValue === undefined ? undefined : dispatchAgent,
         writable: false,
       };
     }
@@ -1340,6 +1348,39 @@ function callCapabilityFunction(
   };
 
   try {
+    if (args.length > 0 && shouldGateDispatchRequest()) {
+      return normalizeCapabilityFunctionResult(
+        dispatchAgent(
+          args[0] as Parameters<DispatchAgentCapability>[0],
+          args[1] as Parameters<DispatchAgentCapability>[1],
+        ),
+        capabilities,
+        exposedReceiver,
+        getRawDispatchAgent,
+        dispatchAgent,
+        retryWithPrivateReceiver,
+        wrapObject,
+      );
+    }
+
+    if (helperMayResolveDispatchAgent(helper)) {
+      const rawDispatchAgent = getRawDispatchAgent();
+      if (helper === rawDispatchAgent || isBoundDispatchAgentAlias(helper, property, rawDispatchAgent)) {
+        return normalizeCapabilityFunctionResult(
+          dispatchAgent(
+            args[0] as Parameters<DispatchAgentCapability>[0],
+            args[1] as Parameters<DispatchAgentCapability>[1],
+          ),
+          capabilities,
+          exposedReceiver,
+          getRawDispatchAgent,
+          dispatchAgent,
+          retryWithPrivateReceiver,
+          wrapObject,
+        );
+      }
+    }
+
     if (isDispatchAgentRequest(args[0]) && shouldGateDispatchRequest()) {
       return normalizeCapabilityFunctionResult(
         dispatchAgent(args[0], args[1] as Parameters<DispatchAgentCapability>[1]),
@@ -1795,7 +1836,8 @@ function isBuiltinCapabilityCollection(
 }
 
 function isBuiltinCapabilityObject(value: object): boolean {
-  return value instanceof Date || value instanceof RegExp || value instanceof Error;
+  const tag = Object.prototype.toString.call(value);
+  return tag === '[object Date]' || tag === '[object RegExp]' || tag === '[object Error]';
 }
 
 function isBoundDispatchAgentAlias(

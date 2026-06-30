@@ -143,6 +143,37 @@ describe('createGitHubTaskProvider', () => {
     );
   });
 
+  it('does not start issue fetches when auth resolves after task abort', async () => {
+    const controller = new AbortController();
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
+      node_id: 'issue-node-id',
+      number: 20,
+      title: 'Late issue',
+    }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    }));
+    const provider = createGitHubTaskProvider({
+      auth: {
+        getAuthToken: async () => {
+          controller.abort(new Error('issue lookup aborted after auth'));
+          return undefined;
+        },
+      },
+      fetch: fetchImpl as unknown as typeof fetch,
+    });
+
+    await expect(provider.getIssue(
+      {
+        provider: 'github',
+        repository: 'reirei-lab/rainrail',
+        number: 20,
+      },
+      { signal: controller.signal },
+    )).rejects.toThrow('issue lookup aborted after auth');
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it('passes task context abort signals to comment fetches', async () => {
     const controller = new AbortController();
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({

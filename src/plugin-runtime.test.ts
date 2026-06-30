@@ -5850,6 +5850,47 @@ describe('plugin runtime contract', () => {
     ]);
   });
 
+  it('preserves cross-realm Date valueOf for built-in capability metadata with launcher aliases', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: { id: 'delivery-cross-realm-date-valueof-capability', receivedAt: '2026-06-29T14:00:00.000Z' },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: { kind: 'external-reference', reference: 'github://deliveries/cross-realm-date-valueof-capability' },
+    });
+    const realm = createContext({});
+    const deadline = runInContext("new Date('2026-06-29T14:05:00.000Z')", realm) as Date & {
+      dispatchAgent?: RuntimeCapabilities['dispatchAgent'];
+    };
+    deadline.dispatchAgent = async () => ({ sessionKey: 'agent:main:date-valueof' });
+    const loader = createPluginLoader({
+      runtime: mockRuntimeContext({
+        capabilities: {
+          provider: 'codex',
+          deadline,
+        } as unknown as RuntimeCapabilities & { deadline: Date },
+      }),
+    });
+
+    loader.on(
+      'github.issue',
+      (_handledEvent, context) =>
+        (context.capabilities as unknown as { deadline: Date }).deadline.valueOf(),
+      { name: 'cross-realm-date-valueof-capability-handler' },
+    );
+
+    await expect(loader.dispatch(event)).resolves.toMatchObject([
+      {
+        pluginName: 'cross-realm-date-valueof-capability-handler',
+        eventId: 'github-webhook:delivery-cross-realm-date-valueof-capability:github.issue',
+        status: 'fulfilled',
+        value: deadline.valueOf(),
+      },
+    ]);
+  });
+
   it('calls nested capability helpers with the nested receiver', async () => {
     const event = createEventEnvelope({
       source: { type: 'github', name: 'github-webhook' },
@@ -8266,6 +8307,68 @@ describe('plugin runtime contract', () => {
     expect(dispatchAgent).not.toHaveBeenCalled();
   });
 
+  it('gates getter-backed raw dispatchAgent helper calls before trusting proxy request shapes', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: { id: 'delivery-raw-dispatch-hostile-request', receivedAt: '2026-06-29T14:00:00.000Z' },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: { kind: 'external-reference', reference: 'github://deliveries/raw-dispatch-hostile-request' },
+    });
+    const dispatchAgent = vi.fn(async () => ({ sessionKey: 'agent:main:raw-hostile-request' }));
+    const loader = createPluginLoader({
+      runtime: mockRuntimeContext({
+        capabilities: {
+          provider: 'codex',
+          get dispatchAgent() {
+            return dispatchAgent;
+          },
+          get go() {
+            return dispatchAgent;
+          },
+        } as RuntimeCapabilities & { go: RuntimeCapabilities['dispatchAgent'] },
+      }),
+    });
+
+    loader.on(
+      'github.issue',
+      (handledEvent, context) => {
+        const request = new Proxy(
+          {
+            event: handledEvent,
+            workflow: 'raw-dispatch-hostile-request-handler',
+            runId: context.runId,
+          },
+          {
+            has(target, property) {
+              if (property === 'event') {
+                return false;
+              }
+
+              return property in target;
+            },
+          },
+        );
+
+        return (context.capabilities as unknown as {
+          go: RuntimeCapabilities['dispatchAgent'];
+        }).go?.(request);
+      },
+      { name: 'raw-dispatch-hostile-request-handler' },
+    );
+
+    const [result] = await loader.dispatch(event);
+
+    expect(result).toMatchObject({
+      pluginName: 'raw-dispatch-hostile-request-handler',
+      eventId: 'github-webhook:delivery-raw-dispatch-hostile-request:github.issue',
+      status: 'rejected',
+    });
+    expect(dispatchAgent).not.toHaveBeenCalled();
+  });
+
   it('does not expose raw dispatchAgent through frozen array descriptors', async () => {
     const event = createEventEnvelope({
       source: { type: 'github', name: 'github-webhook' },
@@ -9074,6 +9177,44 @@ describe('plugin runtime contract', () => {
       {
         pluginName: 'undefined-dispatch-agent-accessor-denied-handler',
         eventId: 'github-webhook:delivery-undefined-dispatch-agent-accessor-denied:github.issue',
+        status: 'fulfilled',
+        value: { skipped: true },
+      },
+    ]);
+  });
+
+  it('preserves undefined dispatchAgent accessors in property descriptors', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: { id: 'delivery-undefined-dispatch-agent-descriptor', receivedAt: '2026-06-29T14:00:00.000Z' },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: { kind: 'external-reference', reference: 'github://deliveries/undefined-dispatch-agent-descriptor' },
+    });
+    const loader = createPluginLoader({
+      runtime: mockRuntimeContext({
+        capabilities: {
+          provider: 'codex',
+          get dispatchAgent() {
+            return undefined;
+          },
+        } as unknown as RuntimeCapabilities,
+      }),
+    });
+
+    loader.on(
+      'github.issue',
+      (_handledEvent, context) =>
+        Object.getOwnPropertyDescriptor(context.capabilities, 'dispatchAgent')?.value ?? { skipped: true },
+      { name: 'undefined-dispatch-agent-descriptor-handler', capabilities: ['runtime:start'] },
+    );
+
+    await expect(loader.dispatch(event)).resolves.toMatchObject([
+      {
+        pluginName: 'undefined-dispatch-agent-descriptor-handler',
+        eventId: 'github-webhook:delivery-undefined-dispatch-agent-descriptor:github.issue',
         status: 'fulfilled',
         value: { skipped: true },
       },
