@@ -173,6 +173,7 @@ describe('GitHub webhook source handling', () => {
     });
 
     expect(result.ok && result.event.rawPayload.sha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(result.ok && result.event.payload).not.toHaveProperty('issue');
   });
 
   it('rejects unsigned GitHub webhook requests before parsing JSON', async () => {
@@ -2182,6 +2183,7 @@ describe('GitHub webhook source handling', () => {
         deliveryId: 'delivery-installation-repositories-1',
         payload: {
           action: 'added',
+          organization: { id: 700, login: 'reirei-lab' },
           installation: { id: 123 },
           repositories_added: [
             {
@@ -2221,6 +2223,7 @@ describe('GitHub webhook source handling', () => {
         deliveryId: 'delivery-installation-created-1',
         payload: {
           action: 'created',
+          organization: { id: 700, login: 'reirei-lab' },
           installation: {
             id: 124,
             account: { login: 'reirei-lab' },
@@ -3001,6 +3004,8 @@ describe('GitHub webhook source handling', () => {
           repository: { full_name: 'reirei-lab/rainrail' },
           workflow_run: {
             id: 17345176172,
+            status: 'completed',
+            conclusion: 'failure',
             html_url: 'https://github.com/reirei-lab/rainrail/actions/runs/17345176172',
             pull_requests: [
               {
@@ -3021,6 +3026,9 @@ describe('GitHub webhook source handling', () => {
         url: 'https://github.com/reirei-lab/rainrail/actions/runs/17345176172',
       },
       payload: {
+        action: 'completed',
+        status: 'completed',
+        conclusion: 'failure',
         pullRequests: [
           {
             id: '41',
@@ -3040,6 +3048,8 @@ describe('GitHub webhook source handling', () => {
           repository: { full_name: 'reirei-lab/rainrail' },
           check_suite: {
             id: 48847904331,
+            status: 'completed',
+            conclusion: 'success',
             html_url: 'https://github.com/reirei-lab/rainrail/actions/runs/17345176172',
             pull_requests: [
               {
@@ -3060,6 +3070,9 @@ describe('GitHub webhook source handling', () => {
         url: 'https://github.com/reirei-lab/rainrail/actions/runs/17345176172',
       },
       payload: {
+        action: 'completed',
+        status: 'completed',
+        conclusion: 'success',
         pullRequests: [
           {
             id: '41',

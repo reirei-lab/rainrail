@@ -267,6 +267,8 @@ export interface NormalizedGitHubWebhookPayload {
   provider: 'github';
   event: string;
   action: string;
+  status?: string;
+  conclusion?: string;
   repository?: NormalizedGitHubRepository;
   organization?: NormalizedGitHubOrganization;
   actor?: NormalizedGitHubActor;
@@ -529,6 +531,10 @@ function toRainrailGitHubEventName(githubEvent: string): RainrailEventName {
 }
 
 function findGitHubSubject(payload: GitHubWebhookPayload, name: RainrailEventName): RainrailEventEnvelope['subject'] {
+  if (isInstallationRainrailEvent(name) && isInstallationResourcePayload(payload)) {
+    return subjectFromResource(resourceFromInstallation(payload.installation));
+  }
+
   if (name === 'github.review') {
     return (
       subjectFromReview(payload) ??
@@ -992,6 +998,8 @@ function normalizeGitHubWebhookPayload(
     provider: 'github',
     event: normalizeToken(githubEvent) || 'unknown',
     action: typeof payload.action === 'string' ? normalizeToken(payload.action) || 'received' : 'received',
+    ...optionalStringProperty('status', resource.status),
+    ...optionalStringProperty('conclusion', resource.conclusion),
     ...(repository ? { repository } : {}),
     ...(organization ? { organization } : {}),
     ...(actor ? { actor } : {}),
@@ -1121,6 +1129,8 @@ function normalizedMilestone(milestone: GitHubWebhookRecord | undefined): Normal
 }
 
 function normalizedResource(githubEvent: string, payload: GitHubWebhookPayload): NormalizedGitHubResource {
+  const normalizedEvent = normalizeToken(githubEvent);
+
   if (isDeploymentProtectionRulePayload(payload)) {
     return resourceFromDeploymentProtectionRule(payload);
   }
@@ -1313,6 +1323,10 @@ function normalizedResource(githubEvent: string, payload: GitHubWebhookPayload):
     return resourceFromDiscussion(payload);
   }
 
+  if (isInstallationEvent(normalizedEvent) && isInstallationResourcePayload(payload)) {
+    return resourceFromInstallation(payload.installation);
+  }
+
   if (isOrganizationResourcePayload(payload)) {
     return resourceFromOrganization(payload.organization);
   }
@@ -1322,6 +1336,14 @@ function normalizedResource(githubEvent: string, payload: GitHubWebhookPayload):
   }
 
   return resourceFromRepository(payload.repository);
+}
+
+function isInstallationEvent(normalizedEvent: string): boolean {
+  return normalizedEvent === 'installation' || normalizedEvent === 'installation_repositories';
+}
+
+function isInstallationRainrailEvent(name: RainrailEventName): boolean {
+  return name === 'github.installation' || name === 'github.installation_repositories';
 }
 
 function resourceFromIssue(issue: GitHubWebhookRecord): NormalizedGitHubResource {
