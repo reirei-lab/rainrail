@@ -834,6 +834,10 @@ function isDispatchAgentAliasProperty(property: string | symbol | undefined): bo
   );
 }
 
+function isPotentialDispatchAgentAliasProperty(property: string | symbol | undefined): boolean {
+  return typeof property === 'string' && /(?:^|[-_])alias(?:$|[-_])/iu.test(property);
+}
+
 function isDispatchAgentLikeProperty(property: string | symbol | undefined): boolean {
   return typeof property === 'string' && /(?:dispatch|start|launch|agent)/iu.test(property);
 }
@@ -1180,6 +1184,7 @@ function callCapabilityFunction(
   const shouldGateDispatchRequest = () =>
     helperIsRawDispatchAgent() ||
     isDispatchAgentAliasProperty(property) ||
+    isPotentialDispatchAgentAliasProperty(property) ||
     isStarterAliasProperty(property) ||
     helperMayResolveDispatchAgent(helper);
   const retryWithPrivateReceiver = (reason: unknown) => {
@@ -1513,7 +1518,10 @@ function readCapabilityValue(
 }
 
 function isPrivateReceiverError(reason: unknown): boolean {
-  return reason instanceof TypeError && reason.message.includes('private');
+  return (
+    reason instanceof TypeError &&
+    (reason.message.includes('private') || reason.message.includes('Receiver must be an instance of class'))
+  );
 }
 
 function capabilityAccessorMayResolveDispatchAgent(source: object, property: string | symbol): boolean {
@@ -1533,7 +1541,8 @@ function helperMayResolveDispatchAgent(helper: Function): boolean {
       /#[\p{ID_Start}\p{ID_Continue}]*(?:(?:dispatch|start|launch)[\p{ID_Continue}]*|run[\p{ID_Continue}]*Agent[\p{ID_Continue}]*)/iu.test(
         source,
       ) ||
-      /#[\p{ID_Start}\p{ID_Continue}]*\s*\(/u.test(source)
+      /#[\p{ID_Start}\p{ID_Continue}]*\s*\([^)]*#[\p{ID_Start}\p{ID_Continue}]*/u.test(source) ||
+      /#[\p{ID_Start}\p{ID_Continue}]*\s*\([^)]*\bworkflow\b[^)]*\brunId\b/u.test(source)
     );
   } catch {
     return true;
@@ -1551,7 +1560,7 @@ function dispatchAgentAccessorReturnsUndefined(receiver: object, descriptor: Pro
       return true;
     }
 
-    if (/\bthrow\b/u.test(getterSource)) {
+    if (/\bthrow\b/u.test(getterSource) || !dispatchAgentAccessorMayReturnUndefined(getterSource)) {
       return false;
     }
 
@@ -1559,6 +1568,10 @@ function dispatchAgentAccessorReturnsUndefined(receiver: object, descriptor: Pro
   } catch {
     return false;
   }
+}
+
+function dispatchAgentAccessorMayReturnUndefined(source: string): boolean {
+  return /\?\.|&&|\bundefined\b|\bvoid\s+0\b/u.test(source);
 }
 
 function functionSourceMentions(helper: Function, token: string): boolean {
