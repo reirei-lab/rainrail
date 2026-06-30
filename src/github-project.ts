@@ -195,6 +195,7 @@ async function reconcileProjectIssueClaimState(
     return issue;
   }
   if (normalizedStatus !== normalizeToken(config.inProgressStatus)) {
+    await cleanupDispatchedProjectIssueLocksForIssue(issue, fetchImpl, auth);
     return issue;
   }
   const current = await loadProjectItemStatus(issue.id, fetchImpl, auth, config);
@@ -210,7 +211,7 @@ async function reconcileProjectIssueClaimState(
     await cleanupDispatchedProjectIssueLocks(issue, current.repositoryId, fetchImpl, auth);
     return issue;
   }
-  const lock = await loadProjectIssueClaimLock(current.repositoryId, projectIssueLockRefName(issue), fetchImpl, auth).catch(() => undefined);
+  const lock = await loadProjectIssueClaimLockPair(current.repositoryId, issue, fetchImpl, auth);
   if (lock?.dispatchedAt !== undefined && lock.projectItemId === issue.id) {
     return restoreDispatchedProjectIssueClaim(config, issue, lock, fetchImpl, auth);
   }
@@ -258,11 +259,7 @@ async function restoreDispatchedProjectIssueClaim(
     await updateProjectField(fetchImpl, auth, metadata.projectId, issue.id, metadata.branchFieldId, {
       text: lock.branchName,
     });
-    await deleteProjectIssueClaimLocks({
-      projectItemId: issue.id,
-      lockRefId: lock.id,
-      ...(lock.startingLockRefId === undefined ? {} : { dispatchedLockRefId: lock.startingLockRefId }),
-    }, fetchImpl, auth)
+    await deleteProjectIssueClaimLocks(dispatchedLockClaim(issue, lock), fetchImpl, auth)
       .catch(() => undefined);
   } catch {
     return { ...issue, status: config.inProgressStatus };
@@ -278,12 +275,29 @@ async function cleanupDispatchedProjectIssueLocks(
 ): Promise<void> {
   const lock = await loadProjectIssueClaimLock(repositoryId, projectIssueLockRefName(issue), fetchImpl, auth).catch(() => undefined);
   const dispatchedLock = await loadProjectIssueClaimLock(repositoryId, projectIssueDispatchedLockRefName(issue), fetchImpl, auth).catch(() => undefined);
-  if (lock?.dispatchedAt !== undefined && lock.projectItemId === issue.id) {
-    await deleteProjectIssueClaimLock({ projectItemId: issue.id, lockRefId: lock.id }, fetchImpl, auth).catch(() => undefined);
-  }
   if (dispatchedLock?.dispatchedAt !== undefined && dispatchedLock.projectItemId === issue.id) {
-    await deleteProjectIssueClaimLock({ projectItemId: issue.id, lockRefId: dispatchedLock.id }, fetchImpl, auth).catch(() => undefined);
+    await deleteProjectIssueClaimLocks({
+      projectItemId: issue.id,
+      lockRefId: lock?.id ?? dispatchedLock.id,
+      ...(lock === undefined ? {} : { dispatchedLockRefId: dispatchedLock.id }),
+    }, fetchImpl, auth).catch(() => undefined);
+    return;
   }
+  if (lock?.dispatchedAt !== undefined && lock.projectItemId === issue.id) {
+    await deleteProjectIssueClaimLocks(dispatchedLockClaim(issue, lock), fetchImpl, auth).catch(() => undefined);
+  }
+}
+
+async function cleanupDispatchedProjectIssueLocksForIssue(
+  issue: ProjectIssue,
+  fetchImpl: typeof fetch,
+  auth: GitHubProjectAuthTokenProvider,
+): Promise<void> {
+  const lock = await loadProjectIssueClaimLockForIssue(issue, fetchImpl, auth);
+  if (lock?.dispatchedAt === undefined || lock.projectItemId !== issue.id) {
+    return;
+  }
+  await deleteProjectIssueClaimLocks(dispatchedLockClaim(issue, lock), fetchImpl, auth).catch(() => undefined);
 }
 
 async function claimProjectIssue(
@@ -584,6 +598,25 @@ async function loadProjectIssueClaimLock(
   return parseProjectIssueClaimLockRef(isRecord(payload.node) ? payload.node.ref : undefined);
 }
 
+async function loadProjectIssueClaimLockPair(
+  repositoryId: string,
+  issue: ProjectIssue,
+  fetchImpl: typeof fetch,
+  auth: GitHubProjectAuthTokenProvider,
+): Promise<ProjectIssueClaimLock | undefined> {
+  const lock = await loadProjectIssueClaimLock(repositoryId, projectIssueLockRefName(issue), fetchImpl, auth)
+    .catch(() => undefined);
+  if (lock?.dispatchedAt !== undefined) {
+    return lock;
+  }
+  const dispatchedLock = await loadProjectIssueClaimLock(repositoryId, projectIssueDispatchedLockRefName(issue), fetchImpl, auth)
+    .catch(() => undefined);
+  if (dispatchedLock?.dispatchedAt !== undefined && dispatchedLock.projectItemId === issue.id) {
+    return { ...dispatchedLock, ...(lock === undefined ? {} : { startingLockRefId: lock.id }) };
+  }
+  return lock;
+}
+
 async function loadProjectIssueClaimLockForIssue(
   issue: ProjectIssue,
   fetchImpl: typeof fetch,
@@ -673,22 +706,24 @@ async function deleteProjectIssueClaimLocks(
   fetchImpl: typeof fetch,
   auth: GitHubProjectAuthTokenProvider,
 ): Promise<void> {
-  let firstError: unknown;
-  try {
-    await deleteProjectIssueClaimLock(claim, fetchImpl, auth);
-  } catch (error) {
-    firstError = error;
-  }
+  await deleteProjectIssueClaimLock(claim, fetchImpl, auth);
   if (claim.dispatchedLockRefId !== undefined) {
-    try {
-      await deleteProjectIssueClaimLock({ ...claim, lockRefId: claim.dispatchedLockRefId }, fetchImpl, auth);
-    } catch (error) {
-      firstError ??= error;
-    }
+    await deleteProjectIssueClaimLock({ ...claim, lockRefId: claim.dispatchedLockRefId }, fetchImpl, auth);
   }
-  if (firstError !== undefined) {
-    throw firstError;
+}
+
+function dispatchedLockClaim(issue: ProjectIssue, lock: ProjectIssueClaimLock): ProjectIssueClaim {
+  if (lock.startingLockRefId !== undefined) {
+    return {
+      projectItemId: issue.id,
+      lockRefId: lock.startingLockRefId,
+      dispatchedLockRefId: lock.id,
+    };
   }
+  return {
+    projectItemId: issue.id,
+    lockRefId: lock.id,
+  };
 }
 
 async function loadProjectMetadata(
