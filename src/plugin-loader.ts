@@ -88,11 +88,17 @@ function createRegisteredWorkflow(plugin: WorkflowPlugin): WorkflowPlugin {
   let timeoutError: unknown;
   let timeoutSnapshot = false;
 
-  const capabilityDescriptor = findPropertyDescriptor(plugin, 'capabilities');
-  const hasAccessorCapabilities = capabilityDescriptor !== undefined && !('value' in capabilityDescriptor);
-  if (capabilityDescriptor === undefined) {
+  let capabilityDescriptor: PropertyDescriptor | undefined;
+  try {
+    capabilityDescriptor = findPropertyDescriptor(plugin, 'capabilities');
+  } catch (reason) {
+    capabilityError = reason;
     capabilitySnapshot = true;
-  } else if ('value' in capabilityDescriptor) {
+  }
+  const hasAccessorCapabilities = capabilityDescriptor !== undefined && !('value' in capabilityDescriptor);
+  if (capabilityDescriptor === undefined && capabilityError === undefined) {
+    capabilitySnapshot = true;
+  } else if (capabilityDescriptor !== undefined && 'value' in capabilityDescriptor) {
     try {
       capabilities = capabilityDescriptor.value === undefined ? undefined : [...capabilityDescriptor.value];
     } catch (reason) {
@@ -101,7 +107,13 @@ function createRegisteredWorkflow(plugin: WorkflowPlugin): WorkflowPlugin {
     capabilitySnapshot = true;
   }
 
-  const timeoutDescriptor = findPropertyDescriptor(plugin, 'timeoutMs');
+  let timeoutDescriptor: PropertyDescriptor | undefined;
+  try {
+    timeoutDescriptor = findPropertyDescriptor(plugin, 'timeoutMs');
+  } catch (reason) {
+    timeoutError = reason;
+    timeoutSnapshot = true;
+  }
   const hasAccessorTimeout = timeoutDescriptor !== undefined && !('value' in timeoutDescriptor);
   if (timeoutDescriptor !== undefined && 'value' in timeoutDescriptor) {
     timeoutMs = timeoutDescriptor.value;

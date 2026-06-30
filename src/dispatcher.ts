@@ -725,7 +725,18 @@ function createDispatchAgentCapabilityProxy(
     const viewHandler: ProxyHandler<object> = {
       get(_target, property) {
         if (property === 'dispatchAgent') {
-          return hasDispatchAgentProperty(source) ? dispatchAgent : undefined;
+          const descriptor = findPropertyDescriptor(source, 'dispatchAgent');
+          if (descriptor === undefined) {
+            return undefined;
+          }
+
+          if ('value' in descriptor) {
+            return descriptor.value === undefined ? undefined : dispatchAgent;
+          }
+
+          return source === capabilities && dispatchAgentAccessorReturnsUndefined(descriptor)
+            ? undefined
+            : dispatchAgent;
         }
 
         return readCapabilityProperty(source, property);
@@ -1444,15 +1455,30 @@ function helperMayResolveDispatchAgent(helper: Function): boolean {
   try {
     const source = Function.prototype.toString.call(helper);
     return (
-      /this\s*(?:(?:\?\.|\.)\s*(?:dispatchAgent|startAgent)|(?:\?\.|\s*)\[[^\]]*(?:dispatch|start)[^\]]*Agent[^\]]*\])/u.test(
+      /this\s*(?:(?:\?\.|\.)\s*(?:dispatchAgent|startAgent|runAgent)|(?:\?\.|\s*)\[[^\]]*(?:dispatch|start|run)[^\]]*Agent[^\]]*\])/u.test(
         source,
       ) ||
-      (/\bthis\b/u.test(source) && /\b(?:dispatchAgent|startAgent)\b/u.test(source)) ||
-      (/this\s*(?:\?\.|\s*)\[/u.test(source) && /\b(?:dispatch|start)\b/u.test(source) && /\bAgent\b/u.test(source)) ||
-      /#[\p{ID_Start}\p{ID_Continue}]*(?:dispatch|start|launch)[\p{ID_Continue}]*/iu.test(source)
+      (/\bthis\b/u.test(source) && /\b(?:dispatchAgent|startAgent|runAgent)\b/u.test(source)) ||
+      (/this\s*(?:\?\.|\s*)\[/u.test(source) && /\b(?:dispatch|start|run)\b/u.test(source) && /\bAgent\b/u.test(source)) ||
+      /#[\p{ID_Start}\p{ID_Continue}]*(?:(?:dispatch|start|launch)[\p{ID_Continue}]*|run[\p{ID_Continue}]*Agent[\p{ID_Continue}]*)/iu.test(
+        source,
+      )
     );
   } catch {
     return true;
+  }
+}
+
+function dispatchAgentAccessorReturnsUndefined(descriptor: PropertyDescriptor): boolean {
+  if (typeof descriptor.get !== 'function') {
+    return false;
+  }
+
+  try {
+    const source = Function.prototype.toString.call(descriptor.get);
+    return /\breturn\s+(?:undefined|void 0)\b/u.test(source) && !/\bthrow\b/u.test(source);
+  } catch {
+    return false;
   }
 }
 
@@ -1482,6 +1508,21 @@ function shouldWrapCapabilityObject(value: unknown): value is object {
   }
 
   if (
+    value instanceof Map ||
+    value instanceof Set ||
+    value instanceof WeakMap ||
+    value instanceof WeakSet ||
+    Array.isArray(value)
+  ) {
+    return true;
+  }
+
+  const prototype = Reflect.getPrototypeOf(value);
+  if (prototype !== null && prototypeMayExposeDispatchAgent(prototype)) {
+    return true;
+  }
+
+  if (
     value instanceof Date ||
     value instanceof RegExp ||
     value instanceof Error ||
@@ -1492,22 +1533,11 @@ function shouldWrapCapabilityObject(value: unknown): value is object {
     return false;
   }
 
-  if (
-    value instanceof Map ||
-    value instanceof Set ||
-    value instanceof WeakMap ||
-    value instanceof WeakSet ||
-    Array.isArray(value)
-  ) {
-    return true;
-  }
-
   const tag = Object.prototype.toString.call(value);
   if (tag === '[object Object]') {
     return true;
   }
 
-  const prototype = Reflect.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
 }
 
@@ -1517,7 +1547,7 @@ function objectMayExposeDispatchAgent(value: object): boolean {
   }
 
   return Reflect.ownKeys(value).some((property) => {
-    if (!isDispatchAgentLikeProperty(property)) {
+    if (!isDispatchAgentLikeProperty(property) && !isStarterAliasProperty(property)) {
       return false;
     }
 
