@@ -306,7 +306,7 @@ function validatePublishEnvelope(value: unknown): RainrailEventEnvelope {
       id: subjectId,
       ...optionalUrl(subject, 'url'),
     },
-    payload: normalizePayload(value.payload),
+    payload: normalizePayload(value.payload, { sourceType, name }),
     rawPayload: {
       kind: rawPayloadKind,
       reference: expectSanitizedUrl(rawPayloadReference, 'reference'),
@@ -512,7 +512,7 @@ function optionalSha256(record: Record<string, unknown>): Record<string, string>
   return { sha256: record.sha256.toLowerCase() };
 }
 
-function normalizePayload(value: unknown): unknown {
+function normalizePayload(value: unknown, context: { sourceType: string; name: string }): unknown {
   if (!isRecord(value)) {
     return {};
   }
@@ -521,7 +521,7 @@ function normalizePayload(value: unknown): unknown {
   for (const [key, nestedValue] of Object.entries(value)) {
     if (ALLOWED_PAYLOAD_KEYS.has(key) && isSafePayloadMetadata(nestedValue)) {
       payload[key] = nestedValue;
-    } else if (isCloudflareErrorPayload(value) && CLOUDFLARE_ERROR_PAYLOAD_KEYS.has(key)) {
+    } else if (isCloudflareErrorPayload(value, context) && CLOUDFLARE_ERROR_PAYLOAD_KEYS.has(key)) {
       const normalized = normalizeCloudflareErrorPayloadField(key, nestedValue);
       if (normalized !== undefined) {
         payload[key] = normalized;
@@ -537,7 +537,13 @@ function normalizePayload(value: unknown): unknown {
   return payload;
 }
 
-function isCloudflareErrorPayload(value: Record<string, unknown>): boolean {
+function isCloudflareErrorPayload(
+  value: Record<string, unknown>,
+  context: { sourceType: string; name: string },
+): boolean {
+  if (context.sourceType !== 'cloudflare' || context.name !== 'cloudflare.error') {
+    return false;
+  }
   return value.action === 'exception'
     || value.conclusion === 'failure'
     || Array.isArray(value.exceptions);
@@ -702,7 +708,7 @@ function sanitizePayloadText(value: string): string {
     .replace(/\b(cookie|set-cookie)\s*:\s*[^\r\n]+/giu, '$1: [redacted]')
     .replace(/\bauthorization\s*:\s*[^\r\n]+/giu, 'authorization: [redacted]')
     .replace(/(["'])([A-Za-z0-9_-]*(?:authorization|cookie|token|secret|password|key|code|reset))\1(\s*:\s*)(["'])[^"']*\4/giu, '$1$2$1$3$4[redacted]$4')
-    .replace(/(^|[?&\s"'<>`,;])([A-Za-z0-9_-]*(?:token|secret|password|code|reset))=([^&\s"'<>`,;]+)/giu, '$1$2=[redacted]')
+    .replace(/(^|[?&\s"'<>`,;])([A-Za-z0-9_-]*(?:token|secret|password|key|code|reset))=([^&\s"'<>`,;]+)/giu, '$1$2=[redacted]')
     .replace(/\bBearer\s+[A-Za-z0-9._~+/-]+=*/giu, 'Bearer [redacted]');
 }
 

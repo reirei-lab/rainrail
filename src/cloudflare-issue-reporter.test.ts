@@ -663,6 +663,56 @@ describe('cloudflare issue redaction', () => {
     expect(createdIssues[0]?.body).toContain('authorization: [redacted]');
   });
 
+  it('redacts key-shaped API key parameters in exception strings', async () => {
+    const createdIssues: Array<{ body: string }> = [];
+    const workflow = createCloudflareIssueReporterWorkflow({
+      repository: 'reirei-lab/rainrail',
+      store: createInMemoryCloudflareErrorIssueStore(),
+      issues: {
+        findOpenIssueByFingerprint: async () => undefined,
+        createIssue: async (input) => {
+          createdIssues.push(input);
+          return {
+            number: 133,
+            url: 'https://github.com/reirei-lab/rainrail/issues/133',
+          };
+        },
+      },
+    });
+
+    await expect(workflow.handle(cloudflareErrorEvent({
+      message: 'upstream failed api_key=api-key-secret&key=generic-key-secret public_key=public-key-secret',
+    }), runtimeContext())).resolves.toMatchObject({
+      handled: true,
+    });
+
+    expect(createdIssues[0]?.body).not.toContain('api-key-secret');
+    expect(createdIssues[0]?.body).not.toContain('generic-key-secret');
+    expect(createdIssues[0]?.body).not.toContain('public-key-secret');
+    expect(createdIssues[0]?.body).toContain('api_key=[redacted]');
+    expect(createdIssues[0]?.body).toContain('key=[redacted]');
+    expect(createdIssues[0]?.body).toContain('public_key=[redacted]');
+  });
+
+  it('uses only stack frames for the stack signature', async () => {
+    const first = cloudflareErrorCandidateFromEvent(cloudflareErrorEvent({
+      stack: [
+        'HttpException: user alice failed',
+        '    at handler (worker.js:10:1)',
+      ].join('\n'),
+    }));
+    const second = cloudflareErrorCandidateFromEvent(cloudflareErrorEvent({
+      stack: [
+        'HttpException: user bob failed',
+        '    at handler (worker.js:10:1)',
+      ].join('\n'),
+    }));
+
+    expect(first?.stackSignature).toEqual(['handler @ worker.js']);
+    expect(second?.stackSignature).toEqual(['handler @ worker.js']);
+    expect(cloudflareErrorFingerprint(first!)).toBe(cloudflareErrorFingerprint(second!));
+  });
+
   it('redacts exception names before writing issue titles and summaries', async () => {
     const createdIssues: Array<{ title: string; body: string }> = [];
     const workflow = createCloudflareIssueReporterWorkflow({

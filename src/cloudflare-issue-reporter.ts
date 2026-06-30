@@ -385,8 +385,12 @@ function normalizedStackSignature(stack: string): string[] {
 }
 
 function normalizeStackFrame(line: string): string | undefined {
-  const trimmed = line.trim().replace(/^at\s+/u, '');
-  if (trimmed.length === 0 || /^[A-Za-z]+Error[:\s]/u.test(trimmed)) {
+  const raw = line.trim();
+  if (!/^at\s+/u.test(raw)) {
+    return undefined;
+  }
+  const trimmed = raw.replace(/^at\s+/u, '');
+  if (trimmed.length === 0) {
     return undefined;
   }
 
@@ -485,7 +489,7 @@ function sanitizeSecretString(value: string): string {
     .replace(/\b(cookie|set-cookie)\s*:\s*[^\r\n]+/giu, '$1: [redacted]')
     .replace(/\bauthorization\s*:\s*[^\r\n]+/giu, 'authorization: [redacted]')
     .replace(/(["'])([A-Za-z0-9_-]*(?:authorization|cookie|token|secret|password|key|code|reset))\1(\s*:\s*)(["'])[^"']*\4/giu, '$1$2$1$3$4[redacted]$4')
-    .replace(/(^|[?&\s"'<>`,;])([A-Za-z0-9_-]*(?:token|secret|password|code|reset))=([^&\s"'<>`,;]+)/giu, '$1$2=[redacted]')
+    .replace(/(^|[?&\s"'<>`,;])([A-Za-z0-9_-]*(?:token|secret|password|key|code|reset))=([^&\s"'<>`,;]+)/giu, '$1$2=[redacted]')
     .replace(/\bBearer\s+[A-Za-z0-9._~+/-]+=*/giu, 'Bearer [redacted]');
 }
 

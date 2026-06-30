@@ -5,6 +5,7 @@ import {
   isGitHubAuthFallbackEligibleError,
   type GitHubAuthConfig,
 } from './github-auth.js';
+import { mentionDraftMarker } from './mention-draft.js';
 import { recordGitHubRateLimit } from './github-rate-limit.js';
 import {
   getNextProjectIssueToStart,
@@ -203,6 +204,26 @@ async function addMentionDraftItem(
   auth: GitHubProjectAuthTokenProvider,
 ): Promise<ProjectMentionDraftItem> {
   const metadata = await loadProjectMetadata(config, fetchImpl, auth);
+  const existing = await findExistingMentionDraftItem(config, input, fetchImpl, auth);
+  if (existing !== undefined) {
+    await updateProjectFieldWithRetry(
+      fetchImpl,
+      auth,
+      metadata.projectId,
+      existing.id,
+      metadata.statusFieldId,
+      { singleSelectOptionId: metadata.todoStatusOptionId },
+    );
+
+    return {
+      projectId: metadata.projectId,
+      projectItemId: existing.id,
+      statusFieldId: metadata.statusFieldId,
+      statusOptionId: metadata.todoStatusOptionId,
+      created: false,
+    };
+  }
+
   const payload = await runGraphql<AddProjectDraftIssueData>(fetchImpl, auth, addProjectDraftIssueMutation, {
     projectId: metadata.projectId,
     title: input.title,
@@ -229,6 +250,53 @@ async function addMentionDraftItem(
     statusOptionId: metadata.todoStatusOptionId,
     created: true,
   };
+}
+
+async function findExistingMentionDraftItem(
+  config: GitHubProjectTaskQueueConfig,
+  input: ProjectMentionDraftInput,
+  fetchImpl: typeof fetch,
+  auth: GitHubProjectAuthTokenProvider,
+): Promise<{ id: string } | undefined> {
+  let after: string | undefined;
+
+  do {
+    const payload = await runGraphql<ProjectItemsData>(fetchImpl, auth, projectIssuesQuery, {
+      organization: config.organization,
+      projectNumber: config.projectNumber,
+      after,
+      statusFieldName: config.statusFieldName,
+    });
+    const items = payload.organization?.projectV2?.items;
+    if (items === undefined || !Array.isArray(items.nodes)) {
+      throw new Error('GitHub Project items response is missing project items');
+    }
+    for (const item of items.nodes) {
+      const draft = mentionDraftItemMatch(item, input.commentUrl);
+      if (draft !== undefined) {
+        return draft;
+      }
+    }
+    after = items.pageInfo?.hasNextPage === true && typeof items.pageInfo.endCursor === 'string'
+      ? items.pageInfo.endCursor
+      : undefined;
+  } while (after !== undefined);
+
+  return undefined;
+}
+
+function mentionDraftItemMatch(item: unknown, commentUrl: string): { id: string } | undefined {
+  if (!isRecord(item) || typeof item.id !== 'string' || !isRecord(item.content)) {
+    return undefined;
+  }
+  const content = item.content;
+  if (content.__typename !== 'DraftIssue' || typeof content.body !== 'string') {
+    return undefined;
+  }
+  if (!content.body.includes(mentionDraftMarker) || !content.body.includes(commentUrl)) {
+    return undefined;
+  }
+  return { id: item.id };
 }
 
 async function reconcileProjectIssueClaimState(
@@ -1948,6 +2016,7 @@ const projectIssuesQuery = `
               ... on DraftIssue {
                 id
                 title
+                body
               }
             }
             fieldValues(first: 40) {

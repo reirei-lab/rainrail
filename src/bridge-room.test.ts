@@ -998,6 +998,38 @@ describe('Rainrail bridge room', () => {
     expect(exception?.stack).toContain('... truncated ...');
   });
 
+  it('does not preserve exception details for non-Cloudflare payloads', async () => {
+    const storage = fakeState();
+    const room = createTestRoom(storage, { replayLimit: 10 });
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook', repository: 'reirei-lab/rainrail' },
+      name: 'github.issue',
+      delivery: {
+        id: 'github-exception-shaped-payload',
+        receivedAt: '2026-06-29T18:18:21.000Z',
+      },
+      occurredAt: '2026-06-29T18:18:20.000Z',
+      subject: { type: 'issue', id: '24' },
+      payload: {
+        action: 'created',
+        exceptions: [{
+          message: 'provider body should not be stored',
+          stack: '    at provider (github-webhook.js:1:1)',
+        }],
+      },
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'github://deliveries/github-exception-shaped-payload',
+      },
+    });
+
+    const publishResponse = await room.fetch(publishRequest(event));
+
+    expect(publishResponse.status).toBe(200);
+    expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('provider body should not be stored');
+    expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('exceptions');
+  });
+
   it('passes Last-Event-ID to the SSE replay policy', async () => {
     const room = createTestRoom(fakeState(), { replayLimit: 10 });
     const first = fixtureEvent('delivery-1', 'github.issue');
