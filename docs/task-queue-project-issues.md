@@ -18,8 +18,10 @@ Rainrail の Project issue selection は、GitHub Project v2 固有の GraphQL
 `In Progress`、`Agent session ID`、`Branch` の組は「agent が実際に起動済み」
 であることを表す。dispatch 前の排他には GitHub ref の starting lock を使い、
 Project item は Todo/Backlog のままにする。starting lock には作成時刻、owner
-相当の session/branch、元 Status を含め、TTL を過ぎた未確定 lock は次回の
-claim/list 時に安全に回収する。
+相当の session/branch、元 Status を含め、dispatch が durable に始まったら
+`dispatchedAt` を追記する。TTL を過ぎた未dispatch lock は次回の claim/list 時に
+安全に回収するが、`dispatchedAt` つき lock は起動済み agent の保護として
+自動回収しない。
 
 ## closed issue handling
 

@@ -119,6 +119,41 @@ describe('assignNextProjectIssueToAgent', () => {
     });
   });
 
+  it('reports finalize failures after dispatch without releasing the started claim', async () => {
+    const issue = projectIssue({ number: 21, title: 'Project issue selection' });
+    const claim = { projectItemId: 'item_21', lockRefId: 'REF_lock' };
+    const releaseProjectIssue = vi.fn(async () => undefined);
+
+    await expect(assignNextProjectIssueToAgent({
+      queue: {
+        name: 'github-project',
+        kind: 'task-queue-provider',
+        listProjectIssues: async () => [issue],
+        claimProjectIssue: async () => claim,
+        finalizeProjectIssueClaim: async () => {
+          throw new Error('project finalize unavailable');
+        },
+        releaseProjectIssue,
+      },
+      runtime: {
+        runId: 'run-21',
+        workflow: 'project-issue-selection',
+        agentId: 'main',
+        sessionKeyPrefix: 'rainrail',
+        dispatchAgent: async () => ({ sessionKey: 'agent:main:rainrail-21' }),
+      },
+    })).resolves.toMatchObject({
+      assigned: false,
+      reason: 'failed_to_start_agent',
+      task: {
+        claim,
+        dispatchResult: { sessionKey: 'agent:main:rainrail-21' },
+        error: 'project finalize unavailable',
+      },
+    });
+    expect(releaseProjectIssue).not.toHaveBeenCalled();
+  });
+
   it('releases a claimed issue when dispatch fails', async () => {
     const issue = projectIssue({ number: 21, title: 'Project issue selection' });
     const claim = { projectItemId: 'item_21' };

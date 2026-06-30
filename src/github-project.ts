@@ -85,6 +85,7 @@ interface ProjectItemStatus {
 interface ProjectIssueClaimLock {
   id: string;
   createdAt: string;
+  dispatchedAt?: string;
   agentSessionId?: string;
   branchName?: string;
   projectItemId?: string;
@@ -247,12 +248,14 @@ async function finalizeProjectIssueClaim(
   auth: GitHubProjectAuthTokenProvider,
 ): Promise<void> {
   const metadata = await loadProjectMetadata(config, fetchImpl, auth);
-  assertClaimable(await loadProjectItemStatus(input.issue.id, fetchImpl, auth, config), {
+  const before = await loadProjectItemStatus(input.issue.id, fetchImpl, auth, config);
+  assertClaimable(before, {
     issue: input.issue,
     agentSessionId: input.agentSessionId,
     branchName: input.branchName,
     commentBody: input.claim.commentBody ?? '',
   }, config);
+  await markProjectIssueClaimDispatched(before, input, fetchImpl, auth);
   await updateProjectField(fetchImpl, auth, metadata.projectId, input.issue.id, metadata.statusFieldId, {
     singleSelectOptionId: metadata.statusOptionId,
   });
@@ -336,11 +339,30 @@ async function acquireProjectIssueClaimLock(
   }
 }
 
+async function markProjectIssueClaimDispatched(
+  status: ProjectItemStatus,
+  input: ProjectIssueFinalizeInput,
+  fetchImpl: typeof fetch,
+  auth: GitHubProjectAuthTokenProvider,
+): Promise<void> {
+  if (input.claim.lockRefId === undefined) {
+    return;
+  }
+  const lockOid = await createProjectIssueClaimLockCommit(status, {
+    issue: input.issue,
+    agentSessionId: input.agentSessionId,
+    branchName: input.branchName,
+    commentBody: input.claim.commentBody ?? '',
+  }, fetchImpl, auth, { dispatchedAt: new Date().toISOString() });
+  await updateProjectIssueClaimLock(input.claim.lockRefId, lockOid, fetchImpl, auth);
+}
+
 async function createProjectIssueClaimLockCommit(
   status: ProjectItemStatus,
   input: ProjectIssueClaimInput,
   fetchImpl: typeof fetch,
   auth: GitHubProjectAuthTokenProvider,
+  options: { dispatchedAt?: string } = {},
 ): Promise<string> {
   if (
     status.repositoryNameWithOwner === undefined
@@ -362,6 +384,7 @@ async function createProjectIssueClaimLockCommit(
         branchName: input.branchName,
         projectItemId: input.issue.id,
         originalStatus: input.issue.status ?? '',
+        ...(options.dispatchedAt === undefined ? {} : { dispatchedAt: options.dispatchedAt }),
       }),
       tree: status.defaultBranchTreeOid,
       parents: [status.defaultBranchOid],
@@ -397,6 +420,18 @@ async function createProjectIssueClaimLock(
   return refId;
 }
 
+async function updateProjectIssueClaimLock(
+  refId: string,
+  oid: string,
+  fetchImpl: typeof fetch,
+  auth: GitHubProjectAuthTokenProvider,
+): Promise<void> {
+  await runGraphql(fetchImpl, auth, updateProjectIssueClaimLockMutation, {
+    refId,
+    oid,
+  });
+}
+
 async function loadProjectIssueClaimLock(
   repositoryId: string,
   name: string,
@@ -426,6 +461,7 @@ async function loadProjectIssueClaimLock(
   return {
     id: ref.id,
     createdAt,
+    ...(metadata.dispatchedAt === undefined ? {} : { dispatchedAt: metadata.dispatchedAt }),
     ...(metadata.agentSessionId === undefined ? {} : { agentSessionId: metadata.agentSessionId }),
     ...(metadata.branchName === undefined ? {} : { branchName: metadata.branchName }),
     ...(metadata.projectItemId === undefined ? {} : { projectItemId: metadata.projectItemId }),
@@ -572,16 +608,7 @@ function shouldReleaseCurrentClaim(
   }
   const session = status.agentSessionId?.trim() ?? '';
   const branch = status.branchName?.trim() ?? '';
-  if (session === input.agentSessionId && branch === input.branchName) {
-    return true;
-  }
-  if (session.length > 0 && session !== input.agentSessionId) {
-    return false;
-  }
-  if (branch.length > 0 && branch !== input.branchName) {
-    return false;
-  }
-  return true;
+  return session === input.agentSessionId && branch === input.branchName;
 }
 
 async function updateProjectField(
@@ -912,11 +939,14 @@ function sameLogin(left: string, right: string): boolean {
 function projectIssueLockRefName(issue: ProjectIssue): string {
   const repo = slug(issue.repository ?? 'repo');
   const issueId = issue.number === undefined ? slug(issue.id) : String(issue.number);
-  return `refs/heads/rainrail/locks/${repo}-${issueId}`;
+  return `refs/heads/rainrail/locks/${repo}-${issueId}-${slug(issue.id)}`;
 }
 
 function isRecoverableStaleLock(lock: ProjectIssueClaimLock, input: Pick<ProjectIssueClaimInput, 'issue'>): boolean {
   if (lock.projectItemId !== input.issue.id) {
+    return false;
+  }
+  if (lock.dispatchedAt !== undefined) {
     return false;
   }
   const createdAt = Date.parse(lock.createdAt);
@@ -943,6 +973,7 @@ function claimLockCommitMessage(input: {
   branchName: string;
   projectItemId: string;
   originalStatus: string;
+  dispatchedAt?: string;
 }): string {
   return [
     PROJECT_ISSUE_CLAIM_LOCK_COMMIT_PREFIX,
@@ -954,6 +985,7 @@ function claimLockCommitMessage(input: {
       branchName: input.branchName,
       projectItemId: input.projectItemId,
       originalStatus: input.originalStatus,
+      ...(input.dispatchedAt === undefined ? {} : { dispatchedAt: input.dispatchedAt }),
     }),
   ].join('\n');
 }
@@ -964,6 +996,7 @@ function parseClaimLockCommitMessage(message: string): {
   branchName?: string;
   projectItemId?: string;
   originalStatus?: string;
+  dispatchedAt?: string;
 } | undefined {
   if (!message.startsWith(PROJECT_ISSUE_CLAIM_LOCK_COMMIT_PREFIX)) {
     return undefined;
@@ -983,6 +1016,7 @@ function parseClaimLockCommitMessage(message: string): {
       ...(typeof parsed.branchName === 'string' ? { branchName: parsed.branchName } : {}),
       ...(typeof parsed.projectItemId === 'string' ? { projectItemId: parsed.projectItemId } : {}),
       ...(typeof parsed.originalStatus === 'string' ? { originalStatus: parsed.originalStatus } : {}),
+      ...(typeof parsed.dispatchedAt === 'string' ? { dispatchedAt: parsed.dispatchedAt } : {}),
     };
   } catch {
     return undefined;
@@ -1146,6 +1180,14 @@ const updateProjectFieldMutation = `
 const createProjectIssueClaimLockMutation = `
   mutation RainrailCreateProjectIssueClaimLock($repositoryId: ID!, $name: String!, $oid: GitObjectID!) {
     createRef(input: { repositoryId: $repositoryId, name: $name, oid: $oid }) {
+      ref { id }
+    }
+  }
+`;
+
+const updateProjectIssueClaimLockMutation = `
+  mutation RainrailUpdateProjectIssueClaimLock($refId: ID!, $oid: GitObjectID!) {
+    updateRef(input: { refId: $refId, oid: $oid, force: true }) {
       ref { id }
     }
   }

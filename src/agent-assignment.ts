@@ -75,8 +75,18 @@ export async function assignNextProjectIssueToAgent(
           agentSessionId: task.agentSessionId,
           branchName: task.branchName,
         });
-      } catch {
-        // The agent is already running; a stale lock is safer than rolling back its claim.
+      } catch (error) {
+        return {
+          assigned: false,
+          reason: 'failed_to_start_agent',
+          issues,
+          task: {
+            ...task,
+            claim,
+            dispatchResult,
+            error: error instanceof Error ? error.message : String(error),
+          },
+        };
       }
     }
 
