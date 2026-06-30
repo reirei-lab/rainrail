@@ -620,7 +620,10 @@ function normalizeGitHubResource(value: unknown): unknown {
 
 function normalizeGitHubComment(value: unknown): unknown {
   if (!isRecord(value)) return undefined;
-  const normalized = pickStringFields(value, ['id', 'body', 'url', 'author']);
+  const normalized = {
+    ...pickStringFields(value, ['id', 'url', 'author']),
+    ...mentionedLoginsFromBody(value.body),
+  };
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
@@ -680,7 +683,18 @@ function sanitizePayloadText(value: string): string {
   return value
     .replace(/https?:\/\/[^\s"'<>`]+/giu, (url) => sanitizePayloadUrl(url) ?? '[redacted-url]')
     .replace(/\b(token|secret|password|code|reset)=([^&\s"'<>`]+)/giu, '$1=[redacted]')
-    .replace(/\bBearer\s+[A-Za-z0-9._~+/-]+=*/gu, 'Bearer [redacted]');
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/-]+=*/giu, 'Bearer [redacted]');
+}
+
+function mentionedLoginsFromBody(value: unknown): { mentionedLogins: string[] } | {} {
+  if (typeof value !== 'string' || value.length === 0) return {};
+  const mentions = new Set<string>();
+  for (const match of value.matchAll(/(^|[^\w-])@([A-Za-z0-9-]{1,39})(?=$|[^\w-])/gu)) {
+    const login = match[2];
+    if (login !== undefined) mentions.add(login);
+    if (mentions.size >= 20) break;
+  }
+  return mentions.size > 0 ? { mentionedLogins: [...mentions] } : {};
 }
 
 function isSafePayloadMetadata(value: unknown): value is string | null {

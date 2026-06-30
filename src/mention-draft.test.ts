@@ -146,16 +146,42 @@ describe('mention draft workflow', () => {
         title: 'React to mentions',
       },
       comment: {
-        body: '@reirei-agent please handle this',
         url: 'https://github.com/reirei-lab/rainrail/issues/17#issuecomment-1',
+        mentionedLogins: ['reirei-agent'],
       },
     });
+    expect(JSON.stringify(stored?.payload)).not.toContain('@reirei-agent please handle this');
     await expect(workflow.handle(stored!, runtimeContext())).resolves.toMatchObject({
       handled: true,
       draftItem: {
         projectItemId: 'PVTI_bridge_mention',
       },
     });
+  });
+
+  it('does not persist long mention bodies in bridge replay storage', async () => {
+    const storage = fakeState();
+    const room = new RainrailBridgeRoom(storage, { publishToken: 'test-publish-token', replayLimit: 10 });
+    const longBody = `@reirei-agent ${'internal-note '.repeat(1000)} credential=secret`;
+
+    const publishResponse = await room.fetch(new Request('https://rainrail.test/publish', {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer test-publish-token',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(githubMentionEvent({ body: longBody })),
+    }));
+
+    expect(publishResponse.status).toBe(200);
+    const storedPayload = storage.storedEvents()[0]?.payload;
+    expect(storedPayload).toMatchObject({
+      comment: {
+        mentionedLogins: ['reirei-agent'],
+      },
+    });
+    expect(JSON.stringify(storedPayload)).not.toContain('internal-note');
+    expect(JSON.stringify(storedPayload)).not.toContain('credential=secret');
   });
 });
 

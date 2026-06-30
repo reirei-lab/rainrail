@@ -12,7 +12,7 @@ export interface MentionDraftWorkflowOptions {
 
 export interface MentionDraftRequest {
   commentUrl: string;
-  body: string;
+  body?: string;
   title: string;
   sourceTitle?: string;
   repository?: string;
@@ -100,7 +100,11 @@ function requestFromComment(input: {
   const resource = sourceResource(input.payload);
   const body = stringValue(comment.body);
   const commentUrl = stringValue(comment.url);
-  if (body === undefined || commentUrl === undefined || !mentionsLogin(body, input.agentLogin)) {
+  const mentionedLogins = stringArrayValue(comment.mentionedLogins);
+  const mentionsAgent = body === undefined
+    ? mentionedLogins.some((login) => sameLogin(login, input.agentLogin))
+    : mentionsLogin(body, input.agentLogin);
+  if (commentUrl === undefined || !mentionsAgent) {
     return undefined;
   }
 
@@ -116,7 +120,7 @@ function requestFromComment(input: {
 
   return {
     commentUrl,
-    body,
+    ...(body === undefined ? {} : { body }),
     title: title.slice(0, 256),
     ...(sourceTitle === undefined ? {} : { sourceTitle }),
     ...(repository === undefined ? {} : { repository }),
@@ -207,6 +211,10 @@ function stringValue(value: unknown): string | undefined {
 
 function numberValue(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function stringArrayValue(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
 }
 
 function escapeRegExp(value: string): string {

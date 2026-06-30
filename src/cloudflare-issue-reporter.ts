@@ -211,7 +211,7 @@ export function createTaskProviderGitHubIssueClient(provider: TaskProvider): Git
         provider: 'github',
         repository: input.repository,
         state: 'open',
-        query: `"${fingerprintMarkerPrefix}${input.fingerprint}"`,
+        query: `in:body "${fingerprintMarkerPrefix}${input.fingerprint}"`,
       });
       const issue = issues[0];
       if (issue === undefined || issue.number === undefined || issue.url === undefined) {
@@ -476,7 +476,7 @@ function sanitizeSecretString(value: string): string {
   return value
     .replace(/https?:\/\/[^\s"'<>`]+/giu, (url) => sanitizeUrlString(url))
     .replace(/\b(token|secret|password|code|reset)=([^&\s"'<>`]+)/giu, '$1=[redacted]')
-    .replace(/\bBearer\s+[A-Za-z0-9._~+/-]+=*/gu, 'Bearer [redacted]');
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/-]+=*/giu, 'Bearer [redacted]');
 }
 
 function sanitizeUrlString(value: string): string {

@@ -356,6 +356,7 @@ describe('cloudflare issue reporter workflow', () => {
       provider: 'github',
       repository: 'reirei-lab/rainrail',
       state: 'open',
+      query: expect.stringContaining('in:body'),
     }));
     expect(createIssue).toHaveBeenCalledWith(expect.objectContaining({
       provider: 'github',
@@ -504,6 +505,33 @@ describe('cloudflare issue redaction', () => {
     expect(createdIssues[0]?.body).not.toContain('secret-token');
     expect(createdIssues[0]?.body).not.toContain('https://%');
     expect(createdIssues[0]?.body).toContain('[redacted-url]');
+  });
+
+  it('redacts bearer tokens case-insensitively', async () => {
+    const createdIssues: Array<{ body: string }> = [];
+    const workflow = createCloudflareIssueReporterWorkflow({
+      repository: 'reirei-lab/rainrail',
+      store: createInMemoryCloudflareErrorIssueStore(),
+      issues: {
+        findOpenIssueByFingerprint: async () => undefined,
+        createIssue: async (input) => {
+          createdIssues.push(input);
+          return {
+            number: 126,
+            url: 'https://github.com/reirei-lab/rainrail/issues/126',
+          };
+        },
+      },
+    });
+
+    await expect(workflow.handle(cloudflareErrorEvent({
+      message: 'authorization: bearer lowercase-secret-token',
+    }), runtimeContext())).resolves.toMatchObject({
+      handled: true,
+    });
+
+    expect(createdIssues[0]?.body).not.toContain('lowercase-secret-token');
+    expect(createdIssues[0]?.body).toContain('Bearer [redacted]');
   });
 });
 
