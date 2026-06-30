@@ -203,6 +203,9 @@ async function reconcileProjectIssueClaimState(
         return projectIssueWithCurrentStatus(issue, current);
       }
       if (isFinalizedProjectIssueClaim(current, lock, issue)) {
+        if (normalizeToken(current.status ?? '') !== normalizeToken(config.inProgressStatus)) {
+          return projectIssueWithCurrentStatus(issue, current);
+        }
         if (lock.startingLockReadFailed === true) {
           return projectIssueWithCurrentStatus(issue, current);
         }
@@ -238,6 +241,9 @@ async function reconcileProjectIssueClaimState(
   }
   const lock = await loadProjectIssueClaimLockPair(current.repositoryId, issue, fetchImpl, auth);
   if (lock?.dispatchedAt !== undefined && lock.projectItemId === issue.id) {
+    if (!isRestorableDispatchedClaimOwner(current, lock)) {
+      return projectIssueWithCurrentStatus(issue, current);
+    }
     return restoreDispatchedProjectIssueClaim(config, issue, lock, fetchImpl, auth);
   }
   if (hasAgentSessionId || hasBranchName) {
@@ -982,7 +988,7 @@ async function isRetryablePartialReleaseCurrentClaim(
     return true;
   }
   const lock = await loadOwnedProjectIssueClaimLock(status.repositoryId, input, fetchImpl, auth);
-  return lock?.dispatchedAt !== undefined;
+  return lock !== undefined;
 }
 
 async function assertProjectIssueSelectionStillAvailable(
