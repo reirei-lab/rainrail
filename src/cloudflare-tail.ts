@@ -83,7 +83,7 @@ export async function createCloudflareTailEvent({
   environment,
   fallbackDeliveryId,
 }: CreateCloudflareTailEventInput): Promise<CloudflareTailRainrailEvent> {
-  const occurredAt = normalizeTimestamp(tailEvent.eventTimestamp);
+  const occurredAt = normalizeTimestamp(tailEvent.eventTimestamp, receivedAt);
   const request = tailEvent.event?.request ?? {};
   const response = tailEvent.event?.response ?? {};
   const cfRay = optionalString(findHeader(request.headers, 'cf-ray'));
@@ -141,25 +141,27 @@ export async function publishCloudflareTailEvents(
   tailEvents: CloudflareTailEvent[],
   options: PublishCloudflareTailEventsOptions,
 ): Promise<PublishCloudflareTailEventResult[]> {
-  return Promise.all(
-    tailEvents.map(async (tailEvent) => {
-      const event = await createCloudflareTailEvent({
-        tailEvent,
-        ...(options.receivedAt === undefined ? {} : { receivedAt: options.receivedAt }),
-        ...(options.sourceName === undefined ? {} : { sourceName: options.sourceName }),
-        ...(options.account === undefined ? {} : { account: options.account }),
-        ...(options.environment === undefined ? {} : { environment: options.environment }),
-        ...(options.fallbackDeliveryId === undefined ? {} : { fallbackDeliveryId: options.fallbackDeliveryId }),
-      });
-      const response = await options.publish(event);
+  const results: PublishCloudflareTailEventResult[] = [];
 
-      if (!response.ok) {
-        return { ok: false, id: event.id, status: response.status };
-      }
+  for (const [index, tailEvent] of tailEvents.entries()) {
+    const event = await createCloudflareTailEvent({
+      tailEvent,
+      ...(options.receivedAt === undefined ? {} : { receivedAt: options.receivedAt }),
+      ...(options.sourceName === undefined ? {} : { sourceName: options.sourceName }),
+      ...(options.account === undefined ? {} : { account: options.account }),
+      ...(options.environment === undefined ? {} : { environment: options.environment }),
+      ...(options.fallbackDeliveryId === undefined ? {} : {
+        fallbackDeliveryId: `${options.fallbackDeliveryId}-${index}`,
+      }),
+    });
+    const response = await options.publish(event);
 
-      return { ok: true, id: event.id };
-    }),
-  );
+    results.push(response.ok
+      ? { ok: true, id: event.id }
+      : { ok: false, id: event.id, status: response.status });
+  }
+
+  return results;
 }
 
 function metadataFromContext(context: SourcePluginNormalizeContext): Pick<CreateCloudflareTailEventInput, 'account' | 'environment'> {
@@ -169,7 +171,7 @@ function metadataFromContext(context: SourcePluginNormalizeContext): Pick<Create
   };
 }
 
-function normalizeTimestamp(value: unknown): Date {
+function normalizeTimestamp(value: unknown, fallback: Date): Date {
   if (typeof value === 'number') {
     const milliseconds = value > 10_000_000_000 ? value : value * 1000;
     const date = new Date(milliseconds);
@@ -181,7 +183,7 @@ function normalizeTimestamp(value: unknown): Date {
     if (!Number.isNaN(date.getTime())) return date;
   }
 
-  return new Date();
+  return fallback;
 }
 
 function buildCloudflareTailDeliveryId({
@@ -197,20 +199,21 @@ function buildCloudflareTailDeliveryId({
 }): string {
   const compactedTimestamp = compactTimestamp(occurredAt);
   const fixedLength = 'tail'.length + compactedTimestamp.length + 3;
-  const remainingLength = Math.max(16, maxLength - fixedLength);
+  const remainingLength = Math.max(2, maxLength - fixedLength);
   const suffixLength = Math.min(32, Math.max(8, Math.floor(remainingLength / 2)));
-  const scriptLength = Math.max(8, remainingLength - suffixLength);
+  const scriptLength = Math.max(1, remainingLength - suffixLength);
 
   return [
     'tail',
-    safeIdentifierSegment(scriptName ?? 'unknown-script', 'unknown-script', scriptLength),
+    safeDeliveryReferenceSegment(scriptName ?? 'unknown-script', 'unknown-script', scriptLength),
     compactedTimestamp,
-    safeIdentifierSegment(suffix, 'unknown-ray', suffixLength),
+    safeDeliveryReferenceSegment(suffix, 'unknown-ray', suffixLength, { preserveEnd: true }),
   ].join('-');
 }
 
 function maxDeliveryIdLength(sourceName: string, name: CloudflareTailRainrailEvent['name']): number {
-  return Math.min(95, Math.max(48, 128 - sourceName.length - name.length - 2));
+  const minimumDeliveryIdLength = 'tail'.length + compactTimestamp(new Date(0)).length + 1 + 1 + 3;
+  return Math.min(95, Math.max(minimumDeliveryIdLength, 128 - sourceName.length - name.length - 2));
 }
 
 function compactTimestamp(date: Date): string {
@@ -267,7 +270,7 @@ function optionalField(record: Record<string, unknown>, key: 'name' | 'message')
 function optionalTimestampField(value: unknown): { timestamp: string } | {} {
   if (value === undefined || value === null) return {};
 
-  return { timestamp: normalizeTimestamp(value).toISOString() };
+  return { timestamp: normalizeTimestamp(value, new Date(0)).toISOString() };
 }
 
 function optionalStatus(value: unknown): string | null {
@@ -299,4 +302,22 @@ function safeIdentifierSegment(value: string, fallback: string, maxLength = 64):
     .slice(0, maxLength);
 
   return normalized.length > 0 && /^[a-z0-9]/u.test(normalized) ? normalized : fallback;
+}
+
+function safeDeliveryReferenceSegment(
+  value: string,
+  fallback: string,
+  maxLength = 64,
+  options: { preserveEnd?: boolean } = {},
+): string {
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_.-]+/gu, '-')
+    .replace(/^-+|-+$/gu, '');
+  const truncated = options.preserveEnd === true
+    ? normalized.slice(-maxLength)
+    : normalized.slice(0, maxLength);
+
+  return truncated.length > 0 && /^[a-z0-9]/u.test(truncated) ? truncated : fallback;
 }

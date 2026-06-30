@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { verifyRainrailEventsBearerToken } from './index.js';
 
@@ -66,5 +66,27 @@ describe('Rainrail events auth', () => {
       status: 503,
       reason: 'events_auth_not_configured',
     });
+  });
+
+  it('compares mismatched token lengths across the maximum token length', () => {
+    const charCodeAt = vi.spyOn(String.prototype, 'charCodeAt');
+
+    try {
+      const result = verifyRainrailEventsBearerToken(
+        new Request('https://rainrail.local/events', {
+          headers: { Authorization: 'Bearer short' },
+        }),
+        'much-longer-secret-token',
+      );
+
+      expect(result).toEqual({
+        ok: false,
+        status: 403,
+        reason: 'invalid_bearer_token',
+      });
+      expect(charCodeAt.mock.calls.length).toBeGreaterThanOrEqual('much-longer-secret-token'.length * 2);
+    } finally {
+      charCodeAt.mockRestore();
+    }
   });
 });

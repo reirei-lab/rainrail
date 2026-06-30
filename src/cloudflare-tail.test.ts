@@ -170,6 +170,45 @@ describe('Cloudflare tail source', () => {
     });
   });
 
+  it('keeps fallback delivery ids unique inside a cf-ray-less batch', async () => {
+    const storage = fakeState();
+    const room = new RainrailBridgeRoom(storage, { publishToken: TEST_PUBLISH_TOKEN, replayLimit: 10 });
+    const result = await publishCloudflareTailEvents([
+      cloudflareTailFixture({ outcome: 'ok', cfRay: null }),
+      cloudflareTailFixture({ outcome: 'ok', cfRay: null }),
+    ], {
+      receivedAt: new Date('2026-06-15T08:12:01.000Z'),
+      fallbackDeliveryId: 'stable-batch-delivery',
+      publish: (event) => room.fetch(publishRequest(event)),
+    });
+
+    expect(result).toEqual([
+      { ok: true, id: 'cloudflare-tail:tail-asme-site-20260615T081200000Z-stable-batch-delivery-0:cloudflare.tail' },
+      { ok: true, id: 'cloudflare-tail:tail-asme-site-20260615T081200000Z-stable-batch-delivery-1:cloudflare.tail' },
+    ]);
+    expect(storage.storedEvents()).toHaveLength(2);
+  });
+
+  it('publishes Cloudflare tail batches in input order', async () => {
+    const arrivals: Array<string | null> = [];
+
+    await publishCloudflareTailEvents([
+      cloudflareTailFixture({ outcome: 'ok', cfRay: 'ray-1' }),
+      cloudflareTailFixture({ outcome: 'ok', cfRay: 'ray-2' }),
+    ], {
+      receivedAt: new Date('2026-06-15T08:12:01.000Z'),
+      publish: async (event) => {
+        if (event.payload.cfRay === 'ray-1') {
+          await delay(10);
+        }
+        arrivals.push(event.payload.cfRay);
+        return Response.json({ ok: true });
+      },
+    });
+
+    expect(arrivals).toEqual(['ray-1', 'ray-2']);
+  });
+
   it('keeps default event ids publishable for long worker names without cf-ray', async () => {
     const storage = fakeState();
     const room = new RainrailBridgeRoom(storage, { publishToken: TEST_PUBLISH_TOKEN, replayLimit: 10 });
@@ -190,6 +229,60 @@ describe('Cloudflare tail source', () => {
     expect(result[0]?.id.length).toBeLessThanOrEqual(128);
     expect(storage.storedEvents()).toHaveLength(1);
   });
+
+  it('keeps fallback delivery ids with colons publishable as Cloudflare references', async () => {
+    const storage = fakeState();
+    const room = new RainrailBridgeRoom(storage, { publishToken: TEST_PUBLISH_TOKEN, replayLimit: 10 });
+    const result = await publishCloudflareTailEvents([
+      cloudflareTailFixture({ outcome: 'ok', cfRay: null }),
+    ], {
+      receivedAt: new Date('2026-06-15T08:12:01.000Z'),
+      fallbackDeliveryId: 'queue:delivery:1',
+      publish: (event) => room.fetch(publishRequest(event)),
+    });
+
+    expect(result[0]?.ok).toBe(true);
+    expect(storage.storedEvents()[0]?.rawPayload.reference).toBe('cloudflare://deliveries/tail-asme-site-20260615T081200000Z-queue-delivery-1-0');
+  });
+
+  it('keeps retry ids stable when eventTimestamp is missing', async () => {
+    const first = await createCloudflareTailEvent({
+      tailEvent: cloudflareTailFixture({ outcome: 'ok', eventTimestamp: null }),
+      receivedAt: new Date('2026-06-15T08:12:01.000Z'),
+      fallbackDeliveryId: 'stable-missing-timestamp',
+    });
+    await delay(10);
+    const second = await createCloudflareTailEvent({
+      tailEvent: cloudflareTailFixture({ outcome: 'ok', eventTimestamp: null }),
+      receivedAt: new Date('2026-06-15T08:12:01.000Z'),
+      fallbackDeliveryId: 'stable-missing-timestamp',
+    });
+
+    expect(first.occurredAt).toBe('2026-06-15T08:12:01.000Z');
+    expect(second.id).toBe(first.id);
+  });
+
+  it('keeps event ids publishable when source names are long', async () => {
+    const storage = fakeState();
+    const room = new RainrailBridgeRoom(storage, { publishToken: TEST_PUBLISH_TOKEN, replayLimit: 10 });
+    const sourceName = 'a'.repeat(64);
+    const result = await publishCloudflareTailEvents([
+      cloudflareTailFixture({
+        outcome: 'exception',
+        cfRay: null,
+        scriptName: 'very-long-worker-name-that-used-to-overflow-rainrail-event-identifier-limits',
+      }),
+    ], {
+      sourceName,
+      receivedAt: new Date('2026-06-15T08:12:01.000Z'),
+      fallbackDeliveryId: 'stable-delivery-without-cf-ray',
+      publish: (event) => room.fetch(publishRequest(event)),
+    });
+
+    expect(result[0]?.ok).toBe(true);
+    expect(result[0]?.id.length).toBeLessThanOrEqual(128);
+    expect(storage.storedEvents()).toHaveLength(1);
+  });
 });
 
 function cloudflareTailFixture({
@@ -198,17 +291,19 @@ function cloudflareTailFixture({
   cfRay = 'ray-1',
   exceptions = [],
   scriptName = 'asme-site',
+  eventTimestamp = Date.parse('2026-06-15T08:12:00.000Z'),
 }: {
   outcome: string;
   status?: number;
   cfRay?: string | null;
   exceptions?: Array<{ name?: string; message?: string; timestamp?: number | string }>;
   scriptName?: string;
+  eventTimestamp?: number | string | null;
 }) {
   const headers = cfRay === null ? {} : { 'cf-ray': cfRay };
 
   return {
-    eventTimestamp: Date.parse('2026-06-15T08:12:00.000Z'),
+    ...(eventTimestamp === null ? {} : { eventTimestamp }),
     outcome,
     scriptName,
     scriptVersion: { id: 'script-version-1' },
@@ -273,4 +368,8 @@ async function readUntil(reader: ReadableStreamDefaultReader<Uint8Array>, expect
   }
 
   return text;
+}
+
+async function delay(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
 }

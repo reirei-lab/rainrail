@@ -46,6 +46,11 @@ Cloudflare tail source は Worker tail payload の `exceptions` が空でない�
 長い worker 名や fallback delivery id は delivery id 生成時に短縮する。このため、
 元 tail payload の URL や例外本文は source payload にだけ置き、Bridge room の durable
 replay では allowlist 済み shallow metadata に縮約される。
+batch publish helper は入力順に 1 件ずつ publish する。`cf-ray` が無い batch では
+fallback delivery id に batch index を混ぜ、同一 ms の Cron/Queue tail でも batch 内の
+別 event として配信できるようにする。Cloudflare delivery reference の path segment は
+`:` を含まない文字集合へ正規化し、`eventTimestamp` が欠落または壊れている場合は
+`receivedAt` を occurredAt / delivery id の時刻要素として使う。
 
 ## Task provider
 

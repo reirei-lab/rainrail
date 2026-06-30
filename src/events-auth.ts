@@ -34,11 +34,12 @@ export function rainrailEventsAuthErrorResponse(result: Exclude<RainrailEventsAu
 }
 
 function constantTimeStringEqual(left: string, right: string): boolean {
-  if (left.length !== right.length) return false;
+  let diff = left.length ^ right.length;
+  const maxLength = Math.max(left.length, right.length);
 
-  let result = 0;
-  for (let index = 0; index < left.length; index += 1) {
-    result |= left.charCodeAt(index) ^ right.charCodeAt(index);
+  for (let index = 0; index < maxLength; index += 1) {
+    diff |= (left.charCodeAt(index) || 0) ^ (right.charCodeAt(index) || 0);
   }
-  return result === 0;
+
+  return diff === 0;
 }
