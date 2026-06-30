@@ -72,6 +72,56 @@ describe('getGitHubToken', () => {
     }
   });
 
+  it('does not bind shared GitHub App token fetches to caller abort signals', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'rainrail-github-app-'));
+    const keyPath = join(directory, 'private-key.pem');
+    const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+    writeFileSync(keyPath, privateKey.export({ type: 'pkcs1', format: 'pem' }), 'utf8');
+    const firstController = new AbortController();
+    const secondController = new AbortController();
+    let resolveFetch: ((response: Response) => void) | undefined;
+    const requests: RequestInit[] = [];
+
+    try {
+      const config = {
+        githubApp: {
+          appId: '12345',
+          installationId: '67890',
+          privateKeyPath: keyPath,
+        },
+      };
+      const fetchImpl = vi.fn((async (_url: string | URL | Request, init?: RequestInit) => {
+        requests.push(init ?? {});
+        return await new Promise<Response>((resolve) => {
+          resolveFetch = resolve;
+        });
+      }) as typeof fetch);
+
+      const first = getGitHubToken(config, fetchImpl, firstController.signal);
+      const second = getGitHubToken(config, fetchImpl, secondController.signal);
+      await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledOnce());
+      firstController.abort(new Error('first workflow timed out'));
+      resolveFetch?.(new Response(JSON.stringify({
+        token: 'installation-token',
+        expires_at: new Date(Date.now() + 60 * 60_000).toISOString(),
+      }), {
+        status: 201,
+        headers: {
+          'content-type': 'application/json',
+          'x-ratelimit-limit': '5000',
+          'x-ratelimit-remaining': '4999',
+        },
+      }));
+
+      await expect(first).rejects.toThrow('first workflow timed out');
+      await expect(second).resolves.toBe('installation-token');
+      expect(fetchImpl).toHaveBeenCalledOnce();
+      expect(requests[0]?.signal).toBeUndefined();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('prefers explicitly configured tokens over GitHub App auth', async () => {
     let requestCount = 0;
     const token = await getGitHubToken({

@@ -60,6 +60,12 @@ interface WorkflowExecutionRecord {
   timeoutError?: unknown;
 }
 
+interface WorkflowLifecycle {
+  signal: AbortSignal;
+  closeSideEffects: () => void;
+  isSideEffectClosed: () => boolean;
+}
+
 export function createRuntimeDispatcher(options: RuntimeDispatcherOptions): RuntimeDispatcher {
   const workflows = options.workflows.map(createWorkflowExecutionRecord);
 
@@ -92,10 +98,11 @@ export function createRuntimeDispatcher(options: RuntimeDispatcherOptions): Runt
             let workflowStarted = false;
             let value: unknown;
             try {
-              const context = createWorkflowContext(options, policy, event, abort.controller.signal);
+              const lifecycle = createWorkflowLifecycle(abort.controller.signal);
+              const context = createWorkflowContext(options, policy, event, lifecycle);
               const workflowTimeoutMs = metadata.timeoutMs ?? options.defaultTimeoutMs;
               workflowStarted = true;
-              value = await runWorkflow(() => workflow.handle(event, context), workflowTimeoutMs, abort);
+              value = await runWorkflow(() => workflow.handle(event, context), workflowTimeoutMs, abort, lifecycle);
             } finally {
               if (!workflowStarted) {
                 abort.dispose();
@@ -250,10 +257,10 @@ function createWorkflowContext(
   options: RuntimeDispatcherOptions,
   policy: WorkflowExecutionPolicy,
   event: RainrailEventEnvelope,
-  signal: AbortSignal,
+  lifecycle: WorkflowLifecycle,
 ): PluginRuntimeContext {
   const context = {} as PluginRuntimeContext;
-  const capabilities = createGatedRuntimeCapabilities(options, policy, event, signal);
+  const capabilities = createGatedRuntimeCapabilities(options, policy, event, lifecycle);
 
   defineWorkflowContextAccessor(context, 'runId', () => options.runtime.runId);
   defineWorkflowContextProperty(context, 'now', () => options.runtime.now());
@@ -262,10 +269,10 @@ function createWorkflowContext(
     defineWorkflowContextProperty(context, 'capabilities', capabilities);
   }
 
-  defineWorkflowContextProperty(context, 'providers', createGuardedProviders(options, policy, event, signal));
-  defineWorkflowContextProperty(context, 'runtime', createGatedRuntimeProvider(options, policy, event, signal));
-  defineWorkflowContextProperty(context, 'signal', signal);
-  defineWorkflowContextProperty(context, 'actions', createGatedRuntimeActions(options, policy, event, signal));
+  defineWorkflowContextProperty(context, 'providers', createGuardedProviders(options, policy, event, lifecycle));
+  defineWorkflowContextProperty(context, 'runtime', createGatedRuntimeProvider(options, policy, event, lifecycle));
+  defineWorkflowContextProperty(context, 'signal', lifecycle.signal);
+  defineWorkflowContextProperty(context, 'actions', createGatedRuntimeActions(options, policy, event, lifecycle));
 
   return context;
 }
@@ -320,7 +327,7 @@ function createGatedRuntimeProvider(
   options: RuntimeDispatcherOptions,
   policy: WorkflowExecutionPolicy,
   event: RainrailEventEnvelope,
-  signal: AbortSignal,
+  lifecycle: WorkflowLifecycle,
 ): RuntimeProvider {
   const runtime = options.runtime.runtime ?? unavailableRuntimeProvider;
 
@@ -328,7 +335,7 @@ function createGatedRuntimeProvider(
     name: runtime.name,
     kind: runtime.kind,
     startRun: (request, context) =>
-      callRuntimeStartRun(options, policy, event, signal, runtime, request, context?.signal),
+      callRuntimeStartRun(options, policy, event, lifecycle, runtime, request, context?.signal),
   };
 }
 
@@ -336,12 +343,12 @@ async function callRuntimeStartRun(
   options: RuntimeDispatcherOptions,
   policy: WorkflowExecutionPolicy,
   event: RainrailEventEnvelope,
-  signal: AbortSignal,
+  lifecycle: WorkflowLifecycle,
   runtime: RuntimeProvider,
   request: Parameters<RuntimeProvider['startRun']>[0],
   callerSignal: AbortSignal | undefined,
 ): Promise<Awaited<ReturnType<RuntimeProvider['startRun']>>> {
-  if (signal.aborted) {
+  if (lifecycle.isSideEffectClosed()) {
     const reason = new PluginActionAbortedError('startRuntime', policy.name);
     await recordAudit(options, policy, event, 'startRuntime', 'denied', reason);
     throw reason;
@@ -354,7 +361,7 @@ async function callRuntimeStartRun(
   }
 
   try {
-    const value = await runtime.startRun(request, { signal: combineAbortSignals(signal, callerSignal) });
+    const value = await runtime.startRun(request, { signal: combineAbortSignals(lifecycle.signal, callerSignal) });
     await recordAudit(options, policy, event, 'startRuntime', 'fulfilled');
     return value;
   } catch (reason) {
@@ -367,7 +374,7 @@ function createGatedRuntimeCapabilities(
   options: RuntimeDispatcherOptions,
   policy: WorkflowExecutionPolicy,
   event: RainrailEventEnvelope,
-  signal: AbortSignal,
+  lifecycle: WorkflowLifecycle,
 ): PluginRuntimeContext['capabilities'] {
   const capabilities = options.runtime.capabilities;
   if (capabilities === undefined) {
@@ -380,7 +387,7 @@ function createGatedRuntimeCapabilities(
   }
 
   const dispatchAgent: DispatchAgentCapability = (request, context) =>
-    callDispatchAgent(options, policy, event, signal, request, context?.signal);
+    callDispatchAgent(options, policy, event, lifecycle, rawDispatchAgent, capabilities, request, context?.signal);
 
   return createDispatchAgentCapabilityProxy(capabilities, dispatchAgent, rawDispatchAgent);
 }
@@ -608,7 +615,7 @@ function callCapabilityFunctionWithDispatchAgentShadow(
   args: unknown[],
 ): unknown {
   const ownDescriptor = Reflect.getOwnPropertyDescriptor(capabilities, 'dispatchAgent');
-  if (ownDescriptor === undefined || ownDescriptor.configurable === true) {
+  if (Object.isExtensible(capabilities) && (ownDescriptor === undefined || ownDescriptor.configurable === true)) {
     const restore = () => {
       if (ownDescriptor === undefined) {
         Reflect.deleteProperty(capabilities, 'dispatchAgent');
@@ -627,18 +634,25 @@ function callCapabilityFunctionWithDispatchAgentShadow(
     try {
       const result = Reflect.apply(helper, capabilities, args);
       if (isPromiseLike(result)) {
-        return result.finally(restore);
+        return Promise.resolve(result)
+          .then((value) => normalizeCapabilityHelperResult(value, capabilities, safeReceiver))
+          .finally(restore);
       }
 
       restore();
-      return result;
+      return normalizeCapabilityHelperResult(result, capabilities, safeReceiver);
     } catch (reason) {
       restore();
       throw reason;
     }
   }
 
-  return Reflect.apply(helper, safeReceiver, args);
+  const result = Reflect.apply(helper, safeReceiver, args);
+  if (isPromiseLike(result)) {
+    return Promise.resolve(result).then((value) => normalizeCapabilityHelperResult(value, capabilities, safeReceiver));
+  }
+
+  return normalizeCapabilityHelperResult(result, capabilities, safeReceiver);
 }
 
 function isPromiseLike(value: unknown): value is Promise<unknown> {
@@ -650,15 +664,25 @@ function isPromiseLike(value: unknown): value is Promise<unknown> {
   );
 }
 
+function normalizeCapabilityHelperResult(
+  value: unknown,
+  capabilities: NonNullable<PluginRuntimeContext['capabilities']>,
+  safeReceiver: object,
+): unknown {
+  return value === capabilities ? safeReceiver : value;
+}
+
 async function callDispatchAgent(
   options: RuntimeDispatcherOptions,
   policy: WorkflowExecutionPolicy,
   event: RainrailEventEnvelope,
-  signal: AbortSignal,
+  lifecycle: WorkflowLifecycle,
+  dispatchAgent: DispatchAgentCapability,
+  capabilities: NonNullable<PluginRuntimeContext['capabilities']>,
   request: Parameters<NonNullable<NonNullable<PluginRuntimeContext['capabilities']>['dispatchAgent']>>[0],
   callerSignal: AbortSignal | undefined,
 ): Promise<unknown> {
-  if (signal.aborted) {
+  if (lifecycle.isSideEffectClosed()) {
     const reason = new PluginActionAbortedError('startRuntime', policy.name);
     await recordAudit(options, policy, event, 'startRuntime', 'denied', reason);
     throw reason;
@@ -670,16 +694,10 @@ async function callDispatchAgent(
     throw reason;
   }
 
-  const capabilities = options.runtime.capabilities;
-  const dispatchAgent = capabilities?.dispatchAgent;
-  if (dispatchAgent === undefined) {
-    const reason = new Error('Runtime capability dispatchAgent is not available');
-    await recordAudit(options, policy, event, 'startRuntime', 'rejected', reason);
-    throw reason;
-  }
-
   try {
-    const value = await dispatchAgent.call(capabilities, request, { signal: combineAbortSignals(signal, callerSignal) });
+    const value = await dispatchAgent.call(capabilities, request, {
+      signal: combineAbortSignals(lifecycle.signal, callerSignal),
+    });
     await recordAudit(options, policy, event, 'startRuntime', 'fulfilled');
     return value;
   } catch (reason) {
@@ -700,15 +718,15 @@ function createGatedRuntimeActions(
   options: RuntimeDispatcherOptions,
   policy: WorkflowExecutionPolicy,
   event: RainrailEventEnvelope,
-  signal: AbortSignal,
+  lifecycle: WorkflowLifecycle,
 ): RuntimeActions {
   return {
     mergePullRequest: (request) =>
-      callGatedAction(options, policy, event, signal, 'mergePullRequest', 'merge', request),
+      callGatedAction(options, policy, event, lifecycle, 'mergePullRequest', 'merge', request),
     startRuntime: (request) =>
-      callGatedAction(options, policy, event, signal, 'startRuntime', 'runtime:start', request),
+      callGatedAction(options, policy, event, lifecycle, 'startRuntime', 'runtime:start', request),
     readSecret: (request) =>
-      callGatedAction(options, policy, event, signal, 'readSecret', 'secret:access', request) as Promise<string>,
+      callGatedAction(options, policy, event, lifecycle, 'readSecret', 'secret:access', request) as Promise<string>,
   };
 }
 
@@ -716,12 +734,12 @@ async function callGatedAction<TRequest>(
   options: RuntimeDispatcherOptions,
   policy: WorkflowExecutionPolicy,
   event: RainrailEventEnvelope,
-  signal: AbortSignal,
+  lifecycle: WorkflowLifecycle,
   action: keyof RuntimeActionImplementations,
   capability: RuntimeCapabilityName,
   request: TRequest,
 ): Promise<unknown> {
-  if (signal.aborted) {
+  if (lifecycle.isSideEffectClosed()) {
     const reason = new PluginActionAbortedError(action, policy.name);
     await recordAudit(options, policy, event, action, 'denied', reason);
     throw reason;
@@ -742,7 +760,7 @@ async function callGatedAction<TRequest>(
   }
 
   try {
-    const value = await implementation.call(actions, request as never, { signal });
+    const value = await implementation.call(actions, request as never, { signal: lifecycle.signal });
     await recordAudit(options, policy, event, action, 'fulfilled');
     return value;
   } catch (reason) {
@@ -755,17 +773,17 @@ function createGuardedProviders(
   options: RuntimeDispatcherOptions,
   policy: WorkflowExecutionPolicy,
   event: RainrailEventEnvelope,
-  signal: AbortSignal,
+  lifecycle: WorkflowLifecycle,
 ): TaskProviderRegistry {
   const providers = options.runtime.providers ?? unavailableProviders;
   const guardedProviders: TaskProviderRegistry = {
     ...providers,
-    tasks: createGuardedTaskProvider(options, policy, event, signal, providers.tasks, 'tasks'),
+    tasks: createGuardedTaskProvider(options, policy, event, lifecycle, providers.tasks, 'tasks'),
   };
 
   for (const [name, provider] of Object.entries(providers)) {
     if (name !== 'tasks' && isTaskProvider(provider)) {
-      guardedProviders[name] = createGuardedTaskProvider(options, policy, event, signal, provider, name);
+      guardedProviders[name] = createGuardedTaskProvider(options, policy, event, lifecycle, provider, name);
     }
   }
 
@@ -786,7 +804,7 @@ function createGuardedTaskProvider(
   options: RuntimeDispatcherOptions,
   policy: WorkflowExecutionPolicy,
   event: RainrailEventEnvelope,
-  signal: AbortSignal,
+  lifecycle: WorkflowLifecycle,
   tasks: TaskProvider,
   actionPrefix: string,
 ): TaskProvider {
@@ -795,56 +813,56 @@ function createGuardedTaskProvider(
     name: tasks.name,
     kind: tasks.kind,
     getIssue: async (ref, context) => {
-      const denied = getDeniedProviderCallReason(options, policy, event, signal, auditAction('getIssue'));
+      const denied = getDeniedProviderCallReason(options, policy, event, lifecycle, auditAction('getIssue'));
       if (denied !== undefined) {
         throw denied;
       }
 
-      return tasks.getIssue.call(tasks, ref, { signal: combineAbortSignals(signal, context?.signal) });
+      return tasks.getIssue.call(tasks, ref, { signal: combineAbortSignals(lifecycle.signal, context?.signal) });
     },
     createComment: async (input, context) => {
-      const denied = getDeniedProviderCallReason(options, policy, event, signal, auditAction('createComment'));
+      const denied = getDeniedProviderCallReason(options, policy, event, lifecycle, auditAction('createComment'));
       if (denied !== undefined) {
         throw denied;
       }
 
-      return tasks.createComment.call(tasks, input, { signal: combineAbortSignals(signal, context?.signal) });
+      return tasks.createComment.call(tasks, input, { signal: combineAbortSignals(lifecycle.signal, context?.signal) });
     },
   };
 
   if (tasks.addToProject !== undefined) {
     const addToProject = tasks.addToProject;
     guardedTasks.addToProject = async (input, context) => {
-      const denied = getDeniedProviderCallReason(options, policy, event, signal, auditAction('addToProject'));
+      const denied = getDeniedProviderCallReason(options, policy, event, lifecycle, auditAction('addToProject'));
       if (denied !== undefined) {
         throw denied;
       }
 
-      return addToProject.call(tasks, input, { signal: combineAbortSignals(signal, context?.signal) });
+      return addToProject.call(tasks, input, { signal: combineAbortSignals(lifecycle.signal, context?.signal) });
     };
   }
 
   if (tasks.setStatus !== undefined) {
     const setStatus = tasks.setStatus;
     guardedTasks.setStatus = async (input, context) => {
-      const denied = getDeniedProviderCallReason(options, policy, event, signal, auditAction('setStatus'));
+      const denied = getDeniedProviderCallReason(options, policy, event, lifecycle, auditAction('setStatus'));
       if (denied !== undefined) {
         throw denied;
       }
 
-      return setStatus.call(tasks, input, { signal: combineAbortSignals(signal, context?.signal) });
+      return setStatus.call(tasks, input, { signal: combineAbortSignals(lifecycle.signal, context?.signal) });
     };
   }
 
   if (tasks.createProposal !== undefined) {
     const createProposal = tasks.createProposal;
     guardedTasks.createProposal = async (input, context) => {
-      const denied = getDeniedProviderCallReason(options, policy, event, signal, auditAction('createProposal'));
+      const denied = getDeniedProviderCallReason(options, policy, event, lifecycle, auditAction('createProposal'));
       if (denied !== undefined) {
         throw denied;
       }
 
-      return createProposal.call(tasks, input, { signal: combineAbortSignals(signal, context?.signal) });
+      return createProposal.call(tasks, input, { signal: combineAbortSignals(lifecycle.signal, context?.signal) });
     };
   }
 
@@ -855,10 +873,10 @@ function getDeniedProviderCallReason(
   options: RuntimeDispatcherOptions,
   policy: WorkflowExecutionPolicy,
   event: RainrailEventEnvelope,
-  signal: AbortSignal,
+  lifecycle: WorkflowLifecycle,
   action: WorkflowAuditEntry['action'],
 ): Error | undefined {
-  if (!signal.aborted) {
+  if (!lifecycle.isSideEffectClosed()) {
     return undefined;
   }
 
@@ -932,6 +950,17 @@ interface WorkflowAbortController {
   dispose: () => void;
 }
 
+function createWorkflowLifecycle(signal: AbortSignal): WorkflowLifecycle {
+  let sideEffectsClosed = false;
+  return {
+    signal,
+    closeSideEffects: () => {
+      sideEffectsClosed = true;
+    },
+    isSideEffectClosed: () => sideEffectsClosed || signal.aborted,
+  };
+}
+
 function createWorkflowAbortController(parentSignal: AbortSignal | undefined): WorkflowAbortController {
   const controller = new AbortController();
 
@@ -954,9 +983,11 @@ async function runWorkflow<T>(
   start: () => T | Promise<T>,
   timeoutMs: number | undefined,
   abort: WorkflowAbortController,
+  lifecycle: WorkflowLifecycle,
 ): Promise<T> {
   let timeout: NodeJS.Timeout | undefined;
   let removeAbortListener: (() => void) | undefined;
+  const disposeQueueMicrotaskGuard = installQueueMicrotaskLifecycleGuard(lifecycle);
   try {
     const abortPromise = new Promise<never>((_resolve, reject) => {
       const rejectAbort = () => reject(abort.controller.signal.reason ?? new Error('Plugin runtime signal aborted'));
@@ -997,6 +1028,9 @@ async function runWorkflow<T>(
       }),
     ]);
   } finally {
+    lifecycle.closeSideEffects();
+    disposeQueueMicrotaskGuard();
+
     if (timeout !== undefined) {
       clearTimeout(timeout);
     }
@@ -1009,4 +1043,32 @@ async function runWorkflow<T>(
 
     abort.dispose();
   }
+}
+
+const guardedMicrotaskLifecycles = new Set<WorkflowLifecycle>();
+let originalQueueMicrotask: typeof queueMicrotask | undefined;
+
+function installQueueMicrotaskLifecycleGuard(lifecycle: WorkflowLifecycle): () => void {
+  if (originalQueueMicrotask === undefined) {
+    originalQueueMicrotask = globalThis.queueMicrotask;
+    globalThis.queueMicrotask = (callback) => {
+      const scheduledLifecycles = [...guardedMicrotaskLifecycles];
+      originalQueueMicrotask?.(() => {
+        for (const scheduledLifecycle of scheduledLifecycles) {
+          scheduledLifecycle.closeSideEffects();
+        }
+
+        callback();
+      });
+    };
+  }
+
+  guardedMicrotaskLifecycles.add(lifecycle);
+  return () => {
+    guardedMicrotaskLifecycles.delete(lifecycle);
+    if (guardedMicrotaskLifecycles.size === 0 && originalQueueMicrotask !== undefined) {
+      globalThis.queueMicrotask = originalQueueMicrotask;
+      originalQueueMicrotask = undefined;
+    }
+  };
 }

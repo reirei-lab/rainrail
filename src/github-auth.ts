@@ -182,13 +182,14 @@ async function githubAppInstallationToken(
   const now = Date.now();
   const cached = installationTokenCache.get(cacheKey);
   if (cached !== undefined && cached.expiresAtMs - tokenRefreshSkewMs > now) {
+    throwIfAborted(signal);
     return cached.token;
   }
   if (cached?.pending !== undefined) {
-    return cached.pending;
+    return waitForSignal(cached.pending, signal);
   }
 
-  const pending = createInstallationToken(config, fetchImpl, signal)
+  const pending = createInstallationToken(config, fetchImpl)
     .then(({ token, expiresAtMs }) => {
       installationTokenCache.set(cacheKey, { token, expiresAtMs });
       return token;
@@ -204,13 +205,12 @@ async function githubAppInstallationToken(
     expiresAtMs: 0,
     pending,
   });
-  return pending;
+  return waitForSignal(pending, signal);
 }
 
 async function createInstallationToken(
   config: GitHubAppAuthConfig,
   fetchImpl: FetchLike,
-  signal: AbortSignal | undefined,
 ): Promise<{ token: string; expiresAtMs: number }> {
   const init: RequestInit = {
     method: 'POST',
@@ -220,9 +220,6 @@ async function createInstallationToken(
       'X-GitHub-Api-Version': '2022-11-28',
     },
   };
-  if (signal !== undefined) {
-    init.signal = signal;
-  }
 
   const response = await fetchImpl(
     `https://api.github.com/app/installations/${encodeURIComponent(config.installationId)}/access_tokens`,
@@ -247,6 +244,37 @@ async function createInstallationToken(
     token: payload.token,
     expiresAtMs,
   };
+}
+
+function waitForSignal<T>(promise: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (signal === undefined) {
+    return promise;
+  }
+
+  if (signal.aborted) {
+    return Promise.reject(signal.reason ?? new Error('GitHub App installation token request aborted'));
+  }
+
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(signal.reason ?? new Error('GitHub App installation token request aborted'));
+    signal.addEventListener('abort', abort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener('abort', abort);
+        resolve(value);
+      },
+      (reason: unknown) => {
+        signal.removeEventListener('abort', abort);
+        reject(reason);
+      },
+    );
+  });
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) {
+    throw signal.reason ?? new Error('GitHub App installation token request aborted');
+  }
 }
 
 async function createGitHubAppJwt(config: GitHubAppAuthConfig): Promise<string> {
