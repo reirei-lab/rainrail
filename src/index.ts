@@ -9,9 +9,14 @@ export * from './github-auth.js';
 export * from './github-provider.js';
 export * from './github-rate-limit.js';
 export * from './github-webhook.js';
+export * from './http-app.js';
+export * from './http-utils.js';
+export * from './node-server.js';
 export * from './plugins.js';
 export * from './runtime-provider.js';
 export * from './source-plugin.js';
 export * from './sse.js';
 export * from './task-provider.js';
 export * from './workflow-plugin.js';
+
+export { default } from './worker.js';
