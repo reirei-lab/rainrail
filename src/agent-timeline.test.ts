@@ -102,6 +102,42 @@ describe('agent timeline', () => {
     }
   });
 
+  it('ignores relocated trajectory pointers for a different session', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'rainrail-wrong-pointer-timeline-'));
+    const otherDirectory = join(directory, 'other-sidecar');
+    const sessionId = 'requested-session';
+    const logPath = join(directory, 'agent.log');
+    const requestedFile = join(directory, `${sessionId}.trajectory.jsonl`);
+    const otherFile = join(otherDirectory, 'other-session.trajectory.jsonl');
+    mkdirSync(otherDirectory, { recursive: true });
+    writeFileSync(logPath, JSON.stringify({
+      result: { meta: { agentMeta: { sessionId } } },
+    }), 'utf8');
+    writeFileSync(join(directory, `${sessionId}.trajectory-path.json`), JSON.stringify({
+      traceSchema: 'openclaw-trajectory-pointer',
+      schemaVersion: 1,
+      sessionId: 'other-session',
+      runtimeFile: otherFile,
+    }), 'utf8');
+    writeFileSync(requestedFile, [
+      JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:08:00.000Z', seq: 1 }),
+    ].join('\n'), 'utf8');
+    writeFileSync(otherFile, [
+      JSON.stringify({ type: 'tool.call', ts: '2026-06-30T15:09:00.000Z', seq: 1, data: { name: 'bash', arguments: { command: 'echo wrong session' } } }),
+    ].join('\n'), 'utf8');
+
+    try {
+      const timeline = await readRuntimeTimeline(
+        { logPath, agentSessionId: sessionId },
+        { sessionsDirectory: directory },
+      );
+      expect(timeline.trajectoryPath).toBe(requestedFile);
+      expect(timeline.entries).toEqual([expect.objectContaining({ summary: 'session.started' })]);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('resolves session keys through sessions.json before reading live trajectories', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'rainrail-session-key-timeline-'));
     const logPath = join(directory, 'agent.log');
@@ -121,6 +157,37 @@ describe('agent timeline', () => {
         { sessionsDirectory: directory },
       );
       expect(timeline.sessionId).toBe(sessionId);
+      expect(timeline.missing).toBe(false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('uses sessionFile from sessions.json to locate trajectory sidecars', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'rainrail-session-file-timeline-'));
+    const storeDirectory = join(directory, 'store');
+    const logPath = join(directory, 'agent.log');
+    const sessionKey = 'agent:main:routing-key';
+    const sessionId = 'actual-session-id';
+    const sessionFile = join(storeDirectory, 'custom-session.jsonl');
+    const trajectoryFile = join(storeDirectory, 'custom-session.trajectory.jsonl');
+    mkdirSync(storeDirectory, { recursive: true });
+    writeFileSync(logPath, '', 'utf8');
+    writeFileSync(join(directory, 'sessions.json'), JSON.stringify({
+      [sessionKey]: { sessionId, sessionFile },
+    }), 'utf8');
+    writeFileSync(sessionFile, '', 'utf8');
+    writeFileSync(trajectoryFile, [
+      JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:08:00.000Z', seq: 1 }),
+    ].join('\n'), 'utf8');
+
+    try {
+      const timeline = await readRuntimeTimeline(
+        { logPath, agentSessionId: sessionKey },
+        { sessionsDirectory: directory },
+      );
+      expect(timeline.sessionId).toBe(sessionId);
+      expect(timeline.trajectoryPath).toBe(trajectoryFile);
       expect(timeline.missing).toBe(false);
     } finally {
       rmSync(directory, { recursive: true, force: true });

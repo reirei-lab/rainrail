@@ -347,6 +347,48 @@ describe('createOpenClawRuntimeProvider', () => {
     ]), expect.anything());
   });
 
+  it('resumes the fallback session recorded in the latest resume attempt log', async () => {
+    const spawnProcess = vi.fn(() => ({ pid: 5151, unref: vi.fn() }));
+    const logDirectory = temporaryDirectory();
+    const startLogPath = `${logDirectory}/task.log`;
+    const firstResumeLogPath = `${logDirectory}/resume-1.log`;
+    const secondResumeLogPath = `${logDirectory}/resume-2.log`;
+    writeFileSync(startLogPath, 'started intended session', 'utf8');
+    writeFileSync(firstResumeLogPath, 'first resume used intended session', 'utf8');
+    writeFileSync(secondResumeLogPath, 'EMBEDDED FALLBACK: Gateway timed out; running embedded agent with fresh session gateway-fallback-latest', 'utf8');
+    const provider = createOpenClawRuntimeProvider({
+      enabled: true,
+      command: 'openclaw',
+      agentId: 'main',
+      sessionKeyPrefix: 'rainrail',
+      timeoutSeconds: 900,
+      logDirectory,
+      spawnProcess,
+    });
+
+    await provider.resumeRun?.({
+      run: { id: 'agent:main:intended-session', provider: 'openclaw', status: 'stopped' },
+      task: {
+        id: 'agent_task_reirei-lab-rainrail_22',
+        title: 'OpenClaw runtime',
+        agentSessionId: 'agent:main:intended-session',
+        branchName: 'agent/reirei-lab-rainrail-22',
+        logPath: startLogPath,
+        resumeAttempts: [
+          { id: 'resume-1', status: 'stopped', logPath: firstResumeLogPath },
+          { id: 'resume-2', status: 'stopped', logPath: secondResumeLogPath },
+        ],
+      },
+      attemptId: 'agent_task_reirei-lab-rainrail_22_resume_03',
+      requestedBy: 'reirei-agent',
+    });
+
+    expect(spawnProcess).toHaveBeenCalledWith('openclaw', expect.arrayContaining([
+      '--session-key',
+      'gateway-fallback-latest',
+    ]), expect.anything());
+  });
+
   it('does not treat bare fallback-looking text as a resume session marker', async () => {
     const spawnProcess = vi.fn(() => ({ pid: 5151, unref: vi.fn() }));
     const logDirectory = temporaryDirectory();
@@ -466,6 +508,14 @@ describe('runtime task completion and resume helpers', () => {
       status: 'timed_out',
       finalAssistantVisibleText: 'Outcome: split_recommended',
     }))).toMatchObject({ status: 'timed_out', outcome: 'split_recommended' });
+
+    expect(readRuntimeRunCompletionFromLog(JSON.stringify({
+      status: 'ok',
+      result: {
+        status: 'failed',
+        payloads: [{ text: '途中で失敗しました。\n\nOutcome: implemented' }],
+      },
+    }))).toMatchObject({ status: 'failed', outcome: 'implemented' });
   });
 
   it('accepts canonical runtime completion statuses from JSON logs', () => {

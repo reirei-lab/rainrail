@@ -195,8 +195,12 @@ export function readRuntimeRunCompletionFromLog(raw: string): RuntimeRunCompleti
     return compactionFailureFromLog(raw);
   }
 
+  return runtimeRunCompletionFromPayload(payload);
+}
+
+function runtimeRunCompletionFromPayload(payload: Record<string, unknown>): RuntimeRunCompletion | undefined {
   const completionPayload = completionPayloadFromResponse(payload);
-  const explicitStatus = stringValue(payload.status) ?? stringValue(completionPayload.status);
+  const explicitStatus = stringValue(completionPayload.status) ?? stringValue(payload.status);
   const outcome = outcomeFromPayload(completionPayload);
   const status = runtimeStatusFromPayload(completionPayload, explicitStatus, outcome);
   if (status === undefined) {
@@ -407,7 +411,7 @@ function parseLastJsonObjectFromLog(raw: string): unknown {
     }
     try {
       const candidate = JSON.parse(raw.slice(index, end + 1));
-      if (isRecord(candidate) && runtimeStatusFromPayload(candidate, stringValue(candidate.status)) !== undefined) {
+      if (isRecord(candidate) && runtimeRunCompletionFromPayload(candidate) !== undefined) {
         latest = candidate;
         index = end;
       }
@@ -430,12 +434,20 @@ function issueFieldsFromValue(value: Record<string, unknown>): RuntimeAgentTaskI
 }
 
 function runtimeResumeSessionId(task: RuntimeAgentTask): string {
-  try {
-    const fallbackSessionId = extractFallbackRuntimeSessionId(readFileSync(task.logPath, 'utf8'));
-    return fallbackSessionId ?? task.agentSessionId;
-  } catch {
-    return task.agentSessionId;
+  for (const logPath of [
+    ...task.resumeAttempts.map((attempt) => attempt.logPath).reverse(),
+    task.logPath,
+  ]) {
+    try {
+      const fallbackSessionId = extractFallbackRuntimeSessionId(readFileSync(logPath, 'utf8'));
+      if (fallbackSessionId !== undefined) {
+        return fallbackSessionId;
+      }
+    } catch {
+      // Missing historical logs should not block a resume attempt.
+    }
   }
+  return task.agentSessionId;
 }
 
 function extractFallbackRuntimeSessionId(log: string): string | undefined {
