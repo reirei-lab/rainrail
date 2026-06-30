@@ -129,6 +129,42 @@ event/context API は共通になる。名前を省略した local handler は
 `PluginRuntimeContext` には `signal` も含まれる。handler timeout や親 runtime の
 abort が発生した場合、この signal は abort される。
 
+## Route workflow migration
+
+reirei-harness の matcher / router / actions は Rainrail では
+`createRouteWorkflow()` または `createRouteLocalHandler()` で plugin dispatch 上に載せる。
+どちらも同じ `routeRainrailEvent()` を呼ぶため、packaged workflow と local handler は
+同じ route decision を返す。
+
+route matcher は harness の tree 表現を引き継ぐ。
+
+- `{ source }`: `event.source.type` または `event.source.name` に一致する。
+- `{ eventName }`: `event.name` に一致する。
+- `{ and }`、`{ or }`、`{ not }`: 子 matcher を合成する。
+- `{ path, equals }`、`{ path, notEquals }`、`{ path, exists }`、`{ path, includes }`:
+  route context 上の dot path を評価する。
+
+route context は中立 event envelope から作る。
+
+- `sourceId`: `event.source.type`
+- `sourceName`: `event.source.name`
+- `eventName`: `event.name`
+- `messageId`: `event.id`
+- `message`: event envelope 全体
+- `event`: normalized `event.payload`
+- `source`、`subject`、`delivery`、`rawPayload`: envelope の各 field
+
+このため、既存 harness の `event.action` や
+`event.changes.field_value.field_name` のような payload path はそのまま移せる。
+envelope 自体を見たい場合は `message.delivery.id`、`subject.type`、
+`source.repository` などを使う。
+
+初期 action は harness と同じ `noop` のみを移植する。既定 routes は
+`baseline-noop` で全 event に match し、Rainrail の初期状態では event を drop するだけの
+deterministic な workflow として振る舞う。実際に agent 起動、GitHub 操作、secret 参照などを
+行う action は、今後 `context.actions` や Task/Runtime provider の capability gate を通す
+workflow として追加する。
+
 ## Capability gate と audit log
 
 危険操作は次の capability で gate する。
