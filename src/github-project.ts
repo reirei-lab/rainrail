@@ -6,7 +6,12 @@ import {
   type GitHubAuthConfig,
 } from './github-auth.js';
 import { recordGitHubRateLimit } from './github-rate-limit.js';
-import type { ProjectIssue, ProjectIssueReference } from './project-issues.js';
+import {
+  getNextProjectIssueToStart,
+  type ProjectIssue,
+  type ProjectIssueReference,
+  type ProjectIssueSelectionOptions,
+} from './project-issues.js';
 import type {
   ProjectIssueClaim,
   ProjectIssueClaimInput,
@@ -384,6 +389,7 @@ async function claimProjectIssue(
     };
     assertClaimable(await loadProjectItemStatus(input.issue.id, fetchImpl, auth, config), input, config);
     await assertParentIssueExecutionConditions(config, input.issue, fetchImpl, auth);
+    await assertProjectIssueSelectionStillAvailable(config, input.issue, fetchImpl, auth);
   } catch (error) {
     if (claim !== undefined) {
       await deleteProjectIssueClaimLock(claim, fetchImpl, auth);
@@ -446,7 +452,9 @@ async function releaseProjectIssue(
   auth: GitHubProjectAuthTokenProvider,
 ): Promise<void> {
   const current = await loadProjectItemStatus(input.issue.id, fetchImpl, auth, config);
-  if (!shouldReleaseCurrentClaim(current, input, config)) {
+  const canReleaseCurrentClaim = shouldReleaseCurrentClaim(current, input, config)
+    || await isRetryablePartialReleaseCurrentClaim(current, input, fetchImpl, auth);
+  if (!canReleaseCurrentClaim) {
     await deleteProjectIssueClaimLocksIfOwned(current.repositoryId, input, fetchImpl, auth);
     return;
   }
@@ -454,32 +462,16 @@ async function releaseProjectIssue(
   const releaseStatusOptionId = normalizeToken(input.issue.status ?? config.todoStatus) === normalizeToken(config.backlogStatus)
     ? metadata.backlogStatusOptionId
     : metadata.todoStatusOptionId;
+  await updateProjectFieldWithRetry(fetchImpl, auth, metadata.projectId, input.issue.id, metadata.agentSessionIdFieldId, {
+    text: '',
+  });
+  await updateProjectFieldWithRetry(fetchImpl, auth, metadata.projectId, input.issue.id, metadata.branchFieldId, {
+    text: '',
+  });
   await updateProjectField(fetchImpl, auth, metadata.projectId, input.issue.id, metadata.statusFieldId, {
     singleSelectOptionId: releaseStatusOptionId,
   });
-  let releaseError: unknown;
-  try {
-    await updateProjectFieldWithRetry(fetchImpl, auth, metadata.projectId, input.issue.id, metadata.agentSessionIdFieldId, {
-      text: '',
-    });
-  } catch (error) {
-    releaseError = error;
-  }
-  try {
-    await updateProjectFieldWithRetry(fetchImpl, auth, metadata.projectId, input.issue.id, metadata.branchFieldId, {
-      text: '',
-    });
-  } catch (error) {
-    releaseError ??= error;
-  }
-  try {
-    await deleteProjectIssueClaimLocks(input.claim, fetchImpl, auth);
-  } catch (error) {
-    releaseError ??= error;
-  }
-  if (releaseError !== undefined) {
-    throw releaseError;
-  }
+  await deleteProjectIssueClaimLocks(input.claim, fetchImpl, auth);
 }
 
 async function acquireProjectIssueClaimLock(
@@ -524,7 +516,15 @@ async function acquireProjectIssueClaimLock(
       throw error;
     }
     await assertNoDispatchedClaimMarker(status.repositoryId, input.issue, fetchImpl, auth);
-    await deleteProjectIssueClaimLock({ projectItemId: input.issue.id, lockRefId: existingLock.id }, fetchImpl, auth);
+    const finalLock = await loadProjectIssueClaimLockIfExists(status.repositoryId, name, fetchImpl, auth);
+    if (
+      finalLock === undefined
+      || !isSameProjectIssueClaimLock(existingLock, finalLock)
+      || !isRecoverableStaleLock(finalLock, input)
+    ) {
+      throw error;
+    }
+    await deleteProjectIssueClaimLock({ projectItemId: input.issue.id, lockRefId: finalLock.id }, fetchImpl, auth);
     const retryLockOid = await createProjectIssueClaimLockCommit(status, input, fetchImpl, auth);
     return createProjectIssueClaimLock(status.repositoryId, name, retryLockOid, fetchImpl, auth);
   }
@@ -864,26 +864,18 @@ async function deleteProjectIssueClaimLocksIfOwned(
   fetchImpl: typeof fetch,
   auth: GitHubProjectAuthTokenProvider,
 ): Promise<void> {
-  if (repositoryId === undefined || input.claim.lockRefId === undefined) {
-    return;
-  }
-  const lock = await loadProjectIssueClaimLockIfExists(repositoryId, projectIssueLockRefName(input.issue), fetchImpl, auth)
-    .catch(() => undefined);
-  if (
-    lock?.projectItemId !== input.issue.id
-    || lock.agentSessionId !== input.agentSessionId
-    || lock.branchName !== input.branchName
-  ) {
+  const lock = await loadOwnedProjectIssueClaimLock(repositoryId, input, fetchImpl, auth);
+  if (lock === undefined) {
     return;
   }
   let dispatchedLockRefId: string | undefined;
-  if (input.claim.dispatchedLockRefId !== undefined) {
+  if (input.claim.dispatchedLockRefId !== undefined && repositoryId !== undefined) {
     const dispatchedLock = await loadProjectIssueClaimLockIfExists(
       repositoryId,
       projectIssueDispatchedLockRefName(input.issue),
       fetchImpl,
       auth,
-    ).catch(() => undefined);
+    );
     if (
       dispatchedLock?.projectItemId === input.issue.id
       && dispatchedLock.agentSessionId === input.agentSessionId
@@ -897,6 +889,75 @@ async function deleteProjectIssueClaimLocksIfOwned(
     lockRefId: lock.id,
     ...(dispatchedLockRefId === undefined ? {} : { dispatchedLockRefId }),
   }, fetchImpl, auth);
+}
+
+async function loadOwnedProjectIssueClaimLock(
+  repositoryId: string | undefined,
+  input: ProjectIssueReleaseInput,
+  fetchImpl: typeof fetch,
+  auth: GitHubProjectAuthTokenProvider,
+): Promise<ProjectIssueClaimLock | undefined> {
+  if (repositoryId === undefined || input.claim.lockRefId === undefined) {
+    return undefined;
+  }
+  const lock = await loadProjectIssueClaimLockIfExists(repositoryId, projectIssueLockRefName(input.issue), fetchImpl, auth);
+  if (
+    lock?.projectItemId !== input.issue.id
+    || lock.agentSessionId !== input.agentSessionId
+    || lock.branchName !== input.branchName
+  ) {
+    return undefined;
+  }
+  return lock;
+}
+
+async function isRetryablePartialReleaseCurrentClaim(
+  status: ProjectItemStatus,
+  input: ProjectIssueReleaseInput,
+  fetchImpl: typeof fetch,
+  auth: GitHubProjectAuthTokenProvider,
+): Promise<boolean> {
+  if (normalizeToken(status.status ?? '') !== 'inprogress') {
+    return false;
+  }
+  const session = status.agentSessionId?.trim() ?? '';
+  const branch = status.branchName?.trim() ?? '';
+  const sessionMatchesOrCleared = session === '' || session === input.agentSessionId;
+  const branchMatchesOrCleared = branch === '' || branch === input.branchName;
+  if (!sessionMatchesOrCleared || !branchMatchesOrCleared) {
+    return false;
+  }
+  if (session === input.agentSessionId || branch === input.branchName) {
+    return true;
+  }
+  const lock = await loadOwnedProjectIssueClaimLock(status.repositoryId, input, fetchImpl, auth);
+  return lock?.dispatchedAt !== undefined;
+}
+
+async function assertProjectIssueSelectionStillAvailable(
+  config: GitHubProjectTaskQueueConfig,
+  issue: ProjectIssue,
+  fetchImpl: typeof fetch,
+  auth: GitHubProjectAuthTokenProvider,
+): Promise<void> {
+  if (issue.repository === undefined || issue.number === undefined) {
+    return;
+  }
+  const issues = await fetchProjectIssues(config, fetchImpl, auth);
+  const next = getNextProjectIssueToStart(issues, projectIssueSelectionOptions(config));
+  if (next?.id !== issue.id) {
+    throw new Error('GitHub Project item is no longer claimable');
+  }
+}
+
+function projectIssueSelectionOptions(config: GitHubProjectTaskQueueConfig): ProjectIssueSelectionOptions {
+  return {
+    assigneeLogin: config.assigneeLogin,
+    todoStatus: config.todoStatus,
+    backlogStatus: config.backlogStatus,
+    inProgressStatus: config.inProgressStatus,
+    maxConcurrentAgentTasks: config.maxConcurrentAgentTasks ?? 1,
+  };
 }
 
 function dispatchedLockClaim(issue: ProjectIssue, lock: ProjectIssueClaimLock): ProjectIssueClaim {
