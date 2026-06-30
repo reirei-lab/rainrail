@@ -35,6 +35,7 @@ const SAFE_GITHUB_URL_SEGMENT = /^[A-Za-z0-9_.-]{1,64}$/;
 const SAFE_GITHUB_NUMERIC_ID = /^\d{1,20}$/;
 const SAFE_UTC_ISO_TIMESTAMP = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,3}))?Z$/;
 const MAX_CLOUDFLARE_EXCEPTION_MESSAGE_LENGTH = 512;
+const MAX_CLOUDFLARE_EXCEPTION_NAME_LENGTH = 200;
 const MAX_CLOUDFLARE_EXCEPTION_STACK_LENGTH = 1_200;
 const MAX_CLOUDFLARE_EXCEPTION_STACK_LINES = 8;
 const claimedStorages = new WeakSet<RainrailBridgeRoomStorage>();
@@ -575,6 +576,9 @@ function normalizeCloudflareExceptions(value: unknown): unknown[] | undefined {
 
 function normalizeCloudflareExceptionString(key: 'name' | 'message' | 'stack', value: string): string {
   const sanitized = sanitizePayloadText(value);
+  if (key === 'name') {
+    return truncatePayloadText(sanitized, MAX_CLOUDFLARE_EXCEPTION_NAME_LENGTH);
+  }
   if (key === 'message') {
     return truncatePayloadText(sanitized, MAX_CLOUDFLARE_EXCEPTION_MESSAGE_LENGTH);
   }
@@ -707,12 +711,14 @@ function sanitizePayloadText(value: string): string {
     .replace(/https?:\/\/[^\s"'<>`]+/giu, (url) => sanitizePayloadUrl(url) ?? '[redacted-url]')
     .replace(/\b(cookie|set-cookie)\s*:\s*[^\r\n]+/giu, '$1: [redacted]')
     .replace(/\bauthorization\s*:\s*[^\r\n]+/giu, 'authorization: [redacted]')
-    .replace(/(["'])([A-Za-z0-9_-]*(?:authorization|cookie|token|secret|password|key|code|reset))\1(\s*:\s*)(["'])[^"']*\4/giu, '$1$2$1$3$4[redacted]$4')
-    .replace(/(^|[{\s"'<>`,;])(["']?)([A-Za-z0-9_-]*(?:authorization|cookie|token|secret|password|key|code|reset))\2(\s*:\s*)(["'])[^"']*\5/giu, '$1$2$3$2$4$5[redacted]$5')
-    .replace(/(^|[{\s"'<>`,;])(["']?)([A-Za-z0-9_-]*(?:authorization|cookie|token|secret|password|key|code|reset))\2(\s*:\s*)(?!["'])([^,\s\r\n}\]]+)/giu, '$1$2$3$2$4[redacted]')
-    .replace(/(^|[.?&\s"'<>`,;])([A-Za-z0-9_-]*authorization)=([^\r\n"'<>`,;]*?)(?=(?:\s+[A-Za-z0-9_-]*(?:authorization|cookie|set-cookie|token|secret|password|key|code|reset)=)|[&\r\n"'<>`,;]|$)/giu, '$1$2=[redacted]')
+    .replace(/(["'])([A-Za-z0-9_-]*(?:authorization|cookie|tokens?|secrets?|passwords?|keys?|codes?|resets?))\1(\s*:\s*)\[[^\]]*\]/giu, '$1$2$1$3[redacted]')
+    .replace(/(^|[{\s"'<>`,;])(["']?)([A-Za-z0-9_-]*(?:authorization|cookie|tokens?|secrets?|passwords?|keys?|codes?|resets?))\2(\s*:\s*)\[[^\]]*\]/giu, '$1$2$3$2$4[redacted]')
+    .replace(/(["'])([A-Za-z0-9_-]*(?:authorization|cookie|tokens?|secrets?|passwords?|keys?|codes?|resets?))\1(\s*:\s*)(["'])[^"']*\4/giu, '$1$2$1$3$4[redacted]$4')
+    .replace(/(^|[{\s"'<>`,;])(["']?)([A-Za-z0-9_-]*(?:authorization|cookie|tokens?|secrets?|passwords?|keys?|codes?|resets?))\2(\s*:\s*)(["'])[^"']*\5/giu, '$1$2$3$2$4$5[redacted]$5')
+    .replace(/(^|[{\s"'<>`,;])(["']?)([A-Za-z0-9_-]*(?:authorization|cookie|tokens?|secrets?|passwords?|keys?|codes?|resets?))\2(\s*:\s*)(?!["'])([^,\s\r\n}\]]+)/giu, '$1$2$3$2$4[redacted]')
+    .replace(/(^|[.?&\s"'<>`,;])([A-Za-z0-9_-]*authorization)=([^\r\n"'<>`,;]*?)(?=(?:\s+[A-Za-z0-9_-]*(?:authorization|cookie|set-cookie|tokens?|secrets?|passwords?|keys?|codes?|resets?)=)|[&\r\n"'<>`,;]|$)/giu, '$1$2=[redacted]')
     .replace(/(^|[.?&\s"'<>`,;])([A-Za-z0-9_-]*(?:cookie|set-cookie))=([^&\s"'<>`,;]+)/giu, '$1$2=[redacted]')
-    .replace(/(^|[.?&\s"'<>`,;])([A-Za-z0-9_-]*(?:token|secret|password|key|code|reset))=([^&\s"'<>`,;]+)/giu, '$1$2=[redacted]')
+    .replace(/(^|[.?&\s"'<>`,;])([A-Za-z0-9_-]*(?:tokens?|secrets?|passwords?|keys?|codes?|resets?))=([^&\s"'<>`,;]+)/giu, '$1$2=[redacted]')
     .replace(/\bBearer\s+[A-Za-z0-9._~+/-]+=*/giu, 'Bearer [redacted]');
 }
 

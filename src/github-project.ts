@@ -683,6 +683,7 @@ async function finalizeProjectIssueClaim(
   const before = await loadProjectItemStatus(input.issue.id, fetchImpl, auth, config);
   if (input.issue.contentType === 'DraftIssue') {
     await finalizeDraftProjectIssueClaim(config, input, before, metadata, fetchImpl, auth);
+    await deleteProjectIssueClaimLocks(input.claim, fetchImpl, auth);
     return;
   }
   assertClaimable(before, {
@@ -780,7 +781,7 @@ async function releaseProjectIssue(
   const canReleaseCurrentClaim = shouldReleaseCurrentClaim(current, input, config)
     || await isRetryablePartialReleaseCurrentClaim(current, input, fetchImpl, auth);
   if (!canReleaseCurrentClaim) {
-    await deleteProjectIssueClaimLocksIfOwned(current.repositoryId, input, fetchImpl, auth);
+    await deleteProjectIssueClaimLocksIfOwned(current.repositoryId ?? input.claim.lockRepositoryId, input, fetchImpl, auth);
     return;
   }
   const metadata = await loadProjectMetadata(config, fetchImpl, auth);

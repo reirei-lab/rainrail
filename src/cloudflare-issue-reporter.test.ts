@@ -362,7 +362,30 @@ describe('cloudflare issue reporter workflow', () => {
       provider: 'github',
       repository: 'reirei-lab/rainrail',
     }));
-    expect([...values.keys()][0]).toMatch(/^rainrail:cloudflare-error-issue:reirei-lab\/rainrail:sha256:/u);
+    expect([...values.keys()].find((key) => !key.includes(':lock:'))).toMatch(/^rainrail:cloudflare-error-issue:reirei-lab\/rainrail:sha256:/u);
+  });
+
+  it('keeps fingerprint locks in the storage-backed store', async () => {
+    const values = new Map<string, unknown>();
+    const lockKey = 'rainrail:cloudflare-error-issue:lock:reirei-lab/rainrail:sha256:storage-lock';
+    const store = createStorageCloudflareErrorIssueStore({
+      get: async (key) => values.get(key),
+      put: async (key, value) => {
+        values.set(key, value);
+      },
+    });
+
+    values.set(lockKey, { owner: 'other-runner', expiresAt: Date.now() + 60_000 });
+    await expect(store.withFingerprintLock?.({
+      repository: 'reirei-lab/rainrail',
+      fingerprint: 'sha256:storage-lock',
+    }, async () => 'locked')).rejects.toThrow('already locked');
+
+    values.set(lockKey, { owner: 'expired-runner', expiresAt: 0 });
+    await expect(store.withFingerprintLock?.({
+      repository: 'reirei-lab/rainrail',
+      fingerprint: 'sha256:storage-lock',
+    }, async () => 'released')).resolves.toBe('released');
   });
 
   it('uses the first exception with a usable stack', () => {
@@ -616,7 +639,7 @@ describe('cloudflare issue redaction', () => {
     });
 
     await expect(workflow.handle(cloudflareErrorEvent({
-      message: 'serialized input {"password":"json-secret","access_token":"oauth-secret","api_key":"key-secret"}',
+      message: 'serialized input {"password":"json-secret","access_token":"oauth-secret","api_key":"key-secret","tokens":["array-secret"],"apiKeys":["camel-secret"]} passwords: "plural-secret"',
     }), runtimeContext())).resolves.toMatchObject({
       handled: true,
     });
@@ -624,9 +647,15 @@ describe('cloudflare issue redaction', () => {
     expect(createdIssues[0]?.body).not.toContain('json-secret');
     expect(createdIssues[0]?.body).not.toContain('oauth-secret');
     expect(createdIssues[0]?.body).not.toContain('key-secret');
+    expect(createdIssues[0]?.body).not.toContain('array-secret');
+    expect(createdIssues[0]?.body).not.toContain('camel-secret');
+    expect(createdIssues[0]?.body).not.toContain('plural-secret');
     expect(createdIssues[0]?.body).toContain('\\"password\\":\\"[redacted]\\"');
     expect(createdIssues[0]?.body).toContain('\\"access_token\\":\\"[redacted]\\"');
     expect(createdIssues[0]?.body).toContain('\\"api_key\\":\\"[redacted]\\"');
+    expect(createdIssues[0]?.body).toContain('\\"tokens\\":[redacted]');
+    expect(createdIssues[0]?.body).toContain('\\"apiKeys\\":[redacted]');
+    expect(createdIssues[0]?.body).toContain('passwords: \\"[redacted]\\"');
   });
 
   it('redacts serialized Cookie and non-Bearer Authorization headers', async () => {
@@ -906,6 +935,39 @@ describe('cloudflare issue redaction', () => {
     expect(exceptionLine?.length).toBeLessThan(260);
     expect(exceptionLine).toContain('... truncated ...');
     expect(exceptionLine).not.toContain('exception-name-tail');
+  });
+
+  it('bounds raw event data before JSON serialization', async () => {
+    const createdIssues: Array<{ body: string }> = [];
+    const workflow = createCloudflareIssueReporterWorkflow({
+      repository: 'reirei-lab/rainrail',
+      store: createInMemoryCloudflareErrorIssueStore(),
+      issues: {
+        findOpenIssueByFingerprint: async () => undefined,
+        createIssue: async (input) => {
+          createdIssues.push(input);
+          return {
+            number: 137,
+            url: 'https://github.com/reirei-lab/rainrail/issues/137',
+          };
+        },
+      },
+    });
+
+    await expect(workflow.handle(cloudflareErrorEvent({
+      message: `large raw message ${'r'.repeat(20_000)} raw-message-tail`,
+      stack: [
+        'TypeError: failed',
+        `    at hugeRaw (worker-${'s'.repeat(20_000)}-raw-stack-tail.js:10:1)`,
+      ].join('\n'),
+    }), runtimeContext())).resolves.toMatchObject({
+      handled: true,
+    });
+
+    expect(createdIssues[0]?.body).toContain('... truncated ...');
+    expect(createdIssues[0]?.body).not.toContain('raw-message-tail');
+    expect(createdIssues[0]?.body).not.toContain('raw-stack-tail');
+    expect(createdIssues[0]?.body.length).toBeLessThan(20_000);
   });
 });
 

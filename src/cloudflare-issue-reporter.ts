@@ -27,6 +27,7 @@ export interface StoredCloudflareErrorIssue {
 export interface CloudflareErrorIssueStore {
   get(input: { repository: string; fingerprint: string }): StoredCloudflareErrorIssue | undefined | Promise<StoredCloudflareErrorIssue | undefined>;
   record(input: Omit<StoredCloudflareErrorIssue, 'createdAt'> & { createdAt?: string }): StoredCloudflareErrorIssue | Promise<StoredCloudflareErrorIssue>;
+  withFingerprintLock?<T>(input: { repository: string; fingerprint: string }, fn: () => Promise<T>): Promise<T>;
 }
 
 export interface GitHubIssueClient {
@@ -77,6 +78,11 @@ export interface CloudflareErrorCandidate {
 
 const fingerprintMarkerPrefix = '<!-- error-fingerprint: ';
 const maxRawJsonLength = 50_000;
+const maxRawArrayItems = 50;
+const maxRawDepth = 8;
+const maxRawObjectKeys = 50;
+const maxRawStringLength = 2_000;
+const maxStackLocationLength = 500;
 const maxSummaryExceptionNameLength = 200;
 const maxSummaryExceptionMessageLength = 1_000;
 const storageKeyPrefix = 'rainrail:cloudflare-error-issue:';
@@ -106,7 +112,9 @@ export async function handleCloudflareIssueReporterEvent(
 
   const fingerprint = cloudflareErrorFingerprint(candidate);
 
-  return withFingerprintLock(fingerprint, async () => handleCloudflareIssueReporterCandidate(options, event, candidate, fingerprint));
+  return withFingerprintLock(options.store, { repository: options.repository, fingerprint }, async () =>
+    handleCloudflareIssueReporterCandidate(options, event, candidate, fingerprint)
+  );
 }
 
 async function handleCloudflareIssueReporterCandidate(
@@ -252,6 +260,7 @@ export function createInMemoryCloudflareErrorIssueStore(): CloudflareErrorIssueS
       issues.set(storageKey(input.repository, input.fingerprint), stored);
       return stored;
     },
+    withFingerprintLock: (input, fn) => withLocalFingerprintLock(storageKey(input.repository, input.fingerprint), fn),
   };
 }
 
@@ -268,6 +277,7 @@ export function createStorageCloudflareErrorIssueStore(storage: RainrailBridgeRo
       await storage.put(storageKey(input.repository, input.fingerprint), stored);
       return stored;
     },
+    withFingerprintLock: (input, fn) => withStorageFingerprintLock(storage, input, fn),
   };
 }
 
@@ -337,7 +347,7 @@ function cloudflareIssueBody(input: {
   event: RainrailEventEnvelope;
   fingerprint: string;
 }): string {
-  const rawJson = truncate(JSON.stringify(redact(input.candidate.rawData), null, 2), maxRawJsonLength);
+  const rawJson = truncate(JSON.stringify(redactRawEventData(input.candidate.rawData), null, 2), maxRawJsonLength);
   const exceptionName = truncateSummaryText(
     sanitizeSecretString(input.candidate.exceptionName),
     maxSummaryExceptionNameLength,
@@ -419,7 +429,9 @@ function normalizeStackLocation(value: string): string | undefined {
     .replace(/:\d+:\d+\)?$/u, '')
     .replace(/:\d+\)?$/u, '')
     .replace(/^\(?/u, '');
-  return withoutLineColumn.length === 0 ? undefined : sanitizeSecretString(withoutLineColumn);
+  return withoutLineColumn.length === 0
+    ? undefined
+    : truncateSummaryText(sanitizeSecretString(withoutLineColumn), maxStackLocationLength);
 }
 
 function normalizeExceptionMessage(value: string): string {
@@ -431,22 +443,68 @@ function normalizeExceptionMessage(value: string): string {
     .trim();
 }
 
-async function withFingerprintLock<T>(fingerprint: string, fn: () => Promise<T>): Promise<T> {
+async function withFingerprintLock<T>(
+  store: CloudflareErrorIssueStore,
+  input: { repository: string; fingerprint: string },
+  fn: () => Promise<T>,
+): Promise<T> {
+  if (store.withFingerprintLock !== undefined) {
+    return store.withFingerprintLock(input, fn);
+  }
+  return withLocalFingerprintLock(storageKey(input.repository, input.fingerprint), fn);
+}
+
+async function withLocalFingerprintLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
   let release!: () => void;
-  const previous = fingerprintLocks.get(fingerprint) ?? Promise.resolve();
+  const previous = fingerprintLocks.get(key) ?? Promise.resolve();
   const current = previous.catch(() => undefined).then(() => new Promise<void>((resolve) => {
     release = resolve;
   }));
-  fingerprintLocks.set(fingerprint, current);
+  fingerprintLocks.set(key, current);
   await previous.catch(() => undefined);
   try {
     return await fn();
   } finally {
     release();
-    if (fingerprintLocks.get(fingerprint) === current) {
-      fingerprintLocks.delete(fingerprint);
+    if (fingerprintLocks.get(key) === current) {
+      fingerprintLocks.delete(key);
     }
   }
+}
+
+async function withStorageFingerprintLock<T>(
+  storage: RainrailBridgeRoomStorage,
+  input: { repository: string; fingerprint: string },
+  fn: () => Promise<T>,
+): Promise<T> {
+  return withLocalFingerprintLock(storageKey(input.repository, input.fingerprint), async () => {
+    const key = `${storageKeyPrefix}lock:${input.repository}:${input.fingerprint}`;
+    const owner = `${Date.now()}:${Math.random().toString(36).slice(2)}`;
+    const now = Date.now();
+    if (storageLockRecord(await storage.get(key)) !== undefined) {
+      throw new Error('Cloudflare error fingerprint is already locked');
+    }
+    await storage.put(key, { owner, expiresAt: now + storeHitGraceMs });
+    const lock = storageLockRecord(await storage.get(key));
+    if (lock?.owner !== owner) {
+      throw new Error('Cloudflare error fingerprint is already locked');
+    }
+    try {
+      return await fn();
+    } finally {
+      const current = storageLockRecord(await storage.get(key));
+      if (current?.owner === owner) {
+        await storage.put(key, { owner, expiresAt: 0 });
+      }
+    }
+  });
+}
+
+function storageLockRecord(value: unknown): { owner: string; expiresAt: number } | undefined {
+  if (!isRecord(value) || typeof value.owner !== 'string' || typeof value.expiresAt !== 'number') {
+    return undefined;
+  }
+  return value.expiresAt <= Date.now() ? undefined : { owner: value.owner, expiresAt: value.expiresAt };
 }
 
 function isRecentStoreHit(stored: StoredCloudflareErrorIssue): boolean {
@@ -480,6 +538,37 @@ function redact(value: unknown): unknown {
   return redacted;
 }
 
+function redactRawEventData(value: unknown, depth = 0): unknown {
+  if (depth >= maxRawDepth) return '[truncated]';
+  if (Array.isArray(value)) {
+    const items = value.slice(0, maxRawArrayItems).map((item) => redactRawEventData(item, depth + 1));
+    return value.length > maxRawArrayItems ? [...items, '[... truncated ...]'] : items;
+  }
+  if (typeof value === 'string') {
+    const bounded = value.length > maxRawStringLength
+      ? `${value.slice(0, maxRawStringLength)}\n... truncated ...`
+      : value;
+    return sanitizeSecretString(bounded);
+  }
+  if (!isRecord(value)) return value;
+
+  const redacted: Record<string, unknown> = {};
+  const entries = Object.entries(value).slice(0, maxRawObjectKeys);
+  for (const [key, nestedValue] of entries) {
+    if (isSensitiveKey(key)) {
+      redacted[key] = '[redacted]';
+    } else if (isUrlKey(key) && typeof nestedValue === 'string') {
+      redacted[key] = sanitizeUrlString(nestedValue);
+    } else {
+      redacted[key] = redactRawEventData(nestedValue, depth + 1);
+    }
+  }
+  if (Object.keys(value).length > maxRawObjectKeys) {
+    redacted.__truncated = '[... truncated ...]';
+  }
+  return redacted;
+}
+
 function isSensitiveKey(key: string): boolean {
   return /authorization|cookie|token|secret|password|key/iu.test(key);
 }
@@ -493,12 +582,14 @@ function sanitizeSecretString(value: string): string {
     .replace(/https?:\/\/[^\s"'<>`]+/giu, (url) => sanitizeUrlString(url))
     .replace(/\b(cookie|set-cookie)\s*:\s*[^\r\n]+/giu, '$1: [redacted]')
     .replace(/\bauthorization\s*:\s*[^\r\n]+/giu, 'authorization: [redacted]')
-    .replace(/(["'])([A-Za-z0-9_-]*(?:authorization|cookie|token|secret|password|key|code|reset))\1(\s*:\s*)(["'])[^"']*\4/giu, '$1$2$1$3$4[redacted]$4')
-    .replace(/(^|[{\s"'<>`,;])(["']?)([A-Za-z0-9_-]*(?:authorization|cookie|token|secret|password|key|code|reset))\2(\s*:\s*)(["'])[^"']*\5/giu, '$1$2$3$2$4$5[redacted]$5')
-    .replace(/(^|[{\s"'<>`,;])(["']?)([A-Za-z0-9_-]*(?:authorization|cookie|token|secret|password|key|code|reset))\2(\s*:\s*)(?!["'])([^,\s\r\n}\]]+)/giu, '$1$2$3$2$4[redacted]')
-    .replace(/(^|[.?&\s"'<>`,;])([A-Za-z0-9_-]*authorization)=([^\r\n"'<>`,;]*?)(?=(?:\s+[A-Za-z0-9_-]*(?:authorization|cookie|set-cookie|token|secret|password|key|code|reset)=)|[&\r\n"'<>`,;]|$)/giu, '$1$2=[redacted]')
+    .replace(/(["'])([A-Za-z0-9_-]*(?:authorization|cookie|tokens?|secrets?|passwords?|keys?|codes?|resets?))\1(\s*:\s*)\[[^\]]*\]/giu, '$1$2$1$3[redacted]')
+    .replace(/(^|[{\s"'<>`,;])(["']?)([A-Za-z0-9_-]*(?:authorization|cookie|tokens?|secrets?|passwords?|keys?|codes?|resets?))\2(\s*:\s*)\[[^\]]*\]/giu, '$1$2$3$2$4[redacted]')
+    .replace(/(["'])([A-Za-z0-9_-]*(?:authorization|cookie|tokens?|secrets?|passwords?|keys?|codes?|resets?))\1(\s*:\s*)(["'])[^"']*\4/giu, '$1$2$1$3$4[redacted]$4')
+    .replace(/(^|[{\s"'<>`,;])(["']?)([A-Za-z0-9_-]*(?:authorization|cookie|tokens?|secrets?|passwords?|keys?|codes?|resets?))\2(\s*:\s*)(["'])[^"']*\5/giu, '$1$2$3$2$4$5[redacted]$5')
+    .replace(/(^|[{\s"'<>`,;])(["']?)([A-Za-z0-9_-]*(?:authorization|cookie|tokens?|secrets?|passwords?|keys?|codes?|resets?))\2(\s*:\s*)(?!["'])([^,\s\r\n}\]]+)/giu, '$1$2$3$2$4[redacted]')
+    .replace(/(^|[.?&\s"'<>`,;])([A-Za-z0-9_-]*authorization)=([^\r\n"'<>`,;]*?)(?=(?:\s+[A-Za-z0-9_-]*(?:authorization|cookie|set-cookie|tokens?|secrets?|passwords?|keys?|codes?|resets?)=)|[&\r\n"'<>`,;]|$)/giu, '$1$2=[redacted]')
     .replace(/(^|[.?&\s"'<>`,;])([A-Za-z0-9_-]*(?:cookie|set-cookie))=([^&\s"'<>`,;]+)/giu, '$1$2=[redacted]')
-    .replace(/(^|[.?&\s"'<>`,;])([A-Za-z0-9_-]*(?:token|secret|password|key|code|reset))=([^&\s"'<>`,;]+)/giu, '$1$2=[redacted]')
+    .replace(/(^|[.?&\s"'<>`,;])([A-Za-z0-9_-]*(?:tokens?|secrets?|passwords?|keys?|codes?|resets?))=([^&\s"'<>`,;]+)/giu, '$1$2=[redacted]')
     .replace(/\bBearer\s+[A-Za-z0-9._~+/-]+=*/giu, 'Bearer [redacted]');
 }
 

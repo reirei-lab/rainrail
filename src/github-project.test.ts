@@ -589,6 +589,135 @@ describe('createGitHubProjectTaskQueueProvider', () => {
     ]);
   });
 
+  it('deletes mention draft claim locks after finalize succeeds', async () => {
+    const calls: Array<{ query?: string; variables?: Record<string, unknown> }> = [];
+    const provider = createGitHubProjectTaskQueueProvider({
+      config: projectConfig(),
+      auth: { getAuthToken: async () => ({ token: 'project-token', provider: 'configured-token', fallback: false }) },
+      fetch: (async (_url, init) => {
+        const request = JSON.parse(String(init?.body)) as { query?: string; variables?: Record<string, unknown> };
+        calls.push(request);
+        if (isCreateLockCommitRequest(_url)) {
+          return lockCommitResponse();
+        }
+        if (request.query?.includes('RainrailProjectItemStatus')) {
+          const updatedAgentSessionId = calls.some((call) => call.variables?.fieldId === 'PVTF_session');
+          const updatedBranch = calls.some((call) => call.variables?.fieldId === 'PVTF_branch');
+          return jsonResponse({
+            data: {
+              node: mentionDraftProjectItem({
+                id: 'PVTI_draft_queue',
+                title: 'Respond to reirei-lab/rainrail#24',
+                body: mentionDraftBody('https://github.com/reirei-lab/rainrail/issues/24#issuecomment-1'),
+                status: calls.some((call) => call.variables?.fieldId === 'PVTSSF_status') ? 'In Progress' : 'Todo',
+                agentSessionId: updatedAgentSessionId ? 'agent:main:rainrail-draft' : '',
+                branchName: updatedBranch ? 'agent/reirei-lab-rainrail-draft' : '',
+              }),
+            },
+          });
+        }
+        if (request.query?.includes('RainrailProjectMetadata')) {
+          return projectMetadataResponse();
+        }
+        if (request.query?.includes('RainrailUpdateProjectIssueClaimLock')) {
+          return jsonResponse({ data: { updateRef: { ref: { id: 'REF_draft_lock' } } } });
+        }
+        if (request.query?.includes('RainrailDeleteProjectIssueClaimLock')) {
+          return jsonResponse({ data: { deleteRef: { clientMutationId: null } } });
+        }
+        return jsonResponse({ data: { updateProjectV2ItemFieldValue: { projectV2Item: { id: 'PVTI_draft_queue' } } } });
+      }) as typeof fetch,
+    });
+
+    await expect(provider.finalizeProjectIssueClaim?.({
+      issue: {
+        id: 'PVTI_draft_queue',
+        contentType: 'DraftIssue',
+        title: 'Respond to reirei-lab/rainrail#24',
+        status: 'Todo',
+        assigneeLogins: ['reirei-agent'],
+        commentUrl: 'https://github.com/reirei-lab/rainrail/issues/24#issuecomment-1',
+        repository: 'reirei-lab/rainrail',
+        number: 24,
+      },
+      claim: {
+        projectItemId: 'PVTI_draft_queue',
+        lockRefId: 'REF_draft_lock',
+        lockRepositoryId: 'R_repo',
+        lockRepositoryNameWithOwner: 'reirei-lab/rainrail',
+        lockDefaultBranchOid: 'base_sha',
+        lockDefaultBranchTreeOid: 'base_tree',
+      },
+      agentSessionId: 'agent:main:rainrail-draft',
+      branchName: 'agent/reirei-lab-rainrail-draft',
+    })).resolves.toBeUndefined();
+
+    expect(calls.find((call) => call.query?.includes('RainrailDeleteProjectIssueClaimLock'))?.variables).toEqual({
+      refId: 'REF_draft_lock',
+    });
+  });
+
+  it('releases mention draft claim locks when dispatch fails before Project fields change', async () => {
+    const calls: Array<{ query?: string; variables?: Record<string, unknown> }> = [];
+    const provider = createGitHubProjectTaskQueueProvider({
+      config: projectConfig(),
+      auth: { getAuthToken: async () => ({ token: 'project-token', provider: 'configured-token', fallback: false }) },
+      fetch: (async (_url, init) => {
+        const request = JSON.parse(String(init?.body)) as { query?: string; variables?: Record<string, unknown> };
+        calls.push(request);
+        if (request.query?.includes('RainrailProjectItemStatus')) {
+          return jsonResponse({
+            data: {
+              node: mentionDraftProjectItem({
+                id: 'PVTI_draft_queue',
+                title: 'Respond to reirei-lab/rainrail#24',
+                body: mentionDraftBody('https://github.com/reirei-lab/rainrail/issues/24#issuecomment-1'),
+                status: 'Todo',
+              }),
+            },
+          });
+        }
+        if (request.query?.includes('RainrailProjectIssueClaimLock')) {
+          return lockRefResponse({
+            id: 'REF_draft_lock',
+            agentSessionId: 'agent:main:rainrail-draft',
+            branchName: 'agent/reirei-lab-rainrail-draft',
+            projectItemId: 'PVTI_draft_queue',
+          });
+        }
+        if (request.query?.includes('RainrailDeleteProjectIssueClaimLock')) {
+          return jsonResponse({ data: { deleteRef: { clientMutationId: null } } });
+        }
+        return jsonResponse({ data: {} });
+      }) as typeof fetch,
+    });
+
+    await expect(provider.releaseProjectIssue?.({
+      issue: {
+        id: 'PVTI_draft_queue',
+        contentType: 'DraftIssue',
+        title: 'Respond to reirei-lab/rainrail#24',
+        status: 'Todo',
+        assigneeLogins: ['reirei-agent'],
+        commentUrl: 'https://github.com/reirei-lab/rainrail/issues/24#issuecomment-1',
+        repository: 'reirei-lab/rainrail',
+        number: 24,
+      },
+      claim: {
+        projectItemId: 'PVTI_draft_queue',
+        lockRefId: 'REF_draft_lock',
+        lockRepositoryId: 'R_repo',
+      },
+      agentSessionId: 'agent:main:rainrail-draft',
+      branchName: 'agent/reirei-lab-rainrail-draft',
+      reason: 'dispatch failed',
+    })).resolves.toBeUndefined();
+
+    expect(calls.find((call) => call.query?.includes('RainrailDeleteProjectIssueClaimLock'))?.variables).toEqual({
+      refId: 'REF_draft_lock',
+    });
+  });
+
   it('claims a project issue with a starting lock before updating Project fields', async () => {
     const calls: Array<{ query?: string; variables?: Record<string, unknown> }> = [];
     const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
