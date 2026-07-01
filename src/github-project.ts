@@ -268,7 +268,7 @@ function mentionDraftRepositoryFromUrl(value: string): { repository: string; num
 function mentionDraftBodyWithRepository(body: string, repository: string, number: number | undefined): string {
   const lines = body
     .split('\n')
-    .filter((line) => !/^(Repository|Number):/iu.test(line));
+    .filter((line) => !/^(Repository|Number):/iu.test(line.trim()));
   lines.push(`Repository: ${repository}`);
   if (number !== undefined) {
     lines.push(`Number: ${number}`);

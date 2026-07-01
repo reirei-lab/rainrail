@@ -1133,7 +1133,7 @@ describe('Rainrail bridge room', () => {
         scriptName: 'asme-site',
         exceptions: [{
           name: `HugeError ${'n'.repeat(2_000)} name-tail`,
-          message: `prefix {"password":"storage-secret","escapedPassword":"abc\\"escaped-tail","code":123456,"tokens":["bridge-array-secret]bridge-array-tail"],"apiKeys":["bridge-camel-secret"],"apiKeyValue":"bridge-key-value-secret","auth.token":"bridge-dot-token-secret","password.hash":"bridge-dot-hash-secret","password_hash":"bridge-hash-secret","token":{"meta":{},"value":"bridge-nested-object-secret"}} passwords: "bridge-plural-secret" secretValue=bridge-secret-value tokens=["bridge-kv-array-secret-1","bridge-kv-array-secret-2"] passwords=[bridge-kv-password-1,bridge-kv-password-2] token="bridge-quoted-token-secret" password='bridge-quoted-password-secret' x-api-key: bridge-key-secret x-api-key: "bridge-quoted-key-secret" authorization=Basic bridge-basic-secret cookie=session=bridge-cookie-secret; csrf=bridge-csrf-secret ${'m'.repeat(2_000)} suffix`,
+          message: `prefix {"password":"storage-secret","escapedPassword":"abc\\"escaped-tail","code":123456,"tokens":["bridge-array-secret]bridge-array-tail"],"apiKeys":["bridge-camel-secret"],"apiKeyValue":"bridge-key-value-secret","auth.token":"bridge-dot-token-secret","password.hash":"bridge-dot-hash-secret","password_hash":"bridge-hash-secret","token":{"meta":{},"value":"bridge-nested-object-secret"}} passwords: "bridge-plural-secret" secretValue=bridge-secret-value tokens=["bridge-kv-array-secret-1","bridge-kv-array-secret-2"] passwords=[bridge-kv-password-1,bridge-kv-password-2] token="bridge-quoted-token-secret" password='bridge-quoted-password-secret' token = "bridge-spaced-token-secret" password = bridge-spaced-password-secret DATABASE_URL=postgres://app:bridge-db-pass@db/prod x-api-key: bridge-key-secret x-api-key: "bridge-quoted-key-secret" authorization=Basic bridge-basic-secret cookie=session=bridge-cookie-secret; csrf=bridge-csrf-secret ${'m'.repeat(2_000)} suffix`,
           stack: [
             `HugeError: ${'s'.repeat(1_500)} token=bridge-stack-secret`,
             ...Array.from({ length: 12 }, (_, index) => `message detail ${index}`),
@@ -1171,6 +1171,9 @@ describe('Rainrail bridge room', () => {
     expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-kv-password-2');
     expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-quoted-token-secret');
     expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-quoted-password-secret');
+    expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-spaced-token-secret');
+    expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-spaced-password-secret');
+    expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-db-pass');
     expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('escaped-tail');
     expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-plural-secret');
     expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-key-secret');

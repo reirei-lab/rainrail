@@ -170,7 +170,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
 
     await expect(provider.addMentionDraftItem?.({
       title: 'Respond to reirei-lab/rainrail#24',
-      body: '<!-- rainrail mention-draft -->\nMention URL: https://github.com/reirei-lab/rainrail/pull/24#discussion_r1\nAgent: reirei-agent\n\nRepository: attacker/repo\nNumber: 99',
+      body: '<!-- rainrail mention-draft -->\nMention URL: https://github.com/reirei-lab/rainrail/pull/24#discussion_r1\nAgent: reirei-agent\n\n  Repository: attacker/repo\n\tNumber: 99',
       commentUrl: 'https://github.com/reirei-lab/rainrail/pull/24#discussion_r1',
     })).resolves.toMatchObject({
       projectItemId: 'PVTI_draft',
@@ -180,7 +180,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
     const createVariables = calls.find((call) => call.query?.includes('RainrailAddProjectDraftIssue'))?.variables;
     expect(createVariables?.body).toContain('Repository: reirei-lab/rainrail');
     expect(createVariables?.body).toContain('Number: 24');
-    expect(createVariables?.body).not.toContain('Repository: attacker/repo');
+    expect(createVariables?.body).not.toContain('attacker/repo');
     expect(createVariables?.body).not.toContain('Number: 99');
   });
 

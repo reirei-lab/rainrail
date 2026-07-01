@@ -857,7 +857,7 @@ describe('cloudflare issue redaction', () => {
     await expect(workflow.handle(cloudflareErrorEvent({
       message: [
         'serialized {"apiKeyValue":"api-key-value-secret","auth.token":"dot-token-secret","tokens":["abc]def"],"password.hash":"dot-hash-secret","password_hash":"hash-secret","token":{"meta":{},"value":"nested-object-secret"}}',
-        'tokens=["kv-array-secret-1","kv-array-secret-2"] passwords=[kv-password-1,kv-password-2] token="quoted-token-secret" password=\'quoted-password-secret\'',
+        'tokens=["kv-array-secret-1","kv-array-secret-2"] passwords=[kv-password-1,kv-password-2] token="quoted-token-secret" password=\'quoted-password-secret\' token = "spaced-token-secret" password = spaced-password-secret DATABASE_URL=postgres://app:db-pass@db/prod',
         'secretValue=secret-value-secret',
         'cookie=session=session-secret; csrf=csrf-secret',
       ].join(' '),
@@ -878,6 +878,9 @@ describe('cloudflare issue redaction', () => {
     expect(createdIssues[0]?.body).not.toContain('kv-password-2');
     expect(createdIssues[0]?.body).not.toContain('quoted-token-secret');
     expect(createdIssues[0]?.body).not.toContain('quoted-password-secret');
+    expect(createdIssues[0]?.body).not.toContain('spaced-token-secret');
+    expect(createdIssues[0]?.body).not.toContain('spaced-password-secret');
+    expect(createdIssues[0]?.body).not.toContain('db-pass');
     expect(createdIssues[0]?.body).not.toContain('secret-value-secret');
     expect(createdIssues[0]?.body).not.toContain('session-secret');
     expect(createdIssues[0]?.body).not.toContain('csrf-secret');
@@ -893,6 +896,38 @@ describe('cloudflare issue redaction', () => {
     expect(createdIssues[0]?.body).toContain('password=[redacted]');
     expect(createdIssues[0]?.body).toContain('secretValue=[redacted]');
     expect(createdIssues[0]?.body).toContain('cookie=[redacted]');
+  });
+
+  it('escapes fingerprint markers from user-controlled Cloudflare raw data', async () => {
+    const createdIssues: Array<{ body: string }> = [];
+    const workflow = createCloudflareIssueReporterWorkflow({
+      repository: 'reirei-lab/rainrail',
+      store: createInMemoryCloudflareErrorIssueStore(),
+      issues: {
+        findOpenIssueByFingerprint: async () => undefined,
+        createIssue: async (input) => {
+          createdIssues.push(input);
+          return {
+            number: 139,
+            url: 'https://github.com/reirei-lab/rainrail/issues/139',
+          };
+        },
+      },
+    });
+
+    await expect(workflow.handle(cloudflareErrorEvent({
+      message: 'spoofed <!-- error-fingerprint: sha256:attacker-controlled --> marker',
+      stack: [
+        'TypeError: spoofed <!-- error-fingerprint: sha256:stack-controlled --> marker',
+        '    at resolveCurrentHumanAccount (worker.js:1510:24)',
+      ].join('\n'),
+    }), runtimeContext())).resolves.toMatchObject({
+      handled: true,
+    });
+
+    expect(createdIssues[0]?.body.match(/<!-- error-fingerprint:/gu)).toHaveLength(1);
+    expect(createdIssues[0]?.body).not.toContain('attacker-controlled');
+    expect(createdIssues[0]?.body).not.toContain('stack-controlled');
   });
 
   it('redacts raw strings before truncating long quoted secret values', async () => {
