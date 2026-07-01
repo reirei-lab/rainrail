@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -1363,6 +1363,37 @@ describe('agent timeline', () => {
       );
       expect(jsonl.trajectoryPath).toBe(requestedFile);
       expect(jsonl.raw).toContain('safe trajectory');
+      expect(jsonl.raw).not.toContain('outside-secret-content');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('does not follow direct trajectory symlinks outside the sessions directory', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'rainrail-direct-symlink-root-'));
+    const directory = join(root, 'sessions');
+    const outsideDirectory = join(root, 'outside-store');
+    const sessionId = 'direct-symlink-session';
+    const logPath = join(directory, 'agent.log');
+    const directTrajectoryPath = join(directory, `${sessionId}.trajectory.jsonl`);
+    const outsideFile = join(outsideDirectory, 'secret.trajectory.jsonl');
+    mkdirSync(directory, { recursive: true });
+    mkdirSync(outsideDirectory, { recursive: true });
+    writeFileSync(logPath, JSON.stringify({
+      result: { status: 'ok', meta: { agentMeta: { sessionId } } },
+    }), 'utf8');
+    writeFileSync(outsideFile, [
+      JSON.stringify({ type: 'tool.result', ts: '2026-06-30T15:09:10.000Z', data: { output: 'outside-secret-content' } }),
+    ].join('\n'), 'utf8');
+    symlinkSync(outsideFile, directTrajectoryPath);
+
+    try {
+      const jsonl = await readRuntimeJsonl(
+        { logPath, agentSessionId: sessionId },
+        { sessionsDirectory: directory },
+      );
+      expect(jsonl.trajectoryPath).toBe(directTrajectoryPath);
+      expect(jsonl.missing).toBe(true);
       expect(jsonl.raw).not.toContain('outside-secret-content');
     } finally {
       rmSync(root, { recursive: true, force: true });

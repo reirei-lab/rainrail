@@ -1,3 +1,4 @@
+import { constants } from 'node:fs';
 import { open, readFile, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { isAbsolute, join, relative, resolve } from 'node:path';
@@ -498,10 +499,10 @@ async function isAllowedRuntimeTrajectoryPointerTarget(
 }
 
 async function readTailText(path: string, maxBytes: number): Promise<{ text: string; truncated: boolean }> {
-  const fileStat = await stat(path);
-  const start = Math.max(0, fileStat.size - maxBytes);
-  const file = await open(path, 'r');
+  const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
+    const fileStat = await file.stat();
+    const start = Math.max(0, fileStat.size - maxBytes);
     const context = start > 0 ? await readTailRedactionContext(file, start) : emptyTailRedactionContext();
     let text = await readFileRange(file, start, fileStat.size - start);
     if (start > 0) {

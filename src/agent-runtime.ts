@@ -1,7 +1,7 @@
-import { chmodSync, closeSync, constants, fchmodSync, mkdirSync, openSync, readFileSync, readSync, statSync } from 'node:fs';
+import { chmodSync, closeSync, constants, fchmodSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, statSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 
 import type { AgentAssignmentRuntime } from './agent-assignment.js';
 import type { RuntimeAgentTask, RuntimeProvider, RuntimeProviderContext, RuntimeRun, RuntimeRunRequest, RuntimeRunStatus } from './runtime-provider.js';
@@ -270,7 +270,7 @@ function compactionFailureFromLog(raw: string): RuntimeRunCompletion | undefined
   }
   return {
     status: 'compaction_failed',
-    summary: lastNonEmptyLine(raw),
+    summary: redactRuntimeCompletionText(lastNonEmptyLine(raw)),
     timedOut: /timed out/i.test(raw),
     timeoutPhase: 'compaction',
   };
@@ -885,8 +885,55 @@ function defaultSpawnProcess(command: string, args: string[], options: { detache
 }
 
 function ensurePrivateLogDirectory(directory: string): void {
+  const nearestExistingPath = nearestExistingPathComponent(directory);
+  assertNoSymlinkBetween(nearestExistingPath, directory);
   mkdirSync(directory, { recursive: true, mode: 0o700 });
+  assertNoSymlinkBetween(nearestExistingPath, directory);
   chmodSync(directory, 0o700);
+}
+
+function nearestExistingPathComponent(path: string): string {
+  let current = resolve(path);
+  while (true) {
+    try {
+      lstatSync(current);
+      return current;
+    } catch (error) {
+      if (!isNodeError(error) || error.code !== 'ENOENT') {
+        throw error;
+      }
+    }
+    const parent = dirname(current);
+    if (parent === current) {
+      return current;
+    }
+    current = parent;
+  }
+}
+
+function assertNoSymlinkBetween(startPath: string, targetPath: string): void {
+  const start = resolve(startPath);
+  const target = resolve(targetPath);
+  assertPathIsNotSymlink(start);
+  if (start === target) {
+    return;
+  }
+  const relativePath = target.slice(start.length).replace(/^\/+/, '');
+  let current = start;
+  for (const part of relativePath.split('/').filter(Boolean)) {
+    current = join(current, part);
+    assertPathIsNotSymlink(current);
+  }
+}
+
+function assertPathIsNotSymlink(path: string): void {
+  if (lstatSync(path).isSymbolicLink()) {
+    throw new Error(`runtime log directory path component must not be a symlink: ${path}`);
+  }
+}
+
+function isNodeError(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && 'code' in error;
 }
 
 function openPrivateLogFile(path: string, flags: 'a' | 'w'): number {

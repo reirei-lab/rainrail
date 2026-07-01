@@ -213,6 +213,28 @@ describe('createOpenClawRuntimeProvider', () => {
     expect(readFileSync(targetFile, 'utf8')).toBe('do-not-touch');
   });
 
+  it('rejects symlinked runtime log directories before spawning OpenClaw', async () => {
+    const spawnProcess = vi.fn(() => ({ pid: 4242, unref: vi.fn() }));
+    const root = temporaryDirectory();
+    const realDirectory = join(root, 'outside-logs');
+    const logDirectory = join(root, 'agent-task-logs');
+    mkdirSync(realDirectory);
+    symlinkSync(realDirectory, logDirectory);
+    const provider = createOpenClawRuntimeProvider({
+      enabled: true,
+      command: 'openclaw',
+      agentId: 'main',
+      sessionKeyPrefix: 'rainrail',
+      timeoutSeconds: 900,
+      logDirectory,
+      spawnProcess,
+    });
+
+    await expect(provider.startRun(runtimeRequest())).rejects.toThrow('must not be a symlink');
+
+    expect(spawnProcess).not.toHaveBeenCalled();
+  });
+
   it('passes stable run ids to start and resume OpenClaw invocations', async () => {
     const spawnProcess = vi.fn(() => ({ pid: 4242, unref: vi.fn() }));
     const logDirectory = temporaryDirectory();
@@ -1777,6 +1799,15 @@ describe('runtime task completion and resume helpers', () => {
       status: 'failed',
       summary: 'failed with Set-Cookie: [redacted-cookie]',
       promptError: 'standalone Bearer [redacted-token]',
+    });
+  });
+
+  it('redacts credentials from compaction failure summaries', () => {
+    expect(readRuntimeRunCompletionFromLog(
+      'GatewayClientRequestError: Error: CLI transcript compaction failed for openai/gpt-5.5: Authorization: Bearer github_pat_compactionSecret',
+    )).toMatchObject({
+      status: 'compaction_failed',
+      summary: 'GatewayClientRequestError: Error: CLI transcript compaction failed for openai/gpt-5.5: Authorization: [redacted-authorization]',
     });
   });
 
