@@ -264,7 +264,7 @@ function compactionFailureAfterLatestCompletionJson(raw: string): RuntimeRunComp
     if (
       isRecord(candidate.payload)
       && runtimeRunCompletionFromPayload(candidate.payload) !== undefined
-      && isTrustedRuntimeCompletionFragment(candidate.payload)
+      && isTrustedRuntimeCompletionLogObject(raw, candidate)
     ) {
       latestCompletionEnd = candidate.end;
     }
@@ -514,7 +514,7 @@ function parseLastJsonObjectFromLog(raw: string): unknown {
     if (
       isRecord(candidate.payload)
       && runtimeRunCompletionFromPayload(candidate.payload) !== undefined
-      && isTrustedRuntimeCompletionFragment(candidate.payload)
+      && isTrustedRuntimeCompletionLogObject(raw, candidate)
     ) {
       latest = candidate.payload;
     }
@@ -614,7 +614,7 @@ function extractFallbackRuntimeSessionKey(log: string, agentId: string): string 
     if (
       !isRecord(object.payload)
       || runtimeRunCompletionFromPayload(object.payload) === undefined
-      || !isTrustedRuntimeCompletionFragment(object.payload)
+      || !isTrustedRuntimeCompletionLogObject(log, object)
     ) {
       continue;
     }
@@ -671,6 +671,37 @@ function isTrustedRuntimeCompletionFragment(payload: Record<string, unknown>): b
   return hasRuntimeCompletionSignal(payload)
     || hasRuntimeCompletionSignal(completionPayload)
     || (hasRuntimeAgentMeta(payload) && stringValue(completionPayload.status) !== undefined);
+}
+
+function isTrustedRuntimeCompletionLogObject(
+  raw: string,
+  object: { payload: unknown; index: number; end: number },
+): boolean {
+  if (!isRecord(object.payload)) {
+    return false;
+  }
+  if (isTrustedRuntimeCompletionFragment(object.payload)) {
+    return true;
+  }
+  return isStatusOnlyTerminalCompletion(object.payload)
+    && !hasDiagnosticPrefixBeforeJsonObject(raw, object.index);
+}
+
+function isStatusOnlyTerminalCompletion(payload: Record<string, unknown>): boolean {
+  const status = stringValue(payload.status);
+  return isTerminalRuntimeRunStatus(status) && stringValue(payload.summary) !== undefined;
+}
+
+function hasDiagnosticPrefixBeforeJsonObject(raw: string, index: number): boolean {
+  const lineStart = Math.max(raw.lastIndexOf('\n', index - 1), raw.lastIndexOf('\r', index - 1)) + 1;
+  const sameLinePrefix = raw.slice(lineStart, index).trim();
+  if (/\b(?:diag|diagnostic|quoted|tool result)\b/i.test(sameLinePrefix)) {
+    return true;
+  }
+  const previousText = raw.slice(0, lineStart).trimEnd();
+  const previousLineStart = Math.max(previousText.lastIndexOf('\n'), previousText.lastIndexOf('\r')) + 1;
+  const previousLine = previousText.slice(previousLineStart).trim();
+  return /(?:quoted|diagnostic|tool result)[^{}]*:\s*$/i.test(previousLine);
 }
 
 function hasRuntimeCompletionSignal(payload: Record<string, unknown>): boolean {

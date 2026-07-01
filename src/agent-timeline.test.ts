@@ -273,6 +273,18 @@ describe('agent timeline', () => {
     expect(extractRuntimeFallbackSessionId(log)).toBeUndefined();
   });
 
+  it('does not extract stale fallback markers after a later normal completion', () => {
+    const log = [
+      'EMBEDDED FALLBACK: Gateway timed out; running embedded agent with fresh session gateway-fallback-stale',
+      JSON.stringify({
+        status: 'ok',
+        finalAssistantVisibleText: 'Outcome: implemented',
+      }),
+    ].join('\n');
+
+    expect(extractRuntimeFallbackSessionId(log)).toBeUndefined();
+  });
+
   it('does not prefer fallback markers quoted inside bannered stdout JSON completion text', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'rainrail-quoted-fallback-banner-timeline-'));
     const logPath = join(directory, 'agent.log');
@@ -582,6 +594,48 @@ describe('agent timeline', () => {
         { sessionsDirectory: directory },
       );
       expect(timeline.sessionId).toBe('original-session');
+      expect(timeline.fallback).toBe(false);
+      expect(timeline.missing).toBe(false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('discards fallback session ids after a later normal completion without session metadata', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'rainrail-clear-fallback-session-id-timeline-'));
+    const startLogPath = join(directory, 'agent.log');
+    const resumeLogPath = join(directory, 'resume-1.log');
+    writeFileSync(startLogPath, [
+      JSON.stringify({
+        status: 'ok',
+        meta: { agentMeta: { sessionId: 'actual-session' } },
+      }),
+      JSON.stringify({
+        status: 'ok',
+        meta: { agentMeta: { sessionId: 'gateway-fallback-stale' } },
+      }),
+    ].join('\n'), 'utf8');
+    writeFileSync(resumeLogPath, JSON.stringify({
+      status: 'ok',
+      finalAssistantVisibleText: 'Outcome: implemented',
+    }), 'utf8');
+    writeFileSync(join(directory, 'actual-session.trajectory.jsonl'), [
+      JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:08:00.000Z', seq: 1 }),
+    ].join('\n'), 'utf8');
+    writeFileSync(join(directory, 'gateway-fallback-stale.trajectory.jsonl'), [
+      JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:09:00.000Z', seq: 1 }),
+    ].join('\n'), 'utf8');
+
+    try {
+      const timeline = await readRuntimeTimeline(
+        {
+          logPath: startLogPath,
+          agentSessionId: 'agent:main:routing-key',
+          resumeAttempts: [{ logPath: resumeLogPath }],
+        },
+        { sessionsDirectory: directory },
+      );
+      expect(timeline.sessionId).toBe('actual-session');
       expect(timeline.fallback).toBe(false);
       expect(timeline.missing).toBe(false);
     } finally {
@@ -1444,6 +1498,34 @@ describe('agent timeline', () => {
     expect(timeline[0]!.detail).not.toContain('legacy-proxy-secret');
     expect(timeline[0]!.detail).not.toContain('cluster-proxy-secret');
     expect(timeline[0]!.detail).not.toContain('joined-proxy-secret');
+  });
+
+  it('redacts proxy environment assignments with inline credentials', () => {
+    const timeline = parseRuntimeTrajectoryTimeline([
+      JSON.stringify({
+        type: 'tool.result',
+        ts: '2026-06-30T15:09:10.000Z',
+        seq: 1,
+        data: {
+          name: 'bash',
+          status: 'completed',
+          output: [
+            'HTTPS_PROXY=user:proxy-secret@proxy.example',
+            'NO_PROXY=localhost',
+            'ALL_PROXY=all-user:all-proxy-secret@proxy.example',
+            'npm_config_https_proxy=npm-user:npm-proxy-secret@proxy.example',
+          ].join(' '),
+        },
+      }),
+    ].join('\n'));
+
+    expect(timeline[0]!.excerpt).toContain('HTTPS_PROXY=[redacted-proxy]');
+    expect(timeline[0]!.excerpt).toContain('NO_PROXY=localhost');
+    expect(timeline[0]!.excerpt).toContain('ALL_PROXY=[redacted-proxy]');
+    expect(timeline[0]!.excerpt).toContain('npm_config_https_proxy=[redacted-proxy]');
+    expect(timeline[0]!.excerpt).not.toContain('proxy-secret');
+    expect(timeline[0]!.excerpt).not.toContain('all-proxy-secret');
+    expect(timeline[0]!.excerpt).not.toContain('npm-proxy-secret');
   });
 
   it('redacts bearer tokens with underscores and cookie assignments', () => {

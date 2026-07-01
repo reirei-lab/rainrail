@@ -197,8 +197,31 @@ export function extractRuntimeSessionId(log: string): string | undefined {
   return undefined;
 }
 
+function extractRuntimeNonFallbackSessionId(log: string): string | undefined {
+  try {
+    const payload = JSON.parse(log) as unknown;
+    const sessionId = isTrustedRuntimeCompletionPayload(payload) ? runtimeSessionIdFromPayload(payload) : undefined;
+    return sessionId?.startsWith('gateway-fallback-') === true ? undefined : sessionId;
+  } catch {
+    const parsed = parseJsonObjectsFromLog(log);
+    for (const payload of parsed.payloads.slice().reverse()) {
+      if (!isTrustedRuntimeCompletionPayload(payload)) {
+        continue;
+      }
+      const sessionId = runtimeSessionIdFromPayload(payload);
+      if (sessionId !== undefined && !sessionId.startsWith('gateway-fallback-')) {
+        return sessionId;
+      }
+    }
+  }
+  return undefined;
+}
+
 export function extractRuntimeFallbackSessionId(log: string): string | undefined {
   const fallbackMetadata = extractRuntimeFallbackMetadata(log);
+  if (fallbackMetadata === null) {
+    return undefined;
+  }
   if (fallbackMetadata !== undefined && fallbackMetadata !== null) {
     if (fallbackMetadata.sessionId !== undefined) {
       return fallbackMetadata.sessionId;
@@ -291,8 +314,8 @@ async function readRuntimeSession(
         continue;
       }
       const fallbackMetadata = extractRuntimeFallbackMetadata(log);
-      const sessionId = extractRuntimeSessionId(log);
-      logSessionId ??= sessionId;
+      const fallbackSessionId = extractRuntimeSessionId(log);
+      logSessionId ??= extractRuntimeNonFallbackSessionId(log);
       if (fallbackMetadata === null) {
         groupFallbackSession = undefined;
         groupFallbackCleared = true;
@@ -301,8 +324,8 @@ async function readRuntimeSession(
       if (!fallbackLookupCleared && !groupFallbackCleared && groupFallbackSession === undefined) {
         if (fallbackMetadata !== undefined) {
           groupFallbackSession = fallbackMetadata;
-        } else if (sessionId?.startsWith('gateway-fallback-') === true) {
-          groupFallbackSession = { sessionId };
+        } else if (fallbackSessionId?.startsWith('gateway-fallback-') === true) {
+          groupFallbackSession = { sessionId: fallbackSessionId };
         }
       }
     }
@@ -600,6 +623,7 @@ function redactSensitiveText(value: string): string {
     .replace(/\b(Cookie:\s*)[\s\S]*?(?=(?:"\s+-H\s+"(?:Authorization|Cookie|Set-Cookie):)|\s+Set-Cookie:|[\n\r]|$)/gi, '$1[redacted-cookie]')
     .replace(/\b([A-Za-z0-9_-]*(?:api[-_]?key|token|secret)[A-Za-z0-9_-]*:\s*)[\s\S]*?(?=(?:"\s+-H\s+"[A-Za-z0-9_-]*(?:api[-_]?key|token|secret|authorization|cookie):)|\s+[A-Za-z0-9_-]*(?:api[-_]?key|token|secret|authorization|cookie):|[\n\r]|$)/gi, '$1[redacted-header]')
     .replace(/(^|[\n\r])([A-Za-z0-9_-]*authorization[A-Za-z0-9_-]*\s*:\s*)(?!\[redacted)[^\n\r]*/gi, '$1$2[redacted]')
+    .replace(/(^|\s)((?!(?:no_proxy)\b)[A-Za-z0-9_-]*(?:https?|all)_proxy[A-Za-z0-9_-]*\s*[:=]\s*)(?:"[^"\s]*:[^"@\s]+@[^"\s]+"|'[^'\s]*:[^'@\s]+@[^'\s]+'|[^\s'"]*:[^\s'"]+@[^\s'"]+)/gi, '$1$2[redacted-proxy]')
     .replace(/("[^"]*(?:token|secret|password|api[_-]?key|private[_-]?key|authorization|set-cookie|cookie)[^"]*"\s*:\s*)"(?:(?:\\.)|[^"\\])*"/gi, '$1"[redacted]"')
     .replace(/([A-Za-z0-9_-]*(?:token|secret|password|api[_-]?key|private[_-]?key|set-cookie|cookie)[A-Za-z0-9_-]*\s*[:=]\s*)"(?:(?:\\.)|[^"\\])*"/gi, '$1"[redacted]"')
     .replace(/([A-Za-z0-9_-]*authorization[A-Za-z0-9_-]*\s*=\s*)"(?:(?:\\.)|[^"\\])*"/gi, '$1"[redacted]"')

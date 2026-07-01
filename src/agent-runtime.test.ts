@@ -1581,6 +1581,22 @@ describe('runtime task completion and resume helpers', () => {
     });
   });
 
+  it('uses appended status-only terminal completions as the latest runtime result', () => {
+    const raw = [
+      JSON.stringify({
+        status: 'ok',
+        finalAssistantVisibleText: 'Outcome: implemented',
+        summary: 'stale successful completion',
+      }),
+      JSON.stringify({ status: 'failed', summary: 'retry failed after append' }),
+    ].join('\n');
+
+    expect(readRuntimeRunCompletionFromLog(raw)).toMatchObject({
+      status: 'failed',
+      summary: 'retry failed after append',
+    });
+  });
+
   it('does not use appended diagnostic JSON fragments as runtime completions', () => {
     const raw = [
       JSON.stringify({
