@@ -134,6 +134,31 @@ describe('handleReviewRequestEvent', () => {
     expect(requestCount).toBe(0);
   });
 
+  it('retries successful check events while the live rollup is still pending', async () => {
+    await expect(handleReviewRequestEvent(checkRunEvent(), {
+      agentLogin: 'reirei-agent',
+      reviewerLogin: 'hiragram',
+      branchPrefix: 'agent/',
+      pullRequests: {
+        async getPullRequest(input) {
+          return pullRequest({
+            ...input,
+            reviews: [],
+            statusCheckRollup: [
+              { type: 'CheckRun', name: 'Typecheck, Test, Build', status: 'IN_PROGRESS' },
+            ],
+          });
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          throw new Error('not used');
+        },
+      },
+    })).rejects.toThrow('pull request checks are still being reflected');
+  });
+
   it('does not request twice while a reviewer request is already pending', async () => {
     let requestCount = 0;
 
@@ -401,6 +426,35 @@ describe('handleReviewRequestEvent', () => {
 
     expect(result.reason).toBe('review_requested');
     expect(reviewRequests).toEqual([{ repository: 'reirei-lab/rainrail', number: 44, reviewerLogin: 'hiragram' }]);
+  });
+
+  it('does not expand PR-specific review request events by head SHA', async () => {
+    const reviewRequests: Array<{ repository: string; number: number; reviewerLogin: string }> = [];
+
+    const result = await handleReviewRequestEvent(pullRequestEvent({ action: 'ready_for_review' }), {
+      agentLogin: 'reirei-agent',
+      reviewerLogin: 'hiragram',
+      branchPrefix: 'agent/',
+      pullRequests: {
+        async getPullRequest(input) {
+          return pullRequest({ ...input, reviews: [] });
+        },
+        async findPullRequestsByHead() {
+          throw new Error('not used');
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview(input) {
+          reviewRequests.push(input);
+        },
+      },
+    });
+
+    expect(result.reason).toBe('review_requested');
+    expect(reviewRequests).toEqual([
+      { repository: 'reirei-lab/rainrail', number: 44, reviewerLogin: 'hiragram' },
+    ]);
   });
 
   it('reads normalized commit status state from the resource', async () => {

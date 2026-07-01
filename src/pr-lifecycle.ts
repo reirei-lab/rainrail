@@ -155,6 +155,7 @@ export interface ChangeRequestWorkflowOptions extends TodoHandoffWorkflowOptions
 export interface CodexReviewWorkflowOptions extends TodoHandoffWorkflowOptions {
   agentLogin: string;
   reviewerLogin: string;
+  branchPrefix: string;
   reviewRequest?: ReviewRequestRemovalOptions;
   targetRepositories?: string[];
   pullRequests?: GitHubPullRequestProvider | undefined;
@@ -203,6 +204,7 @@ type PullRequestCandidate = {
   numbers?: number[];
   headRefName?: string;
   headSha?: string;
+  expandByHeadSha?: boolean;
 };
 
 export function createReviewRequestWorkflow(options: ReviewRequestWorkflowOptions): WorkflowPlugin {
@@ -287,6 +289,7 @@ export async function handleReviewRequestEvent(
   if (candidates.length === 0) return { handled: false, reason: 'pull request was not found' };
   let fallback: WorkflowResult = { handled: false, reason: 'pull request was not found' };
   const requestedPullRequests: PullRequestReviewTarget[] = [];
+  let sawUnreflectedCheckRollup = false;
   for (const pullRequest of candidates) {
     if (candidate.headSha !== undefined && pullRequest.headSha !== undefined && candidate.headSha !== pullRequest.headSha) {
       fallback = { handled: false, reason: 'check does not match the current pull request head', candidate, pullRequest };
@@ -309,6 +312,9 @@ export async function handleReviewRequestEvent(
       continue;
     }
     if (!hasPassingCheckRollup(pullRequest)) {
+      if (candidate.expandByHeadSha === true && isUnreflectedCheckRollup(pullRequest)) {
+        sawUnreflectedCheckRollup = true;
+      }
       fallback = { handled: false, reason: 'not all checks have passed', pullRequest };
       continue;
     }
@@ -327,6 +333,9 @@ export async function handleReviewRequestEvent(
       reviewerLogin: options.reviewerLogin,
     }, taskContext(context));
     requestedPullRequests.push(pullRequest);
+  }
+  if (sawUnreflectedCheckRollup) {
+    throw new Error('pull request checks are still being reflected');
   }
   if (requestedPullRequests.length > 0) {
     return {
@@ -649,6 +658,7 @@ export async function handleAutoMergeEvent(
   if (candidates.length === 0) return { handled: false, reason: 'pull request was not found', candidate };
   let fallback: WorkflowResult = { handled: false, reason: 'pull request was not found', candidate };
   let sawPendingMergeability = false;
+  let sawUnreflectedCheckRollup = false;
   const mergedPullRequests: PullRequestReviewTarget[] = [];
   for (const pullRequest of candidates) {
     if (candidate.headSha !== undefined && pullRequest.headSha !== undefined && candidate.headSha !== pullRequest.headSha) {
@@ -672,6 +682,9 @@ export async function handleAutoMergeEvent(
       continue;
     }
     if (!hasPassingCheckRollup(pullRequest)) {
+      if (candidate.expandByHeadSha === true && isUnreflectedCheckRollup(pullRequest)) {
+        sawUnreflectedCheckRollup = true;
+      }
       fallback = { handled: false, reason: 'not all checks have passed', pullRequest };
       continue;
     }
@@ -709,6 +722,9 @@ export async function handleAutoMergeEvent(
   if (sawPendingMergeability) {
     throw new Error('pull request mergeability is still being calculated');
   }
+  if (sawUnreflectedCheckRollup) {
+    throw new Error('pull request checks are still being reflected');
+  }
   if (mergedPullRequests.length > 0) {
     return {
       handled: true,
@@ -727,6 +743,10 @@ export function allChecksPassed(pullRequest: PullRequestReviewTarget): boolean {
 
 function hasPassingCheckRollup(pullRequest: PullRequestReviewTarget): boolean {
   return pullRequest.statusCheckRollup.length > 0 && allChecksPassed(pullRequest);
+}
+
+function isUnreflectedCheckRollup(pullRequest: PullRequestReviewTarget): boolean {
+  return pullRequest.statusCheckRollup.length === 0 || pullRequest.statusCheckRollup.some(isPendingCheck);
 }
 
 function pullRequestsFromContext(context: PluginRuntimeContext): GitHubPullRequestProvider | undefined {
@@ -760,7 +780,7 @@ async function resolvePullRequestCandidates(
       pullRequests.getPullRequest({ repository: candidate.repository, number }, taskContext(context))
     )));
   }
-  if (candidate.headSha !== undefined && pullRequests.findPullRequestsByHead !== undefined) {
+  if (candidate.expandByHeadSha === true && candidate.headSha !== undefined && pullRequests.findPullRequestsByHead !== undefined) {
     candidates.push(...await pullRequests.findPullRequestsByHead(candidate, taskContext(context)));
   } else if (numbers.length === 0 && pullRequests.findPullRequestsByHead !== undefined) {
     candidates.push(...await pullRequests.findPullRequestsByHead(candidate, taskContext(context)));
@@ -830,6 +850,7 @@ function candidateFromPullRequests(payload: Record<string, unknown>, headSha: st
     });
   return {
     repository,
+    expandByHeadSha: true,
     ...(numbers.length === 0 ? {} : { numbers }),
     ...optionalString('headRefName', stringValue(recordValue(payload.resource).headRef)),
     ...optionalString('headSha', headSha),
@@ -862,7 +883,7 @@ function changeRequestTargetFromEvent(event: RainrailEventEnvelope): { repositor
 
 function codexReviewTargetFromEvent(
   event: RainrailEventEnvelope,
-  options: Pick<CodexReviewWorkflowOptions, 'agentLogin' | 'reviewerLogin' | 'targetRepositories'>,
+  options: Pick<CodexReviewWorkflowOptions, 'agentLogin' | 'reviewerLogin' | 'branchPrefix' | 'targetRepositories'>,
 ): {
   repository: string;
   pullRequestNumber: number;
@@ -893,6 +914,7 @@ function codexReviewTargetFromEvent(
     || normalize(pullRequest.headRepository) !== normalize(repository)
     || !sameLogin(stringValue(review.author), options.reviewerLogin)
     || !sameLogin(stringValue(pullRequest.author), options.agentLogin)
+    || !branchName.startsWith(options.branchPrefix)
     || !targetRepositoryAllowed(options.targetRepositories ?? [], repository, true)
   ) {
     return undefined;
@@ -1158,6 +1180,18 @@ function isFailingCheck(check: PullRequestCheck): boolean {
   return ['failure', 'failed', 'error', 'cancelled', 'timed_out', 'action_required'].includes(status);
 }
 
+function isPendingCheck(check: PullRequestCheck): boolean {
+  const status = normalize(check.status ?? check.state);
+  const conclusion = normalize(check.conclusion);
+  return status === ''
+    || status === 'queued'
+    || status === 'in_progress'
+    || status === 'pending'
+    || status === 'requested'
+    || status === 'waiting'
+    || (status === 'completed' && conclusion === '');
+}
+
 function latestActionableReviewsByReviewer(pullRequest: PullRequestReviewTarget): Map<string, PullRequestReview> {
   const latestByReviewer = new Map<string, PullRequestReview>();
   for (const review of pullRequest.reviews ?? []) {
@@ -1268,12 +1302,13 @@ function commitStatusState(payload: Record<string, unknown>): string {
   return normalize(payload.state ?? resource.state ?? resource.status ?? resource.conclusion);
 }
 
-function headCandidateFromStatus(payload: Record<string, unknown>): { repository: string; headSha?: string } | undefined {
+function headCandidateFromStatus(payload: Record<string, unknown>): PullRequestCandidate | undefined {
   const repository = repositoryName(payload);
   const resource = recordValue(payload.resource);
   if (repository === undefined) return undefined;
   return {
     repository,
+    expandByHeadSha: true,
     ...optionalString('headSha', stringValue(resource.headSha ?? resource.id)),
   };
 }

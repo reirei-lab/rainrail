@@ -179,6 +179,35 @@ describe('handleAutoMergeEvent', () => {
     expect(runtimeMerges).toEqual([]);
   });
 
+  it('retries successful check events while the live rollup is still empty', async () => {
+    const runtimeMerges: unknown[] = [];
+
+    await expect(handleAutoMergeEvent(checkRunEvent(), options({
+      statusCheckRollup: [],
+    }), runtimeContext(runtimeMerges))).rejects.toThrow('pull request checks are still being reflected');
+    expect(runtimeMerges).toEqual([]);
+  });
+
+  it('does not expand PR-specific approval events by head SHA', async () => {
+    const runtimeMerges: unknown[] = [];
+
+    const result = await handleAutoMergeEvent(reviewEvent(), {
+      ...options(),
+      pullRequests: {
+        ...options().pullRequests,
+        async getPullRequest(input) {
+          return pullRequest(input);
+        },
+        async findPullRequestsByHead() {
+          throw new Error('not used');
+        },
+      },
+    }, runtimeContext(runtimeMerges));
+
+    expect(result.reason).toBe('pull_request_merged');
+    expect(runtimeMerges).toEqual([expect.objectContaining({ number: 44 })]);
+  });
+
   it('retries pending mergeability candidates after merging later ready PRs', async () => {
     const runtimeMerges: unknown[] = [];
 

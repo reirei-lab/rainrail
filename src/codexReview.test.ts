@@ -9,6 +9,7 @@ describe('handleCodexReviewEvent', () => {
     const result = await handleCodexReviewEvent(reviewEvent({ state: 'commented' }), {
       agentLogin: 'reirei-agent',
       reviewerLogin: 'hiragram',
+      branchPrefix: 'agent/',
       targetRepositories: ['reirei-lab/rainrail'],
       tasks: handoffRecorder({ updates }),
       pullRequests: {
@@ -57,6 +58,7 @@ describe('handleCodexReviewEvent', () => {
     const result = await handleCodexReviewEvent(reviewEvent({ state: 'commented' }), {
       agentLogin: 'reirei-agent',
       reviewerLogin: 'hiragram',
+      branchPrefix: 'agent/',
       reviewRequest: { reviewerLogin: 'hiragram' },
       targetRepositories: ['reirei-lab/rainrail'],
       tasks: handoffRecorder({ updates }),
@@ -96,6 +98,7 @@ describe('handleCodexReviewEvent', () => {
     }), {
       agentLogin: 'reirei-agent',
       reviewerLogin: 'hiragram',
+      branchPrefix: 'agent/',
       reviewRequest: { reviewerLogin: 'hiragram' },
       targetRepositories: ['reirei-lab/rainrail'],
       tasks: handoffRecorder({ updates }),
@@ -138,6 +141,7 @@ describe('handleCodexReviewEvent', () => {
     }), {
       agentLogin: 'reirei-agent',
       reviewerLogin: 'hiragram',
+      branchPrefix: 'agent/',
       targetRepositories: ['reirei-lab/rainrail'],
       tasks: handoffRecorder({ updates }),
     });
@@ -156,6 +160,7 @@ describe('handleCodexReviewEvent', () => {
     }), {
       agentLogin: 'reirei-agent',
       reviewerLogin: 'hiragram',
+      branchPrefix: 'agent/',
       targetRepositories: ['reirei-lab/rainrail'],
       tasks: handoffRecorder({ updates }),
       pullRequests: {
@@ -188,6 +193,7 @@ describe('handleCodexReviewEvent', () => {
     }), {
       agentLogin: 'reirei-agent',
       reviewerLogin: 'hiragram',
+      branchPrefix: 'agent/',
       targetRepositories: ['reirei-lab/rainrail'],
       tasks: handoffRecorder({ updates }),
       pullRequests: {
@@ -220,6 +226,7 @@ describe('handleCodexReviewEvent', () => {
     }), {
       agentLogin: 'reirei-agent',
       reviewerLogin: 'hiragram',
+      branchPrefix: 'agent/',
       targetRepositories: ['reirei-lab/rainrail'],
       tasks: handoffRecorder({ updates }),
       pullRequests: {
@@ -248,6 +255,7 @@ describe('handleCodexReviewEvent', () => {
     const result = await handleCodexReviewEvent(reviewEvent({ state: 'commented', stringReviewId: true }), {
       agentLogin: 'reirei-agent',
       reviewerLogin: 'hiragram',
+      branchPrefix: 'agent/',
       targetRepositories: ['reirei-lab/rainrail'],
       tasks: handoffRecorder({ updates }),
       pullRequests: {
@@ -279,6 +287,7 @@ describe('handleCodexReviewEvent', () => {
     const result = await handleCodexReviewEvent(reviewEvent({ state: 'commented' }), {
       agentLogin: 'reirei-agent',
       reviewerLogin: 'hiragram',
+      branchPrefix: 'agent/',
       targetRepositories: ['reirei-lab/rainrail'],
       tasks: handoffRecorder({
         updates,
@@ -310,6 +319,22 @@ describe('handleCodexReviewEvent', () => {
     const result = await handleCodexReviewEvent(reviewEvent({ headRepository: 'external/fork' }), {
       agentLogin: 'reirei-agent',
       reviewerLogin: 'hiragram',
+      branchPrefix: 'agent/',
+      targetRepositories: ['reirei-lab/rainrail'],
+      tasks: handoffRecorder({ updates }),
+    });
+
+    expect(result.reason).toBe('event is not a Codex review');
+    expect(updates).toEqual([]);
+  });
+
+  it('ignores Codex reviews outside the managed branch prefix', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+
+    const result = await handleCodexReviewEvent(reviewEvent({ state: 'commented', branchName: 'manual/test-pr' }), {
+      agentLogin: 'reirei-agent',
+      reviewerLogin: 'hiragram',
+      branchPrefix: 'agent/',
       targetRepositories: ['reirei-lab/rainrail'],
       tasks: handoffRecorder({ updates }),
     });
@@ -324,6 +349,7 @@ describe('handleCodexReviewEvent', () => {
     await handleCodexReviewEvent(reviewEvent({ state: 'commented' }), {
       agentLogin: 'reirei-agent',
       reviewerLogin: 'hiragram',
+      branchPrefix: 'agent/',
       targetRepositories: ['reirei-lab/rainrail'],
       tasks: handoffRecorder({ updates }),
       pullRequests: {
@@ -357,6 +383,7 @@ describe('handleCodexReviewEvent', () => {
     const result = await handleCodexReviewEvent(reviewEvent({ state: 'commented' }), {
       agentLogin: 'reirei-agent',
       reviewerLogin: 'hiragram',
+      branchPrefix: 'agent/',
       targetRepositories: ['reirei-lab/rainrail'],
       tasks: handoffRecorder({ updates }),
       pullRequests: {
@@ -385,6 +412,7 @@ describe('handleCodexReviewEvent', () => {
     const result = await handleCodexReviewEvent(reviewEvent({ state: 'changes_requested' }), {
       agentLogin: 'reirei-agent',
       reviewerLogin: 'hiragram',
+      branchPrefix: 'agent/',
       targetRepositories: ['reirei-lab/rainrail'],
       tasks: handoffRecorder({ updates }),
     });
@@ -399,6 +427,7 @@ describe('handleCodexReviewEvent', () => {
     const result = await handleCodexReviewEvent(reviewEvent({ state: 'approved' }), {
       agentLogin: 'reirei-agent',
       reviewerLogin: 'hiragram',
+      branchPrefix: 'agent/',
       targetRepositories: ['reirei-lab/rainrail'],
       tasks: handoffRecorder({ updates }),
     });
