@@ -1379,7 +1379,7 @@ describe('agent timeline', () => {
     const directory = mkdtempSync(join(tmpdir(), 'rainrail-jsonl-prefix-key-redaction-'));
     const sessionId = 'jsonl-prefix-key-session';
     const logPath = join(directory, 'agent.log');
-    const keyBody = `MIIE-${'x'.repeat(180)}-private-key-tail`;
+    const keyBody = `MIIE-${'x'.repeat(3000)}-private-key-tail`;
     writeFileSync(logPath, JSON.stringify({
       result: { status: 'ok', meta: { agentMeta: { sessionId } } },
     }), 'utf8');
@@ -1457,7 +1457,7 @@ describe('agent timeline', () => {
     const directory = mkdtempSync(join(tmpdir(), 'rainrail-jsonl-truncated-token-redaction-'));
     const sessionId = 'jsonl-truncated-token-session';
     const logPath = join(directory, 'agent.log');
-    const token = `github_pat_${'x'.repeat(160)}_tailSecret`;
+    const token = `github_pat_${'x'.repeat(3000)}_tailSecret`;
     writeFileSync(logPath, JSON.stringify({
       result: { status: 'ok', meta: { agentMeta: { sessionId } } },
     }), 'utf8');
@@ -1484,7 +1484,7 @@ describe('agent timeline', () => {
     const directory = mkdtempSync(join(tmpdir(), 'rainrail-jsonl-truncated-cookie-redaction-'));
     const sessionId = 'jsonl-truncated-cookie-session';
     const logPath = join(directory, 'agent.log');
-    const cookie = `session=${'x'.repeat(160)}_cookieTailSecret`;
+    const cookie = `session=${'x'.repeat(3000)}_cookieTailSecret`;
     writeFileSync(logPath, JSON.stringify({
       result: { status: 'ok', meta: { agentMeta: { sessionId } } },
     }), 'utf8');

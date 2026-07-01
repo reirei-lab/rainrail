@@ -451,16 +451,11 @@ async function resolveRuntimeTrajectoryPathForSession(
 async function readTailText(path: string, maxBytes: number): Promise<{ text: string; truncated: boolean }> {
   const fileStat = await stat(path);
   const start = Math.max(0, fileStat.size - maxBytes);
-  const contextStart = start > 0 ? Math.max(0, start - 2048) : start;
-  const offset = start - contextStart;
-  const length = fileStat.size - contextStart;
-  const buffer = Buffer.alloc(length);
   const file = await open(path, 'r');
   try {
-    const { bytesRead } = await file.read(buffer, 0, length, contextStart);
-    const rawText = buffer.subarray(0, bytesRead).toString('utf8');
-    const prefixContext = rawText.slice(0, offset);
-    let text = rawText.slice(offset);
+    const contextStart = start > 0 ? await findTailContextStart(file, start) : start;
+    const prefixContext = contextStart < start ? await readFileRange(file, contextStart, start - contextStart) : '';
+    let text = await readFileRange(file, start, fileStat.size - start);
     if (start > 0) {
       text = redactLeadingPrivateKeyFragment(text, prefixContext)
         ?? redactLeadingCredentialFragment(text, prefixContext)
@@ -470,6 +465,51 @@ async function readTailText(path: string, maxBytes: number): Promise<{ text: str
   } finally {
     await file.close();
   }
+}
+
+async function readFileRange(file: Awaited<ReturnType<typeof open>>, start: number, length: number): Promise<string> {
+  const buffer = Buffer.alloc(length);
+  const { bytesRead } = await file.read(buffer, 0, length, start);
+  return buffer.subarray(0, bytesRead).toString('utf8');
+}
+
+async function findTailContextStart(file: Awaited<ReturnType<typeof open>>, start: number): Promise<number> {
+  const lineStart = await findPreviousLineStart(file, start);
+  const privateKeyStart = await findOpenPrivateKeyContextStart(file, start);
+  return privateKeyStart === undefined ? lineStart : Math.min(lineStart, privateKeyStart);
+}
+
+async function findPreviousLineStart(file: Awaited<ReturnType<typeof open>>, start: number): Promise<number> {
+  const chunkSize = 8192;
+  let cursor = start;
+  while (cursor > 0) {
+    const chunkStart = Math.max(0, cursor - chunkSize);
+    const text = await readFileRange(file, chunkStart, cursor - chunkStart);
+    const newlineIndex = Math.max(text.lastIndexOf('\n'), text.lastIndexOf('\r'));
+    if (newlineIndex !== -1) {
+      return chunkStart + newlineIndex + 1;
+    }
+    cursor = chunkStart;
+  }
+  return 0;
+}
+
+async function findOpenPrivateKeyContextStart(file: Awaited<ReturnType<typeof open>>, start: number): Promise<number | undefined> {
+  const chunkSize = 8192;
+  const boundaryOverlap = 128;
+  let cursor = start;
+  let suffix = '';
+  while (cursor > 0) {
+    const chunkStart = Math.max(0, cursor - chunkSize);
+    const chunkText = await readFileRange(file, chunkStart, cursor - chunkStart);
+    const boundary = findLastPrivateKeyBoundaryMatch(`${chunkText}${suffix}`, chunkStart, start);
+    if (boundary !== undefined) {
+      return boundary.kind === 'begin' ? boundary.index : undefined;
+    }
+    suffix = chunkText.slice(0, boundaryOverlap);
+    cursor = chunkStart;
+  }
+  return undefined;
 }
 
 function trimPartialLeadingLine(text: string): string {
@@ -500,20 +540,27 @@ function redactLeadingPrivateKeyFragment(text: string, prefixContext: string): s
 }
 
 function hasOpenPrivateKeyBlock(value: string): boolean {
-  const beginIndex = findLastPrivateKeyBoundary(value, /-----BEGIN [A-Z ]*PRIVATE KEY(?: BLOCK)?-----/g);
-  if (beginIndex === undefined) {
+  const boundary = findLastPrivateKeyBoundaryMatch(value, 0, value.length);
+  if (boundary === undefined) {
     return false;
   }
-  const endIndex = findLastPrivateKeyBoundary(value, /-----END [A-Z ]*PRIVATE KEY(?: BLOCK)?-----/g);
-  return endIndex === undefined || beginIndex > endIndex;
+  return boundary.kind === 'begin';
 }
 
-function findLastPrivateKeyBoundary(value: string, pattern: RegExp): number | undefined {
-  let lastIndex: number | undefined;
-  for (const match of value.matchAll(pattern)) {
-    lastIndex = match.index;
+function findLastPrivateKeyBoundaryMatch(
+  value: string,
+  absoluteStart: number,
+  before: number,
+): { kind: 'begin' | 'end'; index: number } | undefined {
+  let lastBoundary: { kind: 'begin' | 'end'; index: number } | undefined;
+  for (const match of value.matchAll(/-----(BEGIN|END) [A-Z ]*PRIVATE KEY(?: BLOCK)?-----/g)) {
+    const index = absoluteStart + (match.index ?? 0);
+    if (index >= before) {
+      continue;
+    }
+    lastBoundary = { kind: match[1] === 'BEGIN' ? 'begin' : 'end', index };
   }
-  return lastIndex;
+  return lastBoundary;
 }
 
 function timelineEntryForEvent(event: TrajectoryEvent, index: number): RuntimeTimelineEntry {
