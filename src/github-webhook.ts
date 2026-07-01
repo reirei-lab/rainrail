@@ -1406,6 +1406,7 @@ function resourceFromPullRequest(
     ...optionalBooleanProperty('merged', booleanField(pullRequest, 'merged')),
     ...optionalBooleanProperty('draft', booleanField(pullRequest, 'draft')),
     ...optionalStringProperty('url', stringField(pullRequest, 'html_url')),
+    ...optionalStringProperty('author', stringField(recordField(pullRequest, 'user'), 'login')),
     ...optionalStringProperty('headRef', stringField(head, 'ref')),
     ...optionalStringProperty('beforeSha', stringField(payload, 'before')),
     ...optionalStringProperty('headSha', stringField(payload, 'after') ?? stringField(head, 'sha')),

@@ -672,6 +672,7 @@ describe('GitHub webhook source handling', () => {
           pull_request: {
             number: 39,
             html_url: 'https://github.com/reirei-lab/rainrail/pull/39',
+            user: { login: 'reirei-agent' },
           },
           comment: {
             id: 500,
@@ -1887,6 +1888,7 @@ describe('GitHub webhook source handling', () => {
           pull_request: {
             number: 39,
             html_url: 'https://github.com/reirei-lab/rainrail/pull/39',
+            user: { login: 'reirei-agent' },
           },
           review: {
             id: 4594627585,
@@ -1916,6 +1918,7 @@ describe('GitHub webhook source handling', () => {
           id: '39',
           number: 39,
           url: 'https://github.com/reirei-lab/rainrail/pull/39',
+          author: 'reirei-agent',
         },
       },
     });

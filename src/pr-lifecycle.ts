@@ -23,6 +23,7 @@ export interface PullRequestReviewTarget {
   url: string;
   authorLogin: string;
   headRefName: string;
+  headSha?: string;
   isDraft: boolean;
   state?: string;
   mergeable?: string;
@@ -247,7 +248,7 @@ export async function handleReviewRequestEvent(
     return { handled: false, reason: 'pull request is not an agent-authored target', pullRequest };
   }
   if (pullRequest.isDraft) return { handled: false, reason: 'pull request is draft', pullRequest };
-  if (normalize(pullRequest.reviewDecision) === 'changes_requested') {
+  if (hasUnresolvedChangeRequest(pullRequest)) {
     return { handled: false, reason: 'pull request has unresolved change requests', pullRequest };
   }
   if (!allChecksPassed(pullRequest)) return { handled: false, reason: 'not all checks have passed', pullRequest };
@@ -346,6 +347,9 @@ export async function handleCheckFailureEvent(
     ? await pullRequests.findPullRequestByHead(check, taskContext(context))
     : await pullRequests.getPullRequest({ repository: check.repository, number: check.number }, taskContext(context));
   if (pullRequest === undefined) return { handled: false, reason: 'pull request was not found', check };
+  if (check.headSha !== undefined && pullRequest.headSha !== undefined && check.headSha !== pullRequest.headSha) {
+    return { handled: false, reason: 'check does not match the current pull request head', check, pullRequest };
+  }
   if (!isReviewTarget(options, pullRequest)) {
     return { handled: false, reason: 'pull request is not an agent-authored target', check, pullRequest };
   }
@@ -766,12 +770,16 @@ function isReviewTarget(config: { agentLogin: string; branchPrefix: string }, pu
 }
 
 function reviewApproved(config: { reviewerLogin: string }, pullRequest: PullRequestReviewTarget): boolean {
-  if (normalize(pullRequest.reviewDecision) === 'approved') return true;
   return normalize((pullRequest.reviews ?? []).filter((review) => sameLogin(review.authorLogin, config.reviewerLogin)).at(-1)?.state) === 'approved';
 }
 
+function hasUnresolvedChangeRequest(pullRequest: PullRequestReviewTarget): boolean {
+  if (normalize(pullRequest.reviewDecision) === 'changes_requested') return true;
+  return normalize((pullRequest.reviews ?? []).at(-1)?.state) === 'changes_requested';
+}
+
 function isConflicted(pullRequest: PullRequestReviewTarget): boolean {
-  return normalize(pullRequest.mergeable) === 'conflicting' || normalize(pullRequest.mergeStateStatus) === 'dirty';
+  return normalize(pullRequest.mergeStateStatus) === 'dirty' || normalize(pullRequest.mergeStateStatus) === 'conflicting';
 }
 
 function isMergeabilityPending(pullRequest: PullRequestReviewTarget): boolean {
@@ -827,7 +835,9 @@ function arrayValue(value: unknown): unknown[] {
 }
 
 function numberValue(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && /^\d+$/u.test(value)) return Number(value);
+  return undefined;
 }
 
 function stringValue(value: unknown): string | undefined {

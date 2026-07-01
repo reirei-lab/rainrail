@@ -21,7 +21,7 @@ describe('handleConflictCheckEvent', () => {
         async findOpenPullRequestsByBase(input) {
           expect(input).toEqual({ repository: 'reirei-lab/rainrail', baseRefName: 'main' });
           return [
-            pullRequest({ mergeable: 'CONFLICTING', reviewRequests: ['hiragram'] }),
+            pullRequest({ mergeStateStatus: 'DIRTY', reviewRequests: ['hiragram'] }),
             pullRequest({ number: 45, headRefName: 'agent/clean', mergeable: 'MERGEABLE' }),
           ];
         },
@@ -62,5 +62,28 @@ describe('handleConflictCheckEvent', () => {
         },
       },
     })).rejects.toThrow('pull request mergeability is still being calculated');
+  });
+
+  it('does not treat branch-protection blocked pull requests as conflicts', async () => {
+    const result = await handleConflictCheckEvent(pushEvent(), {
+      tasks: handoffRecorder(),
+      delayMs: 0,
+      pullRequests: {
+        async getPullRequest() {
+          throw new Error('not used');
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async findOpenPullRequestsByBase() {
+          return [pullRequest({ mergeable: 'BLOCKED', mergeStateStatus: 'BLOCKED' })];
+        },
+        async requestReview() {
+          throw new Error('not used');
+        },
+      },
+    });
+
+    expect(result.reason).toBe('no conflicting pull requests target the pushed branch');
   });
 });

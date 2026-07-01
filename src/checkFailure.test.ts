@@ -42,4 +42,28 @@ describe('handleCheckFailureEvent', () => {
 
     expect(result.reason).toBe('event is not a completed failed check for a pull request');
   });
+
+  it('ignores stale failed checks from old pull request heads', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+
+    const result = await handleCheckFailureEvent(checkRunEvent({ conclusion: 'failure', headSha: 'old-sha' }), {
+      agentLogin: 'reirei-agent',
+      branchPrefix: 'agent/',
+      tasks: handoffRecorder({ updates }),
+      pullRequests: {
+        async getPullRequest() {
+          return pullRequest({ headSha: 'new-sha' });
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          throw new Error('not used');
+        },
+      },
+    });
+
+    expect(result.reason).toBe('check does not match the current pull request head');
+    expect(updates).toEqual([]);
+  });
 });

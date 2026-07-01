@@ -82,6 +82,8 @@ interface GitHubChecksResponse {
   check_runs?: unknown;
 }
 
+type GitHubCheckRunResponse = Record<string, unknown>;
+
 interface GitHubReviewCommentResponse {
   id?: unknown;
   pull_request_review_id?: unknown;
@@ -258,21 +260,13 @@ export function createGitHubPullRequestProvider(options: GitHubTaskProviderOptio
       url.searchParams.set('state', 'open');
       url.searchParams.set('base', input.baseRefName);
       url.searchParams.set('per_page', '100');
-      const response = await request(url.pathname.slice(1) + url.search, {}, context);
-      if (!response.ok) {
-        throw new Error(`GitHub pull request list request failed with HTTP ${response.status}`);
-      }
-      const payload = await response.json();
-      return Promise.all(arrayValue(payload).map(async (item) => {
-        const pullRequest = item as GitHubPullRequestResponse;
+      const payload = await listPagedArray<GitHubPullRequestResponse>(request, url.pathname.slice(1) + url.search, 'GitHub pull request list request', context);
+      return Promise.all(payload.map(async (pullRequest) => {
         const number = numberValue(pullRequest.number);
         if (number === undefined) {
           throw new Error('GitHub pull request response is missing required PR fields');
         }
-        return pullRequestFromPayload(input.repository, pullRequest, {
-          reviews: await listReviews(request, input.repository, number, context),
-          checks: await listChecks(request, input.repository, pullRequest, context),
-        });
+        return loadPullRequest(request, input.repository, number, context);
       }));
     },
     async findPullRequestByHead(input, context) {
@@ -280,13 +274,10 @@ export function createGitHubPullRequestProvider(options: GitHubTaskProviderOptio
       url.searchParams.set('state', 'open');
       url.searchParams.set('per_page', '100');
       if (input.headRefName !== undefined) {
-        url.searchParams.set('head', input.headRefName);
+        const owner = input.repository.split('/')[0];
+        url.searchParams.set('head', `${owner}:${input.headRefName}`);
       }
-      const response = await request(url.pathname.slice(1) + url.search, {}, context);
-      if (!response.ok) {
-        throw new Error(`GitHub pull request list request failed with HTTP ${response.status}`);
-      }
-      const candidates = arrayValue(await response.json()) as GitHubPullRequestResponse[];
+      const candidates = await listPagedArray<GitHubPullRequestResponse>(request, url.pathname.slice(1) + url.search, 'GitHub pull request list request', context);
       const payload = candidates.find((candidate) =>
         (input.headRefName !== undefined && stringValue(candidate.head?.ref) === input.headRefName)
         || (input.headSha !== undefined && stringValue(candidate.head?.sha) === input.headSha)
@@ -295,10 +286,7 @@ export function createGitHubPullRequestProvider(options: GitHubTaskProviderOptio
       if (payload === undefined || number === undefined) {
         return undefined;
       }
-      return pullRequestFromPayload(input.repository, payload, {
-        reviews: await listReviews(request, input.repository, number, context),
-        checks: await listChecks(request, input.repository, payload, context),
-      });
+      return loadPullRequest(request, input.repository, number, context);
     },
     async requestReview(input, context) {
       const response = await request(`repos/${input.repository}/pulls/${input.number}/requested_reviewers`, {
@@ -367,17 +355,31 @@ async function getPullRequestPayload(
   return await response.json() as GitHubPullRequestResponse;
 }
 
+async function loadPullRequest(
+  request: GitHubRequest,
+  repository: string,
+  number: number,
+  context?: TaskProviderContext,
+): Promise<PullRequestReviewTarget> {
+  const pullRequest = await getPullRequestPayload(request, repository, number, context);
+  return pullRequestFromPayload(repository, pullRequest, {
+    reviews: await listReviews(request, repository, number, context),
+    checks: await listChecks(request, repository, pullRequest, context),
+  });
+}
+
 async function listReviews(
   request: GitHubRequest,
   repository: string,
   number: number,
   context?: TaskProviderContext,
 ): Promise<GitHubReviewResponse[]> {
-  const response = await request(`repos/${repository}/pulls/${number}/reviews?per_page=100`, {}, context);
-  if (!response.ok) {
-    throw new Error(`GitHub pull request reviews request failed with HTTP ${response.status}`);
-  }
-  return arrayValue(await response.json()) as GitHubReviewResponse[];
+  return listPagedArray<GitHubReviewResponse>(
+    request,
+    `repos/${repository}/pulls/${number}/reviews?per_page=100`,
+    'GitHub pull request reviews request',
+    context,
+  );
 }
 
 async function listChecks(
@@ -390,18 +392,18 @@ async function listChecks(
   if (sha === undefined) {
     return [];
   }
-  const [statuses, checks] = await Promise.all([
-    request(`repos/${repository}/commits/${sha}/status`, {}, context),
-    request(`repos/${repository}/commits/${sha}/check-runs?per_page=100`, {}, context),
-  ]);
+  const statuses = await request(`repos/${repository}/commits/${sha}/status`, {}, context);
   if (!statuses.ok) {
     throw new Error(`GitHub commit statuses request failed with HTTP ${statuses.status}`);
   }
-  if (!checks.ok) {
-    throw new Error(`GitHub check runs request failed with HTTP ${checks.status}`);
-  }
+  const checkRuns = await listPagedResource<GitHubCheckRunResponse>(
+    request,
+    `repos/${repository}/commits/${sha}/check-runs?per_page=100`,
+    'check_runs',
+    'GitHub check runs request',
+    context,
+  );
   const statusPayload = await statuses.json() as GitHubStatusResponse;
-  const checksPayload = await checks.json() as GitHubChecksResponse;
   return [
     ...arrayValue(statusPayload.statuses).map((status) => {
       const value = recordValue(status);
@@ -411,7 +413,7 @@ async function listChecks(
         ...optionalString('state', stringValue(value.state)),
       };
     }),
-    ...arrayValue(checksPayload.check_runs).map((check) => {
+    ...checkRuns.map((check) => {
       const value = recordValue(check);
       return {
         type: 'CheckRun',
@@ -455,11 +457,65 @@ function pullRequestFromPayload(
       return login === undefined || state === undefined ? [] : [{ authorLogin: login, state }];
     }),
     ...optionalString('state', stringValue(payload.state)),
-    ...optionalString('mergeable', typeof payload.mergeable === 'boolean'
-      ? (payload.mergeable ? 'MERGEABLE' : 'CONFLICTING')
-      : stringValue(payload.mergeable)),
+    ...optionalString('mergeable', mergeableValue(payload)),
     ...optionalString('mergeStateStatus', stringValue(payload.mergeable_state)),
   };
+}
+
+async function listPagedArray<T>(
+  request: GitHubRequest,
+  firstPath: string,
+  errorLabel: string,
+  context?: TaskProviderContext,
+): Promise<T[]> {
+  const values: T[] = [];
+  let page = 1;
+  while (true) {
+    const path = pagePath(firstPath, page);
+    const response = await request(path, {}, context);
+    if (!response.ok) {
+      throw new Error(`${errorLabel} failed with HTTP ${response.status}`);
+    }
+    const pageValues = arrayValue(await response.json()) as T[];
+    values.push(...pageValues);
+    if (pageValues.length < 100) return values;
+    page += 1;
+  }
+}
+
+async function listPagedResource<T>(
+  request: GitHubRequest,
+  firstPath: string,
+  key: string,
+  errorLabel: string,
+  context?: TaskProviderContext,
+): Promise<T[]> {
+  const values: T[] = [];
+  let page = 1;
+  while (true) {
+    const path = pagePath(firstPath, page);
+    const response = await request(path, {}, context);
+    if (!response.ok) {
+      throw new Error(`${errorLabel} failed with HTTP ${response.status}`);
+    }
+    const pageValues = arrayValue(recordValue(await response.json())[key]) as T[];
+    values.push(...pageValues);
+    if (pageValues.length < 100) return values;
+    page += 1;
+  }
+}
+
+function pagePath(firstPath: string, page: number): string {
+  if (page === 1) return firstPath;
+  const separator = firstPath.includes('?') ? '&' : '?';
+  return `${firstPath}${separator}page=${page}`;
+}
+
+function mergeableValue(payload: GitHubPullRequestResponse): string | undefined {
+  const mergeableState = stringValue(payload.mergeable_state);
+  if (payload.mergeable === true) return 'MERGEABLE';
+  if (payload.mergeable === false) return mergeableState?.toUpperCase();
+  return stringValue(payload.mergeable);
 }
 
 function reviewCommentFromPayload(value: GitHubReviewCommentResponse): PullRequestReviewComment[] {

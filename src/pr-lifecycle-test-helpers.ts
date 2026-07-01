@@ -26,6 +26,7 @@ export function pullRequest(overrides: Partial<PullRequestReviewTarget> = {}): P
     url: 'https://github.com/reirei-lab/rainrail/pull/44',
     authorLogin: 'reirei-agent',
     headRefName: 'agent/test-pr',
+    headSha: 'abc123',
     isDraft: false,
     state: 'OPEN',
     mergeable: 'MERGEABLE',
@@ -71,6 +72,7 @@ export function reviewEvent(overrides: {
   prState?: string;
   repository?: string;
   branchName?: string;
+  stringReviewId?: boolean;
 } = {}): RainrailEventEnvelope {
   const repository = overrides.repository ?? 'reirei-lab/rainrail';
   const reviewId = 4493317816;
@@ -100,7 +102,7 @@ export function reviewEvent(overrides: {
         author: overrides.prAuthor ?? 'reirei-agent',
       },
       review: {
-        id: reviewId,
+        id: overrides.stringReviewId === true ? String(reviewId) : reviewId,
         state: overrides.state ?? 'approved',
         author: overrides.reviewerLogin ?? 'hiragram',
         body: '### Codex Review',
@@ -111,7 +113,7 @@ export function reviewEvent(overrides: {
   });
 }
 
-export function checkRunEvent(overrides: { conclusion?: string; status?: string } = {}): RainrailEventEnvelope {
+export function checkRunEvent(overrides: { conclusion?: string; status?: string; headSha?: string } = {}): RainrailEventEnvelope {
   return createEventEnvelope({
     source: { type: 'github', name: 'github-webhook', repository: 'reirei-lab/rainrail' },
     name: 'github.check_run',
@@ -131,7 +133,7 @@ export function checkRunEvent(overrides: { conclusion?: string; status?: string 
         name: 'Typecheck, Test, Build',
         status: overrides.status ?? 'completed',
         conclusion: overrides.conclusion ?? 'success',
-        headSha: 'abc123',
+        headSha: overrides.headSha ?? 'abc123',
         url: 'https://github.com/reirei-lab/rainrail/actions/runs/1/job/2',
       },
       pullRequests: [{ type: 'pull_request', id: '44', number: 44 }],

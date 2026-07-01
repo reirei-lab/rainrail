@@ -57,4 +57,35 @@ describe('handleAutoMergeEvent', () => {
     expect(result.reason).toBe('repository is not an auto-merge target');
     expect(fetchCount).toBe(0);
   });
+
+  it('requires the configured reviewer latest approval instead of aggregate reviewDecision', async () => {
+    let mergeCount = 0;
+
+    const result = await handleAutoMergeEvent(reviewEvent(), {
+      agentLogin: 'reirei-agent',
+      reviewerLogin: 'hiragram',
+      mergeMethod: 'squash',
+      targetRepositories: ['reirei-lab/rainrail'],
+      pullRequests: {
+        async getPullRequest() {
+          return pullRequest({
+            reviewDecision: 'APPROVED',
+            reviews: [{ authorLogin: 'hiragram', state: 'CHANGES_REQUESTED' }],
+          });
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          throw new Error('not used');
+        },
+        async mergePullRequest() {
+          mergeCount += 1;
+        },
+      },
+    });
+
+    expect(result.reason).toBe('configured reviewer approval is not confirmed');
+    expect(mergeCount).toBe(0);
+  });
 });

@@ -50,6 +50,37 @@ describe('handleCodexReviewEvent', () => {
     expect(updates[0]?.commentBody).not.toContain('old comment');
   });
 
+  it('accepts normalized GitHub review payloads with string review ids', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+
+    const result = await handleCodexReviewEvent(reviewEvent({ stringReviewId: true }), {
+      agentLogin: 'reirei-agent',
+      reviewerLogin: 'hiragram',
+      targetRepositories: ['reirei-lab/rainrail'],
+      tasks: handoffRecorder({ updates }),
+      pullRequests: {
+        async getPullRequest() {
+          throw new Error('not used');
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          throw new Error('not used');
+        },
+        async listReviewComments() {
+          return [{ id: 2, reviewId: 4493317816, path: 'src/pr-lifecycle.ts', body: 'comment' }];
+        },
+      },
+    });
+
+    expect(result).toMatchObject({
+      handled: true,
+      reason: 'Codex review returned issue to Todo',
+    });
+    expect(updates[0]?.commentBody).toContain('Review ID: 4493317816');
+  });
+
   it('still returns the issue to Todo when inline comments cannot be loaded', async () => {
     const updates: Array<{ reason: string; commentBody?: string }> = [];
 
