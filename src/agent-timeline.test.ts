@@ -285,6 +285,19 @@ describe('agent timeline', () => {
     expect(extractRuntimeFallbackSessionId(log)).toBeUndefined();
   });
 
+  it('does not extract quoted fallback marker strings after a later normal completion', () => {
+    const log = [
+      'EMBEDDED FALLBACK: Gateway timed out; running embedded agent with fresh session gateway-fallback-stale',
+      JSON.stringify({
+        status: 'ok',
+        finalAssistantVisibleText: 'Outcome: implemented',
+      }),
+      JSON.stringify('EMBEDDED FALLBACK: Gateway timed out; running embedded agent with fresh session gateway-fallback-quoted'),
+    ].join('\n');
+
+    expect(extractRuntimeFallbackSessionId(log)).toBeUndefined();
+  });
+
   it('does not prefer fallback markers quoted inside bannered stdout JSON completion text', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'rainrail-quoted-fallback-banner-timeline-'));
     const logPath = join(directory, 'agent.log');
@@ -457,6 +470,45 @@ describe('agent timeline', () => {
         { sessionsDirectory: directory },
       );
       expect(timeline.sessionId).toBe('original-session');
+      expect(timeline.fallback).toBe(false);
+      expect(timeline.missing).toBe(false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('does not use diagnostic JSON fragments as normal session metadata', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'rainrail-diagnostic-session-id-timeline-'));
+    const startLogPath = join(directory, 'agent.log');
+    const resumeLogPath = join(directory, 'resume-1.log');
+    writeFileSync(startLogPath, JSON.stringify({
+      status: 'ok',
+      meta: { agentMeta: { sessionId: 'actual-session' } },
+    }), 'utf8');
+    writeFileSync(resumeLogPath, [
+      'tool result quoted target log:',
+      JSON.stringify({
+        status: 'ok',
+        meta: { agentMeta: { sessionId: 'wrong-session' } },
+      }),
+    ].join('\n'), 'utf8');
+    writeFileSync(join(directory, 'actual-session.trajectory.jsonl'), [
+      JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:08:00.000Z', seq: 1 }),
+    ].join('\n'), 'utf8');
+    writeFileSync(join(directory, 'wrong-session.trajectory.jsonl'), [
+      JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:09:00.000Z', seq: 1 }),
+    ].join('\n'), 'utf8');
+
+    try {
+      const timeline = await readRuntimeTimeline(
+        {
+          logPath: startLogPath,
+          agentSessionId: 'agent:main:routing-key',
+          resumeAttempts: [{ logPath: resumeLogPath }],
+        },
+        { sessionsDirectory: directory },
+      );
+      expect(timeline.sessionId).toBe('actual-session');
       expect(timeline.fallback).toBe(false);
       expect(timeline.missing).toBe(false);
     } finally {
@@ -1755,6 +1807,26 @@ describe('agent timeline', () => {
     expect(timeline[0]!.excerpt).toContain('AUTHORIZATION=[redacted]');
     expect(timeline[0]!.excerpt).not.toContain('Credential=AKIA');
     expect(timeline[0]!.excerpt).not.toContain('Signature=aws4-secret');
+  });
+
+  it('redacts full password assignment values with spaces', () => {
+    const timeline = parseRuntimeTrajectoryTimeline([
+      JSON.stringify({
+        type: 'tool.result',
+        ts: '2026-06-30T15:09:10.000Z',
+        seq: 1,
+        data: {
+          name: 'bash',
+          status: 'completed',
+          output: 'password: hunter2 backup phrase\n  DB_PASSPHRASE=correct horse battery staple',
+        },
+      }),
+    ].join('\n'));
+
+    expect(timeline[0]!.excerpt).toContain('password: [redacted]');
+    expect(timeline[0]!.excerpt).toContain('  DB_PASSPHRASE=[redacted]');
+    expect(timeline[0]!.excerpt).not.toContain('backup phrase');
+    expect(timeline[0]!.excerpt).not.toContain('correct horse');
   });
 
   it('classifies common commands into dashboard phases', () => {

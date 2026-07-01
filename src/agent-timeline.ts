@@ -203,12 +203,12 @@ function extractRuntimeNonFallbackSessionId(log: string): string | undefined {
     const sessionId = isTrustedRuntimeCompletionPayload(payload) ? runtimeSessionIdFromPayload(payload) : undefined;
     return sessionId?.startsWith('gateway-fallback-') === true ? undefined : sessionId;
   } catch {
-    const parsed = parseJsonObjectsFromLog(log);
-    for (const payload of parsed.payloads.slice().reverse()) {
-      if (!isTrustedRuntimeCompletionPayload(payload)) {
+    const objects = parseJsonObjectsFromLogWithPositions(log);
+    for (const object of objects.slice().reverse()) {
+      if (!isTrustedRuntimeCompletionLogObject(log, object)) {
         continue;
       }
-      const sessionId = runtimeSessionIdFromPayload(payload);
+      const sessionId = runtimeSessionIdFromPayload(object.payload);
       if (sessionId !== undefined && !sessionId.startsWith('gateway-fallback-')) {
         return sessionId;
       }
@@ -379,7 +379,10 @@ function runtimeTaskLogPathGroups(task: RuntimeTaskForTimeline): string[][] {
 function extractRuntimeFallbackMetadata(log: string): RuntimeFallbackMetadata | null | undefined {
   let latest: { index: number; metadata: RuntimeFallbackMetadata | undefined } | undefined;
   const jsonObjects = parseJsonObjectsFromLogWithPositions(log);
-  const jsonRanges = jsonObjects.map((object) => ({ start: object.index, end: object.end }));
+  const ignoredRanges = [
+    ...jsonObjects.map((object) => ({ start: object.index, end: object.end })),
+    ...parseJsonStringRangesFromLog(log),
+  ];
   for (const object of jsonObjects) {
     if (!isTrustedRuntimeCompletionLogObject(log, object)) {
       continue;
@@ -394,7 +397,7 @@ function extractRuntimeFallbackMetadata(log: string): RuntimeFallbackMetadata | 
   }
   for (const match of log.matchAll(/EMBEDDED FALLBACK:[^\n\r]*fresh session\s+(gateway-fallback-[A-Za-z0-9._-]+)/gi)) {
     const index = match.index ?? 0;
-    if (jsonRanges.some((range) => index >= range.start && index <= range.end)) {
+    if (ignoredRanges.some((range) => index >= range.start && index <= range.end)) {
       continue;
     }
     if (latest === undefined || index > latest.index) {
@@ -627,6 +630,7 @@ function redactSensitiveText(value: string): string {
     .replace(/\b([A-Za-z0-9_-]*(?:api[-_]?key|token|secret)[A-Za-z0-9_-]*:\s*)[\s\S]*?(?=(?:"\s+-H\s+"[A-Za-z0-9_-]*(?:api[-_]?key|token|secret|authorization|cookie):)|\s+[A-Za-z0-9_-]*(?:api[-_]?key|token|secret|authorization|cookie):|[\n\r]|$)/gi, '$1[redacted-header]')
     .replace(/(^|[\n\r])(\s*[A-Za-z0-9_-]*authorization[A-Za-z0-9_-]*\s*[:=]\s*)(?!\[redacted)[^\n\r]*/gi, '$1$2[redacted]')
     .replace(/(^|[\n\r])(\s*[A-Za-z0-9_-]*(?:set[-_]?cookie|cookie)[A-Za-z0-9_-]*\s*[:=]\s*)(?!\[redacted)[^\n\r]*/gi, '$1$2[redacted]')
+    .replace(/(^|[\n\r])(\s*[A-Za-z0-9_-]*(?:password|passphrase)[A-Za-z0-9_-]*\s*[:=]\s*)(?!\[redacted)[^\n\r]*/gi, '$1$2[redacted]')
     .replace(/(^|\s)((?!(?:no_proxy)\b)[A-Za-z0-9_-]*(?:https?|all)_proxy[A-Za-z0-9_-]*\s*[:=]\s*)(?:"[^"\s]*:[^"@\s]+@[^"\s]+"|'[^'\s]*:[^'@\s]+@[^'\s]+'|[^\s'"]*:[^\s'"]+@[^\s'"]+)/gi, '$1$2[redacted-proxy]')
     .replace(/("[^"]*(?:token|secret|password|api[_-]?key|private[_-]?key|authorization|set-cookie|cookie)[^"]*"\s*:\s*)"(?:(?:\\.)|[^"\\])*"/gi, '$1"[redacted]"')
     .replace(/([A-Za-z0-9_-]*(?:token|secret|password|api[_-]?key|private[_-]?key|set-cookie|cookie)[A-Za-z0-9_-]*\s*[:=]\s*)"(?:(?:\\.)|[^"\\])*"/gi, '$1"[redacted]"')
@@ -895,6 +899,29 @@ function parseJsonObjectsFromLogWithPositions(raw: string): Array<{ payload: unk
   return payloads;
 }
 
+function parseJsonStringRangesFromLog(raw: string): Array<{ start: number; end: number }> {
+  const ranges: Array<{ start: number; end: number }> = [];
+  for (let index = 0; index < raw.length; index += 1) {
+    if (raw[index] !== '"') {
+      continue;
+    }
+    let escaped = false;
+    for (let end = index + 1; end < raw.length; end += 1) {
+      const char = raw[end];
+      if (escaped) {
+        escaped = false;
+      } else if (char === '\\') {
+        escaped = true;
+      } else if (char === '"') {
+        ranges.push({ start: index, end });
+        index = end;
+        break;
+      }
+    }
+  }
+  return ranges;
+}
+
 function payloadHasCompletionText(payload: unknown): boolean {
   if (!isRecord(payload)) {
     return false;
@@ -959,7 +986,7 @@ function isRuntimeInFlightPayload(payload: unknown): boolean {
 function isFallbackClearingRuntimeCompletionPayload(payload: Record<string, unknown>): boolean {
   const status = completionStatusFromPayload(payload);
   return status !== undefined
-    && status !== 'in_flight'
+    && !['queued', 'running', 'in_flight'].includes(status)
     && !['failed', 'canceled', 'stopped', 'timed_out', 'compaction_failed'].includes(status);
 }
 

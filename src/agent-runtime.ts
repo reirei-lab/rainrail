@@ -686,7 +686,9 @@ function extractFallbackRuntimeSessionKey(log: string, agentId: string): string 
 
 function fallbackLookupClearingCompletion(payload: Record<string, unknown>): boolean {
   const status = stringValue(completionPayloadFromResponse(payload).status);
-  return status !== undefined && status !== 'in_flight' && !isFailureRuntimeRunStatus(status);
+  return status !== undefined
+    && !['queued', 'running', 'in_flight'].includes(status)
+    && !isFailureRuntimeRunStatus(status);
 }
 
 function parseStrictJsonObject(raw: string): Record<string, unknown> | undefined {
