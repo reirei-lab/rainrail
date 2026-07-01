@@ -26,6 +26,7 @@ Worker/Fetch API の `ReadableStream` でも扱える。これにより Node ser
 Cloudflare Worker entrypoint は同じ core contract を共有する。接続時 comment や
 初期 replay の write が失敗した場合も `close` cleanup を呼び、購読開始に失敗した
 connection のリソースを残さない。
+公開 API の入口は `createRainrailEventBus` と `formatRainrailSseEvent`。
 
 初期 replay は replay buffer の snapshot から送る。replay 中に subscriber が同期的に
 `publish()` して replay buffer が trim されても、接続時点で保持されていた event を
@@ -81,6 +82,8 @@ storage / replay / workflow 起動や subscriber 枠消費の副作用を作ら�
 `verifyRainrailEventsBearerToken()` で `Authorization: Bearer <token>` を検証する。
 missing bearer は `missing_bearer_token` の 401、token 不一致は `invalid_bearer_token`
 の 403、サーバ側未設定は `events_auth_not_configured` の 503 として扱う。
+HTTP entrypoint の公開入口は Fetch adapter の `createRainrailHttpApp` と Node adapter の
+`createRainrailNodeServer`。
 
 `GET /healthz` と `GET /events` は storage 復元失敗を generic 500 応答に変換する。
 adapter/runtime の未処理例外として落とさず、呼び出し元に安定した失敗を返すため。

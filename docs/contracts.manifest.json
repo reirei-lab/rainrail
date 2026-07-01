@@ -1,0 +1,196 @@
+{
+  "contracts": [
+    {
+      "id": "plugin-runtime",
+      "title": "Plugin runtime contract",
+      "sources": [
+        "src/events.ts",
+        "src/source-plugin.ts",
+        "src/workflow-plugin.ts",
+        "src/dispatcher.ts",
+        "src/plugin-loader.ts",
+        "src/route-workflow.ts",
+        "src/runtime-provider.ts",
+        "src/task-provider.ts",
+        "src/config.ts",
+        "src/github-auth.ts",
+        "src/github-provider.ts",
+        "src/github-rate-limit.ts"
+      ],
+      "docs": ["docs/plugin-runtime-contract.md"],
+      "tests": [
+        "src/plugin-runtime.test.ts",
+        "src/plugin-runtime.typecheck.ts",
+        "src/route-workflow.test.ts",
+        "src/config.test.ts",
+        "src/github-auth.test.ts",
+        "src/github-provider.test.ts",
+        "src/github-rate-limit.test.ts"
+      ],
+      "publicExports": [
+        "RainrailEventEnvelope",
+        "SourcePlugin",
+        "WorkflowPlugin",
+        "PluginRuntimeContext",
+        "RuntimeDispatcher",
+        "createRuntimeDispatcher",
+        "RuntimeProvider",
+        "TaskProvider",
+        "TaskIssueRef",
+        "defineSourcePlugin",
+        "defineWorkflowPlugin",
+        "createPluginLoader",
+        "createRouteWorkflow",
+        "createRouteLocalHandler",
+        "routeRainrailEvent",
+        "GitHubAuthToken",
+        "createGitHubTaskProvider",
+        "recordGitHubRateLimit"
+      ],
+      "publicExportKinds": {
+        "RainrailEventEnvelope": "type",
+        "SourcePlugin": "type",
+        "WorkflowPlugin": "type",
+        "PluginRuntimeContext": "type",
+        "RuntimeDispatcher": "type",
+        "createRuntimeDispatcher": "value",
+        "RuntimeProvider": "type",
+        "TaskProvider": "type",
+        "TaskIssueRef": "type",
+        "defineSourcePlugin": "value",
+        "defineWorkflowPlugin": "value",
+        "createPluginLoader": "value",
+        "createRouteWorkflow": "value",
+        "createRouteLocalHandler": "value",
+        "routeRainrailEvent": "value",
+        "GitHubAuthToken": "type",
+        "createGitHubTaskProvider": "value",
+        "recordGitHubRateLimit": "value"
+      }
+    },
+    {
+      "id": "event-delivery",
+      "title": "Core event delivery",
+      "sources": [
+        "src/event-bus.ts",
+        "src/sse.ts",
+        "src/bridge-room.ts",
+        "src/events-auth.ts",
+        "src/http-app.ts",
+        "src/http-utils.ts",
+        "src/node-server.ts"
+      ],
+      "docs": ["docs/event-delivery.md"],
+      "tests": [
+        "src/event-bus.test.ts",
+        "src/sse.test.ts",
+        "src/bridge-room.test.ts",
+        "src/events-auth.test.ts",
+        "src/http-app.test.ts",
+        "src/http-utils.test.ts",
+        "src/node-server.test.ts"
+      ],
+      "publicExports": [
+        "createRainrailEventBus",
+        "RainrailBridgeRoom",
+        "formatRainrailSseEvent",
+        "verifyRainrailEventsBearerToken",
+        "createRainrailHttpApp",
+        "createRainrailNodeServer"
+      ],
+      "publicExportKinds": {
+        "createRainrailEventBus": "value",
+        "RainrailBridgeRoom": "value",
+        "formatRainrailSseEvent": "value",
+        "verifyRainrailEventsBearerToken": "value",
+        "createRainrailHttpApp": "value",
+        "createRainrailNodeServer": "value"
+      }
+    },
+    {
+      "id": "github-webhook-normalization",
+      "title": "GitHub webhook normalization",
+      "sources": ["src/github-webhook.ts"],
+      "docs": ["docs/github-webhook-normalization.md"],
+      "tests": ["src/github-webhook.test.ts"],
+      "publicExports": [
+        "createGitHubWebhookSourcePlugin",
+        "GitHubWebhookPayload",
+        "NormalizedGitHubWebhookPayload"
+      ],
+      "publicExportKinds": {
+        "createGitHubWebhookSourcePlugin": "value",
+        "GitHubWebhookPayload": "type",
+        "NormalizedGitHubWebhookPayload": "type"
+      }
+    },
+    {
+      "id": "cloudflare-tail-source",
+      "title": "Cloudflare tail source",
+      "sources": [
+        "src/cloudflare-tail.ts",
+        "src/worker.ts",
+        "wrangler.jsonc",
+        "package.json",
+        "scripts/validate-cloudflare-secrets.mjs",
+        "scripts/smoke-cloudflare-worker.mjs"
+      ],
+      "docs": ["docs/plugin-runtime-contract.md", "docs/cloudflare-worker.md"],
+      "tests": [
+        "src/cloudflare-tail.test.ts",
+        "src/worker.test.ts",
+        "scripts/validate-cloudflare-worker-ops.test.mjs"
+      ],
+      "publicExports": ["createCloudflareTailSourcePlugin", "CloudflareTailEvent"],
+      "publicExportKinds": {
+        "createCloudflareTailSourcePlugin": "value",
+        "CloudflareTailEvent": "type"
+      }
+    },
+    {
+      "id": "project-issue-queue",
+      "title": "Project issue queue",
+      "sources": [
+        "src/project-issues.ts",
+        "src/task-queue.ts",
+        "src/agent-assignment.ts",
+        "src/github-project.ts"
+      ],
+      "docs": ["docs/task-queue-project-issues.md"],
+      "tests": [
+        "src/project-issues.test.ts",
+        "src/agent-assignment.test.ts",
+        "src/github-project.test.ts"
+      ],
+      "publicExports": [
+        "ProjectIssue",
+        "TaskQueueProvider",
+        "assignNextProjectIssueToAgent",
+        "getNextProjectIssueToStart",
+        "createGitHubProjectTaskQueueProvider"
+      ],
+      "publicExportKinds": {
+        "ProjectIssue": "type",
+        "TaskQueueProvider": "type",
+        "assignNextProjectIssueToAgent": "value",
+        "getNextProjectIssueToStart": "value",
+        "createGitHubProjectTaskQueueProvider": "value"
+      }
+    },
+    {
+      "id": "workflow-plugins",
+      "title": "Packaged workflow plugins",
+      "sources": ["src/mention-draft.ts", "src/cloudflare-issue-reporter.ts"],
+      "docs": ["README.md"],
+      "tests": ["src/mention-draft.test.ts", "src/cloudflare-issue-reporter.test.ts"],
+      "publicExports": [
+        "createMentionDraftWorkflow",
+        "createCloudflareIssueReporterWorkflow"
+      ],
+      "publicExportKinds": {
+        "createMentionDraftWorkflow": "value",
+        "createCloudflareIssueReporterWorkflow": "value"
+      }
+    }
+  ]
+}
