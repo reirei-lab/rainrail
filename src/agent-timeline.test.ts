@@ -87,6 +87,37 @@ describe('agent timeline', () => {
     }
   });
 
+  it('does not use empty completion diagnostic JSON fragments as session metadata', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'rainrail-empty-completion-session-id-timeline-'));
+    const logPath = join(directory, 'agent.log');
+    writeFileSync(logPath, [
+      JSON.stringify({
+        status: 'ok',
+        meta: { agentMeta: { sessionId: 'actual-session' } },
+      }),
+      'tool result quoted target log:',
+      '{"completion":{},"meta":{"agentMeta":{"sessionId":"old-session"}}}',
+    ].join('\n'), 'utf8');
+    writeFileSync(join(directory, 'actual-session.trajectory.jsonl'), [
+      JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:08:00.000Z', seq: 1 }),
+    ].join('\n'), 'utf8');
+    writeFileSync(join(directory, 'old-session.trajectory.jsonl'), [
+      JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:09:00.000Z', seq: 1 }),
+    ].join('\n'), 'utf8');
+
+    try {
+      const timeline = await readRuntimeTimeline(
+        { logPath, agentSessionId: 'agent:main:routing-key' },
+        { sessionsDirectory: directory },
+      );
+      expect(timeline.sessionId).toBe('actual-session');
+      expect(timeline.fallback).toBe(false);
+      expect(timeline.missing).toBe(false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('does not use strict stderr diagnostic JSON as session metadata', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'rainrail-strict-stderr-diagnostic-session-id-timeline-'));
     const logPath = join(directory, 'agent.log');
@@ -129,7 +160,7 @@ describe('agent timeline', () => {
     const logPath = join(directory, 'agent.log');
     writeFileSync(logPath, [
       `EMBEDDED FALLBACK: Gateway agent timed out; running embedded agent with fresh session ${fallbackSessionId}`,
-      JSON.stringify({ result: { status: 'ok', meta: { agentMeta: { sessionId: 'intended-session' } } } }),
+      JSON.stringify({ result: { meta: { agentMeta: { sessionId: 'intended-session' } } } }),
     ].join('\n'), 'utf8');
     writeFileSync(join(directory, `${fallbackSessionId}.trajectory.jsonl`), [
       JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:08:00.000Z', seq: 1 }),
@@ -408,6 +439,37 @@ describe('agent timeline', () => {
     }
   });
 
+  it('does not use empty completion diagnostic JSON fragments as fallback metadata', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'rainrail-empty-completion-fallback-key-timeline-'));
+    const logPath = join(directory, 'agent.log');
+    writeFileSync(logPath, [
+      'tool result quoted target log:',
+      '{"completion":{},"meta":{"agentMeta":{"fallbackSessionKey":"agent:main:explicit:gateway-fallback-quoted"}}}',
+    ].join('\n'), 'utf8');
+    writeFileSync(join(directory, 'sessions.json'), JSON.stringify({
+      'agent:main:original-session': { sessionId: 'original-session' },
+      'agent:main:explicit:gateway-fallback-quoted': { sessionId: 'quoted-fallback-session' },
+    }), 'utf8');
+    writeFileSync(join(directory, 'original-session.trajectory.jsonl'), [
+      JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:08:00.000Z', seq: 1 }),
+    ].join('\n'), 'utf8');
+    writeFileSync(join(directory, 'quoted-fallback-session.trajectory.jsonl'), [
+      JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:09:00.000Z', seq: 1 }),
+    ].join('\n'), 'utf8');
+
+    try {
+      const timeline = await readRuntimeTimeline(
+        { logPath, agentSessionId: 'agent:main:original-session' },
+        { sessionsDirectory: directory },
+      );
+      expect(timeline.sessionId).toBe('original-session');
+      expect(timeline.fallback).toBe(false);
+      expect(timeline.missing).toBe(false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('prefers the last fallback session key in an appended completion log', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'rainrail-last-fallback-key-timeline-'));
     const logPath = join(directory, 'agent.log');
@@ -439,6 +501,44 @@ describe('agent timeline', () => {
       );
       expect(timeline.sessionId).toBe('new-fallback-session');
       expect(timeline.fallback).toBe(true);
+      expect(timeline.missing).toBe(false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('clears stale fallback metadata after a later normal completion', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'rainrail-clear-fallback-timeline-'));
+    const logPath = join(directory, 'agent.log');
+    writeFileSync(logPath, [
+      JSON.stringify({
+        status: 'ok',
+        meta: { agentMeta: { fallbackSessionKey: 'agent:main:explicit:gateway-fallback-stale' } },
+      }),
+      JSON.stringify({
+        status: 'ok',
+        finalAssistantVisibleText: 'Outcome: implemented',
+        meta: { agentMeta: { sessionId: 'original-session' } },
+      }),
+    ].join('\n'), 'utf8');
+    writeFileSync(join(directory, 'sessions.json'), JSON.stringify({
+      'agent:main:original-session': { sessionId: 'original-session' },
+      'agent:main:explicit:gateway-fallback-stale': { sessionId: 'stale-fallback-session' },
+    }), 'utf8');
+    writeFileSync(join(directory, 'original-session.trajectory.jsonl'), [
+      JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:08:00.000Z', seq: 1 }),
+    ].join('\n'), 'utf8');
+    writeFileSync(join(directory, 'stale-fallback-session.trajectory.jsonl'), [
+      JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:09:00.000Z', seq: 1 }),
+    ].join('\n'), 'utf8');
+
+    try {
+      const timeline = await readRuntimeTimeline(
+        { logPath, agentSessionId: 'agent:main:original-session' },
+        { sessionsDirectory: directory },
+      );
+      expect(timeline.sessionId).toBe('original-session');
+      expect(timeline.fallback).toBe(false);
       expect(timeline.missing).toBe(false);
     } finally {
       rmSync(directory, { recursive: true, force: true });

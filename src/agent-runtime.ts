@@ -260,7 +260,9 @@ function compactionFailureFromLog(raw: string): RuntimeRunCompletion | undefined
 
 function compactionFailureAfterLatestCompletionJson(raw: string): RuntimeRunCompletion | undefined {
   let latestCompletionEnd = -1;
-  for (const candidate of parseJsonObjectsFromLogWithPositions(raw)) {
+  const jsonObjects = parseJsonObjectsFromLogWithPositions(raw);
+  const jsonRanges = jsonObjects.map((object) => ({ start: object.index, end: object.end }));
+  for (const candidate of jsonObjects) {
     if (
       isRecord(candidate.payload)
       && runtimeRunCompletionFromPayload(candidate.payload) !== undefined
@@ -271,7 +273,11 @@ function compactionFailureAfterLatestCompletionJson(raw: string): RuntimeRunComp
   }
   let latestFailure: RuntimeRunCompletion | undefined;
   for (const match of raw.matchAll(/[^\r\n]*CLI transcript compaction failed[^\r\n]*/gi)) {
-    if ((match.index ?? -1) > latestCompletionEnd) {
+    const index = match.index ?? -1;
+    if (jsonRanges.some((range) => index >= range.start && index <= range.end)) {
+      continue;
+    }
+    if (index > latestCompletionEnd) {
       latestFailure = compactionFailureFromLog(match[0]);
     }
   }
@@ -644,8 +650,18 @@ function isTrustedRuntimeCompletionFragment(payload: Record<string, unknown>): b
 
 function hasRuntimeCompletionSignal(payload: Record<string, unknown>): boolean {
   return completionTextsFromPayload(payload).length > 0
-    || recordValue(payload.completion) !== undefined
-    || recordValue(payload.executionTrace) !== undefined;
+    || hasRuntimeCompletionObjectSignal(recordValue(payload.completion))
+    || hasRuntimeExecutionTraceSignal(recordValue(payload.executionTrace));
+}
+
+function hasRuntimeCompletionObjectSignal(payload: Record<string, unknown> | undefined): boolean {
+  return stringValue(payload?.finishReason) !== undefined
+    || stringValue(payload?.stopReason) !== undefined;
+}
+
+function hasRuntimeExecutionTraceSignal(payload: Record<string, unknown> | undefined): boolean {
+  return stringValue(payload?.result) !== undefined
+    || stringValue(payload?.status) !== undefined;
 }
 
 function hasRuntimeAgentMeta(payload: Record<string, unknown>): boolean {

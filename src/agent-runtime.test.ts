@@ -1291,6 +1291,21 @@ describe('runtime task completion and resume helpers', () => {
     });
   });
 
+  it('ignores compaction failure text quoted inside appended diagnostic JSON', () => {
+    const raw = [
+      JSON.stringify({
+        status: 'ok',
+        finalAssistantVisibleText: 'Outcome: implemented',
+      }),
+      JSON.stringify({ message: 'CLI transcript compaction failed for quoted target log' }),
+    ].join('\n');
+
+    expect(readRuntimeRunCompletionFromLog(raw)).toMatchObject({
+      status: 'succeeded',
+      outcome: 'implemented',
+    });
+  });
+
   it('does not let advisory Outcome text override explicit failure statuses', () => {
     expect(readRuntimeRunCompletionFromLog(JSON.stringify({
       status: 'error',
@@ -1415,6 +1430,24 @@ describe('runtime task completion and resume helpers', () => {
       }),
       'tool result quoted target log:',
       JSON.stringify({ result: { status: 'failed', summary: 'quoted result diagnostic failure' } }),
+    ].join('\n');
+
+    expect(readRuntimeRunCompletionFromLog(raw)).toMatchObject({
+      status: 'succeeded',
+      outcome: 'implemented',
+      summary: 'real completion',
+    });
+  });
+
+  it('does not use appended empty completion diagnostic fragments as runtime completions', () => {
+    const raw = [
+      JSON.stringify({
+        status: 'ok',
+        finalAssistantVisibleText: 'Outcome: implemented',
+        summary: 'real completion',
+      }),
+      'tool result quoted target log:',
+      JSON.stringify({ status: 'failed', completion: {}, summary: 'quoted empty completion failure' }),
     ].join('\n');
 
     expect(readRuntimeRunCompletionFromLog(raw)).toMatchObject({

@@ -321,7 +321,7 @@ function runtimeTaskLogPaths(task: RuntimeTaskForTimeline): string[] {
 }
 
 function extractRuntimeFallbackMetadata(log: string): RuntimeFallbackMetadata | undefined {
-  let latest: { index: number; metadata: RuntimeFallbackMetadata } | undefined;
+  let latest: { index: number; metadata: RuntimeFallbackMetadata | undefined } | undefined;
   const jsonObjects = parseJsonObjectsFromLogWithPositions(log);
   const jsonRanges = jsonObjects.map((object) => ({ start: object.index, end: object.end }));
   for (const object of jsonObjects) {
@@ -329,7 +329,7 @@ function extractRuntimeFallbackMetadata(log: string): RuntimeFallbackMetadata | 
       continue;
     }
     const metadata = fallbackMetadataFromPayload(object.payload);
-    if (metadata !== undefined && (latest === undefined || object.index > latest.index)) {
+    if (latest === undefined || object.index > latest.index) {
       latest = { index: object.index, metadata };
     }
   }
@@ -672,17 +672,33 @@ function isTrustedRuntimeCompletionPayload(payload: unknown): payload is Record<
   }
   if (
     payloadHasCompletionText(payload)
-    || isRecord(payload.completion)
-    || isRecord(payload.executionTrace)
+    || hasRuntimeCompletionObjectSignal(payload.completion)
+    || hasRuntimeExecutionTraceSignal(payload.executionTrace)
     || (stringField(payload, 'status') !== undefined && runtimeAgentMetaFromPayload(payload) !== undefined)
   ) {
     return true;
   }
   const result = isRecord(payload.result) ? payload.result : undefined;
   return payloadHasCompletionText(result)
-    || isRecord(result?.completion)
-    || isRecord(result?.executionTrace)
+    || hasRuntimeCompletionObjectSignal(result?.completion)
+    || hasRuntimeExecutionTraceSignal(result?.executionTrace)
     || (stringField(result, 'status') !== undefined && runtimeAgentMetaFromPayload(result) !== undefined);
+}
+
+function hasRuntimeCompletionObjectSignal(value: unknown): boolean {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return stringField(value, 'finishReason') !== undefined
+    || stringField(value, 'stopReason') !== undefined;
+}
+
+function hasRuntimeExecutionTraceSignal(value: unknown): boolean {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return stringField(value, 'result') !== undefined
+    || stringField(value, 'status') !== undefined;
 }
 
 function runtimeAgentMetaFromPayload(payload: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
