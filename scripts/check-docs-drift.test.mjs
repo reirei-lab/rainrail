@@ -169,6 +169,11 @@ describe('docs drift checks', () => {
     expect(validateContractsManifest(root)).toContain(
       'contract public export PublicThing is not re-exported from src/index.ts',
     );
+
+    writeFileSync(join(root, 'src/index.ts'), "export type * from './contract.js';\n");
+    expect(validateContractsManifest(root)).toContain(
+      'contract public export PublicThing is not re-exported from src/index.ts',
+    );
   });
 
   it('keeps expected public export kind fixed by the manifest', () => {
@@ -231,5 +236,35 @@ describe('docs drift checks', () => {
     expect(validateChangedFiles(root, ['src/contract.ts'])).toContain(
       'contract source changed without matching docs or tests: src/contract.ts',
     );
+  });
+
+  it('requires docs or tests when a base contract source is removed from the manifest', () => {
+    const root = makeRepo();
+    const baseContracts = [
+      {
+        id: 'contract',
+        sources: ['src/contract.ts', 'src/removed.ts'],
+        docs: ['docs/contract.md'],
+        tests: ['tests/contract.test.ts'],
+      },
+    ];
+
+    expect(
+      validateChangedFiles(
+        root,
+        ['docs/contracts.manifest.json', 'src/removed.ts'],
+        baseContracts,
+      ),
+    ).toContain(
+      'contract source removed from manifest without matching docs or tests: src/removed.ts',
+    );
+
+    expect(
+      validateChangedFiles(
+        root,
+        ['docs/contracts.manifest.json', 'src/removed.ts', 'tests/contract.test.ts'],
+        baseContracts,
+      ),
+    ).toEqual([]);
   });
 });

@@ -74,7 +74,9 @@
         "src/sse.ts",
         "src/bridge-room.ts",
         "src/events-auth.ts",
-        "src/http-app.ts"
+        "src/http-app.ts",
+        "src/http-utils.ts",
+        "src/node-server.ts"
       ],
       "docs": ["docs/event-delivery.md"],
       "tests": [
@@ -82,21 +84,25 @@
         "src/sse.test.ts",
         "src/bridge-room.test.ts",
         "src/events-auth.test.ts",
-        "src/http-app.test.ts"
+        "src/http-app.test.ts",
+        "src/http-utils.test.ts",
+        "src/node-server.test.ts"
       ],
       "publicExports": [
         "createRainrailEventBus",
         "RainrailBridgeRoom",
         "formatRainrailSseEvent",
         "verifyRainrailEventsBearerToken",
-        "createRainrailHttpApp"
+        "createRainrailHttpApp",
+        "createRainrailNodeServer"
       ],
       "publicExportKinds": {
         "createRainrailEventBus": "value",
         "RainrailBridgeRoom": "value",
         "formatRainrailSseEvent": "value",
         "verifyRainrailEventsBearerToken": "value",
-        "createRainrailHttpApp": "value"
+        "createRainrailHttpApp": "value",
+        "createRainrailNodeServer": "value"
       }
     },
     {

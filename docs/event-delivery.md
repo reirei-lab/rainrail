@@ -82,7 +82,8 @@ storage / replay / workflow 起動や subscriber 枠消費の副作用を作ら�
 `verifyRainrailEventsBearerToken()` で `Authorization: Bearer <token>` を検証する。
 missing bearer は `missing_bearer_token` の 401、token 不一致は `invalid_bearer_token`
 の 403、サーバ側未設定は `events_auth_not_configured` の 503 として扱う。
-HTTP entrypoint の公開入口は `createRainrailHttpApp`。
+HTTP entrypoint の公開入口は Fetch adapter の `createRainrailHttpApp` と Node adapter の
+`createRainrailNodeServer`。
 
 `GET /healthz` と `GET /events` は storage 復元失敗を generic 500 応答に変換する。
 adapter/runtime の未処理例外として落とさず、呼び出し元に安定した失敗を返すため。

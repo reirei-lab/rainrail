@@ -127,12 +127,12 @@ const indexReExportsPublicName = (indexSource, exportPath, publicExport, exportK
       return false;
     }
 
-    if (statement.exportClause === undefined) {
-      return true;
-    }
-
     if (exportKind === 'value' && statement.isTypeOnly) {
       return false;
+    }
+
+    if (statement.exportClause === undefined) {
+      return true;
     }
 
     return (
@@ -279,6 +279,27 @@ const projectPathExists = (root, path) =>
   isPathInsideRoot(root, path) && existsSync(resolve(root, path));
 
 /**
+ * @param {string} raw
+ * @returns {Array<{
+ *   id?: string;
+ *   sources?: string[];
+ *   docs?: string[];
+ *   tests?: string[];
+ *   publicExports?: string[];
+ *   publicExportKinds?: Record<string, string>;
+ * }>}
+ */
+const parseManifestContracts = (raw) => {
+  const parsed = JSON.parse(raw);
+
+  if (!parsed || !Array.isArray(parsed.contracts)) {
+    throw new Error(`${manifestPath} must contain a contracts array`);
+  }
+
+  return parsed.contracts;
+};
+
+/**
  * @param {string} root
  * @returns {Array<{
  *   id?: string;
@@ -289,15 +310,23 @@ const projectPathExists = (root, path) =>
  *   publicExportKinds?: Record<string, string>;
  * }>}
  */
-const readManifest = (root) => {
-  const raw = readText(root, manifestPath);
-  const parsed = JSON.parse(raw);
+const readManifest = (root) => parseManifestContracts(readText(root, manifestPath));
 
-  if (!parsed || !Array.isArray(parsed.contracts)) {
-    throw new Error(`${manifestPath} must contain a contracts array`);
+/**
+ * @param {string} baseRef
+ */
+const readManifestFromGit = (baseRef) => {
+  try {
+    return parseManifestContracts(
+      execFileSync('git', ['show', `${baseRef}:${manifestPath}`], {
+        cwd: repoRoot,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }),
+    );
+  } catch {
+    return [];
   }
-
-  return parsed.contracts;
 };
 
 /**
@@ -453,12 +482,19 @@ export const validateContractsManifest = (root = repoRoot) => {
 /**
  * @param {string} [root]
  * @param {string[]} [changedFiles]
+ * @param {ReturnType<typeof readManifest>} [baseContracts]
  * @returns {string[]}
  */
-export const validateChangedFiles = (root = repoRoot, changedFiles = []) => {
+export const validateChangedFiles = (root = repoRoot, changedFiles = [], baseContracts = []) => {
   const errors = [];
   const contracts = readManifest(root);
   const changed = new Set(changedFiles.map(toPosix));
+  const manifestChanged = changed.has(manifestPath);
+  const currentContractsById = new Map(
+    contracts
+      .filter((contract) => typeof contract.id === 'string')
+      .map((contract) => [contract.id, contract]),
+  );
 
   for (const contract of contracts) {
     const sources = contract.sources ?? [];
@@ -474,6 +510,33 @@ export const validateChangedFiles = (root = repoRoot, changedFiles = []) => {
     if (!hasMatchingDocsOrTests) {
       errors.push(
         `${contract.id} source changed without matching docs or tests: ${changedSources.join(', ')}`,
+      );
+    }
+  }
+
+  for (const baseContract of baseContracts) {
+    const id = baseContract.id ?? '<missing id>';
+    const currentContract = typeof baseContract.id === 'string'
+      ? currentContractsById.get(baseContract.id)
+      : undefined;
+    const currentSources = new Set(currentContract?.sources ?? []);
+    const removedSources = (baseContract.sources ?? []).filter((path) => !currentSources.has(path));
+    const changedRemovedSources = removedSources.filter((path) => manifestChanged || changed.has(path));
+
+    if (changedRemovedSources.length === 0) {
+      continue;
+    }
+
+    const docsAndTests = new Set([
+      ...(baseContract.docs ?? []),
+      ...(baseContract.tests ?? []),
+      ...(currentContract?.docs ?? []),
+      ...(currentContract?.tests ?? []),
+    ]);
+    const hasMatchingDocsOrTests = [...docsAndTests].some((path) => changed.has(path));
+    if (!hasMatchingDocsOrTests) {
+      errors.push(
+        `${id} source removed from manifest without matching docs or tests: ${changedRemovedSources.join(', ')}`,
       );
     }
   }
@@ -501,7 +564,13 @@ const main = () => {
   const errors = [
     ...validateMarkdownLinks(repoRoot),
     ...validateContractsManifest(repoRoot),
-    ...(changedFrom ? validateChangedFiles(repoRoot, changedFilesFromGit(changedFrom)) : []),
+    ...(changedFrom
+      ? validateChangedFiles(
+        repoRoot,
+        changedFilesFromGit(changedFrom),
+        readManifestFromGit(changedFrom),
+      )
+      : []),
   ];
 
   if (errors.length > 0) {
