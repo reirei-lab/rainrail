@@ -60,6 +60,18 @@ describe('handleAutoMergeEvent', () => {
     expect(result.reason).toBe('pull request has unresolved change requests');
   });
 
+  it('does not let pending review drafts hide unresolved change requests', async () => {
+    const result = await handleAutoMergeEvent(checkRunEvent(), options({
+      reviews: [
+        { authorLogin: 'hiragram', state: 'APPROVED', commitId: 'abc123' },
+        { authorLogin: 'codex', state: 'CHANGES_REQUESTED', commitId: 'abc123' },
+        { authorLogin: 'codex', state: 'PENDING', commitId: 'abc123' },
+      ],
+    }));
+
+    expect(result.reason).toBe('pull request has unresolved change requests');
+  });
+
   it('re-evaluates auto-merge after successful checks complete', async () => {
     const runtimeMerges: unknown[] = [];
 

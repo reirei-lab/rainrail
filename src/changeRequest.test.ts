@@ -39,6 +39,66 @@ describe('handleChangeRequestEvent', () => {
     expect(updates[0]?.commentBody).not.toContain('x'.repeat(5_000));
   });
 
+  it('ignores stale change-request reviews for an old pull request head', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+
+    const result = await handleChangeRequestEvent(reviewEvent({
+      state: 'changes_requested',
+      headSha: 'new-sha',
+      reviewCommitId: 'old-sha',
+    }), {
+      tasks: handoffRecorder({ updates }),
+    });
+
+    expect(result.reason).toBe('review does not match the current pull request head');
+    expect(updates).toEqual([]);
+  });
+
+  it('removes stale pending review requests when change requests return the issue to Todo', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+    const removedReviewRequests: Array<{ repository: string; number: number; reviewerLogin: string }> = [];
+
+    const result = await handleChangeRequestEvent(reviewEvent({
+      state: 'changes_requested',
+      reviewerLogin: 'codex',
+    }), {
+      reviewRequest: { reviewerLogin: 'hiragram' },
+      tasks: handoffRecorder({ updates }),
+      pullRequests: {
+        async getPullRequest(input) {
+          return {
+            repository: input.repository,
+            number: input.number,
+            title: 'feat: add PR lifecycle workflows',
+            url: 'https://github.com/reirei-lab/rainrail/pull/44',
+            authorLogin: 'reirei-agent',
+            headRefName: 'agent/test-pr',
+            headRepository: 'reirei-lab/rainrail',
+            headSha: 'abc123',
+            isDraft: false,
+            state: 'OPEN',
+            statusCheckRollup: [],
+            reviewRequests: ['hiragram'],
+          };
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          throw new Error('not used');
+        },
+        async removeReviewRequest(input) {
+          removedReviewRequests.push(input);
+        },
+      },
+    });
+
+    expect(result).toMatchObject({ reason: 'change-requested pull request returned to Todo', reviewRequestRemoved: true });
+    expect(removedReviewRequests).toEqual([
+      { repository: 'reirei-lab/rainrail', number: 44, reviewerLogin: 'hiragram' },
+    ]);
+  });
+
   it('ignores non-change-request reviews', async () => {
     const result = await handleChangeRequestEvent(reviewEvent({ state: 'approved' }), {
       tasks: handoffRecorder(),

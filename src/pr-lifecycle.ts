@@ -145,7 +145,10 @@ export interface TodoHandoffWorkflowOptions {
   tasks: AgentTaskHandoffClient;
 }
 
-export interface ChangeRequestWorkflowOptions extends TodoHandoffWorkflowOptions {}
+export interface ChangeRequestWorkflowOptions extends TodoHandoffWorkflowOptions {
+  reviewRequest?: ReviewRequestRemovalOptions;
+  pullRequests?: GitHubPullRequestProvider | undefined;
+}
 
 export interface CodexReviewWorkflowOptions extends TodoHandoffWorkflowOptions {
   agentLogin: string;
@@ -337,6 +340,14 @@ export async function handleChangeRequestEvent(
   if (normalize(target.pullRequestState) === 'closed') {
     return { handled: false, reason: 'pull request is already closed', pullRequestNumber: target.number, branchName: target.branchName };
   }
+  const currentHeadSha = target.headSha ?? await livePullRequestHeadSha(options.pullRequests, target, context);
+  if (
+    target.reviewCommitId !== undefined
+    && currentHeadSha !== undefined
+    && target.reviewCommitId !== currentHeadSha
+  ) {
+    return { handled: false, reason: 'review does not match the current pull request head', pullRequestNumber: target.number, branchName: target.branchName };
+  }
   const task = await options.tasks.getAgentTaskByBranchName(target.branchName);
   if (task === undefined) {
     return { handled: false, reason: 'no agent task matched the PR branch', pullRequestNumber: target.number, branchName: target.branchName };
@@ -352,6 +363,12 @@ export async function handleChangeRequestEvent(
     commentBody: changeRequestComment(target, task),
   }, context);
   await options.tasks.recordTaskStatus?.({ task, result: `change_requested:${update.status}` }, context);
+  const reviewRequestRemoved = await removePendingReviewRequestByNumber(
+    options.pullRequests,
+    { repository: target.repository, number: target.number },
+    options.reviewRequest,
+    context,
+  );
   return {
     handled: true,
     reason: 'change-requested pull request returned to Todo',
@@ -360,6 +377,7 @@ export async function handleChangeRequestEvent(
     taskId: task.id,
     projectItemId: update.projectItemId,
     status: update.status,
+    ...(reviewRequestRemoved ? { reviewRequestRemoved } : {}),
   };
 }
 
@@ -729,7 +747,7 @@ function candidateFromPullRequests(payload: Record<string, unknown>, headSha: st
   };
 }
 
-function changeRequestTargetFromEvent(event: RainrailEventEnvelope): { repository: string; number: number; branchName: string; headRepository?: string; pullRequestState?: string; reviewId?: number; reviewUrl?: string; reviewBody?: string } | undefined {
+function changeRequestTargetFromEvent(event: RainrailEventEnvelope): { repository: string; number: number; branchName: string; headRepository?: string; headSha?: string; pullRequestState?: string; reviewCommitId?: string; reviewId?: number; reviewUrl?: string; reviewBody?: string } | undefined {
   const payload = recordValue(event.payload);
   if (event.name !== 'github.review' || payload.event !== 'pull_request_review' || payload.action !== 'submitted') return undefined;
   const review = recordValue(payload.review);
@@ -744,7 +762,9 @@ function changeRequestTargetFromEvent(event: RainrailEventEnvelope): { repositor
     number,
     branchName,
     ...optionalString('headRepository', stringValue(pullRequest.headRepository ?? pullRequest.headRepo)),
+    ...optionalString('headSha', stringValue(pullRequest.headSha)),
     ...optionalString('pullRequestState', stringValue(pullRequest.state)),
+    ...optionalString('reviewCommitId', stringValue(review.commitId ?? review.commit_id ?? recordValue(payload.resource).commitId ?? recordValue(payload.resource).commit_id)),
     ...optionalNumber('reviewId', numberValue(review.id ?? recordValue(payload.resource).id)),
     ...optionalString('reviewUrl', stringValue(review.url ?? recordValue(payload.resource).url)),
     ...optionalString('reviewBody', stringValue(review.body ?? recordValue(payload.resource).body)),
@@ -1051,7 +1071,7 @@ function latestActionableReviewsByReviewer(pullRequest: PullRequestReviewTarget)
     const reviewer = normalize(review.authorLogin);
     const state = normalize(review.state);
     const previousState = normalize(latestByReviewer.get(reviewer)?.state);
-    if (state === 'commented' && ['approved', 'changes_requested'].includes(previousState)) continue;
+    if ((state === 'commented' || state === 'pending') && ['approved', 'changes_requested'].includes(previousState)) continue;
     latestByReviewer.set(reviewer, review);
   }
   return latestByReviewer;
@@ -1103,6 +1123,19 @@ async function removePendingReviewRequestByNumber(
   if (reviewRequest === undefined || reviewRequest.enabled === false || pullRequests === undefined) return false;
   const pullRequest = await pullRequests.getPullRequest(input, taskContext(context));
   return removePendingReviewRequest(pullRequests, pullRequest, reviewRequest, context);
+}
+
+async function livePullRequestHeadSha(
+  pullRequests: GitHubPullRequestProvider | undefined,
+  target: { repository: string; number: number; reviewCommitId?: string },
+  context: PluginRuntimeContext | undefined,
+): Promise<string | undefined> {
+  if (target.reviewCommitId === undefined || pullRequests === undefined) return undefined;
+  const pullRequest = await pullRequests.getPullRequest({
+    repository: target.repository,
+    number: target.number,
+  }, taskContext(context));
+  return pullRequest.headSha;
 }
 
 function shouldIgnoreTask(task: AgentTask): string | undefined {
