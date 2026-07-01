@@ -74,6 +74,7 @@ export function reviewEvent(overrides: {
   prState?: string;
   repository?: string;
   headRepository?: string;
+  missingHeadRepository?: boolean;
   branchName?: string;
   stringReviewId?: boolean;
   headSha?: string;
@@ -103,7 +104,7 @@ export function reviewEvent(overrides: {
         number: 44,
         headRef: overrides.branchName ?? 'agent/test-pr',
         headSha: overrides.headSha ?? 'abc123',
-        headRepository: overrides.headRepository ?? repository,
+        ...(overrides.missingHeadRepository === true ? {} : { headRepository: overrides.headRepository ?? repository }),
         state: overrides.prState ?? 'open',
         author: overrides.prAuthor ?? 'reirei-agent',
       },

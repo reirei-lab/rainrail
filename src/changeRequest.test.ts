@@ -60,6 +60,19 @@ describe('handleChangeRequestEvent', () => {
     expect(updates).toEqual([]);
   });
 
+  it('does not hand off a task when the pull request head repository is missing', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+    const result = await handleChangeRequestEvent(reviewEvent({
+      state: 'changes_requested',
+      missingHeadRepository: true,
+    }), {
+      tasks: handoffRecorder({ updates }),
+    });
+
+    expect(result.reason).toBe('pull request head repository does not match the base repository');
+    expect(updates).toEqual([]);
+  });
+
   it('does not hand off delayed change requests for closed pull requests', async () => {
     const updates: Array<{ reason: string; commentBody?: string }> = [];
 

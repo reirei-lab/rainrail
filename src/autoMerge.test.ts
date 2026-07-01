@@ -143,6 +143,36 @@ describe('handleAutoMergeEvent', () => {
     expect(runtimeMerges).toEqual([expect.objectContaining({ number: 44 })]);
   });
 
+  it('does not auto-merge before the current head has any reported checks', async () => {
+    const runtimeMerges: unknown[] = [];
+
+    const result = await handleAutoMergeEvent(reviewEvent(), options({
+      statusCheckRollup: [],
+    }), runtimeContext(runtimeMerges));
+
+    expect(result.reason).toBe('not all checks have passed');
+    expect(runtimeMerges).toEqual([]);
+  });
+
+  it('continues past pending mergeability candidates and auto-merges a later ready PR', async () => {
+    const runtimeMerges: unknown[] = [];
+
+    const result = await handleAutoMergeEvent(checkRunEvent({ pullRequests: [{ number: 45 }, { number: 44 }] }), {
+      ...options(),
+      pullRequests: {
+        ...options().pullRequests,
+        async getPullRequest(input) {
+          return input.number === 45
+            ? pullRequest({ ...input, headRefName: 'agent/other-pr', mergeable: 'UNKNOWN', mergeStateStatus: 'UNKNOWN' })
+            : pullRequest(input);
+        },
+      },
+    }, runtimeContext(runtimeMerges));
+
+    expect(result.reason).toBe('pull_request_merged');
+    expect(runtimeMerges).toEqual([expect.objectContaining({ number: 44 })]);
+  });
+
   it('re-evaluates auto-merge after a skipped check completes the passing rollup', async () => {
     const runtimeMerges: unknown[] = [];
 

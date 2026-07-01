@@ -284,17 +284,29 @@ export async function handleReviewRequestEvent(
       fallback = { handled: false, reason: 'pull request is not an agent-authored target', pullRequest };
       continue;
     }
-    if (normalize(pullRequest.state) !== 'open') return { handled: false, reason: 'pull request is not open', pullRequest };
-    if (pullRequest.isDraft) return { handled: false, reason: 'pull request is draft', pullRequest };
-    if (hasUnresolvedChangeRequest(pullRequest)) {
-      return { handled: false, reason: 'pull request has unresolved change requests', pullRequest };
+    if (normalize(pullRequest.state) !== 'open') {
+      fallback = { handled: false, reason: 'pull request is not open', pullRequest };
+      continue;
     }
-    if (!allChecksPassed(pullRequest)) return { handled: false, reason: 'not all checks have passed', pullRequest };
+    if (pullRequest.isDraft) {
+      fallback = { handled: false, reason: 'pull request is draft', pullRequest };
+      continue;
+    }
+    if (hasUnresolvedChangeRequest(pullRequest)) {
+      fallback = { handled: false, reason: 'pull request has unresolved change requests', pullRequest };
+      continue;
+    }
+    if (!allChecksPassed(pullRequest)) {
+      fallback = { handled: false, reason: 'not all checks have passed', pullRequest };
+      continue;
+    }
     if (reviewApproved(options, pullRequest)) {
-      return { handled: false, reason: 'pull request is already approved by configured reviewer', pullRequest };
+      fallback = { handled: false, reason: 'pull request is already approved by configured reviewer', pullRequest };
+      continue;
     }
     if (pullRequest.reviewRequests.some((login) => sameLogin(login, options.reviewerLogin))) {
-      return { handled: false, reason: 'review was already requested', pullRequest };
+      fallback = { handled: false, reason: 'review was already requested', pullRequest };
+      continue;
     }
 
     await pullRequests.requestReview({
@@ -315,7 +327,7 @@ export async function handleChangeRequestEvent(
   if (options.enabled === false) return { handled: false, reason: 'project issue selection is not configured' };
   const target = changeRequestTargetFromEvent(event);
   if (target === undefined) return { handled: false, reason: 'event is not a pull request change request' };
-  if (target.headRepository !== undefined && normalize(target.headRepository) !== normalize(target.repository)) {
+  if (normalize(target.headRepository) !== normalize(target.repository)) {
     return { handled: false, reason: 'pull request head repository does not match the base repository', pullRequestNumber: target.number, branchName: target.branchName };
   }
   if (normalize(target.pullRequestState) === 'closed') {
@@ -404,14 +416,29 @@ export async function handleCheckFailureEvent(
       fallback = { handled: false, reason: 'pull request is not an agent-authored target', check, pullRequest };
       continue;
     }
-    if (normalize(pullRequest.state) !== 'open') return { handled: false, reason: 'pull request is not open', check, pullRequest };
-    if (!hasCurrentCheckFailure(pullRequest)) return { handled: false, reason: 'current pull request checks have passed', check, pullRequest };
+    if (normalize(pullRequest.state) !== 'open') {
+      fallback = { handled: false, reason: 'pull request is not open', check, pullRequest };
+      continue;
+    }
+    if (!hasCurrentCheckFailure(pullRequest)) {
+      fallback = { handled: false, reason: 'current pull request checks have passed', check, pullRequest };
+      continue;
+    }
     const task = await options.tasks.getAgentTaskByBranchName(pullRequest.headRefName);
-    if (task === undefined) return { handled: false, reason: 'no agent task matched the PR branch', check, pullRequest };
+    if (task === undefined) {
+      fallback = { handled: false, reason: 'no agent task matched the PR branch', check, pullRequest };
+      continue;
+    }
     const repositorySkip = repositoryMismatchReason(task, pullRequest.repository);
-    if (repositorySkip !== undefined) return { handled: false, reason: repositorySkip, check, pullRequest, taskId: task.id };
+    if (repositorySkip !== undefined) {
+      fallback = { handled: false, reason: repositorySkip, check, pullRequest, taskId: task.id };
+      continue;
+    }
     const skip = shouldIgnoreTask(task);
-    if (skip !== undefined) return { handled: false, reason: skip, check, pullRequest, taskId: task.id };
+    if (skip !== undefined) {
+      fallback = { handled: false, reason: skip, check, pullRequest, taskId: task.id };
+      continue;
+    }
 
     const update = await options.tasks.returnTaskToTodo({
       task,
@@ -527,6 +554,8 @@ export async function handleAutoMergeEvent(
   const candidates = await resolvePullRequestCandidates(candidate, pullRequests, context);
   if (candidates.length === 0) return { handled: false, reason: 'pull request was not found', candidate };
   let fallback: WorkflowResult = { handled: false, reason: 'pull request was not found', candidate };
+  let sawPendingMergeability = false;
+  let sawNonPendingMergeabilityBlocker = false;
   for (const pullRequest of candidates) {
     if (candidate.headSha !== undefined && pullRequest.headSha !== undefined && candidate.headSha !== pullRequest.headSha) {
       fallback = { handled: false, reason: 'check does not match the current pull request head', candidate, pullRequest };
@@ -542,29 +571,37 @@ export async function handleAutoMergeEvent(
     }
     if (!reviewApproved(options, pullRequest)) {
       fallback = { handled: false, reason: 'configured reviewer approval is not confirmed', pullRequest };
+      sawNonPendingMergeabilityBlocker = true;
       continue;
     }
     if (hasUnresolvedChangeRequest(pullRequest)) {
       fallback = { handled: false, reason: 'pull request has unresolved change requests', pullRequest };
+      sawNonPendingMergeabilityBlocker = true;
       continue;
     }
-    if (!allChecksPassed(pullRequest)) {
+    if (!allChecksPassedForAutoMerge(pullRequest)) {
       fallback = { handled: false, reason: 'not all checks have passed', pullRequest };
+      sawNonPendingMergeabilityBlocker = true;
       continue;
     }
     if (pullRequest.isDraft) {
       fallback = { handled: false, reason: 'pull request is draft', pullRequest };
+      sawNonPendingMergeabilityBlocker = true;
       continue;
     }
     if (normalize(pullRequest.state) !== 'open') {
       fallback = { handled: false, reason: 'pull request is not open', pullRequest };
+      sawNonPendingMergeabilityBlocker = true;
       continue;
     }
     if (isMergeabilityPending(pullRequest)) {
-      throw new Error('pull request mergeability is still being calculated');
+      fallback = { handled: false, reason: 'pull request mergeability is still being calculated', pullRequest };
+      sawPendingMergeability = true;
+      continue;
     }
     if (!isAutoMergeable(pullRequest)) {
       fallback = { handled: false, reason: 'pull request is not mergeable', pullRequest };
+      sawNonPendingMergeabilityBlocker = true;
       continue;
     }
 
@@ -581,12 +618,19 @@ export async function handleAutoMergeEvent(
     });
     return { handled: true, reason: 'pull_request_merged', pullRequest };
   }
+  if (sawPendingMergeability && !sawNonPendingMergeabilityBlocker) {
+    throw new Error('pull request mergeability is still being calculated');
+  }
   return fallback;
 }
 
 export function allChecksPassed(pullRequest: PullRequestReviewTarget): boolean {
   if (pullRequest.statusCheckRollup.length === 0) return true;
   return pullRequest.statusCheckRollup.every(isPassingCheck);
+}
+
+function allChecksPassedForAutoMerge(pullRequest: PullRequestReviewTarget): boolean {
+  return pullRequest.statusCheckRollup.length > 0 && allChecksPassed(pullRequest);
 }
 
 function pullRequestsFromContext(context: PluginRuntimeContext): GitHubPullRequestProvider | undefined {

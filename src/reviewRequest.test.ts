@@ -134,6 +134,34 @@ describe('handleReviewRequestEvent', () => {
     expect(requestCount).toBe(0);
   });
 
+  it('continues past candidates that already have a pending review request', async () => {
+    const reviewRequests: Array<{ repository: string; number: number; reviewerLogin: string }> = [];
+
+    const result = await handleReviewRequestEvent(checkRunEvent({ pullRequests: [{ number: 45 }, { number: 44 }] }), {
+      agentLogin: 'reirei-agent',
+      reviewerLogin: 'hiragram',
+      branchPrefix: 'agent/',
+      pullRequests: {
+        async getPullRequest(input) {
+          return input.number === 45
+            ? pullRequest({ ...input, headRefName: 'agent/other-pr', reviewRequests: ['hiragram'], reviews: [] })
+            : pullRequest({ ...input, reviews: [] });
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview(input) {
+          reviewRequests.push(input);
+        },
+      },
+    });
+
+    expect(result.reason).toBe('review_requested');
+    expect(reviewRequests).toEqual([
+      { repository: 'reirei-lab/rainrail', number: 44, reviewerLogin: 'hiragram' },
+    ]);
+  });
+
   it('does not request review when the configured reviewer already approved the current head', async () => {
     let requestCount = 0;
 

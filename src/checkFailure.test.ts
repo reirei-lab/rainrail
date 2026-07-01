@@ -99,6 +99,39 @@ describe('handleCheckFailureEvent', () => {
     expect(updates).toHaveLength(1);
   });
 
+  it('continues past failed candidates that no longer have a matching task', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+
+    const result = await handleCheckFailureEvent(checkRunEvent({
+      conclusion: 'failure',
+      pullRequests: [{ number: 45 }, { number: 44 }],
+    }), {
+      agentLogin: 'reirei-agent',
+      branchPrefix: 'agent/',
+      tasks: handoffRecorder({ updates }),
+      pullRequests: {
+        async getPullRequest(input) {
+          return pullRequest({
+            ...input,
+            headRefName: input.number === 45 ? 'agent/released-task' : 'agent/test-pr',
+            statusCheckRollup: [
+              { type: 'CheckRun', name: 'Typecheck, Test, Build', status: 'COMPLETED', conclusion: 'FAILURE' },
+            ],
+          });
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          throw new Error('not used');
+        },
+      },
+    });
+
+    expect(result.reason).toBe('failed PR checks returned issue to Todo');
+    expect(updates).toHaveLength(1);
+  });
+
   it('ignores successful checks', async () => {
     const result = await handleCheckFailureEvent(checkRunEvent(), {
       agentLogin: 'reirei-agent',
