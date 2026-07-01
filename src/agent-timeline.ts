@@ -568,7 +568,11 @@ async function findOpenPrivateKeyContextStart(
 
 function trimPartialLeadingLine(text: string): string {
   const firstNewline = text.indexOf('\n');
-  return firstNewline === -1 ? text : text.slice(firstNewline + 1);
+  if (firstNewline === -1) {
+    return text;
+  }
+  const remaining = text.slice(firstNewline + 1);
+  return remaining === '' ? text : remaining;
 }
 
 function redactLeadingCredentialFragment(text: string, context: TailRedactionContext): string | undefined {
@@ -592,7 +596,7 @@ function redactLeadingPrivateKeyFragment(text: string, context: TailRedactionCon
 }
 
 function hasSensitiveCredentialPrefix(value: string): boolean {
-  return /(?:authorization\s*:\s*(?:bearer|basic|digest|ntlm|negotiate)?\s*|(?:set-cookie|cookie)\s*:\s*|bearer\s+|(?:api[-_]?key|token|secret|password|passphrase|_auth|authorization|set[-_]?cookie|cookie)\s*[:=]\s*|(?:https?|all)_proxy[A-Za-z0-9_-]*\s*[:=]\s*|[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s/@:]+:[^\s@]*|(?:--proxy|--preproxy|--proxy1\.0|--proxy-user|--user|-x|-U|-u|-[A-Za-z]*u)(?:=|\s+))[^\n\r]*$/i.test(value);
+  return /(?:authorization\s*:\s*(?:bearer|basic|digest|ntlm|negotiate)?\s*|(?:set-cookie|cookie)\s*:\s*|bearer\s+|(?:api[-_]?key|token|secret|password|passphrase|_auth|authorization|set[-_]?cookie|cookie)\s*[:=]\s*|(?:["\\])(?:api[-_]?key|token|secret|password|passphrase|_auth|authorization|set[-_]?cookie|cookie)(?:["\\])\s*:\s*(?:["\\])?|(?:https?|all)_proxy[A-Za-z0-9_-]*\s*[:=]\s*|[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s/@:]+:[^\s@]*|(?:--proxy|--preproxy|--proxy1\.0|--proxy-user|--user|-x|-U|-u|-[A-Za-z]*u)(?:=|\s+))[^\n\r]*$/i.test(value);
 }
 
 function hasPartialPrivateKeyBegin(value: string): boolean {

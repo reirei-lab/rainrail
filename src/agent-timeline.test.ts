@@ -1506,6 +1506,32 @@ describe('agent timeline', () => {
     }
   });
 
+  it('keeps truncated single-line jsonl tails when the long line ends with a newline', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'rainrail-jsonl-long-line-newline-tail-'));
+    const sessionId = 'jsonl-long-line-newline-session';
+    const logPath = join(directory, 'agent.log');
+    const longValue = `prefix-${'x'.repeat(200)}-visible-tail`;
+    writeFileSync(logPath, JSON.stringify({
+      result: { status: 'ok', meta: { agentMeta: { sessionId } } },
+    }), 'utf8');
+    writeFileSync(join(directory, `${sessionId}.trajectory.jsonl`), `${JSON.stringify({
+      type: 'tool.result',
+      data: { output: longValue },
+    })}\n`, 'utf8');
+
+    try {
+      const jsonl = await readRuntimeJsonl(
+        { logPath, agentSessionId: 'agent:main:routing-key' },
+        { sessionsDirectory: directory, maxBytes: 80 },
+      );
+      expect(jsonl.truncated).toBe(true);
+      expect(jsonl.raw).not.toBe('');
+      expect(jsonl.raw).toContain('visible-tail');
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('redacts credential fragments from truncated raw jsonl reads', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'rainrail-jsonl-truncated-token-redaction-'));
     const sessionId = 'jsonl-truncated-token-session';
@@ -1528,6 +1554,32 @@ describe('agent timeline', () => {
       expect(jsonl.raw).toContain('[redacted-truncated-credential]');
       expect(jsonl.raw).not.toContain('tailSecret');
       expect(jsonl.raw).not.toContain('github_pat_');
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('redacts JSON sensitive value fragments from truncated raw jsonl reads', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'rainrail-jsonl-truncated-json-secret-redaction-'));
+    const sessionId = 'jsonl-truncated-json-secret-session';
+    const logPath = join(directory, 'agent.log');
+    const apiKey = `${'x'.repeat(3000)}_plainSecretTail`;
+    writeFileSync(logPath, JSON.stringify({
+      result: { status: 'ok', meta: { agentMeta: { sessionId } } },
+    }), 'utf8');
+    writeFileSync(join(directory, `${sessionId}.trajectory.jsonl`), JSON.stringify({
+      type: 'tool.result',
+      data: { output: { apiKey } },
+    }), 'utf8');
+
+    try {
+      const jsonl = await readRuntimeJsonl(
+        { logPath, agentSessionId: 'agent:main:routing-key' },
+        { sessionsDirectory: directory, maxBytes: 80 },
+      );
+      expect(jsonl.truncated).toBe(true);
+      expect(jsonl.raw).toContain('[redacted-truncated-credential]');
+      expect(jsonl.raw).not.toContain('plainSecretTail');
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

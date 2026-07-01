@@ -1,4 +1,4 @@
-import { chmodSync, closeSync, mkdirSync, openSync, readFileSync } from 'node:fs';
+import { chmodSync, closeSync, mkdirSync, openSync, readFileSync, readSync, statSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
@@ -57,6 +57,8 @@ type RuntimeAgentTaskInput = {
     url?: string | undefined;
   } | undefined;
 };
+
+const maxRuntimeResumeLogBytes = 512 * 1024;
 
 export interface RuntimeRunCompletion {
   status: RuntimeRunStatus;
@@ -601,7 +603,7 @@ function runtimeResumeSessionId(task: RuntimeAgentTask, agentId: string): string
     let groupFallbackSessionKey: string | null | undefined;
     for (const [index, logPath] of logPaths.entries()) {
       try {
-        const fallbackSessionKey = extractFallbackRuntimeSessionKey(readFileSync(logPath, 'utf8'), agentId, {
+        const fallbackSessionKey = extractFallbackRuntimeSessionKey(readRuntimeResumeLogTail(logPath), agentId, {
           allowClearingCompletion: !(index === 0 && logPaths.length > 1),
           allowCompletionMetadata: !(index === 0 && logPaths.length > 1),
         });
@@ -622,6 +624,24 @@ function runtimeResumeSessionId(task: RuntimeAgentTask, agentId: string): string
     }
   }
   return task.agentSessionId;
+}
+
+function readRuntimeResumeLogTail(logPath: string): string {
+  const size = statSync(logPath).size;
+  const start = Math.max(0, size - maxRuntimeResumeLogBytes);
+  const fd = openSync(logPath, 'r');
+  try {
+    const buffer = Buffer.alloc(size - start);
+    const bytesRead = readSync(fd, buffer, 0, buffer.length, start);
+    const text = buffer.subarray(0, bytesRead).toString('utf8');
+    if (start === 0) {
+      return text;
+    }
+    const newlineIndex = text.search(/[\n\r]/);
+    return newlineIndex === -1 ? text : text.slice(newlineIndex + 1);
+  } finally {
+    closeSync(fd);
+  }
 }
 
 function runtimeResumeLogPathGroups(task: RuntimeAgentTask): string[][] {
