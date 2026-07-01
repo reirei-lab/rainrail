@@ -158,6 +158,7 @@ export interface AutoMergeWorkflowOptions {
   enabled?: boolean;
   agentLogin: string;
   reviewerLogin: string;
+  branchPrefix: string;
   mergeMethod: PullRequestMergeMethod;
   targetRepositories: string[];
   pullRequests?: GitHubPullRequestProvider | undefined;
@@ -479,28 +480,38 @@ export async function handleAutoMergeEvent(
   if (!targetRepositoryAllowed(options.targetRepositories, pullRequest.repository)) {
     return { handled: false, reason: 'live pull request repository is not an auto-merge target', pullRequest };
   }
-  if (!sameLogin(pullRequest.authorLogin, options.agentLogin)) return { handled: false, reason: 'pull request author is not the configured agent', pullRequest };
+  if (!isReviewTarget(options, pullRequest)) {
+    return { handled: false, reason: 'pull request is not an agent-authored target', pullRequest };
+  }
   if (!reviewApproved(options, pullRequest)) return { handled: false, reason: 'configured reviewer approval is not confirmed', pullRequest };
   if (!allChecksPassed(pullRequest)) return { handled: false, reason: 'not all checks have passed', pullRequest };
   if (pullRequest.isDraft) return { handled: false, reason: 'pull request is draft', pullRequest };
   if (normalize(pullRequest.state) !== 'open') return { handled: false, reason: 'pull request is not open', pullRequest };
+  if (isMergeabilityPending(pullRequest)) {
+    throw new Error('pull request mergeability is still being calculated');
+  }
   if (normalize(pullRequest.mergeable) !== 'mergeable') return { handled: false, reason: 'pull request is not mergeable', pullRequest };
-  if (pullRequests.mergePullRequest === undefined) throw new Error('Pull request service does not support merging');
 
-  await pullRequests.mergePullRequest({
+  const mergeInput = {
     repository: pullRequest.repository,
     number: pullRequest.number,
     mergeMethod: options.mergeMethod,
     ...optionalString('sha', pullRequest.headSha),
-  }, taskContext(context));
-  if (context !== undefined && pullRequests.mergePullRequest.length === 0) {
+  };
+  if (pullRequests.mergePullRequest === undefined) {
+    if (context === undefined) throw new Error('Pull request service does not support merging');
     await context.actions.mergePullRequest({
       pullRequestId: `${pullRequest.repository}#${pullRequest.number}`,
-      repository: pullRequest.repository,
-      number: pullRequest.number,
-      mergeMethod: options.mergeMethod,
-      ...optionalString('sha', pullRequest.headSha),
+      ...mergeInput,
     });
+  } else {
+    await pullRequests.mergePullRequest(mergeInput, taskContext(context));
+    if (context !== undefined && pullRequests.mergePullRequest.length === 0) {
+      await context.actions.mergePullRequest({
+        pullRequestId: `${pullRequest.repository}#${pullRequest.number}`,
+        ...mergeInput,
+      });
+    }
   }
   return { handled: true, reason: 'pull_request_merged', pullRequest };
 }
@@ -540,7 +551,7 @@ function pullRequestCandidateFromEvent(event: RainrailEventEnvelope): { reposito
   if (event.name === 'github.check_run' && payload.action === 'completed' && payload.status === 'completed' && payload.conclusion === 'success') {
     return candidateFromPullRequests(payload, stringValue(recordValue(payload.resource).headSha));
   }
-  if (event.name === 'github.status' && successfulCommitStatus(payload)) {
+  if (event.name === 'github.status' && commitStatusState(payload) === 'success') {
     return headCandidateFromStatus(payload);
   }
   if (event.name === 'github.pull_request' && payload.action === 'review_requested') {
@@ -636,8 +647,8 @@ function codexReviewTargetFromEvent(
 function failedCheckCandidateFromEvent(event: RainrailEventEnvelope): { repository: string; number?: number; headRefName?: string; headSha?: string; name?: string; conclusion: string; detailsUrl?: string } | undefined {
   const payload = recordValue(event.payload);
   if (event.name === 'github.status') {
-    const conclusion = normalize(payload.state ?? recordValue(payload.resource).status ?? recordValue(payload.resource).conclusion);
-    if (conclusion.length === 0 || ['success', 'neutral', 'skipped'].includes(conclusion)) return undefined;
+    const conclusion = commitStatusState(payload);
+    if (!['failure', 'error'].includes(conclusion)) return undefined;
     const base = headCandidateFromStatus(payload);
     if (base === undefined) return undefined;
     const resource = recordValue(payload.resource);
@@ -679,9 +690,15 @@ function autoMergeCandidateFromEvent(event: RainrailEventEnvelope): { repository
     if (normalize(review.state ?? recordValue(payload.resource).state) !== 'approved') return undefined;
     const repository = repositoryName(payload);
     const number = numberValue(recordValue(payload.pullRequest).number);
+    const headSha = stringValue(recordValue(payload.pullRequest).headSha);
     const reviewerLogin = stringValue(review.author);
     if (repository === undefined || number === undefined || reviewerLogin === undefined) return undefined;
-    return { repository, number, reviewerLogin };
+    return {
+      repository,
+      number,
+      reviewerLogin,
+      ...optionalString('headSha', headSha),
+    };
   }
   return pullRequestCandidateFromEvent(event);
 }
@@ -822,7 +839,10 @@ function hasUnresolvedChangeRequest(pullRequest: PullRequestReviewTarget): boole
   if (normalize(pullRequest.reviewDecision) === 'changes_requested') return true;
   const latestByReviewer = new Map<string, string>();
   for (const review of pullRequest.reviews ?? []) {
-    latestByReviewer.set(normalize(review.authorLogin), normalize(review.state));
+    const reviewer = normalize(review.authorLogin);
+    const state = normalize(review.state);
+    if (state === 'commented' && latestByReviewer.get(reviewer) === 'changes_requested') continue;
+    latestByReviewer.set(reviewer, state);
   }
   return Array.from(latestByReviewer.values()).some((state) => state === 'changes_requested');
 }
@@ -877,8 +897,9 @@ function repositoryName(payload: Record<string, unknown>): string | undefined {
   return stringValue(recordValue(payload.repository).fullName);
 }
 
-function successfulCommitStatus(payload: Record<string, unknown>): boolean {
-  return normalize(payload.state ?? recordValue(payload.resource).status ?? recordValue(payload.resource).conclusion) === 'success';
+function commitStatusState(payload: Record<string, unknown>): string {
+  const resource = recordValue(payload.resource);
+  return normalize(payload.state ?? resource.state ?? resource.status ?? resource.conclusion);
 }
 
 function headCandidateFromStatus(payload: Record<string, unknown>): { repository: string; headSha?: string } | undefined {

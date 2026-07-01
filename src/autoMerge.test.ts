@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import type { PluginRuntimeContext } from './workflow-plugin.js';
 import { handleAutoMergeEvent } from './pr-lifecycle.js';
 import { checkRunEvent, pullRequest, reviewEvent } from './pr-lifecycle-test-helpers.js';
 
@@ -10,6 +11,7 @@ describe('handleAutoMergeEvent', () => {
     const result = await handleAutoMergeEvent(reviewEvent(), {
       agentLogin: 'reirei-agent',
       reviewerLogin: 'hiragram',
+      branchPrefix: 'agent/',
       mergeMethod: 'squash',
       targetRepositories: ['reirei-lab/rainrail'],
       pullRequests: {
@@ -38,6 +40,7 @@ describe('handleAutoMergeEvent', () => {
     const result = await handleAutoMergeEvent(reviewEvent(), {
       agentLogin: 'reirei-agent',
       reviewerLogin: 'hiragram',
+      branchPrefix: 'agent/',
       mergeMethod: 'squash',
       targetRepositories: ['reirei-lab/other'],
       pullRequests: {
@@ -64,6 +67,7 @@ describe('handleAutoMergeEvent', () => {
     const result = await handleAutoMergeEvent(reviewEvent(), {
       agentLogin: 'reirei-agent',
       reviewerLogin: 'hiragram',
+      branchPrefix: 'agent/',
       mergeMethod: 'squash',
       targetRepositories: ['reirei-lab/rainrail'],
       pullRequests: {
@@ -95,6 +99,7 @@ describe('handleAutoMergeEvent', () => {
     const result = await handleAutoMergeEvent(checkRunEvent(), {
       agentLogin: 'reirei-agent',
       reviewerLogin: 'hiragram',
+      branchPrefix: 'agent/',
       mergeMethod: 'squash',
       targetRepositories: ['reirei-lab/rainrail'],
       pullRequests: {
@@ -117,5 +122,130 @@ describe('handleAutoMergeEvent', () => {
 
     expect(result.reason).toBe('pull_request_merged');
     expect(merges).toEqual([{ repository: 'reirei-lab/rainrail', number: 44, mergeMethod: 'squash', sha: 'abc123' }]);
+  });
+
+  it('ignores stale approved reviews from old pull request heads', async () => {
+    let mergeCount = 0;
+
+    const result = await handleAutoMergeEvent(reviewEvent({ headSha: 'old-sha' }), {
+      agentLogin: 'reirei-agent',
+      reviewerLogin: 'hiragram',
+      branchPrefix: 'agent/',
+      mergeMethod: 'squash',
+      targetRepositories: ['reirei-lab/rainrail'],
+      pullRequests: {
+        async getPullRequest() {
+          return pullRequest({ headSha: 'new-sha' });
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          throw new Error('not used');
+        },
+        async mergePullRequest() {
+          mergeCount += 1;
+        },
+      },
+    });
+
+    expect(result.reason).toBe('check does not match the current pull request head');
+    expect(mergeCount).toBe(0);
+  });
+
+  it('only auto-merges agent branch pull requests', async () => {
+    let mergeCount = 0;
+
+    const result = await handleAutoMergeEvent(reviewEvent({ branchName: 'dependabot/npm/pkg' }), {
+      agentLogin: 'reirei-agent',
+      reviewerLogin: 'hiragram',
+      branchPrefix: 'agent/',
+      mergeMethod: 'squash',
+      targetRepositories: ['reirei-lab/rainrail'],
+      pullRequests: {
+        async getPullRequest() {
+          return pullRequest({ headRefName: 'dependabot/npm/pkg' });
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          throw new Error('not used');
+        },
+        async mergePullRequest() {
+          mergeCount += 1;
+        },
+      },
+    });
+
+    expect(result.reason).toBe('pull request is not an agent-authored target');
+    expect(mergeCount).toBe(0);
+  });
+
+  it('retries when mergeability is still being calculated', async () => {
+    await expect(handleAutoMergeEvent(reviewEvent(), {
+      agentLogin: 'reirei-agent',
+      reviewerLogin: 'hiragram',
+      branchPrefix: 'agent/',
+      mergeMethod: 'squash',
+      targetRepositories: ['reirei-lab/rainrail'],
+      pullRequests: {
+        async getPullRequest() {
+          const target = pullRequest();
+          delete target.mergeable;
+          delete target.mergeStateStatus;
+          return target;
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          throw new Error('not used');
+        },
+        async mergePullRequest() {
+          throw new Error('not used');
+        },
+      },
+    })).rejects.toThrow('pull request mergeability is still being calculated');
+  });
+
+  it('falls back to the runtime merge action when the provider is read-only', async () => {
+    const runtimeMerges: unknown[] = [];
+    const context = {
+      signal: new AbortController().signal,
+      actions: {
+        async mergePullRequest(input: unknown) {
+          runtimeMerges.push(input);
+        },
+      },
+    } as PluginRuntimeContext;
+
+    const result = await handleAutoMergeEvent(reviewEvent(), {
+      agentLogin: 'reirei-agent',
+      reviewerLogin: 'hiragram',
+      branchPrefix: 'agent/',
+      mergeMethod: 'squash',
+      targetRepositories: ['reirei-lab/rainrail'],
+      pullRequests: {
+        async getPullRequest() {
+          return pullRequest();
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          throw new Error('not used');
+        },
+      },
+    }, context);
+
+    expect(result.reason).toBe('pull_request_merged');
+    expect(runtimeMerges).toEqual([{
+      pullRequestId: 'reirei-lab/rainrail#44',
+      repository: 'reirei-lab/rainrail',
+      number: 44,
+      mergeMethod: 'squash',
+      sha: 'abc123',
+    }]);
   });
 });

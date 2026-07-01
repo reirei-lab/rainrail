@@ -438,6 +438,7 @@ function pullRequestFromPayload(
   const url = stringValue(payload.html_url);
   const authorLogin = stringValue(payload.user?.login);
   const headRefName = stringValue(payload.head?.ref);
+  const headSha = stringValue(payload.head?.sha);
   if (number === undefined || title === undefined || url === undefined || authorLogin === undefined || headRefName === undefined) {
     throw new Error('GitHub pull request response is missing required PR fields');
   }
@@ -448,6 +449,7 @@ function pullRequestFromPayload(
     url,
     authorLogin,
     headRefName,
+    ...optionalString('headSha', headSha),
     isDraft: payload.draft === true,
     statusCheckRollup: related.checks,
     reviewRequests: arrayValue(payload.requested_reviewers).flatMap((reviewer) => {

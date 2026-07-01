@@ -136,6 +136,31 @@ describe('handleReviewRequestEvent', () => {
     expect(reviewRequests).toEqual([{ repository: 'reirei-lab/rainrail', number: 44, reviewerLogin: 'hiragram' }]);
   });
 
+  it('reads normalized commit status state from the resource', async () => {
+    const reviewRequests: Array<{ repository: string; number: number; reviewerLogin: string }> = [];
+
+    const result = await handleReviewRequestEvent(statusEvent({ normalizedResourceOnly: true }), {
+      agentLogin: 'reirei-agent',
+      reviewerLogin: 'hiragram',
+      branchPrefix: 'agent/',
+      pullRequests: {
+        async getPullRequest() {
+          throw new Error('not used');
+        },
+        async findPullRequestByHead(input) {
+          expect(input).toMatchObject({ repository: 'reirei-lab/rainrail', headSha: 'abc123' });
+          return pullRequest();
+        },
+        async requestReview(input) {
+          reviewRequests.push(input);
+        },
+      },
+    });
+
+    expect(result.reason).toBe('review_requested');
+    expect(reviewRequests).toEqual([{ repository: 'reirei-lab/rainrail', number: 44, reviewerLogin: 'hiragram' }]);
+  });
+
   it('ignores stale successful checks from old pull request heads', async () => {
     let requestCount = 0;
 
@@ -157,6 +182,37 @@ describe('handleReviewRequestEvent', () => {
     });
 
     expect(result.reason).toBe('check does not match the current pull request head');
+    expect(requestCount).toBe(0);
+  });
+
+  it('keeps changes requested when a later comment review is submitted by the same reviewer', async () => {
+    let requestCount = 0;
+
+    const result = await handleReviewRequestEvent(checkRunEvent(), {
+      agentLogin: 'reirei-agent',
+      reviewerLogin: 'hiragram',
+      branchPrefix: 'agent/',
+      pullRequests: {
+        async getPullRequest() {
+          const target = pullRequest({
+            reviews: [
+              { authorLogin: 'hiragram', state: 'CHANGES_REQUESTED' },
+              { authorLogin: 'hiragram', state: 'COMMENTED' },
+            ],
+          });
+          delete target.reviewDecision;
+          return target;
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          requestCount += 1;
+        },
+      },
+    });
+
+    expect(result.reason).toBe('pull request has unresolved change requests');
     expect(requestCount).toBe(0);
   });
 });

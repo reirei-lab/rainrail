@@ -145,6 +145,7 @@ describe('createGitHubPullRequestProvider', () => {
     });
 
     await expect(provider.getPullRequest({ repository: 'reirei-lab/rainrail', number: 44 })).resolves.toMatchObject({
+      headSha: 'abc123',
       reviews: expect.arrayContaining([expect.objectContaining({ authorLogin: 'hiragram', state: 'CHANGES_REQUESTED' })]),
       statusCheckRollup: expect.arrayContaining([expect.objectContaining({ name: 'late', conclusion: 'failure' })]),
     });

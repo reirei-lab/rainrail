@@ -91,4 +91,17 @@ describe('handleCheckFailureEvent', () => {
     expect(result.reason).toBe('failed PR checks returned issue to Todo');
     expect(updates[0]?.commentBody).toContain('- Check: legacy-ci');
   });
+
+  it('does not return issues to Todo from pending commit status events', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+
+    const result = await handleCheckFailureEvent(statusEvent({ state: 'pending' }), {
+      agentLogin: 'reirei-agent',
+      branchPrefix: 'agent/',
+      tasks: handoffRecorder({ updates }),
+    });
+
+    expect(result.reason).toBe('event is not a completed failed check for a pull request');
+    expect(updates).toEqual([]);
+  });
 });

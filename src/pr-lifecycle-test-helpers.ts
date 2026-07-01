@@ -74,6 +74,7 @@ export function reviewEvent(overrides: {
   repository?: string;
   branchName?: string;
   stringReviewId?: boolean;
+  headSha?: string;
 } = {}): RainrailEventEnvelope {
   const repository = overrides.repository ?? 'reirei-lab/rainrail';
   const reviewId = 4493317816;
@@ -99,6 +100,7 @@ export function reviewEvent(overrides: {
         id: '44',
         number: 44,
         headRef: overrides.branchName ?? 'agent/test-pr',
+        headSha: overrides.headSha ?? 'abc123',
         state: overrides.prState ?? 'open',
         author: overrides.prAuthor ?? 'reirei-agent',
       },
@@ -143,7 +145,7 @@ export function checkRunEvent(overrides: { conclusion?: string; status?: string;
   });
 }
 
-export function statusEvent(overrides: { state?: string; headSha?: string } = {}): RainrailEventEnvelope {
+export function statusEvent(overrides: { state?: string; headSha?: string; normalizedResourceOnly?: boolean } = {}): RainrailEventEnvelope {
   const state = overrides.state ?? 'success';
   return createEventEnvelope({
     source: { type: 'github', name: 'github-webhook', repository: 'reirei-lab/rainrail' },
@@ -155,14 +157,14 @@ export function statusEvent(overrides: { state?: string; headSha?: string } = {}
       provider: 'github',
       event: 'status',
       action: 'received',
-      state,
+      ...(overrides.normalizedResourceOnly === true ? {} : { state }),
       repository: { fullName: 'reirei-lab/rainrail' },
       resource: {
         type: 'status',
         id: overrides.headSha ?? 'abc123',
         context: 'legacy-ci',
-        status: state,
-        conclusion: state,
+        ...(overrides.normalizedResourceOnly === true ? {} : { status: state, conclusion: state }),
+        state,
         headSha: overrides.headSha ?? 'abc123',
         url: 'https://github.com/reirei-lab/rainrail/status/abc123',
       },
