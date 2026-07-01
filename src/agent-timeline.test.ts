@@ -280,26 +280,32 @@ describe('agent timeline', () => {
     const timeline = parseRuntimeTrajectoryTimeline([
       JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:08:00.000Z', seq: 1 }),
       JSON.stringify({ type: 'tool.call', ts: '2026-06-30T15:09:00.000Z', seq: 2, data: { name: 'bash', arguments: { command: 'pnpm test' } } }),
-      JSON.stringify({ type: 'tool.call', ts: '2026-06-30T15:09:05.000Z', seq: 3, data: { name: 'bash', arguments: { command: 'curl https://user:password@example.com/repo.git -H "Authorization: Bearer github_pat_secretValue" -H "Authorization: Basic dXNlcjpwYXNz" -H "Cookie: session=abc123; csrf=def456" AUTHORIZATION="Bearer env-secret" token="quoted-secret" password="pa\\"ss"' } } }),
-      JSON.stringify({ type: 'tool.result', ts: '2026-06-30T15:09:10.000Z', seq: 4, data: { name: 'bash', status: 'completed', output: "ok https://user:password@example.com/repo.git token=secret-value AWS_SECRET_ACCESS_KEY=cloud-secret AUTHORIZATION=BasicEnvSecret api_key='quoted-output-secret' Authorization: Bearer github_pat_outputSecret Authorization: Basic dXNlcjpwYXNz Cookie: session=abc123 Set-Cookie: refresh=def456\n-----BEGIN OPENSSH PRIVATE KEY-----\nplaceholder\n-----END OPENSSH PRIVATE KEY-----" } }),
+      JSON.stringify({ type: 'tool.call', ts: '2026-06-30T15:09:05.000Z', seq: 3, data: { name: 'bash', arguments: { command: 'curl -u user:curl-password --user other:other-password https://user:password@example.com/repo.git -H "Authorization: Bearer github_pat_secretValue" -H "Authorization: Basic dXNlcjpwYXNz" -H "Authorization: AWS4-HMAC-SHA256 Credential=AKIA/20260701/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-date, Signature=abcdef123456" -H "Cookie: session=abc123; csrf=def456" AUTHORIZATION="Bearer env-secret" token="quoted-secret" password="pa\\"ss"' } } }),
+      JSON.stringify({ type: 'tool.result', ts: '2026-06-30T15:09:10.000Z', seq: 4, data: { name: 'bash', status: 'completed', output: "ok curl --user result:result-password https://user:password@example.com/repo.git token=secret-value AWS_SECRET_ACCESS_KEY=cloud-secret AUTHORIZATION=BasicEnvSecret api_key='quoted-output-secret' Authorization: Bearer github_pat_outputSecret Authorization: Basic dXNlcjpwYXNz Authorization: AWS4-HMAC-SHA256 Credential=AKIA/20260701/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-date, Signature=resultsignature Cookie: session=abc123 Set-Cookie: refresh=def456\n-----BEGIN OPENSSH PRIVATE KEY-----\nplaceholder\n-----END OPENSSH PRIVATE KEY-----" } }),
       JSON.stringify({ type: 'tool.result', ts: '2026-06-30T15:09:20.000Z', seq: 5, data: { name: 'bash', status: 'completed', contentItems: [{ token: 'secret-json-token', apiKey: 'secret-json-key', password: 'pa\\"ss', Authorization: 'Basic dXNlcjpwYXNz', Cookie: 'session=json-cookie', 'Set-Cookie': 'refresh=json-refresh', webhookSecret: 'secret-webhook', clientSecret: 'secret-client', apiToken: 'secret-api-token', privateKey: '-----BEGIN PRIVATE KEY-----\\nplaceholder\\n-----END PRIVATE KEY-----', private_key: 'private-key-material' }] } }),
     ].join('\n'));
 
     expect(timeline.map((entry) => [entry.phase, entry.summary])).toEqual([
       ['session.started', 'session.started'],
       ['確認', 'pnpm test'],
-      ['実行', expect.stringContaining('curl https://[redacted]@example.com/repo.git')],
+      ['実行', expect.stringContaining('curl -u [redacted-credential]')],
       ['tool.result', 'bash completed'],
       ['tool.result', 'bash completed'],
     ]);
-    expect(timeline[2]!.detail).toContain('Bearer [redacted-token]');
-    expect(timeline[2]!.detail).toContain('Basic [redacted-token]');
+    expect(timeline[2]!.detail).toContain('Authorization: [redacted-authorization]');
+    expect(timeline[2]!.detail).toContain('-u [redacted-credential]');
+    expect(timeline[2]!.detail).toContain('--user [redacted-credential]');
     expect(timeline[2]!.detail).toContain('Cookie: [redacted-cookie]');
     expect(timeline[2]!.detail).toContain('https://[redacted]@example.com/repo.git');
     expect(timeline[2]!.detail).toContain('AUTHORIZATION="[redacted]"');
     expect(timeline[2]!.detail).toContain('token="[redacted]"');
     expect(timeline[2]!.detail).toContain('password="[redacted]"');
     expect(timeline[2]!.detail).not.toContain('user:password');
+    expect(timeline[2]!.detail).not.toContain('curl-password');
+    expect(timeline[2]!.detail).not.toContain('other-password');
+    expect(timeline[2]!.detail).not.toContain('Signature=abcdef123456');
+    expect(timeline[2]!.detail).not.toContain('github_pat_secretValue');
+    expect(timeline[2]!.detail).not.toContain('dXNlcjpwYXNz');
     expect(timeline[2]!.detail).not.toContain('env-secret');
     expect(timeline[2]!.detail).not.toContain('abc123');
     expect(timeline[2]!.detail).not.toContain('ss"');
@@ -308,13 +314,17 @@ describe('agent timeline', () => {
     expect(timeline[3]!.excerpt).toContain('AUTHORIZATION=[redacted]');
     expect(timeline[3]!.excerpt).toContain('https://[redacted]@example.com/repo.git');
     expect(timeline[3]!.excerpt).toContain("api_key='[redacted]'");
-    expect(timeline[3]!.excerpt).toContain('Bearer [redacted-token]');
-    expect(timeline[3]!.excerpt).toContain('Basic [redacted-token]');
+    expect(timeline[3]!.excerpt).toContain('Authorization: [redacted-authorization]');
+    expect(timeline[3]!.excerpt).toContain('--user [redacted-credential]');
     expect(timeline[3]!.excerpt).toContain('Cookie: [redacted-cookie]');
     expect(timeline[3]!.excerpt).toContain('Set-Cookie: [redacted-cookie]');
     expect(timeline[3]!.excerpt).toContain('[redacted-private-key]');
     expect(timeline[3]!.excerpt).not.toContain('BasicEnvSecret');
     expect(timeline[3]!.excerpt).not.toContain('user:password');
+    expect(timeline[3]!.excerpt).not.toContain('result-password');
+    expect(timeline[3]!.excerpt).not.toContain('Signature=resultsignature');
+    expect(timeline[3]!.excerpt).not.toContain('github_pat_outputSecret');
+    expect(timeline[3]!.excerpt).not.toContain('dXNlcjpwYXNz');
     expect(timeline[3]!.excerpt).not.toContain('def456');
     expect(timeline[3]!.excerpt).not.toContain('BEGIN OPENSSH PRIVATE KEY');
     expect(timeline[4]!.excerpt).toContain('"token": "[redacted]"');

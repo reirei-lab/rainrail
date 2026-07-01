@@ -1,4 +1,4 @@
-import { mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
 import { EventEmitter } from 'node:events';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -180,7 +180,44 @@ describe('createOpenClawRuntimeProvider', () => {
 
     expect(statMode(logDirectory)).toBe(0o700);
     expect(statMode(String(started.metadata?.logPath))).toBe(0o600);
+    expect(statMode(String(started.metadata?.stderrLogPath))).toBe(0o600);
     expect(statMode(String(resumed?.metadata?.logPath))).toBe(0o600);
+    expect(statMode(String(resumed?.metadata?.stderrLogPath))).toBe(0o600);
+  });
+
+  it('keeps JSON stdout separate from diagnostic stderr for completion parsing', async () => {
+    const logDirectory = temporaryDirectory();
+    const spawnProcess = vi.fn((_command, _args, options) => {
+      const stdoutFd = options.stdio[1] as number;
+      const stderrFd = options.stdio[2] as number;
+      expect(stdoutFd).not.toBe(stderrFd);
+      writeSync(stdoutFd, JSON.stringify({
+        status: 'ok',
+        finalAssistantVisibleText: 'Outcome: implemented',
+      }));
+      writeSync(stderrFd, '{"status":"failed","summary":"diagnostic only"}\n');
+      return { pid: 4242, unref: vi.fn() };
+    });
+    const provider = createOpenClawRuntimeProvider({
+      enabled: true,
+      command: 'openclaw',
+      agentId: 'main',
+      sessionKeyPrefix: 'rainrail',
+      timeoutSeconds: 900,
+      logDirectory,
+      spawnProcess,
+    });
+
+    const started = await provider.startRun(runtimeRequest());
+    const stdoutLog = readFileSync(String(started.metadata?.logPath), 'utf8');
+    const stderrLog = readFileSync(String(started.metadata?.stderrLogPath), 'utf8');
+
+    expect(readRuntimeRunCompletionFromLog(stdoutLog)).toMatchObject({
+      status: 'succeeded',
+      outcome: 'implemented',
+    });
+    expect(stderrLog).toContain('diagnostic only');
+    expect(stdoutLog).not.toContain('diagnostic only');
   });
 
   it('uses a run-specific start log path for repeated starts of the same issue task', async () => {
@@ -309,6 +346,45 @@ describe('createOpenClawRuntimeProvider', () => {
     ]), expect.anything());
   });
 
+  it('does not start OpenClaw when the caller signal is already aborted', async () => {
+    const spawnProcess = vi.fn(() => ({ pid: 4242, unref: vi.fn() }));
+    const provider = createOpenClawRuntimeProvider({
+      enabled: true,
+      command: 'openclaw',
+      agentId: 'main',
+      sessionKeyPrefix: 'rainrail',
+      timeoutSeconds: 900,
+      logDirectory: temporaryDirectory(),
+      spawnProcess,
+    });
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(provider.startRun(runtimeRequest(), { signal: controller.signal })).rejects.toThrow('aborted');
+    expect(spawnProcess).not.toHaveBeenCalled();
+  });
+
+  it('terminates a spawned OpenClaw start when the caller signal aborts', async () => {
+    const kill = vi.fn();
+    const provider = createOpenClawRuntimeProvider({
+      enabled: true,
+      command: 'openclaw',
+      agentId: 'main',
+      sessionKeyPrefix: 'rainrail',
+      timeoutSeconds: 900,
+      logDirectory: temporaryDirectory(),
+      spawnProcess: vi.fn(() => ({ pid: 4242, unref: vi.fn(), kill })),
+    });
+    const controller = new AbortController();
+
+    await expect(provider.startRun(runtimeRequest(), { signal: controller.signal })).resolves.toMatchObject({
+      status: 'running',
+    });
+    controller.abort();
+
+    expect(kill).toHaveBeenCalledWith('SIGTERM');
+  });
+
   it('resumes the fallback session key recorded in the previous task log', async () => {
     const spawnProcess = vi.fn(() => ({ pid: 5151, unref: vi.fn() }));
     const logDirectory = temporaryDirectory();
@@ -316,7 +392,9 @@ describe('createOpenClawRuntimeProvider', () => {
     writeFileSync(logPath, [
       'EMBEDDED FALLBACK: Gateway timed out; running embedded agent with fresh session gateway-fallback-abc123',
       JSON.stringify({
+        status: 'ok',
         result: {
+          finalAssistantVisibleText: 'Outcome: implemented',
           meta: {
             agentMeta: {
               sessionId: 'gateway-fallback-abc123',
@@ -407,6 +485,7 @@ describe('createOpenClawRuntimeProvider', () => {
     const logPath = `${logDirectory}/task.log`;
     writeFileSync(logPath, [
       'user pasted gateway-fallback-not-a-runtime-session in the issue body',
+      'tool output: {"agentMeta":{"fallbackSessionKey":"agent:main:other-session"}}',
       'tool output: {"fallbackSessionKey":"agent:main:other-session"}',
     ].join('\n'), 'utf8');
     const provider = createOpenClawRuntimeProvider({

@@ -84,15 +84,19 @@ OpenClaw runtime provider は実 agent 起動を `enabled: true` の capability 
 背後に置く。通常の workflow test では `RuntimeProvider` mock を注入し、
 `createAgentAssignmentRuntimeFromProvider()` 経由で agent assignment を検証する。
 実起動では `openclaw agent --agent ... --session-key ... --timeout ... --json` を
-spawn し、log path、pid、agent session、branch を run metadata に残す。spawn 後に
+spawn し、stdout log path、stderr log path、pid、agent session、branch を run metadata に残す。
+completion 解析は JSON stdout log を対象にし、Gateway/plugin/fallback diagnostics などの
+stderr は別 log に保存する。`startRun(request, { signal })` の signal が abort 済みなら
+spawn せず、spawn 後に abort された場合は child process へ `SIGTERM` を送る。spawn 後に
 Node が `error` を emit しても未処理例外で Rainrail を落とさないよう listener を置き、
 provider 利用側が `onSpawnError` で観測できるようにする。start run の log path は
 同じ issue task を別 run で再起動しても過去ログを切り詰めないよう、agent session id
 由来の一意な名前にする。resume run も session id を attempt id に含め、同じ issue
 task の別 session が同じ resume log に追記されないようにする。初回実行が gateway
-fallback session へ移った場合は、前回 log から fallback session id を検出して resume
+fallback session へ移った場合は、前回 completion metadata から fallback session key を、
+または embedded fallback marker から fallback session id を検出して resume
 対象にする。OpenClaw の raw stdout/stderr log は redaction 前の credential を含み得るため、
-log directory は `0700`、start/resume log file は `0600` で作成する。
+log directory は `0700`、start/resume の stdout/stderr log file は `0600` で作成する。
 
 completion/resume/timeline は provider 境界の情報として扱う。completion parser は
 Codex/OpenClaw の JSON completion と transcript compaction failure を区別し、
@@ -107,10 +111,10 @@ JSON completion として解析できる場合は、本文に `CLI transcript co
 resume helper は running pid を確認し、
 安定した resume attempt id を生成する。timeline reader は OpenClaw trajectory jsonl を読み、Codex activity 表示に
 必要な時刻、分類済み phase、redacted summary、status、redacted excerpt を返す。
-redaction は shell 風の `token=...` だけでなく JSON の `"token": "..."` /
+redaction は shell 風の `token=...` や `curl -u user:password` だけでなく JSON の `"token": "..."` /
 `"apiKey": "..."` / `"password": "..."`、`"webhookSecret"` / `"clientSecret"` /
 `"apiToken"` のような compound key、quoted shell assignment、`github_pat_...`、
-Bearer credential も対象にする。timeline status は最後の lifecycle/event row を見て
+HTTP Authorization header 全体、Bearer credential も対象にする。timeline status は最後の lifecycle/event row を見て
 ended を更新し、resume 後に追記された session を古い ended のまま扱わない。trajectory の既定 path は
 `agentId` ごとの `~/.openclaw/agents/<agentId>/sessions` を使い、`main` 以外の
 OpenClaw agent でも呼び出し側が毎回 sessionsDirectory を上書きしなくてよい。

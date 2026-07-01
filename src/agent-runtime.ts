@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 
 import type { AgentAssignmentRuntime } from './agent-assignment.js';
-import type { RuntimeAgentTask, RuntimeProvider, RuntimeRun, RuntimeRunRequest, RuntimeRunStatus } from './runtime-provider.js';
+import type { RuntimeAgentTask, RuntimeProvider, RuntimeProviderContext, RuntimeRun, RuntimeRunRequest, RuntimeRunStatus } from './runtime-provider.js';
 
 interface AgentAssignmentRuntimeProviderOptions {
   runtime: RuntimeProvider;
@@ -34,6 +34,7 @@ type SpawnProcess = (command: string, args: string[], options: {
 interface SpawnedChild {
   pid?: number | undefined;
   unref?: (() => void) | undefined;
+  kill?: ((signal?: NodeJS.Signals | number) => boolean) | undefined;
   on?: ((event: 'error', listener: (error: Error) => void) => unknown) | undefined;
 }
 
@@ -92,14 +93,16 @@ export function createOpenClawRuntimeProvider(options: OpenClawRuntimeProviderOp
   return {
     name: 'openclaw',
     kind: 'runtime-provider',
-    startRun: async (request) => startOpenClawRun(options, request),
+    startRun: async (request, context) => startOpenClawRun(options, request, context),
     resumeRun: async (request) => {
       if (!options.enabled) {
         throw new Error('OpenClaw runtime provider is disabled');
       }
       ensurePrivateLogDirectory(options.logDirectory);
       const logPath = join(options.logDirectory, `${safeFileName(request.attemptId)}.log`);
+      const stderrLogPath = stderrLogPathFor(logPath);
       const outputFd = openPrivateLogFile(logPath, 'a');
+      const stderrFd = openPrivateLogFile(stderrLogPath, 'a');
       const resumeSessionId = runtimeResumeSessionId(request.task);
       const args = [
         'agent',
@@ -116,7 +119,7 @@ export function createOpenClawRuntimeProvider(options: OpenClawRuntimeProviderOp
       try {
         const child = (options.spawnProcess ?? defaultSpawnProcess)(options.command, args, {
           detached: true,
-          stdio: ['ignore', outputFd, outputFd],
+          stdio: ['ignore', outputFd, stderrFd],
         });
         attachSpawnErrorHandler(child, options, 'resume');
         child.unref?.();
@@ -127,6 +130,7 @@ export function createOpenClawRuntimeProvider(options: OpenClawRuntimeProviderOp
           metadata: {
             pid: child.pid,
             logPath,
+            stderrLogPath,
             agentSessionId: resumeSessionId,
             branchName: request.task.branchName,
             attemptId: request.attemptId,
@@ -134,6 +138,7 @@ export function createOpenClawRuntimeProvider(options: OpenClawRuntimeProviderOp
         };
       } finally {
         closeSync(outputFd);
+        closeSync(stderrFd);
       }
     },
   };
@@ -142,16 +147,20 @@ export function createOpenClawRuntimeProvider(options: OpenClawRuntimeProviderOp
 export async function startOpenClawRun(
   options: OpenClawRuntimeProviderOptions,
   request: RuntimeRunRequest,
+  context?: RuntimeProviderContext,
 ): Promise<RuntimeRun> {
   if (!options.enabled) {
     throw new Error('OpenClaw runtime provider is disabled');
   }
+  throwIfAborted(context?.signal);
 
   const task = runtimeAgentTaskInput(request.task);
   ensurePrivateLogDirectory(options.logDirectory);
   const agentSessionId = task.agentSessionId ?? generatedAgentSessionId(options, request, task);
   const logPath = join(options.logDirectory, `${safeFileName(agentSessionId)}.log`);
+  const stderrLogPath = stderrLogPathFor(logPath);
   const outputFd = openPrivateLogFile(logPath, 'w');
+  const stderrFd = openPrivateLogFile(stderrLogPath, 'w');
   const args = [
     'agent',
     '--agent',
@@ -168,9 +177,10 @@ export async function startOpenClawRun(
   try {
     const child = (options.spawnProcess ?? defaultSpawnProcess)(options.command, args, {
       detached: true,
-      stdio: ['ignore', outputFd, outputFd],
+      stdio: ['ignore', outputFd, stderrFd],
     });
     attachSpawnErrorHandler(child, options, 'start');
+    attachAbortHandler(child, context?.signal);
     child.unref?.();
     return {
       id: agentSessionId,
@@ -179,6 +189,7 @@ export async function startOpenClawRun(
       metadata: {
         pid: child.pid,
         logPath,
+        stderrLogPath,
         agentSessionId,
         branchName: task.branchName,
         taskId: task.id,
@@ -186,6 +197,7 @@ export async function startOpenClawRun(
     };
   } finally {
     closeSync(outputFd);
+    closeSync(stderrFd);
   }
 }
 
@@ -460,9 +472,12 @@ function runtimeResumeSessionId(task: RuntimeAgentTask): string {
 }
 
 function extractFallbackRuntimeSessionKey(log: string): string | undefined {
-  const keyMatch = log.match(/"agentMeta"\s*:\s*\{[\s\S]*?"fallbackSessionKey"\s*:\s*"((?:\\.|[^"\\])*)"/);
-  if (keyMatch?.[1] !== undefined) {
-    return decodeJsonString(keyMatch[1]);
+  const payload = parseJsonFromLog(log);
+  if (isRecord(payload)) {
+    const key = stringValue(recordValue(recordValue(recordValue(payload.result)?.meta)?.agentMeta)?.fallbackSessionKey);
+    if (key !== undefined) {
+      return key;
+    }
   }
   return extractFallbackRuntimeSessionId(log);
 }
@@ -470,14 +485,6 @@ function extractFallbackRuntimeSessionKey(log: string): string | undefined {
 function extractFallbackRuntimeSessionId(log: string): string | undefined {
   const match = log.match(/EMBEDDED FALLBACK:[^\n\r]*fresh session\s+(gateway-fallback-[A-Za-z0-9._-]+)/i);
   return match?.[1];
-}
-
-function decodeJsonString(value: string): string {
-  try {
-    return JSON.parse(`"${value}"`) as string;
-  } catch {
-    return value;
-  }
 }
 
 function generatedAgentSessionId(
@@ -545,6 +552,30 @@ function attachSpawnErrorHandler(
       error,
     });
   });
+}
+
+function attachAbortHandler(child: SpawnedChild, signal: AbortSignal | undefined): void {
+  if (signal === undefined) {
+    return;
+  }
+  const abort = () => {
+    child.kill?.('SIGTERM');
+  };
+  if (signal.aborted) {
+    abort();
+    return;
+  }
+  signal.addEventListener('abort', abort, { once: true });
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) {
+    throw new Error('OpenClaw runtime start was aborted');
+  }
+}
+
+function stderrLogPathFor(logPath: string): string {
+  return logPath.endsWith('.log') ? logPath.replace(/\.log$/, '.stderr.log') : `${logPath}.stderr`;
 }
 
 function safeFileName(value: string): string {
