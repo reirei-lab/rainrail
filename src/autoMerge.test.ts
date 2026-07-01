@@ -41,12 +41,25 @@ describe('handleAutoMergeEvent', () => {
   });
 
   it('requires the configured reviewer latest approval instead of aggregate reviewDecision', async () => {
-    const result = await handleAutoMergeEvent(reviewEvent(), options({
+    const result = await handleAutoMergeEvent(checkRunEvent(), options({
       reviewDecision: 'APPROVED',
       reviews: [{ authorLogin: 'hiragram', state: 'CHANGES_REQUESTED' }],
     }));
 
     expect(result.reason).toBe('configured reviewer approval is not confirmed');
+  });
+
+  it('uses the current approval webhook while live reviews are not reflected yet', async () => {
+    const runtimeMerges: unknown[] = [];
+
+    const result = await handleAutoMergeEvent(reviewEvent({
+      headSha: 'abc123',
+    }), options({
+      reviews: [],
+    }), runtimeContext(runtimeMerges));
+
+    expect(result.reason).toBe('pull_request_merged');
+    expect(runtimeMerges).toEqual([expect.objectContaining({ number: 44 })]);
   });
 
   it('does not merge while another reviewer has unresolved change requests', async () => {

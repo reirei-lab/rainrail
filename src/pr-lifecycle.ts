@@ -287,9 +287,11 @@ export async function handleReviewRequestEvent(
   const pullRequests = requirePullRequests(options.pullRequests);
   const candidates = await resolvePullRequestCandidates(candidate, pullRequests, context);
   if (candidates.length === 0) return { handled: false, reason: 'pull request was not found' };
+  if (candidate.expandByHeadSha === true && candidates.some((pullRequest) => shouldRetryUnreflectedReviewRequestCandidate(options, candidate, pullRequest))) {
+    throw new Error('pull request checks are still being reflected');
+  }
   let fallback: WorkflowResult = { handled: false, reason: 'pull request was not found' };
   const requestedPullRequests: PullRequestReviewTarget[] = [];
-  let sawUnreflectedCheckRollup = false;
   for (const pullRequest of candidates) {
     if (candidate.headSha !== undefined && pullRequest.headSha !== undefined && candidate.headSha !== pullRequest.headSha) {
       fallback = { handled: false, reason: 'check does not match the current pull request head', candidate, pullRequest };
@@ -312,9 +314,6 @@ export async function handleReviewRequestEvent(
       continue;
     }
     if (!hasPassingCheckRollup(pullRequest)) {
-      if (candidate.expandByHeadSha === true && isUnreflectedCheckRollup(pullRequest)) {
-        sawUnreflectedCheckRollup = true;
-      }
       fallback = { handled: false, reason: 'not all checks have passed', pullRequest };
       continue;
     }
@@ -333,9 +332,6 @@ export async function handleReviewRequestEvent(
       reviewerLogin: options.reviewerLogin,
     }, taskContext(context));
     requestedPullRequests.push(pullRequest);
-  }
-  if (sawUnreflectedCheckRollup) {
-    throw new Error('pull request checks are still being reflected');
   }
   if (requestedPullRequests.length > 0) {
     return {
@@ -439,6 +435,9 @@ export async function handleCodexReviewEvent(
     && review.reviewCommitId !== currentHeadSha
   ) {
     return { handled: false, reason: 'review does not match the current pull request head', review };
+  }
+  if (livePullRequest !== undefined && codexReviewWasSuperseded(livePullRequest, review, options)) {
+    return { handled: false, reason: 'Codex review was superseded', review };
   }
   const task = await options.tasks.getAgentTaskByBranchName(review.branchName);
   if (task === undefined) return { handled: false, reason: 'no agent task matched the PR branch', review };
@@ -673,11 +672,12 @@ export async function handleAutoMergeEvent(
       fallback = { handled: false, reason: 'pull request is not an agent-authored target', pullRequest };
       continue;
     }
-    if (!reviewApproved(options, pullRequest)) {
+    const reviewAwarePullRequest = pullRequestWithCandidateApproval(options, candidate, pullRequest);
+    if (!reviewApproved(options, reviewAwarePullRequest)) {
       fallback = { handled: false, reason: 'configured reviewer approval is not confirmed', pullRequest };
       continue;
     }
-    if (hasUnresolvedChangeRequest(pullRequest)) {
+    if (hasUnresolvedChangeRequest(reviewAwarePullRequest)) {
       fallback = { handled: false, reason: 'pull request has unresolved change requests', pullRequest };
       continue;
     }
@@ -747,6 +747,21 @@ function hasPassingCheckRollup(pullRequest: PullRequestReviewTarget): boolean {
 
 function isUnreflectedCheckRollup(pullRequest: PullRequestReviewTarget): boolean {
   return pullRequest.statusCheckRollup.length === 0 || pullRequest.statusCheckRollup.some(isPendingCheck);
+}
+
+function shouldRetryUnreflectedReviewRequestCandidate(
+  options: ReviewRequestWorkflowOptions,
+  candidate: PullRequestCandidate,
+  pullRequest: PullRequestReviewTarget,
+): boolean {
+  if (candidate.headSha !== undefined && pullRequest.headSha !== undefined && candidate.headSha !== pullRequest.headSha) return false;
+  if (!isReviewTarget(options, pullRequest)) return false;
+  if (normalize(pullRequest.state) !== 'open') return false;
+  if (pullRequest.isDraft) return false;
+  if (hasUnresolvedChangeRequest(pullRequest)) return false;
+  if (reviewApproved(options, pullRequest)) return false;
+  if (pullRequest.reviewRequests.some((login) => sameLogin(login, options.reviewerLogin))) return false;
+  return !hasPassingCheckRollup(pullRequest) && isUnreflectedCheckRollup(pullRequest);
 }
 
 function pullRequestsFromContext(context: PluginRuntimeContext): GitHubPullRequestProvider | undefined {
@@ -1153,6 +1168,27 @@ function reviewApproved(config: { reviewerLogin: string }, pullRequest: PullRequ
   return review?.commitId === undefined || pullRequest.headSha === undefined || review.commitId === pullRequest.headSha;
 }
 
+function pullRequestWithCandidateApproval(
+  config: { reviewerLogin: string },
+  candidate: PullRequestCandidate & { reviewerLogin?: string },
+  pullRequest: PullRequestReviewTarget,
+): PullRequestReviewTarget {
+  const reviewerLogin = candidate.reviewerLogin;
+  if (reviewerLogin === undefined || !sameLogin(reviewerLogin, config.reviewerLogin)) return pullRequest;
+  if (candidate.headSha !== undefined && pullRequest.headSha !== undefined && candidate.headSha !== pullRequest.headSha) return pullRequest;
+  return {
+    ...pullRequest,
+    reviews: [
+      ...(pullRequest.reviews ?? []),
+      {
+        authorLogin: reviewerLogin,
+        state: 'APPROVED',
+        ...(candidate.headSha === undefined ? optionalString('commitId', pullRequest.headSha) : { commitId: candidate.headSha }),
+      },
+    ],
+  };
+}
+
 function hasUnresolvedChangeRequest(pullRequest: PullRequestReviewTarget): boolean {
   if (normalize(pullRequest.reviewDecision) === 'changes_requested' && (pullRequest.reviews?.length ?? 0) === 0) return true;
   return Array.from(latestActionableReviewsByReviewer(pullRequest).values())
@@ -1160,6 +1196,17 @@ function hasUnresolvedChangeRequest(pullRequest: PullRequestReviewTarget): boole
       normalize(review.state) === 'changes_requested'
       && (review.commitId === undefined || pullRequest.headSha === undefined || review.commitId === pullRequest.headSha)
     );
+}
+
+function codexReviewWasSuperseded(
+  pullRequest: PullRequestReviewTarget,
+  review: { reviewCommitId?: string },
+  options: Pick<CodexReviewWorkflowOptions, 'reviewerLogin'>,
+): boolean {
+  const latest = latestActionableReviewsByReviewer(pullRequest).get(normalize(options.reviewerLogin));
+  if (latest === undefined || normalize(latest.state) === 'commented') return false;
+  if (!reviewIsForCurrentHead(latest, pullRequest)) return false;
+  return review.reviewCommitId === undefined || latest.commitId === undefined || latest.commitId === review.reviewCommitId;
 }
 
 function hasCurrentCheckFailure(pullRequest: PullRequestReviewTarget): boolean {

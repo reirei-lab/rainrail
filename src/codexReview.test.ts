@@ -64,7 +64,7 @@ describe('handleCodexReviewEvent', () => {
       tasks: handoffRecorder({ updates }),
       pullRequests: {
         async getPullRequest(input) {
-          return pullRequest({ ...input, reviewRequests: ['hiragram'] });
+          return pullRequest({ ...input, reviewRequests: ['hiragram'], reviews: [] });
         },
         async findPullRequestByHead() {
           throw new Error('not used');
@@ -109,6 +109,7 @@ describe('handleCodexReviewEvent', () => {
             ...input,
             headSha: 'abc123',
             reviewRequests: fetchCount === 1 ? [] : ['hiragram'],
+            reviews: [],
           });
         },
         async findPullRequestByHead() {
@@ -213,6 +214,43 @@ describe('handleCodexReviewEvent', () => {
     });
 
     expect(result.reason).toBe('pull request is already closed');
+    expect(updates).toEqual([]);
+  });
+
+  it('does not hand off delayed Codex comments after the live PR is approved', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+
+    const result = await handleCodexReviewEvent(reviewEvent({
+      state: 'commented',
+      headSha: 'abc123',
+      reviewCommitId: 'abc123',
+    }), {
+      agentLogin: 'reirei-agent',
+      reviewerLogin: 'hiragram',
+      branchPrefix: 'agent/',
+      targetRepositories: ['reirei-lab/rainrail'],
+      tasks: handoffRecorder({ updates }),
+      pullRequests: {
+        async getPullRequest(input) {
+          return pullRequest({
+            ...input,
+            headSha: 'abc123',
+            reviews: [{ authorLogin: 'hiragram', state: 'APPROVED', commitId: 'abc123' }],
+          });
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          throw new Error('not used');
+        },
+        async listReviewComments() {
+          throw new Error('not used');
+        },
+      },
+    });
+
+    expect(result.reason).toBe('Codex review was superseded');
     expect(updates).toEqual([]);
   });
 

@@ -159,6 +159,38 @@ describe('handleReviewRequestEvent', () => {
     })).rejects.toThrow('pull request checks are still being reflected');
   });
 
+  it('retries unreflected same-SHA candidates before requesting review', async () => {
+    const reviewRequests: Array<{ repository: string; number: number; reviewerLogin: string }> = [];
+
+    await expect(handleReviewRequestEvent(checkRunEvent({
+      pullRequests: [{ number: 45 }, { number: 44 }],
+    }), {
+      agentLogin: 'reirei-agent',
+      reviewerLogin: 'hiragram',
+      branchPrefix: 'agent/',
+      pullRequests: {
+        async getPullRequest(input) {
+          return input.number === 45
+            ? pullRequest({
+                ...input,
+                headRefName: 'agent/pending-pr',
+                reviews: [],
+                statusCheckRollup: [],
+              })
+            : pullRequest({ ...input, reviews: [] });
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview(input) {
+          reviewRequests.push(input);
+        },
+      },
+    })).rejects.toThrow('pull request checks are still being reflected');
+
+    expect(reviewRequests).toEqual([]);
+  });
+
   it('does not request twice while a reviewer request is already pending', async () => {
     let requestCount = 0;
 
