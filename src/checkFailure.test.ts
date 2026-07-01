@@ -13,7 +13,11 @@ describe('handleCheckFailureEvent', () => {
       tasks: handoffRecorder({ updates }),
       pullRequests: {
         async getPullRequest() {
-          return pullRequest();
+          return pullRequest({
+            statusCheckRollup: [
+              { type: 'CheckRun', name: 'Typecheck, Test, Build', status: 'COMPLETED', conclusion: 'FAILURE' },
+            ],
+          });
         },
         async findPullRequestByHead() {
           throw new Error('not used');
@@ -67,6 +71,78 @@ describe('handleCheckFailureEvent', () => {
     expect(updates).toEqual([]);
   });
 
+  it('ignores failed checks for pull requests that are no longer open', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+
+    const result = await handleCheckFailureEvent(checkRunEvent({ conclusion: 'failure' }), {
+      agentLogin: 'reirei-agent',
+      branchPrefix: 'agent/',
+      tasks: handoffRecorder({ updates }),
+      pullRequests: {
+        async getPullRequest() {
+          return pullRequest({ state: 'CLOSED' });
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          throw new Error('not used');
+        },
+      },
+    });
+
+    expect(result.reason).toBe('pull request is not open');
+    expect(updates).toEqual([]);
+  });
+
+  it('ignores old failed check events once the live rollup has passed', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+
+    const result = await handleCheckFailureEvent(checkRunEvent({ conclusion: 'failure' }), {
+      agentLogin: 'reirei-agent',
+      branchPrefix: 'agent/',
+      tasks: handoffRecorder({ updates }),
+      pullRequests: {
+        async getPullRequest() {
+          return pullRequest();
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          throw new Error('not used');
+        },
+      },
+    });
+
+    expect(result.reason).toBe('current pull request checks have passed');
+    expect(updates).toEqual([]);
+  });
+
+  it('ignores failed checks for fork pull requests that only match the agent branch prefix', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+
+    const result = await handleCheckFailureEvent(checkRunEvent({ conclusion: 'failure' }), {
+      agentLogin: 'reirei-agent',
+      branchPrefix: 'agent/',
+      tasks: handoffRecorder({ updates }),
+      pullRequests: {
+        async getPullRequest() {
+          return pullRequest({ headRepository: 'external/fork' });
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          throw new Error('not used');
+        },
+      },
+    });
+
+    expect(result.reason).toBe('pull request is not an agent-authored target');
+    expect(updates).toEqual([]);
+  });
+
   it('returns issues to Todo from failed commit status events', async () => {
     const updates: Array<{ reason: string; commentBody?: string }> = [];
 
@@ -80,7 +156,11 @@ describe('handleCheckFailureEvent', () => {
         },
         async findPullRequestByHead(input) {
           expect(input).toMatchObject({ repository: 'reirei-lab/rainrail', headSha: 'abc123' });
-          return pullRequest();
+          return pullRequest({
+            statusCheckRollup: [
+              { type: 'StatusContext', name: 'legacy-ci', state: 'failure' },
+            ],
+          });
         },
         async requestReview() {
           throw new Error('not used');

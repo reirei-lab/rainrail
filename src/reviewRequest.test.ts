@@ -130,6 +130,30 @@ describe('handleReviewRequestEvent', () => {
     expect(requestCount).toBe(0);
   });
 
+  it('does not request review for fork pull requests that only match the agent branch prefix', async () => {
+    let requestCount = 0;
+
+    const result = await handleReviewRequestEvent(checkRunEvent(), {
+      agentLogin: 'reirei-agent',
+      reviewerLogin: 'hiragram',
+      branchPrefix: 'agent/',
+      pullRequests: {
+        async getPullRequest() {
+          return pullRequest({ headRepository: 'external/fork', reviews: [] });
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          requestCount += 1;
+        },
+      },
+    });
+
+    expect(result.reason).toBe('pull request is not an agent-authored target');
+    expect(requestCount).toBe(0);
+  });
+
   it('does not request review while the latest review still requests changes', async () => {
     let requestCount = 0;
 

@@ -146,6 +146,7 @@ describe('createGitHubPullRequestProvider', () => {
 
     await expect(provider.getPullRequest({ repository: 'reirei-lab/rainrail', number: 44 })).resolves.toMatchObject({
       headSha: 'abc123',
+      headRepository: 'reirei-lab/rainrail',
       reviews: expect.arrayContaining([expect.objectContaining({ authorLogin: 'hiragram', state: 'CHANGES_REQUESTED', commitId: 'abc123' })]),
       statusCheckRollup: expect.arrayContaining([expect.objectContaining({ name: 'late', conclusion: 'failure' })]),
     });
@@ -181,6 +182,37 @@ describe('createGitHubPullRequestProvider', () => {
         expect.objectContaining({ type: 'StatusRollup', name: 'combined-status', state: 'failure' }),
         expect.objectContaining({ type: 'StatusContext', name: 'first-page-ci', state: 'success' }),
       ]),
+    });
+  });
+
+  it('ignores empty pending combined status when check runs have passed', async () => {
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.endsWith('/pulls/44')) {
+        return new Response(JSON.stringify(githubPullRequest()), { status: 200 });
+      }
+      if (url.endsWith('/pulls/44/reviews?per_page=100')) {
+        return new Response(JSON.stringify([]), { status: 200 });
+      }
+      if (url.endsWith('/commits/abc123/status')) {
+        return new Response(JSON.stringify({ state: 'pending', total_count: 0, statuses: [] }), { status: 200 });
+      }
+      if (url.endsWith('/commits/abc123/check-runs?per_page=100')) {
+        return new Response(JSON.stringify({
+          check_runs: [{ name: 'Typecheck, Test, Build', status: 'completed', conclusion: 'success' }],
+        }), { status: 200 });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    });
+    const provider = createGitHubPullRequestProvider({
+      auth: { getAuthToken: async () => undefined },
+      fetch: fetchImpl as unknown as typeof fetch,
+    });
+
+    await expect(provider.getPullRequest({ repository: 'reirei-lab/rainrail', number: 44 })).resolves.toMatchObject({
+      statusCheckRollup: [
+        { type: 'CheckRun', name: 'Typecheck, Test, Build', status: 'completed', conclusion: 'success' },
+      ],
     });
   });
 
@@ -234,7 +266,7 @@ function githubPullRequest(overrides: Record<string, unknown> = {}) {
     title: 'feat: add PR lifecycle workflows',
     html_url: 'https://github.com/reirei-lab/rainrail/pull/44',
     user: { login: 'reirei-agent' },
-    head: { ref: 'agent/test-pr', sha: 'abc123' },
+    head: { ref: 'agent/test-pr', sha: 'abc123', repo: { full_name: 'reirei-lab/rainrail' } },
     draft: false,
     state: 'open',
     mergeable: false,

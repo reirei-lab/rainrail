@@ -26,6 +26,7 @@ export function pullRequest(overrides: Partial<PullRequestReviewTarget> = {}): P
     url: 'https://github.com/reirei-lab/rainrail/pull/44',
     authorLogin: 'reirei-agent',
     headRefName: 'agent/test-pr',
+    headRepository: 'reirei-lab/rainrail',
     headSha: 'abc123',
     isDraft: false,
     state: 'OPEN',

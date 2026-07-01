@@ -59,7 +59,7 @@ interface GitHubPullRequestResponse {
   title?: unknown;
   html_url?: unknown;
   user?: { login?: unknown };
-  head?: { ref?: unknown; sha?: unknown };
+  head?: { ref?: unknown; repo?: { full_name?: unknown }; sha?: unknown };
   draft?: unknown;
   state?: unknown;
   mergeable?: unknown;
@@ -76,6 +76,7 @@ interface GitHubReviewResponse {
 
 interface GitHubStatusResponse {
   state?: unknown;
+  total_count?: unknown;
   statuses?: unknown;
 }
 
@@ -440,6 +441,7 @@ function pullRequestFromPayload(
   const url = stringValue(payload.html_url);
   const authorLogin = stringValue(payload.user?.login);
   const headRefName = stringValue(payload.head?.ref);
+  const headRepository = stringValue(payload.head?.repo?.full_name);
   const headSha = stringValue(payload.head?.sha);
   if (number === undefined || title === undefined || url === undefined || authorLogin === undefined || headRefName === undefined) {
     throw new Error('GitHub pull request response is missing required PR fields');
@@ -451,6 +453,7 @@ function pullRequestFromPayload(
     url,
     authorLogin,
     headRefName,
+    ...optionalString('headRepository', headRepository),
     ...optionalString('headSha', headSha),
     isDraft: payload.draft === true,
     statusCheckRollup: related.checks,
@@ -477,7 +480,12 @@ function pullRequestFromPayload(
 
 function optionalStatusRollup(statusPayload: GitHubStatusResponse): PullRequestCheck[] {
   const state = stringValue(statusPayload.state);
-  return state === undefined ? [] : [{ type: 'StatusRollup', name: 'combined-status', state }];
+  const statuses = arrayValue(statusPayload.statuses);
+  const totalCount = numberValue(statusPayload.total_count);
+  if (state === undefined || (state === 'pending' && statuses.length === 0 && (totalCount === undefined || totalCount === 0))) {
+    return [];
+  }
+  return [{ type: 'StatusRollup', name: 'combined-status', state }];
 }
 
 async function listPagedArray<T>(

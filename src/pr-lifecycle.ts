@@ -25,6 +25,7 @@ export interface PullRequestReviewTarget {
   url: string;
   authorLogin: string;
   headRefName: string;
+  headRepository?: string;
   headSha?: string;
   isDraft: boolean;
   state?: string;
@@ -381,6 +382,8 @@ export async function handleCheckFailureEvent(
   if (!isReviewTarget(options, pullRequest)) {
     return { handled: false, reason: 'pull request is not an agent-authored target', check, pullRequest };
   }
+  if (normalize(pullRequest.state) !== 'open') return { handled: false, reason: 'pull request is not open', check, pullRequest };
+  if (!hasCurrentCheckFailure(pullRequest)) return { handled: false, reason: 'current pull request checks have passed', check, pullRequest };
   const task = await options.tasks.getAgentTaskByBranchName(pullRequest.headRefName);
   if (task === undefined) return { handled: false, reason: 'no agent task matched the PR branch', check, pullRequest };
   const repositorySkip = repositoryMismatchReason(task, pullRequest.repository);
@@ -502,6 +505,9 @@ export async function handleAutoMergeEvent(
     return { handled: false, reason: 'pull request is not an agent-authored target', pullRequest };
   }
   if (!reviewApproved(options, pullRequest)) return { handled: false, reason: 'configured reviewer approval is not confirmed', pullRequest };
+  if (hasUnresolvedChangeRequest(pullRequest)) {
+    return { handled: false, reason: 'pull request has unresolved change requests', pullRequest };
+  }
   if (!allChecksPassed(pullRequest)) return { handled: false, reason: 'not all checks have passed', pullRequest };
   if (pullRequest.isDraft) return { handled: false, reason: 'pull request is draft', pullRequest };
   if (normalize(pullRequest.state) !== 'open') return { handled: false, reason: 'pull request is not open', pullRequest };
@@ -860,7 +866,9 @@ function inlineCommentSummary(comment: Omit<PullRequestReviewComment, 'reviewId'
 }
 
 function isReviewTarget(config: { agentLogin: string; branchPrefix: string }, pullRequest: PullRequestReviewTarget): boolean {
-  return sameLogin(pullRequest.authorLogin, config.agentLogin) && pullRequest.headRefName.startsWith(config.branchPrefix);
+  return sameLogin(pullRequest.authorLogin, config.agentLogin)
+    && pullRequest.headRefName.startsWith(config.branchPrefix)
+    && normalize(pullRequest.headRepository) === normalize(pullRequest.repository);
 }
 
 function reviewApproved(config: { reviewerLogin: string }, pullRequest: PullRequestReviewTarget): boolean {
@@ -873,6 +881,13 @@ function hasUnresolvedChangeRequest(pullRequest: PullRequestReviewTarget): boole
   if (normalize(pullRequest.reviewDecision) === 'changes_requested') return true;
   return Array.from(latestActionableReviewsByReviewer(pullRequest).values())
     .some((review) => normalize(review.state) === 'changes_requested');
+}
+
+function hasCurrentCheckFailure(pullRequest: PullRequestReviewTarget): boolean {
+  return pullRequest.statusCheckRollup.some((check) => {
+    const state = normalize(check.conclusion ?? check.state ?? check.status);
+    return ['failure', 'failed', 'error', 'cancelled', 'timed_out', 'action_required'].includes(state);
+  });
 }
 
 function latestActionableReviewsByReviewer(pullRequest: PullRequestReviewTarget): Map<string, PullRequestReview> {

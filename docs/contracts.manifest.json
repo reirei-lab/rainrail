@@ -110,6 +110,7 @@
         "classifyRuntimeToolCall",
         "GitHubAuthToken",
         "createGitHubTaskProvider",
+        "createGitHubPullRequestProvider",
         "recordGitHubRateLimit"
       ],
       "publicExportKinds": {
@@ -183,6 +184,7 @@
         "classifyRuntimeToolCall": "value",
         "GitHubAuthToken": "type",
         "createGitHubTaskProvider": "value",
+        "createGitHubPullRequestProvider": "value",
         "recordGitHubRateLimit": "value"
       }
     },
