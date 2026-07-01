@@ -132,6 +132,30 @@ describe('docs drift checks', () => {
     );
   });
 
+  it('does not count type-only re-exports for value public exports', () => {
+    const root = makeRepo();
+
+    writeFileSync(join(root, 'src/contract.ts'), 'export function PublicThing() {}\n');
+    writeFileSync(
+      join(root, 'src/index.ts'),
+      "export type { PublicThing } from './contract.js';\n",
+    );
+
+    expect(validateContractsManifest(root)).toContain(
+      'contract public export PublicThing is not re-exported from src/index.ts',
+    );
+  });
+
+  it('requires docs to mention public exports as exact code spans', () => {
+    const root = makeRepo();
+
+    writeFileSync(join(root, 'docs/contract.md'), '`OtherPublicThing`\n');
+
+    expect(validateContractsManifest(root)).toContain(
+      'contract public export PublicThing is not mentioned by its docs',
+    );
+  });
+
   it('treats Windows-style child paths as inside the project root', () => {
     expect(
       isPathInsideRoot('C:\\repo\\rainrail', 'docs\\contract.md', win32),

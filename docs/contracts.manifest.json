@@ -126,6 +126,17 @@
         "getNextProjectIssueToStart",
         "createGitHubProjectTaskQueueProvider"
       ]
+    },
+    {
+      "id": "workflow-plugins",
+      "title": "Packaged workflow plugins",
+      "sources": ["src/mention-draft.ts", "src/cloudflare-issue-reporter.ts"],
+      "docs": ["README.md"],
+      "tests": ["src/mention-draft.test.ts", "src/cloudflare-issue-reporter.test.ts"],
+      "publicExports": [
+        "createMentionDraftWorkflow",
+        "createCloudflareIssueReporterWorkflow"
+      ]
     }
   ]
 }

@@ -27,10 +27,15 @@ const relativePath = (root, path) => toPosix(relative(root, path));
 const readText = (root, path) => readFileSync(join(root, path), 'utf8');
 
 /**
+ * @param {string} value
+ */
+const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
  * @param {string} sourceText
  * @param {string} publicExport
  */
-const hasExportedDeclaration = (sourceText, publicExport) => {
+const getExportedDeclarationKind = (sourceText, publicExport) => {
   const sourceFile = ts.createSourceFile(
     'contract.ts',
     sourceText,
@@ -39,9 +44,40 @@ const hasExportedDeclaration = (sourceText, publicExport) => {
     ts.ScriptKind.TS,
   );
 
-  return sourceFile.statements.some((statement) =>
-    statementExportsName(statement, publicExport),
+  for (const statement of sourceFile.statements) {
+    const kind = statementExportKind(statement, publicExport);
+    if (kind !== undefined) {
+      return kind;
+    }
+  }
+
+  return undefined;
+};
+
+/**
+ * @param {string} sourceText
+ * @param {string} publicExport
+ */
+const hasExportedDeclaration = (sourceText, publicExport) =>
+  getExportedDeclarationKind(sourceText, publicExport) !== undefined;
+
+/**
+ * @param {string} docsText
+ * @param {string} publicExport
+ */
+const docsMentionPublicExport = (docsText, publicExport) => {
+  const tokenPattern = new RegExp(
+    String.raw`(^|[^A-Za-z0-9_$])${escapeRegExp(publicExport)}([^A-Za-z0-9_$]|$)`,
+    'u',
   );
+
+  for (const match of docsText.matchAll(/`([^`]+)`/gu)) {
+    if (tokenPattern.test(match[1] ?? '')) {
+      return true;
+    }
+  }
+
+  return false;
 };
 
 /**
@@ -70,8 +106,9 @@ const indexExportsModule = (indexSource, exportPath) => {
  * @param {string} indexSource
  * @param {string} exportPath
  * @param {string} publicExport
+ * @param {'type' | 'value'} exportKind
  */
-const indexReExportsPublicName = (indexSource, exportPath, publicExport) => {
+const indexReExportsPublicName = (indexSource, exportPath, publicExport, exportKind) => {
   const sourceFile = ts.createSourceFile(
     'index.ts',
     indexSource,
@@ -94,10 +131,16 @@ const indexReExportsPublicName = (indexSource, exportPath, publicExport) => {
       return true;
     }
 
+    if (exportKind === 'value' && statement.isTypeOnly) {
+      return false;
+    }
+
     return (
       ts.isNamedExports(statement.exportClause) &&
       statement.exportClause.elements.some(
-        (specifier) => specifier.name.text === publicExport,
+        (specifier) =>
+          specifier.name.text === publicExport &&
+          !(exportKind === 'value' && specifier.isTypeOnly),
       )
     );
   });
@@ -106,43 +149,51 @@ const indexReExportsPublicName = (indexSource, exportPath, publicExport) => {
 /**
  * @param {import('typescript').Statement} statement
  * @param {string} publicExport
+ * @returns {'type' | 'value' | undefined}
  */
-const statementExportsName = (statement, publicExport) => {
+const statementExportKind = (statement, publicExport) => {
   if (ts.isExportDeclaration(statement)) {
     const exportClause = statement.exportClause;
-    return (
-      exportClause !== undefined &&
-      ts.isNamedExports(exportClause) &&
-      exportClause.elements.some((specifier) => specifier.name.text === publicExport)
+    if (exportClause === undefined || !ts.isNamedExports(exportClause)) {
+      return undefined;
+    }
+
+    const specifier = exportClause.elements.find(
+      (element) => element.name.text === publicExport,
     );
+    if (specifier === undefined) {
+      return undefined;
+    }
+
+    return statement.isTypeOnly || specifier.isTypeOnly ? 'type' : 'value';
   }
 
   if (!hasExportModifier(statement)) {
-    return false;
+    return undefined;
   }
 
   if (hasDefaultModifier(statement)) {
-    return false;
+    return undefined;
   }
 
   if (ts.isVariableStatement(statement)) {
     return statement.declarationList.declarations.some(
       (declaration) =>
         ts.isIdentifier(declaration.name) && declaration.name.text === publicExport,
-    );
+    )
+      ? 'value'
+      : undefined;
   }
 
-  if (
-    ts.isClassDeclaration(statement) ||
-    ts.isEnumDeclaration(statement) ||
-    ts.isFunctionDeclaration(statement) ||
-    ts.isInterfaceDeclaration(statement) ||
-    ts.isTypeAliasDeclaration(statement)
-  ) {
-    return statement.name?.text === publicExport;
+  if (ts.isClassDeclaration(statement) || ts.isEnumDeclaration(statement) || ts.isFunctionDeclaration(statement)) {
+    return statement.name?.text === publicExport ? 'value' : undefined;
   }
 
-  return false;
+  if (ts.isInterfaceDeclaration(statement) || ts.isTypeAliasDeclaration(statement)) {
+    return statement.name.text === publicExport ? 'type' : undefined;
+  }
+
+  return undefined;
 };
 
 /**
@@ -356,7 +407,10 @@ export const validateContractsManifest = (root = repoRoot) => {
     for (const publicExport of publicExports) {
       const exportingSources = sourceEntries.filter((source) =>
         hasExportedDeclaration(source.text, publicExport),
-      );
+      ).map((source) => ({
+        ...source,
+        exportKind: getExportedDeclarationKind(source.text, publicExport),
+      }));
 
       if (exportingSources.length === 0) {
         errors.push(`${id} public export ${publicExport} is not exported by its sources`);
@@ -367,13 +421,14 @@ export const validateContractsManifest = (root = repoRoot) => {
         !exportingSources.some(
           (source) =>
             source.exportPath !== undefined &&
-            indexReExportsPublicName(indexSource, source.exportPath, publicExport),
+            source.exportKind !== undefined &&
+            indexReExportsPublicName(indexSource, source.exportPath, publicExport, source.exportKind),
         )
       ) {
         errors.push(`${id} public export ${publicExport} is not re-exported from src/index.ts`);
       }
 
-      if (!docsText.includes(publicExport)) {
+      if (!docsMentionPublicExport(docsText, publicExport)) {
         errors.push(`${id} public export ${publicExport} is not mentioned by its docs`);
       }
     }
