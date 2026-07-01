@@ -1133,9 +1133,9 @@ describe('Rainrail bridge room', () => {
         scriptName: 'asme-site',
         exceptions: [{
           name: `HugeError ${'n'.repeat(2_000)} name-tail`,
-          message: `prefix {"password":"storage-secret","escapedPassword":"abc\\"escaped-tail","code":123456,"tokens":["bridge-array-secret]bridge-array-tail"],"apiKeys":["bridge-camel-secret"],"apiKeyValue":"bridge-key-value-secret","auth.token":"bridge-dot-token-secret","password.hash":"bridge-dot-hash-secret","password_hash":"bridge-hash-secret","token":{"meta":{},"value":"bridge-nested-object-secret"}} passwords: "bridge-plural-secret" secretValue=bridge-secret-value tokens=["bridge-kv-array-secret-1","bridge-kv-array-secret-2"] passwords=[bridge-kv-password-1,bridge-kv-password-2] token="bridge-quoted-token-secret" password='bridge-quoted-password-secret' token = "bridge-spaced-token-secret" password = bridge-spaced-password-secret DATABASE_URL=postgres://app:bridge-db-pass@db/prod x-api-key: bridge-key-secret x-api-key: "bridge-quoted-key-secret" authorization=Basic bridge-basic-secret cookie=session=bridge-cookie-secret; csrf=bridge-csrf-secret ${'m'.repeat(2_000)} suffix`,
+          message: `prefix {"password":"storage-secret","escapedPassword":"abc\\"escaped-tail","code":123456,"tokens":["bridge-array-secret]bridge-array-tail"],"apiKeys":["bridge-camel-secret"],"apiKeyValue":"bridge-key-value-secret","auth.token":"bridge-dot-token-secret","password.hash":"bridge-dot-hash-secret","password_hash":"bridge-hash-secret","token":{"meta":{},"value":"bridge-nested-object-secret"}} passwords: "bridge-plural-secret" secretValue=bridge-secret-value tokens=["bridge-kv-array-secret-1","bridge-kv-array-secret-2"] passwords=[bridge-kv-password-1,bridge-kv-password-2] token="bridge-quoted-token-secret" password='bridge-quoted-password-secret' token = "bridge-spaced-token-secret" password = bridge-spaced-password-secret DATABASE_URL=postgres://app:bridge-db-pass@db/prod CACHE_URL=redis://bridge-user-token@cache/0 sessionId=bridge-session-id-secret x-api-key: bridge-key-secret x-api-key: "bridge-quoted-key-secret" authorization=Basic bridge-basic-secret cookie=session=bridge-cookie-secret; csrf=bridge-csrf-secret ${'m'.repeat(2_000)} suffix`,
           stack: [
-            `HugeError: ${'s'.repeat(1_500)} token=bridge-stack-secret`,
+            `HugeError: ${'s'.repeat(1_500)} token=bridge-stack-secret {"password":{"x":"bridge-unclosed-structured-secret"`,
             ...Array.from({ length: 12 }, (_, index) => `message detail ${index}`),
             '    at resolveCurrentHumanAccount (worker.js:1510:24)',
             ...Array.from({ length: 40 }, (_, index) => `    at frame${index} (worker.js:${index}:1)`),
@@ -1174,6 +1174,8 @@ describe('Rainrail bridge room', () => {
     expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-spaced-token-secret');
     expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-spaced-password-secret');
     expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-db-pass');
+    expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-user-token');
+    expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-session-id-secret');
     expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('escaped-tail');
     expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-plural-secret');
     expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-key-secret');
@@ -1182,6 +1184,7 @@ describe('Rainrail bridge room', () => {
     expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-cookie-secret');
     expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-csrf-secret');
     expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-stack-secret');
+    expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-unclosed-structured-secret');
     expect(exception?.name.length).toBeLessThan(260);
     expect(exception?.message.length).toBeLessThan(700);
     expect(exception?.stack.length).toBeLessThan(1_500);

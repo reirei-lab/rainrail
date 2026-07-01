@@ -1085,6 +1085,13 @@ async function markProjectIssueClaimDispatched(
         branchName: input.branchName,
         commentBody: input.claim.commentBody ?? '',
       }, fetchImpl, auth, { dispatchedAt: new Date().toISOString() });
+      try {
+        await assertCurrentStartingClaimLockOwned(input, fetchImpl, auth);
+      } catch (error) {
+        if (isClaimLockOwnershipError(error)) {
+          throw error;
+        }
+      }
       await updateProjectIssueClaimLock(input.claim.lockRefId, lockOid, fetchImpl, auth);
       return;
     } catch (error) {
@@ -1131,8 +1138,11 @@ async function assertCurrentStartingClaimLockOwned(
   } catch (error) {
     throw new Error('GitHub Project issue claim lock ownership could not be verified', { cause: error });
   }
+  if (lock === undefined) {
+    throw new Error('GitHub Project issue ownership could not be verified');
+  }
   if (
-    lock?.projectItemId !== input.issue.id
+    lock.projectItemId !== input.issue.id
     || lock.agentSessionId !== input.agentSessionId
     || lock.branchName !== input.branchName
   ) {
@@ -1141,7 +1151,10 @@ async function assertCurrentStartingClaimLockOwned(
 }
 
 function isClaimLockOwnershipError(error: unknown): boolean {
-  return error instanceof Error && error.message.includes('claim lock');
+  return error instanceof Error && (
+    error.message.includes('claim lock is no longer owned')
+    || error.message.includes('claim is missing lock commit metadata')
+  );
 }
 
 async function createProjectIssueClaimLockCommit(

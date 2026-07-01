@@ -328,9 +328,9 @@ export function cloudflareErrorCandidateFromEvent(event: RainrailEventEnvelope):
 }
 
 function cloudflareIssueTitle(candidate: CloudflareErrorCandidate): string {
-  const location = sanitizeSecretString(candidate.stackSignature[0]?.split(' @ ')[0] ?? candidate.requestPath ?? '');
-  const exceptionName = sanitizeSecretString(candidate.exceptionName);
-  const scriptName = sanitizedWorkerName(candidate.scriptName);
+  const location = sanitizeIssueTitlePart(candidate.stackSignature[0]?.split(' @ ')[0] ?? candidate.requestPath ?? '');
+  const exceptionName = sanitizeIssueTitlePart(candidate.exceptionName);
+  const scriptName = sanitizeIssueTitlePart(candidate.scriptName) || 'unknown-worker';
   return [
     `[${scriptName}]`,
     exceptionName || 'Error',
@@ -386,6 +386,10 @@ function cloudflareIssueBody(input: {
 function sanitizedWorkerName(value: string): string {
   const sanitized = sanitizeSecretString(value).replace(/\s+/gu, ' ').trim();
   return truncateSummaryText(sanitized, maxSummaryExceptionNameLength) || 'unknown-worker';
+}
+
+function sanitizeIssueTitlePart(value: string): string {
+  return sanitizeSummaryLine(value, maxSummaryExceptionNameLength).replace(/@/gu, '@\u200B');
 }
 
 function sanitizeSummaryLine(value: string, maxLength: number): string {
@@ -628,7 +632,7 @@ function redactRawEventData(value: unknown, depth = 0): unknown {
 }
 
 function isSensitiveKey(key: string): boolean {
-  return /authorization|cookie|token|secret|password|key|code|reset|verification/iu.test(key);
+  return /authorization|cookie|token|secret|password|key|code|reset|verification|session/iu.test(key);
 }
 
 function isUrlKey(key: string): boolean {
@@ -638,25 +642,25 @@ function isUrlKey(key: string): boolean {
 function sanitizeSecretString(value: string): string {
   return redactSecretStructuredValues(value)
     .replace(/<!--\s*error-fingerprint:[^>\r\n]*(?:-->)?/giu, '<!-- escaped-error-fingerprint: [redacted] -->')
-    .replace(/\b[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s"'<>`/@]*:[^\s"'<>`/@]*@[^\s"'<>`,;)]+/giu, (url) => sanitizeUrlString(url))
+    .replace(/\b[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s"'<>`/@]*@[^\s"'<>`,;)]+/giu, (url) => sanitizeUrlString(url))
     .replace(/https?:\/\/[^\s"'<>`]+/giu, (url) => sanitizeUrlString(url))
     .replace(/\b(cookie|set-cookie)\s*:\s*[^\r\n]+/giu, '$1: [redacted]')
     .replace(/\bauthorization\s*:\s*[^\r\n]+/giu, 'authorization: [redacted]')
-    .replace(/(["'])([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification)[A-Za-z0-9_.-]*)\1(\s*:\s*)(["'])(?:\\.|(?!\4)[^\\])*\4/giu, '$1$2$1$3$4[redacted]$4')
-    .replace(/(^|[{\s"'<>`,;])(["']?)([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification)[A-Za-z0-9_.-]*)\2(\s*:\s*)(["'])(?:\\.|(?!\5)[^\\])*\5/giu, '$1$2$3$2$4$5[redacted]$5')
-    .replace(/(["'])([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification)[A-Za-z0-9_.-]*)\1(\s*:\s*)(["'])(?:\\.|(?!\4)[^\\])*$/giu, '$1$2$1$3$4[redacted]$4')
-    .replace(/(^|[{\s"'<>`,;])(["']?)([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification)[A-Za-z0-9_.-]*)\2(\s*:\s*)(["'])(?:\\.|(?!\5)[^\\])*$/giu, '$1$2$3$2$4$5[redacted]$5')
-    .replace(/(^|[{\s"'<>`,;])(["']?)([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification)[A-Za-z0-9_.-]*)\2(\s*:\s*)(?!["'])([^,\s\r\n}\]]+)/giu, '$1$2$3$2$4[redacted]')
-    .replace(/(^|[.?&\s"'<>`,;])(["']?)([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification)[A-Za-z0-9_.-]*)\2\s*=\s*(["'])(?:\\.|(?!\4)[^\\])*\4/giu, '$1$2$3$2=[redacted]')
-    .replace(/(^|[.?&\s"'<>`,;])(["']?)([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification)[A-Za-z0-9_.-]*)\2\s*=\s*(["'])(?:\\.|(?!\4)[^\\\r\n])*(?=\r?\n|$)/giu, '$1$2$3$2=[redacted]')
-    .replace(/(^|[.?&\s"'<>`,;])([A-Za-z0-9_.-]*authorization[A-Za-z0-9_.-]*)\s*=\s*([^\r\n"'<>`,;]*?)(?=(?:\s+[A-Za-z0-9_.-]*(?:authorization|cookie|set-cookie|token|secret|password|key|code|reset|verification)[A-Za-z0-9_.-]*\s*=)|[&\r\n"'<>`,;]|$)/giu, '$1$2=[redacted]')
+    .replace(/(["'])([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification|session)[A-Za-z0-9_.-]*)\1(\s*:\s*)(["'])(?:\\.|(?!\4)[^\\])*\4/giu, '$1$2$1$3$4[redacted]$4')
+    .replace(/(^|[{\s"'<>`,;])(["']?)([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification|session)[A-Za-z0-9_.-]*)\2(\s*:\s*)(["'])(?:\\.|(?!\5)[^\\])*\5/giu, '$1$2$3$2$4$5[redacted]$5')
+    .replace(/(["'])([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification|session)[A-Za-z0-9_.-]*)\1(\s*:\s*)(["'])(?:\\.|(?!\4)[^\\])*$/giu, '$1$2$1$3$4[redacted]$4')
+    .replace(/(^|[{\s"'<>`,;])(["']?)([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification|session)[A-Za-z0-9_.-]*)\2(\s*:\s*)(["'])(?:\\.|(?!\5)[^\\])*$/giu, '$1$2$3$2$4$5[redacted]$5')
+    .replace(/(^|[{\s"'<>`,;])(["']?)([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification|session)[A-Za-z0-9_.-]*)\2(\s*:\s*)(?!["'])([^,\s\r\n}\]]+)/giu, '$1$2$3$2$4[redacted]')
+    .replace(/(^|[.?&\s"'<>`,;])(["']?)([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification|session)[A-Za-z0-9_.-]*)\2\s*=\s*(["'])(?:\\.|(?!\4)[^\\])*\4/giu, '$1$2$3$2=[redacted]')
+    .replace(/(^|[.?&\s"'<>`,;])(["']?)([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification|session)[A-Za-z0-9_.-]*)\2\s*=\s*(["'])(?:\\.|(?!\4)[^\\\r\n])*(?=\r?\n|$)/giu, '$1$2$3$2=[redacted]')
+    .replace(/(^|[.?&\s"'<>`,;])([A-Za-z0-9_.-]*authorization[A-Za-z0-9_.-]*)\s*=\s*([^\r\n"'<>`,;]*?)(?=(?:\s+[A-Za-z0-9_.-]*(?:authorization|cookie|set-cookie|token|secret|password|key|code|reset|verification|session)[A-Za-z0-9_.-]*\s*=)|[&\r\n"'<>`,;]|$)/giu, '$1$2=[redacted]')
     .replace(/(^|[.?&\s"'<>`,;])([A-Za-z0-9_.-]*(?:cookie|set-cookie)[A-Za-z0-9_.-]*)\s*=\s*([^;\s\r\n"'<>`,]*(?:;\s*[^=;\s\r\n"'<>`,]+=[^;\s\r\n"'<>`,]*)*)/giu, '$1$2=[redacted]')
-    .replace(/(^|[.?&\s"'<>`,;])([A-Za-z0-9_.-]*(?:token|secret|password|key|code|reset|verification)[A-Za-z0-9_.-]*)\s*=\s*([^&\s"'<>`,;]+)/giu, '$1$2=[redacted]')
+    .replace(/(^|[.?&\s"'<>`,;])([A-Za-z0-9_.-]*(?:token|secret|password|key|code|reset|verification|session)[A-Za-z0-9_.-]*)\s*=\s*([^&\s"'<>`,;]+)/giu, '$1$2=[redacted]')
     .replace(/\bBearer\s+[A-Za-z0-9._~+/-]+=*/giu, 'Bearer [redacted]');
 }
 
 function redactSecretStructuredValues(value: string): string {
-  const keyPattern = /(^|[{\s"'<>`,;])(["']?)([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification)[A-Za-z0-9_.-]*)\2(\s*[:=]\s*)([\[{])/giu;
+  const keyPattern = /(^|[{\s"'<>`,;])(["']?)([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification|session)[A-Za-z0-9_.-]*)\2(\s*[:=]\s*)([\[{])/giu;
   let redacted = '';
   let cursor = 0;
   for (const match of value.matchAll(keyPattern)) {
@@ -667,7 +671,12 @@ function redactSecretStructuredValues(value: string): string {
     const valueEnd = findBalancedStructuredValueEnd(value, valueStart);
     redacted += value.slice(cursor, matchIndex);
     redacted += `${match[1] ?? ''}${match[2] ?? ''}${match[3] ?? ''}${match[2] ?? ''}${match[4] ?? ''}[redacted]`;
-    cursor = valueEnd === undefined ? value.length : valueEnd + 1;
+    if (valueEnd === undefined) {
+      const newlineIndex = value.indexOf('\n', valueStart);
+      cursor = newlineIndex === -1 ? value.length : newlineIndex;
+    } else {
+      cursor = valueEnd + 1;
+    }
   }
   return redacted + value.slice(cursor);
 }

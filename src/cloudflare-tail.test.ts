@@ -158,10 +158,11 @@ describe('Cloudflare tail source', () => {
     const event = await createCloudflareTailEvent({
       tailEvent: cloudflareTailFixture({
         outcome: 'exception',
+        scriptName: 'asme-site token=tail-worker-secret\nextra',
         url: 'https://asme.dev/token/secret-path-value/me?token=tail-url-secret#access_token=fragment-secret',
         exceptions: [{
           name: 'TypeError token=tail-name-secret',
-          message: 'failed token="tail-message-secret" authorization: Bearer tail-auth-secret {"password":"tail-json-secret"} {"resetCode":"tail-open-secret password: tail-colon-secret token = "tail-spaced-token-secret" password = tail-spaced-password-secret DATABASE_URL=postgres://app:tail-db-pass@db/prod',
+          message: 'failed token="tail-message-secret" authorization: Bearer tail-auth-secret {"password":"tail-json-secret"} {"resetCode":"tail-open-secret password: tail-colon-secret token = "tail-spaced-token-secret" password = tail-spaced-password-secret DATABASE_URL=postgres://app:tail-db-pass@db/prod CACHE_URL=redis://tail-user-token@cache/0 sessionId=tail-session-id-secret',
           stack: [
             `TypeError: ${'x'.repeat(1_500)} token=tail-stack-secret {"password":"tail-stack-json-secret"} {"password":{"x":"tail-unclosed-structured-secret" password: tail-stack-colon-secret`,
             '    at resolveCurrentHumanAccount (worker.js:1510:24)',
@@ -173,6 +174,8 @@ describe('Cloudflare tail source', () => {
     });
 
     expect(event.payload.url).toBe('https://asme.dev/[redacted]/[redacted]/me');
+    expect(event.payload.scriptName).toBe('asme-site token=[redacted] extra');
+    expect(JSON.stringify(event.payload)).not.toContain('tail-worker-secret');
     expect(JSON.stringify(event.payload)).not.toContain('tail-url-secret');
     expect(JSON.stringify(event.payload)).not.toContain('fragment-secret');
     expect(JSON.stringify(event.payload)).not.toContain('tail-name-secret');
@@ -184,6 +187,8 @@ describe('Cloudflare tail source', () => {
     expect(JSON.stringify(event.payload)).not.toContain('tail-spaced-token-secret');
     expect(JSON.stringify(event.payload)).not.toContain('tail-spaced-password-secret');
     expect(JSON.stringify(event.payload)).not.toContain('tail-db-pass');
+    expect(JSON.stringify(event.payload)).not.toContain('tail-user-token');
+    expect(JSON.stringify(event.payload)).not.toContain('tail-session-id-secret');
     expect(JSON.stringify(event.payload)).not.toContain('tail-stack-secret');
     expect(JSON.stringify(event.payload)).not.toContain('tail-stack-json-secret');
     expect(JSON.stringify(event.payload)).not.toContain('tail-unclosed-structured-secret');

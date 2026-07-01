@@ -4184,6 +4184,54 @@ describe('createGitHubProjectTaskQueueProvider', () => {
     expect(calls.find((call) => call.query?.includes('updateProjectV2ItemFieldValue'))).toBeUndefined();
   });
 
+  it('verifies the current claim lock owner before marking it dispatched', async () => {
+    const calls: Array<{ query?: string; variables?: Record<string, unknown> }> = [];
+    const provider = createGitHubProjectTaskQueueProvider({
+      config: projectConfig(),
+      auth: { getAuthToken: async () => ({ token: 'project-token', provider: 'configured-token', fallback: false }) },
+      fetch: (async (_url, init) => {
+        const request = JSON.parse(String(init?.body)) as { query?: string; variables?: Record<string, unknown> };
+        calls.push(request);
+        if (isCreateLockCommitRequest(_url)) {
+          return lockCommitResponse(`lock_sha_${calls.length}`);
+        }
+        if (request.query?.includes('RainrailProjectIssueClaimLock')) {
+          return lockRefResponse({
+            id: 'REF_lock',
+            createdAt: new Date().toISOString(),
+            agentSessionId: 'agent:main:other-runner',
+            branchName: 'agent/reirei-lab-rainrail-21-other-runner',
+          });
+        }
+        return jsonResponse({ data: {} });
+      }) as typeof fetch,
+    });
+
+    await expect(provider.finalizeProjectIssueClaim?.({
+      issue: {
+        id: 'item_21',
+        contentId: 'issue_node_21',
+        contentType: 'Issue',
+        title: 'Project issue selection',
+        status: 'Todo',
+        assigneeLogins: ['reirei-agent'],
+      },
+      claim: {
+        projectItemId: 'item_21',
+        lockRefId: 'REF_lock',
+        lockRepositoryId: 'R_repo',
+        lockRepositoryNameWithOwner: 'reirei-lab/rainrail',
+        lockDefaultBranchOid: 'base_sha',
+        lockDefaultBranchTreeOid: 'base_tree',
+      },
+      agentSessionId: 'agent:main:rainrail-21',
+      branchName: 'agent/reirei-lab-rainrail-21-project-issue-selection',
+    })).rejects.toThrow('claim lock is no longer owned');
+
+    expect(calls.find((call) => call.query?.includes('RainrailUpdateProjectIssueClaimLock'))).toBeUndefined();
+    expect(calls.find((call) => call.query?.includes('updateProjectV2ItemFieldValue'))).toBeUndefined();
+  });
+
   it('treats todo items with dispatched locks as in progress while listing', async () => {
     const calls: Array<{ query?: string; variables?: Record<string, unknown> }> = [];
     const provider = createGitHubProjectTaskQueueProvider({
