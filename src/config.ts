@@ -11,10 +11,12 @@ export interface SourceProviderConfig {
 }
 
 export interface OpenClawRuntimeProviderConfig {
+  enabled: boolean;
   command: string;
   agentId: string;
   sessionKeyPrefix: string;
   timeoutSeconds: number;
+  logDirectory: string;
 }
 
 export interface TaskProviderConfig {
@@ -34,10 +36,12 @@ export interface RainrailConfig {
 const defaultGitHubTaskProviderConfig: GitHubAuthConfig = {};
 
 const defaultOpenClawRuntimeProviderConfig: OpenClawRuntimeProviderConfig = {
+  enabled: false,
   command: 'openclaw',
   agentId: 'main',
   sessionKeyPrefix: 'rainrail',
   timeoutSeconds: 600,
+  logDirectory: 'var/agent-task-logs',
 };
 
 export async function loadConfig(path: string): Promise<RainrailConfig> {
@@ -119,6 +123,8 @@ function parseOpenClawRuntimeProvider(value: unknown): OpenClawRuntimeProviderCo
   }
 
   return {
+    enabled: parseOptionalBoolean(value.enabled, 'config.runtimeProviders.openclaw.enabled')
+      ?? defaultOpenClawRuntimeProviderConfig.enabled,
     command: parseOptionalString(value.command, 'config.runtimeProviders.openclaw.command')
       ?? defaultOpenClawRuntimeProviderConfig.command,
     agentId: parseOptionalString(value.agentId, 'config.runtimeProviders.openclaw.agentId')
@@ -127,6 +133,8 @@ function parseOpenClawRuntimeProvider(value: unknown): OpenClawRuntimeProviderCo
       ?? defaultOpenClawRuntimeProviderConfig.sessionKeyPrefix,
     timeoutSeconds: parseOptionalNumber(value.timeoutSeconds, 'config.runtimeProviders.openclaw.timeoutSeconds')
       ?? defaultOpenClawRuntimeProviderConfig.timeoutSeconds,
+    logDirectory: parseOptionalString(value.logDirectory, 'config.runtimeProviders.openclaw.logDirectory')
+      ?? defaultOpenClawRuntimeProviderConfig.logDirectory,
   };
 }
 
@@ -183,6 +191,16 @@ function parseOptionalNumber(value: unknown, path: string): number | undefined {
   }
   if (typeof value !== 'number' || !Number.isFinite(value)) {
     throw new Error(`${path} must be a finite number`);
+  }
+  return value;
+}
+
+function parseOptionalBoolean(value: unknown, path: string): boolean | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== 'boolean') {
+    throw new Error(`${path} must be a boolean`);
   }
   return value;
 }

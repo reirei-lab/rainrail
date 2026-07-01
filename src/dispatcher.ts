@@ -423,7 +423,7 @@ function createGatedRuntimeProvider(
     return runtime;
   };
 
-  return {
+  const provider: RuntimeProvider = {
     get name() {
       return getRuntime().name;
     },
@@ -433,6 +433,32 @@ function createGatedRuntimeProvider(
     startRun: (request, context) =>
       callRuntimeStartRun(options, policy, event, lifecycle, getRuntime, request, context?.signal),
   };
+  Object.defineProperty(provider, 'resumeRun', {
+    configurable: true,
+    enumerable: true,
+    get() {
+      const resumeRun = (
+        request: Parameters<NonNullable<RuntimeProvider['resumeRun']>>[0],
+        context?: Parameters<NonNullable<RuntimeProvider['resumeRun']>>[1],
+      ) =>
+        callRuntimeResumeRun(options, policy, event, lifecycle, getRuntime, request, context?.signal);
+      if (!policy.capabilities.has('runtime:start')) {
+        return resumeRun;
+      }
+      if (lifecycle.isSideEffectClosed()) {
+        return resumeRun;
+      }
+      try {
+        if (getRuntime().resumeRun === undefined) {
+          return undefined;
+        }
+      } catch {
+        return resumeRun;
+      }
+      return resumeRun;
+    },
+  });
+  return provider;
 }
 
 async function callRuntimeStartRun(
@@ -459,6 +485,41 @@ async function callRuntimeStartRun(
   try {
     const runtime = getRuntime();
     const value = await runtime.startRun(request, { signal: combineAbortSignals(lifecycle.signal, callerSignal) });
+    await recordAudit(options, policy, event, 'startRuntime', 'fulfilled');
+    return value;
+  } catch (reason) {
+    await recordAudit(options, policy, event, 'startRuntime', 'rejected', reason);
+    throw reason;
+  }
+}
+
+async function callRuntimeResumeRun(
+  options: RuntimeDispatcherOptions,
+  policy: WorkflowExecutionPolicy,
+  event: RainrailEventEnvelope,
+  lifecycle: WorkflowLifecycle,
+  getRuntime: () => RuntimeProvider,
+  request: Parameters<NonNullable<RuntimeProvider['resumeRun']>>[0],
+  callerSignal: AbortSignal | undefined,
+): Promise<Awaited<ReturnType<NonNullable<RuntimeProvider['resumeRun']>>>> {
+  if (lifecycle.isSideEffectClosed()) {
+    const reason = new PluginActionAbortedError('startRuntime', policy.name);
+    await recordAudit(options, policy, event, 'startRuntime', 'denied', reason);
+    throw reason;
+  }
+
+  if (!policy.capabilities.has('runtime:start')) {
+    const reason = new CapabilityDeniedError('startRuntime', 'runtime:start', policy.name);
+    await recordAudit(options, policy, event, 'startRuntime', 'denied', reason);
+    throw reason;
+  }
+
+  try {
+    const runtime = getRuntime();
+    if (runtime.resumeRun === undefined) {
+      throw new Error('Runtime provider does not support resumeRun');
+    }
+    const value = await runtime.resumeRun(request, { signal: combineAbortSignals(lifecycle.signal, callerSignal) });
     await recordAudit(options, policy, event, 'startRuntime', 'fulfilled');
     return value;
   } catch (reason) {

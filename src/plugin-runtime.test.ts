@@ -789,6 +789,65 @@ describe('plugin runtime contract', () => {
     expect(runtimeReads).toBe(0);
   });
 
+  it('checks runtime:start capability before reading runtime provider resumeRun getters', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: {
+        id: 'delivery-denied-runtime-resume-provider-getter',
+        receivedAt: '2026-06-29T14:00:00.000Z',
+      },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'github://deliveries/delivery-denied-runtime-resume-provider-getter',
+      },
+    });
+    let runtimeReads = 0;
+    const runtime = {
+      runId: 'run-13',
+      now: () => new Date('2026-06-29T14:01:00.000Z'),
+      get runtime(): never {
+        runtimeReads += 1;
+        throw new Error('runtime provider should not be read before resume denial');
+      },
+    } satisfies RuntimeDispatcherContext;
+    const dispatcher = createRuntimeDispatcher({
+      workflows: [
+        defineWorkflowPlugin({
+          name: 'denied-runtime-resume-provider-getter-handler',
+          accepts: (candidate) => candidate.name === 'github.issue',
+          handle: (_handledEvent, context) =>
+            context.runtime.resumeRun?.({
+              run: { id: 'agent:main:existing-session', provider: 'openclaw', status: 'stopped' },
+              task: {
+                id: 'agent_task_reirei-lab-rainrail_22',
+                title: 'OpenClaw runtime',
+                agentSessionId: 'agent:main:existing-session',
+                branchName: 'agent/reirei-lab-rainrail-22',
+                logPath: 'var/agent-task-logs/task.log',
+                resumeAttempts: [],
+              },
+              attemptId: 'agent_task_reirei-lab-rainrail_22_resume_01',
+              requestedBy: 'denied-runtime-resume-provider-getter-handler',
+            }),
+        }),
+      ],
+      runtime,
+    });
+
+    const [result] = await dispatcher.dispatch(event);
+
+    expect(result).toMatchObject({
+      pluginName: 'denied-runtime-resume-provider-getter-handler',
+      eventId: 'github-webhook:delivery-denied-runtime-resume-provider-getter:github.issue',
+      status: 'rejected',
+    });
+    expect(runtimeReads).toBe(0);
+  });
+
   it('does not read unused runtime capability getters when creating workflow contexts', async () => {
     const event = createEventEnvelope({
       source: { type: 'github', name: 'github-webhook' },
@@ -2950,6 +3009,280 @@ describe('plugin runtime contract', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('gates runtime provider resumeRun behind runtime:start capability and combines abort signals', async () => {
+    vi.useFakeTimers();
+    try {
+      const event = createEventEnvelope({
+        source: { type: 'github', name: 'github-webhook' },
+        name: 'github.issue',
+        delivery: {
+          id: 'delivery-resume-run-caller-signal',
+          receivedAt: '2026-06-29T14:00:00.000Z',
+        },
+        occurredAt: '2026-06-29T14:00:00.000Z',
+        subject: { type: 'issue', id: '13' },
+        payload: { action: 'opened' },
+        rawPayload: {
+          kind: 'external-reference',
+          reference: 'github://deliveries/delivery-resume-run-caller-signal',
+        },
+      });
+      const callerController = new AbortController();
+      let resumeRunSignal: AbortSignal | undefined;
+      const resumeRun = vi.fn(
+        async (_request, context?: { signal: AbortSignal }) =>
+          new Promise<{ id: string; provider: 'openclaw'; status: 'running' }>((_resolve, reject) => {
+            resumeRunSignal = context?.signal;
+            context?.signal.addEventListener('abort', () => reject(context.signal.reason), { once: true });
+          }),
+      );
+      const loader = createPluginLoader({
+        runtime: mockRuntimeContext({
+          runId: 'run-13',
+          now: () => new Date('2026-06-29T14:01:00.000Z'),
+          runtime: {
+            name: 'mock-runtime',
+            kind: 'runtime-provider',
+            startRun: async () => ({ id: 'run:mock', provider: 'codex', status: 'queued' }),
+            resumeRun,
+          },
+        }),
+        defaultTimeoutMs: 25,
+      });
+
+      loader.on(
+        'github.issue',
+        async (_handledEvent, context) =>
+          context.runtime.resumeRun?.(
+            {
+              run: { id: 'agent:main:existing-session', provider: 'openclaw', status: 'stopped' },
+              task: {
+                id: 'agent_task_reirei-lab-rainrail_22',
+                title: 'OpenClaw runtime',
+                agentSessionId: 'agent:main:existing-session',
+                branchName: 'agent/reirei-lab-rainrail-22',
+                logPath: 'var/agent-task-logs/task.log',
+                resumeAttempts: [],
+              },
+              attemptId: 'agent_task_reirei-lab-rainrail_22_resume_01',
+              requestedBy: 'resume-run-caller-signal-handler',
+            },
+            { signal: callerController.signal },
+          ),
+        { name: 'resume-run-caller-signal-handler', capabilities: ['runtime:start'] },
+      );
+
+      const dispatchPromise = loader.dispatch(event);
+      callerController.abort(new Error('caller canceled resume'));
+      await Promise.resolve();
+
+      expect(resumeRun).toHaveBeenCalledOnce();
+      expect(resumeRunSignal?.aborted).toBe(true);
+      await expect(dispatchPromise).resolves.toMatchObject([
+        {
+          pluginName: 'resume-run-caller-signal-handler',
+          eventId: 'github-webhook:delivery-resume-run-caller-signal:github.issue',
+          status: 'rejected',
+        },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('preserves undefined runtime provider resumeRun for optional callers', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: {
+        id: 'delivery-runtime-resume-undefined',
+        receivedAt: '2026-06-29T14:00:00.000Z',
+      },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'github://deliveries/delivery-runtime-resume-undefined',
+      },
+    });
+    const loader = createPluginLoader({
+      runtime: mockRuntimeContext({
+        runtime: {
+          name: 'mock-runtime',
+          kind: 'runtime-provider',
+          startRun: async () => ({ id: 'run:mock', provider: 'codex', status: 'queued' }),
+        },
+      }),
+    });
+
+    loader.on(
+      'github.issue',
+      (_handledEvent, context) =>
+        context.runtime.resumeRun?.({
+          run: { id: 'agent:main:existing-session', provider: 'openclaw', status: 'stopped' },
+          task: {
+            id: 'agent_task_reirei-lab-rainrail_22',
+            title: 'OpenClaw runtime',
+            agentSessionId: 'agent:main:existing-session',
+            branchName: 'agent/reirei-lab-rainrail-22',
+            logPath: 'var/agent-task-logs/task.log',
+            resumeAttempts: [],
+          },
+          attemptId: 'agent_task_reirei-lab-rainrail_22_resume_01',
+          requestedBy: 'resume-run-undefined-handler',
+        }) ?? { skipped: true },
+      { name: 'resume-run-undefined-handler', capabilities: ['runtime:start'] },
+    );
+
+    await expect(loader.dispatch(event)).resolves.toMatchObject([
+      {
+        pluginName: 'resume-run-undefined-handler',
+        eventId: 'github-webhook:delivery-runtime-resume-undefined:github.issue',
+        status: 'fulfilled',
+        value: { skipped: true },
+      },
+    ]);
+  });
+
+  it('records startRuntime audit entries when resumeRun getters fail', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: {
+        id: 'delivery-runtime-resume-getter-audit',
+        receivedAt: '2026-06-29T14:00:00.000Z',
+      },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'github://deliveries/delivery-runtime-resume-getter-audit',
+      },
+    });
+    const auditEntries: unknown[] = [];
+    const loader = createPluginLoader({
+      runtime: mockRuntimeContext({
+        runtime: {
+          name: 'mock-runtime',
+          kind: 'runtime-provider',
+          startRun: async () => ({ id: 'run:mock', provider: 'codex', status: 'queued' }),
+          get resumeRun(): never {
+            throw new Error('runtime resumeRun getter failed');
+          },
+        },
+      }),
+      audit: {
+        record: (entry) => {
+          auditEntries.push(entry);
+        },
+      },
+    });
+
+    loader.on(
+      'github.issue',
+      (_handledEvent, context) =>
+        context.runtime.resumeRun?.({
+          run: { id: 'agent:main:existing-session', provider: 'openclaw', status: 'stopped' },
+          task: {
+            id: 'agent_task_reirei-lab-rainrail_22',
+            title: 'OpenClaw runtime',
+            agentSessionId: 'agent:main:existing-session',
+            branchName: 'agent/reirei-lab-rainrail-22',
+            logPath: 'var/agent-task-logs/task.log',
+            resumeAttempts: [],
+          },
+          attemptId: 'agent_task_reirei-lab-rainrail_22_resume_01',
+          requestedBy: 'resume-run-getter-audit-handler',
+        }),
+      { name: 'resume-run-getter-audit-handler', capabilities: ['runtime:start'] },
+    );
+
+    const [result] = await loader.dispatch(event);
+
+    expect(result).toMatchObject({
+      pluginName: 'resume-run-getter-audit-handler',
+      eventId: 'github-webhook:delivery-runtime-resume-getter-audit:github.issue',
+      status: 'rejected',
+    });
+    expect(auditEntries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          pluginId: 'resume-run-getter-audit-handler',
+          eventId: 'github-webhook:delivery-runtime-resume-getter-audit:github.issue',
+          action: 'startRuntime',
+          result: 'rejected',
+        }),
+      ]),
+    );
+  });
+
+  it('checks handler lifecycle before reading late runtime provider resumeRun getters', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: {
+        id: 'delivery-late-resume-run-getter',
+        receivedAt: '2026-06-29T14:00:00.000Z',
+      },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'github://deliveries/delivery-late-resume-run-getter',
+      },
+    });
+    let resumeRunReads = 0;
+    let lateRuntime: PluginRuntimeContext['runtime'] | undefined;
+    const loader = createPluginLoader({
+      runtime: mockRuntimeContext({
+        runtime: {
+          name: 'mock-runtime',
+          kind: 'runtime-provider',
+          startRun: async () => ({ id: 'run:mock', provider: 'codex', status: 'queued' }),
+          get resumeRun(): never {
+            resumeRunReads += 1;
+            throw new Error('late resumeRun getter should not be read');
+          },
+        },
+      }),
+    });
+
+    loader.on(
+      'github.issue',
+      (_handledEvent, context) => {
+        lateRuntime = context.runtime;
+        return { captured: true };
+      },
+      { name: 'late-resume-run-getter-handler', capabilities: ['runtime:start'] },
+    );
+
+    await expect(loader.dispatch(event)).resolves.toMatchObject([
+      {
+        pluginName: 'late-resume-run-getter-handler',
+        eventId: 'github-webhook:delivery-late-resume-run-getter:github.issue',
+        status: 'fulfilled',
+        value: { captured: true },
+      },
+    ]);
+    await expect(Promise.resolve().then(() => lateRuntime!.resumeRun?.({
+      run: { id: 'agent:main:existing-session', provider: 'openclaw', status: 'stopped' },
+      task: {
+        id: 'agent_task_reirei-lab-rainrail_22',
+        title: 'OpenClaw runtime',
+        agentSessionId: 'agent:main:existing-session',
+        branchName: 'agent/reirei-lab-rainrail-22',
+        logPath: 'var/agent-task-logs/task.log',
+        resumeAttempts: [],
+      },
+      attemptId: 'agent_task_reirei-lab-rainrail_22_resume_01',
+      requestedBy: 'late-resume-run-getter-handler',
+    }))).rejects.toThrow('cannot call startRuntime after its runtime signal was aborted');
+    expect(resumeRunReads).toBe(0);
   });
 
   it('combines caller and lifecycle abort signals for task provider methods', async () => {

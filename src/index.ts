@@ -3,6 +3,8 @@ export * from './cloudflare-issue-reporter.js';
 export * from './cloudflare-tail.js';
 export * from './config.js';
 export * from './agent-assignment.js';
+export * from './agent-runtime.js';
+export * from './agent-timeline.js';
 export * from './dispatcher.js';
 export * from './event-bus.js';
 export * from './events.js';

@@ -81,7 +81,96 @@ project、comment、status、proposal の操作は provider 実装に閉じ込�
 Runtime provider は OpenClaw、devteam、Codex などの実行基盤を表す。
 `startRun(request)` は workflow 名、event、任意の task、requestedBy、
 追加 input を受け取り、queued/running/succeeded/failed/canceled などの
-run status を返す。
+run status を返す。agent task runtime では stopped/timed_out/compaction_failed/
+needs_human/split_recommended も status として表現できる。
+
+OpenClaw runtime provider は実 agent 起動を `enabled: true` の capability gate の
+背後に置く。通常の workflow test では `RuntimeProvider` mock を注入し、
+`createAgentAssignmentRuntimeFromProvider()` 経由で agent assignment を検証する。
+実起動では `openclaw agent --agent ... --session-key ... --timeout ... --json` を
+spawn し、stdout log path、stderr log path、pid、agent session、branch を run metadata に残す。
+completion 解析は JSON stdout log を対象にし、Gateway/plugin/fallback diagnostics などの
+stderr は別 log に保存する。`startRun(request, { signal })` の signal が abort 済みなら
+spawn しない。detached process が `running` として返った後は runtime へ所有権が移るため、
+handler lifecycle cleanup の abort では child process を停止しない。spawn 後に
+Node が `error` を emit しても未処理例外で Rainrail を落とさないよう listener を置き、
+provider 利用側が `onSpawnError` で観測できるようにする。start run の log path は
+同じ issue task を別 run で再起動しても過去ログを切り詰めないよう、agent session id
+由来の短い正規化 prefix と短い hash を含む一意な名前にし、長い session key でも一般的な
+filesystem filename limit に収める。resume run も attempt id 由来の
+正規化名と短い hash を含め、同じ issue task の別 session が同じ resume log に
+追記されないようにする。resume attempt id も raw session key の短い hash を含め、
+正規化後に同名になる session key の attempt log が衝突しないようにしつつ、長い task/session でも
+一般的な filesystem filename limit に収まるよう prefix を短く保つ。OpenClaw agent 起動には
+start/resume とも delivery/task/attempt 由来の安定した `--run-id` を渡し、再配送や timeout retry が
+同一 run として冪等に扱われるようにする。start retry は同じ stdout/stderr log を切り詰めず、
+前回 completion metadata や fallback marker を保持する。`task.agentSessionId` が無い場合に生成する
+session key は workflow 名も含め、同じ delivery/task を別 workflow から起動しても transcript/log が混ざらないようにする。
+初回実行が gateway
+fallback session へ移った場合は、前回 completion metadata の top-level または
+`result` 配下の `meta.agentMeta.fallbackSessionKey` から fallback session key を、
+または `meta.agentMeta.sessionId` が `gateway-fallback-*` の場合は explicit fallback session key を、
+または stdout/stderr log の embedded fallback marker から fallback session id を検出して resume
+対象にする。marker 由来の fallback session id は `agent:<agent>:explicit:<session-id>` の
+session key として再開し、JSON completion として解析できた stdout 内の引用 marker は
+resume 対象にしない。banner/footer 付き completion でも抽出できた JSON metadata を優先する。
+Task と resume attempt には stdout `logPath` と対応する `stderrLogPath` を保持し、
+stderr 側にしか fallback diagnostics が残らない timeout でも fallback transcript を引き継ぐ。
+stderr diagnostics に JSON status 行と embedded fallback marker が同居する場合も marker を採用する。
+同一 log に複数の fallback metadata または marker が追記されている場合は、最後のものを最新として採用する。
+OpenClaw の raw stdout/stderr log は redaction 前の credential を含み得るため、
+log directory は `0700`、start/resume の stdout/stderr log file は `0600` で作成する。
+
+completion/resume/timeline は provider 境界の情報として扱う。completion parser は
+Codex/OpenClaw の JSON completion と transcript compaction failure を区別し、
+`Outcome: implemented | updated_issue | needs_human | split_recommended` を
+取り出せる。`Outcome: needs_human` / `Outcome: split_recommended` は成功終了 JSON に
+含まれていても runtime status に反映する。ただし explicit な error/failed/timed_out などの
+失敗 status は Outcome より優先し、failed/canceled/stopped/timed_out などの
+canonical status も completion として読める。banner 付き log から JSON completion を拾う時は
+top-level completion object を優先し、payload 内の nested JSON を run completion と誤認しない。
+JSON completion として解析できる場合は、本文に `CLI transcript compaction failed` という文字列が
+含まれていても JSON の status を優先し、実エラー行だけを compaction_failed とする。
+completion text/status は top-level と `result` の両方から解決し、`result` が metadata だけを
+持つ場合でも top-level の Outcome を落とさない。top-level の terminal runtime status は
+`result.status` より優先し、`error` / `timeout` alias も top-level にあれば失敗扱いとして採用する。
+top-level final text は payload text より優先して Outcome を解決し、同じ text に複数の Outcome がある場合は
+最後の Outcome を採用する。
+resume helper は running pid を確認し、
+安定した resume attempt id を生成する。timeline reader は OpenClaw trajectory jsonl を読み、Codex activity 表示に
+必要な時刻、分類済み phase、redacted summary、status、redacted excerpt を返す。
+root package は OpenClaw runtime/timeline helper として `OpenClawRuntimeProviderOptions`、
+`OpenClawSpawnErrorEvent`、`RuntimeRunCompletion`、`RuntimeTimelinePhase`、
+`RuntimeTimelineEntry`、`RuntimeTimelineResult`、`RuntimeTimelineStatus`、
+`createAgentAssignmentRuntimeFromProvider`、`createOpenClawRuntimeProvider`、
+`startOpenClawRun`、`readRuntimeRunCompletionFromLog`、`runningRuntimeTaskPid`、
+`nextRuntimeResumeAttemptId`、`readRuntimeTimeline`、`readRuntimeTimelineStatus`、
+`readRuntimeJsonl`、`extractRuntimeSessionId`、`extractRuntimeFallbackSessionId`、
+`runtimeTrajectoryPathForSessionId`、`parseRuntimeTrajectoryTimeline`、
+`classifyRuntimeToolCall` を公開 API として re-export する。
+timeline/status/jsonl の session 解決は resume attempts を新しい順に読んだうえで、
+stdout `logPath` と対応する `stderrLogPath` または `.stderr.log` の embedded fallback marker も参照する。
+fallbackSessionKey metadata と fallback marker は種類で後から優先順位を変えず、log 探索順で最初に
+見つかった fallback を元の agentSessionId mapping より優先する。banner/footer 付き completion JSON 内の
+引用 marker は timeline/status/jsonl の fallback 判定にも使わない。fallback marker は
+`agent:<agent>:explicit:<session-id>` の `sessions.json` mapping を先に解決して relocated session file を
+見失わないようにする。redaction は shell 風の
+`token=...` や `curl -u user:password` / `curl -uuser:password` /
+`curl --proxy-user user:password` /
+`curl --oauth2-bearer token` / `curl --pass phrase` / `curl --tlspassword string` /
+`curl -E client.pem:password` / `curl --cert client.pem:password` /
+`curl --proxy-cert proxy.pem:password` / `curl -b session=value` / `curl --cookie session=value` /
+`curl -sHAuthorization: ...` / `curl -sHCookie: ...` / `curl -su user:password` / `curl -sb session=value` /
+`curl -suuser:password` / `curl -sbsession=value` / `curl -sEclient.pem:password`
+だけでなく JSON の `"token": "..."` /
+`"apiKey": "..."` / `"password": "..."`、`"webhookSecret"` / `"clientSecret"` /
+`"apiToken"` のような compound key、quoted shell assignment、`github_pat_...`、
+HTTP Authorization/Cookie/Set-Cookie header 全体、standalone `Bearer <token>` credential も対象にする。
+header 値内の quote は header 終端とみなさず、次 header または改行までを redaction する。
+timeline status は最後の lifecycle/event row を見て
+ended を更新し、resume 後に追記された session を古い ended のまま扱わない。trajectory の既定 path は
+`agentId` ごとの `~/.openclaw/agents/<agentId>/sessions` を使い、`main` 以外の
+OpenClaw agent でも呼び出し側が毎回 sessionsDirectory を上書きしなくてよい。
 
 secret や provider 固有 token は runtime provider の実装が保持し、
 contract には含めない。
@@ -190,13 +279,17 @@ handler timeout 後に handler 本体が遅れて処理を続けた場合でも�
 handler が fulfilled/rejected で settle した後も同じ signal を abort し、handler が
 残した timer や未awaitの処理から後続 action が実行されないようにする。
 さらに runtime 側の action implementation には第2引数で同じ `AbortSignal` を渡す。
-すでに開始済みの merge、runtime start、secret access も、この signal を見て中断や
-冪等化を行えるようにする。dispatcher は action implementation を runtime `actions`
+merge、runtime start、secret access は、この signal を見て起動前の拒否や
+冪等化を行えるようにする。detached runtime start/resume は `running` を返した時点で
+handler lifecycle から所有権が離れる。dispatcher は action implementation を runtime `actions`
 object を receiver として呼ぶため、`this.client` などに依存する object method も
 そのまま利用できる。
-`context.runtime.startRun` も handler へ直接 provider を渡さず gated wrapper にする。
+`context.runtime.startRun` と `context.runtime.resumeRun` は handler へ直接 provider を渡さず gated wrapper にする。
+underlying provider が optional `resumeRun` を持たない場合、wrapper も `resumeRun` を
+`undefined` として見せ、workflow の optional chaining による feature detection を保つ。
 `runtime:start` capability がない handler は runtime provider 経由でも起動できない。
 handler が `context.runtime.startRun(request, { signal })` として caller signal を渡した
+場合、または `context.runtime.resumeRun(request, { signal })` として caller signal を渡した
 場合、dispatcher は plugin lifecycle signal と caller signal を合成して provider へ渡す。
 互換 API の `context.capabilities.dispatchAgent` も同じ `runtime:start` gate を通し、
 未宣言 handler から agent/run 起動経路を迂回できないようにする。handler が
