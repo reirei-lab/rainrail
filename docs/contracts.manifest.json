@@ -256,11 +256,16 @@
         "scripts/validate-cloudflare-secrets.mjs",
         "scripts/smoke-cloudflare-worker.mjs"
       ],
-      "docs": ["docs/plugin-runtime-contract.md", "docs/cloudflare-worker.md"],
+      "docs": [
+        "docs/plugin-runtime-contract.md",
+        "docs/cloudflare-worker.md",
+        "docs/cloudflare-pages.md"
+      ],
       "tests": [
         "src/cloudflare-tail.test.ts",
         "src/worker.test.ts",
-        "scripts/validate-cloudflare-worker-ops.test.mjs"
+        "scripts/validate-cloudflare-worker-ops.test.mjs",
+        "scripts/validate-cloudflare-pages.test.mjs"
       ],
       "publicExports": ["createCloudflareTailSourcePlugin", "CloudflareTailEvent"],
       "publicExportKinds": {

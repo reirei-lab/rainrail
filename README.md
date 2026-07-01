@@ -58,6 +58,12 @@ and `reirei-harness` are inventoried in
 including the Rainrail test files that cover each migrated behavior and the
 alternate checks for behavior that is no longer a separate Rainrail workflow.
 
+## Cloudflare Pages
+
+Rainrail product site の preview / production deploy は Cloudflare Pages project
+`rainrail-www` を使う。GitHub Actions secrets、repeatable deploy command、smoke
+check は `docs/cloudflare-pages.md` にまとめている。
+
 ## Product site and docs boundary
 
 Product-facing content for the future `apps/www` site and engineering-facing
