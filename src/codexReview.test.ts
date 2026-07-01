@@ -85,6 +85,49 @@ describe('handleCodexReviewEvent', () => {
     ]);
   });
 
+  it('does not remove review requests that appear after the Codex review snapshot', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+    const removedReviewRequests: Array<{ repository: string; number: number; reviewerLogin: string }> = [];
+    let fetchCount = 0;
+
+    const result = await handleCodexReviewEvent(reviewEvent({
+      state: 'commented',
+      reviewCommitId: 'abc123',
+    }), {
+      agentLogin: 'reirei-agent',
+      reviewerLogin: 'hiragram',
+      reviewRequest: { reviewerLogin: 'hiragram' },
+      targetRepositories: ['reirei-lab/rainrail'],
+      tasks: handoffRecorder({ updates }),
+      pullRequests: {
+        async getPullRequest(input) {
+          fetchCount += 1;
+          return pullRequest({
+            ...input,
+            headSha: 'abc123',
+            reviewRequests: fetchCount === 1 ? [] : ['hiragram'],
+          });
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          throw new Error('not used');
+        },
+        async removeReviewRequest(input) {
+          removedReviewRequests.push(input);
+        },
+        async listReviewComments() {
+          return [{ id: 2, reviewId: 4493317816, path: 'src/pr-lifecycle.ts', body: 'comment' }];
+        },
+      },
+    });
+
+    expect(result).toMatchObject({ reason: 'Codex review returned issue to Todo' });
+    expect(fetchCount).toBe(1);
+    expect(removedReviewRequests).toEqual([]);
+  });
+
   it('ignores stale Codex reviews for an old pull request head', async () => {
     const updates: Array<{ reason: string; commentBody?: string }> = [];
 

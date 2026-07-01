@@ -126,6 +126,36 @@ describe('handleCheckFailureEvent', () => {
     expect(updates).toHaveLength(1);
   });
 
+  it('treats the failed check event as current while the live rollup is still pending', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+
+    const result = await handleCheckFailureEvent(checkRunEvent({ conclusion: 'failure', headSha: 'abc123' }), {
+      agentLogin: 'reirei-agent',
+      branchPrefix: 'agent/',
+      tasks: handoffRecorder({ updates }),
+      pullRequests: {
+        async getPullRequest(input) {
+          return pullRequest({
+            ...input,
+            headSha: 'abc123',
+            statusCheckRollup: [
+              { type: 'CheckRun', name: 'Typecheck, Test, Build', status: 'IN_PROGRESS' },
+            ],
+          });
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          throw new Error('not used');
+        },
+      },
+    });
+
+    expect(result.reason).toBe('failed PR checks returned issue to Todo');
+    expect(updates).toHaveLength(1);
+  });
+
   it('continues past non-agent check_run PRs and returns a later agent PR issue to Todo', async () => {
     const updates: Array<{ reason: string; commentBody?: string }> = [];
 

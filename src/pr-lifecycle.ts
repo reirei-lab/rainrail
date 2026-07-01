@@ -354,7 +354,8 @@ export async function handleChangeRequestEvent(
     return { handled: false, reason: 'pull request is already closed', pullRequestNumber: target.number, branchName: target.branchName };
   }
   const reviewTargetConfig = changeRequestReviewTargetConfig(options);
-  const livePullRequest = options.pullRequests !== undefined && (target.reviewCommitId !== undefined || reviewTargetConfig !== undefined)
+  const shouldSnapshotReviewRequest = options.reviewRequest !== undefined && options.reviewRequest.enabled !== false;
+  const livePullRequest = options.pullRequests !== undefined && (target.reviewCommitId !== undefined || reviewTargetConfig !== undefined || shouldSnapshotReviewRequest)
     ? await livePullRequestForReview(options.pullRequests, target, context)
     : undefined;
   if (normalize(livePullRequest?.state) === 'closed') {
@@ -371,6 +372,9 @@ export async function handleChangeRequestEvent(
   if (reviewTargetConfig !== undefined && livePullRequest !== undefined && !isReviewTarget(reviewTargetConfig, livePullRequest)) {
     return { handled: false, reason: 'pull request is not an agent-authored target', pullRequestNumber: target.number, branchName: target.branchName };
   }
+  if (target.reviewCommitId !== undefined && livePullRequest !== undefined && !hasUnresolvedChangeRequest(livePullRequest)) {
+    return { handled: false, reason: 'pull request has no unresolved change requests', pullRequestNumber: target.number, branchName: target.branchName };
+  }
   const task = await options.tasks.getAgentTaskByBranchName(target.branchName);
   if (task === undefined) {
     return { handled: false, reason: 'no agent task matched the PR branch', pullRequestNumber: target.number, branchName: target.branchName };
@@ -386,12 +390,9 @@ export async function handleChangeRequestEvent(
     commentBody: changeRequestComment(target, task),
   }, context);
   await options.tasks.recordTaskStatus?.({ task, result: `change_requested:${update.status}` }, context);
-  const reviewRequestRemoved = await removePendingReviewRequestByNumber(
-    options.pullRequests,
-    { repository: target.repository, number: target.number },
-    options.reviewRequest,
-    context,
-  );
+  const reviewRequestRemoved = options.pullRequests === undefined || livePullRequest === undefined
+    ? false
+    : await removePendingReviewRequest(options.pullRequests, livePullRequest, options.reviewRequest, context);
   return {
     handled: true,
     reason: 'change-requested pull request returned to Todo',
@@ -415,7 +416,8 @@ export async function handleCodexReviewEvent(
   if (normalize(review.pullRequestState) === 'closed') {
     return { handled: false, reason: 'pull request is already closed', review };
   }
-  const livePullRequest = review.reviewCommitId === undefined
+  const shouldSnapshotReviewRequest = options.reviewRequest !== undefined && options.reviewRequest.enabled !== false;
+  const livePullRequest = review.reviewCommitId === undefined && !shouldSnapshotReviewRequest
     ? undefined
     : await livePullRequestForReview(options.pullRequests, { repository: review.repository, number: review.pullRequestNumber }, context);
   if (normalize(livePullRequest?.state) === 'closed') {
@@ -442,12 +444,9 @@ export async function handleCodexReviewEvent(
     commentBody: codexReviewComment({ task, review, inlineComments }),
   }, context);
   await options.tasks.recordTaskStatus?.({ task, result: `codex_review:${update.status}` }, context);
-  const reviewRequestRemoved = await removePendingReviewRequestByNumber(
-    options.pullRequests,
-    { repository: review.repository, number: review.pullRequestNumber },
-    options.reviewRequest,
-    context,
-  );
+  const reviewRequestRemoved = options.pullRequests === undefined || livePullRequest === undefined
+    ? false
+    : await removePendingReviewRequest(options.pullRequests, livePullRequest, options.reviewRequest, context);
   return {
     handled: true,
     reason: 'Codex review returned issue to Todo',
@@ -494,7 +493,7 @@ export async function handleCheckFailureEvent(
       fallback = { handled: false, reason: 'pull request is not open', check, pullRequest };
       continue;
     }
-    if (!hasCurrentCheckFailure(pullRequest) && pullRequest.statusCheckRollup.length > 0) {
+    if (!hasCurrentCheckFailure(pullRequest) && pullRequest.statusCheckRollup.length > 0 && allChecksPassed(pullRequest)) {
       fallback = { handled: false, reason: 'current pull request checks have passed', check, pullRequest };
       continue;
     }
@@ -1219,17 +1218,6 @@ async function removePendingReviewRequest(
     reviewerLogin: reviewRequest.reviewerLogin,
   }, taskContext(context));
   return true;
-}
-
-async function removePendingReviewRequestByNumber(
-  pullRequests: GitHubPullRequestProvider | undefined,
-  input: { repository: string; number: number },
-  reviewRequest: ReviewRequestRemovalOptions | undefined,
-  context: PluginRuntimeContext | undefined,
-): Promise<boolean> {
-  if (reviewRequest === undefined || reviewRequest.enabled === false || pullRequests === undefined) return false;
-  const pullRequest = await pullRequests.getPullRequest(input, taskContext(context));
-  return removePendingReviewRequest(pullRequests, pullRequest, reviewRequest, context);
 }
 
 async function livePullRequestForReview(

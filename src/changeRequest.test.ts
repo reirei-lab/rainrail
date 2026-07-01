@@ -82,6 +82,37 @@ describe('handleChangeRequestEvent', () => {
     expect(updates).toEqual([]);
   });
 
+  it('does not hand off delayed change requests after the live PR is approved', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+
+    const result = await handleChangeRequestEvent(reviewEvent({
+      state: 'changes_requested',
+      headSha: 'abc123',
+      reviewCommitId: 'abc123',
+    }), {
+      tasks: handoffRecorder({ updates }),
+      pullRequests: {
+        async getPullRequest(input) {
+          return pullRequestForChangeRequest({
+            ...input,
+            headSha: 'abc123',
+            reviewDecision: 'APPROVED',
+            reviews: [{ authorLogin: 'hiragram', state: 'APPROVED', commitId: 'abc123' }],
+          });
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          throw new Error('not used');
+        },
+      },
+    });
+
+    expect(result.reason).toBe('pull request has no unresolved change requests');
+    expect(updates).toEqual([]);
+  });
+
   it('does not hand off change requests when the live pull request is already closed', async () => {
     const updates: Array<{ reason: string; commentBody?: string }> = [];
 
@@ -151,6 +182,45 @@ describe('handleChangeRequestEvent', () => {
     expect(removedReviewRequests).toEqual([
       { repository: 'reirei-lab/rainrail', number: 44, reviewerLogin: 'hiragram' },
     ]);
+  });
+
+  it('does not remove review requests that appear after the change-request snapshot', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+    const removedReviewRequests: Array<{ repository: string; number: number; reviewerLogin: string }> = [];
+    let fetchCount = 0;
+
+    const result = await handleChangeRequestEvent(reviewEvent({
+      state: 'changes_requested',
+      reviewerLogin: 'codex',
+      reviewCommitId: 'abc123',
+    }), {
+      reviewRequest: { reviewerLogin: 'hiragram' },
+      tasks: handoffRecorder({ updates }),
+      pullRequests: {
+        async getPullRequest(input) {
+          fetchCount += 1;
+          return pullRequestForChangeRequest({
+            ...input,
+            headSha: 'abc123',
+            reviews: [{ authorLogin: 'codex', state: 'CHANGES_REQUESTED', commitId: 'abc123' }],
+            reviewRequests: fetchCount === 1 ? [] : ['hiragram'],
+          });
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          throw new Error('not used');
+        },
+        async removeReviewRequest(input) {
+          removedReviewRequests.push(input);
+        },
+      },
+    });
+
+    expect(result).toMatchObject({ reason: 'change-requested pull request returned to Todo' });
+    expect(fetchCount).toBe(1);
+    expect(removedReviewRequests).toEqual([]);
   });
 
   it('uses the runtime pull request provider when created as a workflow', async () => {
