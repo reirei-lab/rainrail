@@ -530,6 +530,11 @@ function stringifyField(record: Record<string, unknown> | undefined, key: string
 function redactSensitiveText(value: string): string {
   return value
     .replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, '[redacted-private-key]')
+    .replace(/(^|\s)(-[A-Za-z]*H)(Authorization:\s*)[\s\S]*?(?=(?:\s+-[A-Za-z]*H(?:Authorization|Cookie|Set-Cookie):)|(?:\s+-[A-Za-z])|[\n\r]|$)/gi, '$1$2$3[redacted-authorization]')
+    .replace(/(^|\s)(-[A-Za-z]*H)(Set-Cookie:\s*)[\s\S]*?(?=(?:\s+-[A-Za-z]*H(?:Authorization|Cookie|Set-Cookie):)|(?:\s+-[A-Za-z])|[\n\r]|$)/gi, '$1$2$3[redacted-cookie]')
+    .replace(/(^|\s)(-[A-Za-z]*H)(Cookie:\s*)[\s\S]*?(?=(?:\s+-[A-Za-z]*H(?:Authorization|Cookie|Set-Cookie):)|(?:\s+-[A-Za-z])|[\n\r]|$)/gi, '$1$2$3[redacted-cookie]')
+    .replace(/(^|\s)(-[A-Za-z]*[uUE])(\s+)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s'"]+)/g, '$1$2$3[redacted-credential]')
+    .replace(/(^|\s)(-[A-Za-z]*b)(\s+)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s'"]+)/g, '$1$2$3[redacted-cookie]')
     .replace(/(^|\s)(-[uUE])(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s'"]+)/g, '$1$2[redacted-credential]')
     .replace(/(^|\s)(-b)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s'"]+)/g, '$1$2[redacted-cookie]')
     .replace(/(^|\s)(-u|--user|-U|--proxy-user|--oauth2-bearer|--pass|--proxy-pass|--tlspassword|--proxy-tlspassword|-E|--cert|--proxy-cert)(=|\s+)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s'"]+)/g, '$1$2$3[redacted-credential]')

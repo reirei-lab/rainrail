@@ -92,7 +92,8 @@ handler lifecycle cleanup の abort では child process を停止しない。sp
 Node が `error` を emit しても未処理例外で Rainrail を落とさないよう listener を置き、
 provider 利用側が `onSpawnError` で観測できるようにする。start run の log path は
 同じ issue task を別 run で再起動しても過去ログを切り詰めないよう、agent session id
-由来の正規化名と短い hash を含む一意な名前にする。resume run も attempt id 由来の
+由来の短い正規化 prefix と短い hash を含む一意な名前にし、長い session key でも一般的な
+filesystem filename limit に収める。resume run も attempt id 由来の
 正規化名と短い hash を含め、同じ issue task の別 session が同じ resume log に
 追記されないようにする。resume attempt id も raw session key の短い hash を含め、
 正規化後に同名になる session key の attempt log が衝突しないようにしつつ、長い task/session でも
@@ -109,7 +110,8 @@ session key として再開し、JSON completion として解析できた stdout
 resume 対象にしない。banner/footer 付き completion でも抽出できた JSON metadata を優先する。
 Task と resume attempt には stdout `logPath` と対応する `stderrLogPath` を保持し、
 stderr 側にしか fallback diagnostics が残らない timeout でも fallback transcript を引き継ぐ。
-stderr diagnostics に JSON status 行と embedded fallback marker が同居する場合も marker を採用する。
+stderr diagnostics に JSON status 行と embedded fallback marker が同居する場合も marker を採用し、
+同一 log に複数 marker が追記されている場合は最後の marker を最新として採用する。
 OpenClaw の raw stdout/stderr log は redaction 前の credential を含み得るため、
 log directory は `0700`、start/resume の stdout/stderr log file は `0600` で作成する。
 
@@ -141,7 +143,8 @@ fallbackSessionKey metadata と fallback marker は種類で後から優先順�
 `curl --proxy-user user:password` /
 `curl --oauth2-bearer token` / `curl --pass phrase` / `curl --tlspassword string` /
 `curl -E client.pem:password` / `curl --cert client.pem:password` /
-`curl --proxy-cert proxy.pem:password` / `curl -b session=value` / `curl --cookie session=value`
+`curl --proxy-cert proxy.pem:password` / `curl -b session=value` / `curl --cookie session=value` /
+`curl -sHAuthorization: ...` / `curl -sHCookie: ...` / `curl -su user:password` / `curl -sb session=value`
 だけでなく JSON の `"token": "..."` /
 `"apiKey": "..."` / `"password": "..."`、`"webhookSecret"` / `"clientSecret"` /
 `"apiToken"` のような compound key、quoted shell assignment、`github_pat_...`、

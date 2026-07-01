@@ -567,8 +567,8 @@ function fallbackSessionKeyFromPayload(payload: Record<string, unknown>, agentId
 }
 
 function extractFallbackRuntimeSessionId(log: string): string | undefined {
-  const match = log.match(/EMBEDDED FALLBACK:[^\n\r]*fresh session\s+(gateway-fallback-[A-Za-z0-9._-]+)/i);
-  return match?.[1];
+  const matches = [...log.matchAll(/EMBEDDED FALLBACK:[^\n\r]*fresh session\s+(gateway-fallback-[A-Za-z0-9._-]+)/gi)];
+  return matches.at(-1)?.[1];
 }
 
 function generatedAgentSessionId(
@@ -662,7 +662,7 @@ function boundedSafeFileName(value: string, maxLength: number): string {
 }
 
 function safeLogFileName(value: string): string {
-  return `${safeFileName(value)}_${shortHash(value)}`;
+  return `${boundedSafeFileName(value, 140)}_${shortHash(value)}`;
 }
 
 function safeRunId(value: string): string {

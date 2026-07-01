@@ -643,6 +643,31 @@ describe('agent timeline', () => {
     expect(timeline[4]!.excerpt).toContain('"private_key": "[redacted]"');
   });
 
+  it('redacts curl joined headers and clustered credential options', () => {
+    const timeline = parseRuntimeTrajectoryTimeline([
+      JSON.stringify({
+        type: 'tool.call',
+        ts: '2026-06-30T15:09:05.000Z',
+        seq: 1,
+        data: {
+          name: 'bash',
+          arguments: {
+            command: 'curl -sHAuthorization: Basic joined-basic -sHCookie: session=joined-cookie -su user:cluster-password -sb session=cluster-cookie https://example.com',
+          },
+        },
+      }),
+    ].join('\n'));
+
+    expect(timeline[0]!.detail).toContain('-sHAuthorization: [redacted-authorization]');
+    expect(timeline[0]!.detail).toContain('-sHCookie: [redacted-cookie]');
+    expect(timeline[0]!.detail).toContain('-su [redacted-credential]');
+    expect(timeline[0]!.detail).toContain('-sb [redacted-cookie]');
+    expect(timeline[0]!.detail).not.toContain('joined-basic');
+    expect(timeline[0]!.detail).not.toContain('joined-cookie');
+    expect(timeline[0]!.detail).not.toContain('cluster-password');
+    expect(timeline[0]!.detail).not.toContain('cluster-cookie');
+  });
+
   it('classifies common commands into dashboard phases', () => {
     expect(classifyRuntimeToolCall('bash', 'gh issue view 22 --repo reirei-lab/rainrail')).toEqual({
       phase: '調査',

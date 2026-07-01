@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
 import { EventEmitter } from 'node:events';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -309,6 +309,26 @@ describe('createOpenClawRuntimeProvider', () => {
 
     expect(second.metadata?.logPath).toBe(first.metadata?.logPath);
     expect(readFileSync(String(second.metadata?.logPath), 'utf8')).toContain('gateway-fallback-existing');
+  });
+
+  it('keeps long start log filenames within common filename limits', async () => {
+    const spawnProcess = vi.fn(() => ({ pid: 4242, unref: vi.fn() }));
+    const logDirectory = temporaryDirectory();
+    const longSessionId = `agent:main:${'very-long-owner-name-'.repeat(8)}${'very-long-repository-name-'.repeat(8)}${'uuid-'.repeat(40)}`;
+    const provider = createOpenClawRuntimeProvider({
+      enabled: true,
+      command: 'openclaw',
+      agentId: 'main',
+      sessionKeyPrefix: 'rainrail',
+      timeoutSeconds: 900,
+      logDirectory,
+      spawnProcess,
+    });
+
+    const started = await provider.startRun(runtimeRequest({ agentSessionId: longSessionId }));
+
+    expect(Buffer.byteLength(basename(String(started.metadata?.logPath)), 'utf8')).toBeLessThanOrEqual(180);
+    expect(basename(String(started.metadata?.logPath))).toMatch(/_[a-f0-9]{12}\.log$/);
   });
 
   it('uses collision-resistant start log paths for distinct session keys', async () => {
@@ -687,6 +707,48 @@ describe('createOpenClawRuntimeProvider', () => {
     expect(spawnProcess).toHaveBeenCalledWith('openclaw', expect.arrayContaining([
       '--session-key',
       'agent:main:explicit:gateway-fallback-resume-stderr',
+    ]), expect.anything());
+  });
+
+  it('resumes the last fallback marker when a single stderr log contains retry history', async () => {
+    const spawnProcess = vi.fn(() => ({ pid: 5151, unref: vi.fn() }));
+    const logDirectory = temporaryDirectory();
+    const startLogPath = `${logDirectory}/task.log`;
+    const startStderrLogPath = `${logDirectory}/task.stderr.log`;
+    writeFileSync(startLogPath, JSON.stringify({ status: 'timed_out' }), 'utf8');
+    writeFileSync(startStderrLogPath, [
+      'EMBEDDED FALLBACK: Gateway timed out; running embedded agent with fresh session gateway-fallback-old',
+      'retry diagnostics',
+      'EMBEDDED FALLBACK: Gateway timed out; running embedded agent with fresh session gateway-fallback-new',
+    ].join('\n'), 'utf8');
+    const provider = createOpenClawRuntimeProvider({
+      enabled: true,
+      command: 'openclaw',
+      agentId: 'main',
+      sessionKeyPrefix: 'rainrail',
+      timeoutSeconds: 900,
+      logDirectory,
+      spawnProcess,
+    });
+
+    await provider.resumeRun?.({
+      run: { id: 'agent:main:intended-session', provider: 'openclaw', status: 'stopped' },
+      task: {
+        id: 'agent_task_reirei-lab-rainrail_22',
+        title: 'OpenClaw runtime',
+        agentSessionId: 'agent:main:intended-session',
+        branchName: 'agent/reirei-lab-rainrail-22',
+        logPath: startLogPath,
+        stderrLogPath: startStderrLogPath,
+        resumeAttempts: [],
+      },
+      attemptId: 'agent_task_reirei-lab-rainrail_22_resume_02',
+      requestedBy: 'reirei-agent',
+    });
+
+    expect(spawnProcess).toHaveBeenCalledWith('openclaw', expect.arrayContaining([
+      '--session-key',
+      'agent:main:explicit:gateway-fallback-new',
     ]), expect.anything());
   });
 
