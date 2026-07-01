@@ -1,7 +1,7 @@
 import { chmodSync, closeSync, constants, fchmodSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, statSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 
 import type { AgentAssignmentRuntime } from './agent-assignment.js';
 import type { RuntimeAgentTask, RuntimeProvider, RuntimeProviderContext, RuntimeRun, RuntimeRunRequest, RuntimeRunStatus } from './runtime-provider.js';
@@ -264,13 +264,13 @@ function redactRuntimeCompletionText(value: string | undefined): string | undefi
     .replace(/\b((?:[A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSPHRASE|API[-_]?KEY)|api[-_]?key|token|secret|password|passphrase|_auth)\s*[:=]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\n\r]*)/gi, '$1[redacted]');
 }
 
-function compactionFailureFromLog(raw: string): RuntimeRunCompletion | undefined {
+function compactionFailureFromLog(raw: string, summarySource = raw): RuntimeRunCompletion | undefined {
   if (!/CLI transcript compaction failed/i.test(raw)) {
     return undefined;
   }
   return {
     status: 'compaction_failed',
-    summary: redactRuntimeCompletionText(lastNonEmptyLine(raw)),
+    summary: redactRuntimeCompletionText(lastNonEmptyLine(summarySource)),
     timedOut: /timed out/i.test(raw),
     timeoutPhase: 'compaction',
   };
@@ -300,7 +300,7 @@ function compactionFailureAfterLatestCompletionJson(raw: string): RuntimeRunComp
       continue;
     }
     if (index > latestCompletionEnd) {
-      latestFailure = compactionFailureFromLog(match[0]);
+      latestFailure = compactionFailureFromLog(match[0], compactionFailureSummarySource(raw, match.index ?? 0, match[0]));
     }
   }
   return latestFailure;
@@ -318,9 +318,27 @@ function compactionFailureOutsideJsonRanges(raw: string): RuntimeRunCompletion |
     if (ignoredRanges.some((range) => index >= range.start && index <= range.end)) {
       continue;
     }
-    latestFailure = compactionFailureFromLog(match[0]);
+    latestFailure = compactionFailureFromLog(match[0], compactionFailureSummarySource(raw, match.index ?? 0, match[0]));
   }
   return latestFailure;
+}
+
+function compactionFailureSummarySource(raw: string, matchIndex: number, matchLine: string): string {
+  const redactedMatchLine = redactRuntimeCompletionText(matchLine) ?? matchLine;
+  if (redactedMatchLine !== matchLine) {
+    return redactedMatchLine;
+  }
+  const followingLines = raw.slice(matchIndex + matchLine.length).split(/\r?\n/);
+  for (const line of followingLines) {
+    if (line.trim() === '') {
+      continue;
+    }
+    const redactedLine = redactRuntimeCompletionText(line) ?? line;
+    if (redactedLine !== line) {
+      return redactedLine;
+    }
+  }
+  return matchLine;
 }
 
 export function runningRuntimeTaskPid(task: RuntimeAgentTask, isRunning: (pid: number) => boolean): number | undefined {
@@ -886,9 +904,9 @@ function defaultSpawnProcess(command: string, args: string[], options: { detache
 
 function ensurePrivateLogDirectory(directory: string): void {
   const nearestExistingPath = nearestExistingPathComponent(directory);
-  assertNoSymlinkBetween(nearestExistingPath, directory);
+  assertNoSymlinkPathComponents(nearestExistingPath, directory);
   mkdirSync(directory, { recursive: true, mode: 0o700 });
-  assertNoSymlinkBetween(nearestExistingPath, directory);
+  assertNoSymlinkPathComponents(nearestExistingPath, directory);
   chmodSync(directory, 0o700);
 }
 
@@ -899,7 +917,7 @@ function nearestExistingPathComponent(path: string): string {
       lstatSync(current);
       return current;
     } catch (error) {
-      if (!isNodeError(error) || error.code !== 'ENOENT') {
+      if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) {
         throw error;
       }
     }
@@ -911,29 +929,30 @@ function nearestExistingPathComponent(path: string): string {
   }
 }
 
-function assertNoSymlinkBetween(startPath: string, targetPath: string): void {
+function assertNoSymlinkPathComponents(startPath: string, targetPath: string): void {
   const start = resolve(startPath);
   const target = resolve(targetPath);
-  assertPathIsNotSymlink(start);
-  if (start === target) {
-    return;
+  const paths = [start];
+  const relativePath = relative(start, target);
+  if (relativePath !== '') {
+    let current = start;
+    for (const segment of relativePath.split(/[\\/]+/).filter((part) => part !== '')) {
+      current = join(current, segment);
+      paths.push(current);
+    }
   }
-  const relativePath = target.slice(start.length).replace(/^\/+/, '');
-  let current = start;
-  for (const part of relativePath.split('/').filter(Boolean)) {
-    current = join(current, part);
-    assertPathIsNotSymlink(current);
+  for (const path of paths) {
+    try {
+      if (lstatSync(path).isSymbolicLink()) {
+        throw new Error(`runtime log directory path contains a symlink: ${path}`);
+      }
+    } catch (error) {
+      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+        continue;
+      }
+      throw error;
+    }
   }
-}
-
-function assertPathIsNotSymlink(path: string): void {
-  if (lstatSync(path).isSymbolicLink()) {
-    throw new Error(`runtime log directory path component must not be a symlink: ${path}`);
-  }
-}
-
-function isNodeError(error: unknown): error is NodeJS.ErrnoException {
-  return error instanceof Error && 'code' in error;
 }
 
 function openPrivateLogFile(path: string, flags: 'a' | 'w'): number {

@@ -213,13 +213,13 @@ describe('createOpenClawRuntimeProvider', () => {
     expect(readFileSync(targetFile, 'utf8')).toBe('do-not-touch');
   });
 
-  it('rejects symlinked runtime log directories before spawning OpenClaw', async () => {
+  it('rejects symlinked runtime log directories before creating logs', async () => {
     const spawnProcess = vi.fn(() => ({ pid: 4242, unref: vi.fn() }));
     const root = temporaryDirectory();
-    const realDirectory = join(root, 'outside-logs');
-    const logDirectory = join(root, 'agent-task-logs');
-    mkdirSync(realDirectory);
-    symlinkSync(realDirectory, logDirectory);
+    const targetDirectory = join(root, 'actual-logs');
+    const logDirectory = join(root, 'linked-logs');
+    mkdirSync(targetDirectory, { recursive: true });
+    symlinkSync(targetDirectory, logDirectory, 'dir');
     const provider = createOpenClawRuntimeProvider({
       enabled: true,
       command: 'openclaw',
@@ -230,7 +230,7 @@ describe('createOpenClawRuntimeProvider', () => {
       spawnProcess,
     });
 
-    await expect(provider.startRun(runtimeRequest())).rejects.toThrow('must not be a symlink');
+    await expect(provider.startRun(runtimeRequest())).rejects.toThrow(/symlink/i);
 
     expect(spawnProcess).not.toHaveBeenCalled();
   });
@@ -1800,14 +1800,12 @@ describe('runtime task completion and resume helpers', () => {
       summary: 'failed with Set-Cookie: [redacted-cookie]',
       promptError: 'standalone Bearer [redacted-token]',
     });
-  });
-
-  it('redacts credentials from compaction failure summaries', () => {
-    expect(readRuntimeRunCompletionFromLog(
-      'GatewayClientRequestError: Error: CLI transcript compaction failed for openai/gpt-5.5: Authorization: Bearer github_pat_compactionSecret',
-    )).toMatchObject({
+    expect(readRuntimeRunCompletionFromLog([
+      'GatewayClientRequestError: Error: CLI transcript compaction failed for openai/gpt-5.5',
+      'Authorization: Bearer github_pat_compactionSecret',
+    ].join('\n'))).toMatchObject({
       status: 'compaction_failed',
-      summary: 'GatewayClientRequestError: Error: CLI transcript compaction failed for openai/gpt-5.5: Authorization: [redacted-authorization]',
+      summary: 'Authorization: [redacted-authorization]',
     });
   });
 
