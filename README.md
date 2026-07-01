@@ -33,3 +33,10 @@ separate steps so failures identify the command that failed:
 
 Cloudflare Worker として deploy する手順、required secrets、local dev と
 production smoke は `docs/cloudflare-worker.md` にまとめている。
+
+## Product site and docs boundary
+
+Product-facing content for the future `apps/www` site and engineering-facing
+contract/spec docs have separate responsibilities. The initial sitemap,
+documentation boundary, and README / docs / examples / website roles are
+documented in `docs/product-site-information-architecture.md`.
