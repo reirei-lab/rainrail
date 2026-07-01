@@ -167,6 +167,35 @@ describe('agent timeline', () => {
     }
   });
 
+  it('does not prefer fallback markers quoted inside bannered raw completion text', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'rainrail-quoted-fallback-raw-banner-timeline-'));
+    const logPath = join(directory, 'agent.log');
+    writeFileSync(logPath, [
+      'OpenClaw agent starting',
+      JSON.stringify({
+        status: 'ok',
+        finalAssistantRawText: 'quoted log: EMBEDDED FALLBACK: Gateway timed out; running embedded agent with fresh session gateway-fallback-raw-quoted',
+        meta: { agentMeta: { sessionId: 'actual-session' } },
+      }),
+      'OpenClaw agent finished',
+    ].join('\n'), 'utf8');
+    writeFileSync(join(directory, 'actual-session.trajectory.jsonl'), [
+      JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:08:00.000Z', seq: 1 }),
+    ].join('\n'), 'utf8');
+
+    try {
+      const timeline = await readRuntimeTimeline(
+        { logPath, agentSessionId: 'agent:main:routing-key' },
+        { sessionsDirectory: directory },
+      );
+      expect(timeline.sessionId).toBe('actual-session');
+      expect(timeline.fallback).toBe(false);
+      expect(timeline.missing).toBe(false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('prefers fallback session keys from JSON metadata over the original session mapping', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'rainrail-fallback-key-timeline-'));
     const logPath = join(directory, 'agent.log');

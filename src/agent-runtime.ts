@@ -207,6 +207,10 @@ export async function startOpenClawRun(
 }
 
 export function readRuntimeRunCompletionFromLog(raw: string): RuntimeRunCompletion | undefined {
+  const trailingCompactionFailure = compactionFailureFromTrailingLogLine(raw);
+  if (trailingCompactionFailure !== undefined) {
+    return trailingCompactionFailure;
+  }
   const payload = parseJsonFromLog(raw);
   if (!isRecord(payload)) {
     return compactionFailureFromLog(raw);
@@ -252,6 +256,14 @@ function compactionFailureFromLog(raw: string): RuntimeRunCompletion | undefined
     timedOut: /timed out/i.test(raw),
     timeoutPhase: 'compaction',
   };
+}
+
+function compactionFailureFromTrailingLogLine(raw: string): RuntimeRunCompletion | undefined {
+  const line = lastNonEmptyLine(raw);
+  if (line.trimStart().startsWith('{')) {
+    return undefined;
+  }
+  return compactionFailureFromLog(line);
 }
 
 export function runningRuntimeTaskPid(task: RuntimeAgentTask, isRunning: (pid: number) => boolean): number | undefined {

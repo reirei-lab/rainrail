@@ -1127,6 +1127,22 @@ describe('runtime task completion and resume helpers', () => {
     });
   });
 
+  it('prefers trailing compaction failure text over stale appended JSON completions', () => {
+    const raw = [
+      JSON.stringify({
+        status: 'ok',
+        finalAssistantVisibleText: 'Outcome: implemented',
+      }),
+      'GatewayClientRequestError: Error: CLI transcript compaction failed for openai/gpt-5.5: Compaction timed out',
+    ].join('\n');
+
+    expect(readRuntimeRunCompletionFromLog(raw)).toMatchObject({
+      status: 'compaction_failed',
+      summary: expect.stringContaining('Compaction timed out'),
+      timeoutPhase: 'compaction',
+    });
+  });
+
   it('does not let advisory Outcome text override explicit failure statuses', () => {
     expect(readRuntimeRunCompletionFromLog(JSON.stringify({
       status: 'error',

@@ -636,7 +636,7 @@ function payloadHasCompletionText(payload: unknown): boolean {
   if (!isRecord(payload)) {
     return false;
   }
-  if (typeof payload.finalAssistantVisibleText === 'string') {
+  if (typeof payload.finalAssistantVisibleText === 'string' || typeof payload.finalAssistantRawText === 'string') {
     return true;
   }
   if (Array.isArray(payload.payloads) && payload.payloads.some((item) => isRecord(item) && typeof item.text === 'string')) {
