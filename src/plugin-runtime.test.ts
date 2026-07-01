@@ -2952,6 +2952,87 @@ describe('plugin runtime contract', () => {
     }
   });
 
+  it('gates runtime provider resumeRun behind runtime:start capability and combines abort signals', async () => {
+    vi.useFakeTimers();
+    try {
+      const event = createEventEnvelope({
+        source: { type: 'github', name: 'github-webhook' },
+        name: 'github.issue',
+        delivery: {
+          id: 'delivery-resume-run-caller-signal',
+          receivedAt: '2026-06-29T14:00:00.000Z',
+        },
+        occurredAt: '2026-06-29T14:00:00.000Z',
+        subject: { type: 'issue', id: '13' },
+        payload: { action: 'opened' },
+        rawPayload: {
+          kind: 'external-reference',
+          reference: 'github://deliveries/delivery-resume-run-caller-signal',
+        },
+      });
+      const callerController = new AbortController();
+      let resumeRunSignal: AbortSignal | undefined;
+      const resumeRun = vi.fn(
+        async (_request, context?: { signal: AbortSignal }) =>
+          new Promise<{ id: string; provider: 'openclaw'; status: 'running' }>((_resolve, reject) => {
+            resumeRunSignal = context?.signal;
+            context?.signal.addEventListener('abort', () => reject(context.signal.reason), { once: true });
+          }),
+      );
+      const loader = createPluginLoader({
+        runtime: mockRuntimeContext({
+          runId: 'run-13',
+          now: () => new Date('2026-06-29T14:01:00.000Z'),
+          runtime: {
+            name: 'mock-runtime',
+            kind: 'runtime-provider',
+            startRun: async () => ({ id: 'run:mock', provider: 'codex', status: 'queued' }),
+            resumeRun,
+          },
+        }),
+        defaultTimeoutMs: 25,
+      });
+
+      loader.on(
+        'github.issue',
+        async (_handledEvent, context) =>
+          context.runtime.resumeRun?.(
+            {
+              run: { id: 'agent:main:existing-session', provider: 'openclaw', status: 'stopped' },
+              task: {
+                id: 'agent_task_reirei-lab-rainrail_22',
+                title: 'OpenClaw runtime',
+                agentSessionId: 'agent:main:existing-session',
+                branchName: 'agent/reirei-lab-rainrail-22',
+                logPath: 'var/agent-task-logs/task.log',
+                resumeAttempts: [],
+              },
+              attemptId: 'agent_task_reirei-lab-rainrail_22_resume_01',
+              requestedBy: 'resume-run-caller-signal-handler',
+            },
+            { signal: callerController.signal },
+          ),
+        { name: 'resume-run-caller-signal-handler', capabilities: ['runtime:start'] },
+      );
+
+      const dispatchPromise = loader.dispatch(event);
+      callerController.abort(new Error('caller canceled resume'));
+      await Promise.resolve();
+
+      expect(resumeRun).toHaveBeenCalledOnce();
+      expect(resumeRunSignal?.aborted).toBe(true);
+      await expect(dispatchPromise).resolves.toMatchObject([
+        {
+          pluginName: 'resume-run-caller-signal-handler',
+          eventId: 'github-webhook:delivery-resume-run-caller-signal:github.issue',
+          status: 'rejected',
+        },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('combines caller and lifecycle abort signals for task provider methods', async () => {
     const event = createEventEnvelope({
       source: { type: 'github', name: 'github-webhook' },

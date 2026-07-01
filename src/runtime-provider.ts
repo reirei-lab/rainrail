@@ -22,6 +22,7 @@ export interface RuntimeAgentResumeAttempt {
   pid?: number;
   sessionKey?: string;
   logPath: string;
+  stderrLogPath?: string;
   timeoutSeconds?: number;
 }
 
@@ -31,6 +32,7 @@ export interface RuntimeAgentTask {
   agentSessionId: string;
   branchName: string;
   logPath: string;
+  stderrLogPath?: string;
   pid?: number;
   issue?: unknown;
   claim?: unknown;
@@ -69,5 +71,5 @@ export interface RuntimeProvider {
   name: string;
   kind: 'runtime-provider';
   startRun(request: RuntimeRunRequest, context?: RuntimeProviderContext): RuntimeRun | Promise<RuntimeRun>;
-  resumeRun?: (request: RuntimeResumeRequest) => RuntimeRun | Promise<RuntimeRun>;
+  resumeRun?: (request: RuntimeResumeRequest, context?: RuntimeProviderContext) => RuntimeRun | Promise<RuntimeRun>;
 }

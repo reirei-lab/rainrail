@@ -94,10 +94,11 @@ export function createOpenClawRuntimeProvider(options: OpenClawRuntimeProviderOp
     name: 'openclaw',
     kind: 'runtime-provider',
     startRun: async (request, context) => startOpenClawRun(options, request, context),
-    resumeRun: async (request) => {
+    resumeRun: async (request, context) => {
       if (!options.enabled) {
         throw new Error('OpenClaw runtime provider is disabled');
       }
+      throwIfAborted(context?.signal);
       ensurePrivateLogDirectory(options.logDirectory);
       const logPath = join(options.logDirectory, `${safeFileName(request.attemptId)}.log`);
       const stderrLogPath = stderrLogPathFor(logPath);
@@ -122,6 +123,7 @@ export function createOpenClawRuntimeProvider(options: OpenClawRuntimeProviderOp
           stdio: ['ignore', outputFd, stderrFd],
         });
         attachSpawnErrorHandler(child, options, 'resume');
+        attachAbortHandler(child, context?.signal);
         child.unref?.();
         return {
           id: resumeSessionId,
@@ -455,10 +457,7 @@ function issueFieldsFromValue(value: Record<string, unknown>): RuntimeAgentTaskI
 }
 
 function runtimeResumeSessionId(task: RuntimeAgentTask): string {
-  for (const logPath of [
-    ...task.resumeAttempts.map((attempt) => attempt.logPath).reverse(),
-    task.logPath,
-  ]) {
+  for (const logPath of runtimeResumeLogPaths(task)) {
     try {
       const fallbackSessionKey = extractFallbackRuntimeSessionKey(readFileSync(logPath, 'utf8'));
       if (fallbackSessionKey !== undefined) {
@@ -471,15 +470,36 @@ function runtimeResumeSessionId(task: RuntimeAgentTask): string {
   return task.agentSessionId;
 }
 
+function runtimeResumeLogPaths(task: RuntimeAgentTask): string[] {
+  return [
+    ...task.resumeAttempts.slice().reverse().flatMap((attempt) => [
+      attempt.logPath,
+      attempt.stderrLogPath ?? stderrLogPathFor(attempt.logPath),
+    ]),
+    task.logPath,
+    task.stderrLogPath ?? stderrLogPathFor(task.logPath),
+  ];
+}
+
 function extractFallbackRuntimeSessionKey(log: string): string | undefined {
   const payload = parseJsonFromLog(log);
   if (isRecord(payload)) {
-    const key = stringValue(recordValue(recordValue(recordValue(payload.result)?.meta)?.agentMeta)?.fallbackSessionKey);
+    const key = fallbackSessionKeyFromPayload(payload);
     if (key !== undefined) {
       return key;
     }
   }
   return extractFallbackRuntimeSessionId(log);
+}
+
+function fallbackSessionKeyFromPayload(payload: Record<string, unknown>): string | undefined {
+  for (const source of [payload, recordValue(payload.result)]) {
+    const key = stringValue(recordValue(recordValue(source?.meta)?.agentMeta)?.fallbackSessionKey);
+    if (key !== undefined) {
+      return key;
+    }
+  }
+  return undefined;
 }
 
 function extractFallbackRuntimeSessionId(log: string): string | undefined {

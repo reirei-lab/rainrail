@@ -93,9 +93,12 @@ provider 利用側が `onSpawnError` で観測できるようにする。start r
 同じ issue task を別 run で再起動しても過去ログを切り詰めないよう、agent session id
 由来の一意な名前にする。resume run も session id を attempt id に含め、同じ issue
 task の別 session が同じ resume log に追記されないようにする。初回実行が gateway
-fallback session へ移った場合は、前回 completion metadata から fallback session key を、
-または embedded fallback marker から fallback session id を検出して resume
-対象にする。OpenClaw の raw stdout/stderr log は redaction 前の credential を含み得るため、
+fallback session へ移った場合は、前回 completion metadata の top-level または
+`result` 配下の `meta.agentMeta.fallbackSessionKey` から fallback session key を、
+または stdout/stderr log の embedded fallback marker から fallback session id を検出して resume
+対象にする。Task と resume attempt には stdout `logPath` と対応する `stderrLogPath` を保持し、
+stderr 側にしか fallback diagnostics が残らない timeout でも fallback transcript を引き継ぐ。
+OpenClaw の raw stdout/stderr log は redaction 前の credential を含み得るため、
 log directory は `0700`、start/resume の stdout/stderr log file は `0600` で作成する。
 
 completion/resume/timeline は provider 境界の情報として扱う。completion parser は
@@ -227,9 +230,10 @@ handler が fulfilled/rejected で settle した後も同じ signal を abort �
 冪等化を行えるようにする。dispatcher は action implementation を runtime `actions`
 object を receiver として呼ぶため、`this.client` などに依存する object method も
 そのまま利用できる。
-`context.runtime.startRun` も handler へ直接 provider を渡さず gated wrapper にする。
+`context.runtime.startRun` と `context.runtime.resumeRun` は handler へ直接 provider を渡さず gated wrapper にする。
 `runtime:start` capability がない handler は runtime provider 経由でも起動できない。
 handler が `context.runtime.startRun(request, { signal })` として caller signal を渡した
+場合、または `context.runtime.resumeRun(request, { signal })` として caller signal を渡した
 場合、dispatcher は plugin lifecycle signal と caller signal を合成して provider へ渡す。
 互換 API の `context.capabilities.dispatchAgent` も同じ `runtime:start` gate を通し、
 未宣言 handler から agent/run 起動経路を迂回できないようにする。handler が
