@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { PluginRuntimeContext } from './workflow-plugin.js';
-import type { GitHubPullRequestProvider } from './pr-lifecycle.js';
+import type { GitHubPullRequestProvider, PullRequestReviewTarget } from './pr-lifecycle.js';
 import { createChangeRequestWorkflow, createTaskProviderPullRequestCommentHandoff, handleChangeRequestEvent } from './pr-lifecycle.js';
 import { handoffRecorder, reviewEvent, task } from './pr-lifecycle-test-helpers.js';
 
@@ -50,6 +50,32 @@ describe('handleChangeRequestEvent', () => {
       reviewCommitId: 'old-sha',
     }), {
       tasks: handoffRecorder({ updates }),
+    });
+
+    expect(result.reason).toBe('review does not match the current pull request head');
+    expect(updates).toEqual([]);
+  });
+
+  it('prefers the live pull request head over the review payload head when detecting stale change requests', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+
+    const result = await handleChangeRequestEvent(reviewEvent({
+      state: 'changes_requested',
+      headSha: 'old-sha',
+      reviewCommitId: 'old-sha',
+    }), {
+      tasks: handoffRecorder({ updates }),
+      pullRequests: {
+        async getPullRequest(input) {
+          return pullRequestForChangeRequest({ ...input, headSha: 'new-sha' });
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          throw new Error('not used');
+        },
+      },
     });
 
     expect(result.reason).toBe('review does not match the current pull request head');
@@ -146,6 +172,34 @@ describe('handleChangeRequestEvent', () => {
     ]);
   });
 
+  it('does not hand off changes requested on a pull request outside the managed agent target', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+
+    const result = await handleChangeRequestEvent(reviewEvent({ state: 'changes_requested' }), {
+      agentLogin: 'reirei-agent',
+      branchPrefix: 'agent/',
+      tasks: handoffRecorder({ updates }),
+      pullRequests: {
+        async getPullRequest(input) {
+          return pullRequestForChangeRequest({
+            ...input,
+            authorLogin: 'someone-else',
+            headRefName: 'agent/test-pr',
+          });
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          throw new Error('not used');
+        },
+      },
+    });
+
+    expect(result.reason).toBe('pull request is not an agent-authored target');
+    expect(updates).toEqual([]);
+  });
+
   it('ignores non-change-request reviews', async () => {
     const result = await handleChangeRequestEvent(reviewEvent({ state: 'approved' }), {
       tasks: handoffRecorder(),
@@ -160,6 +214,25 @@ describe('handleChangeRequestEvent', () => {
       tasks: handoffRecorder({
         updates,
         taskOverride: { issue: { contentId: 'I_other', repository: 'reirei-lab/other' } },
+      }),
+    });
+
+    expect(result.reason).toBe('matched agent task belongs to another repository');
+    expect(updates).toEqual([]);
+  });
+
+  it('does not hand off a task claimed in a different repository when issue metadata is missing', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+    const result = await handleChangeRequestEvent(reviewEvent({ state: 'changes_requested' }), {
+      tasks: handoffRecorder({
+        updates,
+        taskOverride: {
+          issue: { contentId: 'DI_draft', contentType: 'DraftIssue' },
+          claim: {
+            ...task.claim!,
+            lockRepositoryNameWithOwner: 'reirei-lab/other',
+          },
+        },
       }),
     });
 
@@ -300,10 +373,56 @@ describe('handleChangeRequestEvent', () => {
       },
       reason: 'codex_review',
       commentBody: 'body',
-    })).rejects.toThrow('comment-only handoff requires issue repository and number');
+    })).rejects.toThrow('handoff requires issue repository and number');
     expect(commentCount).toBe(0);
   });
+
+  it('does not release queued project issues when the handoff comment has no target', async () => {
+    const releases: unknown[] = [];
+    const handoff = createTaskProviderPullRequestCommentHandoff({
+      name: 'github',
+      kind: 'task-provider',
+      async getIssue() {
+        throw new Error('not used');
+      },
+      async createComment() {
+        throw new Error('not used');
+      },
+    }, {
+      releaseProjectIssue(input) {
+        releases.push(input);
+      },
+    });
+
+    await expect(handoff.returnTaskToTodo({
+      task: {
+        ...task,
+        issue: { contentId: 'DI_draft', contentType: 'DraftIssue', state: 'OPEN' },
+      },
+      reason: 'codex_review',
+      commentBody: 'body',
+    })).rejects.toThrow('handoff requires issue repository and number');
+    expect(releases).toEqual([]);
+  });
 });
+
+function pullRequestForChangeRequest(overrides: Partial<PullRequestReviewTarget> = {}): PullRequestReviewTarget {
+  return {
+    repository: 'reirei-lab/rainrail',
+    number: 44,
+    title: 'feat: add PR lifecycle workflows',
+    url: 'https://github.com/reirei-lab/rainrail/pull/44',
+    authorLogin: 'reirei-agent',
+    headRefName: 'agent/test-pr',
+    headRepository: 'reirei-lab/rainrail',
+    headSha: 'abc123',
+    isDraft: false,
+    state: 'OPEN',
+    statusCheckRollup: [],
+    reviewRequests: [],
+    ...overrides,
+  };
+}
 
 function runtimeContext(githubPullRequests: GitHubPullRequestProvider): PluginRuntimeContext {
   return {

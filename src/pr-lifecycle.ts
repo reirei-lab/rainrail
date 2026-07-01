@@ -146,6 +146,8 @@ export interface TodoHandoffWorkflowOptions {
 }
 
 export interface ChangeRequestWorkflowOptions extends TodoHandoffWorkflowOptions {
+  agentLogin?: string;
+  branchPrefix?: string;
   reviewRequest?: ReviewRequestRemovalOptions;
   pullRequests?: GitHubPullRequestProvider | undefined;
 }
@@ -340,13 +342,20 @@ export async function handleChangeRequestEvent(
   if (normalize(target.pullRequestState) === 'closed') {
     return { handled: false, reason: 'pull request is already closed', pullRequestNumber: target.number, branchName: target.branchName };
   }
-  const currentHeadSha = target.headSha ?? await livePullRequestHeadSha(options.pullRequests, target, context);
+  const reviewTargetConfig = changeRequestReviewTargetConfig(options);
+  const livePullRequest = options.pullRequests !== undefined && (target.reviewCommitId !== undefined || reviewTargetConfig !== undefined)
+    ? await livePullRequestForReview(options.pullRequests, target, context)
+    : undefined;
+  const currentHeadSha = livePullRequest?.headSha ?? target.headSha;
   if (
     target.reviewCommitId !== undefined
     && currentHeadSha !== undefined
     && target.reviewCommitId !== currentHeadSha
   ) {
     return { handled: false, reason: 'review does not match the current pull request head', pullRequestNumber: target.number, branchName: target.branchName };
+  }
+  if (reviewTargetConfig !== undefined && livePullRequest !== undefined && !isReviewTarget(reviewTargetConfig, livePullRequest)) {
+    return { handled: false, reason: 'pull request is not an agent-authored target', pullRequestNumber: target.number, branchName: target.branchName };
   }
   const task = await options.tasks.getAgentTaskByBranchName(target.branchName);
   if (task === undefined) {
@@ -392,15 +401,10 @@ export async function handleCodexReviewEvent(
   if (normalize(review.pullRequestState) === 'closed') {
     return { handled: false, reason: 'pull request is already closed', review };
   }
-  const currentHeadSha = review.headSha ?? await livePullRequestHeadSha(
-    options.pullRequests,
-    {
-      repository: review.repository,
-      number: review.pullRequestNumber,
-      ...(review.reviewCommitId === undefined ? {} : { reviewCommitId: review.reviewCommitId }),
-    },
-    context,
-  );
+  const livePullRequest = review.reviewCommitId === undefined
+    ? undefined
+    : await livePullRequestForReview(options.pullRequests, { repository: review.repository, number: review.pullRequestNumber }, context);
+  const currentHeadSha = livePullRequest?.headSha ?? review.headSha;
   if (
     review.reviewCommitId !== undefined
     && currentHeadSha !== undefined
@@ -1158,17 +1162,16 @@ async function removePendingReviewRequestByNumber(
   return removePendingReviewRequest(pullRequests, pullRequest, reviewRequest, context);
 }
 
-async function livePullRequestHeadSha(
+async function livePullRequestForReview(
   pullRequests: GitHubPullRequestProvider | undefined,
-  target: { repository: string; number: number; reviewCommitId?: string },
+  target: { repository: string; number: number },
   context: PluginRuntimeContext | undefined,
-): Promise<string | undefined> {
-  if (target.reviewCommitId === undefined || pullRequests === undefined) return undefined;
-  const pullRequest = await pullRequests.getPullRequest({
+): Promise<PullRequestReviewTarget | undefined> {
+  if (pullRequests === undefined) return undefined;
+  return pullRequests.getPullRequest({
     repository: target.repository,
     number: target.number,
   }, taskContext(context));
-  return pullRequest.headSha;
 }
 
 function shouldIgnoreTask(task: AgentTask): string | undefined {
@@ -1178,9 +1181,16 @@ function shouldIgnoreTask(task: AgentTask): string | undefined {
 }
 
 function repositoryMismatchReason(task: AgentTask, repository: string): string | undefined {
-  return task.issue?.repository !== undefined && normalize(task.issue.repository) !== normalize(repository)
+  const taskRepository = task.issue?.repository ?? task.claim?.lockRepositoryNameWithOwner;
+  return taskRepository !== undefined && normalize(taskRepository) !== normalize(repository)
     ? 'matched agent task belongs to another repository'
     : undefined;
+}
+
+function changeRequestReviewTargetConfig(options: ChangeRequestWorkflowOptions): { agentLogin: string; branchPrefix: string } | undefined {
+  return options.agentLogin === undefined || options.branchPrefix === undefined
+    ? undefined
+    : { agentLogin: options.agentLogin, branchPrefix: options.branchPrefix };
 }
 
 function targetRepositoryAllowed(targets: readonly string[], repository: string, allowEmpty = false): boolean {
@@ -1275,11 +1285,10 @@ export function createTaskProviderPullRequestCommentHandoff(
       }
       const issue = input.task.issue;
       if (
-        queue?.releaseProjectIssue === undefined
-        && input.commentBody !== undefined
+        input.commentBody !== undefined
         && (issue?.number === undefined || issue.repository === undefined)
       ) {
-        throw new Error('comment-only handoff requires issue repository and number');
+        throw new Error('handoff requires issue repository and number');
       }
       const comment = input.commentBody === undefined || issue?.number === undefined || issue.repository === undefined
         ? undefined

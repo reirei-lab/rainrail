@@ -96,9 +96,26 @@ describe('handleCodexReviewEvent', () => {
       reviewerLogin: 'hiragram',
       targetRepositories: ['reirei-lab/rainrail'],
       tasks: handoffRecorder({ updates }),
+    });
+
+    expect(result.reason).toBe('review does not match the current pull request head');
+    expect(updates).toEqual([]);
+  });
+
+  it('prefers the live pull request head over the review payload head when detecting stale Codex reviews', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+
+    const result = await handleCodexReviewEvent(reviewEvent({
+      headSha: 'old-sha',
+      reviewCommitId: 'old-sha',
+    }), {
+      agentLogin: 'reirei-agent',
+      reviewerLogin: 'hiragram',
+      targetRepositories: ['reirei-lab/rainrail'],
+      tasks: handoffRecorder({ updates }),
       pullRequests: {
-        async getPullRequest() {
-          throw new Error('not used');
+        async getPullRequest(input) {
+          return pullRequest({ ...input, headSha: 'new-sha' });
         },
         async findPullRequestByHead() {
           throw new Error('not used');
