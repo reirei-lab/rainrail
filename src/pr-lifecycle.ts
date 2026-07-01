@@ -173,6 +173,8 @@ export interface ReviewRequestRemovalOptions {
 }
 
 export interface ConflictCheckWorkflowOptions extends TodoHandoffWorkflowOptions {
+  agentLogin: string;
+  branchPrefix: string;
   pullRequests?: GitHubPullRequestProvider | undefined;
   reviewRequest?: ReviewRequestRemovalOptions;
   delayMs?: number;
@@ -530,7 +532,7 @@ export async function handleConflictCheckEvent(
   const conflictedCandidates = candidates.filter(isConflicted);
   const manageableCandidates = [];
   for (const pullRequest of candidates) {
-    if (!sameRepositoryHead(pullRequest)) continue;
+    if (!isReviewTarget(options, pullRequest)) continue;
     const task = await options.tasks.getAgentTaskByBranchName(pullRequest.headRefName);
     if (
       task === undefined

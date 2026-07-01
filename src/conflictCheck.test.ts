@@ -9,6 +9,8 @@ describe('handleConflictCheckEvent', () => {
     const updates: Array<{ reason: string; commentBody?: string }> = [];
 
     const result = await handleConflictCheckEvent(pushEvent(), {
+      agentLogin: 'reirei-agent',
+      branchPrefix: 'agent/',
       tasks: handoffRecorder({ updates }),
       reviewRequest: { reviewerLogin: 'hiragram' },
       delayMs: 0,
@@ -50,6 +52,8 @@ describe('handleConflictCheckEvent', () => {
     const updates: Array<{ reason: string; commentBody?: string }> = [];
 
     const result = await handleConflictCheckEvent(pushEvent(), {
+      agentLogin: 'reirei-agent',
+      branchPrefix: 'agent/',
       tasks: handoffRecorder({ updates }),
       delayMs: 0,
       pullRequests: {
@@ -74,6 +78,8 @@ describe('handleConflictCheckEvent', () => {
 
   it('retries when open PR mergeability is still being calculated', async () => {
     await expect(handleConflictCheckEvent(pushEvent(), {
+      agentLogin: 'reirei-agent',
+      branchPrefix: 'agent/',
       tasks: handoffRecorder(),
       delayMs: 0,
       pullRequests: {
@@ -97,6 +103,8 @@ describe('handleConflictCheckEvent', () => {
     const updates: Array<{ reason: string; commentBody?: string }> = [];
 
     const result = await handleConflictCheckEvent(pushEvent(), {
+      agentLogin: 'reirei-agent',
+      branchPrefix: 'agent/',
       tasks: handoffRecorder({ updates }),
       delayMs: 0,
       pullRequests: {
@@ -123,10 +131,46 @@ describe('handleConflictCheckEvent', () => {
     expect(updates).toHaveLength(1);
   });
 
+  it('does not return same-repository pull requests from other authors to Todo when only the branch matches', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+
+    const result = await handleConflictCheckEvent(pushEvent(), {
+      agentLogin: 'reirei-agent',
+      branchPrefix: 'agent/',
+      tasks: handoffRecorder({ updates }),
+      delayMs: 0,
+      pullRequests: {
+        async getPullRequest() {
+          throw new Error('not used');
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async findOpenPullRequestsByBase() {
+          return [
+            pullRequest({
+              authorLogin: 'someone-else',
+              headRefName: 'agent/test-pr',
+              mergeStateStatus: 'DIRTY',
+            }),
+          ];
+        },
+        async requestReview() {
+          throw new Error('not used');
+        },
+      },
+    });
+
+    expect(result.reason).toBe('conflicting pull requests had no matching claimed agent tasks');
+    expect(updates).toEqual([]);
+  });
+
   it('retries even when some open PRs are already known conflicts', async () => {
     const updates: Array<{ reason: string; commentBody?: string }> = [];
 
     await expect(handleConflictCheckEvent(pushEvent(), {
+      agentLogin: 'reirei-agent',
+      branchPrefix: 'agent/',
       tasks: handoffRecorder({ updates }),
       delayMs: 0,
       pullRequests: {
@@ -152,6 +196,8 @@ describe('handleConflictCheckEvent', () => {
 
   it('does not treat branch-protection blocked pull requests as conflicts', async () => {
     const result = await handleConflictCheckEvent(pushEvent(), {
+      agentLogin: 'reirei-agent',
+      branchPrefix: 'agent/',
       tasks: handoffRecorder(),
       delayMs: 0,
       pullRequests: {
