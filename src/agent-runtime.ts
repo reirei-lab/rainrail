@@ -215,7 +215,7 @@ function runtimeRunCompletionFromPayload(payload: Record<string, unknown>): Runt
   const completionPayload = completionPayloadFromResponse(payload);
   const topLevelStatus = stringValue(payload.status);
   const completionStatus = stringValue(completionPayload.status);
-  const explicitStatus = isFailureStatus(topLevelStatus) ? topLevelStatus : completionStatus ?? topLevelStatus;
+  const explicitStatus = isTerminalRuntimeRunStatus(topLevelStatus) ? topLevelStatus : completionStatus ?? topLevelStatus;
   const outcome = outcomeFromPayload(completionPayload);
   const status = runtimeStatusFromPayload(completionPayload, explicitStatus, outcome);
   if (status === undefined) {
@@ -262,7 +262,7 @@ export function nextRuntimeResumeAttemptId(
   task: Pick<RuntimeAgentTask, 'id' | 'resumeAttempts'> & { agentSessionId?: string },
 ): string {
   const sessionId = task.agentSessionId !== undefined
-    ? `_${safeFileName(task.agentSessionId)}`
+    ? `_${safeFileName(task.agentSessionId)}_${shortHash(task.agentSessionId)}`
     : '';
   return `${task.id}${sessionId}_resume_${String(task.resumeAttempts.length + 1).padStart(2, '0')}`;
 }
@@ -331,6 +331,9 @@ function runtimeStatusFromPayload(
   if (isFailureRuntimeRunStatus(explicitStatus)) {
     return explicitStatus;
   }
+  if (explicitStatus === 'needs_human' || explicitStatus === 'split_recommended') {
+    return explicitStatus;
+  }
   if (outcome === 'needs_human' || outcome === 'split_recommended') {
     return outcome;
   }
@@ -341,9 +344,6 @@ function runtimeStatusFromPayload(
     return 'succeeded';
   }
   if (isCanonicalRuntimeRunStatus(explicitStatus)) {
-    return explicitStatus;
-  }
-  if (explicitStatus === 'needs_human' || explicitStatus === 'split_recommended') {
     return explicitStatus;
   }
   const executionTrace = recordValue(payload.executionTrace);
@@ -377,6 +377,10 @@ function isCanonicalRuntimeRunStatus(status: string | undefined): status is Runt
     || status === 'compaction_failed'
     || status === 'needs_human'
     || status === 'split_recommended';
+}
+
+function isTerminalRuntimeRunStatus(status: string | undefined): boolean {
+  return status !== 'queued' && status !== 'running' && isCanonicalRuntimeRunStatus(status);
 }
 
 function outcomeFromPayload(payload: Record<string, unknown>): string | undefined {
@@ -614,8 +618,11 @@ function safeFileName(value: string): string {
 }
 
 function safeLogFileName(value: string): string {
-  const hash = createHash('sha256').update(value).digest('hex').slice(0, 12);
-  return `${safeFileName(value)}_${hash}`;
+  return `${safeFileName(value)}_${shortHash(value)}`;
+}
+
+function shortHash(value: string): string {
+  return createHash('sha256').update(value).digest('hex').slice(0, 12);
 }
 
 function lastNonEmptyLine(value: string): string {

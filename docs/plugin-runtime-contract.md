@@ -94,7 +94,8 @@ provider 利用側が `onSpawnError` で観測できるようにする。start r
 同じ issue task を別 run で再起動しても過去ログを切り詰めないよう、agent session id
 由来の正規化名と短い hash を含む一意な名前にする。resume run も attempt id 由来の
 正規化名と短い hash を含め、同じ issue task の別 session が同じ resume log に
-追記されないようにする。初回実行が gateway
+追記されないようにする。resume attempt id も raw session key の短い hash を含め、
+正規化後に同名になる session key の attempt log が衝突しないようにする。初回実行が gateway
 fallback session へ移った場合は、前回 completion metadata の top-level または
 `result` 配下の `meta.agentMeta.fallbackSessionKey` から fallback session key を、
 または stdout/stderr log の embedded fallback marker から fallback session id を検出して resume
@@ -117,15 +118,19 @@ top-level completion object を優先し、payload 内の nested JSON を run co
 JSON completion として解析できる場合は、本文に `CLI transcript compaction failed` という文字列が
 含まれていても JSON の status を優先し、実エラー行だけを compaction_failed とする。
 completion text/status は top-level と `result` の両方から解決し、`result` が metadata だけを
-持つ場合でも top-level の Outcome を落とさない。
+持つ場合でも top-level の Outcome を落とさない。top-level の terminal runtime status は
+`result.status` より優先する。
 resume helper は running pid を確認し、
 安定した resume attempt id を生成する。timeline reader は OpenClaw trajectory jsonl を読み、Codex activity 表示に
 必要な時刻、分類済み phase、redacted summary、status、redacted excerpt を返す。
-timeline/status/jsonl の session 解決は stdout `logPath` と対応する `stderrLogPath` または
-`.stderr.log` の embedded fallback marker も参照する。redaction は shell 風の
+timeline/status/jsonl の session 解決は resume attempts を新しい順に読んだうえで、
+stdout `logPath` と対応する `stderrLogPath` または `.stderr.log` の embedded fallback marker も参照する。
+fallback marker は `agent:<agent>:explicit:<session-id>` の `sessions.json` mapping を先に解決し、
+relocated session file を見失わないようにする。redaction は shell 風の
 `token=...` や `curl -u user:password` / `curl -uuser:password` /
 `curl --proxy-user user:password` /
-`curl --oauth2-bearer token` / `curl --pass phrase` / `curl --tlspassword string`
+`curl --oauth2-bearer token` / `curl --pass phrase` / `curl --tlspassword string` /
+`curl -b session=value` / `curl --cookie session=value`
 だけでなく JSON の `"token": "..."` /
 `"apiKey": "..."` / `"password": "..."`、`"webhookSecret"` / `"clientSecret"` /
 `"apiToken"` のような compound key、quoted shell assignment、`github_pat_...`、

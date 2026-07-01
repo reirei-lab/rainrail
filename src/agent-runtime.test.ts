@@ -824,6 +824,14 @@ describe('runtime task completion and resume helpers', () => {
         payloads: [{ text: 'Outcome: implemented' }],
       },
     }))).toMatchObject({ status: 'failed', outcome: 'implemented' });
+
+    expect(readRuntimeRunCompletionFromLog(JSON.stringify({
+      status: 'needs_human',
+      result: {
+        status: 'ok',
+        payloads: [{ text: 'Outcome: implemented' }],
+      },
+    }))).toMatchObject({ status: 'needs_human', outcome: 'implemented' });
   });
 
   it('accepts canonical runtime completion statuses from JSON logs', () => {
@@ -868,7 +876,7 @@ describe('runtime task completion and resume helpers', () => {
     };
 
     expect(runningRuntimeTaskPid(task, (pid) => pid === 222)).toBe(222);
-    expect(nextRuntimeResumeAttemptId(task)).toBe('agent_task_reirei-lab-rainrail_22_agent_main_session_resume_03');
+    expect(nextRuntimeResumeAttemptId(task)).toMatch(/^agent_task_reirei-lab-rainrail_22_agent_main_session_[a-f0-9]{12}_resume_03$/);
   });
 
   it('keeps resume attempt ids distinct for the same issue task in different sessions', () => {
@@ -885,6 +893,21 @@ describe('runtime task completion and resume helpers', () => {
 
     expect(first).toContain('run-a');
     expect(second).toContain('run-b');
+    expect(first).not.toBe(second);
+  });
+
+  it('keeps resume attempt ids distinct for session keys that normalize to the same name', () => {
+    const first = nextRuntimeResumeAttemptId({
+      id: 'agent_task_reirei-lab-rainrail_22',
+      agentSessionId: 'agent:main:foo',
+      resumeAttempts: [],
+    });
+    const second = nextRuntimeResumeAttemptId({
+      id: 'agent_task_reirei-lab-rainrail_22',
+      agentSessionId: 'agent_main_foo',
+      resumeAttempts: [],
+    });
+
     expect(first).not.toBe(second);
   });
 });

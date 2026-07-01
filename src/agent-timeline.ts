@@ -37,6 +37,10 @@ interface RuntimeTaskForTimeline {
   logPath: string;
   stderrLogPath?: string | undefined;
   agentSessionId?: string;
+  resumeAttempts?: Array<{
+    logPath: string;
+    stderrLogPath?: string | undefined;
+  }> | undefined;
 }
 
 interface RuntimeTimelineReadOptions {
@@ -253,19 +257,34 @@ async function readRuntimeSession(
     fallbackSessionId ??= extractRuntimeFallbackSessionId(log);
     logSessionId ??= extractRuntimeSessionId(log);
   }
-  if (fallbackSessionId !== undefined || mapped !== undefined || logSessionId !== undefined) {
-    const sessionId = fallbackSessionId ?? mapped?.sessionId ?? logSessionId;
+  if (fallbackSessionId !== undefined) {
+    const fallbackMapped = await resolveTrajectorySession(`agent:${options.agentId ?? 'main'}:explicit:${fallbackSessionId}`, options);
+    return {
+      sessionId: fallbackMapped?.sessionId ?? fallbackSessionId,
+      sessionFile: fallbackMapped?.sessionFile,
+      fallback: true,
+    };
+  }
+  if (mapped !== undefined || logSessionId !== undefined) {
+    const sessionId = mapped?.sessionId ?? logSessionId;
     return {
       sessionId,
-      sessionFile: fallbackSessionId === undefined && sessionId === mapped?.sessionId ? mapped?.sessionFile : undefined,
-      fallback: fallbackSessionId !== undefined,
+      sessionFile: sessionId === mapped?.sessionId ? mapped?.sessionFile : undefined,
+      fallback: false,
     };
   }
   return { fallback: false };
 }
 
 function runtimeTaskLogPaths(task: RuntimeTaskForTimeline): string[] {
-  const paths = [task.logPath, task.stderrLogPath ?? stderrLogPathFor(task.logPath)];
+  const paths = [
+    ...(task.resumeAttempts ?? []).slice().reverse().flatMap((attempt) => [
+      attempt.logPath,
+      attempt.stderrLogPath ?? stderrLogPathFor(attempt.logPath),
+    ]),
+    task.logPath,
+    task.stderrLogPath ?? stderrLogPathFor(task.logPath),
+  ];
   return [...new Set(paths)];
 }
 
@@ -463,7 +482,9 @@ function redactSensitiveText(value: string): string {
   return value
     .replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, '[redacted-private-key]')
     .replace(/(^|\s)(-[uU])(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s'"]+)/g, '$1$2[redacted-credential]')
+    .replace(/(^|\s)(-b)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s'"]+)/g, '$1$2[redacted-cookie]')
     .replace(/(^|\s)(-u|--user|-U|--proxy-user|--oauth2-bearer|--pass|--proxy-pass|--tlspassword|--proxy-tlspassword)(=|\s+)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s'"]+)/g, '$1$2$3[redacted-credential]')
+    .replace(/(^|\s)(-b|--cookie)(=|\s+)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s'"]+)/g, '$1$2$3[redacted-cookie]')
     .replace(/\bgithub_pat_[A-Za-z0-9_]+\b/g, '[redacted-token]')
     .replace(/(gh[pousr]_[A-Za-z0-9_]+)/g, '[redacted-token]')
     .replace(/(sk-[A-Za-z0-9_-]{20,})/g, '[redacted-token]')
