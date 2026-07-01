@@ -6,7 +6,8 @@
   "type": "module",
   "packageManager": "pnpm@10.12.1",
   "scripts": {
-    "build": "node scripts/check-scripts.mjs",
+    "build": "pnpm run build:scripts && pnpm --filter www build",
+    "build:scripts": "node scripts/check-scripts.mjs",
     "cf:deploy": "node scripts/validate-cloudflare-secrets.mjs && wrangler deploy",
     "cf:dev": "wrangler dev --local",
     "cf:smoke": "node scripts/smoke-cloudflare-worker.mjs",

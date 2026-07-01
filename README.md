@@ -40,3 +40,10 @@ Product-facing content for the future `apps/www` site and engineering-facing
 contract/spec docs have separate responsibilities. The initial sitemap,
 documentation boundary, and README / docs / examples / website roles are
 documented in `docs/product-site-information-architecture.md`.
+
+The product site is an Astro workspace package. Run these commands from the
+repository root:
+
+- `pnpm --filter www dev`
+- `pnpm --filter www typecheck`
+- `pnpm --filter www build`
