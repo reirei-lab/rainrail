@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
+import type { AgentTaskHandoffClient } from './pr-lifecycle.js';
 import { handleCheckFailureEvent } from './pr-lifecycle.js';
-import { checkRunEvent, handoffRecorder, pullRequest, statusEvent } from './pr-lifecycle-test-helpers.js';
+import { checkRunEvent, handoffRecorder, pullRequest, statusEvent, task } from './pr-lifecycle-test-helpers.js';
 
 describe('handleCheckFailureEvent', () => {
   it('comments on the issue and returns it to Todo when an agent PR check fails', async () => {
@@ -168,6 +169,50 @@ describe('handleCheckFailureEvent', () => {
     expect(updates).toHaveLength(1);
   });
 
+  it('returns every failed same-SHA pull request issue to Todo', async () => {
+    const updates: string[] = [];
+
+    const result = await handleCheckFailureEvent(checkRunEvent({
+      conclusion: 'failure',
+      pullRequests: [{ number: 45 }],
+      headSha: 'abc123',
+    }), {
+      agentLogin: 'reirei-agent',
+      branchPrefix: 'agent/',
+      tasks: branchTaskRecorder(updates),
+      pullRequests: {
+        async getPullRequest(input) {
+          return pullRequest({
+            ...input,
+            headRefName: 'agent/first-pr',
+            statusCheckRollup: [
+              { type: 'CheckRun', name: 'Typecheck, Test, Build', status: 'COMPLETED', conclusion: 'FAILURE' },
+            ],
+          });
+        },
+        async findPullRequestsByHead(input) {
+          expect(input).toMatchObject({ repository: 'reirei-lab/rainrail', headSha: 'abc123' });
+          return [pullRequest({
+            number: 44,
+            headRefName: 'agent/second-pr',
+            statusCheckRollup: [
+              { type: 'CheckRun', name: 'Typecheck, Test, Build', status: 'COMPLETED', conclusion: 'FAILURE' },
+            ],
+          })];
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          throw new Error('not used');
+        },
+      },
+    });
+
+    expect(result.reason).toBe('failed PR checks returned issue to Todo');
+    expect(updates).toEqual(['agent/first-pr', 'agent/second-pr']);
+  });
+
   it('ignores successful checks', async () => {
     const result = await handleCheckFailureEvent(checkRunEvent(), {
       agentLogin: 'reirei-agent',
@@ -316,3 +361,23 @@ describe('handleCheckFailureEvent', () => {
     expect(updates).toEqual([]);
   });
 });
+
+function branchTaskRecorder(updates: string[]): AgentTaskHandoffClient {
+  return {
+    getAgentTaskByBranchName(branchName) {
+      return {
+        ...task,
+        id: `task:${branchName}`,
+        branchName,
+      };
+    },
+    async returnTaskToTodo(input) {
+      updates.push(input.task.branchName);
+      return {
+        projectItemId: input.task.claim?.projectItemId ?? 'PVTI_item',
+        status: 'Todo',
+        commentUrl: 'https://github.com/reirei-lab/rainrail/issues/23#issuecomment-1',
+      };
+    },
+  };
+}

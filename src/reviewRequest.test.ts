@@ -186,6 +186,37 @@ describe('handleReviewRequestEvent', () => {
     ]);
   });
 
+  it('requests review for every eligible same-SHA pull request candidate', async () => {
+    const reviewRequests: Array<{ repository: string; number: number; reviewerLogin: string }> = [];
+
+    const result = await handleReviewRequestEvent(checkRunEvent({ pullRequests: [{ number: 45 }], headSha: 'abc123' }), {
+      agentLogin: 'reirei-agent',
+      reviewerLogin: 'hiragram',
+      branchPrefix: 'agent/',
+      pullRequests: {
+        async getPullRequest(input) {
+          return pullRequest({ ...input, headRefName: 'agent/first-pr', reviews: [] });
+        },
+        async findPullRequestsByHead(input) {
+          expect(input).toMatchObject({ repository: 'reirei-lab/rainrail', headSha: 'abc123' });
+          return [pullRequest({ number: 44, headRefName: 'agent/second-pr', reviews: [] })];
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview(input) {
+          reviewRequests.push(input);
+        },
+      },
+    });
+
+    expect(result.reason).toBe('review_requested');
+    expect(reviewRequests).toEqual([
+      { repository: 'reirei-lab/rainrail', number: 45, reviewerLogin: 'hiragram' },
+      { repository: 'reirei-lab/rainrail', number: 44, reviewerLogin: 'hiragram' },
+    ]);
+  });
+
   it('does not request review when the configured reviewer already approved the current head', async () => {
     let requestCount = 0;
 

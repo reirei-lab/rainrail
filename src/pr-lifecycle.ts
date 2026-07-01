@@ -286,6 +286,7 @@ export async function handleReviewRequestEvent(
   const candidates = await resolvePullRequestCandidates(candidate, pullRequests, context);
   if (candidates.length === 0) return { handled: false, reason: 'pull request was not found' };
   let fallback: WorkflowResult = { handled: false, reason: 'pull request was not found' };
+  const requestedPullRequests: PullRequestReviewTarget[] = [];
   for (const pullRequest of candidates) {
     if (candidate.headSha !== undefined && pullRequest.headSha !== undefined && candidate.headSha !== pullRequest.headSha) {
       fallback = { handled: false, reason: 'check does not match the current pull request head', candidate, pullRequest };
@@ -325,7 +326,15 @@ export async function handleReviewRequestEvent(
       number: pullRequest.number,
       reviewerLogin: options.reviewerLogin,
     }, taskContext(context));
-    return { handled: true, reason: 'review_requested', pullRequest };
+    requestedPullRequests.push(pullRequest);
+  }
+  if (requestedPullRequests.length > 0) {
+    return {
+      handled: true,
+      reason: 'review_requested',
+      pullRequest: requestedPullRequests[0],
+      pullRequests: requestedPullRequests,
+    };
   }
   return fallback;
 }
@@ -464,6 +473,14 @@ export async function handleCheckFailureEvent(
   const candidates = await resolvePullRequestCandidates(check, pullRequests, context);
   if (candidates.length === 0) return { handled: false, reason: 'pull request was not found', check };
   let fallback: WorkflowResult = { handled: false, reason: 'pull request was not found', check };
+  const updates: Array<{
+    pullRequest: PullRequestReviewTarget;
+    task: AgentTask;
+    projectItemId: string;
+    status: string;
+    commentUrl?: string;
+    reviewRequestRemoved?: boolean;
+  }> = [];
   for (const pullRequest of candidates) {
     if (check.headSha !== undefined && pullRequest.headSha !== undefined && check.headSha !== pullRequest.headSha) {
       fallback = { handled: false, reason: 'check does not match the current pull request head', check, pullRequest };
@@ -504,16 +521,35 @@ export async function handleCheckFailureEvent(
     }, context);
     await options.tasks.recordTaskStatus?.({ task, result: `checks_failed:${update.status}` }, context);
     const reviewRequestRemoved = await removePendingReviewRequest(pullRequests, pullRequest, options.reviewRequest, context);
+    updates.push({
+      pullRequest,
+      task,
+      projectItemId: update.projectItemId,
+      status: update.status,
+      ...(update.commentUrl === undefined ? {} : { commentUrl: update.commentUrl }),
+      ...(reviewRequestRemoved ? { reviewRequestRemoved } : {}),
+    });
+  }
+  if (updates.length > 0) {
+    const first = updates[0]!;
     return {
       handled: true,
       reason: 'failed PR checks returned issue to Todo',
       check,
-      pullRequest,
-      taskId: task.id,
-      projectItemId: update.projectItemId,
-      status: update.status,
-      commentUrl: update.commentUrl,
-      ...(reviewRequestRemoved ? { reviewRequestRemoved } : {}),
+      pullRequest: first.pullRequest,
+      taskId: first.task.id,
+      projectItemId: first.projectItemId,
+      status: first.status,
+      ...(first.commentUrl === undefined ? {} : { commentUrl: first.commentUrl }),
+      ...(first.reviewRequestRemoved ? { reviewRequestRemoved: first.reviewRequestRemoved } : {}),
+      updatedTasks: updates.map((update) => ({
+        pullRequest: update.pullRequest,
+        taskId: update.task.id,
+        projectItemId: update.projectItemId,
+        status: update.status,
+        ...(update.commentUrl === undefined ? {} : { commentUrl: update.commentUrl }),
+        ...(update.reviewRequestRemoved ? { reviewRequestRemoved: update.reviewRequestRemoved } : {}),
+      })),
     };
   }
   return fallback;
@@ -614,6 +650,7 @@ export async function handleAutoMergeEvent(
   if (candidates.length === 0) return { handled: false, reason: 'pull request was not found', candidate };
   let fallback: WorkflowResult = { handled: false, reason: 'pull request was not found', candidate };
   let sawPendingMergeability = false;
+  const mergedPullRequests: PullRequestReviewTarget[] = [];
   for (const pullRequest of candidates) {
     if (candidate.headSha !== undefined && pullRequest.headSha !== undefined && candidate.headSha !== pullRequest.headSha) {
       fallback = { handled: false, reason: 'check does not match the current pull request head', candidate, pullRequest };
@@ -668,7 +705,15 @@ export async function handleAutoMergeEvent(
       pullRequestId: `${pullRequest.repository}#${pullRequest.number}`,
       ...mergeInput,
     });
-    return { handled: true, reason: 'pull_request_merged', pullRequest };
+    mergedPullRequests.push(pullRequest);
+  }
+  if (mergedPullRequests.length > 0) {
+    return {
+      handled: true,
+      reason: 'pull_request_merged',
+      pullRequest: mergedPullRequests[0],
+      pullRequests: mergedPullRequests,
+    };
   }
   if (sawPendingMergeability) {
     throw new Error('pull request mergeability is still being calculated');
@@ -710,16 +755,33 @@ async function resolvePullRequestCandidates(
   const numbers = candidate.number === undefined
     ? [...new Set(candidate.numbers ?? [])]
     : [candidate.number];
+  const candidates: PullRequestReviewTarget[] = [];
   if (numbers.length > 0) {
-    return Promise.all(numbers.map((number) =>
+    candidates.push(...await Promise.all(numbers.map((number) =>
       pullRequests.getPullRequest({ repository: candidate.repository, number }, taskContext(context))
-    ));
+    )));
   }
-  if (pullRequests.findPullRequestsByHead !== undefined) {
-    return pullRequests.findPullRequestsByHead(candidate, taskContext(context));
+  if (candidate.headSha !== undefined && pullRequests.findPullRequestsByHead !== undefined) {
+    candidates.push(...await pullRequests.findPullRequestsByHead(candidate, taskContext(context)));
+  } else if (numbers.length === 0 && pullRequests.findPullRequestsByHead !== undefined) {
+    candidates.push(...await pullRequests.findPullRequestsByHead(candidate, taskContext(context)));
+  } else if (numbers.length === 0) {
+    const pullRequest = await pullRequests.findPullRequestByHead(candidate, taskContext(context));
+    if (pullRequest !== undefined) candidates.push(pullRequest);
   }
-  const pullRequest = await pullRequests.findPullRequestByHead(candidate, taskContext(context));
-  return pullRequest === undefined ? [] : [pullRequest];
+  return dedupePullRequests(candidates);
+}
+
+function dedupePullRequests(pullRequests: PullRequestReviewTarget[]): PullRequestReviewTarget[] {
+  const seen = new Set<string>();
+  const deduped: PullRequestReviewTarget[] = [];
+  for (const pullRequest of pullRequests) {
+    const key = `${normalize(pullRequest.repository)}#${pullRequest.number}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(pullRequest);
+  }
+  return deduped;
 }
 
 function taskContext(context: PluginRuntimeContext | undefined): TaskProviderContext | undefined {

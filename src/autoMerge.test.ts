@@ -198,6 +198,33 @@ describe('handleAutoMergeEvent', () => {
     expect(runtimeMerges).toEqual([expect.objectContaining({ number: 44 })]);
   });
 
+  it('auto-merges every ready same-SHA pull request candidate', async () => {
+    const runtimeMerges: unknown[] = [];
+
+    const result = await handleAutoMergeEvent(checkRunEvent({
+      pullRequests: [{ number: 45 }],
+      headSha: 'abc123',
+    }), {
+      ...options(),
+      pullRequests: {
+        ...options().pullRequests,
+        async getPullRequest(input) {
+          return pullRequest({ ...input, headRefName: 'agent/first-pr' });
+        },
+        async findPullRequestsByHead(input) {
+          expect(input).toMatchObject({ repository: 'reirei-lab/rainrail', headSha: 'abc123' });
+          return [pullRequest({ number: 44, headRefName: 'agent/second-pr' })];
+        },
+      },
+    }, runtimeContext(runtimeMerges));
+
+    expect(result.reason).toBe('pull_request_merged');
+    expect(runtimeMerges).toEqual([
+      expect.objectContaining({ number: 45 }),
+      expect.objectContaining({ number: 44 }),
+    ]);
+  });
+
   it('keeps retrying pending mergeability candidates when no later candidate can merge', async () => {
     await expect(handleAutoMergeEvent(checkRunEvent({ pullRequests: [{ number: 45 }, { number: 44 }] }), {
       ...options(),
