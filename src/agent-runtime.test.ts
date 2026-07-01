@@ -142,7 +142,7 @@ describe('createOpenClawRuntimeProvider', () => {
       '--session-key',
       'agent:main:rainrail-agent_task_reirei-lab-rainrail_22-run-22',
       '--run-id',
-      expect.stringMatching(/^rainrail-start-project-issue-selection-delivery-22-agent-task-reirei-lab-rainrail-22-[a-f0-9]{12}$/),
+      expect.stringMatching(/^rainrail-start-project-issue-selection-delivery-22-agent-task-reirei-lab-rainrail-22-session-[a-f0-9]{12}-[a-f0-9]{12}$/),
       '--timeout',
       '900',
       '--json',
@@ -219,7 +219,7 @@ describe('createOpenClawRuntimeProvider', () => {
 
     expect(spawnProcess).toHaveBeenNthCalledWith(1, 'openclaw', expect.arrayContaining([
       '--run-id',
-      expect.stringMatching(/^rainrail-start-project-issue-selection-delivery-22-agent-task-reirei-lab-rainrail-22-[a-f0-9]{12}$/),
+      expect.stringMatching(/^rainrail-start-project-issue-selection-delivery-22-agent-task-reirei-lab-rainrail-22-session-[a-f0-9]{12}-[a-f0-9]{12}$/),
     ]), expect.anything());
     expect(spawnProcess).toHaveBeenNthCalledWith(2, 'openclaw', expect.arrayContaining([
       '--run-id',
@@ -246,8 +246,8 @@ describe('createOpenClawRuntimeProvider', () => {
     const secondArgs = spawnProcess.mock.calls[1]![1] as string[];
     const firstRunId = firstArgs[firstArgs.indexOf('--run-id') + 1];
     const secondRunId = secondArgs[secondArgs.indexOf('--run-id') + 1];
-    expect(firstRunId).toMatch(/^rainrail-start-project-issue-selection-delivery-22-task-a-[a-f0-9]{12}$/);
-    expect(secondRunId).toMatch(/^rainrail-start-project-issue-selection-delivery-22-task-a-[a-f0-9]{12}$/);
+    expect(firstRunId).toMatch(/^rainrail-start-project-issue-selection-delivery-22-task-a-session-[a-f0-9]{12}-[a-f0-9]{12}$/);
+    expect(secondRunId).toMatch(/^rainrail-start-project-issue-selection-delivery-22-task-a-session-[a-f0-9]{12}-[a-f0-9]{12}$/);
     expect(firstRunId).not.toBe(secondRunId);
   });
 
@@ -287,7 +287,7 @@ describe('createOpenClawRuntimeProvider', () => {
   });
 
   it('uses a run-specific start log path for repeated starts of the same issue task', async () => {
-    const spawnProcess = vi.fn(() => ({ pid: 4242, unref: vi.fn() }));
+    const spawnProcess = vi.fn((_command: string, _args: string[]) => ({ pid: 4242, unref: vi.fn() }));
     const logDirectory = temporaryDirectory();
     const provider = createOpenClawRuntimeProvider({
       enabled: true,
@@ -309,6 +309,9 @@ describe('createOpenClawRuntimeProvider', () => {
     expect(first.metadata?.logPath).toContain('run-a');
     expect(second.metadata?.logPath).toContain('run-b');
     expect(first.metadata?.logPath).not.toBe(second.metadata?.logPath);
+    const firstArgs = spawnProcess.mock.calls[0]![1] as string[];
+    const secondArgs = spawnProcess.mock.calls[1]![1] as string[];
+    expect(firstArgs[firstArgs.indexOf('--run-id') + 1]).not.toBe(secondArgs[secondArgs.indexOf('--run-id') + 1]);
   });
 
   it('does not truncate existing start logs when a start request is retried', async () => {
@@ -846,6 +849,48 @@ describe('createOpenClawRuntimeProvider', () => {
     ]), expect.anything());
   });
 
+  it('resumes the last fallback candidate within an appended log regardless of metadata or marker source', async () => {
+    const spawnProcess = vi.fn(() => ({ pid: 5151, unref: vi.fn() }));
+    const logDirectory = temporaryDirectory();
+    const logPath = `${logDirectory}/task.log`;
+    writeFileSync(logPath, [
+      JSON.stringify({
+        status: 'ok',
+        meta: { agentMeta: { fallbackSessionKey: 'agent:main:explicit:gateway-fallback-old' } },
+      }),
+      'retry diagnostics',
+      'EMBEDDED FALLBACK: Gateway timed out; running embedded agent with fresh session gateway-fallback-new',
+    ].join('\n'), 'utf8');
+    const provider = createOpenClawRuntimeProvider({
+      enabled: true,
+      command: 'openclaw',
+      agentId: 'main',
+      sessionKeyPrefix: 'rainrail',
+      timeoutSeconds: 900,
+      logDirectory,
+      spawnProcess,
+    });
+
+    await provider.resumeRun?.({
+      run: { id: 'agent:main:intended-session', provider: 'openclaw', status: 'stopped' },
+      task: {
+        id: 'agent_task_reirei-lab-rainrail_22',
+        title: 'OpenClaw runtime',
+        agentSessionId: 'agent:main:intended-session',
+        branchName: 'agent/reirei-lab-rainrail-22',
+        logPath,
+        resumeAttempts: [],
+      },
+      attemptId: 'agent_task_reirei-lab-rainrail_22_resume_01',
+      requestedBy: 'reirei-agent',
+    });
+
+    expect(spawnProcess).toHaveBeenCalledWith('openclaw', expect.arrayContaining([
+      '--session-key',
+      'agent:main:explicit:gateway-fallback-new',
+    ]), expect.anything());
+  });
+
   it('resumes stderr fallback markers before stale stdout fallback metadata in the same attempt', async () => {
     const spawnProcess = vi.fn(() => ({ pid: 5151, unref: vi.fn() }));
     const logDirectory = temporaryDirectory();
@@ -1134,6 +1179,23 @@ describe('runtime task completion and resume helpers', () => {
         finalAssistantVisibleText: 'Outcome: implemented',
       }),
       'GatewayClientRequestError: Error: CLI transcript compaction failed for openai/gpt-5.5: Compaction timed out',
+    ].join('\n');
+
+    expect(readRuntimeRunCompletionFromLog(raw)).toMatchObject({
+      status: 'compaction_failed',
+      summary: expect.stringContaining('Compaction timed out'),
+      timeoutPhase: 'compaction',
+    });
+  });
+
+  it('prefers compaction failure text after the latest JSON even when followed by footer diagnostics', () => {
+    const raw = [
+      JSON.stringify({
+        status: 'ok',
+        finalAssistantVisibleText: 'Outcome: implemented',
+      }),
+      'GatewayClientRequestError: Error: CLI transcript compaction failed for openai/gpt-5.5: Compaction timed out',
+      'OpenClaw agent finished',
     ].join('\n');
 
     expect(readRuntimeRunCompletionFromLog(raw)).toMatchObject({

@@ -229,6 +229,66 @@ describe('agent timeline', () => {
     }
   });
 
+  it('falls back to metadata session ids when fallback session key mappings are unavailable', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'rainrail-fallback-key-without-mapping-timeline-'));
+    const logPath = join(directory, 'agent.log');
+    writeFileSync(logPath, JSON.stringify({
+      status: 'ok',
+      meta: {
+        agentMeta: {
+          sessionId: 'gateway-fallback-unmapped',
+          fallbackSessionKey: 'agent:main:explicit:gateway-fallback-unmapped',
+        },
+      },
+    }), 'utf8');
+    writeFileSync(join(directory, 'gateway-fallback-unmapped.trajectory.jsonl'), [
+      JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:08:00.000Z', seq: 1 }),
+    ].join('\n'), 'utf8');
+
+    try {
+      const timeline = await readRuntimeTimeline(
+        { logPath, agentSessionId: 'agent:main:original-session' },
+        { sessionsDirectory: directory },
+      );
+      expect(timeline.sessionId).toBe('gateway-fallback-unmapped');
+      expect(timeline.fallback).toBe(true);
+      expect(timeline.missing).toBe(false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('does not use raw diagnostic JSON fragments as fallback metadata', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'rainrail-diagnostic-fallback-key-timeline-'));
+    const logPath = join(directory, 'agent.log');
+    writeFileSync(logPath, [
+      'tool result quoted target log:',
+      '{"meta":{"agentMeta":{"fallbackSessionKey":"agent:main:explicit:gateway-fallback-quoted"}}}',
+    ].join('\n'), 'utf8');
+    writeFileSync(join(directory, 'sessions.json'), JSON.stringify({
+      'agent:main:original-session': { sessionId: 'original-session' },
+      'agent:main:explicit:gateway-fallback-quoted': { sessionId: 'quoted-fallback-session' },
+    }), 'utf8');
+    writeFileSync(join(directory, 'original-session.trajectory.jsonl'), [
+      JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:08:00.000Z', seq: 1 }),
+    ].join('\n'), 'utf8');
+    writeFileSync(join(directory, 'quoted-fallback-session.trajectory.jsonl'), [
+      JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:09:00.000Z', seq: 1 }),
+    ].join('\n'), 'utf8');
+
+    try {
+      const timeline = await readRuntimeTimeline(
+        { logPath, agentSessionId: 'agent:main:original-session' },
+        { sessionsDirectory: directory },
+      );
+      expect(timeline.sessionId).toBe('original-session');
+      expect(timeline.fallback).toBe(false);
+      expect(timeline.missing).toBe(false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('prefers the last fallback session key in an appended completion log', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'rainrail-last-fallback-key-timeline-'));
     const logPath = join(directory, 'agent.log');

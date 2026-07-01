@@ -172,7 +172,7 @@ export async function startOpenClawRun(
     '--session-key',
     agentSessionId,
     '--run-id',
-    runtimeStartRunId(options, request, task),
+    runtimeStartRunId(options, request, task, agentSessionId),
     '--message',
     promptForRuntimeTask(task, agentSessionId),
     '--timeout',
@@ -207,9 +207,9 @@ export async function startOpenClawRun(
 }
 
 export function readRuntimeRunCompletionFromLog(raw: string): RuntimeRunCompletion | undefined {
-  const trailingCompactionFailure = compactionFailureFromTrailingLogLine(raw);
-  if (trailingCompactionFailure !== undefined) {
-    return trailingCompactionFailure;
+  const latestCompactionFailure = compactionFailureAfterLatestCompletionJson(raw);
+  if (latestCompactionFailure !== undefined) {
+    return latestCompactionFailure;
   }
   const payload = parseJsonFromLog(raw);
   if (!isRecord(payload)) {
@@ -258,12 +258,20 @@ function compactionFailureFromLog(raw: string): RuntimeRunCompletion | undefined
   };
 }
 
-function compactionFailureFromTrailingLogLine(raw: string): RuntimeRunCompletion | undefined {
-  const line = lastNonEmptyLine(raw);
-  if (line.trimStart().startsWith('{')) {
-    return undefined;
+function compactionFailureAfterLatestCompletionJson(raw: string): RuntimeRunCompletion | undefined {
+  let latestCompletionEnd = -1;
+  for (const candidate of parseJsonObjectsFromLogWithPositions(raw)) {
+    if (isRecord(candidate.payload) && runtimeRunCompletionFromPayload(candidate.payload) !== undefined) {
+      latestCompletionEnd = candidate.end;
+    }
   }
-  return compactionFailureFromLog(line);
+  let latestFailure: RuntimeRunCompletion | undefined;
+  for (const match of raw.matchAll(/[^\r\n]*CLI transcript compaction failed[^\r\n]*/gi)) {
+    if ((match.index ?? -1) > latestCompletionEnd) {
+      latestFailure = compactionFailureFromLog(match[0]);
+    }
+  }
+  return latestFailure;
 }
 
 export function runningRuntimeTaskPid(task: RuntimeAgentTask, isRunning: (pid: number) => boolean): number | undefined {
@@ -291,6 +299,7 @@ function runtimeStartRunId(
   options: OpenClawRuntimeProviderOptions,
   request: RuntimeRunRequest,
   task: RuntimeAgentTaskInput,
+  agentSessionId: string,
 ): string {
   return boundedRunId([
     options.sessionKeyPrefix,
@@ -298,6 +307,8 @@ function runtimeStartRunId(
     request.workflow,
     request.event.delivery.id,
     task.id,
+    'session',
+    shortHash(agentSessionId),
   ].join('-'));
 }
 
@@ -490,6 +501,16 @@ function parseJsonFromLog(raw: string): unknown {
 
 function parseLastJsonObjectFromLog(raw: string): unknown {
   let latest: unknown;
+  for (const candidate of parseJsonObjectsFromLogWithPositions(raw)) {
+    if (isRecord(candidate.payload) && runtimeRunCompletionFromPayload(candidate.payload) !== undefined) {
+      latest = candidate.payload;
+    }
+  }
+  return latest;
+}
+
+function parseJsonObjectsFromLogWithPositions(raw: string): Array<{ payload: unknown; index: number; end: number }> {
+  const payloads: Array<{ payload: unknown; index: number; end: number }> = [];
   for (let index = 0; index < raw.length; index += 1) {
     if (raw[index] !== '{') {
       continue;
@@ -499,16 +520,13 @@ function parseLastJsonObjectFromLog(raw: string): unknown {
       continue;
     }
     try {
-      const candidate = JSON.parse(raw.slice(index, end + 1));
-      if (isRecord(candidate) && runtimeRunCompletionFromPayload(candidate) !== undefined) {
-        latest = candidate;
-        index = end;
-      }
+      payloads.push({ payload: JSON.parse(raw.slice(index, end + 1)) as unknown, index, end });
+      index = end;
     } catch {
       // Logs may contain partial JSON fragments.
     }
   }
-  return latest;
+  return payloads;
 }
 
 function issueFieldsFromValue(value: Record<string, unknown>): RuntimeAgentTaskInput['issue'] {
@@ -552,18 +570,30 @@ function extractFallbackRuntimeSessionKey(log: string, agentId: string): string 
   if (strictPayload !== undefined) {
     return fallbackSessionKeyFromPayload(strictPayload, agentId);
   }
-  const payload = parseJsonFromLog(log);
-  if (isRecord(payload)) {
-    const key = fallbackSessionKeyFromPayload(payload, agentId);
-    if (key !== undefined) {
-      return key;
+  let latest: { index: number; key: string } | undefined;
+  const jsonObjects = parseJsonObjectsFromLogWithPositions(log);
+  const jsonRanges = jsonObjects.map((object) => ({ start: object.index, end: object.end }));
+  for (const object of jsonObjects) {
+    if (!isRecord(object.payload) || runtimeRunCompletionFromPayload(object.payload) === undefined) {
+      continue;
     }
-    if (completionTextsFromPayload(completionPayloadFromResponse(payload)).length > 0) {
-      return undefined;
+    const key = fallbackSessionKeyFromPayload(object.payload, agentId);
+    if (key !== undefined) {
+      if (latest === undefined || object.index > latest.index) {
+        latest = { index: object.index, key };
+      }
     }
   }
-  const fallbackSessionId = extractFallbackRuntimeSessionId(log);
-  return fallbackSessionId === undefined ? undefined : `agent:${agentId}:explicit:${fallbackSessionId}`;
+  for (const match of log.matchAll(/EMBEDDED FALLBACK:[^\n\r]*fresh session\s+(gateway-fallback-[A-Za-z0-9._-]+)/gi)) {
+    const index = match.index ?? 0;
+    if (jsonRanges.some((range) => index >= range.start && index <= range.end)) {
+      continue;
+    }
+    if (latest === undefined || index > latest.index) {
+      latest = { index, key: `agent:${agentId}:explicit:${match[1]}` };
+    }
+  }
+  return latest?.key;
 }
 
 function parseStrictJsonObject(raw: string): Record<string, unknown> | undefined {

@@ -55,6 +55,11 @@ interface RuntimeSessionResolution {
   fallback: boolean;
 }
 
+interface RuntimeFallbackMetadata {
+  sessionKey?: string | undefined;
+  sessionId?: string | undefined;
+}
+
 interface TrajectoryEvent {
   type?: string;
   ts?: string;
@@ -258,7 +263,7 @@ async function readRuntimeSession(
   options: RuntimeTimelineReadOptions,
 ): Promise<RuntimeSessionResolution> {
   const mapped = await resolveTrajectorySession(task.agentSessionId, options);
-  let fallbackSession: { sessionKey: string } | { sessionId: string } | undefined;
+  let fallbackSession: RuntimeFallbackMetadata | undefined;
   let logSessionId: string | undefined;
   for (const logPath of runtimeTaskLogPaths(task)) {
     let log: string;
@@ -267,27 +272,23 @@ async function readRuntimeSession(
     } catch {
       continue;
     }
-    const fallbackSessionKey = extractRuntimeFallbackSessionKey(log);
-    const fallbackSessionId = extractRuntimeFallbackSessionId(log);
+    const fallbackMetadata = extractRuntimeFallbackMetadata(log);
     const sessionId = extractRuntimeSessionId(log);
     logSessionId ??= sessionId;
     if (fallbackSession === undefined) {
-      if (fallbackSessionKey !== undefined) {
-        fallbackSession = { sessionKey: fallbackSessionKey };
-      } else if (fallbackSessionId !== undefined) {
-        fallbackSession = { sessionId: fallbackSessionId };
+      if (fallbackMetadata !== undefined) {
+        fallbackSession = fallbackMetadata;
       } else if (sessionId?.startsWith('gateway-fallback-') === true) {
         fallbackSession = { sessionId };
       }
     }
   }
   if (fallbackSession !== undefined) {
-    const fallbackSessionKey = 'sessionKey' in fallbackSession
-      ? fallbackSession.sessionKey
-      : `agent:${options.agentId ?? 'main'}:explicit:${fallbackSession.sessionId}`;
+    const fallbackSessionKey = fallbackSession.sessionKey
+      ?? `agent:${options.agentId ?? 'main'}:explicit:${fallbackSession.sessionId}`;
     const fallbackMapped = await resolveTrajectorySession(fallbackSessionKey, options);
     return {
-      sessionId: fallbackMapped?.sessionId ?? ('sessionId' in fallbackSession ? fallbackSession.sessionId : fallbackSession.sessionKey),
+      sessionId: fallbackMapped?.sessionId ?? fallbackSession.sessionId ?? fallbackSession.sessionKey,
       sessionFile: fallbackMapped?.sessionFile,
       fallback: true,
     };
@@ -315,26 +316,29 @@ function runtimeTaskLogPaths(task: RuntimeTaskForTimeline): string[] {
   return [...new Set(paths)];
 }
 
-function extractRuntimeFallbackSessionKey(log: string): string | undefined {
-  const parsed = parseJsonObjectsFromLog(log);
-  if (!parsed.foundJson) {
-    return undefined;
-  }
-  for (const payload of parsed.payloads.slice().reverse()) {
-    if (!isRecord(payload)) {
+function extractRuntimeFallbackMetadata(log: string): RuntimeFallbackMetadata | undefined {
+  let latest: { index: number; metadata: RuntimeFallbackMetadata } | undefined;
+  const jsonObjects = parseJsonObjectsFromLogWithPositions(log);
+  const jsonRanges = jsonObjects.map((object) => ({ start: object.index, end: object.end }));
+  for (const object of jsonObjects) {
+    if (!isTrustedRuntimeCompletionPayload(object.payload)) {
       continue;
     }
-    for (const source of [payload, isRecord(payload.result) ? payload.result : undefined]) {
-      const key = stringField(
-        isRecord(source?.meta) && isRecord(source.meta.agentMeta) ? source.meta.agentMeta : undefined,
-        'fallbackSessionKey',
-      );
-      if (key !== undefined && key.trim() !== '') {
-        return key;
-      }
+    const metadata = fallbackMetadataFromPayload(object.payload);
+    if (metadata !== undefined && (latest === undefined || object.index > latest.index)) {
+      latest = { index: object.index, metadata };
     }
   }
-  return undefined;
+  for (const match of log.matchAll(/EMBEDDED FALLBACK:[^\n\r]*fresh session\s+(gateway-fallback-[A-Za-z0-9._-]+)/gi)) {
+    const index = match.index ?? 0;
+    if (jsonRanges.some((range) => index >= range.start && index <= range.end)) {
+      continue;
+    }
+    if (latest === undefined || index > latest.index) {
+      latest = { index, metadata: { sessionId: match[1] } };
+    }
+  }
+  return latest?.metadata;
 }
 
 async function resolveRuntimeTrajectoryPathForSession(
@@ -609,11 +613,16 @@ function parseStrictJsonObject(raw: string): Record<string, unknown> | undefined
 }
 
 function parseJsonObjectsFromLog(raw: string): { foundJson: boolean; payloads: unknown[] } {
+  const objects = parseJsonObjectsFromLogWithPositions(raw);
+  return { foundJson: objects.length > 0, payloads: objects.map((object) => object.payload) };
+}
+
+function parseJsonObjectsFromLogWithPositions(raw: string): Array<{ payload: unknown; index: number; end: number }> {
   const strict = parseStrictJsonObject(raw);
   if (strict !== undefined) {
-    return { foundJson: true, payloads: [strict] };
+    return [{ payload: strict, index: 0, end: raw.length - 1 }];
   }
-  const payloads: unknown[] = [];
+  const payloads: Array<{ payload: unknown; index: number; end: number }> = [];
   for (let index = 0; index < raw.length; index += 1) {
     if (raw[index] !== '{') {
       continue;
@@ -623,13 +632,13 @@ function parseJsonObjectsFromLog(raw: string): { foundJson: boolean; payloads: u
       continue;
     }
     try {
-      payloads.push(JSON.parse(raw.slice(index, end + 1)) as unknown);
+      payloads.push({ payload: JSON.parse(raw.slice(index, end + 1)) as unknown, index, end });
       index = end;
     } catch {
       // Logs may contain partial or quoted JSON fragments.
     }
   }
-  return { foundJson: payloads.length > 0, payloads };
+  return payloads;
 }
 
 function payloadHasCompletionText(payload: unknown): boolean {
@@ -643,6 +652,32 @@ function payloadHasCompletionText(payload: unknown): boolean {
     return true;
   }
   return payloadHasCompletionText(payload.result);
+}
+
+function isTrustedRuntimeCompletionPayload(payload: unknown): payload is Record<string, unknown> {
+  if (!isRecord(payload)) {
+    return false;
+  }
+  if (stringField(payload, 'status') !== undefined || payloadHasCompletionText(payload)) {
+    return true;
+  }
+  const result = isRecord(payload.result) ? payload.result : undefined;
+  return stringField(result, 'status') !== undefined || payloadHasCompletionText(result);
+}
+
+function fallbackMetadataFromPayload(payload: Record<string, unknown>): RuntimeFallbackMetadata | undefined {
+  for (const source of [payload, isRecord(payload.result) ? payload.result : undefined]) {
+    const agentMeta = isRecord(source?.meta) && isRecord(source.meta.agentMeta) ? source.meta.agentMeta : undefined;
+    const sessionKey = stringField(agentMeta, 'fallbackSessionKey');
+    const sessionId = stringField(agentMeta, 'sessionId');
+    if ((sessionKey !== undefined && sessionKey.trim() !== '') || sessionId?.startsWith('gateway-fallback-') === true) {
+      return {
+        sessionKey: sessionKey !== undefined && sessionKey.trim() !== '' ? sessionKey : undefined,
+        sessionId: sessionId?.startsWith('gateway-fallback-') === true ? sessionId : undefined,
+      };
+    }
+  }
+  return undefined;
 }
 
 function findJsonObjectEnd(raw: string, start: number): number | undefined {
