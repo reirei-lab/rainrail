@@ -79,6 +79,14 @@ a {
   margin: 0 auto;
 }
 
+.hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.08fr) minmax(280px, 0.92fr);
+  gap: 48px;
+  padding: 72px 0 48px;
+  align-items: center;
+}
+
 .product-hero {
   display: grid;
   grid-template-columns: minmax(0, 0.96fr) minmax(420px, 1.04fr);

@@ -59,4 +59,10 @@ describe('product homepage', () => {
     expect(globalStyles).toContain('margin-right: 12px;');
     expect(globalStyles).not.toContain('min(100% - 24px');
   });
+
+  it('keeps the shared hero layout for secondary product pages', () => {
+    expect(globalStyles).toMatch(/\.hero\s*{[\s\S]*?grid-template-columns: minmax\(0, 1\.08fr\) minmax\(280px, 0\.92fr\);/);
+    expect(globalStyles).toMatch(/\.hero\s*{[\s\S]*?padding: 72px 0 48px;/);
+    expect(globalStyles).toMatch(/\.hero\s*{[\s\S]*?align-items: center;/);
+  });
 });
