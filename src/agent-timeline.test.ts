@@ -371,6 +371,37 @@ describe('agent timeline', () => {
     }
   });
 
+  it('ignores symlinked runtime logs before resolving fallback sessions', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'rainrail-runtime-log-symlink-'));
+    const directory = join(root, 'sessions');
+    const outsideDirectory = join(root, 'outside');
+    mkdirSync(directory, { recursive: true });
+    mkdirSync(outsideDirectory, { recursive: true });
+    const logPath = join(directory, 'agent.log');
+    const outsideLogPath = join(outsideDirectory, 'outside.log');
+    writeFileSync(outsideLogPath, 'EMBEDDED FALLBACK: Gateway timed out; running embedded agent with fresh session gateway-fallback-outside', 'utf8');
+    symlinkSync(outsideLogPath, logPath);
+    writeFileSync(join(directory, 'safe-session.trajectory.jsonl'), [
+      JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:08:00.000Z', seq: 1 }),
+    ].join('\n'), 'utf8');
+    writeFileSync(join(directory, 'gateway-fallback-outside.trajectory.jsonl'), [
+      JSON.stringify({ type: 'tool.result', ts: '2026-06-30T15:09:00.000Z', seq: 1, data: { output: 'outside fallback' } }),
+    ].join('\n'), 'utf8');
+
+    try {
+      const timeline = await readRuntimeTimeline(
+        { logPath, agentSessionId: 'safe-session' },
+        { sessionsDirectory: directory },
+      );
+      expect(timeline.sessionId).toBe('safe-session');
+      expect(timeline.fallback).toBe(false);
+      expect(timeline.missing).toBe(false);
+      expect(timeline.entries.map((entry) => entry.excerpt ?? entry.summary).join('\n')).not.toContain('outside fallback');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('does not extract fallback markers from quoted JSON strings without completion JSON', () => {
     const log = JSON.stringify('EMBEDDED FALLBACK: Gateway timed out; running embedded agent with fresh session gateway-fallback-quoted');
 
@@ -2480,6 +2511,17 @@ describe('agent timeline', () => {
     expect(timeline[4]!.excerpt).toContain('"private_key": "[redacted]"');
   });
 
+  it('ignores non-object trajectory JSONL rows', () => {
+    const timeline = parseRuntimeTrajectoryTimeline([
+      'null',
+      '42',
+      JSON.stringify({ type: 'tool.result', ts: '2026-06-30T15:09:10.000Z', seq: 1, data: { output: 'kept output' } }),
+    ].join('\n'));
+
+    expect(timeline).toHaveLength(1);
+    expect(timeline[0]!.excerpt).toBe('kept output');
+  });
+
   it('redacts curl joined headers and clustered credential options', () => {
     const timeline = parseRuntimeTrajectoryTimeline([
       JSON.stringify({
@@ -2906,6 +2948,25 @@ describe('agent timeline', () => {
     expect(timeline[0]!.excerpt).not.toContain('alpha beta');
     expect(timeline[0]!.excerpt).not.toContain('with spaces');
     expect(timeline[0]!.excerpt).not.toContain('prefix correct');
+  });
+
+  it('redacts quoted JSON string secret assignments with spaces', () => {
+    const timeline = parseRuntimeTrajectoryTimeline([
+      JSON.stringify({
+        type: 'tool.result',
+        ts: '2026-06-30T15:09:10.000Z',
+        seq: 1,
+        data: {
+          name: 'bash',
+          status: 'completed',
+          contentItems: [{ text: 'WEBHOOK_SECRET=correct horse battery staple API_TOKEN=alpha beta gamma done' }],
+        },
+      }),
+    ].join('\n'));
+
+    expect(timeline[0]!.excerpt).toContain('WEBHOOK_SECRET=[redacted]');
+    expect(timeline[0]!.excerpt).not.toContain('horse battery');
+    expect(timeline[0]!.excerpt).not.toContain('alpha beta');
   });
 
   it('classifies common commands into dashboard phases', () => {

@@ -1,5 +1,5 @@
 import { constants } from 'node:fs';
-import { lstat, open, realpath, stat } from 'node:fs/promises';
+import { lstat, open, realpath } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 
@@ -469,10 +469,20 @@ async function resolveRuntimeTrajectoryPathForSession(
 }
 
 async function readRuntimeLogTail(path: string): Promise<string> {
-  const fileStat = await stat(path);
-  const start = Math.max(0, fileStat.size - maxRuntimeLogBytes);
-  const file = await open(path, 'r');
+  const pathStat = await lstat(path);
+  if (pathStat.isSymbolicLink()) {
+    throw new Error(`runtime log path is a symlink: ${path}`);
+  }
+  if (!pathStat.isFile()) {
+    throw new Error(`runtime log path must be a regular file: ${path}`);
+  }
+  const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
+    const fileStat = await file.stat();
+    if (!fileStat.isFile()) {
+      throw new Error(`runtime log path must be a regular file: ${path}`);
+    }
+    const start = Math.max(0, fileStat.size - maxRuntimeLogBytes);
     const text = await readFileRange(file, start, fileStat.size - start);
     if (start === 0) {
       return text;
@@ -733,7 +743,8 @@ function timelineEntryForToolResult(event: TrajectoryEvent, index: number): Runt
 
 function parseTrajectoryLine(line: string): TrajectoryEvent | undefined {
   try {
-    return JSON.parse(line) as TrajectoryEvent;
+    const payload = JSON.parse(line) as unknown;
+    return isRecord(payload) ? payload as TrajectoryEvent : undefined;
   } catch {
     return undefined;
   }
@@ -907,6 +918,7 @@ function redactSensitiveText(value: string): string {
     .replace(/(^|[\n\r])(\s*[A-Za-z0-9_-]*(?:set[-_]?cookie|cookie)[A-Za-z0-9_-]*\s*[:=]\s*)(?!\[redacted)[^\n\r]*/gi, '$1$2[redacted]')
     .replace(/(^|[\n\r])(\s*[A-Za-z0-9_-]*(?:password|passphrase)[A-Za-z0-9_-]*\s*[:=]\s*)(?!\[redacted)[^\n\r]*/gi, '$1$2[redacted]')
     .replace(/(^|[\n\r])(\s*[A-Za-z0-9_-]*(?:api[-_]?key|token|secret)[A-Za-z0-9_-]*\s*=\s*)(?!\[redacted)[^\n\r]*/gi, '$1$2[redacted]')
+    .replace(/(^|[\n\r]|\s|")([A-Za-z0-9_-]*(?:password|passphrase|api[-_]?key|token|secret)[A-Za-z0-9_-]*\s*=\s*)(?!\[redacted)(\s*)(?!["'])[\s\S]*?(?=(?:\s+[A-Za-z0-9_-]*(?:password|passphrase|api[-_]?key|token|secret|authorization|set[-_]?cookie|cookie)[A-Za-z0-9_-]*\s*[=:])|(?:\\?")|[\n\r]|$)/gi, '$1$2$3[redacted]')
     .replace(/(^|[\n\r]|\s)([A-Za-z0-9_-]*(?:password|passphrase)[A-Za-z0-9_-]*\s*[:=])(?!\s*\[redacted)(\s*)(?!["'])[\s\S]*?(?=(?:\s+[A-Za-z0-9_-]*(?:password|passphrase|api[-_]?key|token|secret|authorization|set[-_]?cookie|cookie)[A-Za-z0-9_-]*\s*[:=])|(?:\s+(?:Authorization|Cookie|Set-Cookie):)|[\n\r]|$)/gi, '$1$2$3[redacted]')
     .replace(/(^|[\n\r]|\s)([A-Za-z0-9_-]*(?:api[-_]?key|token|secret)[A-Za-z0-9_-]*\s*=)(?!\s*\[redacted)(\s*)(?!["'])[\s\S]*?(?=(?:\s+[A-Za-z0-9_-]*(?:password|passphrase|api[-_]?key|token|secret|authorization|set[-_]?cookie|cookie)[A-Za-z0-9_-]*\s*[:=])|(?:\s+(?:Authorization|Cookie|Set-Cookie):)|[\n\r]|$)/gi, '$1$2$3[redacted]')
     .replace(/(^|[\n\r])(\s*(?:(?:\/\/[^\s:=]+\/)?:)?_auth\s*[:=]\s*)(?!\[redacted)[^\s'",}]+/gi, '$1$2[redacted]')
