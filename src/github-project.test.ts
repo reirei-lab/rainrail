@@ -5556,7 +5556,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
     expect(calls.find((call) => call.query?.includes('RainrailDeleteProjectIssueClaimLock'))).toBeUndefined();
   });
 
-  it('keeps fallback dispatched markers when starting lock cleanup fails', async () => {
+  it('deletes fallback dispatched markers before starting locks during cleanup', async () => {
     const calls: Array<{ query?: string; variables?: Record<string, unknown> }> = [];
     const provider = createGitHubProjectTaskQueueProvider({
       config: projectConfig(),
@@ -5615,9 +5615,81 @@ describe('createGitHubProjectTaskQueueProvider', () => {
       reason: 'failed_to_start_agent',
     })).rejects.toThrow('deleteRef rate limited');
 
-    expect(calls.find((call) =>
+    const fallbackDeleteIndex = calls.findIndex((call) =>
       call.query?.includes('RainrailDeleteProjectIssueClaimLock')
       && call.variables?.refId === 'REF_dispatched'
+    );
+    const startingDeleteIndex = calls.findIndex((call) =>
+      call.query?.includes('RainrailDeleteProjectIssueClaimLock')
+      && call.variables?.refId === 'REF_lock'
+    );
+    expect(fallbackDeleteIndex).toBeGreaterThanOrEqual(0);
+    expect(startingDeleteIndex).toBeGreaterThanOrEqual(0);
+    expect(fallbackDeleteIndex).toBeLessThan(startingDeleteIndex);
+  });
+
+  it('does not orphan fallback dispatched markers when fallback cleanup fails', async () => {
+    const calls: Array<{ query?: string; variables?: Record<string, unknown> }> = [];
+    const provider = createGitHubProjectTaskQueueProvider({
+      config: projectConfig(),
+      auth: { getAuthToken: async () => ({ token: 'project-token', provider: 'configured-token', fallback: false }) },
+      fetch: (async (_url, init) => {
+        const request = JSON.parse(String(init?.body)) as { query?: string; variables?: Record<string, unknown> };
+        calls.push(request);
+        if (request.query?.includes('RainrailProjectItemStatus')) {
+          return jsonResponse({
+            data: {
+              node: projectItem({
+                id: 'item_21',
+                contentId: 'issue_node_21',
+                number: 21,
+                title: 'Project issue selection',
+                status: 'In Progress',
+                assignees: ['reirei-agent'],
+                agentSessionId: 'agent:main:rainrail-21',
+                branchName: 'agent/reirei-lab-rainrail-21-project-issue-selection',
+              }),
+            },
+          });
+        }
+        if (request.query?.includes('RainrailProjectMetadata')) {
+          return projectMetadataResponse();
+        }
+        if (request.query?.includes('RainrailDeleteProjectIssueClaimLock')) {
+          if (request.variables?.refId === 'REF_dispatched') {
+            return new Response(JSON.stringify({ errors: [{ message: 'delete fallback rate limited' }] }), {
+              status: 200,
+              headers: { 'content-type': 'application/json' },
+            });
+          }
+          return jsonResponse({ data: { deleteRef: { clientMutationId: null } } });
+        }
+        return jsonResponse({ data: { updateProjectV2ItemFieldValue: { projectV2Item: { id: 'item_21' } } } });
+      }) as typeof fetch,
+    });
+
+    await expect(provider.releaseProjectIssue?.({
+      issue: {
+        id: 'item_21',
+        contentId: 'issue_node_21',
+        contentType: 'Issue',
+        title: 'Project issue selection',
+        status: 'Todo',
+        assigneeLogins: ['reirei-agent'],
+      },
+      claim: {
+        projectItemId: 'item_21',
+        lockRefId: 'REF_lock',
+        dispatchedLockRefId: 'REF_dispatched',
+      },
+      agentSessionId: 'agent:main:rainrail-21',
+      branchName: 'agent/reirei-lab-rainrail-21-project-issue-selection',
+      reason: 'failed_to_start_agent',
+    })).rejects.toThrow('delete fallback rate limited');
+
+    expect(calls.find((call) =>
+      call.query?.includes('RainrailDeleteProjectIssueClaimLock')
+      && call.variables?.refId === 'REF_lock'
     )).toBeUndefined();
   });
 

@@ -472,7 +472,12 @@ function redactTailSecretStructuredValues(value: string): string {
     const valueEnd = findTailBalancedStructuredValueEnd(value, valueStart);
     redacted += value.slice(cursor, matchIndex);
     redacted += `${match[1] ?? ''}${match[2] ?? ''}${match[3] ?? ''}${match[2] ?? ''}${match[4] ?? ''}[redacted]`;
-    cursor = valueEnd === undefined ? value.length : valueEnd + 1;
+    if (valueEnd === undefined) {
+      const newlineIndex = value.indexOf('\n', valueStart);
+      cursor = newlineIndex === -1 ? value.length : newlineIndex;
+    } else {
+      cursor = valueEnd + 1;
+    }
   }
   return redacted + value.slice(cursor);
 }

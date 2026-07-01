@@ -1268,6 +1268,34 @@ describe('cloudflare issue redaction', () => {
     expect(createdIssues[0]?.body).not.toContain('\n## injected');
   });
 
+  it('renders request summaries as inline code', async () => {
+    const createdIssues: Array<{ body: string }> = [];
+    const workflow = createCloudflareIssueReporterWorkflow({
+      repository: 'reirei-lab/rainrail',
+      store: createInMemoryCloudflareErrorIssueStore(),
+      issues: {
+        findOpenIssueByFingerprint: async () => undefined,
+        createIssue: async (input) => {
+          createdIssues.push(input);
+          return {
+            number: 142,
+            url: 'https://github.com/reirei-lab/rainrail/issues/142',
+          };
+        },
+      },
+    });
+
+    await expect(workflow.handle(cloudflareErrorEvent({
+      url: 'https://asme.dev/@org/team?token=request-secret',
+    }), runtimeContext())).resolves.toMatchObject({
+      handled: true,
+    });
+
+    const requestLine = createdIssues[0]?.body.split('\n').find((line) => line.startsWith('- Request: '));
+    expect(requestLine).toBe('- Request: `GET /@org/team`');
+    expect(createdIssues[0]?.body).not.toContain('request-secret');
+  });
+
   it('keeps stack signature frames inside the Markdown fence', async () => {
     const createdIssues: Array<{ body: string }> = [];
     const workflow = createCloudflareIssueReporterWorkflow({

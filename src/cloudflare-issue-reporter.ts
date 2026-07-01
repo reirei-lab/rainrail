@@ -346,6 +346,10 @@ function cloudflareIssueBody(input: {
   const rawJson = truncate(JSON.stringify(redactRawEventData(input.candidate.rawData), null, 2), maxRawJsonLength);
   const exceptionName = sanitizeSummaryLine(input.candidate.exceptionName, maxSummaryExceptionNameLength);
   const exceptionMessage = sanitizeSummaryLine(input.candidate.exceptionMessage, maxSummaryExceptionMessageLength);
+  const requestSummary = sanitizeSummaryLine(
+    [input.candidate.requestMethod, input.candidate.requestPath].filter(Boolean).join(' '),
+    maxSummaryExceptionNameLength,
+  );
   const stackSignature = input.candidate.stackSignature.map((line) => escapeMarkdownFenceLine(sanitizeSecretString(line)));
   return [
     'Rainrail detected a new Cloudflare Worker server error.',
@@ -357,7 +361,7 @@ function cloudflareIssueBody(input: {
     `- Event: ${input.event.name}`,
     `- Exception: ${exceptionName || 'Error'}`,
     `- Message: ${exceptionMessage || '(empty)'}`,
-    `- Request: ${[input.candidate.requestMethod, input.candidate.requestPath].filter(Boolean).join(' ') || '(unknown)'}`,
+    `- Request: ${requestSummary.length === 0 ? '(unknown)' : markdownInlineCode(requestSummary)}`,
     `- Status: ${input.candidate.responseStatus ?? '(unknown)'}`,
     `- Delivery: ${input.event.delivery.id}`,
     `- First seen: ${input.event.delivery.receivedAt}`,
@@ -391,6 +395,13 @@ function sanitizeSummaryLine(value: string, maxLength: number): string {
 
 function escapeMarkdownFenceLine(value: string): string {
   return value.replace(/^`{3,}/u, (ticks) => ticks.replace(/`/gu, '\\`'));
+}
+
+function markdownInlineCode(value: string): string {
+  const backtickRuns = value.match(/`+/gu) ?? [];
+  const longestRun = backtickRuns.reduce((longest, run) => Math.max(longest, run.length), 0);
+  const fence = '`'.repeat(longestRun + 1);
+  return `${fence}${value}${fence}`;
 }
 
 function cloudflareExceptionWithUsableStack(value: unknown): {

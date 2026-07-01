@@ -1401,10 +1401,10 @@ async function deleteProjectIssueClaimLocks(
   fetchImpl: typeof fetch,
   auth: GitHubProjectAuthTokenProvider,
 ): Promise<void> {
-  await deleteProjectIssueClaimLock(claim, fetchImpl, auth);
   if (claim.dispatchedLockRefId !== undefined) {
     await deleteProjectIssueClaimLock({ ...claim, lockRefId: claim.dispatchedLockRefId }, fetchImpl, auth);
   }
+  await deleteProjectIssueClaimLock(claim, fetchImpl, auth);
 }
 
 async function deleteProjectIssueClaimLocksIfOwned(

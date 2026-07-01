@@ -163,7 +163,7 @@ describe('Cloudflare tail source', () => {
           name: 'TypeError token=tail-name-secret',
           message: 'failed token="tail-message-secret" authorization: Bearer tail-auth-secret {"password":"tail-json-secret"} {"resetCode":"tail-open-secret password: tail-colon-secret token = "tail-spaced-token-secret" password = tail-spaced-password-secret DATABASE_URL=postgres://app:tail-db-pass@db/prod',
           stack: [
-            `TypeError: ${'x'.repeat(1_500)} token=tail-stack-secret {"password":"tail-stack-json-secret"} password: tail-stack-colon-secret`,
+            `TypeError: ${'x'.repeat(1_500)} token=tail-stack-secret {"password":"tail-stack-json-secret"} {"password":{"x":"tail-unclosed-structured-secret" password: tail-stack-colon-secret`,
             '    at resolveCurrentHumanAccount (worker.js:1510:24)',
             '    at handleCurrentHuman (worker.js:1377:18)',
           ].join('\n'),
@@ -186,6 +186,7 @@ describe('Cloudflare tail source', () => {
     expect(JSON.stringify(event.payload)).not.toContain('tail-db-pass');
     expect(JSON.stringify(event.payload)).not.toContain('tail-stack-secret');
     expect(JSON.stringify(event.payload)).not.toContain('tail-stack-json-secret');
+    expect(JSON.stringify(event.payload)).not.toContain('tail-unclosed-structured-secret');
     expect(JSON.stringify(event.payload)).not.toContain('tail-stack-colon-secret');
     expect(event.payload.exceptions[0]?.message).toContain('token=[redacted]');
     expect(event.payload.exceptions[0]?.stack).toContain('resolveCurrentHumanAccount');
