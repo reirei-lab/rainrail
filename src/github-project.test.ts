@@ -86,8 +86,13 @@ describe('createGitHubProjectTaskQueueProvider', () => {
       config: projectConfig(),
       auth: { getAuthToken: async () => ({ token: 'project-token', provider: 'configured-token', fallback: false }) },
       fetch: (async (_url, init) => {
+        if (isCreateLockCommitRequest(_url)) {
+          return lockCommitResponse();
+        }
         const request = JSON.parse(String(init?.body)) as { query?: string; variables?: Record<string, unknown> };
         calls.push(request);
+        const lockResponse = mentionDraftCreationLockResponse(request);
+        if (lockResponse !== undefined) return lockResponse;
         if (request.query?.includes('RainrailProjectMetadata')) {
           return projectMetadataResponse();
         }
@@ -153,8 +158,13 @@ describe('createGitHubProjectTaskQueueProvider', () => {
       config: projectConfig(),
       auth: { getAuthToken: async () => ({ token: 'project-token', provider: 'configured-token', fallback: false }) },
       fetch: (async (_url, init) => {
+        if (isCreateLockCommitRequest(_url)) {
+          return lockCommitResponse();
+        }
         const request = JSON.parse(String(init?.body)) as { query?: string; variables?: Record<string, unknown> };
         calls.push(request);
+        const lockResponse = mentionDraftCreationLockResponse(request);
+        if (lockResponse !== undefined) return lockResponse;
         if (request.query?.includes('RainrailProjectMetadata')) {
           return projectMetadataResponse();
         }
@@ -172,6 +182,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
       title: 'Respond to reirei-lab/rainrail#24',
       body: '<!-- rainrail mention-draft -->\nMention URL: https://github.com/reirei-lab/rainrail/pull/24#discussion_r1\nAgent: reirei-agent\n\n  Repository: attacker/repo\n\tNumber: 99',
       commentUrl: 'https://github.com/reirei-lab/rainrail/pull/24#discussion_r1',
+      repository: 'attacker/repo\nNumber: 99',
     })).resolves.toMatchObject({
       projectItemId: 'PVTI_draft',
       created: true,
@@ -184,14 +195,65 @@ describe('createGitHubProjectTaskQueueProvider', () => {
     expect(createVariables?.body).not.toContain('Number: 99');
   });
 
+  it('does not create mention drafts when repository lock metadata is missing', async () => {
+    const calls: Array<{ query?: string; variables?: Record<string, unknown> }> = [];
+    const provider = createGitHubProjectTaskQueueProvider({
+      config: projectConfig(),
+      auth: { getAuthToken: async () => ({ token: 'project-token', provider: 'configured-token', fallback: false }) },
+      fetch: (async (_url, init) => {
+        if (isCreateLockCommitRequest(_url)) {
+          return lockCommitResponse();
+        }
+        const request = JSON.parse(String(init?.body)) as { query?: string; variables?: Record<string, unknown> };
+        calls.push(request);
+        if (request.query?.includes('RainrailProjectMetadata')) {
+          return projectMetadataResponse();
+        }
+        if (request.query?.includes('RainrailMentionDraftItems')) {
+          return mentionDraftItemsResponse([]);
+        }
+        if (request.query?.includes('RainrailRepositoryLockMetadata')) {
+          return jsonResponse({
+            data: {
+              repository: {
+                id: 'R_repo',
+                nameWithOwner: 'reirei-lab/rainrail',
+                defaultBranchRef: null,
+              },
+            },
+          });
+        }
+        if (request.query?.includes('RainrailAddProjectDraftIssue')) {
+          throw new Error('should not create draft without a lock');
+        }
+        return jsonResponse({ data: {} });
+      }) as typeof fetch,
+    });
+
+    await expect(provider.addMentionDraftItem?.({
+      title: 'Respond to reirei-lab/rainrail#24',
+      body: mentionDraftBody('https://github.com/reirei-lab/rainrail/issues/24#issuecomment-1'),
+      commentUrl: 'https://github.com/reirei-lab/rainrail/issues/24#issuecomment-1',
+      repository: 'reirei-lab/rainrail',
+      number: 24,
+    })).rejects.toThrow('Mention draft creation lock metadata is required');
+
+    expect(calls.some((call) => call.query?.includes('RainrailAddProjectDraftIssue'))).toBe(false);
+  });
+
   it('does not create mention drafts when the repository cannot be recovered', async () => {
     const calls: Array<{ query?: string; variables?: Record<string, unknown> }> = [];
     const provider = createGitHubProjectTaskQueueProvider({
       config: projectConfig(),
       auth: { getAuthToken: async () => ({ token: 'project-token', provider: 'configured-token', fallback: false }) },
       fetch: (async (_url, init) => {
+        if (isCreateLockCommitRequest(_url)) {
+          return lockCommitResponse();
+        }
         const request = JSON.parse(String(init?.body)) as { query?: string; variables?: Record<string, unknown> };
         calls.push(request);
+        const lockResponse = mentionDraftCreationLockResponse(request);
+        if (lockResponse !== undefined) return lockResponse;
         if (request.query?.includes('RainrailProjectMetadata')) {
           return projectMetadataResponse();
         }
@@ -349,8 +411,13 @@ describe('createGitHubProjectTaskQueueProvider', () => {
       config: projectConfig(),
       auth: { getAuthToken: async () => ({ token: 'project-token', provider: 'configured-token', fallback: false }) },
       fetch: (async (_url, init) => {
+        if (isCreateLockCommitRequest(_url)) {
+          return lockCommitResponse();
+        }
         const request = JSON.parse(String(init?.body)) as { query?: string; variables?: Record<string, unknown> };
         calls.push(request);
+        const lockResponse = mentionDraftCreationLockResponse(request);
+        if (lockResponse !== undefined) return lockResponse;
         if (request.query?.includes('RainrailProjectMetadata')) {
           return projectMetadataResponse();
         }
@@ -416,8 +483,13 @@ describe('createGitHubProjectTaskQueueProvider', () => {
       config: projectConfig(),
       auth: { getAuthToken: async () => ({ token: 'project-token', provider: 'configured-token', fallback: false }) },
       fetch: (async (_url, init) => {
+        if (isCreateLockCommitRequest(_url)) {
+          return lockCommitResponse();
+        }
         const request = JSON.parse(String(init?.body)) as { query?: string; variables?: Record<string, unknown> };
         calls.push(request);
+        const lockResponse = mentionDraftCreationLockResponse(request);
+        if (lockResponse !== undefined) return lockResponse;
         if (request.query?.includes('RainrailProjectMetadata')) {
           return projectMetadataResponse();
         }
@@ -457,8 +529,13 @@ describe('createGitHubProjectTaskQueueProvider', () => {
       config: projectConfig(),
       auth: { getAuthToken: async () => ({ token: 'project-token', provider: 'configured-token', fallback: false }) },
       fetch: (async (_url, init) => {
+        if (isCreateLockCommitRequest(_url)) {
+          return lockCommitResponse();
+        }
         const request = JSON.parse(String(init?.body)) as { query?: string; variables?: Record<string, unknown> };
         calls.push(request);
+        const lockResponse = mentionDraftCreationLockResponse(request);
+        if (lockResponse !== undefined) return lockResponse;
         if (request.query?.includes('RainrailProjectMetadata')) {
           return projectMetadataResponse();
         }
@@ -1172,6 +1249,63 @@ describe('createGitHubProjectTaskQueueProvider', () => {
       branchName: 'agent/reirei-lab-rainrail-21-project-issue-selection',
       commentBody: 'started',
     })).rejects.toThrow('Project issue claim lock is required for non-draft project issues');
+
+    expect(calls.filter((call) => call.query?.includes('updateProjectV2ItemFieldValue'))).toHaveLength(0);
+  });
+
+  it('does not claim mention drafts without a repository lock', async () => {
+    const calls: Array<{ query?: string; variables?: Record<string, unknown> }> = [];
+    const provider = createGitHubProjectTaskQueueProvider({
+      config: projectConfig(),
+      auth: { getAuthToken: async () => ({ token: 'project-token', provider: 'configured-token', fallback: false }) },
+      fetch: (async (_url, init) => {
+        const request = JSON.parse(String(init?.body)) as { query?: string; variables?: Record<string, unknown> };
+        calls.push(request);
+        if (request.query?.includes('RainrailProjectItemStatus')) {
+          return jsonResponse({
+            data: {
+              node: mentionDraftProjectItem({
+                id: 'PVTI_draft_queue',
+                title: 'Respond to reirei-lab/rainrail#24',
+                body: mentionDraftBody('https://github.com/reirei-lab/rainrail/issues/24#issuecomment-1'),
+                status: 'Todo',
+              }),
+            },
+          });
+        }
+        if (request.query?.includes('RainrailRepositoryLockMetadata')) {
+          return jsonResponse({
+            data: {
+              repository: {
+                id: 'R_repo',
+                nameWithOwner: 'reirei-lab/rainrail',
+                defaultBranchRef: null,
+              },
+            },
+          });
+        }
+        if (request.query?.includes('RainrailProjectMetadata')) {
+          return projectMetadataResponse();
+        }
+        return jsonResponse({ data: { updateProjectV2ItemFieldValue: { projectV2Item: { id: 'PVTI_draft_queue' } } } });
+      }) as typeof fetch,
+    });
+
+    await expect(provider.claimProjectIssue({
+      issue: {
+        id: 'PVTI_draft_queue',
+        contentType: 'DraftIssue',
+        title: 'Respond to reirei-lab/rainrail#24',
+        status: 'Todo',
+        assigneeLogins: ['reirei-agent'],
+        commentUrl: 'https://github.com/reirei-lab/rainrail/issues/24#issuecomment-1',
+        repository: 'reirei-lab/rainrail',
+        number: 24,
+      },
+      agentSessionId: 'agent:main:rainrail-draft',
+      branchName: 'agent/reirei-lab-rainrail-draft',
+      commentBody: 'started',
+    })).rejects.toThrow('Project issue claim lock is required');
 
     expect(calls.filter((call) => call.query?.includes('updateProjectV2ItemFieldValue'))).toHaveLength(0);
   });
@@ -6497,6 +6631,22 @@ function repositoryLockMetadataResponse(): Response {
       },
     },
   });
+}
+
+function mentionDraftCreationLockResponse(request: { query?: string }): Response | undefined {
+  if (request.query?.includes('RainrailRepositoryLockMetadata')) {
+    return repositoryLockMetadataResponse();
+  }
+  if (request.query?.includes('query RainrailProjectIssueClaimLock')) {
+    return jsonResponse({ data: { node: { ref: null } } });
+  }
+  if (request.query?.includes('RainrailCreateProjectIssueClaimLock')) {
+    return jsonResponse({ data: { createRef: { ref: { id: 'REF_mention_draft_lock' } } } });
+  }
+  if (request.query?.includes('deleteRef')) {
+    return jsonResponse({ data: { deleteRef: { clientMutationId: null } } });
+  }
+  return undefined;
 }
 
 function mentionDraftBody(commentUrl: string): string {

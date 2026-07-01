@@ -236,7 +236,7 @@ async function addMentionDraftItem(
 
 function normalizeMentionDraftInput(input: ProjectMentionDraftInput): ProjectMentionDraftInput {
   const fromUrl = mentionDraftRepositoryFromUrl(input.commentUrl);
-  const repository = input.repository ?? fromUrl?.repository;
+  const repository = normalizeRepositoryNameWithOwner(input.repository) ?? fromUrl?.repository;
   const number = input.number ?? fromUrl?.number;
   if (repository === undefined) {
     throw new Error('Mention draft repository is required');
@@ -274,6 +274,22 @@ function mentionDraftBodyWithRepository(body: string, repository: string, number
     lines.push(`Number: ${number}`);
   }
   return lines.join('\n');
+}
+
+function normalizeRepositoryNameWithOwner(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  if (normalized === undefined || normalized.length === 0 || /[\r\n]/u.test(normalized)) {
+    return undefined;
+  }
+  try {
+    const [owner, repo] = splitRepositoryNameWithOwner(normalized);
+    if (!/^[A-Za-z0-9_.-]+$/u.test(owner) || !/^[A-Za-z0-9_.-]+$/u.test(repo)) {
+      return undefined;
+    }
+    return `${owner}/${repo}`;
+  } catch {
+    return undefined;
+  }
 }
 
 async function reuseMentionDraftItem(
@@ -354,7 +370,7 @@ async function withMentionDraftCreationLock<T>(
     || repository.defaultBranchOid === undefined
     || repository.defaultBranchTreeOid === undefined
   ) {
-    return fn();
+    throw new Error('Mention draft creation lock metadata is required');
   }
 
   const issue = mentionDraftCreationLockIssue(config, input);
@@ -703,8 +719,8 @@ async function claimProjectIssue(
   const metadata = await loadProjectMetadata(config, fetchImpl, auth);
   let claim: ProjectIssueClaim | undefined;
   const useClaimLock = shouldUseProjectIssueClaimLock(claimStatus);
-  if (!useClaimLock && input.issue.contentType !== 'DraftIssue') {
-    throw new Error('Project issue claim lock is required for non-draft project issues');
+  if (!useClaimLock) {
+    throw new Error('Project issue claim lock is required for non-draft project issues and mention drafts');
   }
   try {
     const lockRefId = useClaimLock
