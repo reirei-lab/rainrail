@@ -93,6 +93,36 @@ describe('handleConflictCheckEvent', () => {
     })).rejects.toThrow('pull request mergeability is still being calculated');
   });
 
+  it('ignores pending mergeability for pull requests that cannot match claimed agent tasks', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+
+    const result = await handleConflictCheckEvent(pushEvent(), {
+      tasks: handoffRecorder({ updates }),
+      delayMs: 0,
+      pullRequests: {
+        async getPullRequest() {
+          throw new Error('not used');
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async findOpenPullRequestsByBase() {
+          return [
+            pullRequest({ mergeable: 'UNKNOWN', headRepository: 'external/fork' }),
+            pullRequest({ number: 45, headRefName: 'feature/manual-pr', mergeable: 'UNKNOWN' }),
+            pullRequest({ mergeStateStatus: 'DIRTY' }),
+          ];
+        },
+        async requestReview() {
+          throw new Error('not used');
+        },
+      },
+    });
+
+    expect(result.reason).toBe('conflicting pull requests returned to Todo');
+    expect(updates).toHaveLength(1);
+  });
+
   it('retries even when some open PRs are already known conflicts', async () => {
     const updates: Array<{ reason: string; commentBody?: string }> = [];
 
@@ -109,7 +139,7 @@ describe('handleConflictCheckEvent', () => {
         async findOpenPullRequestsByBase() {
           return [
             pullRequest({ mergeStateStatus: 'DIRTY' }),
-            pullRequest({ number: 45, headRefName: 'agent/pending', mergeable: 'UNKNOWN' }),
+            pullRequest({ number: 45, mergeable: 'UNKNOWN' }),
           ];
         },
         async requestReview() {

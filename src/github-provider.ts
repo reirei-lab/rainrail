@@ -11,7 +11,6 @@ import type {
   PullRequestCheck,
   PullRequestReviewComment,
   PullRequestReviewTarget,
-  PullRequestMergeMethod,
 } from './pr-lifecycle.js';
 import type {
   TaskComment,
@@ -308,18 +307,6 @@ export function createGitHubPullRequestProvider(options: GitHubTaskProviderOptio
         throw new Error(`GitHub review request removal failed with HTTP ${response.status}`);
       }
     },
-    async mergePullRequest(input, context) {
-      const response = await request(`repos/${input.repository}/pulls/${input.number}/merge`, {
-        method: 'PUT',
-        body: JSON.stringify({
-          merge_method: mergeMethod(input.mergeMethod),
-          ...(input.sha === undefined ? {} : { sha: input.sha }),
-        }),
-      }, context);
-      if (!response.ok) {
-        throw new Error(`GitHub pull request merge failed with HTTP ${response.status}`);
-      }
-    },
     async listReviewComments(input, context) {
       const comments: PullRequestReviewComment[] = [];
       let page = 1;
@@ -563,11 +550,6 @@ function reviewCommentFromPayload(value: GitHubReviewCommentResponse): PullReque
     ...optionalNumber('startLine', numberValue(value.start_line) ?? numberValue(value.original_start_line)),
     ...optionalString('commitId', stringValue(value.commit_id)),
   }];
-}
-
-function mergeMethod(value: PullRequestMergeMethod): string {
-  if (value === 'merge' || value === 'squash' || value === 'rebase') return value;
-  throw new Error(`Unsupported GitHub pull request merge method: ${String(value)}`);
 }
 
 async function getDefaultGitHubAuthToken(

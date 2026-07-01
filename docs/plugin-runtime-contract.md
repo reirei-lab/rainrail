@@ -216,8 +216,9 @@ handoff、base push conflict check、auto-merge の各 workflow に分ける。
 実 GitHub API は `GitHubPullRequestProvider` に閉じ込め、handler は
 `PullRequestReviewTarget`、`PullRequestCheck`、`PullRequestReview`、
 `PullRequestReviewComment` の正規化済み状態だけを見る。
-merge は `PullRequestMergeMethod` を明示的に扱い、`merge`、`squash`、`rebase`
-以外の値は provider 側で拒否する。
+`GitHubPullRequestProvider` は read-only とし、merge は provider から直接公開しない。
+auto-merge は `PullRequestMergeMethod` を明示的に扱い、実行は capability/policy gate
+付きの `context.actions.mergePullRequest` だけを通す。
 
 agent task handoff は `AgentTaskIssue`、`AgentTaskClaim`、`AgentTask`、
 `AgentTaskHandoffClient` で表す。Project item を Todo に戻す adapter は

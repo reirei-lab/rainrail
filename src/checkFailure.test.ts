@@ -37,6 +37,34 @@ describe('handleCheckFailureEvent', () => {
     expect(updates[0]?.commentBody).toContain('Outcome: checks_failed');
   });
 
+  it('treats completed startup_failure check runs as current failures', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+
+    const result = await handleCheckFailureEvent(checkRunEvent({ conclusion: 'startup_failure' }), {
+      agentLogin: 'reirei-agent',
+      branchPrefix: 'agent/',
+      tasks: handoffRecorder({ updates }),
+      pullRequests: {
+        async getPullRequest() {
+          return pullRequest({
+            statusCheckRollup: [
+              { type: 'CheckRun', name: 'Typecheck, Test, Build', status: 'COMPLETED', conclusion: 'startup_failure' },
+            ],
+          });
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          throw new Error('not used');
+        },
+      },
+    });
+
+    expect(result.reason).toBe('failed PR checks returned issue to Todo');
+    expect(updates).toHaveLength(1);
+  });
+
   it('ignores successful checks', async () => {
     const result = await handleCheckFailureEvent(checkRunEvent(), {
       agentLogin: 'reirei-agent',

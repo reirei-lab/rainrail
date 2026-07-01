@@ -75,12 +75,6 @@ export interface GitHubPullRequestProvider {
     number: number;
     reviewerLogin: string;
   }, context?: TaskProviderContext): Promise<void>;
-  mergePullRequest?(input: {
-    repository: string;
-    number: number;
-    mergeMethod: PullRequestMergeMethod;
-    sha?: string;
-  }, context?: TaskProviderContext): Promise<void>;
   listReviewComments?(input: {
     repository: string;
     number: number;
@@ -426,12 +420,23 @@ export async function handleConflictCheckEvent(
     throw new Error('Pull request service cannot list pull requests by base branch');
   }
   const candidates = await pullRequests.findOpenPullRequestsByBase(target, taskContext(context));
-  const pending = candidates.filter(isMergeabilityPending);
+  const conflictedCandidates = candidates.filter(isConflicted);
+  const manageableCandidates = [];
+  for (const pullRequest of candidates) {
+    if (!sameRepositoryHead(pullRequest)) continue;
+    const task = await options.tasks.getAgentTaskByBranchName(pullRequest.headRefName);
+    if (
+      task === undefined
+      || repositoryMismatchReason(task, pullRequest.repository) !== undefined
+      || shouldIgnoreTask(task) !== undefined
+    ) continue;
+    manageableCandidates.push({ pullRequest, task });
+  }
+  const pending = manageableCandidates.filter(({ pullRequest }) => isMergeabilityPending(pullRequest));
   if (pending.length > 0) {
     throw new Error(`pull request mergeability is still being calculated for ${pending.length} open PR(s)`);
   }
-  const conflicted = candidates.filter(isConflicted);
-  if (conflicted.length === 0) {
+  if (conflictedCandidates.length === 0) {
     return {
       handled: false,
       reason: 'no conflicting pull requests target the pushed branch',
@@ -441,14 +446,7 @@ export async function handleConflictCheckEvent(
   }
 
   const updatedTasks = [];
-  for (const pullRequest of conflicted) {
-    if (!sameRepositoryHead(pullRequest)) continue;
-    const task = await options.tasks.getAgentTaskByBranchName(pullRequest.headRefName);
-    if (
-      task === undefined
-      || repositoryMismatchReason(task, pullRequest.repository) !== undefined
-      || shouldIgnoreTask(task) !== undefined
-    ) continue;
+  for (const { pullRequest, task } of manageableCandidates.filter(({ pullRequest }) => isConflicted(pullRequest))) {
     const update = await options.tasks.returnTaskToTodo({
       task,
       reason: 'conflict',
@@ -528,25 +526,17 @@ export async function handleAutoMergeEvent(
     mergeMethod: options.mergeMethod,
     ...optionalString('sha', pullRequest.headSha),
   };
-  if (pullRequests.mergePullRequest === undefined) {
-    if (context === undefined) throw new Error('Pull request service does not support merging');
-    await context.actions.mergePullRequest({
-      pullRequestId: `${pullRequest.repository}#${pullRequest.number}`,
-      ...mergeInput,
-    });
-  } else {
-    await pullRequests.mergePullRequest(mergeInput, taskContext(context));
-  }
+  if (context === undefined) throw new Error('Auto-merge requires a gated runtime merge action');
+  await context.actions.mergePullRequest({
+    pullRequestId: `${pullRequest.repository}#${pullRequest.number}`,
+    ...mergeInput,
+  });
   return { handled: true, reason: 'pull_request_merged', pullRequest };
 }
 
 export function allChecksPassed(pullRequest: PullRequestReviewTarget): boolean {
   if (pullRequest.statusCheckRollup.length === 0) return true;
-  return pullRequest.statusCheckRollup.every((check) => {
-    const status = normalize(check.status ?? check.state);
-    const conclusion = normalize(check.conclusion);
-    return (status === 'completed' || status === 'success') && (conclusion === '' || conclusion === 'success' || conclusion === 'neutral' || conclusion === 'skipped');
-  });
+  return pullRequest.statusCheckRollup.every(isPassingCheck);
 }
 
 function pullRequestsFromContext(context: PluginRuntimeContext): GitHubPullRequestProvider | undefined {
@@ -909,10 +899,21 @@ function hasUnresolvedChangeRequest(pullRequest: PullRequestReviewTarget): boole
 }
 
 function hasCurrentCheckFailure(pullRequest: PullRequestReviewTarget): boolean {
-  return pullRequest.statusCheckRollup.some((check) => {
-    const state = normalize(check.conclusion ?? check.state ?? check.status);
-    return ['failure', 'failed', 'error', 'cancelled', 'timed_out', 'action_required'].includes(state);
-  });
+  return pullRequest.statusCheckRollup.some(isFailingCheck);
+}
+
+function isPassingCheck(check: PullRequestCheck): boolean {
+  const status = normalize(check.status ?? check.state);
+  const conclusion = normalize(check.conclusion);
+  return (status === 'completed' || status === 'success')
+    && (conclusion === '' || conclusion === 'success' || conclusion === 'neutral' || conclusion === 'skipped');
+}
+
+function isFailingCheck(check: PullRequestCheck): boolean {
+  const status = normalize(check.status ?? check.state);
+  const conclusion = normalize(check.conclusion);
+  if (status === 'completed') return !['', 'success', 'neutral', 'skipped'].includes(conclusion);
+  return ['failure', 'failed', 'error', 'cancelled', 'timed_out', 'action_required'].includes(status);
 }
 
 function latestActionableReviewsByReviewer(pullRequest: PullRequestReviewTarget): Map<string, PullRequestReview> {
