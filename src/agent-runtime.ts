@@ -261,7 +261,11 @@ function compactionFailureFromLog(raw: string): RuntimeRunCompletion | undefined
 function compactionFailureAfterLatestCompletionJson(raw: string): RuntimeRunCompletion | undefined {
   let latestCompletionEnd = -1;
   for (const candidate of parseJsonObjectsFromLogWithPositions(raw)) {
-    if (isRecord(candidate.payload) && runtimeRunCompletionFromPayload(candidate.payload) !== undefined) {
+    if (
+      isRecord(candidate.payload)
+      && runtimeRunCompletionFromPayload(candidate.payload) !== undefined
+      && isTrustedRuntimeCompletionFragment(candidate.payload)
+    ) {
       latestCompletionEnd = candidate.end;
     }
   }
@@ -502,7 +506,11 @@ function parseJsonFromLog(raw: string): unknown {
 function parseLastJsonObjectFromLog(raw: string): unknown {
   let latest: unknown;
   for (const candidate of parseJsonObjectsFromLogWithPositions(raw)) {
-    if (isRecord(candidate.payload) && runtimeRunCompletionFromPayload(candidate.payload) !== undefined) {
+    if (
+      isRecord(candidate.payload)
+      && runtimeRunCompletionFromPayload(candidate.payload) !== undefined
+      && isTrustedRuntimeCompletionFragment(candidate.payload)
+    ) {
       latest = candidate.payload;
     }
   }
@@ -568,13 +576,19 @@ function runtimeResumeLogPaths(task: RuntimeAgentTask): string[] {
 function extractFallbackRuntimeSessionKey(log: string, agentId: string): string | undefined {
   const strictPayload = parseStrictJsonObject(log);
   if (strictPayload !== undefined) {
-    return fallbackSessionKeyFromPayload(strictPayload, agentId);
+    return runtimeRunCompletionFromPayload(strictPayload) !== undefined && isTrustedRuntimeCompletionFragment(strictPayload)
+      ? fallbackSessionKeyFromPayload(strictPayload, agentId)
+      : undefined;
   }
   let latest: { index: number; key: string } | undefined;
   const jsonObjects = parseJsonObjectsFromLogWithPositions(log);
   const jsonRanges = jsonObjects.map((object) => ({ start: object.index, end: object.end }));
   for (const object of jsonObjects) {
-    if (!isRecord(object.payload) || runtimeRunCompletionFromPayload(object.payload) === undefined) {
+    if (
+      !isRecord(object.payload)
+      || runtimeRunCompletionFromPayload(object.payload) === undefined
+      || !isTrustedRuntimeCompletionFragment(object.payload)
+    ) {
       continue;
     }
     const key = fallbackSessionKeyFromPayload(object.payload, agentId);
@@ -618,6 +632,29 @@ function fallbackSessionKeyFromPayload(payload: Record<string, unknown>, agentId
     }
   }
   return undefined;
+}
+
+function isTrustedRuntimeCompletionFragment(payload: Record<string, unknown>): boolean {
+  if (stringValue(payload.status) === 'in_flight') {
+    return true;
+  }
+  const completionPayload = completionPayloadFromResponse(payload);
+  return hasRuntimeCompletionSignal(payload)
+    || hasRuntimeCompletionSignal(completionPayload)
+    || (hasRuntimeAgentMeta(payload) && stringValue(completionPayload.status) !== undefined);
+}
+
+function hasRuntimeCompletionSignal(payload: Record<string, unknown>): boolean {
+  return completionTextsFromPayload(payload).length > 0
+    || recordValue(payload.completion) !== undefined
+    || recordValue(payload.executionTrace) !== undefined
+    || recordValue(payload.result) !== undefined;
+}
+
+function hasRuntimeAgentMeta(payload: Record<string, unknown>): boolean {
+  return [payload, recordValue(payload.result)].some((source) =>
+    recordValue(recordValue(source?.meta)?.agentMeta) !== undefined
+  );
 }
 
 function extractFallbackRuntimeSessionId(log: string): string | undefined {

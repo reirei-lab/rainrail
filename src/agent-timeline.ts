@@ -181,6 +181,9 @@ export function extractRuntimeSessionId(log: string): string | undefined {
   } catch {
     const parsed = parseJsonObjectsFromLog(log);
     for (const payload of parsed.payloads.slice().reverse()) {
+      if (!isTrustedRuntimeCompletionPayload(payload)) {
+        continue;
+      }
       const sessionId = runtimeSessionIdFromPayload(payload);
       if (sessionId !== undefined) {
         return sessionId;
@@ -658,11 +661,24 @@ function isTrustedRuntimeCompletionPayload(payload: unknown): payload is Record<
   if (!isRecord(payload)) {
     return false;
   }
-  if (stringField(payload, 'status') !== undefined || payloadHasCompletionText(payload)) {
+  if (
+    payloadHasCompletionText(payload)
+    || isRecord(payload.completion)
+    || isRecord(payload.executionTrace)
+    || (stringField(payload, 'status') !== undefined && runtimeAgentMetaFromPayload(payload) !== undefined)
+  ) {
     return true;
   }
   const result = isRecord(payload.result) ? payload.result : undefined;
-  return stringField(result, 'status') !== undefined || payloadHasCompletionText(result);
+  return payloadHasCompletionText(result)
+    || isRecord(result?.completion)
+    || isRecord(result?.executionTrace)
+    || (result !== undefined && runtimeAgentMetaFromPayload(result) !== undefined)
+    || (stringField(result, 'status') !== undefined && runtimeAgentMetaFromPayload(result) !== undefined);
+}
+
+function runtimeAgentMetaFromPayload(payload: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+  return isRecord(payload?.meta) && isRecord(payload.meta.agentMeta) ? payload.meta.agentMeta : undefined;
 }
 
 function fallbackMetadataFromPayload(payload: Record<string, unknown>): RuntimeFallbackMetadata | undefined {

@@ -1068,6 +1068,47 @@ describe('createOpenClawRuntimeProvider', () => {
     ]), expect.anything());
   });
 
+  it('does not resume fallback keys from strict diagnostic JSON', async () => {
+    const spawnProcess = vi.fn(() => ({ pid: 5151, unref: vi.fn() }));
+    const logDirectory = temporaryDirectory();
+    const logPath = `${logDirectory}/task.log`;
+    writeFileSync(logPath, JSON.stringify({
+      meta: {
+        agentMeta: {
+          fallbackSessionKey: 'agent:main:explicit:gateway-fallback-quoted',
+        },
+      },
+    }), 'utf8');
+    const provider = createOpenClawRuntimeProvider({
+      enabled: true,
+      command: 'openclaw',
+      agentId: 'main',
+      sessionKeyPrefix: 'rainrail',
+      timeoutSeconds: 900,
+      logDirectory,
+      spawnProcess,
+    });
+
+    await provider.resumeRun?.({
+      run: { id: 'agent:main:intended-session', provider: 'openclaw', status: 'stopped' },
+      task: {
+        id: 'agent_task_reirei-lab-rainrail_22',
+        title: 'OpenClaw runtime',
+        agentSessionId: 'agent:main:intended-session',
+        branchName: 'agent/reirei-lab-rainrail-22',
+        logPath,
+        resumeAttempts: [],
+      },
+      attemptId: 'agent_task_reirei-lab-rainrail_22_resume_01',
+      requestedBy: 'reirei-agent',
+    });
+
+    expect(spawnProcess).toHaveBeenCalledWith('openclaw', expect.arrayContaining([
+      '--session-key',
+      'agent:main:intended-session',
+    ]), expect.anything());
+  });
+
   it('handles asynchronous spawn errors instead of leaving them unobserved', async () => {
     const child = new EventEmitter() as EventEmitter & { pid: number; unref: () => void };
     child.pid = 6262;
@@ -1299,6 +1340,24 @@ describe('runtime task completion and resume helpers', () => {
     expect(readRuntimeRunCompletionFromLog(raw)).toMatchObject({
       status: 'running',
       summary: 'duplicate run is still active',
+    });
+  });
+
+  it('does not use appended diagnostic JSON fragments as runtime completions', () => {
+    const raw = [
+      JSON.stringify({
+        status: 'ok',
+        finalAssistantVisibleText: 'Outcome: implemented',
+        summary: 'real completion',
+      }),
+      'tool result quoted target log:',
+      JSON.stringify({ status: 'failed', summary: 'quoted diagnostic failure' }),
+    ].join('\n');
+
+    expect(readRuntimeRunCompletionFromLog(raw)).toMatchObject({
+      status: 'succeeded',
+      outcome: 'implemented',
+      summary: 'real completion',
     });
   });
 

@@ -789,6 +789,65 @@ describe('plugin runtime contract', () => {
     expect(runtimeReads).toBe(0);
   });
 
+  it('checks runtime:start capability before reading runtime provider resumeRun getters', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: {
+        id: 'delivery-denied-runtime-resume-provider-getter',
+        receivedAt: '2026-06-29T14:00:00.000Z',
+      },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'github://deliveries/delivery-denied-runtime-resume-provider-getter',
+      },
+    });
+    let runtimeReads = 0;
+    const runtime = {
+      runId: 'run-13',
+      now: () => new Date('2026-06-29T14:01:00.000Z'),
+      get runtime(): never {
+        runtimeReads += 1;
+        throw new Error('runtime provider should not be read before resume denial');
+      },
+    } satisfies RuntimeDispatcherContext;
+    const dispatcher = createRuntimeDispatcher({
+      workflows: [
+        defineWorkflowPlugin({
+          name: 'denied-runtime-resume-provider-getter-handler',
+          accepts: (candidate) => candidate.name === 'github.issue',
+          handle: (_handledEvent, context) =>
+            context.runtime.resumeRun?.({
+              run: { id: 'agent:main:existing-session', provider: 'openclaw', status: 'stopped' },
+              task: {
+                id: 'agent_task_reirei-lab-rainrail_22',
+                title: 'OpenClaw runtime',
+                agentSessionId: 'agent:main:existing-session',
+                branchName: 'agent/reirei-lab-rainrail-22',
+                logPath: 'var/agent-task-logs/task.log',
+                resumeAttempts: [],
+              },
+              attemptId: 'agent_task_reirei-lab-rainrail_22_resume_01',
+              requestedBy: 'denied-runtime-resume-provider-getter-handler',
+            }),
+        }),
+      ],
+      runtime,
+    });
+
+    const [result] = await dispatcher.dispatch(event);
+
+    expect(result).toMatchObject({
+      pluginName: 'denied-runtime-resume-provider-getter-handler',
+      eventId: 'github-webhook:delivery-denied-runtime-resume-provider-getter:github.issue',
+      status: 'rejected',
+    });
+    expect(runtimeReads).toBe(0);
+  });
+
   it('does not read unused runtime capability getters when creating workflow contexts', async () => {
     const event = createEventEnvelope({
       source: { type: 'github', name: 'github-webhook' },

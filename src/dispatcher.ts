@@ -437,6 +437,13 @@ function createGatedRuntimeProvider(
     configurable: true,
     enumerable: true,
     get() {
+      if (!policy.capabilities.has('runtime:start')) {
+        return (
+          request: Parameters<NonNullable<RuntimeProvider['resumeRun']>>[0],
+          context?: Parameters<NonNullable<RuntimeProvider['resumeRun']>>[1],
+        ) =>
+          callRuntimeResumeRun(options, policy, event, lifecycle, getRuntime, request, context?.signal);
+      }
       if (getRuntime().resumeRun === undefined) {
         return undefined;
       }

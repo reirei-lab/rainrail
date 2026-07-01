@@ -56,6 +56,37 @@ describe('agent timeline', () => {
     expect(extractRuntimeSessionId(log)).toBe('gateway-fallback-new');
   });
 
+  it('does not use appended diagnostic JSON fragments as session metadata', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'rainrail-diagnostic-session-id-timeline-'));
+    const logPath = join(directory, 'agent.log');
+    writeFileSync(logPath, [
+      JSON.stringify({
+        status: 'ok',
+        meta: { agentMeta: { sessionId: 'actual-session' } },
+      }),
+      'tool result quoted target log:',
+      '{"meta":{"agentMeta":{"sessionId":"old-session"}}}',
+    ].join('\n'), 'utf8');
+    writeFileSync(join(directory, 'actual-session.trajectory.jsonl'), [
+      JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:08:00.000Z', seq: 1 }),
+    ].join('\n'), 'utf8');
+    writeFileSync(join(directory, 'old-session.trajectory.jsonl'), [
+      JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:09:00.000Z', seq: 1 }),
+    ].join('\n'), 'utf8');
+
+    try {
+      const timeline = await readRuntimeTimeline(
+        { logPath, agentSessionId: 'agent:main:routing-key' },
+        { sessionsDirectory: directory },
+      );
+      expect(timeline.sessionId).toBe('actual-session');
+      expect(timeline.fallback).toBe(false);
+      expect(timeline.missing).toBe(false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('does not extract quoted agentMeta session ids from valid JSON logs without metadata', () => {
     expect(extractRuntimeSessionId(JSON.stringify({
       status: 'ok',
