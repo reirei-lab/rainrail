@@ -318,6 +318,33 @@ describe('agent timeline', () => {
     expect(extractRuntimeFallbackSessionId(log)).toBeUndefined();
   });
 
+  it('does not use old fallback markers outside the bounded session log tail', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'rainrail-bounded-session-log-timeline-'));
+    const sessionId = 'bounded-session-log-session';
+    const logPath = join(directory, 'agent.log');
+    writeFileSync(logPath, [
+      'EMBEDDED FALLBACK: Gateway timed out; running embedded agent with fresh session gateway-fallback-old-history',
+      'x'.repeat(2 * 1024 * 1024),
+    ].join('\n'), 'utf8');
+    writeFileSync(join(directory, `${sessionId}.trajectory.jsonl`), JSON.stringify({
+      type: 'tool.result',
+      ts: '2026-06-30T15:09:10.000Z',
+      data: { output: 'intended-session-output' },
+    }), 'utf8');
+
+    try {
+      const timeline = await readRuntimeTimeline(
+        { logPath, agentSessionId: sessionId },
+        { sessionsDirectory: directory },
+      );
+      expect(timeline.fallback).toBe(false);
+      expect(timeline.sessionId).toBe(sessionId);
+      expect(timeline.entries[0]!.excerpt).toContain('intended-session-output');
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('does not extract fallback markers from quoted JSON strings without completion JSON', () => {
     const log = JSON.stringify('EMBEDDED FALLBACK: Gateway timed out; running embedded agent with fresh session gateway-fallback-quoted');
 
@@ -1288,6 +1315,41 @@ describe('agent timeline', () => {
       expect(timeline.entries).toEqual([expect.objectContaining({ summary: 'session.started' })]);
     } finally {
       rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('ignores trajectory pointers outside the runtime sessions directory', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'rainrail-pointer-outside-root-'));
+    const directory = join(root, 'sessions');
+    const sessionId = 'outside-pointer-session';
+    const logPath = join(directory, 'agent.log');
+    const requestedFile = join(directory, `${sessionId}.trajectory.jsonl`);
+    const outsideFile = join(root, 'outside-secret-file');
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(logPath, JSON.stringify({
+      result: { status: 'ok', meta: { agentMeta: { sessionId } } },
+    }), 'utf8');
+    writeFileSync(join(directory, `${sessionId}.trajectory-path.json`), JSON.stringify({
+      traceSchema: 'openclaw-trajectory-pointer',
+      schemaVersion: 1,
+      sessionId,
+      runtimeFile: outsideFile,
+    }), 'utf8');
+    writeFileSync(requestedFile, [
+      JSON.stringify({ type: 'tool.result', ts: '2026-06-30T15:09:10.000Z', data: { output: 'safe trajectory' } }),
+    ].join('\n'), 'utf8');
+    writeFileSync(outsideFile, 'outside-secret-content', 'utf8');
+
+    try {
+      const jsonl = await readRuntimeJsonl(
+        { logPath, agentSessionId: sessionId },
+        { sessionsDirectory: directory },
+      );
+      expect(jsonl.trajectoryPath).toBe(requestedFile);
+      expect(jsonl.raw).toContain('safe trajectory');
+      expect(jsonl.raw).not.toContain('outside-secret-content');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 
@@ -2513,7 +2575,7 @@ describe('agent timeline', () => {
         data: {
           name: 'bash',
           status: 'completed',
-          output: 'WEBHOOK_SECRET=correct horse battery staple\nAPI_TOKEN=alpha beta gamma\napiKey=key with spaces',
+          output: 'WEBHOOK_SECRET=correct horse battery staple\nAPI_TOKEN=alpha beta gamma\napiKey=key with spaces\nprefix WEBHOOK_SECRET=prefix correct horse battery',
         },
       }),
     ].join('\n'));
@@ -2524,6 +2586,7 @@ describe('agent timeline', () => {
     expect(timeline[0]!.excerpt).not.toContain('horse battery');
     expect(timeline[0]!.excerpt).not.toContain('alpha beta');
     expect(timeline[0]!.excerpt).not.toContain('with spaces');
+    expect(timeline[0]!.excerpt).not.toContain('prefix correct');
   });
 
   it('classifies common commands into dashboard phases', () => {

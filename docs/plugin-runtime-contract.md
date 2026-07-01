@@ -139,6 +139,15 @@ top-level final text は payload text より優先して Outcome を解決し、
 resume helper は running pid を確認し、
 安定した resume attempt id を生成する。timeline reader は OpenClaw trajectory jsonl を読み、Codex activity 表示に
 必要な時刻、分類済み phase、redacted summary、status、redacted excerpt を返す。
+root package は OpenClaw runtime/timeline helper として `OpenClawRuntimeProviderOptions`、
+`OpenClawSpawnErrorEvent`、`RuntimeRunCompletion`、`RuntimeTimelinePhase`、
+`RuntimeTimelineEntry`、`RuntimeTimelineResult`、`RuntimeTimelineStatus`、
+`createAgentAssignmentRuntimeFromProvider`、`createOpenClawRuntimeProvider`、
+`startOpenClawRun`、`readRuntimeRunCompletionFromLog`、`runningRuntimeTaskPid`、
+`nextRuntimeResumeAttemptId`、`readRuntimeTimeline`、`readRuntimeTimelineStatus`、
+`readRuntimeJsonl`、`extractRuntimeSessionId`、`extractRuntimeFallbackSessionId`、
+`runtimeTrajectoryPathForSessionId`、`parseRuntimeTrajectoryTimeline`、
+`classifyRuntimeToolCall` を公開 API として re-export する。
 timeline/status/jsonl の session 解決は resume attempts を新しい順に読んだうえで、
 stdout `logPath` と対応する `stderrLogPath` または `.stderr.log` の embedded fallback marker も参照する。
 fallbackSessionKey metadata と fallback marker は種類で後から優先順位を変えず、log 探索順で最初に

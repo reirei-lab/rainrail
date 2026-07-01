@@ -1,7 +1,7 @@
 import { createReadStream } from 'node:fs';
-import { open, readFile, stat } from 'node:fs/promises';
+import { open, readFile, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { isAbsolute, join } from 'node:path';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 
 export type RuntimeTimelinePhase = '調査' | '準備' | '実装' | '確認' | '完了処理' | '実行' | string;
@@ -78,6 +78,7 @@ interface TrajectoryEvent {
 const excerptLength = 1200;
 const detailLength = 600;
 const maxJsonlBytes = 400 * 1024;
+const maxRuntimeLogBytes = 512 * 1024;
 const tailRedactionContextBytes = 64 * 1024;
 
 export async function readRuntimeTimeline(
@@ -336,7 +337,7 @@ async function readRuntimeSession(
       const allowCompletionResolution = !(index === 0 && logPaths.length > 1);
       let log: string;
       try {
-        log = await readFile(logPath, 'utf8');
+        log = await readRuntimeLogTail(logPath);
       } catch {
         continue;
       }
@@ -462,6 +463,7 @@ async function resolveRuntimeTrajectoryPathForSession(
       && pointer.sessionId === session.sessionId
       && typeof pointer.runtimeFile === 'string'
       && pointer.runtimeFile.trim() !== ''
+      && await isAllowedRuntimeTrajectoryPointerTarget(pointer.runtimeFile, options)
     ) {
       return pointer.runtimeFile;
     }
@@ -469,6 +471,38 @@ async function resolveRuntimeTrajectoryPathForSession(
     // Older OpenClaw runs store the trajectory directly beside the session file.
   }
   return directPath;
+}
+
+async function readRuntimeLogTail(path: string): Promise<string> {
+  const fileStat = await stat(path);
+  const start = Math.max(0, fileStat.size - maxRuntimeLogBytes);
+  const file = await open(path, 'r');
+  try {
+    const text = await readFileRange(file, start, fileStat.size - start);
+    if (start === 0) {
+      return text;
+    }
+    const newlineIndex = text.search(/[\n\r]/);
+    return newlineIndex === -1 ? text : text.slice(newlineIndex + 1);
+  } finally {
+    await file.close();
+  }
+}
+
+async function isAllowedRuntimeTrajectoryPointerTarget(
+  runtimeFile: string,
+  options: RuntimeTimelineReadOptions,
+): Promise<boolean> {
+  if (!isAbsolute(runtimeFile)) {
+    return false;
+  }
+  const sessionsDirectory = runtimeSessionsDirectory(options);
+  const [root, target] = await Promise.all([
+    realpath(sessionsDirectory).catch(() => resolve(sessionsDirectory)),
+    realpath(runtimeFile).catch(() => resolve(runtimeFile)),
+  ]);
+  const relativeTarget = relative(root, target);
+  return relativeTarget === '' || (!relativeTarget.startsWith('..') && !isAbsolute(relativeTarget));
 }
 
 async function readTailText(path: string, maxBytes: number): Promise<{ text: string; truncated: boolean }> {
@@ -804,6 +838,8 @@ function redactSensitiveText(value: string): string {
     .replace(/(^|[\n\r])(\s*[A-Za-z0-9_-]*(?:set[-_]?cookie|cookie)[A-Za-z0-9_-]*\s*[:=]\s*)(?!\[redacted)[^\n\r]*/gi, '$1$2[redacted]')
     .replace(/(^|[\n\r])(\s*[A-Za-z0-9_-]*(?:password|passphrase)[A-Za-z0-9_-]*\s*[:=]\s*)(?!\[redacted)[^\n\r]*/gi, '$1$2[redacted]')
     .replace(/(^|[\n\r])(\s*[A-Za-z0-9_-]*(?:api[-_]?key|token|secret)[A-Za-z0-9_-]*\s*=\s*)(?!\[redacted)[^\n\r]*/gi, '$1$2[redacted]')
+    .replace(/(^|[\n\r]|\s)([A-Za-z0-9_-]*(?:password|passphrase)[A-Za-z0-9_-]*\s*[:=])(?!\s*\[redacted)(\s*)(?!["'])[\s\S]*?(?=(?:\s+[A-Za-z0-9_-]*(?:password|passphrase|api[-_]?key|token|secret|authorization|set[-_]?cookie|cookie)[A-Za-z0-9_-]*\s*[:=])|(?:\s+(?:Authorization|Cookie|Set-Cookie):)|[\n\r]|$)/gi, '$1$2$3[redacted]')
+    .replace(/(^|[\n\r]|\s)([A-Za-z0-9_-]*(?:api[-_]?key|token|secret)[A-Za-z0-9_-]*\s*=)(?!\s*\[redacted)(\s*)(?!["'])[\s\S]*?(?=(?:\s+[A-Za-z0-9_-]*(?:password|passphrase|api[-_]?key|token|secret|authorization|set[-_]?cookie|cookie)[A-Za-z0-9_-]*\s*[:=])|(?:\s+(?:Authorization|Cookie|Set-Cookie):)|[\n\r]|$)/gi, '$1$2$3[redacted]')
     .replace(/(^|[\n\r])(\s*(?:(?:\/\/[^\s:=]+\/)?:)?_auth\s*[:=]\s*)(?!\[redacted)[^\s'",}]+/gi, '$1$2[redacted]')
     .replace(/(^|\s)((?!(?:no_proxy)\b)[A-Za-z0-9_-]*(?:https?|all)_proxy[A-Za-z0-9_-]*\s*[:=]\s*)(?:"[^"\s]*:[^"@\s]+@[^"\s]+"|'[^'\s]*:[^'@\s]+@[^'\s]+'|[^\s'"]*:[^\s'"]+@[^\s'"]+)/gi, '$1$2[redacted-proxy]')
     .replace(/("[^"]*(?:_auth|token|secret|password|api[_-]?key|private[_-]?key|authorization|set-cookie|cookie)[^"]*"\s*:\s*)"(?:(?:\\.)|[^"\\])*"/gi, '$1"[redacted]"')
