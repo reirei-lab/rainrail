@@ -1,4 +1,4 @@
-import { open, readFile, realpath, stat } from 'node:fs/promises';
+import { lstat, open, readFile, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 
@@ -498,6 +498,9 @@ async function isAllowedRuntimeTrajectoryPointerTarget(
 }
 
 async function readTailText(path: string, maxBytes: number): Promise<{ text: string; truncated: boolean }> {
+  if ((await lstat(path)).isSymbolicLink()) {
+    throw new Error(`runtime trajectory path is a symlink: ${path}`);
+  }
   const fileStat = await stat(path);
   const start = Math.max(0, fileStat.size - maxBytes);
   const file = await open(path, 'r');

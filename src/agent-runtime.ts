@@ -1,7 +1,7 @@
-import { chmodSync, closeSync, constants, fchmodSync, mkdirSync, openSync, readFileSync, readSync, statSync } from 'node:fs';
+import { chmodSync, closeSync, constants, fchmodSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, statSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { join } from 'node:path';
+import { join, parse, resolve } from 'node:path';
 
 import type { AgentAssignmentRuntime } from './agent-assignment.js';
 import type { RuntimeAgentTask, RuntimeProvider, RuntimeProviderContext, RuntimeRun, RuntimeRunRequest, RuntimeRunStatus } from './runtime-provider.js';
@@ -264,13 +264,13 @@ function redactRuntimeCompletionText(value: string | undefined): string | undefi
     .replace(/\b((?:[A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSPHRASE|API[-_]?KEY)|api[-_]?key|token|secret|password|passphrase|_auth)\s*[:=]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\n\r]*)/gi, '$1[redacted]');
 }
 
-function compactionFailureFromLog(raw: string): RuntimeRunCompletion | undefined {
+function compactionFailureFromLog(raw: string, summarySource = raw): RuntimeRunCompletion | undefined {
   if (!/CLI transcript compaction failed/i.test(raw)) {
     return undefined;
   }
   return {
     status: 'compaction_failed',
-    summary: lastNonEmptyLine(raw),
+    summary: redactRuntimeCompletionText(lastNonEmptyLine(summarySource)),
     timedOut: /timed out/i.test(raw),
     timeoutPhase: 'compaction',
   };
@@ -300,7 +300,7 @@ function compactionFailureAfterLatestCompletionJson(raw: string): RuntimeRunComp
       continue;
     }
     if (index > latestCompletionEnd) {
-      latestFailure = compactionFailureFromLog(match[0]);
+      latestFailure = compactionFailureFromLog(match[0], compactionFailureSummarySource(raw, match.index ?? 0, match[0]));
     }
   }
   return latestFailure;
@@ -318,9 +318,27 @@ function compactionFailureOutsideJsonRanges(raw: string): RuntimeRunCompletion |
     if (ignoredRanges.some((range) => index >= range.start && index <= range.end)) {
       continue;
     }
-    latestFailure = compactionFailureFromLog(match[0]);
+    latestFailure = compactionFailureFromLog(match[0], compactionFailureSummarySource(raw, match.index ?? 0, match[0]));
   }
   return latestFailure;
+}
+
+function compactionFailureSummarySource(raw: string, matchIndex: number, matchLine: string): string {
+  const redactedMatchLine = redactRuntimeCompletionText(matchLine) ?? matchLine;
+  if (redactedMatchLine !== matchLine) {
+    return redactedMatchLine;
+  }
+  const followingLines = raw.slice(matchIndex + matchLine.length).split(/\r?\n/);
+  for (const line of followingLines) {
+    if (line.trim() === '') {
+      continue;
+    }
+    const redactedLine = redactRuntimeCompletionText(line) ?? line;
+    if (redactedLine !== line) {
+      return redactedLine;
+    }
+  }
+  return matchLine;
 }
 
 export function runningRuntimeTaskPid(task: RuntimeAgentTask, isRunning: (pid: number) => boolean): number | undefined {
@@ -885,8 +903,30 @@ function defaultSpawnProcess(command: string, args: string[], options: { detache
 }
 
 function ensurePrivateLogDirectory(directory: string): void {
+  assertNoSymlinkPathComponents(directory);
   mkdirSync(directory, { recursive: true, mode: 0o700 });
+  assertNoSymlinkPathComponents(directory);
   chmodSync(directory, 0o700);
+}
+
+function assertNoSymlinkPathComponents(directory: string): void {
+  const absolutePath = resolve(directory);
+  const root = parse(absolutePath).root;
+  const segments = absolutePath.slice(root.length).split(/[\\/]+/).filter((segment) => segment !== '');
+  let current = root;
+  for (const segment of segments) {
+    current = join(current, segment);
+    try {
+      if (lstatSync(current).isSymbolicLink()) {
+        throw new Error(`runtime log directory path contains a symlink: ${current}`);
+      }
+    } catch (error) {
+      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+        return;
+      }
+      throw error;
+    }
+  }
 }
 
 function openPrivateLogFile(path: string, flags: 'a' | 'w'): number {
