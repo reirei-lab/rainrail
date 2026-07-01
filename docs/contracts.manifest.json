@@ -29,6 +29,7 @@
         "src/config.test.ts",
         "src/github-auth.test.ts",
         "src/github-provider.test.ts",
+        "src/githubPullRequest.test.ts",
         "src/github-rate-limit.test.ts"
       ],
       "publicExports": [
