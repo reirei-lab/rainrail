@@ -125,7 +125,7 @@ describe('agent timeline', () => {
     const logPath = join(directory, 'agent.log');
     writeFileSync(logPath, [
       'issue body mentioned gateway-fallback-example but no runtime fallback happened',
-      JSON.stringify({ result: { meta: { agentMeta: { sessionId: 'intended-session' } } } }),
+      JSON.stringify({ result: { status: 'ok', meta: { agentMeta: { sessionId: 'intended-session' } } } }),
     ].join('\n'), 'utf8');
     writeFileSync(join(directory, 'intended-session.trajectory.jsonl'), [
       JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:08:00.000Z', seq: 1 }),
@@ -295,6 +295,37 @@ describe('agent timeline', () => {
     writeFileSync(logPath, [
       'tool result quoted target log:',
       '{"meta":{"agentMeta":{"fallbackSessionKey":"agent:main:explicit:gateway-fallback-quoted"}}}',
+    ].join('\n'), 'utf8');
+    writeFileSync(join(directory, 'sessions.json'), JSON.stringify({
+      'agent:main:original-session': { sessionId: 'original-session' },
+      'agent:main:explicit:gateway-fallback-quoted': { sessionId: 'quoted-fallback-session' },
+    }), 'utf8');
+    writeFileSync(join(directory, 'original-session.trajectory.jsonl'), [
+      JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:08:00.000Z', seq: 1 }),
+    ].join('\n'), 'utf8');
+    writeFileSync(join(directory, 'quoted-fallback-session.trajectory.jsonl'), [
+      JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:09:00.000Z', seq: 1 }),
+    ].join('\n'), 'utf8');
+
+    try {
+      const timeline = await readRuntimeTimeline(
+        { logPath, agentSessionId: 'agent:main:original-session' },
+        { sessionsDirectory: directory },
+      );
+      expect(timeline.sessionId).toBe('original-session');
+      expect(timeline.fallback).toBe(false);
+      expect(timeline.missing).toBe(false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('does not use result-only diagnostic JSON fragments as fallback metadata', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'rainrail-result-diagnostic-fallback-key-timeline-'));
+    const logPath = join(directory, 'agent.log');
+    writeFileSync(logPath, [
+      'tool result quoted target log:',
+      '{"result":{"meta":{"agentMeta":{"fallbackSessionKey":"agent:main:explicit:gateway-fallback-quoted"}}}}',
     ].join('\n'), 'utf8');
     writeFileSync(join(directory, 'sessions.json'), JSON.stringify({
       'agent:main:original-session': { sessionId: 'original-session' },
@@ -954,6 +985,27 @@ describe('agent timeline', () => {
 
     expect(timeline[0]!.detail).toContain('--ftp-account [redacted-credential]');
     expect(timeline[0]!.detail).not.toContain('acct-secret');
+  });
+
+  it('redacts curl proxy URLs with inline credentials', () => {
+    const timeline = parseRuntimeTrajectoryTimeline([
+      JSON.stringify({
+        type: 'tool.call',
+        ts: '2026-06-30T15:09:05.000Z',
+        seq: 1,
+        data: {
+          name: 'bash',
+          arguments: {
+            command: 'curl -x user:proxy-secret@proxy.example --preproxy pre:pre-secret@preproxy.example https://example.com',
+          },
+        },
+      }),
+    ].join('\n'));
+
+    expect(timeline[0]!.detail).toContain('-x [redacted-proxy]');
+    expect(timeline[0]!.detail).toContain('--preproxy [redacted-proxy]');
+    expect(timeline[0]!.detail).not.toContain('proxy-secret');
+    expect(timeline[0]!.detail).not.toContain('pre-secret');
   });
 
   it('classifies common commands into dashboard phases', () => {

@@ -546,6 +546,8 @@ function redactSensitiveText(value: string): string {
     .replace(/(^|\s)(-[A-GI-Za-gi-z]*?b)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s'"]+)/g, '$1$2[redacted-cookie]')
     .replace(/(^|\s)(-[uUE])(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s'"]+)/g, '$1$2[redacted-credential]')
     .replace(/(^|\s)(-b)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s'"]+)/g, '$1$2[redacted-cookie]')
+    .replace(/(^|\s)(-x|--proxy|--preproxy)(=|\s+)(?:"[^"\s]*:[^"@\s]+@[^"\s]+"|'[^'\s]*:[^'@\s]+@[^'\s]+'|[^\s'"]*:[^\s'"]+@[^\s'"]+)/g, '$1$2$3[redacted-proxy]')
+    .replace(/(^|\s)(-x)(?:"[^"\s]*:[^"@\s]+@[^"\s]+"|'[^'\s]*:[^'@\s]+@[^'\s]+'|[^\s'"]*:[^\s'"]+@[^\s'"]+)/g, '$1$2[redacted-proxy]')
     .replace(/(^|\s)(-u|--user|-U|--proxy-user|--oauth2-bearer|--pass|--proxy-pass|--tlspassword|--proxy-tlspassword|--ftp-account|-E|--cert|--proxy-cert)(=|\s+)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s'"]+)/g, '$1$2$3[redacted-credential]')
     .replace(/(^|\s)(-b|--cookie)(=|\s+)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s'"]+)/g, '$1$2$3[redacted-cookie]')
     .replace(/\bgithub_pat_[A-Za-z0-9_]+\b/g, '[redacted-token]')
@@ -673,7 +675,6 @@ function isTrustedRuntimeCompletionPayload(payload: unknown): payload is Record<
   return payloadHasCompletionText(result)
     || isRecord(result?.completion)
     || isRecord(result?.executionTrace)
-    || (result !== undefined && runtimeAgentMetaFromPayload(result) !== undefined)
     || (stringField(result, 'status') !== undefined && runtimeAgentMetaFromPayload(result) !== undefined);
 }
 
