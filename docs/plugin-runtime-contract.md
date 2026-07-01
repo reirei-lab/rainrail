@@ -208,6 +208,36 @@ runtime action の戻り値を handler 内だけで扱う。互換 API の
 capabilities object 全体を plain object にコピーせず、`dispatchAgent` だけを wrapper で
 差し替えるため、provider 固有の prototype method や non-enumerable helper を保持する。
 
+## PR lifecycle workflow
+
+PR lifecycle workflow は GitHub の normalized PR/check/review/status event を
+review request、change request handoff、Codex review handoff、failed check
+handoff、base push conflict check、auto-merge の各 workflow に分ける。
+実 GitHub API は `GitHubPullRequestProvider` に閉じ込め、handler は
+`PullRequestReviewTarget`、`PullRequestCheck`、`PullRequestReview`、
+`PullRequestReviewComment` の正規化済み状態だけを見る。
+merge は `PullRequestMergeMethod` を明示的に扱い、`merge`、`squash`、`rebase`
+以外の値は provider 側で拒否する。
+
+agent task handoff は `AgentTaskIssue`、`AgentTaskClaim`、`AgentTask`、
+`AgentTaskHandoffClient` で表す。Project item を Todo に戻す adapter は
+`createTaskProviderPullRequestCommentHandoff` で、Project claim の release と
+issue comment 作成を同じ handoff 境界で扱う。個別 workflow の options は
+`ReviewRequestWorkflowOptions`、`TodoHandoffWorkflowOptions`、
+`ChangeRequestWorkflowOptions`、`CodexReviewWorkflowOptions`、
+`CheckFailureWorkflowOptions`、`ConflictCheckWorkflowOptions`、
+`AutoMergeWorkflowOptions` で、handler の戻り値は `WorkflowResult` にそろえる。
+
+packaged workflow factory は `createReviewRequestWorkflow`、
+`createChangeRequestWorkflow`、`createCodexReviewWorkflow`、
+`createCheckFailureWorkflow`、`createConflictCheckWorkflow`、
+`createAutoMergeWorkflow` を公開する。外部 API なしの focused test では
+`handleReviewRequestEvent`、`handleChangeRequestEvent`、
+`handleCodexReviewEvent`、`handleCheckFailureEvent`、
+`handleConflictCheckEvent`、`handleAutoMergeEvent` を直接呼べる。
+check rollup 判定は `allChecksPassed` に集約し、`success` に加えて
+`neutral` / `skipped` の完了も成功扱いにする。
+
 ## Plugin loader と local handler
 
 `createPluginLoader` は packaged Workflow plugin と local handler を同じ

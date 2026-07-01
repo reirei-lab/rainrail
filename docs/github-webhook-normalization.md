@@ -17,7 +17,7 @@ workflow plugin が受け取る `event.payload` は Rainrail 側で安定させ�
 - `issues.assigned` / `pull_request.assigned` では、対象 assignee を `event.payload.assignee` に集約する。
 - `pull_request.review_requested` / `pull_request.review_request_removed` では、対象 reviewer/team を `event.payload.requestedReviewer` / `event.payload.requestedTeam` に集約する。
 - `issue_comment` が pull request conversation comment の場合は、`payload.issue.pull_request` marker を見て `event.payload.resource.type` と `event.subject.type` を `pull_request` にする。
-- `pull_request.closed` では、通常 close と merge を区別できるように `event.payload.resource.merged` を残す。draft 状態と synchronize の before/after SHA も pull request resource に残す。
+- `pull_request.closed` では、通常 close と merge を区別できるように `event.payload.resource.merged` を残す。draft 状態と synchronize の before/after SHA、fork 判定に必要な `headRepository` も pull request resource に残す。
 - `pull_request_review` は `pull_request` より `review` を優先して `event.payload.resource` にし、関連 PR を `event.payload.pullRequest` に残す。
 - `pull_request_review_thread` は `thread.node_id` を resource id とし、解決状態や `thread.comments` 由来の対象位置を残す。関連 PR は `event.payload.pullRequest` に残す。
 - `check_run` / `check_suite` / `workflow_run` に紐づく PR は `event.payload.pullRequests` に残す。

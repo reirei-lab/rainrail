@@ -124,6 +124,37 @@ describe('handleAutoMergeEvent', () => {
     expect(merges).toEqual([{ repository: 'reirei-lab/rainrail', number: 44, mergeMethod: 'squash', sha: 'abc123' }]);
   });
 
+  it('re-evaluates auto-merge after a skipped check completes the passing rollup', async () => {
+    const merges: Array<{ repository: string; number: number; mergeMethod: string; sha?: string }> = [];
+
+    const result = await handleAutoMergeEvent(checkRunEvent({ conclusion: 'skipped' }), {
+      agentLogin: 'reirei-agent',
+      reviewerLogin: 'hiragram',
+      branchPrefix: 'agent/',
+      mergeMethod: 'squash',
+      targetRepositories: ['reirei-lab/rainrail'],
+      pullRequests: {
+        async getPullRequest() {
+          const target = pullRequest();
+          delete target.reviewDecision;
+          return target;
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          throw new Error('not used');
+        },
+        async mergePullRequest(input) {
+          merges.push(input);
+        },
+      },
+    });
+
+    expect(result.reason).toBe('pull_request_merged');
+    expect(merges).toEqual([{ repository: 'reirei-lab/rainrail', number: 44, mergeMethod: 'squash', sha: 'abc123' }]);
+  });
+
   it('uses only approvals for the current pull request head', async () => {
     let mergeCount = 0;
 

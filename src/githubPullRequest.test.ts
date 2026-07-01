@@ -208,6 +208,24 @@ describe('createGitHubPullRequestProvider', () => {
 
     expect(mergeBody).toEqual({ merge_method: 'squash', sha: 'abc123' });
   });
+
+  it('rejects unsupported merge methods instead of defaulting to squash', async () => {
+    const fetchImpl = vi.fn(async () => {
+      throw new Error('merge request should not be sent');
+    });
+    const provider = createGitHubPullRequestProvider({
+      auth: { getAuthToken: async () => undefined },
+      fetch: fetchImpl as unknown as typeof fetch,
+    });
+
+    await expect(provider.mergePullRequest?.({
+      repository: 'reirei-lab/rainrail',
+      number: 44,
+      mergeMethod: 'MERGE' as 'merge',
+      sha: 'abc123',
+    })).rejects.toThrow('Unsupported GitHub pull request merge method');
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
 });
 
 function githubPullRequest(overrides: Record<string, unknown> = {}) {

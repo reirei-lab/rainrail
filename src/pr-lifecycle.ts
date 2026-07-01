@@ -297,6 +297,9 @@ export async function handleChangeRequestEvent(
   if (options.enabled === false) return { handled: false, reason: 'project issue selection is not configured' };
   const target = changeRequestTargetFromEvent(event);
   if (target === undefined) return { handled: false, reason: 'event is not a pull request change request' };
+  if (target.headRepository !== undefined && normalize(target.headRepository) !== normalize(target.repository)) {
+    return { handled: false, reason: 'pull request head repository does not match the base repository', pullRequestNumber: target.number, branchName: target.branchName };
+  }
   const task = await options.tasks.getAgentTaskByBranchName(target.branchName);
   if (task === undefined) {
     return { handled: false, reason: 'no agent task matched the PR branch', pullRequestNumber: target.number, branchName: target.branchName };
@@ -557,13 +560,13 @@ function taskContext(context: PluginRuntimeContext | undefined): TaskProviderCon
 
 function pullRequestCandidateFromEvent(event: RainrailEventEnvelope): { repository: string; number?: number; headRefName?: string; headSha?: string } | undefined {
   const payload = recordValue(event.payload);
-  if (event.name === 'github.check_run' && payload.action === 'completed' && payload.status === 'completed' && payload.conclusion === 'success') {
+  if (event.name === 'github.check_run' && isPassingCompletedCheckRun(payload)) {
     return candidateFromPullRequests(payload, stringValue(recordValue(payload.resource).headSha));
   }
   if (event.name === 'github.status' && commitStatusState(payload) === 'success') {
     return headCandidateFromStatus(payload);
   }
-  if (event.name === 'github.pull_request' && payload.action === 'review_requested') {
+  if (event.name === 'github.pull_request' && (payload.action === 'review_requested' || payload.action === 'ready_for_review')) {
     const resource = recordValue(payload.resource);
     const repository = repositoryName(payload);
     const number = numberValue(resource.number);
@@ -578,6 +581,15 @@ function pullRequestCandidateFromEvent(event: RainrailEventEnvelope): { reposito
   return undefined;
 }
 
+function isPassingCompletedCheckRun(payload: Record<string, unknown>): boolean {
+  const resource = recordValue(payload.resource);
+  const status = normalize(payload.status ?? resource.status);
+  const conclusion = normalize(payload.conclusion ?? resource.conclusion);
+  return payload.action === 'completed'
+    && status === 'completed'
+    && ['success', 'neutral', 'skipped'].includes(conclusion);
+}
+
 function candidateFromPullRequests(payload: Record<string, unknown>, headSha: string | undefined): { repository: string; number?: number; headRefName?: string; headSha?: string } | undefined {
   const repository = repositoryName(payload);
   if (repository === undefined) return undefined;
@@ -590,7 +602,7 @@ function candidateFromPullRequests(payload: Record<string, unknown>, headSha: st
   };
 }
 
-function changeRequestTargetFromEvent(event: RainrailEventEnvelope): { repository: string; number: number; branchName: string; reviewId?: number; reviewUrl?: string; reviewBody?: string } | undefined {
+function changeRequestTargetFromEvent(event: RainrailEventEnvelope): { repository: string; number: number; branchName: string; headRepository?: string; reviewId?: number; reviewUrl?: string; reviewBody?: string } | undefined {
   const payload = recordValue(event.payload);
   if (event.name !== 'github.review' || payload.event !== 'pull_request_review' || payload.action !== 'submitted') return undefined;
   const review = recordValue(payload.review);
@@ -604,6 +616,7 @@ function changeRequestTargetFromEvent(event: RainrailEventEnvelope): { repositor
     repository,
     number,
     branchName,
+    ...optionalString('headRepository', stringValue(pullRequest.headRepository ?? pullRequest.headRepo)),
     ...optionalNumber('reviewId', numberValue(review.id ?? recordValue(payload.resource).id)),
     ...optionalString('reviewUrl', stringValue(review.url ?? recordValue(payload.resource).url)),
     ...optionalString('reviewBody', stringValue(review.body ?? recordValue(payload.resource).body)),

@@ -47,6 +47,19 @@ describe('handleChangeRequestEvent', () => {
     expect(updates).toEqual([]);
   });
 
+  it('does not hand off a task for a fork pull request that only matches the branch name', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+    const result = await handleChangeRequestEvent(reviewEvent({
+      state: 'changes_requested',
+      headRepository: 'external/fork',
+    }), {
+      tasks: handoffRecorder({ updates }),
+    });
+
+    expect(result.reason).toBe('pull request head repository does not match the base repository');
+    expect(updates).toEqual([]);
+  });
+
   it('releases the project issue before reporting Todo from the task provider handoff adapter', async () => {
     const calls: string[] = [];
     const releases: unknown[] = [];

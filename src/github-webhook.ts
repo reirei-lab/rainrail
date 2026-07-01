@@ -386,6 +386,7 @@ export interface NormalizedGitHubResource {
   context?: string;
   url?: string;
   headRef?: string;
+  headRepository?: string;
   headSha?: string;
   baseRef?: string;
   baseSha?: string;
@@ -1408,6 +1409,7 @@ function resourceFromPullRequest(
     ...optionalStringProperty('url', stringField(pullRequest, 'html_url')),
     ...optionalStringProperty('author', stringField(recordField(pullRequest, 'user'), 'login')),
     ...optionalStringProperty('headRef', stringField(head, 'ref')),
+    ...optionalStringProperty('headRepository', stringField(recordField(head, 'repo'), 'full_name')),
     ...optionalStringProperty('beforeSha', stringField(payload, 'before')),
     ...optionalStringProperty('headSha', stringField(payload, 'after') ?? stringField(head, 'sha')),
     ...optionalStringProperty('baseRef', stringField(base, 'ref')),

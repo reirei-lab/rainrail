@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { handleReviewRequestEvent } from './pr-lifecycle.js';
-import { checkRunEvent, pullRequest, statusEvent } from './pr-lifecycle-test-helpers.js';
+import { checkRunEvent, pullRequest, pullRequestEvent, statusEvent } from './pr-lifecycle-test-helpers.js';
 
 describe('handleReviewRequestEvent', () => {
   it('requests a review for an agent PR when all checks pass', async () => {
@@ -25,6 +25,58 @@ describe('handleReviewRequestEvent', () => {
     });
 
     expect(result).toMatchObject({ handled: true, reason: 'review_requested' });
+    expect(reviewRequests).toEqual([
+      { repository: 'reirei-lab/rainrail', number: 44, reviewerLogin: 'hiragram' },
+    ]);
+  });
+
+  it('requests a review when the final check completes with a neutral conclusion', async () => {
+    const reviewRequests: Array<{ repository: string; number: number; reviewerLogin: string }> = [];
+
+    const result = await handleReviewRequestEvent(checkRunEvent({ conclusion: 'neutral' }), {
+      agentLogin: 'reirei-agent',
+      reviewerLogin: 'hiragram',
+      branchPrefix: 'agent/',
+      pullRequests: {
+        async getPullRequest(input) {
+          return pullRequest({ ...input, reviews: [] });
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview(input) {
+          reviewRequests.push(input);
+        },
+      },
+    });
+
+    expect(result.reason).toBe('review_requested');
+    expect(reviewRequests).toEqual([
+      { repository: 'reirei-lab/rainrail', number: 44, reviewerLogin: 'hiragram' },
+    ]);
+  });
+
+  it('re-evaluates review requests when a draft PR becomes ready for review', async () => {
+    const reviewRequests: Array<{ repository: string; number: number; reviewerLogin: string }> = [];
+
+    const result = await handleReviewRequestEvent(pullRequestEvent({ action: 'ready_for_review' }), {
+      agentLogin: 'reirei-agent',
+      reviewerLogin: 'hiragram',
+      branchPrefix: 'agent/',
+      pullRequests: {
+        async getPullRequest(input) {
+          return pullRequest({ ...input, reviews: [] });
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview(input) {
+          reviewRequests.push(input);
+        },
+      },
+    });
+
+    expect(result.reason).toBe('review_requested');
     expect(reviewRequests).toEqual([
       { repository: 'reirei-lab/rainrail', number: 44, reviewerLogin: 'hiragram' },
     ]);

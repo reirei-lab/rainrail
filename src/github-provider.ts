@@ -558,7 +558,8 @@ function reviewCommentFromPayload(value: GitHubReviewCommentResponse): PullReque
 }
 
 function mergeMethod(value: PullRequestMergeMethod): string {
-  return ['merge', 'squash', 'rebase'].includes(value) ? value : 'squash';
+  if (value === 'merge' || value === 'squash' || value === 'rebase') return value;
+  throw new Error(`Unsupported GitHub pull request merge method: ${String(value)}`);
 }
 
 async function getDefaultGitHubAuthToken(
