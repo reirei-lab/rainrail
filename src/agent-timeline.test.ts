@@ -19,6 +19,13 @@ describe('agent timeline', () => {
     }))).toBe('4920eb13-b75f-4680-8b21-54f40262d2ba');
   });
 
+  it('extracts result-side session metadata when top-level status marks a completion', () => {
+    expect(extractRuntimeSessionId(JSON.stringify({
+      status: 'ok',
+      result: { meta: { agentMeta: { sessionId: 'result-side-session' } } },
+    }))).toBe('result-side-session');
+  });
+
   it('extracts OpenClaw session ids from top-level JSON metadata without scanning quoted payload text', () => {
     expect(extractRuntimeSessionId(JSON.stringify({
       status: 'ok',
@@ -599,6 +606,39 @@ describe('agent timeline', () => {
         { sessionsDirectory: directory },
       );
       expect(timeline.sessionId).toBe('original-session');
+      expect(timeline.fallback).toBe(false);
+      expect(timeline.missing).toBe(false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('continues session id lookup after the latest normal completion clears fallback', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'rainrail-clear-fallback-keep-session-lookup-timeline-'));
+    const startLogPath = join(directory, 'agent.log');
+    const resumeLogPath = join(directory, 'resume-1.log');
+    writeFileSync(startLogPath, JSON.stringify({
+      status: 'ok',
+      meta: { agentMeta: { sessionId: 'actual-session' } },
+    }), 'utf8');
+    writeFileSync(resumeLogPath, JSON.stringify({
+      status: 'ok',
+      finalAssistantVisibleText: 'Outcome: implemented',
+    }), 'utf8');
+    writeFileSync(join(directory, 'actual-session.trajectory.jsonl'), [
+      JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:08:00.000Z', seq: 1 }),
+    ].join('\n'), 'utf8');
+
+    try {
+      const timeline = await readRuntimeTimeline(
+        {
+          logPath: startLogPath,
+          agentSessionId: 'agent:main:routing-key',
+          resumeAttempts: [{ logPath: resumeLogPath }],
+        },
+        { sessionsDirectory: directory },
+      );
+      expect(timeline.sessionId).toBe('actual-session');
       expect(timeline.fallback).toBe(false);
       expect(timeline.missing).toBe(false);
     } finally {
@@ -1250,6 +1290,47 @@ describe('agent timeline', () => {
     expect(timeline[1]!.excerpt).not.toContain('result-token-secret');
   });
 
+  it('redacts sensitive JSON keys with array and object values', () => {
+    const timeline = parseRuntimeTrajectoryTimeline([
+      JSON.stringify({
+        type: 'tool.result',
+        ts: '2026-06-30T15:09:10.000Z',
+        seq: 1,
+        data: {
+          name: 'bash',
+          status: 'completed',
+          output: '{"tokens":["opaque-session-token"],"apiKeys":{"primary":"live-secret"},"safe":"visible"}',
+        },
+      }),
+    ].join('\n'));
+
+    expect(timeline[0]!.excerpt).toContain('"tokens":"[redacted]"');
+    expect(timeline[0]!.excerpt).toContain('"apiKeys":"[redacted]"');
+    expect(timeline[0]!.excerpt).toContain('"safe":"visible"');
+    expect(timeline[0]!.excerpt).not.toContain('opaque-session-token');
+    expect(timeline[0]!.excerpt).not.toContain('live-secret');
+  });
+
+  it('redacts sensitive keys inside escaped JSON strings', () => {
+    const timeline = parseRuntimeTrajectoryTimeline([
+      JSON.stringify({
+        type: 'tool.result',
+        ts: '2026-06-30T15:09:10.000Z',
+        seq: 1,
+        data: {
+          name: 'bash',
+          status: 'completed',
+          output: String.raw`escaped {\"token\":\"opaque-session-token\",\"apiKeys\":[\"live-secret\"]}`,
+        },
+      }),
+    ].join('\n'));
+
+    expect(timeline[0]!.excerpt).toContain(String.raw`\"token\":\"[redacted]\"`);
+    expect(timeline[0]!.excerpt).toContain(String.raw`\"apiKeys\":[redacted]`);
+    expect(timeline[0]!.excerpt).not.toContain('opaque-session-token');
+    expect(timeline[0]!.excerpt).not.toContain('live-secret');
+  });
+
   it('redacts curl ftp account credentials', () => {
     const timeline = parseRuntimeTrajectoryTimeline([
       JSON.stringify({
@@ -1338,6 +1419,25 @@ describe('agent timeline', () => {
     expect(timeline[0]!.excerpt).not.toContain('dXNlcjpwYXNz');
     expect(timeline[0]!.excerpt).not.toContain('username="u"');
     expect(timeline[0]!.excerpt).not.toContain('response="secret"');
+  });
+
+  it('redacts full AWS4 authorization assignment values', () => {
+    const timeline = parseRuntimeTrajectoryTimeline([
+      JSON.stringify({
+        type: 'tool.result',
+        ts: '2026-06-30T15:09:10.000Z',
+        seq: 1,
+        data: {
+          name: 'bash',
+          status: 'completed',
+          output: 'AUTHORIZATION=AWS4-HMAC-SHA256 Credential=AKIA/20260701/us-east-1/s3/aws4_request, Signature=aws4-secret',
+        },
+      }),
+    ].join('\n'));
+
+    expect(timeline[0]!.excerpt).toContain('AUTHORIZATION=[redacted]');
+    expect(timeline[0]!.excerpt).not.toContain('Credential=AKIA');
+    expect(timeline[0]!.excerpt).not.toContain('Signature=aws4-secret');
   });
 
   it('classifies common commands into dashboard phases', () => {

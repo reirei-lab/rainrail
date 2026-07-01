@@ -271,7 +271,8 @@ function compactionFailureAfterLatestCompletionJson(raw: string): RuntimeRunComp
   }
   let latestFailure: RuntimeRunCompletion | undefined;
   for (const match of raw.matchAll(/[^\r\n]*CLI transcript compaction failed[^\r\n]*/gi)) {
-    const index = match.index ?? -1;
+    const phraseOffset = match[0].toLowerCase().indexOf('cli transcript compaction failed');
+    const index = (match.index ?? -1) + phraseOffset;
     if (jsonRanges.some((range) => index >= range.start && index <= range.end)) {
       continue;
     }

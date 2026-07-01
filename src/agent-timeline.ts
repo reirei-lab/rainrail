@@ -267,6 +267,7 @@ async function readRuntimeSession(
 ): Promise<RuntimeSessionResolution> {
   const mapped = await resolveTrajectorySession(task.agentSessionId, options);
   let fallbackSession: RuntimeFallbackMetadata | undefined;
+  let fallbackLookupCleared = false;
   let logSessionId: string | undefined;
   for (const logPath of runtimeTaskLogPaths(task)) {
     let log: string;
@@ -279,9 +280,10 @@ async function readRuntimeSession(
     const sessionId = extractRuntimeSessionId(log);
     logSessionId ??= sessionId;
     if (fallbackMetadata === null) {
-      break;
+      fallbackLookupCleared = true;
+      continue;
     }
-    if (fallbackSession === undefined) {
+    if (!fallbackLookupCleared && fallbackSession === undefined) {
       if (fallbackMetadata !== undefined) {
         fallbackSession = fallbackMetadata;
       } else if (sessionId?.startsWith('gateway-fallback-') === true) {
@@ -542,7 +544,7 @@ function stringifyField(record: Record<string, unknown> | undefined, key: string
 }
 
 function redactSensitiveText(value: string): string {
-  return value
+  return redactSensitiveJsonKeyValues(value)
     .replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, '[redacted-private-key]')
     .replace(/(^|\s)(-[A-Za-z]*H)(Authorization:\s*)[\s\S]*?(?=(?:\s+-[A-Za-z]*H(?:Authorization|Cookie|Set-Cookie):)|(?:\s+-[A-Za-z])|[\n\r]|$)/gi, '$1$2$3[redacted-authorization]')
     .replace(/(^|\s)(-[A-Za-z]*H)(Set-Cookie:\s*)[\s\S]*?(?=(?:\s+-[A-Za-z]*H(?:Authorization|Cookie|Set-Cookie):)|(?:\s+-[A-Za-z])|[\n\r]|$)/gi, '$1$2$3[redacted-cookie]')
@@ -573,9 +575,21 @@ function redactSensitiveText(value: string): string {
     .replace(/([A-Za-z0-9_-]*authorization[A-Za-z0-9_-]*\s*=\s*)"(?:(?:\\.)|[^"\\])*"/gi, '$1"[redacted]"')
     .replace(/([A-Za-z0-9_-]*(?:token|secret|password|api[_-]?key|private[_-]?key|set-cookie|cookie)[A-Za-z0-9_-]*\s*[:=]\s*)'(?:(?:\\.)|[^'\\])*'/gi, "$1'[redacted]'")
     .replace(/([A-Za-z0-9_-]*authorization[A-Za-z0-9_-]*\s*=\s*)'(?:(?:\\.)|[^'\\])*'/gi, "$1'[redacted]'")
-    .replace(/([A-Za-z0-9_-]*authorization[A-Za-z0-9_-]*\s*=\s*)(?:Basic|Digest|NTLM|Negotiate)\s+[^\n\r]*/gi, '$1[redacted]')
+    .replace(/([A-Za-z0-9_-]*authorization[A-Za-z0-9_-]*\s*=\s*)(?:Basic|Digest|NTLM|Negotiate|AWS4-HMAC-SHA256|[A-Za-z0-9]+-[A-Za-z0-9-]+)\s+[^\n\r]*/gi, '$1[redacted]')
     .replace(/([A-Za-z0-9_-]*(?:token|secret|password|api[_-]?key|private[_-]?key|set-cookie|cookie)[A-Za-z0-9_-]*\s*[:=]\s*)(?!\[redacted)[^\s'",}]+/gi, '$1[redacted]')
     .replace(/([A-Za-z0-9_-]*authorization[A-Za-z0-9_-]*\s*=\s*)(?!\[redacted)[^\s'",}]+/gi, '$1[redacted]');
+}
+
+function redactSensitiveJsonKeyValues(value: string): string {
+  const sensitiveKey = String.raw`(?:token|secret|password|api[_-]?key|private[_-]?key|authorization|set-cookie|cookie)`;
+  const unescapedKey = String.raw`(?<!\\)"[^"]*${sensitiveKey}[^"]*"\s*:\s*`;
+  return value
+    .replace(/(\\"[^"\\]*(?:token|secret|password|api[_-]?key|private[_-]?key|authorization|set-cookie|cookie)[^"\\]*\\"\s*:\s*)\\"(?:(?:\\\\.)|[^\\])*?\\"/gi, '$1\\"[redacted]\\"')
+    .replace(/(\\"[^"\\]*(?:token|secret|password|api[_-]?key|private[_-]?key|authorization|set-cookie|cookie)[^"\\]*\\"\s*:\s*)(?!\\")(?:\[[\s\S]*?\]|\{[\s\S]*?\}|[^\s,}\]]+)/gi, '$1[redacted]')
+    .replace(
+      new RegExp(`(${unescapedKey})(?:"(?:(?:\\\\.)|[^"\\\\])*"|\\[[\\s\\S]*?\\]|\\{[\\s\\S]*?\\}|[^\\s,}\\]]+)`, 'gi'),
+      '$1"[redacted]"',
+    );
 }
 
 function truncate(value: string, maxLength: number): string {
@@ -686,6 +700,7 @@ function isTrustedRuntimeCompletionPayload(payload: unknown): payload is Record<
   return payloadHasCompletionText(result)
     || hasRuntimeCompletionObjectSignal(result?.completion)
     || hasRuntimeExecutionTraceSignal(result?.executionTrace)
+    || (stringField(payload, 'status') !== undefined && runtimeAgentMetaFromPayload(result) !== undefined)
     || (stringField(result, 'status') !== undefined && runtimeAgentMetaFromPayload(result) !== undefined);
 }
 
