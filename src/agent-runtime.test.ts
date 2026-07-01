@@ -213,6 +213,27 @@ describe('createOpenClawRuntimeProvider', () => {
     expect(readFileSync(targetFile, 'utf8')).toBe('do-not-touch');
   });
 
+  it('rejects pre-existing non-regular runtime log paths before spawning', async () => {
+    const spawnProcess = vi.fn(() => ({ pid: 4242, unref: vi.fn() }));
+    const logDirectory = temporaryDirectory();
+    const agentSessionId = 'agent:main:directory-log-session';
+    const logPath = join(logDirectory, `${safeRuntimeLogFileName(agentSessionId)}.log`);
+    mkdirSync(logPath, { recursive: true });
+    const provider = createOpenClawRuntimeProvider({
+      enabled: true,
+      command: 'openclaw',
+      agentId: 'main',
+      sessionKeyPrefix: 'rainrail',
+      timeoutSeconds: 900,
+      logDirectory,
+      spawnProcess,
+    });
+
+    await expect(provider.startRun(runtimeRequest({ agentSessionId }))).rejects.toThrow(/regular file/i);
+
+    expect(spawnProcess).not.toHaveBeenCalled();
+  });
+
   it('rejects symlinked runtime log directories before creating logs', async () => {
     const spawnProcess = vi.fn(() => ({ pid: 4242, unref: vi.fn() }));
     const root = temporaryDirectory();
@@ -1823,6 +1844,24 @@ describe('runtime task completion and resume helpers', () => {
       status: 'failed',
       summary: 'failed with Set-Cookie: [redacted-cookie]',
       promptError: 'standalone Bearer [redacted-token]',
+    });
+    expect(readRuntimeRunCompletionFromLog(JSON.stringify({
+      status: 'failed',
+      summary: [
+        'failed with private key',
+        '-----BEGIN OPENSSH PRIVATE KEY-----',
+        'placeholder-private-key',
+        '-----END OPENSSH PRIVATE KEY-----',
+      ].join('\n'),
+      promptError: [
+        '-----BEGIN PRIVATE KEY-----',
+        'placeholder-private-key',
+        '-----END PRIVATE KEY-----',
+      ].join('\n'),
+    }))).toMatchObject({
+      status: 'failed',
+      summary: 'failed with private key\n[redacted-private-key]',
+      promptError: '[redacted-private-key]',
     });
     expect(readRuntimeRunCompletionFromLog([
       'GatewayClientRequestError: Error: CLI transcript compaction failed for openai/gpt-5.5',

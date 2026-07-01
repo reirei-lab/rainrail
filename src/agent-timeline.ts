@@ -1,5 +1,5 @@
 import { constants } from 'node:fs';
-import { lstat, open, readFile, realpath, stat } from 'node:fs/promises';
+import { lstat, open, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 
@@ -78,6 +78,8 @@ const excerptLength = 1200;
 const detailLength = 600;
 const maxJsonlBytes = 400 * 1024;
 const maxRuntimeLogBytes = 512 * 1024;
+const maxRuntimePointerBytes = 16 * 1024;
+const maxRuntimeSessionsJsonBytes = 256 * 1024;
 const tailRedactionContextBytes = 64 * 1024;
 
 export async function readRuntimeTimeline(
@@ -450,7 +452,7 @@ async function resolveRuntimeTrajectoryPathForSession(
     : runtimeTrajectoryPathForSessionFile(session.sessionFile);
   const pointerPath = directPath.replace(/\.trajectory\.jsonl$/, '.trajectory-path.json');
   try {
-    const pointer = JSON.parse(await readFile(pointerPath, 'utf8')) as unknown;
+    const pointer = JSON.parse(await readBoundedRegularText(pointerPath, maxRuntimePointerBytes)) as unknown;
     if (
       isRecord(pointer)
       && pointer.sessionId === session.sessionId
@@ -489,22 +491,23 @@ async function isAllowedRuntimeTrajectoryPointerTarget(
   if (!isAbsolute(runtimeFile)) {
     return false;
   }
-  const sessionsDirectory = runtimeSessionsDirectory(options);
-  const [root, target] = await Promise.all([
-    realpath(sessionsDirectory).catch(() => resolve(sessionsDirectory)),
-    realpath(runtimeFile).catch(() => resolve(runtimeFile)),
-  ]);
-  const relativeTarget = relative(root, target);
-  return relativeTarget === '' || (!relativeTarget.startsWith('..') && !isAbsolute(relativeTarget));
+  return isAllowedRuntimePathTarget(runtimeFile, runtimeSessionsDirectory(options));
 }
 
 async function readTailText(path: string, maxBytes: number): Promise<{ text: string; truncated: boolean }> {
-  if ((await lstat(path)).isSymbolicLink()) {
+  const pathStat = await lstat(path);
+  if (pathStat.isSymbolicLink()) {
     throw new Error(`runtime trajectory path is a symlink: ${path}`);
+  }
+  if (!pathStat.isFile()) {
+    throw new Error(`runtime trajectory path must be a regular file: ${path}`);
   }
   const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
     const fileStat = await file.stat();
+    if (!fileStat.isFile()) {
+      throw new Error(`runtime trajectory path must be a regular file: ${path}`);
+    }
     const start = Math.max(0, fileStat.size - maxBytes);
     const context = start > 0 ? await readTailRedactionContext(file, start) : emptyTailRedactionContext();
     let text = await readFileRange(file, start, fileStat.size - start);
@@ -514,6 +517,32 @@ async function readTailText(path: string, maxBytes: number): Promise<{ text: str
         ?? trimPartialLeadingLine(text);
     }
     return { text, truncated: start > 0 };
+  } finally {
+    await file.close();
+  }
+}
+
+async function readBoundedRegularText(path: string, maxBytes: number): Promise<string> {
+  const pathStat = await lstat(path);
+  if (pathStat.isSymbolicLink()) {
+    throw new Error(`runtime metadata path is a symlink: ${path}`);
+  }
+  if (!pathStat.isFile()) {
+    throw new Error(`runtime metadata path must be a regular file: ${path}`);
+  }
+  if (pathStat.size > maxBytes) {
+    throw new Error(`runtime metadata path is too large: ${path}`);
+  }
+  const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const fileStat = await file.stat();
+    if (!fileStat.isFile()) {
+      throw new Error(`runtime metadata path must be a regular file: ${path}`);
+    }
+    if (fileStat.size > maxBytes) {
+      throw new Error(`runtime metadata path is too large: ${path}`);
+    }
+    return readFileRange(file, 0, fileStat.size);
   } finally {
     await file.close();
   }
@@ -761,7 +790,10 @@ async function readMappedRuntimeSession(
   options: RuntimeTimelineReadOptions,
 ): Promise<{ sessionId: string; sessionFile?: string | undefined } | undefined> {
   try {
-    const sessions = JSON.parse(await readFile(join(runtimeSessionsDirectory(options), 'sessions.json'), 'utf8')) as unknown;
+    const sessions = JSON.parse(await readBoundedRegularText(
+      join(runtimeSessionsDirectory(options), 'sessions.json'),
+      maxRuntimeSessionsJsonBytes,
+    )) as unknown;
     if (!isRecord(sessions)) {
       return undefined;
     }
@@ -789,14 +821,38 @@ async function resolveRuntimeSessionFile(
   }
   const sessionsDirectory = runtimeSessionsDirectory(options);
   const sessionFile = isAbsolute(value) ? value : join(sessionsDirectory, value);
-  const [root, target] = await Promise.all([
-    realpath(sessionsDirectory).catch(() => resolve(sessionsDirectory)),
-    realpath(sessionFile).catch(() => resolve(sessionFile)),
-  ]);
-  const relativeTarget = relative(root, target);
-  return relativeTarget === '' || (!relativeTarget.startsWith('..') && !isAbsolute(relativeTarget))
+  return await isAllowedRuntimePathTarget(sessionFile, sessionsDirectory)
     ? sessionFile
     : undefined;
+}
+
+async function isAllowedRuntimePathTarget(targetPath: string, rootPath: string): Promise<boolean> {
+  const root = await realpath(rootPath).catch(() => resolve(rootPath));
+  const nearestExistingPath = await nearestExistingPathComponent(targetPath);
+  const nearestReal = await realpath(nearestExistingPath).catch(() => resolve(nearestExistingPath));
+  const suffix = relative(resolve(nearestExistingPath), resolve(targetPath));
+  const target = suffix === '' ? nearestReal : resolve(nearestReal, suffix);
+  const relativeTarget = relative(root, target);
+  return relativeTarget === '' || (!relativeTarget.startsWith('..') && !isAbsolute(relativeTarget));
+}
+
+async function nearestExistingPathComponent(path: string): Promise<string> {
+  let current = resolve(path);
+  while (true) {
+    try {
+      await lstat(current);
+      return current;
+    } catch (error) {
+      if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) {
+        throw error;
+      }
+    }
+    const parent = resolve(current, '..');
+    if (parent === current) {
+      return current;
+    }
+    current = parent;
+  }
 }
 
 function timelineEntryId(event: TrajectoryEvent, index: number): string {
@@ -1110,6 +1166,11 @@ function parseJsonObjectsFromLogWithPositions(raw: string): Array<{ payload: unk
     }
     const end = findJsonObjectEnd(raw, index);
     if (end === undefined) {
+      const nextLineBreak = raw.slice(index + 1).search(/[\n\r]/);
+      if (nextLineBreak === -1) {
+        break;
+      }
+      index += nextLineBreak + 1;
       continue;
     }
     try {
@@ -1354,6 +1415,9 @@ function findJsonObjectEnd(raw: string, start: number): number | undefined {
     if (char === '"') {
       inString = true;
       continue;
+    }
+    if ((char === '\n' || char === '\r') && depth > 0) {
+      return undefined;
     }
     if (char === '{') {
       depth += 1;

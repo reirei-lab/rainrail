@@ -84,6 +84,16 @@ describe('agent timeline', () => {
     expect(extractRuntimeSessionId(log)).toBe('gateway-fallback-new');
   });
 
+  it('skips incomplete JSON fragments while finding later session metadata', () => {
+    const incompleteFragments = Array.from({ length: 2000 }, (_, index) => `tool output ${index}: { incomplete`).join('\n');
+    const completion = JSON.stringify({
+      status: 'ok',
+      meta: { agentMeta: { sessionId: 'linear-session' } },
+    });
+
+    expect(extractRuntimeSessionId(`${incompleteFragments}\n${completion}`)).toBe('linear-session');
+  });
+
   it('does not use appended diagnostic JSON fragments as session metadata', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'rainrail-diagnostic-session-id-timeline-'));
     const logPath = join(directory, 'agent.log');
@@ -1369,6 +1379,40 @@ describe('agent timeline', () => {
     }
   });
 
+  it('ignores symlinked trajectory pointer files before reading them', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'rainrail-pointer-symlink-'));
+    const directory = join(root, 'sessions');
+    const sessionId = 'pointer-symlink-session';
+    const logPath = join(directory, 'agent.log');
+    const requestedFile = join(directory, `${sessionId}.trajectory.jsonl`);
+    const outsidePointer = join(root, 'outside-pointer.json');
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(logPath, JSON.stringify({
+      result: { status: 'ok', meta: { agentMeta: { sessionId } } },
+    }), 'utf8');
+    writeFileSync(outsidePointer, JSON.stringify({
+      traceSchema: 'openclaw-trajectory-pointer',
+      schemaVersion: 1,
+      sessionId,
+      runtimeFile: join(root, 'outside-secret-file'),
+    }), 'utf8');
+    symlinkSync(outsidePointer, join(directory, `${sessionId}.trajectory-path.json`));
+    writeFileSync(requestedFile, [
+      JSON.stringify({ type: 'tool.result', ts: '2026-06-30T15:09:10.000Z', data: { output: 'safe trajectory' } }),
+    ].join('\n'), 'utf8');
+
+    try {
+      const jsonl = await readRuntimeJsonl(
+        { logPath, agentSessionId: sessionId },
+        { sessionsDirectory: directory },
+      );
+      expect(jsonl.trajectoryPath).toBe(requestedFile);
+      expect(jsonl.raw).toContain('safe trajectory');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('rejects direct trajectory symlinks outside the runtime sessions directory', async () => {
     const root = mkdtempSync(join(tmpdir(), 'rainrail-direct-symlink-'));
     const directory = join(root, 'sessions');
@@ -1393,6 +1437,28 @@ describe('agent timeline', () => {
       expect(jsonl.error).toMatch(/symlink|outside/i);
     } finally {
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects non-regular trajectory files without reading them', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'rainrail-direct-directory-'));
+    const sessionId = 'direct-directory-session';
+    const logPath = join(directory, 'agent.log');
+    const trajectoryPath = join(directory, `${sessionId}.trajectory.jsonl`);
+    writeFileSync(logPath, JSON.stringify({
+      result: { status: 'ok', meta: { agentMeta: { sessionId } } },
+    }), 'utf8');
+    mkdirSync(trajectoryPath, { recursive: true });
+
+    try {
+      const jsonl = await readRuntimeJsonl(
+        { logPath, agentSessionId: sessionId },
+        { sessionsDirectory: directory },
+      );
+      expect(jsonl.missing).toBe(true);
+      expect(jsonl.error).toMatch(/regular file/i);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
     }
   });
 
@@ -1898,6 +1964,58 @@ describe('agent timeline', () => {
     }
   });
 
+  it('ignores symlinked sessions.json mappings before reading them', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'rainrail-sessions-json-symlink-'));
+    const directory = join(root, 'sessions');
+    const logPath = join(directory, 'agent.log');
+    const sessionKey = 'agent:main:routing-key';
+    const outsideSessionsJson = join(root, 'outside-sessions.json');
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(logPath, '', 'utf8');
+    writeFileSync(outsideSessionsJson, JSON.stringify({
+      [sessionKey]: { sessionId: 'mapped-session' },
+    }), 'utf8');
+    symlinkSync(outsideSessionsJson, join(directory, 'sessions.json'));
+    writeFileSync(join(directory, 'mapped-session.trajectory.jsonl'), [
+      JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:08:00.000Z', seq: 1 }),
+    ].join('\n'), 'utf8');
+
+    try {
+      const timeline = await readRuntimeTimeline(
+        { logPath, agentSessionId: sessionKey },
+        { sessionsDirectory: directory },
+      );
+      expect(timeline.missing).toBe(true);
+      expect(timeline.sessionId).toBeUndefined();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('ignores oversized sessions.json mappings before parsing them', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'rainrail-sessions-json-large-'));
+    const logPath = join(directory, 'agent.log');
+    const sessionKey = 'agent:main:routing-key';
+    writeFileSync(logPath, '', 'utf8');
+    writeFileSync(join(directory, 'sessions.json'), `${' '.repeat(1024 * 1024)}${JSON.stringify({
+      [sessionKey]: { sessionId: 'mapped-session' },
+    })}`, 'utf8');
+    writeFileSync(join(directory, 'mapped-session.trajectory.jsonl'), [
+      JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:08:00.000Z', seq: 1 }),
+    ].join('\n'), 'utf8');
+
+    try {
+      const timeline = await readRuntimeTimeline(
+        { logPath, agentSessionId: sessionKey },
+        { sessionsDirectory: directory },
+      );
+      expect(timeline.missing).toBe(true);
+      expect(timeline.sessionId).toBeUndefined();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('uses sessionFile from sessions.json to locate trajectory sidecars', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'rainrail-session-file-timeline-'));
     const storeDirectory = join(directory, 'store');
@@ -1926,6 +2044,37 @@ describe('agent timeline', () => {
       expect(timeline.missing).toBe(false);
     } finally {
       rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects sessions.json sessionFile entries whose parent resolves outside the sessions directory', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'rainrail-session-file-parent-symlink-'));
+    const directory = join(root, 'sessions');
+    const outsideDirectory = join(root, 'outside-store');
+    const linkedDirectory = join(directory, 'linked-store');
+    const logPath = join(directory, 'agent.log');
+    const sessionKey = 'agent:main:routing-key';
+    const sessionId = 'parent-symlink-session';
+    mkdirSync(directory, { recursive: true });
+    mkdirSync(outsideDirectory, { recursive: true });
+    symlinkSync(outsideDirectory, linkedDirectory, 'dir');
+    writeFileSync(logPath, '', 'utf8');
+    writeFileSync(join(directory, 'sessions.json'), JSON.stringify({
+      [sessionKey]: { sessionId, sessionFile: 'linked-store/missing-session.jsonl' },
+    }), 'utf8');
+    writeFileSync(join(outsideDirectory, 'missing-session.trajectory.jsonl'), [
+      JSON.stringify({ type: 'tool.result', ts: '2026-06-30T15:08:00.000Z', data: { output: 'outside-secret-content' } }),
+    ].join('\n'), 'utf8');
+
+    try {
+      const jsonl = await readRuntimeJsonl(
+        { logPath, agentSessionId: sessionKey },
+        { sessionsDirectory: directory },
+      );
+      expect(jsonl.missing).toBe(true);
+      expect(jsonl.raw).not.toContain('outside-secret-content');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 

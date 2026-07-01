@@ -1,4 +1,4 @@
-import { chmodSync, closeSync, constants, fchmodSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, statSync } from 'node:fs';
+import { chmodSync, closeSync, constants, fchmodSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, statSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { dirname, join, relative, resolve } from 'node:path';
@@ -254,7 +254,10 @@ function runtimeRunCompletionFromPayload(payload: Record<string, unknown>): Runt
 
 function redactRuntimeCompletionText(value: string | undefined): string | undefined {
   return value
-    ?.replace(/Authorization:\s*[^\n\r]*/gi, 'Authorization: [redacted-authorization]')
+    ?.replace(/-----BEGIN [A-Z ]*PRIVATE KEY(?: BLOCK)?-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY(?: BLOCK)?-----/g, '[redacted-private-key]')
+    .replace(/-----BEGIN [A-Z ]*PRIVATE KEY(?: BLOCK)?-----[\s\S]*$/g, '[redacted-private-key]')
+    .replace(/(^|[\n\r])[\s\S]*?-----END [A-Z ]*PRIVATE KEY(?: BLOCK)?-----/g, '$1[redacted-private-key]')
+    .replace(/Authorization:\s*[^\n\r]*/gi, 'Authorization: [redacted-authorization]')
     .replace(/Set-Cookie:\s*[^\n\r]*/gi, 'Set-Cookie: [redacted-cookie]')
     .replace(/Cookie:\s*[^\n\r]*/gi, 'Cookie: [redacted-cookie]')
     .replace(/\bBearer\s+[A-Za-z0-9._~+/-]+=*/g, 'Bearer [redacted-token]')
@@ -663,10 +666,12 @@ function runtimeResumeSessionId(task: RuntimeAgentTask, agentId: string): string
 }
 
 function readRuntimeResumeLogTail(logPath: string): string {
+  assertRegularFileIfExists(logPath);
   const size = statSync(logPath).size;
   const start = Math.max(0, size - maxRuntimeResumeLogBytes);
   const fd = openSync(logPath, 'r');
   try {
+    assertRegularFileDescriptor(fd, logPath);
     const buffer = Buffer.alloc(size - start);
     const bytesRead = readSync(fd, buffer, 0, buffer.length, start);
     const text = buffer.subarray(0, bytesRead).toString('utf8');
@@ -956,12 +961,38 @@ function assertNoSymlinkPathComponents(startPath: string, targetPath: string): v
 }
 
 function openPrivateLogFile(path: string, flags: 'a' | 'w'): number {
+  assertRegularFileIfExists(path);
   const openFlags = flags === 'a'
     ? constants.O_CREAT | constants.O_APPEND | constants.O_WRONLY | constants.O_NOFOLLOW
     : constants.O_CREAT | constants.O_TRUNC | constants.O_WRONLY | constants.O_NOFOLLOW;
   const fd = openSync(path, openFlags, 0o600);
-  fchmodSync(fd, 0o600);
-  return fd;
+  try {
+    assertRegularFileDescriptor(fd, path);
+    fchmodSync(fd, 0o600);
+    return fd;
+  } catch (error) {
+    closeSync(fd);
+    throw error;
+  }
+}
+
+function assertRegularFileIfExists(path: string): void {
+  try {
+    if (!lstatSync(path).isFile()) {
+      throw new Error(`runtime log path must be a regular file: ${path}`);
+    }
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+      return;
+    }
+    throw error;
+  }
+}
+
+function assertRegularFileDescriptor(fd: number, path: string): void {
+  if (!fstatSync(fd).isFile()) {
+    throw new Error(`runtime log path must be a regular file: ${path}`);
+  }
 }
 
 function openPrivateLogFiles(
