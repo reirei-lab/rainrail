@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import type { PullRequestReviewTarget } from './pr-lifecycle.js';
 import type { PluginRuntimeContext } from './workflow-plugin.js';
-import { handleAutoMergeEvent } from './pr-lifecycle.js';
-import { checkRunEvent, pullRequest, reviewEvent } from './pr-lifecycle-test-helpers.js';
+import { createAutoMergeWorkflow, handleAutoMergeEvent } from './pr-lifecycle.js';
+import { checkRunEvent, pullRequest, pullRequestEvent, reviewEvent } from './pr-lifecycle-test-helpers.js';
 
 describe('handleAutoMergeEvent', () => {
   it('squash merges an agent PR through the gated runtime action after reviewer approval', async () => {
@@ -67,6 +67,19 @@ describe('handleAutoMergeEvent', () => {
 
     expect(result.reason).toBe('pull_request_merged');
     expect(runtimeMerges).toHaveLength(1);
+  });
+
+  it('accepts ready_for_review events so draft release can trigger auto-merge', async () => {
+    const runtimeMerges: unknown[] = [];
+    const workflow = createAutoMergeWorkflow(options());
+    const event = pullRequestEvent({ action: 'ready_for_review' });
+
+    if (workflow.accepts === undefined) throw new Error('auto-merge workflow has no accepts predicate');
+    expect(workflow.accepts(event)).toBe(true);
+    const result = await workflow.handle(event, runtimeContext(runtimeMerges));
+
+    expect(result).toMatchObject({ reason: 'pull_request_merged' });
+    expect(runtimeMerges).toEqual([expect.objectContaining({ number: 44 })]);
   });
 
   it('continues past non-agent check_run PRs and auto-merges a later agent PR', async () => {

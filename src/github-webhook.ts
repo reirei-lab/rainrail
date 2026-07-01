@@ -378,6 +378,7 @@ export interface NormalizedGitHubResource {
   title?: string;
   description?: string;
   color?: string;
+  author?: string;
   dueOn?: string;
   state?: string;
   merged?: boolean;

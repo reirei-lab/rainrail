@@ -263,6 +263,38 @@ describe('handleReviewRequestEvent', () => {
     expect(requestCount).toBe(0);
   });
 
+  it('requests review again when the last change request was for an old head', async () => {
+    const reviewRequests: Array<{ repository: string; number: number; reviewerLogin: string }> = [];
+
+    const result = await handleReviewRequestEvent(checkRunEvent({ headSha: 'new-sha' }), {
+      agentLogin: 'reirei-agent',
+      reviewerLogin: 'hiragram',
+      branchPrefix: 'agent/',
+      pullRequests: {
+        async getPullRequest(input) {
+          const target = pullRequest({
+            ...input,
+            headSha: 'new-sha',
+            reviews: [{ authorLogin: 'hiragram', state: 'CHANGES_REQUESTED', commitId: 'old-sha' }],
+          });
+          delete target.reviewDecision;
+          return target;
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview(input) {
+          reviewRequests.push(input);
+        },
+      },
+    });
+
+    expect(result.reason).toBe('review_requested');
+    expect(reviewRequests).toEqual([
+      { repository: 'reirei-lab/rainrail', number: 44, reviewerLogin: 'hiragram' },
+    ]);
+  });
+
   it('requests review from successful commit status events', async () => {
     const reviewRequests: Array<{ repository: string; number: number; reviewerLogin: string }> = [];
 

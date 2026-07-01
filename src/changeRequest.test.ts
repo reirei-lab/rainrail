@@ -87,6 +87,7 @@ describe('handleChangeRequestEvent', () => {
           ...task.claim!,
           lockRefId: 'REF_lock',
           dispatchedLockRefId: 'REF_dispatched',
+          originalStatus: 'Backlog',
         },
       },
       reason: 'checks_failed',
@@ -95,7 +96,7 @@ describe('handleChangeRequestEvent', () => {
 
     expect(calls).toEqual(['release:checks_failed', 'comment']);
     expect(releases).toEqual([expect.objectContaining({
-      issue: expect.objectContaining({ id: 'PVTI_item', contentId: 'I_issue' }),
+      issue: expect.objectContaining({ id: 'PVTI_item', contentId: 'I_issue', status: 'Backlog' }),
       claim: expect.objectContaining({
         projectItemId: 'PVTI_item',
         lockRefId: 'REF_lock',

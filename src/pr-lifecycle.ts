@@ -250,7 +250,12 @@ export function createAutoMergeWorkflow(options: AutoMergeWorkflowOptions): Work
     name: 'auto-merge',
     capabilities: ['merge'],
     accepts: (event) => event.source.type === 'github'
-      && (event.name === 'github.review' || event.name === 'github.check_run' || event.name === 'github.status'),
+      && (
+        event.name === 'github.review'
+        || event.name === 'github.check_run'
+        || event.name === 'github.status'
+        || (event.name === 'github.pull_request' && eventAction(event) === 'ready_for_review')
+      ),
     async handle(event, context) {
       return handleAutoMergeEvent(event, { ...options, pullRequests: options.pullRequests ?? pullRequestsFromContext(context) }, context);
     },
@@ -944,9 +949,12 @@ function reviewApproved(config: { reviewerLogin: string }, pullRequest: PullRequ
 }
 
 function hasUnresolvedChangeRequest(pullRequest: PullRequestReviewTarget): boolean {
-  if (normalize(pullRequest.reviewDecision) === 'changes_requested') return true;
+  if (normalize(pullRequest.reviewDecision) === 'changes_requested' && (pullRequest.reviews?.length ?? 0) === 0) return true;
   return Array.from(latestActionableReviewsByReviewer(pullRequest).values())
-    .some((review) => normalize(review.state) === 'changes_requested');
+    .some((review) =>
+      normalize(review.state) === 'changes_requested'
+      && (review.commitId === undefined || pullRequest.headSha === undefined || review.commitId === pullRequest.headSha)
+    );
 }
 
 function hasCurrentCheckFailure(pullRequest: PullRequestReviewTarget): boolean {
@@ -1033,6 +1041,10 @@ function targetRepositoryAllowed(targets: readonly string[], repository: string,
 
 function repositoryName(payload: Record<string, unknown>): string | undefined {
   return stringValue(recordValue(payload.repository).fullName);
+}
+
+function eventAction(event: RainrailEventEnvelope): string | undefined {
+  return stringValue(recordValue(event.payload).action);
 }
 
 function commitStatusState(payload: Record<string, unknown>): string {
@@ -1153,6 +1165,7 @@ function agentTaskProjectIssue(task: AgentTask): {
   number?: number;
   state?: string;
   url?: string;
+  status?: string | null;
 } {
   const issue = task.issue;
   return {
@@ -1166,5 +1179,6 @@ function agentTaskProjectIssue(task: AgentTask): {
     ...(issue?.number === undefined ? {} : { number: issue.number }),
     ...(issue?.state === undefined ? {} : { state: issue.state }),
     ...(issue?.url === undefined ? {} : { url: issue.url }),
+    ...(task.claim?.originalStatus === undefined ? {} : { status: task.claim.originalStatus }),
   };
 }
