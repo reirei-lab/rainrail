@@ -857,7 +857,7 @@ describe('cloudflare issue redaction', () => {
     await expect(workflow.handle(cloudflareErrorEvent({
       message: [
         'serialized {"apiKeyValue":"api-key-value-secret","auth.token":"dot-token-secret","tokens":["abc]def"],"password.hash":"dot-hash-secret","password_hash":"hash-secret","token":{"meta":{},"value":"nested-object-secret"}}',
-        'tokens=["kv-array-secret-1","kv-array-secret-2"] passwords=[kv-password-1,kv-password-2] token="quoted-token-secret" password=\'quoted-password-secret\' token = "spaced-token-secret" password = spaced-password-secret DATABASE_URL=postgres://app:db-pass@db/prod',
+        'tokens=["kv-array-secret-1","kv-array-secret-2"] passwords=[kv-password-1,kv-password-2] token="quoted-token-secret" password=\'quoted-password-secret\' token = "spaced-token-secret" password = spaced-password-secret DATABASE_URL=postgres://app:db-pass@db/prod REDIS_URL=redis://:redis-pass@cache/0',
         'secretValue=secret-value-secret',
         'cookie=session=session-secret; csrf=csrf-secret',
       ].join(' '),
@@ -881,6 +881,7 @@ describe('cloudflare issue redaction', () => {
     expect(createdIssues[0]?.body).not.toContain('spaced-token-secret');
     expect(createdIssues[0]?.body).not.toContain('spaced-password-secret');
     expect(createdIssues[0]?.body).not.toContain('db-pass');
+    expect(createdIssues[0]?.body).not.toContain('redis-pass');
     expect(createdIssues[0]?.body).not.toContain('secret-value-secret');
     expect(createdIssues[0]?.body).not.toContain('session-secret');
     expect(createdIssues[0]?.body).not.toContain('csrf-secret');
@@ -1236,6 +1237,66 @@ describe('cloudflare issue redaction', () => {
     expect(messageLine?.length).toBeLessThan(1_200);
     expect(messageLine).toContain('... truncated ...');
     expect(messageLine).not.toContain('summary-tail');
+  });
+
+  it('keeps the summary exception message on one Markdown line', async () => {
+    const createdIssues: Array<{ body: string }> = [];
+    const workflow = createCloudflareIssueReporterWorkflow({
+      repository: 'reirei-lab/rainrail',
+      store: createInMemoryCloudflareErrorIssueStore(),
+      issues: {
+        findOpenIssueByFingerprint: async () => undefined,
+        createIssue: async (input) => {
+          createdIssues.push(input);
+          return {
+            number: 140,
+            url: 'https://github.com/reirei-lab/rainrail/issues/140',
+          };
+        },
+      },
+    });
+
+    await expect(workflow.handle(cloudflareErrorEvent({
+      message: 'fail\n@org/team\n## injected',
+    }), runtimeContext())).resolves.toMatchObject({
+      handled: true,
+    });
+
+    const messageLine = createdIssues[0]?.body.split('\n').find((line) => line.startsWith('- Message: '));
+    expect(messageLine).toBe('- Message: fail @org/team ## injected');
+    expect(createdIssues[0]?.body).not.toContain('\n@org/team');
+    expect(createdIssues[0]?.body).not.toContain('\n## injected');
+  });
+
+  it('keeps stack signature frames inside the Markdown fence', async () => {
+    const createdIssues: Array<{ body: string }> = [];
+    const workflow = createCloudflareIssueReporterWorkflow({
+      repository: 'reirei-lab/rainrail',
+      store: createInMemoryCloudflareErrorIssueStore(),
+      issues: {
+        findOpenIssueByFingerprint: async () => undefined,
+        createIssue: async (input) => {
+          createdIssues.push(input);
+          return {
+            number: 141,
+            url: 'https://github.com/reirei-lab/rainrail/issues/141',
+          };
+        },
+      },
+    });
+
+    await expect(workflow.handle(cloudflareErrorEvent({
+      stack: [
+        'TypeError: failed',
+        '    at ``` (worker.js:1:1)',
+        '    at @org/team (worker.js:2:1)',
+      ].join('\n'),
+    }), runtimeContext())).resolves.toMatchObject({
+      handled: true,
+    });
+
+    expect(createdIssues[0]?.body).not.toContain('\n```\n@org/team');
+    expect(createdIssues[0]?.body).toContain('\\`\\`\\` @ worker.js');
   });
 
   it('truncates the summary exception name independently from raw data', async () => {

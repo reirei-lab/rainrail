@@ -718,7 +718,7 @@ function sanitizePayloadPathname(pathname: string): string {
 function sanitizePayloadText(value: string): string {
   return redactPayloadSecretStructuredValues(value)
     .replace(/<!--\s*error-fingerprint:[^>\r\n]*(?:-->)?/giu, '<!-- escaped-error-fingerprint: [redacted] -->')
-    .replace(/\b[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s"'<>`/@]+:[^\s"'<>`/@]+@[^\s"'<>`,;)]+/giu, (url) => sanitizePayloadCredentialUrl(url))
+    .replace(/\b[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s"'<>`/@]*:[^\s"'<>`/@]*@[^\s"'<>`,;)]+/giu, (url) => sanitizePayloadCredentialUrl(url))
     .replace(/https?:\/\/[^\s"'<>`]+/giu, (url) => sanitizePayloadUrl(url) ?? '[redacted-url]')
     .replace(/\b(cookie|set-cookie)\s*:\s*[^\r\n]+/giu, '$1: [redacted]')
     .replace(/\bauthorization\s*:\s*[^\r\n]+/giu, 'authorization: [redacted]')

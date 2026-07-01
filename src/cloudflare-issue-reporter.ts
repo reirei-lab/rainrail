@@ -344,15 +344,9 @@ function cloudflareIssueBody(input: {
   fingerprint: string;
 }): string {
   const rawJson = truncate(JSON.stringify(redactRawEventData(input.candidate.rawData), null, 2), maxRawJsonLength);
-  const exceptionName = truncateSummaryText(
-    sanitizeSecretString(input.candidate.exceptionName),
-    maxSummaryExceptionNameLength,
-  );
-  const exceptionMessage = truncateSummaryText(
-    sanitizeSecretString(input.candidate.exceptionMessage),
-    maxSummaryExceptionMessageLength,
-  );
-  const stackSignature = input.candidate.stackSignature.map(sanitizeSecretString);
+  const exceptionName = sanitizeSummaryLine(input.candidate.exceptionName, maxSummaryExceptionNameLength);
+  const exceptionMessage = sanitizeSummaryLine(input.candidate.exceptionMessage, maxSummaryExceptionMessageLength);
+  const stackSignature = input.candidate.stackSignature.map((line) => escapeMarkdownFenceLine(sanitizeSecretString(line)));
   return [
     'Rainrail detected a new Cloudflare Worker server error.',
     '',
@@ -388,6 +382,15 @@ function cloudflareIssueBody(input: {
 function sanitizedWorkerName(value: string): string {
   const sanitized = sanitizeSecretString(value).replace(/\s+/gu, ' ').trim();
   return truncateSummaryText(sanitized, maxSummaryExceptionNameLength) || 'unknown-worker';
+}
+
+function sanitizeSummaryLine(value: string, maxLength: number): string {
+  const sanitized = sanitizeSecretString(value).replace(/\s+/gu, ' ').trim();
+  return truncateSummaryText(sanitized, maxLength);
+}
+
+function escapeMarkdownFenceLine(value: string): string {
+  return value.replace(/^`{3,}/u, (ticks) => ticks.replace(/`/gu, '\\`'));
 }
 
 function cloudflareExceptionWithUsableStack(value: unknown): {
@@ -624,7 +627,7 @@ function isUrlKey(key: string): boolean {
 function sanitizeSecretString(value: string): string {
   return redactSecretStructuredValues(value)
     .replace(/<!--\s*error-fingerprint:[^>\r\n]*(?:-->)?/giu, '<!-- escaped-error-fingerprint: [redacted] -->')
-    .replace(/\b[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s"'<>`/@]+:[^\s"'<>`/@]+@[^\s"'<>`,;)]+/giu, (url) => sanitizeUrlString(url))
+    .replace(/\b[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s"'<>`/@]*:[^\s"'<>`/@]*@[^\s"'<>`,;)]+/giu, (url) => sanitizeUrlString(url))
     .replace(/https?:\/\/[^\s"'<>`]+/giu, (url) => sanitizeUrlString(url))
     .replace(/\b(cookie|set-cookie)\s*:\s*[^\r\n]+/giu, '$1: [redacted]')
     .replace(/\bauthorization\s*:\s*[^\r\n]+/giu, 'authorization: [redacted]')

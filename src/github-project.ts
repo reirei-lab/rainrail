@@ -703,6 +703,9 @@ async function claimProjectIssue(
   const metadata = await loadProjectMetadata(config, fetchImpl, auth);
   let claim: ProjectIssueClaim | undefined;
   const useClaimLock = shouldUseProjectIssueClaimLock(claimStatus);
+  if (!useClaimLock && input.issue.contentType !== 'DraftIssue') {
+    throw new Error('Project issue claim lock is required for non-draft project issues');
+  }
   try {
     const lockRefId = useClaimLock
       ? await acquireProjectIssueClaimLock(claimStatus, input, config, fetchImpl, auth)

@@ -430,7 +430,7 @@ function sanitizeTailPathname(pathname: string): string {
 function sanitizeTailSecretString(value: string): string {
   return redactTailSecretStructuredValues(value)
     .replace(/<!--\s*error-fingerprint:[^>\r\n]*(?:-->)?/giu, '<!-- escaped-error-fingerprint: [redacted] -->')
-    .replace(/\b[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s"'<>`/@]+:[^\s"'<>`/@]+@[^\s"'<>`,;)]+/giu, (url) => sanitizeTailCredentialUrl(url))
+    .replace(/\b[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s"'<>`/@]*:[^\s"'<>`/@]*@[^\s"'<>`,;)]+/giu, (url) => sanitizeTailCredentialUrl(url))
     .replace(/https?:\/\/[^\s"'<>`]+/giu, (url) => sanitizeTailUrl(url) ?? '[redacted-url]')
     .replace(/\b(cookie|set-cookie)\s*:\s*[^\r\n]+/giu, '$1: [redacted]')
     .replace(/\bauthorization\s*:\s*[^\r\n]+/giu, 'authorization: [redacted]')
