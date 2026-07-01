@@ -10,7 +10,7 @@ describe('handleConflictCheckEvent', () => {
 
     const result = await handleConflictCheckEvent(pushEvent(), {
       tasks: handoffRecorder({ updates }),
-      reviewRequest: { enabled: true, reviewerLogin: 'hiragram' },
+      reviewRequest: { reviewerLogin: 'hiragram' },
       delayMs: 0,
       pullRequests: {
         async getPullRequest() {

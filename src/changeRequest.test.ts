@@ -60,7 +60,18 @@ describe('handleChangeRequestEvent', () => {
     expect(updates).toEqual([]);
   });
 
-  it('releases the project issue before reporting Todo from the task provider handoff adapter', async () => {
+  it('does not hand off delayed change requests for closed pull requests', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+
+    const result = await handleChangeRequestEvent(reviewEvent({ state: 'changes_requested', prState: 'closed' }), {
+      tasks: handoffRecorder({ updates }),
+    });
+
+    expect(result.reason).toBe('pull request is already closed');
+    expect(updates).toEqual([]);
+  });
+
+  it('creates the handoff comment before releasing the project issue', async () => {
     const calls: string[] = [];
     const releases: unknown[] = [];
     const handoff = createTaskProviderPullRequestCommentHandoff({
@@ -94,7 +105,7 @@ describe('handleChangeRequestEvent', () => {
       commentBody: 'body',
     });
 
-    expect(calls).toEqual(['release:checks_failed', 'comment']);
+    expect(calls).toEqual(['comment', 'release:checks_failed']);
     expect(releases).toEqual([expect.objectContaining({
       issue: expect.objectContaining({ id: 'PVTI_item', contentId: 'I_issue', status: 'Backlog' }),
       claim: expect.objectContaining({
@@ -108,5 +119,30 @@ describe('handleChangeRequestEvent', () => {
       status: 'Todo',
       commentUrl: 'https://github.com/reirei-lab/rainrail/issues/23#issuecomment-1',
     });
+  });
+
+  it('does not release the project issue when creating the handoff comment fails', async () => {
+    const releases: unknown[] = [];
+    const handoff = createTaskProviderPullRequestCommentHandoff({
+      name: 'github',
+      kind: 'task-provider',
+      async getIssue() {
+        throw new Error('not used');
+      },
+      async createComment() {
+        throw new Error('comment failed');
+      },
+    }, {
+      releaseProjectIssue(input) {
+        releases.push(input);
+      },
+    });
+
+    await expect(handoff.returnTaskToTodo({
+      task,
+      reason: 'checks_failed',
+      commentBody: 'body',
+    })).rejects.toThrow('comment failed');
+    expect(releases).toEqual([]);
   });
 });

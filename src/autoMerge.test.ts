@@ -124,6 +124,25 @@ describe('handleAutoMergeEvent', () => {
     expect(runtimeMerges).toEqual([expect.objectContaining({ number: 44 })]);
   });
 
+  it('continues past unapproved candidates and auto-merges a later approved PR', async () => {
+    const runtimeMerges: unknown[] = [];
+
+    const result = await handleAutoMergeEvent(checkRunEvent({ pullRequests: [{ number: 45 }, { number: 44 }] }), {
+      ...options(),
+      pullRequests: {
+        ...options().pullRequests,
+        async getPullRequest(input) {
+          return input.number === 45
+            ? pullRequest({ ...input, reviews: [] })
+            : pullRequest(input);
+        },
+      },
+    }, runtimeContext(runtimeMerges));
+
+    expect(result.reason).toBe('pull_request_merged');
+    expect(runtimeMerges).toEqual([expect.objectContaining({ number: 44 })]);
+  });
+
   it('re-evaluates auto-merge after a skipped check completes the passing rollup', async () => {
     const runtimeMerges: unknown[] = [];
 

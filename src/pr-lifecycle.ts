@@ -318,6 +318,9 @@ export async function handleChangeRequestEvent(
   if (target.headRepository !== undefined && normalize(target.headRepository) !== normalize(target.repository)) {
     return { handled: false, reason: 'pull request head repository does not match the base repository', pullRequestNumber: target.number, branchName: target.branchName };
   }
+  if (normalize(target.pullRequestState) === 'closed') {
+    return { handled: false, reason: 'pull request is already closed', pullRequestNumber: target.number, branchName: target.branchName };
+  }
   const task = await options.tasks.getAgentTaskByBranchName(target.branchName);
   if (task === undefined) {
     return { handled: false, reason: 'no agent task matched the PR branch', pullRequestNumber: target.number, branchName: target.branchName };
@@ -537,17 +540,33 @@ export async function handleAutoMergeEvent(
       fallback = { handled: false, reason: 'pull request is not an agent-authored target', pullRequest };
       continue;
     }
-    if (!reviewApproved(options, pullRequest)) return { handled: false, reason: 'configured reviewer approval is not confirmed', pullRequest };
-    if (hasUnresolvedChangeRequest(pullRequest)) {
-      return { handled: false, reason: 'pull request has unresolved change requests', pullRequest };
+    if (!reviewApproved(options, pullRequest)) {
+      fallback = { handled: false, reason: 'configured reviewer approval is not confirmed', pullRequest };
+      continue;
     }
-    if (!allChecksPassed(pullRequest)) return { handled: false, reason: 'not all checks have passed', pullRequest };
-    if (pullRequest.isDraft) return { handled: false, reason: 'pull request is draft', pullRequest };
-    if (normalize(pullRequest.state) !== 'open') return { handled: false, reason: 'pull request is not open', pullRequest };
+    if (hasUnresolvedChangeRequest(pullRequest)) {
+      fallback = { handled: false, reason: 'pull request has unresolved change requests', pullRequest };
+      continue;
+    }
+    if (!allChecksPassed(pullRequest)) {
+      fallback = { handled: false, reason: 'not all checks have passed', pullRequest };
+      continue;
+    }
+    if (pullRequest.isDraft) {
+      fallback = { handled: false, reason: 'pull request is draft', pullRequest };
+      continue;
+    }
+    if (normalize(pullRequest.state) !== 'open') {
+      fallback = { handled: false, reason: 'pull request is not open', pullRequest };
+      continue;
+    }
     if (isMergeabilityPending(pullRequest)) {
       throw new Error('pull request mergeability is still being calculated');
     }
-    if (!isAutoMergeable(pullRequest)) return { handled: false, reason: 'pull request is not mergeable', pullRequest };
+    if (!isAutoMergeable(pullRequest)) {
+      fallback = { handled: false, reason: 'pull request is not mergeable', pullRequest };
+      continue;
+    }
 
     const mergeInput = {
       repository: pullRequest.repository,
@@ -660,7 +679,7 @@ function candidateFromPullRequests(payload: Record<string, unknown>, headSha: st
   };
 }
 
-function changeRequestTargetFromEvent(event: RainrailEventEnvelope): { repository: string; number: number; branchName: string; headRepository?: string; reviewId?: number; reviewUrl?: string; reviewBody?: string } | undefined {
+function changeRequestTargetFromEvent(event: RainrailEventEnvelope): { repository: string; number: number; branchName: string; headRepository?: string; pullRequestState?: string; reviewId?: number; reviewUrl?: string; reviewBody?: string } | undefined {
   const payload = recordValue(event.payload);
   if (event.name !== 'github.review' || payload.event !== 'pull_request_review' || payload.action !== 'submitted') return undefined;
   const review = recordValue(payload.review);
@@ -675,6 +694,7 @@ function changeRequestTargetFromEvent(event: RainrailEventEnvelope): { repositor
     number,
     branchName,
     ...optionalString('headRepository', stringValue(pullRequest.headRepository ?? pullRequest.headRepo)),
+    ...optionalString('pullRequestState', stringValue(pullRequest.state)),
     ...optionalNumber('reviewId', numberValue(review.id ?? recordValue(payload.resource).id)),
     ...optionalString('reviewUrl', stringValue(review.url ?? recordValue(payload.resource).url)),
     ...optionalString('reviewBody', stringValue(review.body ?? recordValue(payload.resource).body)),
@@ -1009,7 +1029,8 @@ async function removePendingReviewRequest(
   context: PluginRuntimeContext | undefined,
 ): Promise<boolean> {
   if (
-    reviewRequest?.enabled !== true
+    reviewRequest === undefined
+    || reviewRequest.enabled === false
     || pullRequests.removeReviewRequest === undefined
     || !pullRequest.reviewRequests.some((login) => sameLogin(login, reviewRequest.reviewerLogin))
   ) {
@@ -1125,15 +1146,6 @@ export function createTaskProviderPullRequestCommentHandoff(
       if (input.task.claim?.projectItemId === undefined) {
         throw new Error('agent task has no Project claim');
       }
-      if (queue?.releaseProjectIssue !== undefined) {
-        await queue.releaseProjectIssue({
-          issue: agentTaskProjectIssue(input.task),
-          claim: input.task.claim,
-          agentSessionId: input.task.agentSessionId,
-          branchName: input.task.branchName,
-          reason: input.reason,
-        });
-      }
       const issue = input.task.issue;
       const comment = input.commentBody === undefined || issue?.number === undefined || issue.repository === undefined
         ? undefined
@@ -1145,6 +1157,15 @@ export function createTaskProviderPullRequestCommentHandoff(
             },
             body: input.commentBody,
           }, context === undefined ? undefined : { signal: context.signal });
+      if (queue?.releaseProjectIssue !== undefined) {
+        await queue.releaseProjectIssue({
+          issue: agentTaskProjectIssue(input.task),
+          claim: input.task.claim,
+          agentSessionId: input.task.agentSessionId,
+          branchName: input.task.branchName,
+          reason: input.reason,
+        });
+      }
       return {
         projectItemId: input.task.claim.projectItemId,
         status: queue?.releaseProjectIssue === undefined ? 'Commented' : 'Todo',
