@@ -32,6 +32,9 @@ const makeRepo = () => {
             docs: ['docs/contract.md'],
             tests: ['tests/contract.test.ts'],
             publicExports: ['PublicThing'],
+            publicExportKinds: {
+              PublicThing: 'type',
+            },
           },
         ],
       },
@@ -134,6 +137,28 @@ describe('docs drift checks', () => {
 
   it('does not count type-only re-exports for value public exports', () => {
     const root = makeRepo();
+    writeFileSync(
+      join(root, 'docs/contracts.manifest.json'),
+      JSON.stringify(
+        {
+          contracts: [
+            {
+              id: 'contract',
+              title: 'Contract',
+              sources: ['src/contract.ts'],
+              docs: ['docs/contract.md'],
+              tests: ['tests/contract.test.ts'],
+              publicExports: ['PublicThing'],
+              publicExportKinds: {
+                PublicThing: 'value',
+              },
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+    );
 
     writeFileSync(join(root, 'src/contract.ts'), 'export function PublicThing() {}\n');
     writeFileSync(
@@ -143,6 +168,38 @@ describe('docs drift checks', () => {
 
     expect(validateContractsManifest(root)).toContain(
       'contract public export PublicThing is not re-exported from src/index.ts',
+    );
+  });
+
+  it('keeps expected public export kind fixed by the manifest', () => {
+    const root = makeRepo();
+    writeFileSync(
+      join(root, 'docs/contracts.manifest.json'),
+      JSON.stringify(
+        {
+          contracts: [
+            {
+              id: 'contract',
+              title: 'Contract',
+              sources: ['src/contract.ts'],
+              docs: ['docs/contract.md'],
+              tests: ['tests/contract.test.ts'],
+              publicExports: ['PublicThing'],
+              publicExportKinds: {
+                PublicThing: 'value',
+              },
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+    );
+
+    writeFileSync(join(root, 'src/contract.ts'), 'export type PublicThing = () => void;\n');
+
+    expect(validateContractsManifest(root)).toContain(
+      'contract public export PublicThing is not exported as value by its sources',
     );
   });
 

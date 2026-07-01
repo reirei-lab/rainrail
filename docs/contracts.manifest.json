@@ -45,7 +45,26 @@
         "GitHubAuthToken",
         "createGitHubTaskProvider",
         "recordGitHubRateLimit"
-      ]
+      ],
+      "publicExportKinds": {
+        "RainrailEventEnvelope": "type",
+        "SourcePlugin": "type",
+        "WorkflowPlugin": "type",
+        "PluginRuntimeContext": "type",
+        "RuntimeDispatcher": "type",
+        "createRuntimeDispatcher": "value",
+        "RuntimeProvider": "type",
+        "TaskProvider": "type",
+        "defineSourcePlugin": "value",
+        "defineWorkflowPlugin": "value",
+        "createPluginLoader": "value",
+        "createRouteWorkflow": "value",
+        "createRouteLocalHandler": "value",
+        "routeRainrailEvent": "value",
+        "GitHubAuthToken": "type",
+        "createGitHubTaskProvider": "value",
+        "recordGitHubRateLimit": "value"
+      }
     },
     {
       "id": "event-delivery",
@@ -71,7 +90,14 @@
         "formatRainrailSseEvent",
         "verifyRainrailEventsBearerToken",
         "createRainrailHttpApp"
-      ]
+      ],
+      "publicExportKinds": {
+        "createRainrailEventBus": "value",
+        "RainrailBridgeRoom": "value",
+        "formatRainrailSseEvent": "value",
+        "verifyRainrailEventsBearerToken": "value",
+        "createRainrailHttpApp": "value"
+      }
     },
     {
       "id": "github-webhook-normalization",
@@ -83,7 +109,12 @@
         "createGitHubWebhookSourcePlugin",
         "GitHubWebhookPayload",
         "NormalizedGitHubWebhookPayload"
-      ]
+      ],
+      "publicExportKinds": {
+        "createGitHubWebhookSourcePlugin": "value",
+        "GitHubWebhookPayload": "type",
+        "NormalizedGitHubWebhookPayload": "type"
+      }
     },
     {
       "id": "cloudflare-tail-source",
@@ -102,7 +133,11 @@
         "src/worker.test.ts",
         "scripts/validate-cloudflare-worker-ops.test.mjs"
       ],
-      "publicExports": ["createCloudflareTailSourcePlugin", "CloudflareTailEvent"]
+      "publicExports": ["createCloudflareTailSourcePlugin", "CloudflareTailEvent"],
+      "publicExportKinds": {
+        "createCloudflareTailSourcePlugin": "value",
+        "CloudflareTailEvent": "type"
+      }
     },
     {
       "id": "project-issue-queue",
@@ -125,7 +160,14 @@
         "assignNextProjectIssueToAgent",
         "getNextProjectIssueToStart",
         "createGitHubProjectTaskQueueProvider"
-      ]
+      ],
+      "publicExportKinds": {
+        "ProjectIssue": "type",
+        "TaskQueueProvider": "type",
+        "assignNextProjectIssueToAgent": "value",
+        "getNextProjectIssueToStart": "value",
+        "createGitHubProjectTaskQueueProvider": "value"
+      }
     },
     {
       "id": "workflow-plugins",
@@ -136,7 +178,11 @@
       "publicExports": [
         "createMentionDraftWorkflow",
         "createCloudflareIssueReporterWorkflow"
-      ]
+      ],
+      "publicExportKinds": {
+        "createMentionDraftWorkflow": "value",
+        "createCloudflareIssueReporterWorkflow": "value"
+      }
     }
   ]
 }

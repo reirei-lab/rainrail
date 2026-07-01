@@ -286,6 +286,7 @@ const projectPathExists = (root, path) =>
  *   docs?: string[];
  *   tests?: string[];
  *   publicExports?: string[];
+ *   publicExportKinds?: Record<string, string>;
  * }>}
  */
 const readManifest = (root) => {
@@ -356,6 +357,7 @@ export const validateContractsManifest = (root = repoRoot) => {
     const docs = contract.docs ?? [];
     const tests = contract.tests ?? [];
     const publicExports = contract.publicExports ?? [];
+    const publicExportKinds = contract.publicExportKinds ?? {};
 
     if (!id || typeof id !== 'string') {
       errors.push('contract is missing a string id');
@@ -405,15 +407,26 @@ export const validateContractsManifest = (root = repoRoot) => {
     }
 
     for (const publicExport of publicExports) {
-      const exportingSources = sourceEntries.filter((source) =>
-        hasExportedDeclaration(source.text, publicExport),
-      ).map((source) => ({
+      const expectedKind = publicExportKinds[publicExport];
+      if (expectedKind !== 'type' && expectedKind !== 'value') {
+        errors.push(`${id} public export ${publicExport} must declare kind type or value`);
+        continue;
+      }
+
+      const declaredSources = sourceEntries
+        .map((source) => ({
         ...source,
         exportKind: getExportedDeclarationKind(source.text, publicExport),
-      }));
+        }))
+        .filter((source) => source.exportKind !== undefined);
+      const exportingSources = declaredSources.filter(
+        (source) => source.exportKind === expectedKind,
+      );
 
-      if (exportingSources.length === 0) {
+      if (declaredSources.length === 0) {
         errors.push(`${id} public export ${publicExport} is not exported by its sources`);
+      } else if (exportingSources.length === 0) {
+        errors.push(`${id} public export ${publicExport} is not exported as ${expectedKind} by its sources`);
       }
 
       if (
