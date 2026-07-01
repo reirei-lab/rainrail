@@ -98,7 +98,9 @@ provider 利用側が `onSpawnError` で観測できるようにする。start r
 fallback session へ移った場合は、前回 completion metadata の top-level または
 `result` 配下の `meta.agentMeta.fallbackSessionKey` から fallback session key を、
 または stdout/stderr log の embedded fallback marker から fallback session id を検出して resume
-対象にする。Task と resume attempt には stdout `logPath` と対応する `stderrLogPath` を保持し、
+対象にする。marker 由来の fallback session id は `agent:<agent>:explicit:<session-id>` の
+session key として再開し、JSON completion として解析できた stdout 内の引用 marker は
+resume 対象にしない。Task と resume attempt には stdout `logPath` と対応する `stderrLogPath` を保持し、
 stderr 側にしか fallback diagnostics が残らない timeout でも fallback transcript を引き継ぐ。
 OpenClaw の raw stdout/stderr log は redaction 前の credential を含み得るため、
 log directory は `0700`、start/resume の stdout/stderr log file は `0600` で作成する。
@@ -119,7 +121,8 @@ resume helper は running pid を確認し、
 timeline/status/jsonl の session 解決は stdout `logPath` と対応する `stderrLogPath` または
 `.stderr.log` の embedded fallback marker も参照する。redaction は shell 風の
 `token=...` や `curl -u user:password` / `curl --proxy-user user:password` /
-`curl --oauth2-bearer token` だけでなく JSON の `"token": "..."` /
+`curl --oauth2-bearer token` / `curl --pass phrase` / `curl --tlspassword string`
+だけでなく JSON の `"token": "..."` /
 `"apiKey": "..."` / `"password": "..."`、`"webhookSecret"` / `"clientSecret"` /
 `"apiToken"` のような compound key、quoted shell assignment、`github_pat_...`、
 HTTP Authorization header 全体、Bearer credential も対象にする。timeline status は最後の lifecycle/event row を見て
@@ -237,6 +240,8 @@ handler lifecycle から所有権が離れる。dispatcher は action implementa
 object を receiver として呼ぶため、`this.client` などに依存する object method も
 そのまま利用できる。
 `context.runtime.startRun` と `context.runtime.resumeRun` は handler へ直接 provider を渡さず gated wrapper にする。
+underlying provider が optional `resumeRun` を持たない場合、wrapper も `resumeRun` を
+`undefined` として見せ、workflow の optional chaining による feature detection を保つ。
 `runtime:start` capability がない handler は runtime provider 経由でも起動できない。
 handler が `context.runtime.startRun(request, { signal })` として caller signal を渡した
 場合、または `context.runtime.resumeRun(request, { signal })` として caller signal を渡した

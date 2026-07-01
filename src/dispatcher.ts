@@ -423,7 +423,7 @@ function createGatedRuntimeProvider(
     return runtime;
   };
 
-  return {
+  const provider: RuntimeProvider = {
     get name() {
       return getRuntime().name;
     },
@@ -432,9 +432,22 @@ function createGatedRuntimeProvider(
     },
     startRun: (request, context) =>
       callRuntimeStartRun(options, policy, event, lifecycle, getRuntime, request, context?.signal),
-    resumeRun: (request, context) =>
-      callRuntimeResumeRun(options, policy, event, lifecycle, getRuntime, request, context?.signal),
   };
+  Object.defineProperty(provider, 'resumeRun', {
+    configurable: true,
+    enumerable: true,
+    get() {
+      if (getRuntime().resumeRun === undefined) {
+        return undefined;
+      }
+      return (
+        request: Parameters<NonNullable<RuntimeProvider['resumeRun']>>[0],
+        context?: Parameters<NonNullable<RuntimeProvider['resumeRun']>>[1],
+      ) =>
+        callRuntimeResumeRun(options, policy, event, lifecycle, getRuntime, request, context?.signal);
+    },
+  });
+  return provider;
 }
 
 async function callRuntimeStartRun(

@@ -576,7 +576,7 @@ describe('createOpenClawRuntimeProvider', () => {
 
     expect(spawnProcess).toHaveBeenCalledWith('openclaw', expect.arrayContaining([
       '--session-key',
-      'gateway-fallback-resume-stderr',
+      'agent:main:explicit:gateway-fallback-resume-stderr',
     ]), expect.anything());
   });
 
@@ -618,7 +618,52 @@ describe('createOpenClawRuntimeProvider', () => {
 
     expect(spawnProcess).toHaveBeenCalledWith('openclaw', expect.arrayContaining([
       '--session-key',
-      'gateway-fallback-latest',
+      'agent:main:explicit:gateway-fallback-latest',
+    ]), expect.anything());
+  });
+
+  it('does not resume fallback markers quoted inside JSON completion text', async () => {
+    const spawnProcess = vi.fn(() => ({ pid: 5151, unref: vi.fn() }));
+    const logDirectory = temporaryDirectory();
+    const logPath = `${logDirectory}/task.log`;
+    writeFileSync(logPath, JSON.stringify({
+      status: 'ok',
+      finalAssistantVisibleText: '調査対象ログ: EMBEDDED FALLBACK: Gateway timed out; running embedded agent with fresh session gateway-fallback-quoted',
+      result: {
+        meta: {
+          agentMeta: {
+            sessionId: 'intended-session',
+          },
+        },
+      },
+    }), 'utf8');
+    const provider = createOpenClawRuntimeProvider({
+      enabled: true,
+      command: 'openclaw',
+      agentId: 'main',
+      sessionKeyPrefix: 'rainrail',
+      timeoutSeconds: 900,
+      logDirectory,
+      spawnProcess,
+    });
+
+    await provider.resumeRun?.({
+      run: { id: 'agent:main:intended-session', provider: 'openclaw', status: 'stopped' },
+      task: {
+        id: 'agent_task_reirei-lab-rainrail_22',
+        title: 'OpenClaw runtime',
+        agentSessionId: 'agent:main:intended-session',
+        branchName: 'agent/reirei-lab-rainrail-22',
+        logPath,
+        resumeAttempts: [],
+      },
+      attemptId: 'agent_task_reirei-lab-rainrail_22_resume_01',
+      requestedBy: 'reirei-agent',
+    });
+
+    expect(spawnProcess).toHaveBeenCalledWith('openclaw', expect.arrayContaining([
+      '--session-key',
+      'agent:main:intended-session',
     ]), expect.anything());
   });
 

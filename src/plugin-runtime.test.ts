@@ -3033,6 +3033,61 @@ describe('plugin runtime contract', () => {
     }
   });
 
+  it('preserves undefined runtime provider resumeRun for optional callers', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: {
+        id: 'delivery-runtime-resume-undefined',
+        receivedAt: '2026-06-29T14:00:00.000Z',
+      },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'github://deliveries/delivery-runtime-resume-undefined',
+      },
+    });
+    const loader = createPluginLoader({
+      runtime: mockRuntimeContext({
+        runtime: {
+          name: 'mock-runtime',
+          kind: 'runtime-provider',
+          startRun: async () => ({ id: 'run:mock', provider: 'codex', status: 'queued' }),
+        },
+      }),
+    });
+
+    loader.on(
+      'github.issue',
+      (_handledEvent, context) =>
+        context.runtime.resumeRun?.({
+          run: { id: 'agent:main:existing-session', provider: 'openclaw', status: 'stopped' },
+          task: {
+            id: 'agent_task_reirei-lab-rainrail_22',
+            title: 'OpenClaw runtime',
+            agentSessionId: 'agent:main:existing-session',
+            branchName: 'agent/reirei-lab-rainrail-22',
+            logPath: 'var/agent-task-logs/task.log',
+            resumeAttempts: [],
+          },
+          attemptId: 'agent_task_reirei-lab-rainrail_22_resume_01',
+          requestedBy: 'resume-run-undefined-handler',
+        }) ?? { skipped: true },
+      { name: 'resume-run-undefined-handler', capabilities: ['runtime:start'] },
+    );
+
+    await expect(loader.dispatch(event)).resolves.toMatchObject([
+      {
+        pluginName: 'resume-run-undefined-handler',
+        eventId: 'github-webhook:delivery-runtime-resume-undefined:github.issue',
+        status: 'fulfilled',
+        value: { skipped: true },
+      },
+    ]);
+  });
+
   it('combines caller and lifecycle abort signals for task provider methods', async () => {
     const event = createEventEnvelope({
       source: { type: 'github', name: 'github-webhook' },
