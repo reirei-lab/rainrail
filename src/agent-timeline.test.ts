@@ -1449,9 +1449,28 @@ describe('agent timeline', () => {
     ].join('\n'));
 
     expect(timeline[0]!.excerpt).toContain(String.raw`\"token\":\"[redacted]\"`);
-    expect(timeline[0]!.excerpt).toContain(String.raw`\"apiKeys\":[redacted]`);
+    expect(timeline[0]!.excerpt).toContain(String.raw`\"apiKeys\":\"[redacted]\"`);
     expect(timeline[0]!.excerpt).not.toContain('opaque-session-token');
     expect(timeline[0]!.excerpt).not.toContain('live-secret');
+  });
+
+  it('redacts nested sensitive keys inside escaped JSON strings', () => {
+    const timeline = parseRuntimeTrajectoryTimeline([
+      JSON.stringify({
+        type: 'tool.result',
+        ts: '2026-06-30T15:09:10.000Z',
+        seq: 1,
+        data: {
+          name: 'bash',
+          status: 'completed',
+          output: String.raw`escaped {\"tokens\":{\"meta\":{},\"value\":\"opaque-session-token\"},\"safe\":\"visible\"}`,
+        },
+      }),
+    ].join('\n'));
+
+    expect(timeline[0]!.excerpt).toContain(String.raw`\"tokens\":\"[redacted]\"`);
+    expect(timeline[0]!.excerpt).toContain(String.raw`\"safe\":\"visible\"`);
+    expect(timeline[0]!.excerpt).not.toContain('opaque-session-token');
   });
 
   it('redacts curl ftp account credentials', () => {
@@ -1550,6 +1569,46 @@ describe('agent timeline', () => {
     expect(timeline[0]!.excerpt).not.toContain('secret-cookie');
     expect(timeline[0]!.excerpt).not.toContain('session-secret');
     expect(timeline[0]!.excerpt).not.toContain('refresh-secret');
+  });
+
+  it('redacts indented authorization assignments', () => {
+    const timeline = parseRuntimeTrajectoryTimeline([
+      JSON.stringify({
+        type: 'tool.result',
+        ts: '2026-06-30T15:09:10.000Z',
+        seq: 1,
+        data: {
+          name: 'bash',
+          status: 'completed',
+          output: 'env:\n  HTTP_AUTHORIZATION: Basic dXNlcjpwYXNz\n  AUTHORIZATION_HEADER: Digest username="u", response="digest-secret"',
+        },
+      }),
+    ].join('\n'));
+
+    expect(timeline[0]!.excerpt).toContain('  HTTP_AUTHORIZATION: [redacted]');
+    expect(timeline[0]!.excerpt).toContain('  AUTHORIZATION_HEADER: [redacted]');
+    expect(timeline[0]!.excerpt).not.toContain('dXNlcjpwYXNz');
+    expect(timeline[0]!.excerpt).not.toContain('digest-secret');
+  });
+
+  it('redacts full cookie assignment values', () => {
+    const timeline = parseRuntimeTrajectoryTimeline([
+      JSON.stringify({
+        type: 'tool.result',
+        ts: '2026-06-30T15:09:10.000Z',
+        seq: 1,
+        data: {
+          name: 'bash',
+          status: 'completed',
+          output: 'HTTP_COOKIE=session=abc; csrf=secret\n  SET_COOKIE: refresh=def; csrf=other-secret',
+        },
+      }),
+    ].join('\n'));
+
+    expect(timeline[0]!.excerpt).toContain('HTTP_COOKIE=[redacted]');
+    expect(timeline[0]!.excerpt).toContain('  SET_COOKIE: [redacted]');
+    expect(timeline[0]!.excerpt).not.toContain('csrf=secret');
+    expect(timeline[0]!.excerpt).not.toContain('other-secret');
   });
 
   it('redacts full authorization assignment values', () => {

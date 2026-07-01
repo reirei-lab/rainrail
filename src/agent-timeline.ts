@@ -622,7 +622,8 @@ function redactSensitiveText(value: string): string {
     .replace(/\b(Set-Cookie:\s*)[\s\S]*?(?=(?:"\s+-H\s+"(?:Authorization|Cookie|Set-Cookie):)|\s+(?:Authorization|Cookie|Set-Cookie):|[\n\r]|$)/gi, '$1[redacted-cookie]')
     .replace(/\b(Cookie:\s*)[\s\S]*?(?=(?:"\s+-H\s+"(?:Authorization|Cookie|Set-Cookie):)|\s+Set-Cookie:|[\n\r]|$)/gi, '$1[redacted-cookie]')
     .replace(/\b([A-Za-z0-9_-]*(?:api[-_]?key|token|secret)[A-Za-z0-9_-]*:\s*)[\s\S]*?(?=(?:"\s+-H\s+"[A-Za-z0-9_-]*(?:api[-_]?key|token|secret|authorization|cookie):)|\s+[A-Za-z0-9_-]*(?:api[-_]?key|token|secret|authorization|cookie):|[\n\r]|$)/gi, '$1[redacted-header]')
-    .replace(/(^|[\n\r])([A-Za-z0-9_-]*authorization[A-Za-z0-9_-]*\s*:\s*)(?!\[redacted)[^\n\r]*/gi, '$1$2[redacted]')
+    .replace(/(^|[\n\r])(\s*[A-Za-z0-9_-]*authorization[A-Za-z0-9_-]*\s*[:=]\s*)(?!\[redacted)[^\n\r]*/gi, '$1$2[redacted]')
+    .replace(/(^|[\n\r])(\s*[A-Za-z0-9_-]*(?:set[-_]?cookie|cookie)[A-Za-z0-9_-]*\s*[:=]\s*)(?!\[redacted)[^\n\r]*/gi, '$1$2[redacted]')
     .replace(/(^|\s)((?!(?:no_proxy)\b)[A-Za-z0-9_-]*(?:https?|all)_proxy[A-Za-z0-9_-]*\s*[:=]\s*)(?:"[^"\s]*:[^"@\s]+@[^"\s]+"|'[^'\s]*:[^'@\s]+@[^'\s]+'|[^\s'"]*:[^\s'"]+@[^\s'"]+)/gi, '$1$2[redacted-proxy]')
     .replace(/("[^"]*(?:token|secret|password|api[_-]?key|private[_-]?key|authorization|set-cookie|cookie)[^"]*"\s*:\s*)"(?:(?:\\.)|[^"\\])*"/gi, '$1"[redacted]"')
     .replace(/([A-Za-z0-9_-]*(?:token|secret|password|api[_-]?key|private[_-]?key|set-cookie|cookie)[A-Za-z0-9_-]*\s*[:=]\s*)"(?:(?:\\.)|[^"\\])*"/gi, '$1"[redacted]"')
@@ -635,9 +636,7 @@ function redactSensitiveText(value: string): string {
 }
 
 function redactSensitiveJsonKeyValues(value: string): string {
-  return redactUnescapedSensitiveJsonKeyValues(value)
-    .replace(/(\\"[^"\\]*(?:token|secret|password|api[_-]?key|private[_-]?key|authorization|set-cookie|cookie)[^"\\]*\\"\s*:\s*)\\"(?:(?:\\\\.)|[^\\])*?\\"/gi, '$1\\"[redacted]\\"')
-    .replace(/(\\"[^"\\]*(?:token|secret|password|api[_-]?key|private[_-]?key|authorization|set-cookie|cookie)[^"\\]*\\"\s*:\s*)(?!\\")(?:\[[\s\S]*?\]|\{[\s\S]*?\}|[^\s,}\]]+)/gi, '$1[redacted]')
+  return redactEscapedSensitiveJsonKeyValues(redactUnescapedSensitiveJsonKeyValues(value));
 }
 
 function redactUnescapedSensitiveJsonKeyValues(value: string): string {
@@ -656,6 +655,80 @@ function redactUnescapedSensitiveJsonKeyValues(value: string): string {
     cursor = valueEnd;
   }
   return cursor === 0 ? value : redacted + value.slice(cursor);
+}
+
+function redactEscapedSensitiveJsonKeyValues(value: string): string {
+  const keyPattern = /\\"[^"\\]*(?:token|secret|password|api[_-]?key|private[_-]?key|authorization|set-cookie|cookie)[^"\\]*\\"\s*:\s*/gi;
+  let redacted = '';
+  let cursor = 0;
+  for (const match of value.matchAll(keyPattern)) {
+    const matchIndex = match.index ?? 0;
+    if (matchIndex < cursor) {
+      continue;
+    }
+    const valueStart = matchIndex + match[0].length;
+    const valueEnd = findEscapedJsonValueEnd(value, valueStart);
+    redacted += value.slice(cursor, valueStart);
+    redacted += '\\"[redacted]\\"';
+    cursor = valueEnd;
+  }
+  return cursor === 0 ? value : redacted + value.slice(cursor);
+}
+
+function findEscapedJsonValueEnd(value: string, start: number): number {
+  let index = start;
+  while (/\s/.test(value[index] ?? '')) {
+    index += 1;
+  }
+  const opener = value[index];
+  if (opener === '\\' && value[index + 1] === '"') {
+    return findEscapedJsonStringEnd(value, index) ?? value.length;
+  }
+  if (opener === '[' || opener === '{') {
+    return findBalancedEscapedJsonEnd(value, index, opener) ?? value.length;
+  }
+  while (index < value.length && !/[\s,}\]]/.test(value[index] ?? '')) {
+    index += 1;
+  }
+  return index;
+}
+
+function findEscapedJsonStringEnd(value: string, start: number): number | undefined {
+  for (let index = start + 2; index < value.length; index += 1) {
+    if (value[index] === '\\' && value[index + 1] === '"') {
+      return index + 2;
+    }
+  }
+  return undefined;
+}
+
+function findBalancedEscapedJsonEnd(value: string, start: number, opener: string): number | undefined {
+  const stack = [opener === '[' ? ']' : '}'];
+  let inString = false;
+  for (let index = start + 1; index < value.length; index += 1) {
+    const char = value[index];
+    if (inString) {
+      if (char === '\\' && value[index + 1] === '"') {
+        inString = false;
+        index += 1;
+      }
+      continue;
+    }
+    if (char === '\\' && value[index + 1] === '"') {
+      inString = true;
+      index += 1;
+    } else if (char === '[') {
+      stack.push(']');
+    } else if (char === '{') {
+      stack.push('}');
+    } else if (char === stack.at(-1)) {
+      stack.pop();
+      if (stack.length === 0) {
+        return index + 1;
+      }
+    }
+  }
+  return undefined;
 }
 
 function findJsonValueEnd(value: string, start: number): number {

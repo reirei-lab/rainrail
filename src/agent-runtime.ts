@@ -211,7 +211,7 @@ export function readRuntimeRunCompletionFromLog(raw: string): RuntimeRunCompleti
   }
   const payload = parseJsonFromLog(raw);
   if (!isRecord(payload)) {
-    return compactionFailureFromLog(raw);
+    return compactionFailureOutsideJsonRanges(raw);
   }
 
   return runtimeRunCompletionFromPayload(payload);
@@ -279,6 +279,20 @@ function compactionFailureAfterLatestCompletionJson(raw: string): RuntimeRunComp
     if (index > latestCompletionEnd) {
       latestFailure = compactionFailureFromLog(match[0]);
     }
+  }
+  return latestFailure;
+}
+
+function compactionFailureOutsideJsonRanges(raw: string): RuntimeRunCompletion | undefined {
+  const jsonRanges = parseJsonObjectsFromLogWithPositions(raw).map((object) => ({ start: object.index, end: object.end }));
+  let latestFailure: RuntimeRunCompletion | undefined;
+  for (const match of raw.matchAll(/[^\r\n]*CLI transcript compaction failed[^\r\n]*/gi)) {
+    const phraseOffset = match[0].toLowerCase().indexOf('cli transcript compaction failed');
+    const index = (match.index ?? -1) + phraseOffset;
+    if (jsonRanges.some((range) => index >= range.start && index <= range.end)) {
+      continue;
+    }
+    latestFailure = compactionFailureFromLog(match[0]);
   }
   return latestFailure;
 }
