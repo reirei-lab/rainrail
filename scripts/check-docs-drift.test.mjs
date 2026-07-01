@@ -133,6 +133,14 @@ describe('docs drift checks', () => {
     expect(validateContractsManifest(root)).toContain(
       'contract public export PublicThing is not re-exported from src/index.ts',
     );
+
+    writeFileSync(
+      join(root, 'src/index.ts'),
+      "export { OtherThing as PublicThing } from './contract.js';\n",
+    );
+    expect(validateContractsManifest(root)).toContain(
+      'contract public export PublicThing is not re-exported from src/index.ts',
+    );
   });
 
   it('does not count type-only re-exports for value public exports', () => {
@@ -211,6 +219,19 @@ describe('docs drift checks', () => {
 
     expect(validateContractsManifest(root)).toContain(
       'contract public export PublicThing is not exported by its sources',
+    );
+
+    writeFileSync(join(root, 'src/contract.ts'), 'export const enum PublicThing { A }\n');
+
+    expect(validateContractsManifest(root)).toContain(
+      'contract public export PublicThing is not exported by its sources',
+    );
+
+    writeFileSync(join(root, 'src/types.ts'), 'export type PublicThing = () => void;\n');
+    writeFileSync(join(root, 'src/contract.ts'), "export { PublicThing } from './types.js';\n");
+
+    expect(validateContractsManifest(root)).toContain(
+      'contract public export PublicThing is not exported as value by its sources',
     );
 
     writeFileSync(

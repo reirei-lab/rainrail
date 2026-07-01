@@ -34,8 +34,13 @@ const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 /**
  * @param {string} sourceText
  * @param {string} publicExport
+ * @param {(moduleSpecifier: string, publicExport: string) => 'type' | 'value' | undefined | null} [resolveModuleExportKind]
  */
-const getExportedDeclarationKind = (sourceText, publicExport) => {
+const getExportedDeclarationKind = (
+  sourceText,
+  publicExport,
+  resolveModuleExportKind = () => null,
+) => {
   const sourceFile = ts.createSourceFile(
     'contract.ts',
     sourceText,
@@ -45,7 +50,7 @@ const getExportedDeclarationKind = (sourceText, publicExport) => {
   );
 
   for (const statement of sourceFile.statements) {
-    const kind = statementExportKind(sourceFile, statement, publicExport);
+    const kind = statementExportKind(sourceFile, statement, publicExport, resolveModuleExportKind);
     if (kind !== undefined) {
       return kind;
     }
@@ -140,6 +145,7 @@ const indexReExportsPublicName = (indexSource, exportPath, publicExport, exportK
       statement.exportClause.elements.some(
         (specifier) =>
           specifier.name.text === publicExport &&
+          (specifier.propertyName?.text ?? specifier.name.text) === publicExport &&
           !(exportKind === 'value' && specifier.isTypeOnly),
       )
     );
@@ -150,9 +156,10 @@ const indexReExportsPublicName = (indexSource, exportPath, publicExport, exportK
  * @param {import('typescript').SourceFile} sourceFile
  * @param {import('typescript').Statement} statement
  * @param {string} publicExport
+ * @param {(moduleSpecifier: string, publicExport: string) => 'type' | 'value' | undefined | null} resolveModuleExportKind
  * @returns {'type' | 'value' | undefined}
  */
-const statementExportKind = (sourceFile, statement, publicExport) => {
+const statementExportKind = (sourceFile, statement, publicExport, resolveModuleExportKind) => {
   if (ts.isExportDeclaration(statement)) {
     const exportClause = statement.exportClause;
     if (exportClause === undefined || !ts.isNamedExports(exportClause)) {
@@ -171,7 +178,15 @@ const statementExportKind = (sourceFile, statement, publicExport) => {
     }
 
     if (statement.moduleSpecifier !== undefined) {
-      return 'value';
+      if (!ts.isStringLiteral(statement.moduleSpecifier)) {
+        return undefined;
+      }
+
+      const resolvedKind = resolveModuleExportKind(
+        statement.moduleSpecifier.text,
+        specifier.propertyName?.text ?? specifier.name.text,
+      );
+      return resolvedKind === null ? 'value' : resolvedKind;
     }
 
     return localBindingKind(
@@ -249,6 +264,7 @@ const localImportKind = (statement, localName) => {
  */
 const directDeclarationKind = (statement, publicExport) => {
   const isDeclared = hasDeclareModifier(statement);
+  const isConst = hasConstModifier(statement);
 
   if (ts.isVariableStatement(statement)) {
     return !isDeclared && statement.declarationList.declarations.some(
@@ -259,7 +275,11 @@ const directDeclarationKind = (statement, publicExport) => {
       : undefined;
   }
 
-  if (ts.isClassDeclaration(statement) || ts.isEnumDeclaration(statement) || ts.isFunctionDeclaration(statement)) {
+  if (ts.isEnumDeclaration(statement)) {
+    return !isDeclared && !isConst && statement.name.text === publicExport ? 'value' : undefined;
+  }
+
+  if (ts.isClassDeclaration(statement) || ts.isFunctionDeclaration(statement)) {
     return !isDeclared && statement.name?.text === publicExport ? 'value' : undefined;
   }
 
@@ -287,6 +307,12 @@ const hasDefaultModifier = (node) =>
  */
 const hasDeclareModifier = (node) =>
   hasModifier(node, ts.SyntaxKind.DeclareKeyword);
+
+/**
+ * @param {import('typescript').Node} node
+ */
+const hasConstModifier = (node) =>
+  hasModifier(node, ts.SyntaxKind.ConstKeyword);
 
 /**
  * @param {import('typescript').Node} node
@@ -503,6 +529,49 @@ export const validateContractsManifest = (root = repoRoot) => {
             ? `./${path.slice('src/'.length, -'.ts'.length)}.js`
             : undefined,
       }));
+    /**
+     * @param {string} sourcePath
+     * @param {string} moduleSpecifier
+     */
+    const resolveRelativeModulePath = (sourcePath, moduleSpecifier) => {
+      if (!moduleSpecifier.startsWith('.')) {
+        return undefined;
+      }
+
+      const sourceDir = sourcePath.includes('/') ? sourcePath.slice(0, sourcePath.lastIndexOf('/')) : '.';
+      const modulePath = toPosix(normalize(join(sourceDir, moduleSpecifier)));
+      const candidate = modulePath.endsWith('.js')
+        ? `${modulePath.slice(0, -'.js'.length)}.ts`
+        : modulePath;
+
+      return projectPathExists(root, candidate) ? candidate : undefined;
+    };
+    /**
+     * @param {string} sourcePath
+     * @param {string} exportedName
+     * @param {Set<string>} [seen]
+     * @returns {'type' | 'value' | undefined}
+     */
+    const getSourceExportedDeclarationKind = (sourcePath, exportedName, seen = new Set()) => {
+      const seenKey = `${sourcePath}:${exportedName}`;
+      if (seen.has(seenKey) || !projectPathExists(root, sourcePath)) {
+        return undefined;
+      }
+      seen.add(seenKey);
+
+      return getExportedDeclarationKind(
+        readText(root, sourcePath),
+        exportedName,
+        (moduleSpecifier, moduleExport) => {
+          const modulePath = resolveRelativeModulePath(sourcePath, moduleSpecifier);
+          if (modulePath === undefined) {
+            return moduleSpecifier.startsWith('.') ? undefined : null;
+          }
+
+          return getSourceExportedDeclarationKind(modulePath, moduleExport, seen);
+        },
+      );
+    };
 
     for (const source of sources) {
       if (!source.startsWith('src/') || !source.endsWith('.ts')) {
@@ -524,8 +593,8 @@ export const validateContractsManifest = (root = repoRoot) => {
 
       const declaredSources = sourceEntries
         .map((source) => ({
-        ...source,
-        exportKind: getExportedDeclarationKind(source.text, publicExport),
+          ...source,
+          exportKind: getSourceExportedDeclarationKind(source.path, publicExport),
         }))
         .filter((source) => source.exportKind !== undefined);
       const exportingSources = declaredSources.filter(
