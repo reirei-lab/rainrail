@@ -545,6 +545,44 @@ describe('agent timeline', () => {
     }
   });
 
+  it('stops fallback lookup when the latest resume log has a normal completion', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'rainrail-clear-fallback-across-logs-timeline-'));
+    const startLogPath = join(directory, 'agent.log');
+    const resumeLogPath = join(directory, 'resume-1.log');
+    writeFileSync(startLogPath, 'EMBEDDED FALLBACK: Gateway timed out; running embedded agent with fresh session gateway-fallback-stale', 'utf8');
+    writeFileSync(resumeLogPath, JSON.stringify({
+      status: 'ok',
+      finalAssistantVisibleText: 'Outcome: implemented',
+      meta: { agentMeta: { sessionId: 'original-session' } },
+    }), 'utf8');
+    writeFileSync(join(directory, 'sessions.json'), JSON.stringify({
+      'agent:main:original-session': { sessionId: 'original-session' },
+      'agent:main:explicit:gateway-fallback-stale': { sessionId: 'stale-fallback-session' },
+    }), 'utf8');
+    writeFileSync(join(directory, 'original-session.trajectory.jsonl'), [
+      JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:08:00.000Z', seq: 1 }),
+    ].join('\n'), 'utf8');
+    writeFileSync(join(directory, 'stale-fallback-session.trajectory.jsonl'), [
+      JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:09:00.000Z', seq: 1 }),
+    ].join('\n'), 'utf8');
+
+    try {
+      const timeline = await readRuntimeTimeline(
+        {
+          logPath: startLogPath,
+          agentSessionId: 'agent:main:original-session',
+          resumeAttempts: [{ logPath: resumeLogPath }],
+        },
+        { sessionsDirectory: directory },
+      );
+      expect(timeline.sessionId).toBe('original-session');
+      expect(timeline.fallback).toBe(false);
+      expect(timeline.missing).toBe(false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('prefers the last fallback marker in an appended diagnostics log', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'rainrail-last-fallback-marker-timeline-'));
     const logPath = join(directory, 'agent.log');
@@ -771,6 +809,35 @@ describe('agent timeline', () => {
       [sessionKey]: { sessionId, sessionFile },
     }), 'utf8');
     writeFileSync(sessionFile, '', 'utf8');
+    writeFileSync(trajectoryFile, [
+      JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:08:00.000Z', seq: 1 }),
+    ].join('\n'), 'utf8');
+
+    try {
+      const timeline = await readRuntimeTimeline(
+        { logPath, agentSessionId: sessionKey },
+        { sessionsDirectory: directory },
+      );
+      expect(timeline.sessionId).toBe(sessionId);
+      expect(timeline.trajectoryPath).toBe(trajectoryFile);
+      expect(timeline.missing).toBe(false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('resolves relative sessionFile entries from the sessions directory', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'rainrail-relative-session-file-timeline-'));
+    const logPath = join(directory, 'agent.log');
+    const sessionKey = 'agent:main:routing-key';
+    const sessionId = 'actual-session-id';
+    const sessionFile = 'relative-session.jsonl';
+    const trajectoryFile = join(directory, 'relative-session.trajectory.jsonl');
+    writeFileSync(logPath, '', 'utf8');
+    writeFileSync(join(directory, 'sessions.json'), JSON.stringify({
+      [sessionKey]: { sessionId, sessionFile },
+    }), 'utf8');
+    writeFileSync(join(directory, sessionFile), '', 'utf8');
     writeFileSync(trajectoryFile, [
       JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:08:00.000Z', seq: 1 }),
     ].join('\n'), 'utf8');
@@ -1193,6 +1260,26 @@ describe('agent timeline', () => {
     expect(timeline[0]!.excerpt).not.toContain('secret-cookie');
     expect(timeline[0]!.excerpt).not.toContain('session-secret');
     expect(timeline[0]!.excerpt).not.toContain('refresh-secret');
+  });
+
+  it('redacts full authorization assignment values', () => {
+    const timeline = parseRuntimeTrajectoryTimeline([
+      JSON.stringify({
+        type: 'tool.result',
+        ts: '2026-06-30T15:09:10.000Z',
+        seq: 1,
+        data: {
+          name: 'bash',
+          status: 'completed',
+          output: 'AUTHORIZATION=Basic dXNlcjpwYXNz\nAUTHORIZATION=Digest username="u", response="secret"',
+        },
+      }),
+    ].join('\n'));
+
+    expect(timeline[0]!.excerpt).toContain('AUTHORIZATION=[redacted]');
+    expect(timeline[0]!.excerpt).not.toContain('dXNlcjpwYXNz');
+    expect(timeline[0]!.excerpt).not.toContain('username="u"');
+    expect(timeline[0]!.excerpt).not.toContain('response="secret"');
   });
 
   it('classifies common commands into dashboard phases', () => {

@@ -1,6 +1,6 @@
 import { open, readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 
 export type RuntimeTimelinePhase = '調査' | '準備' | '実装' | '確認' | '完了処理' | '実行' | string;
 
@@ -279,6 +279,9 @@ async function readRuntimeSession(
     const fallbackMetadata = extractRuntimeFallbackMetadata(log);
     const sessionId = extractRuntimeSessionId(log);
     logSessionId ??= sessionId;
+    if (fallbackMetadata === null) {
+      break;
+    }
     if (fallbackSession === undefined) {
       if (fallbackMetadata !== undefined) {
         fallbackSession = fallbackMetadata;
@@ -320,7 +323,7 @@ function runtimeTaskLogPaths(task: RuntimeTaskForTimeline): string[] {
   return [...new Set(paths)];
 }
 
-function extractRuntimeFallbackMetadata(log: string): RuntimeFallbackMetadata | undefined {
+function extractRuntimeFallbackMetadata(log: string): RuntimeFallbackMetadata | null | undefined {
   let latest: { index: number; metadata: RuntimeFallbackMetadata | undefined } | undefined;
   const jsonObjects = parseJsonObjectsFromLogWithPositions(log);
   const jsonRanges = jsonObjects.map((object) => ({ start: object.index, end: object.end }));
@@ -342,7 +345,7 @@ function extractRuntimeFallbackMetadata(log: string): RuntimeFallbackMetadata | 
       latest = { index, metadata: { sessionId: match[1] } };
     }
   }
-  return latest?.metadata;
+  return latest === undefined ? undefined : latest.metadata ?? null;
 }
 
 async function resolveRuntimeTrajectoryPathForSession(
@@ -513,7 +516,7 @@ async function readMappedRuntimeSession(
     }
     const sessionFile = entry.sessionFile;
     return typeof sessionFile === 'string' && sessionFile.trim() !== ''
-      ? { sessionId, sessionFile }
+      ? { sessionId, sessionFile: isAbsolute(sessionFile) ? sessionFile : join(runtimeSessionsDirectory(options), sessionFile) }
       : { sessionId };
   } catch {
     return undefined;
@@ -570,6 +573,7 @@ function redactSensitiveText(value: string): string {
     .replace(/([A-Za-z0-9_-]*authorization[A-Za-z0-9_-]*\s*=\s*)"(?:(?:\\.)|[^"\\])*"/gi, '$1"[redacted]"')
     .replace(/([A-Za-z0-9_-]*(?:token|secret|password|api[_-]?key|private[_-]?key|set-cookie|cookie)[A-Za-z0-9_-]*\s*[:=]\s*)'(?:(?:\\.)|[^'\\])*'/gi, "$1'[redacted]'")
     .replace(/([A-Za-z0-9_-]*authorization[A-Za-z0-9_-]*\s*=\s*)'(?:(?:\\.)|[^'\\])*'/gi, "$1'[redacted]'")
+    .replace(/([A-Za-z0-9_-]*authorization[A-Za-z0-9_-]*\s*=\s*)(?:Basic|Digest|NTLM|Negotiate)\s+[^\n\r]*/gi, '$1[redacted]')
     .replace(/([A-Za-z0-9_-]*(?:token|secret|password|api[_-]?key|private[_-]?key|set-cookie|cookie)[A-Za-z0-9_-]*\s*[:=]\s*)(?!\[redacted)[^\s'",}]+/gi, '$1[redacted]')
     .replace(/([A-Za-z0-9_-]*authorization[A-Za-z0-9_-]*\s*=\s*)(?!\[redacted)[^\s'",}]+/gi, '$1[redacted]');
 }

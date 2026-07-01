@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
 import { EventEmitter } from 'node:events';
 import { tmpdir } from 'node:os';
@@ -980,6 +981,81 @@ describe('createOpenClawRuntimeProvider', () => {
     ]), expect.anything());
   });
 
+  it('stops fallback lookup when the latest resume log has a normal completion', async () => {
+    const spawnProcess = vi.fn(() => ({ pid: 5151, unref: vi.fn() }));
+    const logDirectory = temporaryDirectory();
+    const startLogPath = `${logDirectory}/task.log`;
+    const resumeLogPath = `${logDirectory}/resume-1.log`;
+    writeFileSync(startLogPath, 'EMBEDDED FALLBACK: Gateway timed out; running embedded agent with fresh session gateway-fallback-stale', 'utf8');
+    writeFileSync(resumeLogPath, JSON.stringify({
+      status: 'ok',
+      finalAssistantVisibleText: 'Outcome: implemented',
+      meta: { agentMeta: { sessionId: 'intended-session' } },
+    }), 'utf8');
+    const provider = createOpenClawRuntimeProvider({
+      enabled: true,
+      command: 'openclaw',
+      agentId: 'main',
+      sessionKeyPrefix: 'rainrail',
+      timeoutSeconds: 900,
+      logDirectory,
+      spawnProcess,
+    });
+
+    await provider.resumeRun?.({
+      run: { id: 'agent:main:intended-session', provider: 'openclaw', status: 'stopped' },
+      task: {
+        id: 'agent_task_reirei-lab-rainrail_22',
+        title: 'OpenClaw runtime',
+        agentSessionId: 'agent:main:intended-session',
+        branchName: 'agent/reirei-lab-rainrail-22',
+        logPath: startLogPath,
+        resumeAttempts: [
+          { id: 'resume-1', status: 'stopped', logPath: resumeLogPath },
+        ],
+      },
+      attemptId: 'agent_task_reirei-lab-rainrail_22_resume_02',
+      requestedBy: 'reirei-agent',
+    });
+
+    expect(spawnProcess).toHaveBeenCalledWith('openclaw', expect.arrayContaining([
+      '--session-key',
+      'agent:main:intended-session',
+    ]), expect.anything());
+  });
+
+  it('closes the stdout log when opening the stderr log fails', async () => {
+    const logDirectory = temporaryDirectory();
+    const attemptId = 'agent_task_reirei-lab-rainrail_22_resume_01';
+    const stderrLogPath = `${logDirectory}/${testSafeLogFileName(attemptId)}.stderr.log`;
+    mkdirSync(stderrLogPath);
+    const provider = createOpenClawRuntimeProvider({
+      enabled: true,
+      command: 'openclaw',
+      agentId: 'main',
+      sessionKeyPrefix: 'rainrail',
+      timeoutSeconds: 900,
+      logDirectory,
+      spawnProcess: vi.fn(() => ({ pid: 5151, unref: vi.fn() })),
+    });
+
+    await expect(provider.resumeRun?.({
+      run: { id: 'agent:main:intended-session', provider: 'openclaw', status: 'stopped' },
+      task: {
+        id: 'agent_task_reirei-lab-rainrail_22',
+        title: 'OpenClaw runtime',
+        agentSessionId: 'agent:main:intended-session',
+        branchName: 'agent/reirei-lab-rainrail-22',
+        logPath: `${logDirectory}/task.log`,
+        resumeAttempts: [],
+      },
+      attemptId,
+      requestedBy: 'reirei-agent',
+    })).rejects.toThrow();
+
+    expect((provider as { name: string }).name).toBe('openclaw');
+  });
+
   it('does not resume fallback markers quoted inside JSON completion text', async () => {
     const spawnProcess = vi.fn(() => ({ pid: 5151, unref: vi.fn() }));
     const logDirectory = temporaryDirectory();
@@ -1548,6 +1624,10 @@ function temporaryDirectory(): string {
   mkdirSync(directory, { recursive: true });
   temporaryDirectories.push(directory);
   return directory;
+}
+
+function testSafeLogFileName(value: string): string {
+  return `${value.replace(/[^A-Za-z0-9._-]/g, '_')}_${createHash('sha256').update(value).digest('hex').slice(0, 12)}`;
 }
 
 function statMode(path: string): number {

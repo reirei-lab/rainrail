@@ -103,8 +103,7 @@ export function createOpenClawRuntimeProvider(options: OpenClawRuntimeProviderOp
       ensurePrivateLogDirectory(options.logDirectory);
       const logPath = join(options.logDirectory, `${safeLogFileName(request.attemptId)}.log`);
       const stderrLogPath = stderrLogPathFor(logPath);
-      const outputFd = openPrivateLogFile(logPath, 'a');
-      const stderrFd = openPrivateLogFile(stderrLogPath, 'a');
+      const { outputFd, stderrFd } = openPrivateLogFiles(logPath, stderrLogPath, 'a');
       const resumeSessionId = runtimeResumeSessionId(request.task, options.agentId);
       const args = [
         'agent',
@@ -163,8 +162,7 @@ export async function startOpenClawRun(
   const agentSessionId = task.agentSessionId ?? generatedAgentSessionId(options, request, task);
   const logPath = join(options.logDirectory, `${safeLogFileName(agentSessionId)}.log`);
   const stderrLogPath = stderrLogPathFor(logPath);
-  const outputFd = openPrivateLogFile(logPath, 'a');
-  const stderrFd = openPrivateLogFile(stderrLogPath, 'a');
+  const { outputFd, stderrFd } = openPrivateLogFiles(logPath, stderrLogPath, 'a');
   const args = [
     'agent',
     '--agent',
@@ -558,6 +556,9 @@ function runtimeResumeSessionId(task: RuntimeAgentTask, agentId: string): string
   for (const logPath of runtimeResumeLogPaths(task)) {
     try {
       const fallbackSessionKey = extractFallbackRuntimeSessionKey(readFileSync(logPath, 'utf8'), agentId);
+      if (fallbackSessionKey === null) {
+        return task.agentSessionId;
+      }
       if (fallbackSessionKey !== undefined) {
         return fallbackSessionKey;
       }
@@ -579,12 +580,13 @@ function runtimeResumeLogPaths(task: RuntimeAgentTask): string[] {
   ];
 }
 
-function extractFallbackRuntimeSessionKey(log: string, agentId: string): string | undefined {
+function extractFallbackRuntimeSessionKey(log: string, agentId: string): string | null | undefined {
   const strictPayload = parseStrictJsonObject(log);
   if (strictPayload !== undefined) {
-    return runtimeRunCompletionFromPayload(strictPayload) !== undefined && isTrustedRuntimeCompletionFragment(strictPayload)
-      ? fallbackSessionKeyFromPayload(strictPayload, agentId)
-      : undefined;
+    if (runtimeRunCompletionFromPayload(strictPayload) === undefined || !isTrustedRuntimeCompletionFragment(strictPayload)) {
+      return undefined;
+    }
+    return fallbackSessionKeyFromPayload(strictPayload, agentId) ?? null;
   }
   let latest: { index: number; key: string | undefined } | undefined;
   const jsonObjects = parseJsonObjectsFromLogWithPositions(log);
@@ -611,7 +613,7 @@ function extractFallbackRuntimeSessionKey(log: string, agentId: string): string 
       latest = { index, key: `agent:${agentId}:explicit:${match[1]}` };
     }
   }
-  return latest?.key;
+  return latest === undefined ? undefined : latest.key ?? null;
 }
 
 function parseStrictJsonObject(raw: string): Record<string, unknown> | undefined {
@@ -726,6 +728,20 @@ function openPrivateLogFile(path: string, flags: 'a' | 'w'): number {
   const fd = openSync(path, flags, 0o600);
   chmodSync(path, 0o600);
   return fd;
+}
+
+function openPrivateLogFiles(
+  logPath: string,
+  stderrLogPath: string,
+  flags: 'a' | 'w',
+): { outputFd: number; stderrFd: number } {
+  const outputFd = openPrivateLogFile(logPath, flags);
+  try {
+    return { outputFd, stderrFd: openPrivateLogFile(stderrLogPath, flags) };
+  } catch (error) {
+    closeSync(outputFd);
+    throw error;
+  }
 }
 
 function attachSpawnErrorHandler(
