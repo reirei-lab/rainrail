@@ -1,6 +1,8 @@
+import { createReadStream } from 'node:fs';
 import { open, readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
+import { createInterface } from 'node:readline';
 
 export type RuntimeTimelinePhase = '調査' | '準備' | '実装' | '確認' | '完了処理' | '実行' | string;
 
@@ -76,6 +78,7 @@ interface TrajectoryEvent {
 const excerptLength = 1200;
 const detailLength = 600;
 const maxJsonlBytes = 400 * 1024;
+const tailRedactionContextBytes = 64 * 1024;
 
 export async function readRuntimeTimeline(
   task: RuntimeTaskForTimeline,
@@ -125,19 +128,35 @@ export async function readRuntimeTimelineStatus(
   }
   const trajectoryPath = await resolveRuntimeTrajectoryPathForSession(session, options);
   status.trajectoryPath = trajectoryPath;
-  let contents: string;
   try {
-    contents = await readFile(trajectoryPath, 'utf8');
+    await readRuntimeTimelineStatusFromFile(trajectoryPath, status);
   } catch {
     return status;
   }
-  for (const line of contents.split(/\r?\n/)) {
+  return status;
+}
+
+async function readRuntimeTimelineStatusFromFile(path: string, status: RuntimeTimelineStatus): Promise<void> {
+  const lines = createInterface({
+    input: createReadStream(path, { encoding: 'utf8' }),
+    crlfDelay: Infinity,
+  });
+  try {
+    for await (const line of lines) {
+      applyRuntimeTimelineStatusLine(status, line);
+    }
+  } finally {
+    lines.close();
+  }
+}
+
+function applyRuntimeTimelineStatusLine(status: RuntimeTimelineStatus, line: string): void {
     if (line.trim() === '') {
-      continue;
+      return;
     }
     const event = parseTrajectoryLine(line);
     if (event === undefined) {
-      continue;
+      return;
     }
     status.lastTimestamp = event.ts ?? status.lastTimestamp;
     if (event.type === 'session.ended') {
@@ -147,8 +166,6 @@ export async function readRuntimeTimelineStatus(
       status.ended = false;
       status.endedStatus = undefined;
     }
-  }
-  return status;
 }
 
 export async function readRuntimeJsonl(
@@ -486,9 +503,9 @@ async function readTailRedactionContext(file: Awaited<ReturnType<typeof open>>, 
   const prefixLength = Math.min(start, 512);
   const prefix = prefixLength === 0 ? '' : await readFileRange(file, start - prefixLength, prefixLength);
   const [inCredentialLine, openPrivateKeyStart, hasPartialBegin] = await Promise.all([
-    scanCurrentLineBeforeTail(file, start, hasSensitiveCredentialPrefix),
-    findOpenPrivateKeyContextStart(file, start),
-    scanCurrentLineBeforeTail(file, start, hasPartialPrivateKeyBegin),
+    scanCurrentLineBeforeTail(file, start, hasSensitiveCredentialPrefix, tailRedactionContextBytes),
+    findOpenPrivateKeyContextStart(file, start, tailRedactionContextBytes),
+    scanCurrentLineBeforeTail(file, start, hasPartialPrivateKeyBegin, tailRedactionContextBytes),
   ]);
   return {
     prefix,
@@ -501,13 +518,15 @@ async function scanCurrentLineBeforeTail(
   file: Awaited<ReturnType<typeof open>>,
   start: number,
   predicate: (value: string) => boolean,
+  maxScanBytes: number,
 ): Promise<boolean> {
   const chunkSize = 8192;
   const boundaryOverlap = 512;
+  const minCursor = Math.max(0, start - maxScanBytes);
   let cursor = start;
   let suffix = '';
-  while (cursor > 0) {
-    const chunkStart = Math.max(0, cursor - chunkSize);
+  while (cursor > minCursor) {
+    const chunkStart = Math.max(minCursor, cursor - chunkSize);
     const text = await readFileRange(file, chunkStart, cursor - chunkStart);
     const newlineIndex = Math.max(text.lastIndexOf('\n'), text.lastIndexOf('\r'));
     const lineSegment = newlineIndex === -1 ? text : text.slice(newlineIndex + 1);
@@ -524,13 +543,18 @@ async function scanCurrentLineBeforeTail(
   return false;
 }
 
-async function findOpenPrivateKeyContextStart(file: Awaited<ReturnType<typeof open>>, start: number): Promise<number | undefined> {
+async function findOpenPrivateKeyContextStart(
+  file: Awaited<ReturnType<typeof open>>,
+  start: number,
+  maxScanBytes: number,
+): Promise<number | undefined> {
   const chunkSize = 8192;
   const boundaryOverlap = 128;
+  const minCursor = Math.max(0, start - maxScanBytes);
   let cursor = start;
   let suffix = '';
-  while (cursor > 0) {
-    const chunkStart = Math.max(0, cursor - chunkSize);
+  while (cursor > minCursor) {
+    const chunkStart = Math.max(minCursor, cursor - chunkSize);
     const chunkText = await readFileRange(file, chunkStart, cursor - chunkStart);
     const boundary = findLastPrivateKeyBoundaryMatch(`${chunkText}${suffix}`, chunkStart, start);
     if (boundary !== undefined) {
@@ -568,7 +592,7 @@ function redactLeadingPrivateKeyFragment(text: string, context: TailRedactionCon
 }
 
 function hasSensitiveCredentialPrefix(value: string): boolean {
-  return /(?:authorization\s*:\s*(?:bearer|basic|digest|ntlm|negotiate)?\s*|(?:set-cookie|cookie)\s*:\s*|bearer\s+|(?:api[-_]?key|token|secret|password|passphrase|_auth|authorization|set[-_]?cookie|cookie)\s*[:=]\s*|(?:https?|all)_proxy[A-Za-z0-9_-]*\s*[:=]\s*|(?:--proxy|--preproxy|--proxy1\.0|--proxy-user|-x|-U)(?:=|\s+))[^\n\r]*$/i.test(value);
+  return /(?:authorization\s*:\s*(?:bearer|basic|digest|ntlm|negotiate)?\s*|(?:set-cookie|cookie)\s*:\s*|bearer\s+|(?:api[-_]?key|token|secret|password|passphrase|_auth|authorization|set[-_]?cookie|cookie)\s*[:=]\s*|(?:https?|all)_proxy[A-Za-z0-9_-]*\s*[:=]\s*|[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s/@:]+:[^\s@]*|(?:--proxy|--preproxy|--proxy1\.0|--proxy-user|--user|-x|-U|-u|-[A-Za-z]*u)(?:=|\s+))[^\n\r]*$/i.test(value);
 }
 
 function hasPartialPrivateKeyBegin(value: string): boolean {
