@@ -198,15 +198,26 @@ export function extractRuntimeSessionId(log: string): string | undefined {
 }
 
 export function extractRuntimeFallbackSessionId(log: string): string | undefined {
-  if (parseStrictJsonObject(log) !== undefined) {
-    return undefined;
+  const fallbackMetadata = extractRuntimeFallbackMetadata(log);
+  if (fallbackMetadata !== undefined && fallbackMetadata !== null) {
+    if (fallbackMetadata.sessionId !== undefined) {
+      return fallbackMetadata.sessionId;
+    }
+    const explicitFallbackMatch = fallbackMetadata.sessionKey?.match(/^agent:[^:]+:explicit:(gateway-fallback-.+)$/);
+    if (explicitFallbackMatch != null) {
+      return explicitFallbackMatch[1];
+    }
   }
-  const parsed = parseJsonObjectsFromLog(log);
-  if (parsed.payloads.some((payload) => payloadHasCompletionText(payload))) {
-    return undefined;
+  const jsonRanges = parseJsonObjectsFromLogWithPositions(log).map((object) => ({ start: object.index, end: object.end }));
+  let latest: string | undefined;
+  for (const match of log.matchAll(/EMBEDDED FALLBACK:[^\n\r]*fresh session\s+(gateway-fallback-[A-Za-z0-9._-]+)/gi)) {
+    const index = match.index ?? 0;
+    if (jsonRanges.some((range) => index >= range.start && index <= range.end)) {
+      continue;
+    }
+    latest = match[1];
   }
-  const matches = [...log.matchAll(/EMBEDDED FALLBACK:[^\n\r]*fresh session\s+(gateway-fallback-[A-Za-z0-9._-]+)/gi)];
-  return matches.at(-1)?.[1];
+  return latest;
 }
 
 export function runtimeTrajectoryPathForSessionId(
@@ -269,26 +280,38 @@ async function readRuntimeSession(
   let fallbackSession: RuntimeFallbackMetadata | undefined;
   let fallbackLookupCleared = false;
   let logSessionId: string | undefined;
-  for (const logPath of runtimeTaskLogPaths(task)) {
-    let log: string;
-    try {
-      log = await readFile(logPath, 'utf8');
-    } catch {
-      continue;
-    }
-    const fallbackMetadata = extractRuntimeFallbackMetadata(log);
-    const sessionId = extractRuntimeSessionId(log);
-    logSessionId ??= sessionId;
-    if (fallbackMetadata === null) {
-      fallbackLookupCleared = true;
-      continue;
-    }
-    if (!fallbackLookupCleared && fallbackSession === undefined) {
-      if (fallbackMetadata !== undefined) {
-        fallbackSession = fallbackMetadata;
-      } else if (sessionId?.startsWith('gateway-fallback-') === true) {
-        fallbackSession = { sessionId };
+  for (const logPaths of runtimeTaskLogPathGroups(task)) {
+    let groupFallbackSession: RuntimeFallbackMetadata | undefined;
+    let groupFallbackCleared = false;
+    for (const logPath of logPaths) {
+      let log: string;
+      try {
+        log = await readFile(logPath, 'utf8');
+      } catch {
+        continue;
       }
+      const fallbackMetadata = extractRuntimeFallbackMetadata(log);
+      const sessionId = extractRuntimeSessionId(log);
+      logSessionId ??= sessionId;
+      if (fallbackMetadata === null) {
+        groupFallbackSession = undefined;
+        groupFallbackCleared = true;
+        continue;
+      }
+      if (!fallbackLookupCleared && !groupFallbackCleared && groupFallbackSession === undefined) {
+        if (fallbackMetadata !== undefined) {
+          groupFallbackSession = fallbackMetadata;
+        } else if (sessionId?.startsWith('gateway-fallback-') === true) {
+          groupFallbackSession = { sessionId };
+        }
+      }
+    }
+    if (groupFallbackSession !== undefined) {
+      fallbackSession = groupFallbackSession;
+      break;
+    }
+    if (groupFallbackCleared) {
+      fallbackLookupCleared = true;
     }
   }
   if (fallbackSession !== undefined) {
@@ -313,15 +336,21 @@ async function readRuntimeSession(
 }
 
 function runtimeTaskLogPaths(task: RuntimeTaskForTimeline): string[] {
-  const paths = [
-    ...(task.resumeAttempts ?? []).slice().reverse().flatMap((attempt) => [
+  return [...new Set(runtimeTaskLogPathGroups(task).flat())];
+}
+
+function runtimeTaskLogPathGroups(task: RuntimeTaskForTimeline): string[][] {
+  const pathGroups = [
+    ...(task.resumeAttempts ?? []).slice().reverse().map((attempt) => [
       attempt.stderrLogPath ?? stderrLogPathFor(attempt.logPath),
       attempt.logPath,
     ]),
-    task.stderrLogPath ?? stderrLogPathFor(task.logPath),
-    task.logPath,
+    [
+      task.stderrLogPath ?? stderrLogPathFor(task.logPath),
+      task.logPath,
+    ],
   ];
-  return [...new Set(paths)];
+  return pathGroups.map((paths) => [...new Set(paths)]);
 }
 
 function extractRuntimeFallbackMetadata(log: string): RuntimeFallbackMetadata | null | undefined {
@@ -570,6 +599,7 @@ function redactSensitiveText(value: string): string {
     .replace(/\b(Set-Cookie:\s*)[\s\S]*?(?=(?:"\s+-H\s+"(?:Authorization|Cookie|Set-Cookie):)|\s+(?:Authorization|Cookie|Set-Cookie):|[\n\r]|$)/gi, '$1[redacted-cookie]')
     .replace(/\b(Cookie:\s*)[\s\S]*?(?=(?:"\s+-H\s+"(?:Authorization|Cookie|Set-Cookie):)|\s+Set-Cookie:|[\n\r]|$)/gi, '$1[redacted-cookie]')
     .replace(/\b([A-Za-z0-9_-]*(?:api[-_]?key|token|secret)[A-Za-z0-9_-]*:\s*)[\s\S]*?(?=(?:"\s+-H\s+"[A-Za-z0-9_-]*(?:api[-_]?key|token|secret|authorization|cookie):)|\s+[A-Za-z0-9_-]*(?:api[-_]?key|token|secret|authorization|cookie):|[\n\r]|$)/gi, '$1[redacted-header]')
+    .replace(/(^|[\n\r])([A-Za-z0-9_-]*authorization[A-Za-z0-9_-]*\s*:\s*)(?!\[redacted)[^\n\r]*/gi, '$1$2[redacted]')
     .replace(/("[^"]*(?:token|secret|password|api[_-]?key|private[_-]?key|authorization|set-cookie|cookie)[^"]*"\s*:\s*)"(?:(?:\\.)|[^"\\])*"/gi, '$1"[redacted]"')
     .replace(/([A-Za-z0-9_-]*(?:token|secret|password|api[_-]?key|private[_-]?key|set-cookie|cookie)[A-Za-z0-9_-]*\s*[:=]\s*)"(?:(?:\\.)|[^"\\])*"/gi, '$1"[redacted]"')
     .replace(/([A-Za-z0-9_-]*authorization[A-Za-z0-9_-]*\s*=\s*)"(?:(?:\\.)|[^"\\])*"/gi, '$1"[redacted]"')
@@ -581,15 +611,93 @@ function redactSensitiveText(value: string): string {
 }
 
 function redactSensitiveJsonKeyValues(value: string): string {
-  const sensitiveKey = String.raw`(?:token|secret|password|api[_-]?key|private[_-]?key|authorization|set-cookie|cookie)`;
-  const unescapedKey = String.raw`(?<!\\)"[^"]*${sensitiveKey}[^"]*"\s*:\s*`;
-  return value
+  return redactUnescapedSensitiveJsonKeyValues(value)
     .replace(/(\\"[^"\\]*(?:token|secret|password|api[_-]?key|private[_-]?key|authorization|set-cookie|cookie)[^"\\]*\\"\s*:\s*)\\"(?:(?:\\\\.)|[^\\])*?\\"/gi, '$1\\"[redacted]\\"')
     .replace(/(\\"[^"\\]*(?:token|secret|password|api[_-]?key|private[_-]?key|authorization|set-cookie|cookie)[^"\\]*\\"\s*:\s*)(?!\\")(?:\[[\s\S]*?\]|\{[\s\S]*?\}|[^\s,}\]]+)/gi, '$1[redacted]')
-    .replace(
-      new RegExp(`(${unescapedKey})(?:"(?:(?:\\\\.)|[^"\\\\])*"|\\[[\\s\\S]*?\\]|\\{[\\s\\S]*?\\}|[^\\s,}\\]]+)`, 'gi'),
-      '$1"[redacted]"',
-    );
+}
+
+function redactUnescapedSensitiveJsonKeyValues(value: string): string {
+  const keyPattern = /(?<!\\)"[^"]*(?:token|secret|password|api[_-]?key|private[_-]?key|authorization|set-cookie|cookie)[^"]*"\s*:\s*/gi;
+  let redacted = '';
+  let cursor = 0;
+  for (const match of value.matchAll(keyPattern)) {
+    const matchIndex = match.index ?? 0;
+    if (matchIndex < cursor) {
+      continue;
+    }
+    const valueStart = matchIndex + match[0].length;
+    const valueEnd = findJsonValueEnd(value, valueStart);
+    redacted += value.slice(cursor, valueStart);
+    redacted += '"[redacted]"';
+    cursor = valueEnd;
+  }
+  return cursor === 0 ? value : redacted + value.slice(cursor);
+}
+
+function findJsonValueEnd(value: string, start: number): number {
+  let index = start;
+  while (/\s/.test(value[index] ?? '')) {
+    index += 1;
+  }
+  const opener = value[index];
+  if (opener === '"') {
+    return findJsonStringEnd(value, index) ?? value.length;
+  }
+  if (opener === '[' || opener === '{') {
+    return findBalancedJsonEnd(value, index, opener) ?? value.length;
+  }
+  while (index < value.length && !/[\s,}\]]/.test(value[index] ?? '')) {
+    index += 1;
+  }
+  return index;
+}
+
+function findJsonStringEnd(value: string, start: number): number | undefined {
+  let escaped = false;
+  for (let index = start + 1; index < value.length; index += 1) {
+    const char = value[index];
+    if (escaped) {
+      escaped = false;
+    } else if (char === '\\') {
+      escaped = true;
+    } else if (char === '"') {
+      return index + 1;
+    }
+  }
+  return undefined;
+}
+
+function findBalancedJsonEnd(value: string, start: number, opener: string): number | undefined {
+  const closer = opener === '[' ? ']' : '}';
+  const stack = [closer];
+  let inString = false;
+  let escaped = false;
+  for (let index = start + 1; index < value.length; index += 1) {
+    const char = value[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === '\\') {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+    } else if (char === '[') {
+      stack.push(']');
+    } else if (char === '{') {
+      stack.push('}');
+    } else if (char === stack.at(-1)) {
+      stack.pop();
+      if (stack.length === 0) {
+        return index + 1;
+      }
+    }
+  }
+  return undefined;
 }
 
 function truncate(value: string, maxLength: number): string {

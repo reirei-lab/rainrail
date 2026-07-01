@@ -554,31 +554,45 @@ function issueFieldsFromValue(value: Record<string, unknown>): RuntimeAgentTaskI
 }
 
 function runtimeResumeSessionId(task: RuntimeAgentTask, agentId: string): string {
-  for (const logPath of runtimeResumeLogPaths(task)) {
-    try {
-      const fallbackSessionKey = extractFallbackRuntimeSessionKey(readFileSync(logPath, 'utf8'), agentId);
-      if (fallbackSessionKey === null) {
-        return task.agentSessionId;
+  for (const logPaths of runtimeResumeLogPathGroups(task)) {
+    let groupFallbackSessionKey: string | null | undefined;
+    for (const logPath of logPaths) {
+      try {
+        const fallbackSessionKey = extractFallbackRuntimeSessionKey(readFileSync(logPath, 'utf8'), agentId);
+        if (fallbackSessionKey === null) {
+          groupFallbackSessionKey = null;
+        } else if (fallbackSessionKey !== undefined && groupFallbackSessionKey === undefined) {
+          groupFallbackSessionKey = fallbackSessionKey;
+        }
+      } catch {
+        // Missing historical logs should not block a resume attempt.
       }
-      if (fallbackSessionKey !== undefined) {
-        return fallbackSessionKey;
-      }
-    } catch {
-      // Missing historical logs should not block a resume attempt.
+    }
+    if (groupFallbackSessionKey === null) {
+      return task.agentSessionId;
+    }
+    if (groupFallbackSessionKey !== undefined) {
+      return groupFallbackSessionKey;
     }
   }
   return task.agentSessionId;
 }
 
-function runtimeResumeLogPaths(task: RuntimeAgentTask): string[] {
+function runtimeResumeLogPathGroups(task: RuntimeAgentTask): string[][] {
   return [
-    ...task.resumeAttempts.slice().reverse().flatMap((attempt) => [
+    ...task.resumeAttempts.slice().reverse().map((attempt) => [
       attempt.stderrLogPath ?? stderrLogPathFor(attempt.logPath),
       attempt.logPath,
     ]),
-    task.stderrLogPath ?? stderrLogPathFor(task.logPath),
-    task.logPath,
+    [
+      task.stderrLogPath ?? stderrLogPathFor(task.logPath),
+      task.logPath,
+    ],
   ];
+}
+
+function runtimeResumeLogPaths(task: RuntimeAgentTask): string[] {
+  return runtimeResumeLogPathGroups(task).flat();
 }
 
 function extractFallbackRuntimeSessionKey(log: string, agentId: string): string | null | undefined {

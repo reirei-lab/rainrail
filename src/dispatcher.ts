@@ -444,8 +444,16 @@ function createGatedRuntimeProvider(
         ) =>
           callRuntimeResumeRun(options, policy, event, lifecycle, getRuntime, request, context?.signal);
       }
-      if (getRuntime().resumeRun === undefined) {
-        return undefined;
+      try {
+        if (getRuntime().resumeRun === undefined) {
+          return undefined;
+        }
+      } catch {
+        return (
+          request: Parameters<NonNullable<RuntimeProvider['resumeRun']>>[0],
+          context?: Parameters<NonNullable<RuntimeProvider['resumeRun']>>[1],
+        ) =>
+          callRuntimeResumeRun(options, policy, event, lifecycle, getRuntime, request, context?.signal);
       }
       return (
         request: Parameters<NonNullable<RuntimeProvider['resumeRun']>>[0],

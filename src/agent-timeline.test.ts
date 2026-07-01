@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   classifyRuntimeToolCall,
+  extractRuntimeFallbackSessionId,
   extractRuntimeSessionId,
   parseRuntimeTrajectoryTimeline,
   readRuntimeTimeline,
@@ -257,6 +258,19 @@ describe('agent timeline', () => {
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
+  });
+
+  it('does not extract fallback markers quoted inside JSON ranges', () => {
+    const log = [
+      'OpenClaw agent starting',
+      JSON.stringify({
+        status: 'ok',
+        summary: 'quoted EMBEDDED FALLBACK: Gateway timed out; running embedded agent with fresh session gateway-fallback-old',
+      }),
+      'OpenClaw agent finished',
+    ].join('\n');
+
+    expect(extractRuntimeFallbackSessionId(log)).toBeUndefined();
   });
 
   it('does not prefer fallback markers quoted inside bannered stdout JSON completion text', async () => {
@@ -602,6 +616,42 @@ describe('agent timeline', () => {
           logPath: startLogPath,
           agentSessionId: 'agent:main:original-session',
           resumeAttempts: [{ logPath: resumeLogPath }],
+        },
+        { sessionsDirectory: directory },
+      );
+      expect(timeline.sessionId).toBe('original-session');
+      expect(timeline.fallback).toBe(false);
+      expect(timeline.missing).toBe(false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('clears same-attempt stderr fallback when stdout has a normal completion', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'rainrail-clear-same-attempt-stderr-fallback-timeline-'));
+    const startLogPath = join(directory, 'agent.log');
+    const resumeLogPath = join(directory, 'resume-1.log');
+    const resumeStderrLogPath = join(directory, 'resume-1.stderr.log');
+    writeFileSync(startLogPath, '', 'utf8');
+    writeFileSync(resumeStderrLogPath, 'EMBEDDED FALLBACK: Gateway timed out; running embedded agent with fresh session gateway-fallback-stale', 'utf8');
+    writeFileSync(resumeLogPath, JSON.stringify({
+      status: 'ok',
+      finalAssistantVisibleText: 'Outcome: implemented',
+      meta: { agentMeta: { sessionId: 'original-session' } },
+    }), 'utf8');
+    writeFileSync(join(directory, 'original-session.trajectory.jsonl'), [
+      JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:08:00.000Z', seq: 1 }),
+    ].join('\n'), 'utf8');
+    writeFileSync(join(directory, 'gateway-fallback-stale.trajectory.jsonl'), [
+      JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:09:00.000Z', seq: 1 }),
+    ].join('\n'), 'utf8');
+
+    try {
+      const timeline = await readRuntimeTimeline(
+        {
+          logPath: startLogPath,
+          agentSessionId: 'agent:main:original-session',
+          resumeAttempts: [{ logPath: resumeLogPath, stderrLogPath: resumeStderrLogPath }],
         },
         { sessionsDirectory: directory },
       );
@@ -1311,6 +1361,25 @@ describe('agent timeline', () => {
     expect(timeline[0]!.excerpt).not.toContain('live-secret');
   });
 
+  it('redacts sensitive nested JSON values completely', () => {
+    const timeline = parseRuntimeTrajectoryTimeline([
+      JSON.stringify({
+        type: 'tool.result',
+        ts: '2026-06-30T15:09:10.000Z',
+        seq: 1,
+        data: {
+          name: 'bash',
+          status: 'completed',
+          output: '{"tokens":{"meta":{},"value":"opaque-session-token"},"safe":"visible"}',
+        },
+      }),
+    ].join('\n'));
+
+    expect(timeline[0]!.excerpt).toContain('"tokens":"[redacted]"');
+    expect(timeline[0]!.excerpt).toContain('"safe":"visible"');
+    expect(timeline[0]!.excerpt).not.toContain('opaque-session-token');
+  });
+
   it('redacts sensitive keys inside escaped JSON strings', () => {
     const timeline = parseRuntimeTrajectoryTimeline([
       JSON.stringify({
@@ -1418,6 +1487,26 @@ describe('agent timeline', () => {
     expect(timeline[0]!.excerpt).toContain('AUTHORIZATION=[redacted]');
     expect(timeline[0]!.excerpt).not.toContain('dXNlcjpwYXNz');
     expect(timeline[0]!.excerpt).not.toContain('username="u"');
+    expect(timeline[0]!.excerpt).not.toContain('response="secret"');
+  });
+
+  it('redacts colon authorization assignment values', () => {
+    const timeline = parseRuntimeTrajectoryTimeline([
+      JSON.stringify({
+        type: 'tool.result',
+        ts: '2026-06-30T15:09:10.000Z',
+        seq: 1,
+        data: {
+          name: 'bash',
+          status: 'completed',
+          output: 'HTTP_AUTHORIZATION: Basic dXNlcjpwYXNz\nAUTHORIZATION_HEADER: Digest username="u", response="secret"',
+        },
+      }),
+    ].join('\n'));
+
+    expect(timeline[0]!.excerpt).toContain('HTTP_AUTHORIZATION: [redacted]');
+    expect(timeline[0]!.excerpt).toContain('AUTHORIZATION_HEADER: [redacted]');
+    expect(timeline[0]!.excerpt).not.toContain('dXNlcjpwYXNz');
     expect(timeline[0]!.excerpt).not.toContain('response="secret"');
   });
 

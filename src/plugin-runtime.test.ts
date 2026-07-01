@@ -3147,6 +3147,79 @@ describe('plugin runtime contract', () => {
     ]);
   });
 
+  it('records startRuntime audit entries when resumeRun getters fail', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: {
+        id: 'delivery-runtime-resume-getter-audit',
+        receivedAt: '2026-06-29T14:00:00.000Z',
+      },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'issue', id: '13' },
+      payload: { action: 'opened' },
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'github://deliveries/delivery-runtime-resume-getter-audit',
+      },
+    });
+    const auditEntries: unknown[] = [];
+    const loader = createPluginLoader({
+      runtime: mockRuntimeContext({
+        runtime: {
+          name: 'mock-runtime',
+          kind: 'runtime-provider',
+          startRun: async () => ({ id: 'run:mock', provider: 'codex', status: 'queued' }),
+          get resumeRun(): never {
+            throw new Error('runtime resumeRun getter failed');
+          },
+        },
+      }),
+      audit: {
+        record: (entry) => {
+          auditEntries.push(entry);
+        },
+      },
+    });
+
+    loader.on(
+      'github.issue',
+      (_handledEvent, context) =>
+        context.runtime.resumeRun?.({
+          run: { id: 'agent:main:existing-session', provider: 'openclaw', status: 'stopped' },
+          task: {
+            id: 'agent_task_reirei-lab-rainrail_22',
+            title: 'OpenClaw runtime',
+            agentSessionId: 'agent:main:existing-session',
+            branchName: 'agent/reirei-lab-rainrail-22',
+            logPath: 'var/agent-task-logs/task.log',
+            resumeAttempts: [],
+          },
+          attemptId: 'agent_task_reirei-lab-rainrail_22_resume_01',
+          requestedBy: 'resume-run-getter-audit-handler',
+        }),
+      { name: 'resume-run-getter-audit-handler', capabilities: ['runtime:start'] },
+    );
+
+    const [result] = await loader.dispatch(event);
+
+    expect(result).toMatchObject({
+      pluginName: 'resume-run-getter-audit-handler',
+      eventId: 'github-webhook:delivery-runtime-resume-getter-audit:github.issue',
+      status: 'rejected',
+    });
+    expect(auditEntries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          pluginId: 'resume-run-getter-audit-handler',
+          eventId: 'github-webhook:delivery-runtime-resume-getter-audit:github.issue',
+          action: 'startRuntime',
+          result: 'rejected',
+        }),
+      ]),
+    );
+  });
+
   it('combines caller and lifecycle abort signals for task provider methods', async () => {
     const event = createEventEnvelope({
       source: { type: 'github', name: 'github-webhook' },
