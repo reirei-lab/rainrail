@@ -254,7 +254,7 @@ function mentionDraftRepositoryFromUrl(value: string): { repository: string; num
     const url = new URL(value);
     if (url.protocol !== 'https:' || url.hostname !== 'github.com') return undefined;
     const parts = url.pathname.split('/').filter((part) => part.length > 0);
-    if (parts.length < 4 || parts[2] !== 'issues') return undefined;
+    if (parts.length < 4 || !/^(issues|pull)$/u.test(parts[2] ?? '')) return undefined;
     const number = Number.parseInt(parts[3] ?? '', 10);
     return {
       repository: `${parts[0]}/${parts[1]}`,
@@ -266,11 +266,11 @@ function mentionDraftRepositoryFromUrl(value: string): { repository: string; num
 }
 
 function mentionDraftBodyWithRepository(body: string, repository: string, number: number | undefined): string {
-  const lines = body.split('\n');
-  if (!lines.some((line) => /^Repository:/iu.test(line))) {
-    lines.push(`Repository: ${repository}`);
-  }
-  if (number !== undefined && !lines.some((line) => /^Number:/iu.test(line))) {
+  const lines = body
+    .split('\n')
+    .filter((line) => !/^(Repository|Number):/iu.test(line));
+  lines.push(`Repository: ${repository}`);
+  if (number !== undefined) {
     lines.push(`Number: ${number}`);
   }
   return lines.join('\n');

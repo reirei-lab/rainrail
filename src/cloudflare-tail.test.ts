@@ -161,9 +161,9 @@ describe('Cloudflare tail source', () => {
         url: 'https://asme.dev/token/secret-path-value/me?token=tail-url-secret#access_token=fragment-secret',
         exceptions: [{
           name: 'TypeError token=tail-name-secret',
-          message: 'failed token="tail-message-secret" authorization: Bearer tail-auth-secret',
+          message: 'failed token="tail-message-secret" authorization: Bearer tail-auth-secret {"password":"tail-json-secret"} password: tail-colon-secret',
           stack: [
-            `TypeError: ${'x'.repeat(1_500)} token=tail-stack-secret`,
+            `TypeError: ${'x'.repeat(1_500)} token=tail-stack-secret {"password":"tail-stack-json-secret"} password: tail-stack-colon-secret`,
             '    at resolveCurrentHumanAccount (worker.js:1510:24)',
             '    at handleCurrentHuman (worker.js:1377:18)',
           ].join('\n'),
@@ -178,7 +178,11 @@ describe('Cloudflare tail source', () => {
     expect(JSON.stringify(event.payload)).not.toContain('tail-name-secret');
     expect(JSON.stringify(event.payload)).not.toContain('tail-message-secret');
     expect(JSON.stringify(event.payload)).not.toContain('tail-auth-secret');
+    expect(JSON.stringify(event.payload)).not.toContain('tail-json-secret');
+    expect(JSON.stringify(event.payload)).not.toContain('tail-colon-secret');
     expect(JSON.stringify(event.payload)).not.toContain('tail-stack-secret');
+    expect(JSON.stringify(event.payload)).not.toContain('tail-stack-json-secret');
+    expect(JSON.stringify(event.payload)).not.toContain('tail-stack-colon-secret');
     expect(event.payload.exceptions[0]?.message).toContain('token=[redacted]');
     expect(event.payload.exceptions[0]?.stack).toContain('resolveCurrentHumanAccount');
     expect(event.payload.exceptions[0]?.stack).toContain('... truncated ...');

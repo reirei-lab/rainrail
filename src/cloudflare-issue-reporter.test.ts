@@ -570,6 +570,7 @@ function cloudflareErrorEvent(overrides: {
   url?: string;
   line?: number;
   column?: number;
+  scriptName?: string;
   exceptionName?: string;
   message?: string;
   stack?: string;
@@ -595,7 +596,7 @@ function cloudflareErrorEvent(overrides: {
       action: 'exception',
       status: '500',
       conclusion: 'failure',
-      scriptName: 'asme-site',
+      scriptName: overrides.scriptName ?? 'asme-site',
       method: 'GET',
       url: overrides.url ?? 'https://asme.dev/me?debug=1',
       exceptions: overrides.exceptions ?? [
@@ -1141,6 +1142,36 @@ describe('cloudflare issue redaction', () => {
     expect(createdIssues[0]?.body).not.toContain('name-secret');
     expect(createdIssues[0]?.body).not.toContain('user:password');
     expect(createdIssues[0]?.body).not.toContain('name-token');
+  });
+
+  it('redacts worker names before writing issue titles and summaries', async () => {
+    const createdIssues: Array<{ title: string; body: string }> = [];
+    const workflow = createCloudflareIssueReporterWorkflow({
+      repository: 'reirei-lab/rainrail',
+      store: createInMemoryCloudflareErrorIssueStore(),
+      issues: {
+        findOpenIssueByFingerprint: async () => undefined,
+        createIssue: async (input) => {
+          createdIssues.push(input);
+          return {
+            number: 138,
+            url: 'https://github.com/reirei-lab/rainrail/issues/138',
+          };
+        },
+      },
+    });
+
+    await expect(workflow.handle(cloudflareErrorEvent({
+      scriptName: 'asme-site token=worker-secret\nextra',
+    }), runtimeContext())).resolves.toMatchObject({
+      handled: true,
+    });
+
+    expect(createdIssues[0]?.title).not.toContain('worker-secret');
+    expect(createdIssues[0]?.title).not.toContain('\n');
+    expect(createdIssues[0]?.body).not.toContain('worker-secret');
+    expect(createdIssues[0]?.body).not.toContain('asme-site token=worker-secret');
+    expect(createdIssues[0]?.title).toContain('token=[redacted]');
   });
 
   it('truncates the summary exception message independently from raw data', async () => {

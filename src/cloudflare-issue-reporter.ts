@@ -330,8 +330,9 @@ export function cloudflareErrorCandidateFromEvent(event: RainrailEventEnvelope):
 function cloudflareIssueTitle(candidate: CloudflareErrorCandidate): string {
   const location = sanitizeSecretString(candidate.stackSignature[0]?.split(' @ ')[0] ?? candidate.requestPath ?? '');
   const exceptionName = sanitizeSecretString(candidate.exceptionName);
+  const scriptName = sanitizedWorkerName(candidate.scriptName);
   return [
-    `[${candidate.scriptName}]`,
+    `[${scriptName}]`,
     exceptionName || 'Error',
     location.length === 0 ? undefined : `in ${location}`,
   ].filter((part): part is string => part !== undefined && part.length > 0).join(' ').slice(0, 180);
@@ -358,7 +359,7 @@ function cloudflareIssueBody(input: {
     '## Summary',
     '',
     '- Service: cloudflare',
-    `- Worker: ${input.candidate.scriptName}`,
+    `- Worker: ${sanitizedWorkerName(input.candidate.scriptName)}`,
     `- Event: ${input.event.name}`,
     `- Exception: ${exceptionName || 'Error'}`,
     `- Message: ${exceptionMessage || '(empty)'}`,
@@ -382,6 +383,11 @@ function cloudflareIssueBody(input: {
     '',
     `${fingerprintMarkerPrefix}${input.fingerprint} -->`,
   ].join('\n');
+}
+
+function sanitizedWorkerName(value: string): string {
+  const sanitized = sanitizeSecretString(value).replace(/\s+/gu, ' ').trim();
+  return truncateSummaryText(sanitized, maxSummaryExceptionNameLength) || 'unknown-worker';
 }
 
 function cloudflareExceptionWithUsableStack(value: unknown): {
