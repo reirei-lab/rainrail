@@ -1153,6 +1153,8 @@ async function assertCurrentStartingClaimLockOwned(
 function isClaimLockOwnershipError(error: unknown): boolean {
   return error instanceof Error && (
     error.message.includes('claim lock is no longer owned')
+    || error.message.includes('claim lock ownership could not be verified')
+    || error.message.includes('issue ownership could not be verified')
     || error.message.includes('claim is missing lock commit metadata')
   );
 }

@@ -232,7 +232,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
         if (request.query?.includes('RainrailRepositoryLockMetadata')) {
           return repositoryLockMetadataResponse();
         }
-        if (request.query?.includes('RainrailProjectIssueClaimLock')) {
+        if (request.query?.includes('query RainrailProjectIssueClaimLock') || request.query?.includes('RainrailProjectIssueClaimLockByRepository')) {
           return jsonResponse({ data: { node: { ref: null } } });
         }
         if (request.query?.includes('RainrailCreateProjectIssueClaimLock')) {
@@ -293,7 +293,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
         if (request.query?.includes('RainrailRepositoryLockMetadata')) {
           return repositoryLockMetadataResponse();
         }
-        if (request.query?.includes('RainrailProjectIssueClaimLock')) {
+        if (request.query?.includes('query RainrailProjectIssueClaimLock') || request.query?.includes('RainrailProjectIssueClaimLockByRepository')) {
           return lockRefResponse({
             id: 'REF_stale_mention_draft_lock',
             createdAt: '2026-06-30T00:00:00.000Z',
@@ -564,7 +564,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
         if (isCreateLockCommitRequest(_url)) {
           return lockCommitResponse();
         }
-        if (request.query?.includes('RainrailProjectIssueClaimLock')) {
+        if (request.query?.includes('query RainrailProjectIssueClaimLock') || request.query?.includes('RainrailProjectIssueClaimLockByRepository')) {
           return jsonResponse({ data: { node: { ref: null } } });
         }
         if (request.query?.includes('RainrailCreateProjectIssueClaimLock')) {
@@ -734,7 +734,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
           createdLock = true;
           return jsonResponse({ data: { createRef: { ref: { id: 'REF_draft_lock' } } } });
         }
-        if (request.query?.includes('RainrailProjectIssueClaimLock')) {
+        if (request.query?.includes('query RainrailProjectIssueClaimLock') || request.query?.includes('RainrailProjectIssueClaimLockByRepository')) {
           const qualifiedName = String(request.variables?.qualifiedName ?? '');
           if (createdLock && !qualifiedName.includes('dispatched-locks')) {
             return lockRefResponse({
@@ -903,6 +903,14 @@ describe('createGitHubProjectTaskQueueProvider', () => {
         if (request.query?.includes('RainrailProjectMetadata')) {
           return projectMetadataResponse();
         }
+        if (request.query?.includes('query RainrailProjectIssueClaimLock') || request.query?.includes('RainrailProjectIssueClaimLockByRepository')) {
+          return lockRefResponse({
+            id: 'REF_draft_lock',
+            agentSessionId: 'agent:main:rainrail-draft',
+            branchName: 'agent/reirei-lab-rainrail-draft',
+            projectItemId: 'PVTI_draft_queue',
+          });
+        }
         if (request.query?.includes('RainrailUpdateProjectIssueClaimLock')) {
           return jsonResponse({ data: { updateRef: { ref: { id: 'REF_draft_lock' } } } });
         }
@@ -961,7 +969,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
             },
           });
         }
-        if (request.query?.includes('RainrailProjectIssueClaimLock')) {
+        if (request.query?.includes('query RainrailProjectIssueClaimLock') || request.query?.includes('RainrailProjectIssueClaimLockByRepository')) {
           return lockRefResponse({
             id: 'REF_draft_lock',
             agentSessionId: 'agent:main:rainrail-draft',
@@ -1058,7 +1066,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
           },
         });
       }
-      if (request.query?.includes('RainrailProjectIssueClaimLock')) {
+      if (request.query?.includes('query RainrailProjectIssueClaimLock') || request.query?.includes('RainrailProjectIssueClaimLockByRepository')) {
         return jsonResponse({ data: { node: { ref: null } } });
       }
       if (request.query?.includes('RainrailCreateProjectIssueClaimLock')) {
@@ -1199,6 +1207,13 @@ describe('createGitHubProjectTaskQueueProvider', () => {
         if (request.query?.includes('RainrailProjectMetadata')) {
           return projectMetadataResponse();
         }
+        if (request.query?.includes('query RainrailProjectIssueClaimLock') || request.query?.includes('RainrailProjectIssueClaimLockByRepository')) {
+          return lockRefResponse({
+            id: 'REF_lock',
+            agentSessionId: 'agent:main:rainrail-21',
+            branchName: 'agent/reirei-lab-rainrail-21-project-issue-selection',
+          });
+        }
         if (request.query?.includes('RainrailCreateProjectIssueClaimLock')) {
           return jsonResponse({ data: { createRef: { ref: { id: 'REF_lock' } } } });
         }
@@ -1338,7 +1353,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
         if (request.query?.includes('RainrailDeleteProjectIssueClaimLock')) {
           return jsonResponse({ data: { deleteRef: { clientMutationId: null } } });
         }
-        if (request.query?.includes('RainrailProjectIssueClaimLock')) {
+        if (request.query?.includes('query RainrailProjectIssueClaimLock') || request.query?.includes('RainrailProjectIssueClaimLockByRepository')) {
           return lockRefResponse({
             id: 'REF_lock',
             createdAt: new Date().toISOString(),
@@ -1585,7 +1600,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
         if (request.query?.includes('RainrailProjectMetadata')) {
           return projectMetadataResponse();
         }
-        if (request.query?.includes('RainrailProjectIssueClaimLock')) {
+        if (request.query?.includes('query RainrailProjectIssueClaimLock') || request.query?.includes('RainrailProjectIssueClaimLockByRepository')) {
           return jsonResponse({ data: { node: { ref: null } } });
         }
         if (request.query?.includes('RainrailCreateProjectIssueClaimLock')) {
@@ -1680,7 +1695,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
         if (request.query?.includes('RainrailProjectMetadata')) {
           return projectMetadataResponse();
         }
-        if (request.query?.includes('RainrailProjectIssueClaimLock')) {
+        if (request.query?.includes('query RainrailProjectIssueClaimLock') || request.query?.includes('RainrailProjectIssueClaimLockByRepository')) {
           return jsonResponse({ data: { node: { ref: null } } });
         }
         if (request.query?.includes('RainrailCreateProjectIssueClaimLock')) {
@@ -1770,7 +1785,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
         if (request.query?.includes('RainrailProjectMetadata')) {
           return projectMetadataResponse();
         }
-        if (request.query?.includes('RainrailProjectIssueClaimLock')) {
+        if (request.query?.includes('query RainrailProjectIssueClaimLock') || request.query?.includes('RainrailProjectIssueClaimLockByRepository')) {
           return jsonResponse({ data: { node: { ref: null } } });
         }
         if (request.query?.includes('RainrailCreateProjectIssueClaimLock')) {
@@ -1866,7 +1881,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
             projectItemId: 'item_21',
           });
         }
-        if (request.query?.includes('RainrailProjectIssueClaimLock')) {
+        if (request.query?.includes('query RainrailProjectIssueClaimLock') || request.query?.includes('RainrailProjectIssueClaimLockByRepository')) {
           return jsonResponse({ data: { node: { ref: null } } });
         }
         if (request.query?.includes('RainrailProjectMetadata')) {
@@ -1954,6 +1969,15 @@ describe('createGitHubProjectTaskQueueProvider', () => {
         }
         if (request.query?.includes('RainrailProjectMetadata')) {
           return projectMetadataResponse();
+        }
+        if (request.query?.includes('query RainrailProjectIssueClaimLock') || request.query?.includes('RainrailProjectIssueClaimLockByRepository')) {
+          return lockRefResponse({
+            id: 'REF_lock',
+            agentSessionId: 'agent:main:rainrail-22',
+            branchName: 'agent/reirei-lab-rainrail-22-child-issue',
+            projectItemId: 'item_22',
+            originalStatus: 'Backlog',
+          });
         }
         if (request.query?.includes('RainrailUpdateProjectIssueClaimLock')) {
           return jsonResponse({ data: { updateRef: { ref: { id: 'REF_lock' } } } });
@@ -2065,7 +2089,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
         if (request.query?.includes('RainrailProjectMetadata')) {
           return projectMetadataResponse();
         }
-        if (request.query?.includes('RainrailProjectIssueClaimLock')) {
+        if (request.query?.includes('query RainrailProjectIssueClaimLock') || request.query?.includes('RainrailProjectIssueClaimLockByRepository')) {
           return jsonResponse({ data: { node: { ref: null } } });
         }
         if (request.query?.includes('RainrailCreateProjectIssueClaimLock')) {
@@ -2158,7 +2182,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
             branchName: 'agent/reirei-lab-rainrail-21-project-issue-selection',
           });
         }
-        if (request.query?.includes('RainrailProjectIssueClaimLock')) {
+        if (request.query?.includes('query RainrailProjectIssueClaimLock') || request.query?.includes('RainrailProjectIssueClaimLockByRepository')) {
           return jsonResponse({ data: { node: { ref: null } } });
         }
         if (request.query?.includes('RainrailCreateProjectIssueClaimLock')) {
@@ -2256,7 +2280,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
             headers: { 'content-type': 'application/json' },
           });
         }
-        if (request.query?.includes('RainrailProjectIssueClaimLock')) {
+        if (request.query?.includes('query RainrailProjectIssueClaimLock') || request.query?.includes('RainrailProjectIssueClaimLockByRepository')) {
           return jsonResponse({ data: { node: { ref: null } } });
         }
         if (request.query?.includes('RainrailCreateProjectIssueClaimLock')) {
@@ -2328,7 +2352,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
               headers: { 'content-type': 'application/json', date: githubDate },
             });
           }
-          if (request.query?.includes('RainrailProjectIssueClaimLock')) {
+          if (request.query?.includes('query RainrailProjectIssueClaimLock') || request.query?.includes('RainrailProjectIssueClaimLockByRepository')) {
             const qualifiedName = String(request.variables?.qualifiedName ?? '');
             if (qualifiedName.includes('notes/rainrail/dispatched-locks/')) {
               return jsonResponseWithDate({ data: { node: { ref: null } } }, githubDate);
@@ -2403,7 +2427,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
           }
           return jsonResponse({ data: { createRef: { ref: { id: 'REF_lock_new' } } } });
         }
-        if (request.query?.includes('RainrailProjectIssueClaimLock')) {
+        if (request.query?.includes('query RainrailProjectIssueClaimLock') || request.query?.includes('RainrailProjectIssueClaimLockByRepository')) {
           return lockRefResponse({ createdAt: new Date().toISOString() });
         }
         return jsonResponse({ data: { updateProjectV2ItemFieldValue: { projectV2Item: { id: 'item_21' } } } });
@@ -2449,7 +2473,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
             },
           });
         }
-        if (request.query?.includes('RainrailProjectIssueClaimLock')) {
+        if (request.query?.includes('query RainrailProjectIssueClaimLock') || request.query?.includes('RainrailProjectIssueClaimLockByRepository')) {
           const qualifiedName = String(request.variables?.qualifiedName ?? '');
           if (qualifiedName.includes('notes/rainrail/dispatched-locks/')) {
             return lockRefResponse({
@@ -2523,7 +2547,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
             headers: { 'content-type': 'application/json' },
           });
         }
-        if (request.query?.includes('RainrailProjectIssueClaimLock')) {
+        if (request.query?.includes('query RainrailProjectIssueClaimLock') || request.query?.includes('RainrailProjectIssueClaimLockByRepository')) {
           const qualifiedName = String(request.variables?.qualifiedName ?? '');
           if (qualifiedName.includes('notes/rainrail/dispatched-locks/')) {
             dispatchedLockReads += 1;
@@ -2596,7 +2620,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
             headers: { 'content-type': 'application/json' },
           });
         }
-        if (request.query?.includes('RainrailProjectIssueClaimLock')) {
+        if (request.query?.includes('query RainrailProjectIssueClaimLock') || request.query?.includes('RainrailProjectIssueClaimLockByRepository')) {
           return lockRefResponse({ createdAt: new Date().toISOString() });
         }
         if (request.query?.includes('addComment')) {
@@ -2670,7 +2694,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
           }
           return jsonResponse({ data: { createRef: { ref: { id: 'REF_lock_new' } } } });
         }
-        if (request.query?.includes('RainrailProjectIssueClaimLock')) {
+        if (request.query?.includes('query RainrailProjectIssueClaimLock') || request.query?.includes('RainrailProjectIssueClaimLockByRepository')) {
           return lockRefResponse({ id: 'REF_lock_expired', createdAt: '2000-01-01T00:00:00.000Z' });
         }
         if (request.query?.includes('RainrailDeleteProjectIssueClaimLock')) {
@@ -2746,7 +2770,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
           }
           return jsonResponse({ data: { createRef: { ref: { id: 'REF_lock_new' } } } });
         }
-        if (request.query?.includes('RainrailProjectIssueClaimLock')) {
+        if (request.query?.includes('query RainrailProjectIssueClaimLock') || request.query?.includes('RainrailProjectIssueClaimLockByRepository')) {
           const qualifiedName = String(request.variables?.qualifiedName ?? '');
           if (qualifiedName.includes('notes/rainrail/dispatched-locks/')) {
             return jsonResponse({ data: { node: { ref: null } } });
@@ -2824,7 +2848,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
           }
           return jsonResponse({ data: { createRef: { ref: { id: 'REF_lock_new' } } } });
         }
-        if (request.query?.includes('RainrailProjectIssueClaimLock')) {
+        if (request.query?.includes('query RainrailProjectIssueClaimLock') || request.query?.includes('RainrailProjectIssueClaimLockByRepository')) {
           const qualifiedName = String(request.variables?.qualifiedName ?? '');
           if (qualifiedName.includes('notes/rainrail/dispatched-locks/')) {
             dispatchedLockReads += 1;
@@ -2903,7 +2927,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
           }
           return jsonResponse({ data: { createRef: { ref: { id: 'REF_lock_new' } } } });
         }
-        if (request.query?.includes('RainrailProjectIssueClaimLock')) {
+        if (request.query?.includes('query RainrailProjectIssueClaimLock') || request.query?.includes('RainrailProjectIssueClaimLockByRepository')) {
           const qualifiedName = String(request.variables?.qualifiedName ?? '');
           if (qualifiedName.includes('notes/rainrail/dispatched-locks/')) {
             return jsonResponse({ data: { node: { ref: null } } });
@@ -3093,7 +3117,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
         if (request.query?.includes('RainrailProjectMetadata')) {
           return projectMetadataResponse();
         }
-        if (request.query?.includes('RainrailProjectIssueClaimLock')) {
+        if (request.query?.includes('query RainrailProjectIssueClaimLock') || request.query?.includes('RainrailProjectIssueClaimLockByRepository')) {
           return lockRefResponse({
             id: 'REF_lock',
             createdAt: new Date().toISOString(),
@@ -3174,7 +3198,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
         if (request.query?.includes('RainrailProjectMetadata')) {
           return projectMetadataResponse({ inProgressStatusName: 'Working', inProgressStatusOptionId: 'status_working' });
         }
-        if (request.query?.includes('RainrailProjectIssueClaimLock')) {
+        if (request.query?.includes('query RainrailProjectIssueClaimLock') || request.query?.includes('RainrailProjectIssueClaimLockByRepository')) {
           return lockRefResponse({
             id: 'REF_lock',
             createdAt: new Date().toISOString(),
@@ -3235,7 +3259,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
         if (request.query?.includes('RainrailProjectMetadata')) {
           return projectMetadataResponse();
         }
-        if (request.query?.includes('RainrailProjectIssueClaimLock')) {
+        if (request.query?.includes('query RainrailProjectIssueClaimLock') || request.query?.includes('RainrailProjectIssueClaimLockByRepository')) {
           return lockRefResponse({
             id: 'REF_draft_lock',
             agentSessionId: 'agent:main:rainrail-draft',
@@ -3377,7 +3401,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
         if (request.query?.includes('RainrailProjectMetadata')) {
           return projectMetadataResponse();
         }
-        if (request.query?.includes('RainrailProjectIssueClaimLock')) {
+        if (request.query?.includes('query RainrailProjectIssueClaimLock') || request.query?.includes('RainrailProjectIssueClaimLockByRepository')) {
           return lockRefResponse({
             id: 'REF_lock',
             createdAt: new Date().toISOString(),
@@ -3430,7 +3454,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
             },
           });
         }
-        if (request.query?.includes('RainrailProjectIssueClaimLock')) {
+        if (request.query?.includes('query RainrailProjectIssueClaimLock') || request.query?.includes('RainrailProjectIssueClaimLockByRepository')) {
           return lockRefResponse({
             id: 'REF_lock',
             createdAt: new Date().toISOString(),
@@ -3485,7 +3509,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
             },
           });
         }
-        if (request.query?.includes('RainrailProjectIssueClaimLock')) {
+        if (request.query?.includes('query RainrailProjectIssueClaimLock') || request.query?.includes('RainrailProjectIssueClaimLockByRepository')) {
           return new Response(JSON.stringify({ errors: [{ message: 'secondary rate limit' }] }), {
             status: 200,
             headers: { 'content-type': 'application/json' },
@@ -3540,7 +3564,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
         if (request.query?.includes('RainrailDeleteProjectIssueClaimLock')) {
           return jsonResponse({ data: { deleteRef: { clientMutationId: null } } });
         }
-        if (request.query?.includes('RainrailProjectIssueClaimLock')) {
+        if (request.query?.includes('query RainrailProjectIssueClaimLock') || request.query?.includes('RainrailProjectIssueClaimLockByRepository')) {
           return lockRefResponse({
             id: 'REF_lock',
             createdAt: new Date().toISOString(),
@@ -3601,7 +3625,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
         if (request.query?.includes('RainrailProjectMetadata')) {
           return projectMetadataResponse();
         }
-        if (request.query?.includes('RainrailProjectIssueClaimLock')) {
+        if (request.query?.includes('query RainrailProjectIssueClaimLock') || request.query?.includes('RainrailProjectIssueClaimLockByRepository')) {
           return lockRefResponse({
             id: 'REF_lock',
             createdAt: new Date().toISOString(),
@@ -3688,7 +3712,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
             },
           });
         }
-        if (request.query?.includes('RainrailProjectIssueClaimLock')) {
+        if (request.query?.includes('query RainrailProjectIssueClaimLock') || request.query?.includes('RainrailProjectIssueClaimLockByRepository')) {
           return lockRefResponse({
             id: 'REF_lock_expired',
             createdAt: '2000-01-01T00:00:00.000Z',
@@ -3744,6 +3768,13 @@ describe('createGitHubProjectTaskQueueProvider', () => {
         }
         if (request.query?.includes('RainrailProjectMetadata')) {
           return projectMetadataResponse();
+        }
+        if (request.query?.includes('query RainrailProjectIssueClaimLock') || request.query?.includes('RainrailProjectIssueClaimLockByRepository')) {
+          return lockRefResponse({
+            id: 'REF_lock',
+            agentSessionId: 'agent:main:rainrail-21',
+            branchName: 'agent/reirei-lab-rainrail-21-project-issue-selection',
+          });
         }
         if (request.query?.includes('RainrailCreateProjectIssueClaimLock')) {
           return jsonResponse({ data: { createRef: { ref: { id: 'REF_lock' } } } });
@@ -3831,6 +3862,14 @@ describe('createGitHubProjectTaskQueueProvider', () => {
         if (request.query?.includes('RainrailUpdateProjectIssueClaimLock')) {
           return jsonResponse({ data: { updateRef: { ref: { id: 'REF_lock' } } } });
         }
+        if (request.query?.includes('query RainrailProjectIssueClaimLock') || request.query?.includes('RainrailProjectIssueClaimLockByRepository')) {
+          return lockRefResponse({
+            id: 'REF_lock',
+            agentSessionId: 'agent:main:rainrail-21',
+            branchName: 'agent/reirei-lab-rainrail-21-project-issue-selection',
+            projectItemId: 'item_21',
+          });
+        }
         return jsonResponse({ data: { updateProjectV2ItemFieldValue: { projectV2Item: { id: 'item_21' } } } });
       }) as typeof fetch,
     });
@@ -3910,6 +3949,14 @@ describe('createGitHubProjectTaskQueueProvider', () => {
           }
           return jsonResponse({ data: { updateRef: { ref: { id: 'REF_lock' } } } });
         }
+        if (request.query?.includes('query RainrailProjectIssueClaimLock') || request.query?.includes('RainrailProjectIssueClaimLockByRepository')) {
+          return lockRefResponse({
+            id: 'REF_lock',
+            agentSessionId: 'agent:main:rainrail-21',
+            branchName: 'agent/reirei-lab-rainrail-21-project-issue-selection',
+            projectItemId: 'item_21',
+          });
+        }
         if (request.query?.includes('RainrailDeleteProjectIssueClaimLock')) {
           return jsonResponse({ data: { deleteRef: { clientMutationId: null } } });
         }
@@ -3986,7 +4033,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
             headers: { 'content-type': 'application/json' },
           });
         }
-        if (request.query?.includes('RainrailProjectIssueClaimLock')) {
+        if (request.query?.includes('query RainrailProjectIssueClaimLock') || request.query?.includes('RainrailProjectIssueClaimLockByRepository')) {
           return lockRefResponse({
             id: 'REF_lock',
             createdAt: new Date().toISOString(),
@@ -4067,7 +4114,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
         if (request.query?.includes('RainrailProjectMetadata')) {
           return projectMetadataResponse();
         }
-        if (request.query?.includes('RainrailProjectIssueClaimLock')) {
+        if (request.query?.includes('query RainrailProjectIssueClaimLock') || request.query?.includes('RainrailProjectIssueClaimLockByRepository')) {
           return lockRefResponse({
             id: 'REF_lock',
             createdAt: new Date().toISOString(),
@@ -4141,7 +4188,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
         if (isCreateLockCommitRequest(_url)) {
           return lockCommitResponse(`lock_sha_${calls.length}`);
         }
-        if (request.query?.includes('RainrailProjectIssueClaimLock')) {
+        if (request.query?.includes('query RainrailProjectIssueClaimLock') || request.query?.includes('RainrailProjectIssueClaimLockByRepository')) {
           return lockRefResponse({
             id: 'REF_lock_new',
             createdAt: new Date().toISOString(),
@@ -4195,7 +4242,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
         if (isCreateLockCommitRequest(_url)) {
           return lockCommitResponse(`lock_sha_${calls.length}`);
         }
-        if (request.query?.includes('RainrailProjectIssueClaimLock')) {
+        if (request.query?.includes('query RainrailProjectIssueClaimLock') || request.query?.includes('RainrailProjectIssueClaimLockByRepository')) {
           return lockRefResponse({
             id: 'REF_lock',
             createdAt: new Date().toISOString(),
@@ -4227,6 +4274,54 @@ describe('createGitHubProjectTaskQueueProvider', () => {
       agentSessionId: 'agent:main:rainrail-21',
       branchName: 'agent/reirei-lab-rainrail-21-project-issue-selection',
     })).rejects.toThrow('claim lock is no longer owned');
+
+    expect(calls.find((call) => call.query?.includes('RainrailUpdateProjectIssueClaimLock'))).toBeUndefined();
+    expect(calls.find((call) => call.query?.includes('updateProjectV2ItemFieldValue'))).toBeUndefined();
+  });
+
+  it('stops finalize when claim lock ownership cannot be verified before dispatch', async () => {
+    const calls: Array<{ query?: string; variables?: Record<string, unknown> }> = [];
+    const provider = createGitHubProjectTaskQueueProvider({
+      config: projectConfig(),
+      auth: { getAuthToken: async () => ({ token: 'project-token', provider: 'configured-token', fallback: false }) },
+      fetch: (async (_url, init) => {
+        const request = JSON.parse(String(init?.body)) as { query?: string; variables?: Record<string, unknown> };
+        calls.push(request);
+        if (isCreateLockCommitRequest(_url)) {
+          return lockCommitResponse(`lock_sha_${calls.length}`);
+        }
+        if (request.query?.includes('query RainrailProjectIssueClaimLock') || request.query?.includes('RainrailProjectIssueClaimLockByRepository')) {
+          return jsonResponse({
+            errors: [{ message: 'secondary rate limit' }],
+          });
+        }
+        if (request.query?.includes('RainrailProjectMetadata')) {
+          return projectMetadataResponse();
+        }
+        return jsonResponse({ data: {} });
+      }) as typeof fetch,
+    });
+
+    await expect(provider.finalizeProjectIssueClaim?.({
+      issue: {
+        id: 'item_21',
+        contentId: 'issue_node_21',
+        contentType: 'Issue',
+        title: 'Project issue selection',
+        status: 'Todo',
+        assigneeLogins: ['reirei-agent'],
+      },
+      claim: {
+        projectItemId: 'item_21',
+        lockRefId: 'REF_lock',
+        lockRepositoryId: 'R_repo',
+        lockRepositoryNameWithOwner: 'reirei-lab/rainrail',
+        lockDefaultBranchOid: 'base_sha',
+        lockDefaultBranchTreeOid: 'base_tree',
+      },
+      agentSessionId: 'agent:main:rainrail-21',
+      branchName: 'agent/reirei-lab-rainrail-21-project-issue-selection',
+    })).rejects.toThrow('claim lock ownership could not be verified');
 
     expect(calls.find((call) => call.query?.includes('RainrailUpdateProjectIssueClaimLock'))).toBeUndefined();
     expect(calls.find((call) => call.query?.includes('updateProjectV2ItemFieldValue'))).toBeUndefined();
@@ -4277,7 +4372,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
             },
           });
         }
-        if (request.query?.includes('RainrailProjectIssueClaimLock')) {
+        if (request.query?.includes('query RainrailProjectIssueClaimLock') || request.query?.includes('RainrailProjectIssueClaimLockByRepository')) {
           return lockRefByRepositoryResponse({
             id: 'REF_lock_dispatched',
             createdAt: '2000-01-01T00:00:00.000Z',
@@ -4352,7 +4447,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
             },
           });
         }
-        if (request.query?.includes('RainrailProjectIssueClaimLock')) {
+        if (request.query?.includes('query RainrailProjectIssueClaimLock') || request.query?.includes('RainrailProjectIssueClaimLockByRepository')) {
           return lockRefByRepositoryResponse({
             id: 'REF_lock_dispatched',
             createdAt: '2000-01-01T00:00:00.000Z',
@@ -4427,7 +4522,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
             },
           });
         }
-        if (request.query?.includes('RainrailProjectIssueClaimLock')) {
+        if (request.query?.includes('query RainrailProjectIssueClaimLock') || request.query?.includes('RainrailProjectIssueClaimLockByRepository')) {
           return lockRefByRepositoryResponse({
             id: 'REF_lock_dispatched',
             createdAt: '2000-01-01T00:00:00.000Z',
@@ -4495,7 +4590,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
             },
           });
         }
-        if (request.query?.includes('RainrailProjectIssueClaimLock')) {
+        if (request.query?.includes('query RainrailProjectIssueClaimLock') || request.query?.includes('RainrailProjectIssueClaimLockByRepository')) {
           return lockRefByRepositoryResponse({
             id: 'REF_lock_dispatched',
             createdAt: '2000-01-01T00:00:00.000Z',
@@ -4567,7 +4662,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
             },
           });
         }
-        if (request.query?.includes('RainrailProjectIssueClaimLock')) {
+        if (request.query?.includes('query RainrailProjectIssueClaimLock') || request.query?.includes('RainrailProjectIssueClaimLockByRepository')) {
           return lockRefByRepositoryResponse({
             id: 'REF_lock_dispatched',
             createdAt: '2000-01-01T00:00:00.000Z',
@@ -4636,7 +4731,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
             },
           });
         }
-        if (request.query?.includes('RainrailProjectIssueClaimLock')) {
+        if (request.query?.includes('query RainrailProjectIssueClaimLock') || request.query?.includes('RainrailProjectIssueClaimLockByRepository')) {
           return lockRefByRepositoryResponse({
             id: 'REF_lock_dispatched',
             createdAt: '2000-01-01T00:00:00.000Z',
@@ -4743,7 +4838,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
             },
           });
         }
-        if (request.query?.includes('RainrailProjectIssueClaimLock')) {
+        if (request.query?.includes('query RainrailProjectIssueClaimLock') || request.query?.includes('RainrailProjectIssueClaimLockByRepository')) {
           return lockRefByRepositoryResponse({
             id: 'REF_lock_active',
             createdAt: new Date().toISOString(),
@@ -4810,7 +4905,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
             },
           });
         }
-        if (request.query?.includes('RainrailProjectIssueClaimLock')) {
+        if (request.query?.includes('query RainrailProjectIssueClaimLock') || request.query?.includes('RainrailProjectIssueClaimLockByRepository')) {
           return lockRefResponse({
             id: 'REF_lock_dispatched',
             createdAt: '2000-01-01T00:00:00.000Z',
@@ -4891,7 +4986,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
             },
           });
         }
-        if (request.query?.includes('RainrailProjectIssueClaimLock')) {
+        if (request.query?.includes('query RainrailProjectIssueClaimLock') || request.query?.includes('RainrailProjectIssueClaimLockByRepository')) {
           return lockRefResponse({
             id: 'REF_lock_dispatched',
             createdAt: '2000-01-01T00:00:00.000Z',
@@ -4955,6 +5050,14 @@ describe('createGitHubProjectTaskQueueProvider', () => {
         }
         if (request.query?.includes('RainrailUpdateProjectIssueClaimLock')) {
           return jsonResponse({ data: { updateRef: { ref: { id: 'REF_lock' } } } });
+        }
+        if (request.query?.includes('query RainrailProjectIssueClaimLock') || request.query?.includes('RainrailProjectIssueClaimLockByRepository')) {
+          return lockRefResponse({
+            id: 'REF_lock',
+            agentSessionId: 'agent:main:rainrail-21',
+            branchName: 'agent/reirei-lab-rainrail-21-project-issue-selection',
+            projectItemId: 'item_21',
+          });
         }
         if (request.query?.includes('RainrailDeleteProjectIssueClaimLock')) {
           return jsonResponse({ data: { deleteRef: { clientMutationId: null } } });
@@ -5044,7 +5147,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
             },
           });
         }
-        if (request.query?.includes('RainrailProjectIssueClaimLock')) {
+        if (request.query?.includes('query RainrailProjectIssueClaimLock') || request.query?.includes('RainrailProjectIssueClaimLockByRepository')) {
           return lockRefResponse({
             id: 'REF_lock_dispatched',
             createdAt: '2000-01-01T00:00:00.000Z',
@@ -5116,7 +5219,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
             },
           });
         }
-        if (request.query?.includes('RainrailProjectIssueClaimLock')) {
+        if (request.query?.includes('query RainrailProjectIssueClaimLock') || request.query?.includes('RainrailProjectIssueClaimLockByRepository')) {
           const qualifiedName = String(request.variables?.qualifiedName ?? '');
           if (qualifiedName.includes('notes/rainrail/locks/')) {
             return new Response(JSON.stringify({ errors: [{ message: 'secondary rate limit' }] }), {
@@ -5412,7 +5515,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
         if (request.query?.includes('RainrailProjectMetadata')) {
           return projectMetadataResponse();
         }
-        if (request.query?.includes('RainrailProjectIssueClaimLock')) {
+        if (request.query?.includes('query RainrailProjectIssueClaimLock') || request.query?.includes('RainrailProjectIssueClaimLockByRepository')) {
           const qualifiedName = String(request.variables?.qualifiedName ?? '');
           if (qualifiedName.includes('dispatched-locks')) {
             return lockRefResponse({
@@ -5493,7 +5596,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
             },
           });
         }
-        if (request.query?.includes('RainrailProjectIssueClaimLock')) {
+        if (request.query?.includes('query RainrailProjectIssueClaimLock') || request.query?.includes('RainrailProjectIssueClaimLockByRepository')) {
           const qualifiedName = String(request.variables?.qualifiedName ?? '');
           if (qualifiedName.includes('dispatched-locks')) {
             return lockRefResponse({
@@ -5572,7 +5675,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
         if (request.query?.includes('RainrailProjectMetadata')) {
           return projectMetadataResponse();
         }
-        if (request.query?.includes('RainrailProjectIssueClaimLock')) {
+        if (request.query?.includes('query RainrailProjectIssueClaimLock') || request.query?.includes('RainrailProjectIssueClaimLockByRepository')) {
           const qualifiedName = String(request.variables?.qualifiedName ?? '');
           if (qualifiedName.includes('notes/rainrail/locks/')) {
             return new Response(JSON.stringify({ errors: [{ message: 'secondary rate limit' }] }), {
@@ -5775,7 +5878,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
             headers: { 'content-type': 'application/json' },
           });
         }
-        if (request.query?.includes('RainrailProjectIssueClaimLock')) {
+        if (request.query?.includes('query RainrailProjectIssueClaimLock') || request.query?.includes('RainrailProjectIssueClaimLockByRepository')) {
           return lockRefResponse({
             id: 'REF_lock_dispatched',
             createdAt: '2000-01-01T00:00:00.000Z',
@@ -5837,7 +5940,7 @@ describe('createGitHubProjectTaskQueueProvider', () => {
             headers: { 'content-type': 'application/json' },
           });
         }
-        if (request.query?.includes('RainrailProjectIssueClaimLock')) {
+        if (request.query?.includes('query RainrailProjectIssueClaimLock') || request.query?.includes('RainrailProjectIssueClaimLockByRepository')) {
           return lockRefResponse({
             id: 'REF_lock_existing',
             createdAt: '2000-01-01T00:00:00.000Z',
@@ -6011,6 +6114,14 @@ describe('createGitHubProjectTaskQueueProvider', () => {
         }
         if (request.query?.includes('RainrailCreateProjectIssueClaimLock')) {
           return jsonResponse({ data: { createRef: { ref: { id: 'REF_lock' } } } });
+        }
+        if (request.query?.includes('query RainrailProjectIssueClaimLock') || request.query?.includes('RainrailProjectIssueClaimLockByRepository')) {
+          return lockRefResponse({
+            id: 'REF_lock',
+            agentSessionId: 'agent:main:rainrail-21',
+            branchName: 'agent/reirei-lab-rainrail-21-project-issue-selection',
+            projectItemId: 'item_21',
+          });
         }
         return jsonResponse({ data: { updateProjectV2ItemFieldValue: { projectV2Item: { id: 'item_21' } } } });
       }) as typeof fetch,
@@ -6480,7 +6591,7 @@ function claimSuccessFetch(input: {
     if (request.query?.includes('RainrailProjectMetadata')) {
       return input.metadata ?? projectMetadataResponse();
     }
-    if (request.query?.includes('RainrailProjectIssueClaimLock')) {
+    if (request.query?.includes('query RainrailProjectIssueClaimLock') || request.query?.includes('RainrailProjectIssueClaimLockByRepository')) {
       return jsonResponse({ data: { node: { ref: null } } });
     }
     if (request.query?.includes('RainrailCreateProjectIssueClaimLock')) {

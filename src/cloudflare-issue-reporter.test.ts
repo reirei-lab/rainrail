@@ -757,6 +757,39 @@ describe('cloudflare issue redaction', () => {
     expect(createdIssues[0]?.body).toContain('resetHandler @ https://worker.example/[redacted]/[redacted]/worker.js');
   });
 
+  it('redacts plain path stack locations in signatures and raw data', async () => {
+    const createdIssues: Array<{ body: string }> = [];
+    const workflow = createCloudflareIssueReporterWorkflow({
+      repository: 'reirei-lab/rainrail',
+      store: createInMemoryCloudflareErrorIssueStore(),
+      issues: {
+        findOpenIssueByFingerprint: async () => undefined,
+        createIssue: async (input) => {
+          createdIssues.push(input);
+          return {
+            number: 129,
+            url: 'https://github.com/reirei-lab/rainrail/issues/129',
+          };
+        },
+      },
+    });
+
+    await expect(workflow.handle(cloudflareErrorEvent({
+      stack: [
+        'TypeError: failed',
+        '    at resetHandler (/reset/secret-reset-token/worker.js:1:1)',
+        '    at sessionHandler (file:///auth/session/secret-session-id/worker.js:2:1)',
+      ].join('\n'),
+    }), runtimeContext())).resolves.toMatchObject({
+      handled: true,
+    });
+
+    expect(createdIssues[0]?.body).not.toContain('secret-reset-token');
+    expect(createdIssues[0]?.body).not.toContain('secret-session-id');
+    expect(createdIssues[0]?.body).toContain('resetHandler @ /[redacted]/[redacted]/worker.js');
+    expect(createdIssues[0]?.body).toContain('sessionHandler @ file:///auth/[redacted]/[redacted]/worker.js');
+  });
+
   it('redacts JSON-shaped secret values embedded in exception strings', async () => {
     const createdIssues: Array<{ body: string }> = [];
     const workflow = createCloudflareIssueReporterWorkflow({
@@ -858,7 +891,7 @@ describe('cloudflare issue redaction', () => {
       message: [
         'serialized {"apiKeyValue":"api-key-value-secret","auth.token":"dot-token-secret","tokens":["abc]def"],"password.hash":"dot-hash-secret","password_hash":"hash-secret","token":{"meta":{},"value":"nested-object-secret"}}',
         'tokens=["kv-array-secret-1","kv-array-secret-2"] passwords=[kv-password-1,kv-password-2] token="quoted-token-secret" password=\'quoted-password-secret\' token = "spaced-token-secret" password = spaced-password-secret DATABASE_URL=postgres://app:db-pass@db/prod REDIS_URL=redis://:redis-pass@cache/0 CACHE_URL=redis://redis-user-token@cache/0',
-        'secretValue=secret-value-secret session=session-secret sessionId=session-id-secret',
+        'secretValue=secret-value-secret session=session-secret sessionId=session-id-secret details=[token=bracket-token-secret] (sessionId=paren-session-secret)',
         'cookie=session=session-secret; csrf=csrf-secret',
       ].join(' '),
     }), runtimeContext())).resolves.toMatchObject({
@@ -886,6 +919,8 @@ describe('cloudflare issue redaction', () => {
     expect(createdIssues[0]?.body).not.toContain('secret-value-secret');
     expect(createdIssues[0]?.body).not.toContain('session-id-secret');
     expect(createdIssues[0]?.body).not.toContain('session-secret');
+    expect(createdIssues[0]?.body).not.toContain('bracket-token-secret');
+    expect(createdIssues[0]?.body).not.toContain('paren-session-secret');
     expect(createdIssues[0]?.body).not.toContain('csrf-secret');
     expect(createdIssues[0]?.body).toContain('\\"apiKeyValue\\":\\"[redacted]\\"');
     expect(createdIssues[0]?.body).toContain('\\"auth.token\\":\\"[redacted]\\"');
