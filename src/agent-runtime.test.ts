@@ -670,6 +670,55 @@ describe('createOpenClawRuntimeProvider', () => {
     ]), expect.anything());
   });
 
+  it('does not resume fallback markers quoted inside bannered JSON completion text', async () => {
+    const spawnProcess = vi.fn(() => ({ pid: 5151, unref: vi.fn() }));
+    const logDirectory = temporaryDirectory();
+    const logPath = `${logDirectory}/task.log`;
+    writeFileSync(logPath, [
+      'OpenClaw agent starting',
+      JSON.stringify({
+        status: 'ok',
+        finalAssistantVisibleText: '調査対象ログ: EMBEDDED FALLBACK: Gateway timed out; running embedded agent with fresh session gateway-fallback-banner-quoted',
+        result: {
+          meta: {
+            agentMeta: {
+              sessionId: 'intended-session',
+            },
+          },
+        },
+      }),
+      'OpenClaw agent finished',
+    ].join('\n'), 'utf8');
+    const provider = createOpenClawRuntimeProvider({
+      enabled: true,
+      command: 'openclaw',
+      agentId: 'main',
+      sessionKeyPrefix: 'rainrail',
+      timeoutSeconds: 900,
+      logDirectory,
+      spawnProcess,
+    });
+
+    await provider.resumeRun?.({
+      run: { id: 'agent:main:intended-session', provider: 'openclaw', status: 'stopped' },
+      task: {
+        id: 'agent_task_reirei-lab-rainrail_22',
+        title: 'OpenClaw runtime',
+        agentSessionId: 'agent:main:intended-session',
+        branchName: 'agent/reirei-lab-rainrail-22',
+        logPath,
+        resumeAttempts: [],
+      },
+      attemptId: 'agent_task_reirei-lab-rainrail_22_resume_01',
+      requestedBy: 'reirei-agent',
+    });
+
+    expect(spawnProcess).toHaveBeenCalledWith('openclaw', expect.arrayContaining([
+      '--session-key',
+      'agent:main:intended-session',
+    ]), expect.anything());
+  });
+
   it('does not treat bare fallback-looking text as a resume session marker', async () => {
     const spawnProcess = vi.fn(() => ({ pid: 5151, unref: vi.fn() }));
     const logDirectory = temporaryDirectory();
@@ -762,6 +811,15 @@ describe('runtime task completion and resume helpers', () => {
       status: 'ok',
       finalAssistantVisibleText: 'Outcome: split_recommended',
     }))).toMatchObject({ status: 'split_recommended', outcome: 'split_recommended' });
+
+    expect(readRuntimeRunCompletionFromLog(JSON.stringify({
+      status: 'ok',
+      finalAssistantVisibleText: [
+        '引用: Outcome: needs_human',
+        '実際の最終結果です。',
+        'Outcome: implemented',
+      ].join('\n'),
+    }))).toMatchObject({ status: 'succeeded', outcome: 'implemented' });
 
     expect(readRuntimeRunCompletionFromLog(JSON.stringify({
       payloads: [{ text: '修正して PR を更新しました。\n\nOutcome: implemented' }],

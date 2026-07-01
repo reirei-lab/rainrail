@@ -27,6 +27,20 @@ describe('agent timeline', () => {
     }))).toBe('actual-session');
   });
 
+  it('extracts OpenClaw session ids from bannered JSON metadata without scanning quoted payload text', () => {
+    const log = [
+      'OpenClaw agent starting',
+      JSON.stringify({
+        status: 'ok',
+        payloads: [{ text: 'tool output quoted {"agentMeta":{"sessionId":"wrong-session"}}' }],
+        meta: { agentMeta: { sessionId: 'actual-session' } },
+      }),
+      'OpenClaw agent finished',
+    ].join('\n');
+
+    expect(extractRuntimeSessionId(log)).toBe('actual-session');
+  });
+
   it('does not extract quoted agentMeta session ids from valid JSON logs without metadata', () => {
     expect(extractRuntimeSessionId(JSON.stringify({
       status: 'ok',
@@ -103,6 +117,39 @@ describe('agent timeline', () => {
       );
       expect(timeline.sessionId).toBe('actual-session');
       expect(timeline.fallback).toBe(false);
+      expect(timeline.missing).toBe(false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('prefers fallback session keys from JSON metadata over the original session mapping', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'rainrail-fallback-key-timeline-'));
+    const logPath = join(directory, 'agent.log');
+    writeFileSync(logPath, JSON.stringify({
+      status: 'ok',
+      meta: {
+        agentMeta: {
+          sessionId: 'gateway-fallback-meta',
+          fallbackSessionKey: 'agent:main:explicit:gateway-fallback-meta',
+        },
+      },
+    }), 'utf8');
+    writeFileSync(join(directory, 'sessions.json'), JSON.stringify({
+      'agent:main:original-session': { sessionId: 'original-session' },
+      'agent:main:explicit:gateway-fallback-meta': { sessionId: 'fallback-session' },
+    }), 'utf8');
+    writeFileSync(join(directory, 'fallback-session.trajectory.jsonl'), [
+      JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:08:00.000Z', seq: 1 }),
+    ].join('\n'), 'utf8');
+
+    try {
+      const timeline = await readRuntimeTimeline(
+        { logPath, agentSessionId: 'agent:main:original-session' },
+        { sessionsDirectory: directory },
+      );
+      expect(timeline.sessionId).toBe('fallback-session');
+      expect(timeline.fallback).toBe(true);
       expect(timeline.missing).toBe(false);
     } finally {
       rmSync(directory, { recursive: true, force: true });
@@ -418,7 +465,7 @@ describe('agent timeline', () => {
       JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:08:00.000Z', seq: 1 }),
       JSON.stringify({ type: 'tool.call', ts: '2026-06-30T15:09:00.000Z', seq: 2, data: { name: 'bash', arguments: { command: 'pnpm test' } } }),
       JSON.stringify({ type: 'tool.call', ts: '2026-06-30T15:09:05.000Z', seq: 3, data: { name: 'bash', arguments: { command: 'curl -uuser:joined-password -Uproxy:joined-proxy-password -b session=inline-cookie --cookie other=other-cookie -u user:curl-password --user other:other-password -U proxy:proxy-password --proxy-user other-proxy:other-proxy-password --oauth2-bearer oauth-secret --pass private-key-pass --proxy-pass proxy-key-pass --tlspassword tls-secret --proxy-tlspassword proxy-tls-secret AUTHORIZATION="Bearer env-secret" token="quoted-secret" password="pa\\"ss" https://user:password@example.com/repo.git -H "Cookie: session=\\"cookie-secret\\"; csrf=def456" -H "Authorization: Digest username=\\"user\\", response=\\"digest-secret\\"" -H "Authorization: AWS4-HMAC-SHA256 Credential=AKIA/20260701/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-date, Signature=abcdef123456"' } } }),
-      JSON.stringify({ type: 'tool.result', ts: '2026-06-30T15:09:10.000Z', seq: 4, data: { name: 'bash', status: 'completed', output: "ok curl --user result:result-password --proxy-user proxy-result:proxy-result-password --oauth2-bearer oauth-result-token --cookie result=result-cookie --pass result-key-pass --tlspassword result-tls-secret https://user:password@example.com/repo.git token=secret-value AWS_SECRET_ACCESS_KEY=cloud-secret AUTHORIZATION=BasicEnvSecret api_key='quoted-output-secret' Authorization: Bearer github_pat_outputSecret Authorization: Basic dXNlcjpwYXNz Authorization: AWS4-HMAC-SHA256 Credential=AKIA/20260701/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-date, Signature=resultsignature Cookie: session=abc123 Set-Cookie: refresh=def456\n-----BEGIN OPENSSH PRIVATE KEY-----\nplaceholder\n-----END OPENSSH PRIVATE KEY-----" } }),
+      JSON.stringify({ type: 'tool.result', ts: '2026-06-30T15:09:10.000Z', seq: 4, data: { name: 'bash', status: 'completed', output: "ok curl --user result:result-password --proxy-user proxy-result:proxy-result-password --oauth2-bearer oauth-result-token --cookie result=result-cookie --pass result-key-pass --tlspassword result-tls-secret https://user:password@example.com/repo.git token=secret-value AWS_SECRET_ACCESS_KEY=cloud-secret AUTHORIZATION=BasicEnvSecret api_key='quoted-output-secret' standalone Bearer opaque-session-token Authorization: Bearer github_pat_outputSecret Authorization: Basic dXNlcjpwYXNz Authorization: AWS4-HMAC-SHA256 Credential=AKIA/20260701/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-date, Signature=resultsignature Cookie: session=abc123 Set-Cookie: refresh=def456\n-----BEGIN OPENSSH PRIVATE KEY-----\nplaceholder\n-----END OPENSSH PRIVATE KEY-----" } }),
       JSON.stringify({ type: 'tool.result', ts: '2026-06-30T15:09:20.000Z', seq: 5, data: { name: 'bash', status: 'completed', contentItems: [{ token: 'secret-json-token', apiKey: 'secret-json-key', password: 'pa\\"ss', Authorization: 'Basic dXNlcjpwYXNz', Cookie: 'session=json-cookie', 'Set-Cookie': 'refresh=json-refresh', webhookSecret: 'secret-webhook', clientSecret: 'secret-client', apiToken: 'secret-api-token', privateKey: '-----BEGIN PRIVATE KEY-----\\nplaceholder\\n-----END PRIVATE KEY-----', private_key: 'private-key-material' }] } }),
     ].join('\n'));
 
@@ -476,6 +523,7 @@ describe('agent timeline', () => {
     expect(timeline[3]!.excerpt).toContain('https://[redacted]@example.com/repo.git');
     expect(timeline[3]!.excerpt).toContain("api_key='[redacted]'");
     expect(timeline[3]!.excerpt).toContain('Authorization: [redacted-authorization]');
+    expect(timeline[3]!.excerpt).toContain('Bearer [redacted-bearer]');
     expect(timeline[3]!.excerpt).toContain('--user [redacted-credential]');
     expect(timeline[3]!.excerpt).toContain('--proxy-user [redacted-credential]');
     expect(timeline[3]!.excerpt).toContain('--oauth2-bearer [redacted-credential]');
@@ -490,6 +538,7 @@ describe('agent timeline', () => {
     expect(timeline[3]!.excerpt).not.toContain('result-password');
     expect(timeline[3]!.excerpt).not.toContain('proxy-result-password');
     expect(timeline[3]!.excerpt).not.toContain('oauth-result-token');
+    expect(timeline[3]!.excerpt).not.toContain('opaque-session-token');
     expect(timeline[3]!.excerpt).not.toContain('result-cookie');
     expect(timeline[3]!.excerpt).not.toContain('result-key-pass');
     expect(timeline[3]!.excerpt).not.toContain('result-tls-secret');

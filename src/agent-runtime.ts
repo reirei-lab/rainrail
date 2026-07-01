@@ -385,9 +385,10 @@ function isTerminalRuntimeRunStatus(status: string | undefined): boolean {
 
 function outcomeFromPayload(payload: Record<string, unknown>): string | undefined {
   for (const text of completionTextsFromPayload(payload).reverse()) {
-    const outcome = text.match(/\bOutcome:\s*(implemented|updated_issue|needs_human|split_recommended)\b/)?.[1];
-    if (outcome !== undefined) {
-      return outcome;
+    const outcomes = [...text.matchAll(/\bOutcome:\s*(implemented|updated_issue|needs_human|split_recommended)\b/g)];
+    const latest = outcomes.at(-1)?.[1];
+    if (latest !== undefined) {
+      return latest;
     }
   }
   return undefined;
@@ -506,6 +507,9 @@ function extractFallbackRuntimeSessionKey(log: string, agentId: string): string 
     const key = fallbackSessionKeyFromPayload(payload);
     if (key !== undefined) {
       return key;
+    }
+    if (completionTextsFromPayload(completionPayloadFromResponse(payload)).length > 0) {
+      return undefined;
     }
   }
   const fallbackSessionId = extractFallbackRuntimeSessionId(log);

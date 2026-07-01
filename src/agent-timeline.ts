@@ -174,7 +174,16 @@ export function extractRuntimeSessionId(log: string): string | undefined {
   try {
     return runtimeSessionIdFromPayload(JSON.parse(log) as unknown);
   } catch {
-    // Partial logs are common, regex fallback handles them.
+    const parsed = parseJsonObjectsFromLog(log);
+    for (const payload of parsed.payloads) {
+      const sessionId = runtimeSessionIdFromPayload(payload);
+      if (sessionId !== undefined) {
+        return sessionId;
+      }
+    }
+    if (parsed.foundJson) {
+      return undefined;
+    }
   }
   const match = log.match(/"agentMeta"\s*:\s*\{[\s\S]*?"sessionId"\s*:\s*"([^"]+)"/);
   return match?.[1];
@@ -245,6 +254,7 @@ async function readRuntimeSession(
   options: RuntimeTimelineReadOptions,
 ): Promise<RuntimeSessionResolution> {
   const mapped = await resolveTrajectorySession(task.agentSessionId, options);
+  let fallbackSessionKey: string | undefined;
   let fallbackSessionId: string | undefined;
   let logSessionId: string | undefined;
   for (const logPath of runtimeTaskLogPaths(task)) {
@@ -254,8 +264,21 @@ async function readRuntimeSession(
     } catch {
       continue;
     }
+    fallbackSessionKey ??= extractRuntimeFallbackSessionKey(log);
     fallbackSessionId ??= extractRuntimeFallbackSessionId(log);
-    logSessionId ??= extractRuntimeSessionId(log);
+    const sessionId = extractRuntimeSessionId(log);
+    logSessionId ??= sessionId;
+    if (fallbackSessionId === undefined && sessionId?.startsWith('gateway-fallback-') === true) {
+      fallbackSessionId = sessionId;
+    }
+  }
+  if (fallbackSessionKey !== undefined) {
+    const fallbackMapped = await resolveTrajectorySession(fallbackSessionKey, options);
+    return {
+      sessionId: fallbackMapped?.sessionId ?? fallbackSessionKey,
+      sessionFile: fallbackMapped?.sessionFile,
+      fallback: true,
+    };
   }
   if (fallbackSessionId !== undefined) {
     const fallbackMapped = await resolveTrajectorySession(`agent:${options.agentId ?? 'main'}:explicit:${fallbackSessionId}`, options);
@@ -286,6 +309,28 @@ function runtimeTaskLogPaths(task: RuntimeTaskForTimeline): string[] {
     task.stderrLogPath ?? stderrLogPathFor(task.logPath),
   ];
   return [...new Set(paths)];
+}
+
+function extractRuntimeFallbackSessionKey(log: string): string | undefined {
+  const parsed = parseJsonObjectsFromLog(log);
+  if (!parsed.foundJson) {
+    return undefined;
+  }
+  for (const payload of parsed.payloads) {
+    if (!isRecord(payload)) {
+      continue;
+    }
+    for (const source of [payload, isRecord(payload.result) ? payload.result : undefined]) {
+      const key = stringField(
+        isRecord(source?.meta) && isRecord(source.meta.agentMeta) ? source.meta.agentMeta : undefined,
+        'fallbackSessionKey',
+      );
+      if (key !== undefined && key.trim() !== '') {
+        return key;
+      }
+    }
+  }
+  return undefined;
 }
 
 async function resolveRuntimeTrajectoryPathForSession(
@@ -488,6 +533,7 @@ function redactSensitiveText(value: string): string {
     .replace(/\bgithub_pat_[A-Za-z0-9_]+\b/g, '[redacted-token]')
     .replace(/(gh[pousr]_[A-Za-z0-9_]+)/g, '[redacted-token]')
     .replace(/(sk-[A-Za-z0-9_-]{20,})/g, '[redacted-token]')
+    .replace(/\b(Bearer\s+)[A-Za-z0-9._~+/-][A-Za-z0-9._~+/=-]{5,}/gi, '$1[redacted-bearer]')
     .replace(/([A-Za-z][A-Za-z0-9+.-]*:\/\/)[^\s/@:]+:[^\s/@]+@/g, '$1[redacted]@')
     .replace(/\b(Authorization:\s*)[\s\S]*?(?=(?:"\s+-H\s+"(?:Authorization|Cookie|Set-Cookie):)|\s+(?:Authorization|Cookie|Set-Cookie):|[\n\r]|$)/gi, '$1[redacted-authorization]')
     .replace(/\b(Set-Cookie:\s*)[\s\S]*?(?=(?:"\s+-H\s+"(?:Authorization|Cookie|Set-Cookie):)|\s+(?:Authorization|Cookie|Set-Cookie):|[\n\r]|$)/gi, '$1[redacted-cookie]')
@@ -549,4 +595,60 @@ function parseStrictJsonObject(raw: string): Record<string, unknown> | undefined
   } catch {
     return undefined;
   }
+}
+
+function parseJsonObjectsFromLog(raw: string): { foundJson: boolean; payloads: unknown[] } {
+  const strict = parseStrictJsonObject(raw);
+  if (strict !== undefined) {
+    return { foundJson: true, payloads: [strict] };
+  }
+  const payloads: unknown[] = [];
+  for (let index = 0; index < raw.length; index += 1) {
+    if (raw[index] !== '{') {
+      continue;
+    }
+    const end = findJsonObjectEnd(raw, index);
+    if (end === undefined) {
+      continue;
+    }
+    try {
+      payloads.push(JSON.parse(raw.slice(index, end + 1)) as unknown);
+      index = end;
+    } catch {
+      // Logs may contain partial or quoted JSON fragments.
+    }
+  }
+  return { foundJson: payloads.length > 0, payloads };
+}
+
+function findJsonObjectEnd(raw: string, start: number): number | undefined {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = start; index < raw.length; index += 1) {
+    const char = raw[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === '\\') {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+    if (char === '{') {
+      depth += 1;
+    } else if (char === '}') {
+      depth -= 1;
+      if (depth === 0) {
+        return index;
+      }
+    }
+  }
+  return undefined;
 }

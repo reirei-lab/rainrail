@@ -101,7 +101,8 @@ fallback session へ移った場合は、前回 completion metadata の top-leve
 または stdout/stderr log の embedded fallback marker から fallback session id を検出して resume
 対象にする。marker 由来の fallback session id は `agent:<agent>:explicit:<session-id>` の
 session key として再開し、JSON completion として解析できた stdout 内の引用 marker は
-resume 対象にしない。Task と resume attempt には stdout `logPath` と対応する `stderrLogPath` を保持し、
+resume 対象にしない。banner/footer 付き completion でも抽出できた JSON metadata を優先する。
+Task と resume attempt には stdout `logPath` と対応する `stderrLogPath` を保持し、
 stderr 側にしか fallback diagnostics が残らない timeout でも fallback transcript を引き継ぐ。
 stderr diagnostics に JSON status 行と embedded fallback marker が同居する場合も marker を採用する。
 OpenClaw の raw stdout/stderr log は redaction 前の credential を含み得るため、
@@ -119,14 +120,15 @@ JSON completion として解析できる場合は、本文に `CLI transcript co
 含まれていても JSON の status を優先し、実エラー行だけを compaction_failed とする。
 completion text/status は top-level と `result` の両方から解決し、`result` が metadata だけを
 持つ場合でも top-level の Outcome を落とさない。top-level の terminal runtime status は
-`result.status` より優先する。
+`result.status` より優先する。同じ text に複数の Outcome がある場合は最後の Outcome を採用する。
 resume helper は running pid を確認し、
 安定した resume attempt id を生成する。timeline reader は OpenClaw trajectory jsonl を読み、Codex activity 表示に
 必要な時刻、分類済み phase、redacted summary、status、redacted excerpt を返す。
 timeline/status/jsonl の session 解決は resume attempts を新しい順に読んだうえで、
 stdout `logPath` と対応する `stderrLogPath` または `.stderr.log` の embedded fallback marker も参照する。
-fallback marker は `agent:<agent>:explicit:<session-id>` の `sessions.json` mapping を先に解決し、
-relocated session file を見失わないようにする。redaction は shell 風の
+fallbackSessionKey metadata は元の agentSessionId mapping より優先し、fallback marker は
+`agent:<agent>:explicit:<session-id>` の `sessions.json` mapping を先に解決して relocated session file を
+見失わないようにする。redaction は shell 風の
 `token=...` や `curl -u user:password` / `curl -uuser:password` /
 `curl --proxy-user user:password` /
 `curl --oauth2-bearer token` / `curl --pass phrase` / `curl --tlspassword string` /
@@ -134,7 +136,7 @@ relocated session file を見失わないようにする。redaction は shell �
 だけでなく JSON の `"token": "..."` /
 `"apiKey": "..."` / `"password": "..."`、`"webhookSecret"` / `"clientSecret"` /
 `"apiToken"` のような compound key、quoted shell assignment、`github_pat_...`、
-HTTP Authorization/Cookie/Set-Cookie header 全体、Bearer credential も対象にする。
+HTTP Authorization/Cookie/Set-Cookie header 全体、standalone `Bearer <token>` credential も対象にする。
 header 値内の quote は header 終端とみなさず、次 header または改行までを redaction する。
 timeline status は最後の lifecycle/event row を見て
 ended を更新し、resume 後に追記された session を古い ended のまま扱わない。trajectory の既定 path は
