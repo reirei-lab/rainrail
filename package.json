@@ -11,6 +11,7 @@
     "cf:deploy": "node scripts/validate-cloudflare-secrets.mjs && wrangler deploy",
     "cf:dev": "wrangler dev --local",
     "cf:smoke": "node scripts/smoke-cloudflare-worker.mjs",
+    "docs:check": "node scripts/check-docs-drift.mjs && tsc -p tsconfig.docs.json",
     "test": "vitest run scripts src",
     "typecheck": "tsc --noEmit"
   },

@@ -26,6 +26,7 @@ Workflow plugin の routing API には直接漏らさない。
 ## Source plugin
 
 Source plugin は provider 固有入力を受け取り、`RainrailEventEnvelope` を返す。
+公開 API は `SourcePlugin` と `defineSourcePlugin` を入口にする。
 `normalize(input, context)` の `context` には delivery id、受信時刻、
 plugin 名、raw payload reference、provider メタデータを渡す。
 
@@ -59,6 +60,8 @@ fallback delivery id に batch index を混ぜ、同一 ms の Cron/Queue tail �
 大文字小文字だけが違う場合や末尾記号を落とす場合も含め、元の suffix 由来の安定 hash も混ぜる。
 `eventTimestamp` が欠落または壊れている場合は
 `receivedAt` を occurredAt / delivery id の時刻要素として使う。
+実装の入口は `createCloudflareTailSourcePlugin` で、入力 payload は
+`CloudflareTailEvent` として扱う。
 
 ## Task provider
 
@@ -66,6 +69,7 @@ Task provider は forge/task system の操作面を表す。初期 contract は
 GitHub と Forgejo の issue 操作を同じ workflow から使えるように、
 `getIssue`、`createComment`、`addToProject`、`setStatus`、`createProposal`
 を持つ。
+公開 contract は `TaskProvider` として提供する。
 
 `TaskIssueRef` は provider、repository、id、number、url を持てる。
 Workflow plugin は GitHub webhook payload ではなく、中立 event の
@@ -81,12 +85,15 @@ run status を返す。
 
 secret や provider 固有 token は runtime provider の実装が保持し、
 contract には含めない。
+公開 contract は `RuntimeProvider` として提供する。
 
 ## Workflow plugin
 
 Workflow plugin は `accepts(event)` で対象イベントを絞り込み、
 `handle(event, context)` で処理する。`context` は `providers.tasks` と
 `runtime` を受け取り、必要なら既存の `capabilities` も使える。
+公開 API は `WorkflowPlugin`、`PluginRuntimeContext`、
+`defineWorkflowPlugin` を入口にする。
 
 Workflow plugin は event に反応し、Task provider と Runtime provider を
 組み合わせるだけにする。GitHub/Forgejo の API 呼び出しや OpenClaw/devteam/Codex

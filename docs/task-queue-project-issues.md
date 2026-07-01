@@ -6,6 +6,7 @@ Rainrail の Project issue selection は、GitHub Project v2 固有の GraphQL
 ## 境界
 
 - `ProjectIssue` は TaskQueue が扱う中立的な issue 表現。
+- `TaskQueueProvider` は Project issue の列挙、claim、finalize/release を隠蔽する。
 - `getNextProjectIssueToStart` は provider 非依存の純粋な selector。
 - `assignNextProjectIssueToAgent` は `claimProjectIssue` で短命の starting
   lock を取得し、runtime の agent dispatch が durable に開始した後で

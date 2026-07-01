@@ -26,6 +26,7 @@ Worker/Fetch API の `ReadableStream` でも扱える。これにより Node ser
 Cloudflare Worker entrypoint は同じ core contract を共有する。接続時 comment や
 初期 replay の write が失敗した場合も `close` cleanup を呼び、購読開始に失敗した
 connection のリソースを残さない。
+公開 API の入口は `createRainrailEventBus` と `formatRainrailSseEvent`。
 
 初期 replay は replay buffer の snapshot から送る。replay 中に subscriber が同期的に
 `publish()` して replay buffer が trim されても、接続時点で保持されていた event を

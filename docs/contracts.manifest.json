@@ -1,0 +1,72 @@
+{
+  "contracts": [
+    {
+      "id": "plugin-runtime",
+      "title": "Plugin runtime contract",
+      "sources": [
+        "src/events.ts",
+        "src/source-plugin.ts",
+        "src/workflow-plugin.ts",
+        "src/runtime-provider.ts",
+        "src/task-provider.ts"
+      ],
+      "docs": ["docs/plugin-runtime-contract.md"],
+      "tests": ["src/plugin-runtime.test.ts", "src/plugin-runtime.typecheck.ts"],
+      "publicExports": [
+        "RainrailEventEnvelope",
+        "SourcePlugin",
+        "WorkflowPlugin",
+        "PluginRuntimeContext",
+        "RuntimeProvider",
+        "TaskProvider",
+        "defineSourcePlugin",
+        "defineWorkflowPlugin"
+      ]
+    },
+    {
+      "id": "event-delivery",
+      "title": "Core event delivery",
+      "sources": ["src/event-bus.ts", "src/sse.ts", "src/bridge-room.ts"],
+      "docs": ["docs/event-delivery.md"],
+      "tests": ["src/event-bus.test.ts", "src/sse.test.ts", "src/bridge-room.test.ts"],
+      "publicExports": [
+        "createRainrailEventBus",
+        "RainrailBridgeRoom",
+        "formatRainrailSseEvent"
+      ]
+    },
+    {
+      "id": "github-webhook-normalization",
+      "title": "GitHub webhook normalization",
+      "sources": ["src/github-webhook.ts"],
+      "docs": ["docs/github-webhook-normalization.md"],
+      "tests": ["src/github-webhook.test.ts"],
+      "publicExports": [
+        "createGitHubWebhookSourcePlugin",
+        "GitHubWebhookPayload",
+        "NormalizedGitHubWebhookPayload"
+      ]
+    },
+    {
+      "id": "cloudflare-tail-source",
+      "title": "Cloudflare tail source",
+      "sources": ["src/cloudflare-tail.ts"],
+      "docs": ["docs/plugin-runtime-contract.md", "docs/cloudflare-worker.md"],
+      "tests": ["src/cloudflare-tail.test.ts"],
+      "publicExports": ["createCloudflareTailSourcePlugin", "CloudflareTailEvent"]
+    },
+    {
+      "id": "project-issue-queue",
+      "title": "Project issue queue",
+      "sources": ["src/project-issues.ts", "src/task-queue.ts", "src/agent-assignment.ts"],
+      "docs": ["docs/task-queue-project-issues.md"],
+      "tests": ["src/project-issues.test.ts", "src/agent-assignment.test.ts"],
+      "publicExports": [
+        "ProjectIssue",
+        "TaskQueueProvider",
+        "assignNextProjectIssueToAgent",
+        "getNextProjectIssueToStart"
+      ]
+    }
+  ]
+}
