@@ -67,6 +67,43 @@ const indexExportsModule = (indexSource, exportPath) => {
 };
 
 /**
+ * @param {string} indexSource
+ * @param {string} exportPath
+ * @param {string} publicExport
+ */
+const indexReExportsPublicName = (indexSource, exportPath, publicExport) => {
+  const sourceFile = ts.createSourceFile(
+    'index.ts',
+    indexSource,
+    ts.ScriptTarget.Latest,
+    false,
+    ts.ScriptKind.TS,
+  );
+
+  return sourceFile.statements.some((statement) => {
+    if (
+      !ts.isExportDeclaration(statement) ||
+      statement.moduleSpecifier === undefined ||
+      !ts.isStringLiteral(statement.moduleSpecifier) ||
+      statement.moduleSpecifier.text !== exportPath
+    ) {
+      return false;
+    }
+
+    if (statement.exportClause === undefined) {
+      return true;
+    }
+
+    return (
+      ts.isNamedExports(statement.exportClause) &&
+      statement.exportClause.elements.some(
+        (specifier) => specifier.name.text === publicExport,
+      )
+    );
+  });
+};
+
+/**
  * @param {import('typescript').Statement} statement
  * @param {string} publicExport
  */
@@ -294,10 +331,16 @@ export const validateContractsManifest = (root = repoRoot) => {
       .filter((path) => projectPathExists(root, path))
       .map((path) => readText(root, path))
       .join('\n');
-    const sourceText = sources
+    const sourceEntries = sources
       .filter((path) => projectPathExists(root, path))
-      .map((path) => readText(root, path))
-      .join('\n');
+      .map((path) => ({
+        path,
+        text: readText(root, path),
+        exportPath:
+          path.startsWith('src/') && path.endsWith('.ts')
+            ? `./${path.slice('src/'.length, -'.ts'.length)}.js`
+            : undefined,
+      }));
 
     for (const source of sources) {
       if (!source.startsWith('src/') || !source.endsWith('.ts')) {
@@ -311,8 +354,23 @@ export const validateContractsManifest = (root = repoRoot) => {
     }
 
     for (const publicExport of publicExports) {
-      if (!hasExportedDeclaration(sourceText, publicExport)) {
+      const exportingSources = sourceEntries.filter((source) =>
+        hasExportedDeclaration(source.text, publicExport),
+      );
+
+      if (exportingSources.length === 0) {
         errors.push(`${id} public export ${publicExport} is not exported by its sources`);
+      }
+
+      if (
+        exportingSources.length > 0 &&
+        !exportingSources.some(
+          (source) =>
+            source.exportPath !== undefined &&
+            indexReExportsPublicName(indexSource, source.exportPath, publicExport),
+        )
+      ) {
+        errors.push(`${id} public export ${publicExport} is not re-exported from src/index.ts`);
       }
 
       if (!docsText.includes(publicExport)) {

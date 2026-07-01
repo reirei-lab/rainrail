@@ -50,19 +50,27 @@
     {
       "id": "event-delivery",
       "title": "Core event delivery",
-      "sources": ["src/event-bus.ts", "src/sse.ts", "src/bridge-room.ts", "src/events-auth.ts"],
+      "sources": [
+        "src/event-bus.ts",
+        "src/sse.ts",
+        "src/bridge-room.ts",
+        "src/events-auth.ts",
+        "src/http-app.ts"
+      ],
       "docs": ["docs/event-delivery.md"],
       "tests": [
         "src/event-bus.test.ts",
         "src/sse.test.ts",
         "src/bridge-room.test.ts",
-        "src/events-auth.test.ts"
+        "src/events-auth.test.ts",
+        "src/http-app.test.ts"
       ],
       "publicExports": [
         "createRainrailEventBus",
         "RainrailBridgeRoom",
         "formatRainrailSseEvent",
-        "verifyRainrailEventsBearerToken"
+        "verifyRainrailEventsBearerToken",
+        "createRainrailHttpApp"
       ]
     },
     {

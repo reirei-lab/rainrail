@@ -114,6 +114,24 @@ describe('docs drift checks', () => {
     );
   });
 
+  it('requires src/index.ts to re-export public names from contract sources', () => {
+    const root = makeRepo();
+
+    writeFileSync(
+      join(root, 'src/index.ts'),
+      "export { PublicThing as HiddenThing } from './contract.js';\n",
+    );
+
+    expect(validateContractsManifest(root)).toContain(
+      'contract public export PublicThing is not re-exported from src/index.ts',
+    );
+
+    writeFileSync(join(root, 'src/index.ts'), "export {} from './contract.js';\n");
+    expect(validateContractsManifest(root)).toContain(
+      'contract public export PublicThing is not re-exported from src/index.ts',
+    );
+  });
+
   it('treats Windows-style child paths as inside the project root', () => {
     expect(
       isPathInsideRoot('C:\\repo\\rainrail', 'docs\\contract.md', win32),
