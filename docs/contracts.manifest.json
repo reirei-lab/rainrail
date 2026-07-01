@@ -7,16 +7,23 @@
         "src/events.ts",
         "src/source-plugin.ts",
         "src/workflow-plugin.ts",
+        "src/dispatcher.ts",
         "src/runtime-provider.ts",
         "src/task-provider.ts"
       ],
       "docs": ["docs/plugin-runtime-contract.md"],
-      "tests": ["src/plugin-runtime.test.ts", "src/plugin-runtime.typecheck.ts"],
+      "tests": [
+        "src/plugin-runtime.test.ts",
+        "src/plugin-runtime.typecheck.ts",
+        "src/route-workflow.test.ts"
+      ],
       "publicExports": [
         "RainrailEventEnvelope",
         "SourcePlugin",
         "WorkflowPlugin",
         "PluginRuntimeContext",
+        "RuntimeDispatcher",
+        "createRuntimeDispatcher",
         "RuntimeProvider",
         "TaskProvider",
         "defineSourcePlugin",
@@ -58,14 +65,24 @@
     {
       "id": "project-issue-queue",
       "title": "Project issue queue",
-      "sources": ["src/project-issues.ts", "src/task-queue.ts", "src/agent-assignment.ts"],
+      "sources": [
+        "src/project-issues.ts",
+        "src/task-queue.ts",
+        "src/agent-assignment.ts",
+        "src/github-project.ts"
+      ],
       "docs": ["docs/task-queue-project-issues.md"],
-      "tests": ["src/project-issues.test.ts", "src/agent-assignment.test.ts"],
+      "tests": [
+        "src/project-issues.test.ts",
+        "src/agent-assignment.test.ts",
+        "src/github-project.test.ts"
+      ],
       "publicExports": [
         "ProjectIssue",
         "TaskQueueProvider",
         "assignNextProjectIssueToAgent",
-        "getNextProjectIssueToStart"
+        "getNextProjectIssueToStart",
+        "createGitHubProjectTaskQueueProvider"
       ]
     }
   ]

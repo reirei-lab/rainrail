@@ -258,7 +258,8 @@ provider 実装の観測性に使う。secret や token 値は snapshot に含�
 
 ## Dispatcher
 
-`createRuntimeDispatcher` は workflow plugin 配列と runtime context を受け取る。
+`RuntimeDispatcher` の生成入口である `createRuntimeDispatcher` は
+workflow plugin 配列と runtime context を受け取る。
 `dispatch(event)` は `accepts` が true の workflow だけを呼び、
 plugin ごとに fulfilled/rejected の結果を返す。`accepts` が例外を投げた場合も
 その plugin の rejected result として隔離し、後続 workflow の評価は続ける。

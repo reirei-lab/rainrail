@@ -26,6 +26,29 @@ const relativePath = (root, path) => toPosix(relative(root, path));
 const readText = (root, path) => readFileSync(join(root, path), 'utf8');
 
 /**
+ * @param {string} value
+ */
+const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * @param {string} sourceText
+ * @param {string} publicExport
+ */
+const hasExportedDeclaration = (sourceText, publicExport) => {
+  const escaped = escapeRegExp(publicExport);
+  const declarationPattern = new RegExp(
+    String.raw`\bexport\s+(?:declare\s+)?(?:abstract\s+)?(?:async\s+)?(?:interface|type|class|function|const|let|var|enum)\s+${escaped}\b`,
+    'u',
+  );
+  const namedExportPattern = new RegExp(
+    String.raw`\bexport\s*\{[^}]*\b${escaped}\b(?:\s+as\s+\w+)?[^}]*\}`,
+    'u',
+  );
+
+  return declarationPattern.test(sourceText) || namedExportPattern.test(sourceText);
+};
+
+/**
  * @param {string} root
  * @param {string} dir
  * @param {Set<string>} extensions
@@ -184,8 +207,8 @@ export const validateContractsManifest = (root = repoRoot) => {
     }
 
     for (const publicExport of publicExports) {
-      if (!sourceText.includes(publicExport)) {
-        errors.push(`${id} public export ${publicExport} is not present in its sources`);
+      if (!hasExportedDeclaration(sourceText, publicExport)) {
+        errors.push(`${id} public export ${publicExport} is not exported by its sources`);
       }
 
       if (!docsText.includes(publicExport)) {

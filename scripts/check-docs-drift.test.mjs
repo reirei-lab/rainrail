@@ -65,6 +65,19 @@ describe('docs drift checks', () => {
     );
   });
 
+  it('requires public exports to be exported declarations instead of loose source mentions', () => {
+    const root = makeRepo();
+
+    writeFileSync(
+      join(root, 'src/contract.ts'),
+      '// PublicThing is planned but not exported yet.\ninterface PublicThing {}\n',
+    );
+
+    expect(validateContractsManifest(root)).toContain(
+      'contract public export PublicThing is not exported by its sources',
+    );
+  });
+
   it('requires docs or tests to move with changed contract sources', () => {
     const root = makeRepo();
 
