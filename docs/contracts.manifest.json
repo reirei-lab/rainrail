@@ -8,14 +8,24 @@
         "src/source-plugin.ts",
         "src/workflow-plugin.ts",
         "src/dispatcher.ts",
+        "src/plugin-loader.ts",
+        "src/route-workflow.ts",
         "src/runtime-provider.ts",
-        "src/task-provider.ts"
+        "src/task-provider.ts",
+        "src/config.ts",
+        "src/github-auth.ts",
+        "src/github-provider.ts",
+        "src/github-rate-limit.ts"
       ],
       "docs": ["docs/plugin-runtime-contract.md"],
       "tests": [
         "src/plugin-runtime.test.ts",
         "src/plugin-runtime.typecheck.ts",
-        "src/route-workflow.test.ts"
+        "src/route-workflow.test.ts",
+        "src/config.test.ts",
+        "src/github-auth.test.ts",
+        "src/github-provider.test.ts",
+        "src/github-rate-limit.test.ts"
       ],
       "publicExports": [
         "RainrailEventEnvelope",
@@ -27,19 +37,32 @@
         "RuntimeProvider",
         "TaskProvider",
         "defineSourcePlugin",
-        "defineWorkflowPlugin"
+        "defineWorkflowPlugin",
+        "createPluginLoader",
+        "createRouteWorkflow",
+        "createRouteLocalHandler",
+        "routeRainrailEvent",
+        "GitHubAuthToken",
+        "createGitHubTaskProvider",
+        "recordGitHubRateLimit"
       ]
     },
     {
       "id": "event-delivery",
       "title": "Core event delivery",
-      "sources": ["src/event-bus.ts", "src/sse.ts", "src/bridge-room.ts"],
+      "sources": ["src/event-bus.ts", "src/sse.ts", "src/bridge-room.ts", "src/events-auth.ts"],
       "docs": ["docs/event-delivery.md"],
-      "tests": ["src/event-bus.test.ts", "src/sse.test.ts", "src/bridge-room.test.ts"],
+      "tests": [
+        "src/event-bus.test.ts",
+        "src/sse.test.ts",
+        "src/bridge-room.test.ts",
+        "src/events-auth.test.ts"
+      ],
       "publicExports": [
         "createRainrailEventBus",
         "RainrailBridgeRoom",
-        "formatRainrailSseEvent"
+        "formatRainrailSseEvent",
+        "verifyRainrailEventsBearerToken"
       ]
     },
     {
@@ -57,9 +80,20 @@
     {
       "id": "cloudflare-tail-source",
       "title": "Cloudflare tail source",
-      "sources": ["src/cloudflare-tail.ts"],
+      "sources": [
+        "src/cloudflare-tail.ts",
+        "src/worker.ts",
+        "wrangler.jsonc",
+        "package.json",
+        "scripts/validate-cloudflare-secrets.mjs",
+        "scripts/smoke-cloudflare-worker.mjs"
+      ],
       "docs": ["docs/plugin-runtime-contract.md", "docs/cloudflare-worker.md"],
-      "tests": ["src/cloudflare-tail.test.ts"],
+      "tests": [
+        "src/cloudflare-tail.test.ts",
+        "src/worker.test.ts",
+        "scripts/validate-cloudflare-worker-ops.test.mjs"
+      ],
       "publicExports": ["createCloudflareTailSourcePlugin", "CloudflareTailEvent"]
     },
     {

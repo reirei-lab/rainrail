@@ -84,6 +84,36 @@ describe('docs drift checks', () => {
     );
   });
 
+  it('does not count named default declarations as named public exports', () => {
+    const root = makeRepo();
+
+    writeFileSync(
+      join(root, 'src/contract.ts'),
+      'export default function PublicThing() {}\n',
+    );
+
+    expect(validateContractsManifest(root)).toContain(
+      'contract public export PublicThing is not exported by its sources',
+    );
+  });
+
+  it('requires src/index.ts to re-export contract sources as syntax', () => {
+    const root = makeRepo();
+
+    writeFileSync(
+      join(root, 'src/index.ts'),
+      [
+        "// export * from './contract.js';",
+        "const planned = './contract.js';",
+        '',
+      ].join('\n'),
+    );
+
+    expect(validateContractsManifest(root)).toContain(
+      'contract source is not exported from src/index.ts: src/contract.ts',
+    );
+  });
+
   it('treats Windows-style child paths as inside the project root', () => {
     expect(
       isPathInsideRoot('C:\\repo\\rainrail', 'docs\\contract.md', win32),

@@ -249,6 +249,7 @@ GitHub CLI と同じく `GH_TOKEN`、`GITHUB_TOKEN` の順で最初の非空値�
 fallback は Rainrail の GitHub API URL に合わせて `github.com` host だけから
 取得する。`GitHubTaskProvider` は `auth.getAuthToken()` を注入できるため、
 workflow test や別 runtime では実 GitHub App/PAT 実装を差し替えられる。
+実装の入口は `createGitHubTaskProvider`。
 デフォルト provider は GitHub App token 発行が GitHub API 側の auth/rate-limit
 エラーで失敗したとき、設定済み env/gh fallback token があればそれを使う。
 

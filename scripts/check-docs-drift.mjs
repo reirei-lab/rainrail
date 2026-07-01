@@ -45,6 +45,28 @@ const hasExportedDeclaration = (sourceText, publicExport) => {
 };
 
 /**
+ * @param {string} indexSource
+ * @param {string} exportPath
+ */
+const indexExportsModule = (indexSource, exportPath) => {
+  const sourceFile = ts.createSourceFile(
+    'index.ts',
+    indexSource,
+    ts.ScriptTarget.Latest,
+    false,
+    ts.ScriptKind.TS,
+  );
+
+  return sourceFile.statements.some(
+    (statement) =>
+      ts.isExportDeclaration(statement) &&
+      statement.moduleSpecifier !== undefined &&
+      ts.isStringLiteral(statement.moduleSpecifier) &&
+      statement.moduleSpecifier.text === exportPath,
+  );
+};
+
+/**
  * @param {import('typescript').Statement} statement
  * @param {string} publicExport
  */
@@ -59,6 +81,10 @@ const statementExportsName = (statement, publicExport) => {
   }
 
   if (!hasExportModifier(statement)) {
+    return false;
+  }
+
+  if (hasDefaultModifier(statement)) {
     return false;
   }
 
@@ -86,9 +112,22 @@ const statementExportsName = (statement, publicExport) => {
  * @param {import('typescript').Node} node
  */
 const hasExportModifier = (node) =>
+  hasModifier(node, ts.SyntaxKind.ExportKeyword);
+
+/**
+ * @param {import('typescript').Node} node
+ */
+const hasDefaultModifier = (node) =>
+  hasModifier(node, ts.SyntaxKind.DefaultKeyword);
+
+/**
+ * @param {import('typescript').Node} node
+ * @param {import('typescript').SyntaxKind} kind
+ */
+const hasModifier = (node, kind) =>
   ts.canHaveModifiers(node) &&
   (ts.getModifiers(node)?.some(
-    (modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword,
+    (modifier) => modifier.kind === kind,
   ) ??
     false);
 
@@ -266,7 +305,7 @@ export const validateContractsManifest = (root = repoRoot) => {
       }
 
       const exportPath = `./${source.slice('src/'.length, -'.ts'.length)}.js`;
-      if (!indexSource.includes(`'${exportPath}'`) && !indexSource.includes(`"${exportPath}"`)) {
+      if (!indexExportsModule(indexSource, exportPath)) {
         errors.push(`${id} source is not exported from src/index.ts: ${source}`);
       }
     }
