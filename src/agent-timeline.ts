@@ -132,7 +132,7 @@ export async function readRuntimeTimelineStatus(
     if (event.type === 'session.ended') {
       status.ended = true;
       status.endedStatus = stringField(event.data, 'status');
-    } else {
+    } else if (event.type === 'session.started') {
       status.ended = false;
       status.endedStatus = undefined;
     }
@@ -539,7 +539,7 @@ function redactSensitiveText(value: string): string {
     .replace(/(^|\s)(-[A-GI-Za-gi-z]*?b)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s'"]+)/g, '$1$2[redacted-cookie]')
     .replace(/(^|\s)(-[uUE])(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s'"]+)/g, '$1$2[redacted-credential]')
     .replace(/(^|\s)(-b)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s'"]+)/g, '$1$2[redacted-cookie]')
-    .replace(/(^|\s)(-u|--user|-U|--proxy-user|--oauth2-bearer|--pass|--proxy-pass|--tlspassword|--proxy-tlspassword|-E|--cert|--proxy-cert)(=|\s+)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s'"]+)/g, '$1$2$3[redacted-credential]')
+    .replace(/(^|\s)(-u|--user|-U|--proxy-user|--oauth2-bearer|--pass|--proxy-pass|--tlspassword|--proxy-tlspassword|--ftp-account|-E|--cert|--proxy-cert)(=|\s+)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s'"]+)/g, '$1$2$3[redacted-credential]')
     .replace(/(^|\s)(-b|--cookie)(=|\s+)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s'"]+)/g, '$1$2$3[redacted-cookie]')
     .replace(/\bgithub_pat_[A-Za-z0-9_]+\b/g, '[redacted-token]')
     .replace(/(gh[pousr]_[A-Za-z0-9_]+)/g, '[redacted-token]')

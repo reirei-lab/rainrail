@@ -504,6 +504,31 @@ describe('agent timeline', () => {
     }
   });
 
+  it('keeps ended trajectory status after terminal bookkeeping rows', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'rainrail-ended-bookkeeping-timeline-'));
+    const logPath = join(directory, 'agent.log');
+    writeFileSync(logPath, '', 'utf8');
+    writeFileSync(join(directory, 'bookkeeping-session.trajectory.jsonl'), [
+      JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:08:00.000Z', seq: 1 }),
+      JSON.stringify({ type: 'session.ended', ts: '2026-06-30T15:58:00.000Z', seq: 2, data: { status: 'success' } }),
+      JSON.stringify({ type: 'usage.reported', ts: '2026-06-30T15:58:01.000Z', seq: 3, data: { totalTokens: 1234 } }),
+    ].join('\n'), 'utf8');
+
+    try {
+      await expect(readRuntimeTimelineStatus(
+        { logPath, agentSessionId: 'bookkeeping-session' },
+        { sessionsDirectory: directory },
+      )).resolves.toMatchObject({
+        sessionId: 'bookkeeping-session',
+        ended: true,
+        endedStatus: 'success',
+        lastTimestamp: '2026-06-30T15:58:01.000Z',
+      });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('uses the latest lifecycle event when reporting ended trajectory status', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'rainrail-resumed-timeline-'));
     const logPath = join(directory, 'agent.log');
@@ -790,6 +815,25 @@ describe('agent timeline', () => {
     expect(timeline[0]!.detail).not.toContain('joined-cluster-password');
     expect(timeline[0]!.detail).not.toContain('joined-cluster-cookie');
     expect(timeline[0]!.detail).not.toContain('joined-cluster-cert-secret');
+  });
+
+  it('redacts curl ftp account credentials', () => {
+    const timeline = parseRuntimeTrajectoryTimeline([
+      JSON.stringify({
+        type: 'tool.call',
+        ts: '2026-06-30T15:09:05.000Z',
+        seq: 1,
+        data: {
+          name: 'bash',
+          arguments: {
+            command: 'curl --ftp-account acct-secret ftp://example.com/file',
+          },
+        },
+      }),
+    ].join('\n'));
+
+    expect(timeline[0]!.detail).toContain('--ftp-account [redacted-credential]');
+    expect(timeline[0]!.detail).not.toContain('acct-secret');
   });
 
   it('classifies common commands into dashboard phases', () => {

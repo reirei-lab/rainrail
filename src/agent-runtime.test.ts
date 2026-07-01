@@ -1092,6 +1092,12 @@ describe('runtime task completion and resume helpers', () => {
     }))).toMatchObject({ status: 'succeeded', outcome: 'implemented' });
 
     expect(readRuntimeRunCompletionFromLog(JSON.stringify({
+      finalAssistantRawText: 'raw only completion',
+      executionTrace: { result: 'success' },
+      completion: { finishReason: 'stop' },
+    }))).toMatchObject({ status: 'succeeded', summary: 'raw only completion' });
+
+    expect(readRuntimeRunCompletionFromLog(JSON.stringify({
       result: {
         payloads: [
           { text: 'Issue に調査結果を追記しました。' },
@@ -1199,6 +1205,23 @@ describe('runtime task completion and resume helpers', () => {
         summary: `${status} run`,
       });
     }
+
+    expect(readRuntimeRunCompletionFromLog(JSON.stringify({ status: 'in_flight', summary: 'duplicate run' }))).toMatchObject({
+      status: 'running',
+      summary: 'duplicate run',
+    });
+  });
+
+  it('treats appended in-flight duplicate run responses as running completions', () => {
+    const raw = [
+      JSON.stringify({ status: 'failed', summary: 'stale terminal completion' }),
+      JSON.stringify({ status: 'in_flight', summary: 'duplicate run is still active' }),
+    ].join('\n');
+
+    expect(readRuntimeRunCompletionFromLog(raw)).toMatchObject({
+      status: 'running',
+      summary: 'duplicate run is still active',
+    });
   });
 
   it('keeps nested JSON payload objects from replacing the top-level completion', () => {

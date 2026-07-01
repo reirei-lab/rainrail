@@ -354,6 +354,9 @@ function runtimeStatusFromPayload(
   if (explicitStatus === 'timeout') {
     return 'timed_out';
   }
+  if (explicitStatus === 'in_flight') {
+    return 'running';
+  }
   if (isFailureRuntimeRunStatus(explicitStatus)) {
     return explicitStatus;
   }
@@ -375,7 +378,7 @@ function runtimeStatusFromPayload(
   const executionTrace = recordValue(payload.executionTrace);
   const completion = recordValue(payload.completion);
   if (
-    typeof payload.finalAssistantVisibleText === 'string'
+    completionTextsFromPayload(payload).length > 0
     && normalize(executionTrace?.result) === 'success'
     && normalize(completion?.finishReason) === 'stop'
   ) {
