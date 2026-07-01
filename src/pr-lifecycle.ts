@@ -494,7 +494,7 @@ export async function handleCheckFailureEvent(
       fallback = { handled: false, reason: 'pull request is not open', check, pullRequest };
       continue;
     }
-    if (!hasCurrentCheckFailure(pullRequest)) {
+    if (!hasCurrentCheckFailure(pullRequest) && pullRequest.statusCheckRollup.length > 0) {
       fallback = { handled: false, reason: 'current pull request checks have passed', check, pullRequest };
       continue;
     }
@@ -707,6 +707,9 @@ export async function handleAutoMergeEvent(
     });
     mergedPullRequests.push(pullRequest);
   }
+  if (sawPendingMergeability) {
+    throw new Error('pull request mergeability is still being calculated');
+  }
   if (mergedPullRequests.length > 0) {
     return {
       handled: true,
@@ -714,9 +717,6 @@ export async function handleAutoMergeEvent(
       pullRequest: mergedPullRequests[0],
       pullRequests: mergedPullRequests,
     };
-  }
-  if (sawPendingMergeability) {
-    throw new Error('pull request mergeability is still being calculated');
   }
   return fallback;
 }
@@ -890,7 +890,7 @@ function codexReviewTargetFromEvent(
     || pullRequestNumber === undefined
     || branchName === undefined
     || reviewId === undefined
-    || reviewState === 'changes_requested'
+    || reviewState !== 'commented'
     || normalize(pullRequest.headRepository) !== normalize(repository)
     || !sameLogin(stringValue(review.author), options.reviewerLogin)
     || !sameLogin(stringValue(pullRequest.author), options.agentLogin)

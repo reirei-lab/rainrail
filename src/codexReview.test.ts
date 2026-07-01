@@ -6,7 +6,7 @@ import { handoffRecorder, pullRequest, reviewEvent } from './pr-lifecycle-test-h
 describe('handleCodexReviewEvent', () => {
   it('returns the matching issue to Todo with inline Codex review comments', async () => {
     const updates: Array<{ reason: string; commentBody?: string }> = [];
-    const result = await handleCodexReviewEvent(reviewEvent(), {
+    const result = await handleCodexReviewEvent(reviewEvent({ state: 'commented' }), {
       agentLogin: 'reirei-agent',
       reviewerLogin: 'hiragram',
       targetRepositories: ['reirei-lab/rainrail'],
@@ -54,7 +54,7 @@ describe('handleCodexReviewEvent', () => {
     const updates: Array<{ reason: string; commentBody?: string }> = [];
     const removedReviewRequests: Array<{ repository: string; number: number; reviewerLogin: string }> = [];
 
-    const result = await handleCodexReviewEvent(reviewEvent(), {
+    const result = await handleCodexReviewEvent(reviewEvent({ state: 'commented' }), {
       agentLogin: 'reirei-agent',
       reviewerLogin: 'hiragram',
       reviewRequest: { reviewerLogin: 'hiragram' },
@@ -89,6 +89,7 @@ describe('handleCodexReviewEvent', () => {
     const updates: Array<{ reason: string; commentBody?: string }> = [];
 
     const result = await handleCodexReviewEvent(reviewEvent({
+      state: 'commented',
       headSha: 'new-sha',
       reviewCommitId: 'old-sha',
     }), {
@@ -106,6 +107,7 @@ describe('handleCodexReviewEvent', () => {
     const updates: Array<{ reason: string; commentBody?: string }> = [];
 
     const result = await handleCodexReviewEvent(reviewEvent({
+      state: 'commented',
       headSha: 'old-sha',
       reviewCommitId: 'old-sha',
     }), {
@@ -137,6 +139,7 @@ describe('handleCodexReviewEvent', () => {
     const updates: Array<{ reason: string; commentBody?: string }> = [];
 
     const result = await handleCodexReviewEvent(reviewEvent({
+      state: 'commented',
       headSha: 'abc123',
       reviewCommitId: 'abc123',
     }), {
@@ -168,6 +171,7 @@ describe('handleCodexReviewEvent', () => {
     const updates: Array<{ reason: string; commentBody?: string }> = [];
 
     const result = await handleCodexReviewEvent(reviewEvent({
+      state: 'commented',
       missingHeadSha: true,
       reviewCommitId: 'old-sha',
     }), {
@@ -198,7 +202,7 @@ describe('handleCodexReviewEvent', () => {
   it('accepts normalized GitHub review payloads with string review ids', async () => {
     const updates: Array<{ reason: string; commentBody?: string }> = [];
 
-    const result = await handleCodexReviewEvent(reviewEvent({ stringReviewId: true }), {
+    const result = await handleCodexReviewEvent(reviewEvent({ state: 'commented', stringReviewId: true }), {
       agentLogin: 'reirei-agent',
       reviewerLogin: 'hiragram',
       targetRepositories: ['reirei-lab/rainrail'],
@@ -229,7 +233,7 @@ describe('handleCodexReviewEvent', () => {
   it('does not require optional GitHub issue content ids', async () => {
     const updates: Array<{ reason: string; commentBody?: string }> = [];
 
-    const result = await handleCodexReviewEvent(reviewEvent(), {
+    const result = await handleCodexReviewEvent(reviewEvent({ state: 'commented' }), {
       agentLogin: 'reirei-agent',
       reviewerLogin: 'hiragram',
       targetRepositories: ['reirei-lab/rainrail'],
@@ -274,7 +278,7 @@ describe('handleCodexReviewEvent', () => {
   it('marks truncated Codex inline comment summaries as incomplete', async () => {
     const updates: Array<{ reason: string; commentBody?: string }> = [];
 
-    await handleCodexReviewEvent(reviewEvent(), {
+    await handleCodexReviewEvent(reviewEvent({ state: 'commented' }), {
       agentLogin: 'reirei-agent',
       reviewerLogin: 'hiragram',
       targetRepositories: ['reirei-lab/rainrail'],
@@ -307,7 +311,7 @@ describe('handleCodexReviewEvent', () => {
   it('still returns the issue to Todo when inline comments cannot be loaded', async () => {
     const updates: Array<{ reason: string; commentBody?: string }> = [];
 
-    const result = await handleCodexReviewEvent(reviewEvent(), {
+    const result = await handleCodexReviewEvent(reviewEvent({ state: 'commented' }), {
       agentLogin: 'reirei-agent',
       reviewerLogin: 'hiragram',
       targetRepositories: ['reirei-lab/rainrail'],
@@ -336,6 +340,20 @@ describe('handleCodexReviewEvent', () => {
     const updates: Array<{ reason: string; commentBody?: string }> = [];
 
     const result = await handleCodexReviewEvent(reviewEvent({ state: 'changes_requested' }), {
+      agentLogin: 'reirei-agent',
+      reviewerLogin: 'hiragram',
+      targetRepositories: ['reirei-lab/rainrail'],
+      tasks: handoffRecorder({ updates }),
+    });
+
+    expect(result.reason).toBe('event is not a Codex review');
+    expect(updates).toEqual([]);
+  });
+
+  it('ignores Codex approved reviews so auto-merge can handle them', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+
+    const result = await handleCodexReviewEvent(reviewEvent({ state: 'approved' }), {
       agentLogin: 'reirei-agent',
       reviewerLogin: 'hiragram',
       targetRepositories: ['reirei-lab/rainrail'],

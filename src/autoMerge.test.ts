@@ -179,10 +179,10 @@ describe('handleAutoMergeEvent', () => {
     expect(runtimeMerges).toEqual([]);
   });
 
-  it('continues past pending mergeability candidates and auto-merges a later ready PR', async () => {
+  it('retries pending mergeability candidates after merging later ready PRs', async () => {
     const runtimeMerges: unknown[] = [];
 
-    const result = await handleAutoMergeEvent(checkRunEvent({ pullRequests: [{ number: 45 }, { number: 44 }] }), {
+    await expect(handleAutoMergeEvent(checkRunEvent({ pullRequests: [{ number: 45 }, { number: 44 }] }), {
       ...options(),
       pullRequests: {
         ...options().pullRequests,
@@ -192,9 +192,8 @@ describe('handleAutoMergeEvent', () => {
             : pullRequest(input);
         },
       },
-    }, runtimeContext(runtimeMerges));
+    }, runtimeContext(runtimeMerges))).rejects.toThrow('pull request mergeability is still being calculated');
 
-    expect(result.reason).toBe('pull_request_merged');
     expect(runtimeMerges).toEqual([expect.objectContaining({ number: 44 })]);
   });
 
