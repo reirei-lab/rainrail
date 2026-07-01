@@ -1,0 +1,57 @@
+---
+import SiteLayout from '../layouts/SiteLayout.astro';
+---
+
+<SiteLayout
+  title="How it works"
+  description="How Rainrail moves source events through neutral envelopes, workflow plugins, and runtime providers."
+>
+  <section class="hero">
+    <div>
+      <p class="eyebrow">Architecture overview</p>
+      <h1>One route from provider events to agent execution.</h1>
+      <p class="lede">
+        Rainrail separates event ingestion from workflow selection so each
+        adapter can stay small, testable, and accountable.
+      </p>
+    </div>
+    <div class="panel event-flow" aria-label="Plugin runtime stages">
+      <div class="flow-step">
+        <strong>Source plugin</strong>
+        <span>Accepts provider input and normalizes it.</span>
+      </div>
+      <div class="flow-step">
+        <strong>RainrailEventEnvelope</strong>
+        <span>Captures event kind, source, identity, and safe metadata.</span>
+      </div>
+      <div class="flow-step">
+        <strong>Workflow plugin</strong>
+        <span>Maps neutral events to task-specific agent instructions.</span>
+      </div>
+      <div class="flow-step">
+        <strong>Runtime provider</strong>
+        <span>Starts or resumes the agent workflow with deterministic inputs.</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="section">
+    <h2>Implementation contracts stay in engineering docs</h2>
+    <p>
+      The product site summarizes the architecture. Payload shapes, plugin API
+      signatures, retry behavior, and runtime semantics remain in the repository
+      documentation so implementation decisions have a single source of truth.
+    </p>
+    <div class="actions">
+      <a
+        class="button"
+        href="https://github.com/reirei-lab/rainrail/blob/main/docs/plugin-runtime-contract.md"
+      >
+        Plugin runtime contract
+      </a>
+      <a class="button secondary" href="/examples">
+        End-to-end example
+      </a>
+    </div>
+  </section>
+</SiteLayout>

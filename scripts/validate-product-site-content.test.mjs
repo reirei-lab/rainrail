@@ -1,0 +1,73 @@
+import { readFileSync } from 'node:fs';
+import { describe, expect, it } from 'vitest';
+
+/**
+ * @param {string} name
+ */
+const page = (name) =>
+  readFileSync(
+    new URL(`../apps/www/src/pages/${name}.astro`, import.meta.url),
+    'utf8',
+  );
+
+const layout = readFileSync(
+  new URL('../apps/www/src/layouts/SiteLayout.astro', import.meta.url),
+  'utf8',
+);
+const docsPage = page('docs');
+
+describe('product site concepts, guides, and examples', () => {
+  it('exposes Concepts, Guides, and Examples from the primary navigation and docs gateway', () => {
+    for (const href of ['/concepts', '/guides', '/examples']) {
+      expect(layout).toContain(`href="${href}"`);
+      expect(docsPage).toContain(`href: '${href}'`);
+    }
+  });
+
+  it('publishes the initial Concepts content with links back to implementation contracts', () => {
+    const concepts = page('concepts');
+
+    for (const term of [
+      'RainrailEventEnvelope',
+      'Source plugin',
+      'Workflow plugin',
+      'Runtime provider',
+      'Bridge room',
+    ]) {
+      expect(concepts).toContain(term);
+    }
+
+    expect(concepts).toContain('docs/plugin-runtime-contract.md');
+    expect(concepts).toContain('docs/event-delivery.md');
+  });
+
+  it('publishes the initial Guides content for the first operational workflows', () => {
+    const guides = page('guides');
+
+    for (const guide of [
+      'GitHub issue automation',
+      'PR review loop',
+      'Cloudflare event reporting',
+    ]) {
+      expect(guides).toContain(guide);
+    }
+
+    expect(guides).toContain('docs/task-queue-project-issues.md');
+    expect(guides).toContain('docs/cloudflare-worker.md');
+  });
+
+  it('publishes an end-to-end example from GitHub issue to merge', () => {
+    const examples = page('examples');
+
+    for (const step of [
+      'GitHub issue',
+      'Project queue',
+      'agent run',
+      'pull request',
+      'review',
+      'merge',
+    ]) {
+      expect(examples).toContain(step);
+    }
+  });
+});

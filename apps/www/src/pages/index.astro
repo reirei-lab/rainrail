@@ -1,0 +1,96 @@
+---
+import SiteLayout from '../layouts/SiteLayout.astro';
+---
+
+<SiteLayout
+  title="Rainrail"
+  description="Rainrail routes development events into deterministic agent workflows."
+>
+  <section class="hero">
+    <div>
+      <p class="eyebrow">Event routing for agent operations</p>
+      <h1>Rainrail turns development events into agent-ready workflows.</h1>
+      <p class="lede">
+        Connect GitHub issues, pull requests, project queues, and operational
+        signals to repeatable automation without coupling every source to every
+        runtime.
+      </p>
+      <div class="actions">
+        <a class="button" href="/how-it-works">See the flow</a>
+        <a class="button secondary" href="/concepts">Read the concepts</a>
+      </div>
+    </div>
+    <div class="panel event-flow" aria-label="Rainrail event flow">
+      <div class="flow-step">
+        <strong>Source event</strong>
+        <span>GitHub, Cloudflare tail, project queues, and future adapters.</span>
+      </div>
+      <div class="flow-step">
+        <strong>Neutral envelope</strong>
+        <span>Provider-specific payloads become a stable Rainrail event.</span>
+      </div>
+      <div class="flow-step">
+        <strong>Workflow dispatch</strong>
+        <span>Plugins decide which agent workflow should handle the work.</span>
+      </div>
+      <div class="flow-step">
+        <strong>Runtime provider</strong>
+        <span>Agents receive deterministic inputs and observable execution context.</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="section">
+    <h2>Built for maintainable automation</h2>
+    <div class="grid">
+      <div class="item">
+        <h3>Stable contracts</h3>
+        <p>
+          Event envelopes and plugin boundaries keep automation behavior explicit
+          as source systems change.
+        </p>
+      </div>
+      <div class="item">
+        <h3>Composable workflows</h3>
+        <p>
+          Source plugins, workflow plugins, and runtime providers evolve without
+          collapsing into one provider-specific script.
+        </p>
+      </div>
+      <div class="item">
+        <h3>Operational visibility</h3>
+        <p>
+          Dispatch decisions, assignment rules, and runtime context are designed
+          to be reproducible and reviewable.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <section class="section">
+    <h2>Initial content</h2>
+    <div class="grid">
+      <div class="item">
+        <h3><a href="/concepts">Concepts</a></h3>
+        <p>
+          Learn the event envelope, source plugin, workflow plugin, provider,
+          and bridge room vocabulary before reading implementation contracts.
+        </p>
+      </div>
+      <div class="item">
+        <h3><a href="/guides">Guides</a></h3>
+        <p>
+          Follow the first GitHub issue automation, PR review loop, and
+          Cloudflare event reporting paths at an operator level.
+        </p>
+      </div>
+      <div class="item">
+        <h3><a href="/examples">Examples</a></h3>
+        <p>
+          Trace the GitHub issue to Project queue to agent PR to review and
+          merge workflow end to end.
+        </p>
+      </div>
+    </div>
+  </section>
+</SiteLayout>

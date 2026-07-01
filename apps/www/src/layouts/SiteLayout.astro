@@ -1,0 +1,45 @@
+---
+import '../styles/global.css';
+
+interface Props {
+  title: string;
+  description: string;
+}
+
+const { title, description } = Astro.props;
+const pageTitle = title === 'Rainrail' ? title : `${title} - Rainrail`;
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width" />
+    <meta name="description" content={description} />
+    <meta name="generator" content={Astro.generator} />
+    <title>{pageTitle}</title>
+  </head>
+  <body>
+    <div class="site-shell">
+      <header class="site-header">
+        <nav class="nav" aria-label="Primary navigation">
+          <a class="brand" href="/">Rainrail</a>
+          <div class="nav-links">
+            <a href="/how-it-works">How it works</a>
+            <a href="/concepts">Concepts</a>
+            <a href="/guides">Guides</a>
+            <a href="/examples">Examples</a>
+            <a href="/docs">Docs</a>
+            <a href="https://github.com/reirei-lab/rainrail">GitHub</a>
+          </div>
+        </nav>
+      </header>
+      <main class="main">
+        <slot />
+      </main>
+      <footer class="site-footer">
+        Rainrail routes development events into deterministic agent workflows.
+      </footer>
+    </div>
+  </body>
+</html>

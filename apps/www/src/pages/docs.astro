@@ -1,0 +1,78 @@
+---
+import SiteLayout from '../layouts/SiteLayout.astro';
+
+const docs = [
+  {
+    title: 'Concepts',
+    href: '/concepts',
+    description:
+      'Product-facing vocabulary for events, source plugins, workflow plugins, providers, and bridge room delivery.',
+  },
+  {
+    title: 'Guides',
+    href: '/guides',
+    description:
+      'Initial operating guides for GitHub issue automation, PR review follow-up, and Cloudflare event reporting.',
+  },
+  {
+    title: 'Examples',
+    href: '/examples',
+    description:
+      'An end-to-end GitHub issue to Project queue to agent PR to review and merge path.',
+  },
+  {
+    title: 'Plugin runtime contract',
+    href: 'https://github.com/reirei-lab/rainrail/blob/main/docs/plugin-runtime-contract.md',
+    description:
+      'Source plugin, workflow plugin, and runtime provider boundaries.',
+  },
+  {
+    title: 'GitHub webhook normalization',
+    href: 'https://github.com/reirei-lab/rainrail/blob/main/docs/github-webhook-normalization.md',
+    description:
+      'How GitHub webhook payloads become neutral Rainrail events.',
+  },
+  {
+    title: 'Cloudflare Worker operations',
+    href: 'https://github.com/reirei-lab/rainrail/blob/main/docs/cloudflare-worker.md',
+    description:
+      'Deploy, required secrets, local development, and production smoke testing.',
+  },
+  {
+    title: 'Product site information architecture',
+    href: 'https://github.com/reirei-lab/rainrail/blob/main/docs/product-site-information-architecture.md',
+    description:
+      'The boundary between public product content and engineering docs.',
+  },
+];
+---
+
+<SiteLayout
+  title="Docs"
+  description="Rainrail documentation entry points for implementers and operators."
+>
+  <section class="hero">
+    <div>
+      <p class="eyebrow">Documentation gateway</p>
+      <h1>Start with the overview, then jump into the contracts.</h1>
+      <p class="lede">
+        Rainrail keeps product narrative in this site and durable engineering
+        decisions in repository docs.
+      </p>
+    </div>
+  </section>
+
+  <section class="section">
+    <h2>Start here</h2>
+    <div class="doc-list">
+      {
+        docs.map((doc) => (
+          <article class="doc-link">
+            <h3><a href={doc.href}>{doc.title}</a></h3>
+            <p>{doc.description}</p>
+          </article>
+        ))
+      }
+    </div>
+  </section>
+</SiteLayout>
