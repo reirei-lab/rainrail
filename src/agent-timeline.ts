@@ -193,6 +193,10 @@ export function extractRuntimeFallbackSessionId(log: string): string | undefined
   if (parseStrictJsonObject(log) !== undefined) {
     return undefined;
   }
+  const parsed = parseJsonObjectsFromLog(log);
+  if (parsed.payloads.some((payload) => payloadHasCompletionText(payload))) {
+    return undefined;
+  }
   const match = log.match(/EMBEDDED FALLBACK:[^\n\r]*fresh session\s+(gateway-fallback-[A-Za-z0-9._-]+)/i);
   return match?.[1];
 }
@@ -526,9 +530,9 @@ function stringifyField(record: Record<string, unknown> | undefined, key: string
 function redactSensitiveText(value: string): string {
   return value
     .replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, '[redacted-private-key]')
-    .replace(/(^|\s)(-[uU])(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s'"]+)/g, '$1$2[redacted-credential]')
+    .replace(/(^|\s)(-[uUE])(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s'"]+)/g, '$1$2[redacted-credential]')
     .replace(/(^|\s)(-b)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s'"]+)/g, '$1$2[redacted-cookie]')
-    .replace(/(^|\s)(-u|--user|-U|--proxy-user|--oauth2-bearer|--pass|--proxy-pass|--tlspassword|--proxy-tlspassword)(=|\s+)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s'"]+)/g, '$1$2$3[redacted-credential]')
+    .replace(/(^|\s)(-u|--user|-U|--proxy-user|--oauth2-bearer|--pass|--proxy-pass|--tlspassword|--proxy-tlspassword|-E|--cert|--proxy-cert)(=|\s+)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s'"]+)/g, '$1$2$3[redacted-credential]')
     .replace(/(^|\s)(-b|--cookie)(=|\s+)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s'"]+)/g, '$1$2$3[redacted-cookie]')
     .replace(/\bgithub_pat_[A-Za-z0-9_]+\b/g, '[redacted-token]')
     .replace(/(gh[pousr]_[A-Za-z0-9_]+)/g, '[redacted-token]')
@@ -619,6 +623,19 @@ function parseJsonObjectsFromLog(raw: string): { foundJson: boolean; payloads: u
     }
   }
   return { foundJson: payloads.length > 0, payloads };
+}
+
+function payloadHasCompletionText(payload: unknown): boolean {
+  if (!isRecord(payload)) {
+    return false;
+  }
+  if (typeof payload.finalAssistantVisibleText === 'string') {
+    return true;
+  }
+  if (Array.isArray(payload.payloads) && payload.payloads.some((item) => isRecord(item) && typeof item.text === 'string')) {
+    return true;
+  }
+  return payloadHasCompletionText(payload.result);
 }
 
 function findJsonObjectEnd(raw: string, start: number): number | undefined {

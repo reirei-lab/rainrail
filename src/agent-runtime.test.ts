@@ -287,6 +287,30 @@ describe('createOpenClawRuntimeProvider', () => {
     expect(first.metadata?.logPath).not.toBe(second.metadata?.logPath);
   });
 
+  it('does not truncate existing start logs when a start request is retried', async () => {
+    const spawnProcess = vi.fn(() => ({ pid: 4242, unref: vi.fn() }));
+    const logDirectory = temporaryDirectory();
+    const provider = createOpenClawRuntimeProvider({
+      enabled: true,
+      command: 'openclaw',
+      agentId: 'main',
+      sessionKeyPrefix: 'rainrail',
+      timeoutSeconds: 900,
+      logDirectory,
+      spawnProcess,
+    });
+
+    const first = await provider.startRun(runtimeRequest());
+    writeFileSync(String(first.metadata?.logPath), JSON.stringify({
+      status: 'ok',
+      meta: { agentMeta: { fallbackSessionKey: 'agent:main:explicit:gateway-fallback-existing' } },
+    }), 'utf8');
+    const second = await provider.startRun(runtimeRequest());
+
+    expect(second.metadata?.logPath).toBe(first.metadata?.logPath);
+    expect(readFileSync(String(second.metadata?.logPath), 'utf8')).toContain('gateway-fallback-existing');
+  });
+
   it('uses collision-resistant start log paths for distinct session keys', async () => {
     const spawnProcess = vi.fn(() => ({ pid: 4242, unref: vi.fn() }));
     const logDirectory = temporaryDirectory();
@@ -574,6 +598,48 @@ describe('createOpenClawRuntimeProvider', () => {
     expect(spawnProcess).toHaveBeenCalledWith('openclaw', expect.arrayContaining([
       '--session-key',
       'agent:main:explicit:gateway-fallback-top-level',
+    ]), expect.anything());
+  });
+
+  it('resumes fallback sessions recorded only as completion session ids', async () => {
+    const spawnProcess = vi.fn(() => ({ pid: 5151, unref: vi.fn() }));
+    const logDirectory = temporaryDirectory();
+    const logPath = `${logDirectory}/task.log`;
+    writeFileSync(logPath, JSON.stringify({
+      status: 'ok',
+      meta: {
+        agentMeta: {
+          sessionId: 'gateway-fallback-session-only',
+        },
+      },
+    }), 'utf8');
+    const provider = createOpenClawRuntimeProvider({
+      enabled: true,
+      command: 'openclaw',
+      agentId: 'main',
+      sessionKeyPrefix: 'rainrail',
+      timeoutSeconds: 900,
+      logDirectory,
+      spawnProcess,
+    });
+
+    await provider.resumeRun?.({
+      run: { id: 'agent:main:intended-session', provider: 'openclaw', status: 'stopped' },
+      task: {
+        id: 'agent_task_reirei-lab-rainrail_22',
+        title: 'OpenClaw runtime',
+        agentSessionId: 'agent:main:intended-session',
+        branchName: 'agent/reirei-lab-rainrail-22',
+        logPath,
+        resumeAttempts: [],
+      },
+      attemptId: 'agent_task_reirei-lab-rainrail_22_resume_01',
+      requestedBy: 'reirei-agent',
+    });
+
+    expect(spawnProcess).toHaveBeenCalledWith('openclaw', expect.arrayContaining([
+      '--session-key',
+      'agent:main:explicit:gateway-fallback-session-only',
     ]), expect.anything());
   });
 
@@ -923,6 +989,22 @@ describe('runtime task completion and resume helpers', () => {
         payloads: [{ text: 'Outcome: implemented' }],
       },
     }))).toMatchObject({ status: 'failed', outcome: 'implemented' });
+
+    expect(readRuntimeRunCompletionFromLog(JSON.stringify({
+      status: 'error',
+      result: {
+        status: 'ok',
+        payloads: [{ text: 'Outcome: implemented' }],
+      },
+    }))).toMatchObject({ status: 'failed', outcome: 'implemented' });
+
+    expect(readRuntimeRunCompletionFromLog(JSON.stringify({
+      status: 'timeout',
+      result: {
+        status: 'ok',
+        payloads: [{ text: 'Outcome: implemented' }],
+      },
+    }))).toMatchObject({ status: 'timed_out', outcome: 'implemented' });
 
     expect(readRuntimeRunCompletionFromLog(JSON.stringify({
       status: 'needs_human',

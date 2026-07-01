@@ -98,9 +98,11 @@ provider 利用側が `onSpawnError` で観測できるようにする。start r
 正規化後に同名になる session key の attempt log が衝突しないようにしつつ、長い task/session でも
 一般的な filesystem filename limit に収まるよう prefix を短く保つ。OpenClaw agent 起動には
 start/resume とも delivery/task/attempt 由来の安定した `--run-id` を渡し、再配送や timeout retry が
-同一 run として冪等に扱われるようにする。初回実行が gateway
+同一 run として冪等に扱われるようにする。start retry は同じ stdout/stderr log を切り詰めず、
+前回 completion metadata や fallback marker を保持する。初回実行が gateway
 fallback session へ移った場合は、前回 completion metadata の top-level または
 `result` 配下の `meta.agentMeta.fallbackSessionKey` から fallback session key を、
+または `meta.agentMeta.sessionId` が `gateway-fallback-*` の場合は explicit fallback session key を、
 または stdout/stderr log の embedded fallback marker から fallback session id を検出して resume
 対象にする。marker 由来の fallback session id は `agent:<agent>:explicit:<session-id>` の
 session key として再開し、JSON completion として解析できた stdout 内の引用 marker は
@@ -123,20 +125,23 @@ JSON completion として解析できる場合は、本文に `CLI transcript co
 含まれていても JSON の status を優先し、実エラー行だけを compaction_failed とする。
 completion text/status は top-level と `result` の両方から解決し、`result` が metadata だけを
 持つ場合でも top-level の Outcome を落とさない。top-level の terminal runtime status は
-`result.status` より優先する。同じ text に複数の Outcome がある場合は最後の Outcome を採用する。
+`result.status` より優先し、`error` / `timeout` alias も top-level にあれば失敗扱いとして採用する。
+同じ text に複数の Outcome がある場合は最後の Outcome を採用する。
 resume helper は running pid を確認し、
 安定した resume attempt id を生成する。timeline reader は OpenClaw trajectory jsonl を読み、Codex activity 表示に
 必要な時刻、分類済み phase、redacted summary、status、redacted excerpt を返す。
 timeline/status/jsonl の session 解決は resume attempts を新しい順に読んだうえで、
 stdout `logPath` と対応する `stderrLogPath` または `.stderr.log` の embedded fallback marker も参照する。
 fallbackSessionKey metadata と fallback marker は種類で後から優先順位を変えず、log 探索順で最初に
-見つかった fallback を元の agentSessionId mapping より優先する。fallback marker は
+見つかった fallback を元の agentSessionId mapping より優先する。banner/footer 付き completion JSON 内の
+引用 marker は timeline/status/jsonl の fallback 判定にも使わない。fallback marker は
 `agent:<agent>:explicit:<session-id>` の `sessions.json` mapping を先に解決して relocated session file を
 見失わないようにする。redaction は shell 風の
 `token=...` や `curl -u user:password` / `curl -uuser:password` /
 `curl --proxy-user user:password` /
 `curl --oauth2-bearer token` / `curl --pass phrase` / `curl --tlspassword string` /
-`curl -b session=value` / `curl --cookie session=value`
+`curl -E client.pem:password` / `curl --cert client.pem:password` /
+`curl --proxy-cert proxy.pem:password` / `curl -b session=value` / `curl --cookie session=value`
 だけでなく JSON の `"token": "..."` /
 `"apiKey": "..."` / `"password": "..."`、`"webhookSecret"` / `"clientSecret"` /
 `"apiToken"` のような compound key、quoted shell assignment、`github_pat_...`、

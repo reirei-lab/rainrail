@@ -163,8 +163,8 @@ export async function startOpenClawRun(
   const agentSessionId = task.agentSessionId ?? generatedAgentSessionId(options, request, task);
   const logPath = join(options.logDirectory, `${safeLogFileName(agentSessionId)}.log`);
   const stderrLogPath = stderrLogPathFor(logPath);
-  const outputFd = openPrivateLogFile(logPath, 'w');
-  const stderrFd = openPrivateLogFile(stderrLogPath, 'w');
+  const outputFd = openPrivateLogFile(logPath, 'a');
+  const stderrFd = openPrivateLogFile(stderrLogPath, 'a');
   const args = [
     'agent',
     '--agent',
@@ -219,7 +219,9 @@ function runtimeRunCompletionFromPayload(payload: Record<string, unknown>): Runt
   const completionPayload = completionPayloadFromResponse(payload);
   const topLevelStatus = stringValue(payload.status);
   const completionStatus = stringValue(completionPayload.status);
-  const explicitStatus = isTerminalRuntimeRunStatus(topLevelStatus) ? topLevelStatus : completionStatus ?? topLevelStatus;
+  const explicitStatus = isTerminalRuntimeRunStatus(topLevelStatus) || topLevelStatus === 'error' || topLevelStatus === 'timeout'
+    ? topLevelStatus
+    : completionStatus ?? topLevelStatus;
   const outcome = outcomeFromPayload(completionPayload);
   const status = runtimeStatusFromPayload(completionPayload, explicitStatus, outcome);
   if (status === undefined) {
@@ -524,11 +526,11 @@ function runtimeResumeLogPaths(task: RuntimeAgentTask): string[] {
 function extractFallbackRuntimeSessionKey(log: string, agentId: string): string | undefined {
   const strictPayload = parseStrictJsonObject(log);
   if (strictPayload !== undefined) {
-    return fallbackSessionKeyFromPayload(strictPayload);
+    return fallbackSessionKeyFromPayload(strictPayload, agentId);
   }
   const payload = parseJsonFromLog(log);
   if (isRecord(payload)) {
-    const key = fallbackSessionKeyFromPayload(payload);
+    const key = fallbackSessionKeyFromPayload(payload, agentId);
     if (key !== undefined) {
       return key;
     }
@@ -549,11 +551,16 @@ function parseStrictJsonObject(raw: string): Record<string, unknown> | undefined
   }
 }
 
-function fallbackSessionKeyFromPayload(payload: Record<string, unknown>): string | undefined {
+function fallbackSessionKeyFromPayload(payload: Record<string, unknown>, agentId: string): string | undefined {
   for (const source of [payload, recordValue(payload.result)]) {
-    const key = stringValue(recordValue(recordValue(source?.meta)?.agentMeta)?.fallbackSessionKey);
+    const agentMeta = recordValue(recordValue(source?.meta)?.agentMeta);
+    const key = stringValue(agentMeta?.fallbackSessionKey);
     if (key !== undefined) {
       return key;
+    }
+    const sessionId = stringValue(agentMeta?.sessionId);
+    if (sessionId?.startsWith('gateway-fallback-') === true) {
+      return `agent:${agentId}:explicit:${sessionId}`;
     }
   }
   return undefined;
