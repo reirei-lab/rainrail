@@ -1194,6 +1194,48 @@ describe('createOpenClawRuntimeProvider', () => {
     ]), expect.anything());
   });
 
+  it('keeps fallback lookup when the latest resume log reports timeout alias failure', async () => {
+    const spawnProcess = vi.fn(() => ({ pid: 5151, unref: vi.fn() }));
+    const logDirectory = temporaryDirectory();
+    const startLogPath = `${logDirectory}/task.log`;
+    const resumeLogPath = `${logDirectory}/resume-1.log`;
+    writeFileSync(startLogPath, 'EMBEDDED FALLBACK: Gateway timed out; running embedded agent with fresh session gateway-fallback-active', 'utf8');
+    writeFileSync(resumeLogPath, JSON.stringify({
+      status: 'timeout',
+      meta: { agentMeta: {} },
+    }), 'utf8');
+    const provider = createOpenClawRuntimeProvider({
+      enabled: true,
+      command: 'openclaw',
+      agentId: 'main',
+      sessionKeyPrefix: 'rainrail',
+      timeoutSeconds: 900,
+      logDirectory,
+      spawnProcess,
+    });
+
+    await provider.resumeRun?.({
+      run: { id: 'agent:main:intended-session', provider: 'openclaw', status: 'stopped' },
+      task: {
+        id: 'agent_task_reirei-lab-rainrail_22',
+        title: 'OpenClaw runtime',
+        agentSessionId: 'agent:main:intended-session',
+        branchName: 'agent/reirei-lab-rainrail-22',
+        logPath: startLogPath,
+        resumeAttempts: [
+          { id: 'resume-1', status: 'stopped', logPath: resumeLogPath },
+        ],
+      },
+      attemptId: 'agent_task_reirei-lab-rainrail_22_resume_02',
+      requestedBy: 'reirei-agent',
+    });
+
+    expect(spawnProcess).toHaveBeenCalledWith('openclaw', expect.arrayContaining([
+      '--session-key',
+      'agent:main:explicit:gateway-fallback-active',
+    ]), expect.anything());
+  });
+
   it('closes the stdout log when opening the stderr log fails', async () => {
     const logDirectory = temporaryDirectory();
     const attemptId = 'agent_task_reirei-lab-rainrail_22_resume_01';
@@ -1746,6 +1788,32 @@ describe('runtime task completion and resume helpers', () => {
     expect(readRuntimeRunCompletionFromLog(raw)).toMatchObject({
       status: 'failed',
       promptError: 'retry failed after append',
+    });
+  });
+
+  it('uses appended alias status-only completions as the latest runtime result', () => {
+    expect(readRuntimeRunCompletionFromLog([
+      JSON.stringify({ status: 'failed', summary: 'stale failed completion' }),
+      JSON.stringify({ status: 'ok', summary: 'retry succeeded' }),
+    ].join('\n'))).toMatchObject({
+      status: 'succeeded',
+      summary: 'retry succeeded',
+    });
+
+    expect(readRuntimeRunCompletionFromLog([
+      JSON.stringify({ status: 'ok', summary: 'stale successful completion' }),
+      JSON.stringify({ status: 'error', summary: 'retry failed' }),
+    ].join('\n'))).toMatchObject({
+      status: 'failed',
+      summary: 'retry failed',
+    });
+
+    expect(readRuntimeRunCompletionFromLog([
+      JSON.stringify({ status: 'ok', summary: 'stale successful completion' }),
+      JSON.stringify({ status: 'timeout', summary: 'retry timed out' }),
+    ].join('\n'))).toMatchObject({
+      status: 'timed_out',
+      summary: 'retry timed out',
     });
   });
 

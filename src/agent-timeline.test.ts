@@ -9,6 +9,7 @@ import {
   extractRuntimeFallbackSessionId,
   extractRuntimeSessionId,
   parseRuntimeTrajectoryTimeline,
+  readRuntimeJsonl,
   readRuntimeTimeline,
   readRuntimeTimelineStatus,
 } from './agent-timeline.js';
@@ -770,6 +771,43 @@ describe('agent timeline', () => {
     }
   });
 
+  it('stops fallback lookup when the latest resume log has an ok status-only completion', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'rainrail-clear-ok-status-fallback-timeline-'));
+    const startLogPath = join(directory, 'agent.log');
+    const resumeLogPath = join(directory, 'resume-1.log');
+    writeFileSync(startLogPath, 'EMBEDDED FALLBACK: Gateway timed out; running embedded agent with fresh session gateway-fallback-stale', 'utf8');
+    writeFileSync(resumeLogPath, JSON.stringify({
+      status: 'ok',
+      summary: 'done',
+    }), 'utf8');
+    writeFileSync(join(directory, 'sessions.json'), JSON.stringify({
+      'agent:main:original-session': { sessionId: 'original-session' },
+      'agent:main:explicit:gateway-fallback-stale': { sessionId: 'stale-fallback-session' },
+    }), 'utf8');
+    writeFileSync(join(directory, 'original-session.trajectory.jsonl'), [
+      JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:08:00.000Z', seq: 1 }),
+    ].join('\n'), 'utf8');
+    writeFileSync(join(directory, 'stale-fallback-session.trajectory.jsonl'), [
+      JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:09:00.000Z', seq: 1 }),
+    ].join('\n'), 'utf8');
+
+    try {
+      const timeline = await readRuntimeTimeline(
+        {
+          logPath: startLogPath,
+          agentSessionId: 'agent:main:original-session',
+          resumeAttempts: [{ logPath: resumeLogPath }],
+        },
+        { sessionsDirectory: directory },
+      );
+      expect(timeline.sessionId).toBe('original-session');
+      expect(timeline.fallback).toBe(false);
+      expect(timeline.missing).toBe(false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('keeps fallback lookup when the latest resume log only reports in-flight', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'rainrail-keep-in-flight-fallback-timeline-'));
     const startLogPath = join(directory, 'agent.log');
@@ -1008,6 +1046,37 @@ describe('agent timeline', () => {
       expect(timeline.trajectoryPath).toBe(runtimeFile);
       expect(timeline.missing).toBe(false);
       expect(timeline.entries).toEqual([expect.objectContaining({ summary: 'session.started' })]);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('redacts sensitive tool output from raw jsonl reads', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'rainrail-jsonl-redaction-'));
+    const sessionId = 'jsonl-redaction-session';
+    const logPath = join(directory, 'agent.log');
+    writeFileSync(logPath, JSON.stringify({
+      result: { status: 'ok', meta: { agentMeta: { sessionId } } },
+    }), 'utf8');
+    writeFileSync(join(directory, `${sessionId}.trajectory.jsonl`), [
+      '{"type":"tool.result","data":{"output":"Authorization: Bearer github_pat_jsonlSecret"}}',
+      '_auth=dXNlcjpwYXNz',
+      '-----BEGIN OPENSSH PRIVATE KEY-----',
+      'placeholder',
+      '-----END OPENSSH PRIVATE KEY-----',
+    ].join('\n'), 'utf8');
+
+    try {
+      const jsonl = await readRuntimeJsonl(
+        { logPath, agentSessionId: 'agent:main:routing-key' },
+        { sessionsDirectory: directory },
+      );
+      expect(jsonl.raw).toContain('Authorization: [redacted-authorization]');
+      expect(jsonl.raw).toContain('_auth=[redacted]');
+      expect(jsonl.raw).toContain('[redacted-private-key]');
+      expect(jsonl.raw).not.toContain('github_pat_jsonlSecret');
+      expect(jsonl.raw).not.toContain('dXNlcjpwYXNz');
+      expect(jsonl.raw).not.toContain('placeholder');
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
@@ -1532,6 +1601,29 @@ describe('agent timeline', () => {
     expect(timeline[0]!.excerpt).toContain('"safe":"visible"');
     expect(timeline[0]!.excerpt).not.toContain('opaque-session-token');
     expect(timeline[0]!.excerpt).not.toContain('live-secret');
+  });
+
+  it('redacts npm auth assignments and JSON keys', () => {
+    const timeline = parseRuntimeTrajectoryTimeline([
+      JSON.stringify({
+        type: 'tool.result',
+        ts: '2026-06-30T15:09:10.000Z',
+        seq: 1,
+        data: {
+          name: 'bash',
+          status: 'completed',
+          output: '_auth=dXNlcjpwYXNz\n//registry.example/:_auth=npm-registry-basic\n{"_auth":"json-basic","safe":"visible"}',
+        },
+      }),
+    ].join('\n'));
+
+    expect(timeline[0]!.excerpt).toContain('_auth=[redacted]');
+    expect(timeline[0]!.excerpt).toContain('//registry.example/:_auth=[redacted]');
+    expect(timeline[0]!.excerpt).toContain('"_auth":"[redacted]"');
+    expect(timeline[0]!.excerpt).toContain('"safe":"visible"');
+    expect(timeline[0]!.excerpt).not.toContain('dXNlcjpwYXNz');
+    expect(timeline[0]!.excerpt).not.toContain('npm-registry-basic');
+    expect(timeline[0]!.excerpt).not.toContain('json-basic');
   });
 
   it('redacts sensitive nested JSON values completely', () => {

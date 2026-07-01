@@ -685,10 +685,10 @@ function extractFallbackRuntimeSessionKey(log: string, agentId: string): string 
 }
 
 function fallbackLookupClearingCompletion(payload: Record<string, unknown>): boolean {
-  const status = stringValue(completionPayloadFromResponse(payload).status);
-  return status !== undefined
-    && !['queued', 'running', 'in_flight'].includes(status)
-    && !isFailureRuntimeRunStatus(status);
+  const completion = runtimeRunCompletionFromPayload(payload);
+  return completion?.status === 'succeeded'
+    || completion?.status === 'needs_human'
+    || completion?.status === 'split_recommended';
 }
 
 function parseStrictJsonObject(raw: string): Record<string, unknown> | undefined {
@@ -741,7 +741,10 @@ function isTrustedRuntimeCompletionLogObject(
 
 function isStatusOnlyTerminalCompletion(payload: Record<string, unknown>): boolean {
   const status = stringValue(payload.status);
-  return isTerminalRuntimeRunStatus(status);
+  return status === 'ok'
+    || status === 'error'
+    || status === 'timeout'
+    || isTerminalRuntimeRunStatus(status);
 }
 
 function hasDiagnosticPrefixBeforeJsonObject(raw: string, index: number): boolean {

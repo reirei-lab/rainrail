@@ -164,7 +164,7 @@ export async function readRuntimeJsonl(
   const trajectoryPath = await resolveRuntimeTrajectoryPathForSession(session, options);
   try {
     const tail = await readTailText(trajectoryPath, options.maxBytes ?? maxJsonlBytes);
-    return { ...result, trajectoryPath, raw: tail.text, truncated: tail.truncated };
+    return { ...result, trajectoryPath, raw: redactSensitiveText(tail.text), truncated: tail.truncated };
   } catch (error) {
     return {
       ...result,
@@ -631,14 +631,15 @@ function redactSensitiveText(value: string): string {
     .replace(/(^|[\n\r])(\s*[A-Za-z0-9_-]*authorization[A-Za-z0-9_-]*\s*[:=]\s*)(?!\[redacted)[^\n\r]*/gi, '$1$2[redacted]')
     .replace(/(^|[\n\r])(\s*[A-Za-z0-9_-]*(?:set[-_]?cookie|cookie)[A-Za-z0-9_-]*\s*[:=]\s*)(?!\[redacted)[^\n\r]*/gi, '$1$2[redacted]')
     .replace(/(^|[\n\r])(\s*[A-Za-z0-9_-]*(?:password|passphrase)[A-Za-z0-9_-]*\s*[:=]\s*)(?!\[redacted)[^\n\r]*/gi, '$1$2[redacted]')
+    .replace(/(^|[\n\r])(\s*(?:(?:\/\/[^\s:=]+\/)?:)?_auth\s*[:=]\s*)(?!\[redacted)[^\s'",}]+/gi, '$1$2[redacted]')
     .replace(/(^|\s)((?!(?:no_proxy)\b)[A-Za-z0-9_-]*(?:https?|all)_proxy[A-Za-z0-9_-]*\s*[:=]\s*)(?:"[^"\s]*:[^"@\s]+@[^"\s]+"|'[^'\s]*:[^'@\s]+@[^'\s]+'|[^\s'"]*:[^\s'"]+@[^\s'"]+)/gi, '$1$2[redacted-proxy]')
-    .replace(/("[^"]*(?:token|secret|password|api[_-]?key|private[_-]?key|authorization|set-cookie|cookie)[^"]*"\s*:\s*)"(?:(?:\\.)|[^"\\])*"/gi, '$1"[redacted]"')
-    .replace(/([A-Za-z0-9_-]*(?:token|secret|password|api[_-]?key|private[_-]?key|set-cookie|cookie)[A-Za-z0-9_-]*\s*[:=]\s*)"(?:(?:\\.)|[^"\\])*"/gi, '$1"[redacted]"')
+    .replace(/("[^"]*(?:_auth|token|secret|password|api[_-]?key|private[_-]?key|authorization|set-cookie|cookie)[^"]*"\s*:\s*)"(?:(?:\\.)|[^"\\])*"/gi, '$1"[redacted]"')
+    .replace(/([A-Za-z0-9_-]*(?:_auth|token|secret|password|api[_-]?key|private[_-]?key|set-cookie|cookie)[A-Za-z0-9_-]*\s*[:=]\s*)"(?:(?:\\.)|[^"\\])*"/gi, '$1"[redacted]"')
     .replace(/([A-Za-z0-9_-]*authorization[A-Za-z0-9_-]*\s*=\s*)"(?:(?:\\.)|[^"\\])*"/gi, '$1"[redacted]"')
-    .replace(/([A-Za-z0-9_-]*(?:token|secret|password|api[_-]?key|private[_-]?key|set-cookie|cookie)[A-Za-z0-9_-]*\s*[:=]\s*)'(?:(?:\\.)|[^'\\])*'/gi, "$1'[redacted]'")
+    .replace(/([A-Za-z0-9_-]*(?:_auth|token|secret|password|api[_-]?key|private[_-]?key|set-cookie|cookie)[A-Za-z0-9_-]*\s*[:=]\s*)'(?:(?:\\.)|[^'\\])*'/gi, "$1'[redacted]'")
     .replace(/([A-Za-z0-9_-]*authorization[A-Za-z0-9_-]*\s*=\s*)'(?:(?:\\.)|[^'\\])*'/gi, "$1'[redacted]'")
     .replace(/([A-Za-z0-9_-]*authorization[A-Za-z0-9_-]*\s*=\s*)(?:Basic|Digest|NTLM|Negotiate|AWS4-HMAC-SHA256|[A-Za-z0-9]+-[A-Za-z0-9-]+)\s+[^\n\r]*/gi, '$1[redacted]')
-    .replace(/([A-Za-z0-9_-]*(?:token|secret|password|api[_-]?key|private[_-]?key|set-cookie|cookie)[A-Za-z0-9_-]*\s*[:=]\s*)(?!\[redacted)[^\s'",}]+/gi, '$1[redacted]')
+    .replace(/([A-Za-z0-9_-]*(?:_auth|token|secret|password|api[_-]?key|private[_-]?key|set-cookie|cookie)[A-Za-z0-9_-]*\s*[:=]\s*)(?!\[redacted)[^\s'",}]+/gi, '$1[redacted]')
     .replace(/([A-Za-z0-9_-]*authorization[A-Za-z0-9_-]*\s*=\s*)(?!\[redacted)[^\s'",}]+/gi, '$1[redacted]');
 }
 
@@ -647,7 +648,7 @@ function redactSensitiveJsonKeyValues(value: string): string {
 }
 
 function redactUnescapedSensitiveJsonKeyValues(value: string): string {
-  const keyPattern = /(?<!\\)"[^"]*(?:token|secret|password|api[_-]?key|private[_-]?key|authorization|set-cookie|cookie)[^"]*"\s*:\s*/gi;
+  const keyPattern = /(?<!\\)"[^"]*(?:_auth|token|secret|password|api[_-]?key|private[_-]?key|authorization|set-cookie|cookie)[^"]*"\s*:\s*/gi;
   let redacted = '';
   let cursor = 0;
   for (const match of value.matchAll(keyPattern)) {
@@ -665,7 +666,7 @@ function redactUnescapedSensitiveJsonKeyValues(value: string): string {
 }
 
 function redactEscapedSensitiveJsonKeyValues(value: string): string {
-  const keyPattern = /\\"[^"\\]*(?:token|secret|password|api[_-]?key|private[_-]?key|authorization|set-cookie|cookie)[^"\\]*\\"\s*:\s*/gi;
+  const keyPattern = /\\"[^"\\]*(?:_auth|token|secret|password|api[_-]?key|private[_-]?key|authorization|set-cookie|cookie)[^"\\]*\\"\s*:\s*/gi;
   let redacted = '';
   let cursor = 0;
   for (const match of value.matchAll(keyPattern)) {
@@ -972,7 +973,7 @@ function isStatusOnlyTerminalCompletionPayload(payload: Record<string, unknown>)
     && status !== 'queued'
     && status !== 'running'
     && status !== 'in_flight'
-    && ['succeeded', 'failed', 'canceled', 'stopped', 'timed_out', 'compaction_failed', 'needs_human', 'split_recommended'].includes(status);
+    && ['ok', 'error', 'timeout', 'succeeded', 'failed', 'canceled', 'stopped', 'timed_out', 'compaction_failed', 'needs_human', 'split_recommended'].includes(status);
 }
 
 function isRuntimeInFlightPayload(payload: unknown): boolean {
@@ -987,7 +988,7 @@ function isFallbackClearingRuntimeCompletionPayload(payload: Record<string, unkn
   const status = completionStatusFromPayload(payload);
   return status !== undefined
     && !['queued', 'running', 'in_flight'].includes(status)
-    && !['failed', 'canceled', 'stopped', 'timed_out', 'compaction_failed'].includes(status);
+    && !['error', 'timeout', 'failed', 'canceled', 'stopped', 'timed_out', 'compaction_failed'].includes(status);
 }
 
 function completionStatusFromPayload(payload: Record<string, unknown>): string | undefined {
