@@ -1226,6 +1226,38 @@ describe('agent timeline', () => {
     }
   });
 
+  it('does not use stderr completion JSON when stdout contains the fallback marker', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'rainrail-ignore-stderr-completion-json-timeline-'));
+    const startLogPath = join(directory, 'agent.log');
+    const resumeLogPath = join(directory, 'resume-1.log');
+    const resumeStderrLogPath = join(directory, 'resume-1.stderr.log');
+    writeFileSync(startLogPath, 'started original session', 'utf8');
+    writeFileSync(resumeStderrLogPath, JSON.stringify({
+      status: 'ok',
+      meta: { agentMeta: { sessionId: 'diagnostic-session' } },
+    }), 'utf8');
+    writeFileSync(resumeLogPath, 'EMBEDDED FALLBACK: Gateway timed out; running embedded agent with fresh session gateway-fallback-stdout', 'utf8');
+    writeFileSync(join(directory, 'gateway-fallback-stdout.trajectory.jsonl'), [
+      JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:09:00.000Z', seq: 1 }),
+    ].join('\n'), 'utf8');
+
+    try {
+      const timeline = await readRuntimeTimeline(
+        {
+          logPath: startLogPath,
+          agentSessionId: 'agent:main:original-session',
+          resumeAttempts: [{ logPath: resumeLogPath, stderrLogPath: resumeStderrLogPath }],
+        },
+        { sessionsDirectory: directory },
+      );
+      expect(timeline.sessionId).toBe('gateway-fallback-stdout');
+      expect(timeline.fallback).toBe(true);
+      expect(timeline.missing).toBe(false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('follows relocated trajectory pointers for timeline reads', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'rainrail-relocated-timeline-'));
     const relocatedDirectory = join(directory, 'runtime-sidecar');
@@ -1343,6 +1375,58 @@ describe('agent timeline', () => {
     }
   });
 
+  it('redacts private key fragments when truncated after the begin line', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'rainrail-jsonl-prefix-key-redaction-'));
+    const sessionId = 'jsonl-prefix-key-session';
+    const logPath = join(directory, 'agent.log');
+    const keyBody = `MIIE-${'x'.repeat(180)}-private-key-tail`;
+    writeFileSync(logPath, JSON.stringify({
+      result: { status: 'ok', meta: { agentMeta: { sessionId } } },
+    }), 'utf8');
+    writeFileSync(join(directory, `${sessionId}.trajectory.jsonl`), [
+      '-----BEGIN OPENSSH PRIVATE KEY-----',
+      keyBody,
+    ].join('\n'), 'utf8');
+
+    try {
+      const jsonl = await readRuntimeJsonl(
+        { logPath, agentSessionId: 'agent:main:routing-key' },
+        { sessionsDirectory: directory, maxBytes: 80 },
+      );
+      expect(jsonl.truncated).toBe(true);
+      expect(jsonl.raw).toContain('[redacted-private-key]');
+      expect(jsonl.raw).not.toContain('private-key-tail');
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('redacts PGP private key blocks from raw jsonl reads', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'rainrail-jsonl-pgp-key-redaction-'));
+    const sessionId = 'jsonl-pgp-key-session';
+    const logPath = join(directory, 'agent.log');
+    writeFileSync(logPath, JSON.stringify({
+      result: { status: 'ok', meta: { agentMeta: { sessionId } } },
+    }), 'utf8');
+    writeFileSync(join(directory, `${sessionId}.trajectory.jsonl`), [
+      '-----BEGIN PGP PRIVATE KEY BLOCK-----',
+      'pgp-private-key-material',
+      '-----END PGP PRIVATE KEY BLOCK-----',
+    ].join('\n'), 'utf8');
+
+    try {
+      const jsonl = await readRuntimeJsonl(
+        { logPath, agentSessionId: 'agent:main:routing-key' },
+        { sessionsDirectory: directory },
+      );
+      expect(jsonl.raw).toContain('[redacted-private-key]');
+      expect(jsonl.raw).not.toContain('pgp-private-key-material');
+      expect(jsonl.raw).not.toContain('PGP PRIVATE KEY BLOCK');
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('keeps truncated single-line jsonl tails when no newline remains', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'rainrail-jsonl-long-line-tail-'));
     const sessionId = 'jsonl-long-line-session';
@@ -1391,6 +1475,33 @@ describe('agent timeline', () => {
       expect(jsonl.raw).toContain('[redacted-truncated-credential]');
       expect(jsonl.raw).not.toContain('tailSecret');
       expect(jsonl.raw).not.toContain('github_pat_');
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('redacts cookie fragments from truncated raw jsonl reads', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'rainrail-jsonl-truncated-cookie-redaction-'));
+    const sessionId = 'jsonl-truncated-cookie-session';
+    const logPath = join(directory, 'agent.log');
+    const cookie = `session=${'x'.repeat(160)}_cookieTailSecret`;
+    writeFileSync(logPath, JSON.stringify({
+      result: { status: 'ok', meta: { agentMeta: { sessionId } } },
+    }), 'utf8');
+    writeFileSync(join(directory, `${sessionId}.trajectory.jsonl`), JSON.stringify({
+      type: 'tool.result',
+      data: { output: `Cookie: ${cookie}` },
+    }), 'utf8');
+
+    try {
+      const jsonl = await readRuntimeJsonl(
+        { logPath, agentSessionId: 'agent:main:routing-key' },
+        { sessionsDirectory: directory, maxBytes: 80 },
+      );
+      expect(jsonl.truncated).toBe(true);
+      expect(jsonl.raw).toContain('[redacted-truncated-credential]');
+      expect(jsonl.raw).not.toContain('cookieTailSecret');
+      expect(jsonl.raw).not.toContain('session=');
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

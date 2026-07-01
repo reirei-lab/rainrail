@@ -309,16 +309,22 @@ async function readRuntimeSession(
   for (const logPaths of runtimeTaskLogPathGroups(task)) {
     let groupFallbackSession: RuntimeFallbackMetadata | undefined;
     let groupFallbackCleared = false;
-    for (const logPath of logPaths) {
+    for (const [index, logPath] of logPaths.entries()) {
+      const allowCompletionResolution = !(index === 0 && logPaths.length > 1);
       let log: string;
       try {
         log = await readFile(logPath, 'utf8');
       } catch {
         continue;
       }
-      const fallbackMetadata = extractRuntimeFallbackMetadata(log);
-      const fallbackSessionId = extractRuntimeSessionId(log);
-      logSessionId ??= extractRuntimeNonFallbackSessionId(log);
+      const fallbackMetadata = extractRuntimeFallbackMetadata(log, {
+        allowCompletionMetadata: allowCompletionResolution,
+        allowClearingCompletion: allowCompletionResolution,
+      });
+      const fallbackSessionId = allowCompletionResolution ? extractRuntimeSessionId(log) : undefined;
+      if (allowCompletionResolution) {
+        logSessionId ??= extractRuntimeNonFallbackSessionId(log);
+      }
       if (fallbackMetadata === null) {
         groupFallbackSession = undefined;
         groupFallbackCleared = true;
@@ -379,7 +385,12 @@ function runtimeTaskLogPathGroups(task: RuntimeTaskForTimeline): string[][] {
   return pathGroups.map((paths) => [...new Set(paths)]);
 }
 
-function extractRuntimeFallbackMetadata(log: string): RuntimeFallbackMetadata | null | undefined {
+function extractRuntimeFallbackMetadata(
+  log: string,
+  options: { allowCompletionMetadata?: boolean; allowClearingCompletion?: boolean } = {},
+): RuntimeFallbackMetadata | null | undefined {
+  const allowCompletionMetadata = options.allowCompletionMetadata !== false;
+  const allowClearingCompletion = options.allowClearingCompletion !== false;
   let latest: { index: number; metadata: RuntimeFallbackMetadata | undefined } | undefined;
   const jsonObjects = parseJsonObjectsFromLogWithPositions(log);
   const ignoredRanges = [
@@ -387,11 +398,11 @@ function extractRuntimeFallbackMetadata(log: string): RuntimeFallbackMetadata | 
     ...parseJsonStringRangesFromLog(log),
   ];
   for (const object of jsonObjects) {
-    if (!isTrustedRuntimeCompletionLogObject(log, object)) {
+    if (!allowCompletionMetadata || !isTrustedRuntimeCompletionLogObject(log, object)) {
       continue;
     }
     const metadata = fallbackMetadataFromPayload(object.payload);
-    if (metadata === undefined && !isFallbackClearingRuntimeCompletionPayload(object.payload)) {
+    if (metadata === undefined && !(allowClearingCompletion && isFallbackClearingRuntimeCompletionPayload(object.payload))) {
       continue;
     }
     if (latest === undefined || object.index > latest.index) {
@@ -451,7 +462,9 @@ async function readTailText(path: string, maxBytes: number): Promise<{ text: str
     const prefixContext = rawText.slice(0, offset);
     let text = rawText.slice(offset);
     if (start > 0) {
-      text = redactLeadingCredentialFragment(text, prefixContext) ?? trimPartialLeadingLine(text);
+      text = redactLeadingPrivateKeyFragment(text, prefixContext)
+        ?? redactLeadingCredentialFragment(text, prefixContext)
+        ?? trimPartialLeadingLine(text);
     }
     return { text, truncated: start > 0 };
   } finally {
@@ -467,13 +480,40 @@ function trimPartialLeadingLine(text: string): string {
 function redactLeadingCredentialFragment(text: string, prefixContext: string): string | undefined {
   const lineStart = Math.max(prefixContext.lastIndexOf('\n'), prefixContext.lastIndexOf('\r')) + 1;
   const linePrefix = prefixContext.slice(lineStart);
-  if (!/(?:authorization\s*:\s*(?:bearer|basic|digest|ntlm|negotiate)?\s*|bearer\s+|(?:api[-_]?key|token|secret|password|passphrase|_auth|authorization)\s*[:=]\s*)[^\n\r]*$/i.test(linePrefix)) {
+  if (!/(?:authorization\s*:\s*(?:bearer|basic|digest|ntlm|negotiate)?\s*|(?:set-cookie|cookie)\s*:\s*|bearer\s+|(?:api[-_]?key|token|secret|password|passphrase|_auth|authorization|set[-_]?cookie|cookie)\s*[:=]\s*)[^\n\r]*$/i.test(linePrefix)) {
     return undefined;
   }
   const newlineIndex = text.search(/[\n\r]/);
   return newlineIndex === -1
     ? '[redacted-truncated-credential]'
     : `[redacted-truncated-credential]${text.slice(newlineIndex)}`;
+}
+
+function redactLeadingPrivateKeyFragment(text: string, prefixContext: string): string | undefined {
+  if (!hasOpenPrivateKeyBlock(prefixContext)) {
+    return undefined;
+  }
+  const endMatch = /-----END [A-Z ]*PRIVATE KEY(?: BLOCK)?-----/.exec(text);
+  return endMatch == null
+    ? '[redacted-private-key]'
+    : `[redacted-private-key]${text.slice(endMatch.index + endMatch[0].length)}`;
+}
+
+function hasOpenPrivateKeyBlock(value: string): boolean {
+  const beginIndex = findLastPrivateKeyBoundary(value, /-----BEGIN [A-Z ]*PRIVATE KEY(?: BLOCK)?-----/g);
+  if (beginIndex === undefined) {
+    return false;
+  }
+  const endIndex = findLastPrivateKeyBoundary(value, /-----END [A-Z ]*PRIVATE KEY(?: BLOCK)?-----/g);
+  return endIndex === undefined || beginIndex > endIndex;
+}
+
+function findLastPrivateKeyBoundary(value: string, pattern: RegExp): number | undefined {
+  let lastIndex: number | undefined;
+  for (const match of value.matchAll(pattern)) {
+    lastIndex = match.index;
+  }
+  return lastIndex;
 }
 
 function timelineEntryForEvent(event: TrajectoryEvent, index: number): RuntimeTimelineEntry {
@@ -626,9 +666,9 @@ function stringifyField(record: Record<string, unknown> | undefined, key: string
 
 function redactSensitiveText(value: string): string {
   return redactSensitiveJsonKeyValues(value)
-    .replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, '[redacted-private-key]')
-    .replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*$/g, '[redacted-private-key]')
-    .replace(/(^|[\n\r])[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, '$1[redacted-private-key]')
+    .replace(/-----BEGIN [A-Z ]*PRIVATE KEY(?: BLOCK)?-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY(?: BLOCK)?-----/g, '[redacted-private-key]')
+    .replace(/-----BEGIN [A-Z ]*PRIVATE KEY(?: BLOCK)?-----[\s\S]*$/g, '[redacted-private-key]')
+    .replace(/(^|[\n\r])[\s\S]*?-----END [A-Z ]*PRIVATE KEY(?: BLOCK)?-----/g, '$1[redacted-private-key]')
     .replace(/(^|\s)(-[A-Za-z]*H)(Authorization:\s*)[\s\S]*?(?=(?:\s+-[A-Za-z]*H(?:Authorization|Cookie|Set-Cookie):)|(?:\s+-[A-Za-z])|[\n\r]|$)/gi, '$1$2$3[redacted-authorization]')
     .replace(/(^|\s)(-[A-Za-z]*H)(Set-Cookie:\s*)[\s\S]*?(?=(?:\s+-[A-Za-z]*H(?:Authorization|Cookie|Set-Cookie):)|(?:\s+-[A-Za-z])|[\n\r]|$)/gi, '$1$2$3[redacted-cookie]')
     .replace(/(^|\s)(-[A-Za-z]*H)(Cookie:\s*)[\s\S]*?(?=(?:\s+-[A-Za-z]*H(?:Authorization|Cookie|Set-Cookie):)|(?:\s+-[A-Za-z])|[\n\r]|$)/gi, '$1$2$3[redacted-cookie]')
