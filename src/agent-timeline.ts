@@ -1,8 +1,6 @@
-import { createReadStream } from 'node:fs';
 import { open, readFile, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { isAbsolute, join, relative, resolve } from 'node:path';
-import { createInterface } from 'node:readline';
 
 export type RuntimeTimelinePhase = '調査' | '準備' | '実装' | '確認' | '完了処理' | '実行' | string;
 
@@ -138,16 +136,9 @@ export async function readRuntimeTimelineStatus(
 }
 
 async function readRuntimeTimelineStatusFromFile(path: string, status: RuntimeTimelineStatus): Promise<void> {
-  const lines = createInterface({
-    input: createReadStream(path, { encoding: 'utf8' }),
-    crlfDelay: Infinity,
-  });
-  try {
-    for await (const line of lines) {
-      applyRuntimeTimelineStatusLine(status, line);
-    }
-  } finally {
-    lines.close();
+  const tail = await readTailText(path, maxJsonlBytes);
+  for (const line of tail.text.split(/\r?\n/)) {
+    applyRuntimeTimelineStatusLine(status, line);
   }
 }
 

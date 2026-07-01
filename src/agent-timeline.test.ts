@@ -2004,6 +2004,33 @@ describe('agent timeline', () => {
     }
   });
 
+  it('bounds trajectory status reads to the tail', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'rainrail-status-tail-bound-'));
+    const logPath = join(directory, 'agent.log');
+    writeFileSync(logPath, '', 'utf8');
+    writeFileSync(join(directory, 'status-tail-session.trajectory.jsonl'), [
+      JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:08:00.000Z', seq: 1 }),
+      JSON.stringify({ type: 'session.ended', ts: '2026-06-30T15:58:00.000Z', seq: 2, data: { status: 'success' } }),
+      'x'.repeat(450 * 1024),
+      JSON.stringify({ type: 'usage.reported', ts: '2026-06-30T16:58:01.000Z', seq: 3, data: { totalTokens: 1234 } }),
+    ].join('\n'), 'utf8');
+
+    try {
+      const status = await readRuntimeTimelineStatus(
+        { logPath, agentSessionId: 'status-tail-session' },
+        { sessionsDirectory: directory },
+      );
+      expect(status).toMatchObject({
+        sessionId: 'status-tail-session',
+        ended: false,
+        lastTimestamp: '2026-06-30T16:58:01.000Z',
+      });
+      expect(status.endedStatus).toBeUndefined();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('uses the latest lifecycle event when reporting ended trajectory status', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'rainrail-resumed-timeline-'));
     const logPath = join(directory, 'agent.log');

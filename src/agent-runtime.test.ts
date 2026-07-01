@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync, writeSync } from 'node:fs';
 import { EventEmitter } from 'node:events';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
@@ -187,6 +187,30 @@ describe('createOpenClawRuntimeProvider', () => {
     expect(statMode(String(started.metadata?.stderrLogPath))).toBe(0o600);
     expect(statMode(String(resumed?.metadata?.logPath))).toBe(0o600);
     expect(statMode(String(resumed?.metadata?.stderrLogPath))).toBe(0o600);
+  });
+
+  it('does not follow pre-existing symlinks when creating runtime logs', async () => {
+    const spawnProcess = vi.fn(() => ({ pid: 4242, unref: vi.fn() }));
+    const logDirectory = temporaryDirectory();
+    const targetFile = join(logDirectory, 'outside-target.log');
+    const agentSessionId = 'agent:main:symlink-session';
+    const logPath = join(logDirectory, `${safeRuntimeLogFileName(agentSessionId)}.log`);
+    writeFileSync(targetFile, 'do-not-touch', 'utf8');
+    symlinkSync(targetFile, logPath);
+    const provider = createOpenClawRuntimeProvider({
+      enabled: true,
+      command: 'openclaw',
+      agentId: 'main',
+      sessionKeyPrefix: 'rainrail',
+      timeoutSeconds: 900,
+      logDirectory,
+      spawnProcess,
+    });
+
+    await expect(provider.startRun(runtimeRequest({ agentSessionId }))).rejects.toThrow();
+
+    expect(spawnProcess).not.toHaveBeenCalled();
+    expect(readFileSync(targetFile, 'utf8')).toBe('do-not-touch');
   });
 
   it('passes stable run ids to start and resume OpenClaw invocations', async () => {
@@ -1638,6 +1662,24 @@ describe('createOpenClawRuntimeProvider', () => {
       error: expect.any(Error),
     }));
   });
+
+  it('rejects start runs when spawn returns no process id', async () => {
+    const child = new EventEmitter() as EventEmitter & { unref: () => void };
+    child.unref = vi.fn();
+    const provider = createOpenClawRuntimeProvider({
+      enabled: true,
+      command: 'missing-openclaw',
+      agentId: 'main',
+      sessionKeyPrefix: 'rainrail',
+      timeoutSeconds: 900,
+      logDirectory: temporaryDirectory(),
+      spawnProcess: vi.fn(() => child),
+    });
+
+    await expect(provider.startRun(runtimeRequest())).rejects.toThrow('did not report a process id');
+
+    expect(child.unref).not.toHaveBeenCalled();
+  });
 });
 
 describe('runtime task completion and resume helpers', () => {
@@ -1710,6 +1752,20 @@ describe('runtime task completion and resume helpers', () => {
     )).toMatchObject({
       status: 'compaction_failed',
       summary: expect.stringContaining('Compaction timed out'),
+    });
+  });
+
+  it('redacts credentials from runtime completion summaries', () => {
+    expect(readRuntimeRunCompletionFromLog(JSON.stringify({
+      status: 'failed',
+      summary: 'failed with Authorization: Bearer github_pat_completionSecret',
+      promptError: 'WEBHOOK_SECRET=correct horse battery',
+      stopReason: 'password=hunter2 backup phrase',
+    }))).toMatchObject({
+      status: 'failed',
+      summary: 'failed with Authorization: [redacted-authorization]',
+      promptError: 'WEBHOOK_SECRET=[redacted]',
+      stopReason: 'password=[redacted]',
     });
   });
 
@@ -2180,4 +2236,10 @@ function runtimeRequest(overrides: { agentSessionId?: string | null; deliveryId?
       },
     },
   };
+}
+
+function safeRuntimeLogFileName(value: string): string {
+  const safe = value.replace(/[^A-Za-z0-9._-]/g, '_');
+  const hash = createHash('sha256').update(value).digest('hex').slice(0, 12);
+  return `${safe.length <= 140 ? safe : `${safe.slice(0, 127)}_${hash}`}_${hash}`;
 }

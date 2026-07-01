@@ -1,4 +1,4 @@
-import { chmodSync, closeSync, mkdirSync, openSync, readFileSync, readSync, statSync } from 'node:fs';
+import { chmodSync, closeSync, constants, fchmodSync, mkdirSync, openSync, readFileSync, readSync, statSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
@@ -127,13 +127,14 @@ export function createOpenClawRuntimeProvider(options: OpenClawRuntimeProviderOp
           stdio: ['ignore', outputFd, stderrFd],
         });
         attachSpawnErrorHandler(child, options, 'resume');
+        const pid = requireSpawnedPid(child, options, 'resume');
         child.unref?.();
         return {
           id: resumeSessionId,
           provider: 'openclaw',
           status: 'running',
           metadata: {
-            pid: child.pid,
+            pid,
             logPath,
             stderrLogPath,
             agentSessionId: resumeSessionId,
@@ -186,13 +187,14 @@ export async function startOpenClawRun(
       stdio: ['ignore', outputFd, stderrFd],
     });
     attachSpawnErrorHandler(child, options, 'start');
+    const pid = requireSpawnedPid(child, options, 'start');
     child.unref?.();
     return {
       id: agentSessionId,
       provider: 'openclaw',
       status: 'running',
       metadata: {
-        pid: child.pid,
+        pid,
         logPath,
         stderrLogPath,
         agentSessionId,
@@ -232,18 +234,31 @@ function runtimeRunCompletionFromPayload(payload: Record<string, unknown>): Runt
     return undefined;
   }
 
+  const summary = stringValue(completionPayload.summary) ?? completionSummaryFromPayload(completionPayload) ?? stringValue(payload.summary);
+  const promptError = stringValue(completionPayload.promptError) ?? stringValue(payload.promptError);
+  const timeoutPhase = stringValue(completionPayload.timeoutPhase) ?? stringValue(payload.timeoutPhase);
+  const stopReason = stringValue(completionPayload.stopReason)
+    ?? stringValue(recordValue(completionPayload.completion)?.stopReason)
+    ?? stringValue(payload.stopReason)
+    ?? stringValue(recordValue(payload.completion)?.stopReason);
   return {
     status,
     outcome,
-    summary: stringValue(completionPayload.summary) ?? completionSummaryFromPayload(completionPayload) ?? stringValue(payload.summary),
-    promptError: stringValue(completionPayload.promptError) ?? stringValue(payload.promptError),
+    summary: redactRuntimeCompletionText(summary),
+    promptError: redactRuntimeCompletionText(promptError),
     timedOut: booleanValue(completionPayload.timedOut) ?? booleanValue(payload.timedOut),
-    timeoutPhase: stringValue(completionPayload.timeoutPhase) ?? stringValue(payload.timeoutPhase),
-    stopReason: stringValue(completionPayload.stopReason)
-      ?? stringValue(recordValue(completionPayload.completion)?.stopReason)
-      ?? stringValue(payload.stopReason)
-      ?? stringValue(recordValue(payload.completion)?.stopReason),
+    timeoutPhase: redactRuntimeCompletionText(timeoutPhase),
+    stopReason: redactRuntimeCompletionText(stopReason),
   };
+}
+
+function redactRuntimeCompletionText(value: string | undefined): string | undefined {
+  return value
+    ?.replace(/Authorization:\s*[^\n\r]*/gi, 'Authorization: [redacted-authorization]')
+    .replace(/\bgithub_pat_[A-Za-z0-9_]+\b/g, '[redacted-token]')
+    .replace(/\bgh[pousr]_[A-Za-z0-9_]+\b/g, '[redacted-token]')
+    .replace(/\bsk-[A-Za-z0-9_-]{20,}\b/g, '[redacted-token]')
+    .replace(/\b((?:[A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSPHRASE|API[-_]?KEY)|api[-_]?key|token|secret|password|passphrase|_auth)\s*[:=]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\n\r]*)/gi, '$1[redacted]');
 }
 
 function compactionFailureFromLog(raw: string): RuntimeRunCompletion | undefined {
@@ -872,8 +887,11 @@ function ensurePrivateLogDirectory(directory: string): void {
 }
 
 function openPrivateLogFile(path: string, flags: 'a' | 'w'): number {
-  const fd = openSync(path, flags, 0o600);
-  chmodSync(path, 0o600);
+  const openFlags = flags === 'a'
+    ? constants.O_CREAT | constants.O_APPEND | constants.O_WRONLY | constants.O_NOFOLLOW
+    : constants.O_CREAT | constants.O_TRUNC | constants.O_WRONLY | constants.O_NOFOLLOW;
+  const fd = openSync(path, openFlags, 0o600);
+  fchmodSync(fd, 0o600);
   return fd;
 }
 
@@ -903,6 +921,23 @@ function attachSpawnErrorHandler(
       error,
     });
   });
+}
+
+function requireSpawnedPid(
+  child: SpawnedChild,
+  options: OpenClawRuntimeProviderOptions,
+  phase: OpenClawSpawnErrorEvent['phase'],
+): number {
+  if (child.pid !== undefined) {
+    return child.pid;
+  }
+  const error = new Error('OpenClaw runtime spawn did not report a process id');
+  options.onSpawnError?.({
+    command: options.command,
+    phase,
+    error,
+  });
+  throw error;
 }
 
 function throwIfAborted(signal: AbortSignal | undefined): void {
