@@ -150,6 +150,7 @@ export interface ChangeRequestWorkflowOptions extends TodoHandoffWorkflowOptions
 export interface CodexReviewWorkflowOptions extends TodoHandoffWorkflowOptions {
   agentLogin: string;
   reviewerLogin: string;
+  reviewRequest?: ReviewRequestRemovalOptions;
   targetRepositories?: string[];
   pullRequests?: GitHubPullRequestProvider | undefined;
 }
@@ -386,6 +387,12 @@ export async function handleCodexReviewEvent(
     commentBody: codexReviewComment({ task, review, inlineComments }),
   }, context);
   await options.tasks.recordTaskStatus?.({ task, result: `codex_review:${update.status}` }, context);
+  const reviewRequestRemoved = await removePendingReviewRequestByNumber(
+    options.pullRequests,
+    { repository: review.repository, number: review.pullRequestNumber },
+    options.reviewRequest,
+    context,
+  );
   return {
     handled: true,
     reason: 'Codex review returned issue to Todo',
@@ -394,6 +401,7 @@ export async function handleCodexReviewEvent(
     projectItemId: update.projectItemId,
     status: update.status,
     issueCommentUrl: update.commentUrl,
+    ...(reviewRequestRemoved ? { reviewRequestRemoved } : {}),
   };
 }
 
@@ -1086,6 +1094,17 @@ async function removePendingReviewRequest(
   return true;
 }
 
+async function removePendingReviewRequestByNumber(
+  pullRequests: GitHubPullRequestProvider | undefined,
+  input: { repository: string; number: number },
+  reviewRequest: ReviewRequestRemovalOptions | undefined,
+  context: PluginRuntimeContext | undefined,
+): Promise<boolean> {
+  if (reviewRequest === undefined || reviewRequest.enabled === false || pullRequests === undefined) return false;
+  const pullRequest = await pullRequests.getPullRequest(input, taskContext(context));
+  return removePendingReviewRequest(pullRequests, pullRequest, reviewRequest, context);
+}
+
 function shouldIgnoreTask(task: AgentTask): string | undefined {
   if (normalize(task.issue?.state) === 'closed') return 'issue is closed';
   if (task.claim?.projectItemId === undefined) return 'agent task has no Project claim';
@@ -1189,6 +1208,13 @@ export function createTaskProviderPullRequestCommentHandoff(
         throw new Error('agent task has no Project claim');
       }
       const issue = input.task.issue;
+      if (
+        queue?.releaseProjectIssue === undefined
+        && input.commentBody !== undefined
+        && (issue?.number === undefined || issue.repository === undefined)
+      ) {
+        throw new Error('comment-only handoff requires issue repository and number');
+      }
       const comment = input.commentBody === undefined || issue?.number === undefined || issue.repository === undefined
         ? undefined
         : await tasks.createComment({

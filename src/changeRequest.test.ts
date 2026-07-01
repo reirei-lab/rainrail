@@ -171,4 +171,29 @@ describe('handleChangeRequestEvent', () => {
     })).rejects.toThrow('comment failed');
     expect(releases).toEqual([]);
   });
+
+  it('requires a comment target for comment-only handoffs', async () => {
+    let commentCount = 0;
+    const handoff = createTaskProviderPullRequestCommentHandoff({
+      name: 'github',
+      kind: 'task-provider',
+      async getIssue() {
+        throw new Error('not used');
+      },
+      async createComment() {
+        commentCount += 1;
+        throw new Error('not used');
+      },
+    });
+
+    await expect(handoff.returnTaskToTodo({
+      task: {
+        ...task,
+        issue: { contentId: 'DI_draft', contentType: 'DraftIssue', state: 'OPEN' },
+      },
+      reason: 'codex_review',
+      commentBody: 'body',
+    })).rejects.toThrow('comment-only handoff requires issue repository and number');
+    expect(commentCount).toBe(0);
+  });
 });

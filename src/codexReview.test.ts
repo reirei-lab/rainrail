@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { handleCodexReviewEvent } from './pr-lifecycle.js';
-import { handoffRecorder, reviewEvent } from './pr-lifecycle-test-helpers.js';
+import { handoffRecorder, pullRequest, reviewEvent } from './pr-lifecycle-test-helpers.js';
 
 describe('handleCodexReviewEvent', () => {
   it('returns the matching issue to Todo with inline Codex review comments', async () => {
@@ -48,6 +48,41 @@ describe('handleCodexReviewEvent', () => {
     expect(updates[0]?.commentBody).toContain('src/pr-lifecycle.ts:42');
     expect(updates[0]?.commentBody).toContain('Please handle this inline comment.');
     expect(updates[0]?.commentBody).not.toContain('old comment');
+  });
+
+  it('removes stale pending review requests when Codex review returns the issue to Todo', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+    const removedReviewRequests: Array<{ repository: string; number: number; reviewerLogin: string }> = [];
+
+    const result = await handleCodexReviewEvent(reviewEvent(), {
+      agentLogin: 'reirei-agent',
+      reviewerLogin: 'hiragram',
+      reviewRequest: { reviewerLogin: 'hiragram' },
+      targetRepositories: ['reirei-lab/rainrail'],
+      tasks: handoffRecorder({ updates }),
+      pullRequests: {
+        async getPullRequest(input) {
+          return pullRequest({ ...input, reviewRequests: ['hiragram'] });
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          throw new Error('not used');
+        },
+        async removeReviewRequest(input) {
+          removedReviewRequests.push(input);
+        },
+        async listReviewComments() {
+          return [{ id: 2, reviewId: 4493317816, path: 'src/pr-lifecycle.ts', body: 'comment' }];
+        },
+      },
+    });
+
+    expect(result).toMatchObject({ reason: 'Codex review returned issue to Todo', reviewRequestRemoved: true });
+    expect(removedReviewRequests).toEqual([
+      { repository: 'reirei-lab/rainrail', number: 44, reviewerLogin: 'hiragram' },
+    ]);
   });
 
   it('accepts normalized GitHub review payloads with string review ids', async () => {
