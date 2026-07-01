@@ -154,6 +154,30 @@ describe('handleReviewRequestEvent', () => {
     expect(requestCount).toBe(0);
   });
 
+  it('does not request review for pull requests that are no longer open', async () => {
+    let requestCount = 0;
+
+    const result = await handleReviewRequestEvent(checkRunEvent(), {
+      agentLogin: 'reirei-agent',
+      reviewerLogin: 'hiragram',
+      branchPrefix: 'agent/',
+      pullRequests: {
+        async getPullRequest() {
+          return pullRequest({ state: 'CLOSED', reviews: [] });
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          requestCount += 1;
+        },
+      },
+    });
+
+    expect(result.reason).toBe('pull request is not open');
+    expect(requestCount).toBe(0);
+  });
+
   it('does not request review while the latest review still requests changes', async () => {
     let requestCount = 0;
 

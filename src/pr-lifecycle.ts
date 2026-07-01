@@ -270,6 +270,7 @@ export async function handleReviewRequestEvent(
   if (!isReviewTarget(options, pullRequest)) {
     return { handled: false, reason: 'pull request is not an agent-authored target', pullRequest };
   }
+  if (normalize(pullRequest.state) !== 'open') return { handled: false, reason: 'pull request is not open', pullRequest };
   if (pullRequest.isDraft) return { handled: false, reason: 'pull request is draft', pullRequest };
   if (hasUnresolvedChangeRequest(pullRequest)) {
     return { handled: false, reason: 'pull request has unresolved change requests', pullRequest };
@@ -441,13 +442,18 @@ export async function handleConflictCheckEvent(
 
   const updatedTasks = [];
   for (const pullRequest of conflicted) {
+    if (!sameRepositoryHead(pullRequest)) continue;
     const task = await options.tasks.getAgentTaskByBranchName(pullRequest.headRefName);
     if (
       task === undefined
       || repositoryMismatchReason(task, pullRequest.repository) !== undefined
       || shouldIgnoreTask(task) !== undefined
     ) continue;
-    const update = await options.tasks.returnTaskToTodo({ task, reason: 'conflict' }, context);
+    const update = await options.tasks.returnTaskToTodo({
+      task,
+      reason: 'conflict',
+      commentBody: conflictComment({ task, pullRequest }),
+    }, context);
     await options.tasks.recordTaskStatus?.({ task, result: `conflict:${update.status}` }, context);
     const reviewRequestRemoved = await removePendingReviewRequest(pullRequests, pullRequest, options.reviewRequest, context);
     updatedTasks.push({
@@ -657,6 +663,7 @@ function codexReviewTargetFromEvent(
     || branchName === undefined
     || reviewId === undefined
     || reviewState === 'changes_requested'
+    || normalize(pullRequest.headRepository) !== normalize(repository)
     || !sameLogin(stringValue(review.author), options.reviewerLogin)
     || !sameLogin(stringValue(pullRequest.author), options.agentLogin)
     || !targetRepositoryAllowed(options.targetRepositories ?? [], repository, true)
@@ -851,6 +858,20 @@ function checkFailureComment(input: {
   return lines.join('\n');
 }
 
+function conflictComment(input: { task: AgentTask; pullRequest: PullRequestReviewTarget }): string {
+  return [
+    'Rainrail detected that the agent PR has merge conflicts.',
+    '',
+    `- PR: ${input.pullRequest.url}`,
+    `- Branch: ${input.pullRequest.headRefName}`,
+    `- Agent session: ${input.task.agentSessionId}`,
+    '',
+    'The issue is back in Todo so the next agent pass should rebase or otherwise resolve the conflict before asking for review again.',
+    '',
+    'Outcome: conflict',
+  ].join('\n');
+}
+
 function inlineCommentSummary(comment: Omit<PullRequestReviewComment, 'reviewId'>): string {
   const line = comment.line ?? comment.originalLine;
   const location = line === undefined
@@ -868,7 +889,11 @@ function inlineCommentSummary(comment: Omit<PullRequestReviewComment, 'reviewId'
 function isReviewTarget(config: { agentLogin: string; branchPrefix: string }, pullRequest: PullRequestReviewTarget): boolean {
   return sameLogin(pullRequest.authorLogin, config.agentLogin)
     && pullRequest.headRefName.startsWith(config.branchPrefix)
-    && normalize(pullRequest.headRepository) === normalize(pullRequest.repository);
+    && sameRepositoryHead(pullRequest);
+}
+
+function sameRepositoryHead(pullRequest: PullRequestReviewTarget): boolean {
+  return normalize(pullRequest.headRepository) === normalize(pullRequest.repository);
 }
 
 function reviewApproved(config: { reviewerLogin: string }, pullRequest: PullRequestReviewTarget): boolean {

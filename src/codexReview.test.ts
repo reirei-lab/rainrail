@@ -112,6 +112,20 @@ describe('handleCodexReviewEvent', () => {
     expect(updates[0]?.commentBody).toContain('Codex inline review comments:');
   });
 
+  it('ignores Codex reviews from fork pull requests that only match the agent branch name', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+
+    const result = await handleCodexReviewEvent(reviewEvent({ headRepository: 'external/fork' }), {
+      agentLogin: 'reirei-agent',
+      reviewerLogin: 'hiragram',
+      targetRepositories: ['reirei-lab/rainrail'],
+      tasks: handoffRecorder({ updates }),
+    });
+
+    expect(result.reason).toBe('event is not a Codex review');
+    expect(updates).toEqual([]);
+  });
+
   it('marks truncated Codex inline comment summaries as incomplete', async () => {
     const updates: Array<{ reason: string; commentBody?: string }> = [];
 
