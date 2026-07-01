@@ -235,6 +235,30 @@ describe('createOpenClawRuntimeProvider', () => {
     expect(spawnProcess).not.toHaveBeenCalled();
   });
 
+  it('rejects symlinked runtime log path components inside the worktree', async () => {
+    const spawnProcess = vi.fn(() => ({ pid: 4242, unref: vi.fn() }));
+    const root = join(process.cwd(), `.rainrail-agent-runtime-${crypto.randomUUID()}`);
+    temporaryDirectories.push(root);
+    const targetDirectory = join(root, 'actual-logs');
+    const linkedComponent = join(root, 'linked-component');
+    const logDirectory = join(linkedComponent, 'nested-logs');
+    mkdirSync(targetDirectory, { recursive: true });
+    symlinkSync(targetDirectory, linkedComponent, 'dir');
+    const provider = createOpenClawRuntimeProvider({
+      enabled: true,
+      command: 'openclaw',
+      agentId: 'main',
+      sessionKeyPrefix: 'rainrail',
+      timeoutSeconds: 900,
+      logDirectory,
+      spawnProcess,
+    });
+
+    await expect(provider.startRun(runtimeRequest())).rejects.toThrow(/symlink/i);
+
+    expect(spawnProcess).not.toHaveBeenCalled();
+  });
+
   it('passes stable run ids to start and resume OpenClaw invocations', async () => {
     const spawnProcess = vi.fn(() => ({ pid: 4242, unref: vi.fn() }));
     const logDirectory = temporaryDirectory();

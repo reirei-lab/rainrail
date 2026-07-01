@@ -1,7 +1,7 @@
 import { chmodSync, closeSync, constants, fchmodSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, statSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { join, parse, resolve } from 'node:path';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 
 import type { AgentAssignmentRuntime } from './agent-assignment.js';
 import type { RuntimeAgentTask, RuntimeProvider, RuntimeProviderContext, RuntimeRun, RuntimeRunRequest, RuntimeRunStatus } from './runtime-provider.js';
@@ -911,21 +911,34 @@ function ensurePrivateLogDirectory(directory: string): void {
 
 function assertNoSymlinkPathComponents(directory: string): void {
   const absolutePath = resolve(directory);
-  const root = parse(absolutePath).root;
-  const segments = absolutePath.slice(root.length).split(/[\\/]+/).filter((segment) => segment !== '');
+  assertPathIsNotSymlink(absolutePath);
+  const cwd = resolve(process.cwd());
+  const relativePath = relative(cwd, absolutePath);
+  if (relativePath === '' || relativePath.startsWith('..') || isAbsolute(relativePath)) {
+    return;
+  }
+  assertNoSymlinkPathComponentsFrom(cwd, relativePath);
+}
+
+function assertNoSymlinkPathComponentsFrom(root: string, relativePath: string): void {
+  const segments = relativePath.split(/[\\/]+/).filter((segment) => segment !== '');
   let current = root;
   for (const segment of segments) {
     current = join(current, segment);
-    try {
-      if (lstatSync(current).isSymbolicLink()) {
-        throw new Error(`runtime log directory path contains a symlink: ${current}`);
-      }
-    } catch (error) {
-      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
-        return;
-      }
-      throw error;
+    assertPathIsNotSymlink(current);
+  }
+}
+
+function assertPathIsNotSymlink(path: string): void {
+  try {
+    if (lstatSync(path).isSymbolicLink()) {
+      throw new Error(`runtime log directory path contains a symlink: ${path}`);
     }
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+      return;
+    }
+    throw error;
   }
 }
 
