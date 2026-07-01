@@ -147,6 +147,29 @@ describe('agent timeline', () => {
     }
   });
 
+  it('does not use broken diagnostic fragments as session metadata', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'rainrail-broken-diagnostic-session-id-timeline-'));
+    const logPath = join(directory, 'agent.log');
+    writeFileSync(logPath, [
+      'tool result quoted target log:',
+      '"agentMeta":{"sessionId":"old-session"',
+    ].join('\n'), 'utf8');
+    writeFileSync(join(directory, 'old-session.trajectory.jsonl'), [
+      JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:09:00.000Z', seq: 1 }),
+    ].join('\n'), 'utf8');
+
+    try {
+      const timeline = await readRuntimeTimeline(
+        { logPath, agentSessionId: 'agent:main:routing-key' },
+        { sessionsDirectory: directory },
+      );
+      expect(timeline.sessionId).toBeUndefined();
+      expect(timeline.missing).toBe(true);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('does not extract quoted agentMeta session ids from valid JSON logs without metadata', () => {
     expect(extractRuntimeSessionId(JSON.stringify({
       status: 'ok',
@@ -1190,6 +1213,41 @@ describe('agent timeline', () => {
     expect(timeline[0]!.detail).not.toContain('joined-cluster-password');
     expect(timeline[0]!.detail).not.toContain('joined-cluster-cookie');
     expect(timeline[0]!.detail).not.toContain('joined-cluster-cert-secret');
+  });
+
+  it('redacts API key and token headers', () => {
+    const timeline = parseRuntimeTrajectoryTimeline([
+      JSON.stringify({
+        type: 'tool.call',
+        ts: '2026-06-30T15:09:05.000Z',
+        seq: 1,
+        data: {
+          name: 'bash',
+          arguments: {
+            command: 'curl -H "X-API-Key: live-secret" -H "Private-Token: private-token-secret" https://example.com',
+          },
+        },
+      }),
+      JSON.stringify({
+        type: 'tool.result',
+        ts: '2026-06-30T15:09:10.000Z',
+        seq: 2,
+        data: {
+          name: 'bash',
+          status: 'completed',
+          output: 'X-Secret-Header: result-secret\nGitLab-Token: result-token-secret',
+        },
+      }),
+    ].join('\n'));
+
+    expect(timeline[0]!.detail).toContain('X-API-Key: [redacted-header]');
+    expect(timeline[0]!.detail).toContain('Private-Token: [redacted-header]');
+    expect(timeline[0]!.detail).not.toContain('live-secret');
+    expect(timeline[0]!.detail).not.toContain('private-token-secret');
+    expect(timeline[1]!.excerpt).toContain('X-Secret-Header: [redacted-header]');
+    expect(timeline[1]!.excerpt).toContain('GitLab-Token: [redacted-header]');
+    expect(timeline[1]!.excerpt).not.toContain('result-secret');
+    expect(timeline[1]!.excerpt).not.toContain('result-token-secret');
   });
 
   it('redacts curl ftp account credentials', () => {

@@ -586,7 +586,11 @@ function extractFallbackRuntimeSessionKey(log: string, agentId: string): string 
     if (runtimeRunCompletionFromPayload(strictPayload) === undefined || !isTrustedRuntimeCompletionFragment(strictPayload)) {
       return undefined;
     }
-    return fallbackSessionKeyFromPayload(strictPayload, agentId) ?? null;
+    const fallbackSessionKey = fallbackSessionKeyFromPayload(strictPayload, agentId);
+    if (fallbackSessionKey !== undefined) {
+      return fallbackSessionKey;
+    }
+    return fallbackLookupClearingCompletion(strictPayload) ? null : undefined;
   }
   let latest: { index: number; key: string | undefined } | undefined;
   const jsonObjects = parseJsonObjectsFromLogWithPositions(log);
@@ -600,7 +604,7 @@ function extractFallbackRuntimeSessionKey(log: string, agentId: string): string 
       continue;
     }
     const key = fallbackSessionKeyFromPayload(object.payload, agentId);
-    if (latest === undefined || object.index > latest.index) {
+    if ((key !== undefined || fallbackLookupClearingCompletion(object.payload)) && (latest === undefined || object.index > latest.index)) {
       latest = { index: object.index, key };
     }
   }
@@ -614,6 +618,10 @@ function extractFallbackRuntimeSessionKey(log: string, agentId: string): string 
     }
   }
   return latest === undefined ? undefined : latest.key ?? null;
+}
+
+function fallbackLookupClearingCompletion(payload: Record<string, unknown>): boolean {
+  return stringValue(completionPayloadFromResponse(payload).status) !== 'in_flight';
 }
 
 function parseStrictJsonObject(raw: string): Record<string, unknown> | undefined {
