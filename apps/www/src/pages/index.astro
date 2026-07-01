@@ -17,7 +17,7 @@ import SiteLayout from '../layouts/SiteLayout.astro';
       </p>
       <div class="actions">
         <a class="button" href="/how-it-works">See the flow</a>
-        <a class="button secondary" href="/docs">Read the docs</a>
+        <a class="button secondary" href="/concepts">Read the concepts</a>
       </div>
     </div>
     <div class="panel event-flow" aria-label="Rainrail event flow">
@@ -62,6 +62,33 @@ import SiteLayout from '../layouts/SiteLayout.astro';
         <p>
           Dispatch decisions, assignment rules, and runtime context are designed
           to be reproducible and reviewable.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <section class="section">
+    <h2>Initial content</h2>
+    <div class="grid">
+      <div class="item">
+        <h3><a href="/concepts">Concepts</a></h3>
+        <p>
+          Learn the event envelope, source plugin, workflow plugin, provider,
+          and bridge room vocabulary before reading implementation contracts.
+        </p>
+      </div>
+      <div class="item">
+        <h3><a href="/guides">Guides</a></h3>
+        <p>
+          Follow the first GitHub issue automation, PR review loop, and
+          Cloudflare event reporting paths at an operator level.
+        </p>
+      </div>
+      <div class="item">
+        <h3><a href="/examples">Examples</a></h3>
+        <p>
+          Trace the GitHub issue to Project queue to agent PR to review and
+          merge workflow end to end.
         </p>
       </div>
     </div>
