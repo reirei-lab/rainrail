@@ -102,6 +102,7 @@ fallback session へ移った場合は、前回 completion metadata の top-leve
 session key として再開し、JSON completion として解析できた stdout 内の引用 marker は
 resume 対象にしない。Task と resume attempt には stdout `logPath` と対応する `stderrLogPath` を保持し、
 stderr 側にしか fallback diagnostics が残らない timeout でも fallback transcript を引き継ぐ。
+stderr diagnostics に JSON status 行と embedded fallback marker が同居する場合も marker を採用する。
 OpenClaw の raw stdout/stderr log は redaction 前の credential を含み得るため、
 log directory は `0700`、start/resume の stdout/stderr log file は `0600` で作成する。
 
@@ -115,17 +116,22 @@ canonical status も completion として読める。banner 付き log から JS
 top-level completion object を優先し、payload 内の nested JSON を run completion と誤認しない。
 JSON completion として解析できる場合は、本文に `CLI transcript compaction failed` という文字列が
 含まれていても JSON の status を優先し、実エラー行だけを compaction_failed とする。
+completion text/status は top-level と `result` の両方から解決し、`result` が metadata だけを
+持つ場合でも top-level の Outcome を落とさない。
 resume helper は running pid を確認し、
 安定した resume attempt id を生成する。timeline reader は OpenClaw trajectory jsonl を読み、Codex activity 表示に
 必要な時刻、分類済み phase、redacted summary、status、redacted excerpt を返す。
 timeline/status/jsonl の session 解決は stdout `logPath` と対応する `stderrLogPath` または
 `.stderr.log` の embedded fallback marker も参照する。redaction は shell 風の
-`token=...` や `curl -u user:password` / `curl --proxy-user user:password` /
+`token=...` や `curl -u user:password` / `curl -uuser:password` /
+`curl --proxy-user user:password` /
 `curl --oauth2-bearer token` / `curl --pass phrase` / `curl --tlspassword string`
 だけでなく JSON の `"token": "..."` /
 `"apiKey": "..."` / `"password": "..."`、`"webhookSecret"` / `"clientSecret"` /
 `"apiToken"` のような compound key、quoted shell assignment、`github_pat_...`、
-HTTP Authorization header 全体、Bearer credential も対象にする。timeline status は最後の lifecycle/event row を見て
+HTTP Authorization/Cookie/Set-Cookie header 全体、Bearer credential も対象にする。
+header 値内の quote は header 終端とみなさず、次 header または改行までを redaction する。
+timeline status は最後の lifecycle/event row を見て
 ended を更新し、resume 後に追記された session を古い ended のまま扱わない。trajectory の既定 path は
 `agentId` ごとの `~/.openclaw/agents/<agentId>/sessions` を使い、`main` 以外の
 OpenClaw agent でも呼び出し側が毎回 sessionsDirectory を上書きしなくてよい。

@@ -546,7 +546,10 @@ describe('createOpenClawRuntimeProvider', () => {
     writeFileSync(startLogPath, JSON.stringify({ status: 'timed_out', summary: 'gateway timeout before completion metadata' }), 'utf8');
     writeFileSync(startStderrLogPath, 'EMBEDDED FALLBACK: Gateway timed out; running embedded agent with fresh session gateway-fallback-start-stderr', 'utf8');
     writeFileSync(resumeLogPath, 'resume stdout without fallback marker', 'utf8');
-    writeFileSync(resumeStderrLogPath, 'EMBEDDED FALLBACK: Gateway timed out; running embedded agent with fresh session gateway-fallback-resume-stderr', 'utf8');
+    writeFileSync(resumeStderrLogPath, [
+      JSON.stringify({ status: 'failed', summary: 'gateway diagnostic before fallback marker' }),
+      'EMBEDDED FALLBACK: Gateway timed out; running embedded agent with fresh session gateway-fallback-resume-stderr',
+    ].join('\n'), 'utf8');
     const provider = createOpenClawRuntimeProvider({
       enabled: true,
       command: 'openclaw',
@@ -774,6 +777,18 @@ describe('runtime task completion and resume helpers', () => {
         meta: { agentMeta: { sessionId: 'session-2' } },
       },
     }))).toMatchObject({ status: 'succeeded', outcome: 'updated_issue' });
+
+    expect(readRuntimeRunCompletionFromLog(JSON.stringify({
+      status: 'ok',
+      finalAssistantVisibleText: '追加確認が必要です。\n\nOutcome: needs_human',
+      result: {
+        meta: {
+          agentMeta: {
+            sessionId: 'session-metadata-only',
+          },
+        },
+      },
+    }))).toMatchObject({ status: 'needs_human', outcome: 'needs_human' });
 
     expect(readRuntimeRunCompletionFromLog(
       'GatewayClientRequestError: Error: CLI transcript compaction failed for openai/gpt-5.5: Compaction timed out',

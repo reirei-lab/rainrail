@@ -168,11 +168,7 @@ export async function readRuntimeJsonl(
 
 export function extractRuntimeSessionId(log: string): string | undefined {
   try {
-    const parsed = JSON.parse(log) as { result?: { meta?: { agentMeta?: { sessionId?: unknown } } } };
-    const sessionId = parsed.result?.meta?.agentMeta?.sessionId;
-    if (typeof sessionId === 'string' && sessionId.trim() !== '') {
-      return sessionId;
-    }
+    return runtimeSessionIdFromPayload(JSON.parse(log) as unknown);
   } catch {
     // Partial logs are common, regex fallback handles them.
   }
@@ -181,6 +177,9 @@ export function extractRuntimeSessionId(log: string): string | undefined {
 }
 
 export function extractRuntimeFallbackSessionId(log: string): string | undefined {
+  if (parseStrictJsonObject(log) !== undefined) {
+    return undefined;
+  }
   const match = log.match(/EMBEDDED FALLBACK:[^\n\r]*fresh session\s+(gateway-fallback-[A-Za-z0-9._-]+)/i);
   return match?.[1];
 }
@@ -463,14 +462,15 @@ function stringifyField(record: Record<string, unknown> | undefined, key: string
 function redactSensitiveText(value: string): string {
   return value
     .replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, '[redacted-private-key]')
+    .replace(/(^|\s)(-[uU])(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s'"]+)/g, '$1$2[redacted-credential]')
     .replace(/(^|\s)(-u|--user|-U|--proxy-user|--oauth2-bearer|--pass|--proxy-pass|--tlspassword|--proxy-tlspassword)(=|\s+)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s'"]+)/g, '$1$2$3[redacted-credential]')
     .replace(/\bgithub_pat_[A-Za-z0-9_]+\b/g, '[redacted-token]')
     .replace(/(gh[pousr]_[A-Za-z0-9_]+)/g, '[redacted-token]')
     .replace(/(sk-[A-Za-z0-9_-]{20,})/g, '[redacted-token]')
     .replace(/([A-Za-z][A-Za-z0-9+.-]*:\/\/)[^\s/@:]+:[^\s/@]+@/g, '$1[redacted]@')
-    .replace(/\b(Authorization:\s*)[\s\S]*?(?=\s+(?:Authorization|Cookie|Set-Cookie):|[\n\r"]|$)/gi, '$1[redacted-authorization]')
-    .replace(/\b(Set-Cookie:\s*)[^\n\r"]+/gi, '$1[redacted-cookie]')
-    .replace(/\b(Cookie:\s*)[^\n\r"]+?(?=\s+Set-Cookie:|[\n\r"]|$)/gi, '$1[redacted-cookie]')
+    .replace(/\b(Authorization:\s*)[\s\S]*?(?=(?:"\s+-H\s+"(?:Authorization|Cookie|Set-Cookie):)|\s+(?:Authorization|Cookie|Set-Cookie):|[\n\r]|$)/gi, '$1[redacted-authorization]')
+    .replace(/\b(Set-Cookie:\s*)[\s\S]*?(?=(?:"\s+-H\s+"(?:Authorization|Cookie|Set-Cookie):)|\s+(?:Authorization|Cookie|Set-Cookie):|[\n\r]|$)/gi, '$1[redacted-cookie]')
+    .replace(/\b(Cookie:\s*)[\s\S]*?(?=(?:"\s+-H\s+"(?:Authorization|Cookie|Set-Cookie):)|\s+Set-Cookie:|[\n\r]|$)/gi, '$1[redacted-cookie]')
     .replace(/("[^"]*(?:token|secret|password|api[_-]?key|private[_-]?key|authorization|set-cookie|cookie)[^"]*"\s*:\s*)"(?:(?:\\.)|[^"\\])*"/gi, '$1"[redacted]"')
     .replace(/([A-Za-z0-9_-]*(?:token|secret|password|api[_-]?key|private[_-]?key)[A-Za-z0-9_-]*\s*[:=]\s*)"(?:(?:\\.)|[^"\\])*"/gi, '$1"[redacted]"')
     .replace(/([A-Za-z0-9_-]*authorization[A-Za-z0-9_-]*\s*=\s*)"(?:(?:\\.)|[^"\\])*"/gi, '$1"[redacted]"')
@@ -503,4 +503,29 @@ function stderrLogPathFor(logPath: string): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function runtimeSessionIdFromPayload(payload: unknown): string | undefined {
+  if (!isRecord(payload)) {
+    return undefined;
+  }
+  for (const source of [payload, isRecord(payload.result) ? payload.result : undefined]) {
+    const sessionId = stringField(
+      isRecord(source?.meta) && isRecord(source.meta.agentMeta) ? source.meta.agentMeta : undefined,
+      'sessionId',
+    );
+    if (sessionId !== undefined && sessionId.trim() !== '') {
+      return sessionId;
+    }
+  }
+  return undefined;
+}
+
+function parseStrictJsonObject(raw: string): Record<string, unknown> | undefined {
+  try {
+    const payload = JSON.parse(raw) as unknown;
+    return isRecord(payload) ? payload : undefined;
+  } catch {
+    return undefined;
+  }
 }

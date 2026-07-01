@@ -410,7 +410,19 @@ function completionTextsFromPayload(payload: Record<string, unknown>): string[] 
 }
 
 function completionPayloadFromResponse(payload: Record<string, unknown>): Record<string, unknown> {
-  return recordValue(payload.result) ?? payload;
+  const result = recordValue(payload.result);
+  if (result === undefined) {
+    return payload;
+  }
+  return {
+    ...payload,
+    ...result,
+    status: result.status ?? payload.status,
+    summary: result.summary ?? payload.summary,
+    finalAssistantVisibleText: result.finalAssistantVisibleText ?? payload.finalAssistantVisibleText,
+    finalAssistantRawText: result.finalAssistantRawText ?? payload.finalAssistantRawText,
+    payloads: result.payloads ?? payload.payloads,
+  };
 }
 
 function parseJsonFromLog(raw: string): unknown {
@@ -481,12 +493,28 @@ function runtimeResumeLogPaths(task: RuntimeAgentTask): string[] {
 }
 
 function extractFallbackRuntimeSessionKey(log: string, agentId: string): string | undefined {
+  const strictPayload = parseStrictJsonObject(log);
+  if (strictPayload !== undefined) {
+    return fallbackSessionKeyFromPayload(strictPayload);
+  }
   const payload = parseJsonFromLog(log);
   if (isRecord(payload)) {
-    return fallbackSessionKeyFromPayload(payload);
+    const key = fallbackSessionKeyFromPayload(payload);
+    if (key !== undefined) {
+      return key;
+    }
   }
   const fallbackSessionId = extractFallbackRuntimeSessionId(log);
   return fallbackSessionId === undefined ? undefined : `agent:${agentId}:explicit:${fallbackSessionId}`;
+}
+
+function parseStrictJsonObject(raw: string): Record<string, unknown> | undefined {
+  try {
+    const payload = JSON.parse(raw) as unknown;
+    return recordValue(payload);
+  } catch {
+    return undefined;
+  }
 }
 
 function fallbackSessionKeyFromPayload(payload: Record<string, unknown>): string | undefined {
