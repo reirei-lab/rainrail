@@ -43,10 +43,11 @@ export function pullRequest(overrides: Partial<PullRequestReviewTarget> = {}): P
 export function handoffRecorder(records: {
   updates?: Array<{ reason: string; commentBody?: string }>;
   statusRecords?: string[];
+  taskOverride?: Partial<AgentTask>;
 } = {}): AgentTaskHandoffClient {
   return {
     getAgentTaskByBranchName(branchName) {
-      return branchName === task.branchName ? task : undefined;
+      return branchName === task.branchName ? { ...task, ...records.taskOverride } : undefined;
     },
     async returnTaskToTodo(input) {
       records.updates?.push({
@@ -139,6 +140,34 @@ export function checkRunEvent(overrides: { conclusion?: string; status?: string;
       pullRequests: [{ type: 'pull_request', id: '44', number: 44 }],
     },
     rawPayload: { kind: 'inline-redacted', reference: 'github://deliveries/delivery-check' },
+  });
+}
+
+export function statusEvent(overrides: { state?: string; headSha?: string } = {}): RainrailEventEnvelope {
+  const state = overrides.state ?? 'success';
+  return createEventEnvelope({
+    source: { type: 'github', name: 'github-webhook', repository: 'reirei-lab/rainrail' },
+    name: 'github.status',
+    delivery: { id: 'delivery-status', receivedAt: '2026-07-01T00:00:00.000Z' },
+    occurredAt: '2026-07-01T00:00:00.000Z',
+    subject: { type: 'status', id: overrides.headSha ?? 'abc123' },
+    payload: {
+      provider: 'github',
+      event: 'status',
+      action: 'received',
+      state,
+      repository: { fullName: 'reirei-lab/rainrail' },
+      resource: {
+        type: 'status',
+        id: overrides.headSha ?? 'abc123',
+        context: 'legacy-ci',
+        status: state,
+        conclusion: state,
+        headSha: overrides.headSha ?? 'abc123',
+        url: 'https://github.com/reirei-lab/rainrail/status/abc123',
+      },
+    },
+    rawPayload: { kind: 'inline-redacted', reference: 'github://deliveries/delivery-status' },
   });
 }
 

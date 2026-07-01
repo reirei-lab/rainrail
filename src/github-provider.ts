@@ -309,7 +309,10 @@ export function createGitHubPullRequestProvider(options: GitHubTaskProviderOptio
     async mergePullRequest(input, context) {
       const response = await request(`repos/${input.repository}/pulls/${input.number}/merge`, {
         method: 'PUT',
-        body: JSON.stringify({ merge_method: mergeMethod(input.mergeMethod) }),
+        body: JSON.stringify({
+          merge_method: mergeMethod(input.mergeMethod),
+          ...(input.sha === undefined ? {} : { sha: input.sha }),
+        }),
       }, context);
       if (!response.ok) {
         throw new Error(`GitHub pull request merge failed with HTTP ${response.status}`);

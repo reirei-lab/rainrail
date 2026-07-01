@@ -76,6 +76,7 @@ export interface GitHubPullRequestProvider {
     repository: string;
     number: number;
     mergeMethod: PullRequestMergeMethod;
+    sha?: string;
   }, context?: TaskProviderContext): Promise<void>;
   listReviewComments?(input: {
     repository: string;
@@ -172,7 +173,7 @@ export function createReviewRequestWorkflow(options: ReviewRequestWorkflowOption
   return defineWorkflowPlugin({
     name: 'review-request',
     accepts: (event) => event.source.type === 'github'
-      && (event.name === 'github.check_run' || event.name === 'github.pull_request'),
+      && (event.name === 'github.check_run' || event.name === 'github.status' || event.name === 'github.pull_request'),
     async handle(event, context) {
       return handleReviewRequestEvent(event, { ...options, pullRequests: options.pullRequests ?? pullRequestsFromContext(context) }, context);
     },
@@ -202,7 +203,7 @@ export function createCodexReviewWorkflow(options: CodexReviewWorkflowOptions): 
 export function createCheckFailureWorkflow(options: CheckFailureWorkflowOptions): WorkflowPlugin {
   return defineWorkflowPlugin({
     name: 'check-failure',
-    accepts: (event) => event.source.type === 'github' && event.name === 'github.check_run',
+    accepts: (event) => event.source.type === 'github' && (event.name === 'github.check_run' || event.name === 'github.status'),
     async handle(event, context) {
       return handleCheckFailureEvent(event, { ...options, pullRequests: options.pullRequests ?? pullRequestsFromContext(context) }, context);
     },
@@ -223,7 +224,8 @@ export function createAutoMergeWorkflow(options: AutoMergeWorkflowOptions): Work
   return defineWorkflowPlugin({
     name: 'auto-merge',
     capabilities: ['merge'],
-    accepts: (event) => event.source.type === 'github' && event.name === 'github.review',
+    accepts: (event) => event.source.type === 'github'
+      && (event.name === 'github.review' || event.name === 'github.check_run' || event.name === 'github.status'),
     async handle(event, context) {
       return handleAutoMergeEvent(event, { ...options, pullRequests: options.pullRequests ?? pullRequestsFromContext(context) }, context);
     },
@@ -244,6 +246,9 @@ export async function handleReviewRequestEvent(
     ? await pullRequests.findPullRequestByHead(candidate, taskContext(context))
     : await pullRequests.getPullRequest({ repository: candidate.repository, number: candidate.number }, taskContext(context));
   if (pullRequest === undefined) return { handled: false, reason: 'pull request was not found' };
+  if (candidate.headSha !== undefined && pullRequest.headSha !== undefined && candidate.headSha !== pullRequest.headSha) {
+    return { handled: false, reason: 'check does not match the current pull request head', candidate, pullRequest };
+  }
   if (!isReviewTarget(options, pullRequest)) {
     return { handled: false, reason: 'pull request is not an agent-authored target', pullRequest };
   }
@@ -276,6 +281,8 @@ export async function handleChangeRequestEvent(
   if (task === undefined) {
     return { handled: false, reason: 'no agent task matched the PR branch', pullRequestNumber: target.number, branchName: target.branchName };
   }
+  const repositorySkip = repositoryMismatchReason(task, target.repository);
+  if (repositorySkip !== undefined) return { handled: false, reason: repositorySkip, pullRequestNumber: target.number, branchName: target.branchName, taskId: task.id };
   const skip = shouldIgnoreTask(task);
   if (skip !== undefined) return { handled: false, reason: skip, pullRequestNumber: target.number, branchName: target.branchName, taskId: task.id };
 
@@ -309,6 +316,8 @@ export async function handleCodexReviewEvent(
   }
   const task = await options.tasks.getAgentTaskByBranchName(review.branchName);
   if (task === undefined) return { handled: false, reason: 'no agent task matched the PR branch', review };
+  const repositorySkip = repositoryMismatchReason(task, review.repository);
+  if (repositorySkip !== undefined) return { handled: false, reason: repositorySkip, review, taskId: task.id };
   const skip = shouldIgnoreTask(task);
   if (skip !== undefined) return { handled: false, reason: skip, review, taskId: task.id };
   if (task.issue?.contentId === undefined) {
@@ -355,6 +364,8 @@ export async function handleCheckFailureEvent(
   }
   const task = await options.tasks.getAgentTaskByBranchName(pullRequest.headRefName);
   if (task === undefined) return { handled: false, reason: 'no agent task matched the PR branch', check, pullRequest };
+  const repositorySkip = repositoryMismatchReason(task, pullRequest.repository);
+  if (repositorySkip !== undefined) return { handled: false, reason: repositorySkip, check, pullRequest, taskId: task.id };
   const skip = shouldIgnoreTask(task);
   if (skip !== undefined) return { handled: false, reason: skip, check, pullRequest, taskId: task.id };
 
@@ -409,7 +420,11 @@ export async function handleConflictCheckEvent(
   const updatedTasks = [];
   for (const pullRequest of conflicted) {
     const task = await options.tasks.getAgentTaskByBranchName(pullRequest.headRefName);
-    if (task === undefined || shouldIgnoreTask(task) !== undefined) continue;
+    if (
+      task === undefined
+      || repositoryMismatchReason(task, pullRequest.repository) !== undefined
+      || shouldIgnoreTask(task) !== undefined
+    ) continue;
     const update = await options.tasks.returnTaskToTodo({ task, reason: 'conflict' }, context);
     await options.tasks.recordTaskStatus?.({ task, result: `conflict:${update.status}` }, context);
     const reviewRequestRemoved = await removePendingReviewRequest(pullRequests, pullRequest, options.reviewRequest, context);
@@ -446,13 +461,21 @@ export async function handleAutoMergeEvent(
   context?: PluginRuntimeContext,
 ): Promise<WorkflowResult> {
   if (options.enabled === false) return { handled: false, reason: 'auto-merge is disabled' };
-  const candidate = approvalCandidateFromEvent(event);
-  if (candidate === undefined) return { handled: false, reason: 'event is not an approved pull request review' };
-  if (!sameLogin(candidate.reviewerLogin, options.reviewerLogin)) return { handled: false, reason: 'reviewer is not the configured reviewer' };
+  const candidate = autoMergeCandidateFromEvent(event);
+  if (candidate === undefined) return { handled: false, reason: 'event is not an approved review or successful check for a pull request' };
+  if (candidate.reviewerLogin !== undefined && !sameLogin(candidate.reviewerLogin, options.reviewerLogin)) {
+    return { handled: false, reason: 'reviewer is not the configured reviewer' };
+  }
   if (!targetRepositoryAllowed(options.targetRepositories, candidate.repository)) return { handled: false, reason: 'repository is not an auto-merge target' };
 
   const pullRequests = requirePullRequests(options.pullRequests);
-  const pullRequest = await pullRequests.getPullRequest({ repository: candidate.repository, number: candidate.number }, taskContext(context));
+  const pullRequest = candidate.number === undefined
+    ? await pullRequests.findPullRequestByHead(candidate, taskContext(context))
+    : await pullRequests.getPullRequest({ repository: candidate.repository, number: candidate.number }, taskContext(context));
+  if (pullRequest === undefined) return { handled: false, reason: 'pull request was not found', candidate };
+  if (candidate.headSha !== undefined && pullRequest.headSha !== undefined && candidate.headSha !== pullRequest.headSha) {
+    return { handled: false, reason: 'check does not match the current pull request head', candidate, pullRequest };
+  }
   if (!targetRepositoryAllowed(options.targetRepositories, pullRequest.repository)) {
     return { handled: false, reason: 'live pull request repository is not an auto-merge target', pullRequest };
   }
@@ -468,6 +491,7 @@ export async function handleAutoMergeEvent(
     repository: pullRequest.repository,
     number: pullRequest.number,
     mergeMethod: options.mergeMethod,
+    ...optionalString('sha', pullRequest.headSha),
   }, taskContext(context));
   if (context !== undefined && pullRequests.mergePullRequest.length === 0) {
     await context.actions.mergePullRequest({
@@ -475,6 +499,7 @@ export async function handleAutoMergeEvent(
       repository: pullRequest.repository,
       number: pullRequest.number,
       mergeMethod: options.mergeMethod,
+      ...optionalString('sha', pullRequest.headSha),
     });
   }
   return { handled: true, reason: 'pull_request_merged', pullRequest };
@@ -515,6 +540,9 @@ function pullRequestCandidateFromEvent(event: RainrailEventEnvelope): { reposito
   if (event.name === 'github.check_run' && payload.action === 'completed' && payload.status === 'completed' && payload.conclusion === 'success') {
     return candidateFromPullRequests(payload, stringValue(recordValue(payload.resource).headSha));
   }
+  if (event.name === 'github.status' && successfulCommitStatus(payload)) {
+    return headCandidateFromStatus(payload);
+  }
   if (event.name === 'github.pull_request' && payload.action === 'review_requested') {
     const resource = recordValue(payload.resource);
     const repository = repositoryName(payload);
@@ -542,16 +570,18 @@ function candidateFromPullRequests(payload: Record<string, unknown>, headSha: st
   };
 }
 
-function changeRequestTargetFromEvent(event: RainrailEventEnvelope): { number: number; branchName: string; reviewId?: number; reviewUrl?: string; reviewBody?: string } | undefined {
+function changeRequestTargetFromEvent(event: RainrailEventEnvelope): { repository: string; number: number; branchName: string; reviewId?: number; reviewUrl?: string; reviewBody?: string } | undefined {
   const payload = recordValue(event.payload);
   if (event.name !== 'github.review' || payload.event !== 'pull_request_review' || payload.action !== 'submitted') return undefined;
   const review = recordValue(payload.review);
   const pullRequest = recordValue(payload.pullRequest);
   if (normalize(review.state ?? recordValue(payload.resource).state) !== 'changes_requested') return undefined;
+  const repository = repositoryName(payload);
   const number = numberValue(pullRequest.number);
   const branchName = stringValue(pullRequest.headRef);
-  if (number === undefined || branchName === undefined) return undefined;
+  if (repository === undefined || number === undefined || branchName === undefined) return undefined;
   return {
+    repository,
     number,
     branchName,
     ...optionalNumber('reviewId', numberValue(review.id ?? recordValue(payload.resource).id)),
@@ -605,6 +635,19 @@ function codexReviewTargetFromEvent(
 
 function failedCheckCandidateFromEvent(event: RainrailEventEnvelope): { repository: string; number?: number; headRefName?: string; headSha?: string; name?: string; conclusion: string; detailsUrl?: string } | undefined {
   const payload = recordValue(event.payload);
+  if (event.name === 'github.status') {
+    const conclusion = normalize(payload.state ?? recordValue(payload.resource).status ?? recordValue(payload.resource).conclusion);
+    if (conclusion.length === 0 || ['success', 'neutral', 'skipped'].includes(conclusion)) return undefined;
+    const base = headCandidateFromStatus(payload);
+    if (base === undefined) return undefined;
+    const resource = recordValue(payload.resource);
+    return {
+      ...base,
+      conclusion,
+      ...optionalString('name', stringValue(resource.context ?? resource.name)),
+      ...optionalString('detailsUrl', stringValue(resource.url)),
+    };
+  }
   if (event.name !== 'github.check_run' || payload.action !== 'completed' || payload.status !== 'completed') return undefined;
   const conclusion = normalize(payload.conclusion);
   if (conclusion.length === 0 || ['success', 'neutral', 'skipped'].includes(conclusion)) return undefined;
@@ -629,16 +672,18 @@ function pushTargetFromEvent(event: RainrailEventEnvelope): { repository: string
   return { repository, baseRefName: ref.slice('refs/heads/'.length) };
 }
 
-function approvalCandidateFromEvent(event: RainrailEventEnvelope): { repository: string; number: number; reviewerLogin: string } | undefined {
+function autoMergeCandidateFromEvent(event: RainrailEventEnvelope): { repository: string; number?: number; headRefName?: string; headSha?: string; reviewerLogin?: string } | undefined {
   const payload = recordValue(event.payload);
-  if (event.name !== 'github.review' || payload.event !== 'pull_request_review' || payload.action !== 'submitted') return undefined;
-  const review = recordValue(payload.review);
-  if (normalize(review.state ?? recordValue(payload.resource).state) !== 'approved') return undefined;
-  const repository = repositoryName(payload);
-  const number = numberValue(recordValue(payload.pullRequest).number);
-  const reviewerLogin = stringValue(review.author);
-  if (repository === undefined || number === undefined || reviewerLogin === undefined) return undefined;
-  return { repository, number, reviewerLogin };
+  if (event.name === 'github.review' && payload.event === 'pull_request_review' && payload.action === 'submitted') {
+    const review = recordValue(payload.review);
+    if (normalize(review.state ?? recordValue(payload.resource).state) !== 'approved') return undefined;
+    const repository = repositoryName(payload);
+    const number = numberValue(recordValue(payload.pullRequest).number);
+    const reviewerLogin = stringValue(review.author);
+    if (repository === undefined || number === undefined || reviewerLogin === undefined) return undefined;
+    return { repository, number, reviewerLogin };
+  }
+  return pullRequestCandidateFromEvent(event);
 }
 
 async function safeReviewInlineComments(
@@ -775,7 +820,11 @@ function reviewApproved(config: { reviewerLogin: string }, pullRequest: PullRequ
 
 function hasUnresolvedChangeRequest(pullRequest: PullRequestReviewTarget): boolean {
   if (normalize(pullRequest.reviewDecision) === 'changes_requested') return true;
-  return normalize((pullRequest.reviews ?? []).at(-1)?.state) === 'changes_requested';
+  const latestByReviewer = new Map<string, string>();
+  for (const review of pullRequest.reviews ?? []) {
+    latestByReviewer.set(normalize(review.authorLogin), normalize(review.state));
+  }
+  return Array.from(latestByReviewer.values()).some((state) => state === 'changes_requested');
 }
 
 function isConflicted(pullRequest: PullRequestReviewTarget): boolean {
@@ -814,12 +863,32 @@ function shouldIgnoreTask(task: AgentTask): string | undefined {
   return undefined;
 }
 
+function repositoryMismatchReason(task: AgentTask, repository: string): string | undefined {
+  return task.issue?.repository !== undefined && normalize(task.issue.repository) !== normalize(repository)
+    ? 'matched agent task belongs to another repository'
+    : undefined;
+}
+
 function targetRepositoryAllowed(targets: readonly string[], repository: string, allowEmpty = false): boolean {
   return (allowEmpty && targets.length === 0) || targets.some((target) => normalize(target) === normalize(repository));
 }
 
 function repositoryName(payload: Record<string, unknown>): string | undefined {
   return stringValue(recordValue(payload.repository).fullName);
+}
+
+function successfulCommitStatus(payload: Record<string, unknown>): boolean {
+  return normalize(payload.state ?? recordValue(payload.resource).status ?? recordValue(payload.resource).conclusion) === 'success';
+}
+
+function headCandidateFromStatus(payload: Record<string, unknown>): { repository: string; headSha?: string } | undefined {
+  const repository = repositoryName(payload);
+  const resource = recordValue(payload.resource);
+  if (repository === undefined) return undefined;
+  return {
+    repository,
+    ...optionalString('headSha', stringValue(resource.headSha ?? resource.id)),
+  };
 }
 
 function pullRequestUrl(task: AgentTask, number: number): string {

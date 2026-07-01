@@ -33,4 +33,17 @@ describe('handleChangeRequestEvent', () => {
 
     expect(result.reason).toBe('event is not a pull request change request');
   });
+
+  it('does not hand off a task from a different repository with the same branch', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+    const result = await handleChangeRequestEvent(reviewEvent({ state: 'changes_requested' }), {
+      tasks: handoffRecorder({
+        updates,
+        taskOverride: { issue: { contentId: 'I_other', repository: 'reirei-lab/other' } },
+      }),
+    });
+
+    expect(result.reason).toBe('matched agent task belongs to another repository');
+    expect(updates).toEqual([]);
+  });
 });

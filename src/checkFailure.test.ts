@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { handleCheckFailureEvent } from './pr-lifecycle.js';
-import { checkRunEvent, handoffRecorder, pullRequest } from './pr-lifecycle-test-helpers.js';
+import { checkRunEvent, handoffRecorder, pullRequest, statusEvent } from './pr-lifecycle-test-helpers.js';
 
 describe('handleCheckFailureEvent', () => {
   it('comments on the issue and returns it to Todo when an agent PR check fails', async () => {
@@ -65,5 +65,30 @@ describe('handleCheckFailureEvent', () => {
 
     expect(result.reason).toBe('check does not match the current pull request head');
     expect(updates).toEqual([]);
+  });
+
+  it('returns issues to Todo from failed commit status events', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+
+    const result = await handleCheckFailureEvent(statusEvent({ state: 'failure' }), {
+      agentLogin: 'reirei-agent',
+      branchPrefix: 'agent/',
+      tasks: handoffRecorder({ updates }),
+      pullRequests: {
+        async getPullRequest() {
+          throw new Error('not used');
+        },
+        async findPullRequestByHead(input) {
+          expect(input).toMatchObject({ repository: 'reirei-lab/rainrail', headSha: 'abc123' });
+          return pullRequest();
+        },
+        async requestReview() {
+          throw new Error('not used');
+        },
+      },
+    });
+
+    expect(result.reason).toBe('failed PR checks returned issue to Todo');
+    expect(updates[0]?.commentBody).toContain('- Check: legacy-ci');
   });
 });

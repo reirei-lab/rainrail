@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 import { handleAutoMergeEvent } from './pr-lifecycle.js';
-import { pullRequest, reviewEvent } from './pr-lifecycle-test-helpers.js';
+import { checkRunEvent, pullRequest, reviewEvent } from './pr-lifecycle-test-helpers.js';
 
 describe('handleAutoMergeEvent', () => {
   it('squash merges an agent PR after the configured reviewer approves it', async () => {
-    const merges: Array<{ repository: string; number: number; mergeMethod: string }> = [];
+    const merges: Array<{ repository: string; number: number; mergeMethod: string; sha?: string }> = [];
 
     const result = await handleAutoMergeEvent(reviewEvent(), {
       agentLogin: 'reirei-agent',
@@ -29,7 +29,7 @@ describe('handleAutoMergeEvent', () => {
     });
 
     expect(result).toMatchObject({ handled: true, reason: 'pull_request_merged' });
-    expect(merges).toEqual([{ repository: 'reirei-lab/rainrail', number: 44, mergeMethod: 'squash' }]);
+    expect(merges).toEqual([{ repository: 'reirei-lab/rainrail', number: 44, mergeMethod: 'squash', sha: 'abc123' }]);
   });
 
   it('requires the repository allow-list before fetching the live PR', async () => {
@@ -87,5 +87,35 @@ describe('handleAutoMergeEvent', () => {
 
     expect(result.reason).toBe('configured reviewer approval is not confirmed');
     expect(mergeCount).toBe(0);
+  });
+
+  it('re-evaluates auto-merge after successful checks complete', async () => {
+    const merges: Array<{ repository: string; number: number; mergeMethod: string; sha?: string }> = [];
+
+    const result = await handleAutoMergeEvent(checkRunEvent(), {
+      agentLogin: 'reirei-agent',
+      reviewerLogin: 'hiragram',
+      mergeMethod: 'squash',
+      targetRepositories: ['reirei-lab/rainrail'],
+      pullRequests: {
+        async getPullRequest() {
+          const target = pullRequest();
+          delete target.reviewDecision;
+          return target;
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          throw new Error('not used');
+        },
+        async mergePullRequest(input) {
+          merges.push(input);
+        },
+      },
+    });
+
+    expect(result.reason).toBe('pull_request_merged');
+    expect(merges).toEqual([{ repository: 'reirei-lab/rainrail', number: 44, mergeMethod: 'squash', sha: 'abc123' }]);
   });
 });

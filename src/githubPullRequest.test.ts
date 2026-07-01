@@ -149,6 +149,31 @@ describe('createGitHubPullRequestProvider', () => {
       statusCheckRollup: expect.arrayContaining([expect.objectContaining({ name: 'late', conclusion: 'failure' })]),
     });
   });
+
+  it('passes the verified head SHA to GitHub merge requests', async () => {
+    let mergeBody: unknown;
+    const fetchImpl = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/pulls/44/merge')) {
+        mergeBody = JSON.parse(String(init?.body));
+        return new Response(JSON.stringify({ merged: true }), { status: 200 });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    });
+    const provider = createGitHubPullRequestProvider({
+      auth: { getAuthToken: async () => undefined },
+      fetch: fetchImpl as unknown as typeof fetch,
+    });
+
+    await provider.mergePullRequest?.({
+      repository: 'reirei-lab/rainrail',
+      number: 44,
+      mergeMethod: 'squash',
+      sha: 'abc123',
+    });
+
+    expect(mergeBody).toEqual({ merge_method: 'squash', sha: 'abc123' });
+  });
 });
 
 function githubPullRequest(overrides: Record<string, unknown> = {}) {
