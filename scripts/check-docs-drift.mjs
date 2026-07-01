@@ -1,7 +1,8 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { extname, join, normalize, relative, resolve } from 'node:path';
+import { extname, isAbsolute, join, normalize, relative, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import * as ts from 'typescript';
 
 const repoRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const manifestPath = 'docs/contracts.manifest.json';
@@ -26,27 +27,70 @@ const relativePath = (root, path) => toPosix(relative(root, path));
 const readText = (root, path) => readFileSync(join(root, path), 'utf8');
 
 /**
- * @param {string} value
- */
-const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
-/**
  * @param {string} sourceText
  * @param {string} publicExport
  */
 const hasExportedDeclaration = (sourceText, publicExport) => {
-  const escaped = escapeRegExp(publicExport);
-  const declarationPattern = new RegExp(
-    String.raw`\bexport\s+(?:declare\s+)?(?:abstract\s+)?(?:async\s+)?(?:interface|type|class|function|const|let|var|enum)\s+${escaped}\b`,
-    'u',
-  );
-  const namedExportPattern = new RegExp(
-    String.raw`\bexport\s*\{[^}]*\b${escaped}\b(?:\s+as\s+\w+)?[^}]*\}`,
-    'u',
+  const sourceFile = ts.createSourceFile(
+    'contract.ts',
+    sourceText,
+    ts.ScriptTarget.Latest,
+    false,
+    ts.ScriptKind.TS,
   );
 
-  return declarationPattern.test(sourceText) || namedExportPattern.test(sourceText);
+  return sourceFile.statements.some((statement) =>
+    statementExportsName(statement, publicExport),
+  );
 };
+
+/**
+ * @param {import('typescript').Statement} statement
+ * @param {string} publicExport
+ */
+const statementExportsName = (statement, publicExport) => {
+  if (ts.isExportDeclaration(statement)) {
+    const exportClause = statement.exportClause;
+    return (
+      exportClause !== undefined &&
+      ts.isNamedExports(exportClause) &&
+      exportClause.elements.some((specifier) => specifier.name.text === publicExport)
+    );
+  }
+
+  if (!hasExportModifier(statement)) {
+    return false;
+  }
+
+  if (ts.isVariableStatement(statement)) {
+    return statement.declarationList.declarations.some(
+      (declaration) =>
+        ts.isIdentifier(declaration.name) && declaration.name.text === publicExport,
+    );
+  }
+
+  if (
+    ts.isClassDeclaration(statement) ||
+    ts.isEnumDeclaration(statement) ||
+    ts.isFunctionDeclaration(statement) ||
+    ts.isInterfaceDeclaration(statement) ||
+    ts.isTypeAliasDeclaration(statement)
+  ) {
+    return statement.name?.text === publicExport;
+  }
+
+  return false;
+};
+
+/**
+ * @param {import('typescript').Node} node
+ */
+const hasExportModifier = (node) =>
+  ts.canHaveModifiers(node) &&
+  (ts.getModifiers(node)?.some(
+    (modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword,
+  ) ??
+    false);
 
 /**
  * @param {string} root
@@ -73,18 +117,39 @@ const walkFiles = (root, dir, extensions) => {
 };
 
 /**
+ * @typedef {{
+ *   resolve: (...paths: string[]) => string;
+ *   relative: (from: string, to: string) => string;
+ *   isAbsolute: (path: string) => boolean;
+ * }} PathTools
+ */
+
+/**
+ * @param {string} root
+ * @param {string} path
+ * @param {PathTools} [pathTools]
+ */
+export const isPathInsideRoot = (
+  root,
+  path,
+  pathTools = { resolve, relative, isAbsolute },
+) => {
+  const absoluteRoot = pathTools.resolve(root);
+  const absolutePath = pathTools.resolve(root, path);
+  const relativeToRoot = pathTools.relative(absoluteRoot, absolutePath);
+
+  return (
+    relativeToRoot === '' ||
+    (!relativeToRoot.startsWith('..') && !pathTools.isAbsolute(relativeToRoot))
+  );
+};
+
+/**
  * @param {string} root
  * @param {string} path
  */
-const projectPathExists = (root, path) => {
-  const absoluteRoot = resolve(root);
-  const absolutePath = resolve(root, path);
-
-  return (
-    (absolutePath === absoluteRoot || absolutePath.startsWith(`${absoluteRoot}/`)) &&
-    existsSync(absolutePath)
-  );
-};
+const projectPathExists = (root, path) =>
+  isPathInsideRoot(root, path) && existsSync(resolve(root, path));
 
 /**
  * @param {string} root

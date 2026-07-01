@@ -1,8 +1,9 @@
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, win32 } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
+  isPathInsideRoot,
   validateChangedFiles,
   validateContractsManifest,
   validateMarkdownLinks,
@@ -70,12 +71,26 @@ describe('docs drift checks', () => {
 
     writeFileSync(
       join(root, 'src/contract.ts'),
-      '// PublicThing is planned but not exported yet.\ninterface PublicThing {}\n',
+      [
+        '// export interface PublicThing {}',
+        'const sample = "export const PublicThing = true";',
+        'interface PublicThing {}',
+        '',
+      ].join('\n'),
     );
 
     expect(validateContractsManifest(root)).toContain(
       'contract public export PublicThing is not exported by its sources',
     );
+  });
+
+  it('treats Windows-style child paths as inside the project root', () => {
+    expect(
+      isPathInsideRoot('C:\\repo\\rainrail', 'docs\\contract.md', win32),
+    ).toBe(true);
+    expect(
+      isPathInsideRoot('C:\\repo\\rainrail', '..\\outside.md', win32),
+    ).toBe(false);
   });
 
   it('requires docs or tests to move with changed contract sources', () => {
