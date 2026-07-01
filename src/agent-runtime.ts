@@ -410,7 +410,16 @@ function isTerminalRuntimeRunStatus(status: string | undefined): boolean {
 }
 
 function outcomeFromPayload(payload: Record<string, unknown>): string | undefined {
-  for (const text of completionTextsFromPayload(payload).reverse()) {
+  const finalTexts = [
+    stringValue(payload.finalAssistantVisibleText) ?? stringValue(payload.finalAssistantRawText),
+  ].filter((text): text is string => text !== undefined);
+  const payloadTexts = Array.isArray(payload.payloads)
+    ? payload.payloads
+      .map((item) => stringValue(recordValue(item)?.text))
+      .filter((text): text is string => text !== undefined)
+      .reverse()
+    : [];
+  for (const text of [...finalTexts, ...payloadTexts]) {
     const outcomes = [...text.matchAll(/\bOutcome:\s*(implemented|updated_issue|needs_human|split_recommended)\b/g)];
     const latest = outcomes.at(-1)?.[1];
     if (latest !== undefined) {
@@ -576,7 +585,7 @@ function generatedAgentSessionId(
   request: RuntimeRunRequest,
   task: RuntimeAgentTaskInput,
 ): string {
-  return `agent:${options.agentId}:${options.sessionKeyPrefix}-${task.id}-${request.event.delivery.id}`;
+  return `agent:${options.agentId}:${options.sessionKeyPrefix}-${request.workflow}-${task.id}-${request.event.delivery.id}`;
 }
 
 function findJsonObjectEnd(raw: string, start: number): number | undefined {

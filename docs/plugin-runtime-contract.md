@@ -100,7 +100,9 @@ filesystem filename limit に収める。resume run も attempt id 由来の
 一般的な filesystem filename limit に収まるよう prefix を短く保つ。OpenClaw agent 起動には
 start/resume とも delivery/task/attempt 由来の安定した `--run-id` を渡し、再配送や timeout retry が
 同一 run として冪等に扱われるようにする。start retry は同じ stdout/stderr log を切り詰めず、
-前回 completion metadata や fallback marker を保持する。初回実行が gateway
+前回 completion metadata や fallback marker を保持する。`task.agentSessionId` が無い場合に生成する
+session key は workflow 名も含め、同じ delivery/task を別 workflow から起動しても transcript/log が混ざらないようにする。
+初回実行が gateway
 fallback session へ移った場合は、前回 completion metadata の top-level または
 `result` 配下の `meta.agentMeta.fallbackSessionKey` から fallback session key を、
 または `meta.agentMeta.sessionId` が `gateway-fallback-*` の場合は explicit fallback session key を、
@@ -110,8 +112,8 @@ session key として再開し、JSON completion として解析できた stdout
 resume 対象にしない。banner/footer 付き completion でも抽出できた JSON metadata を優先する。
 Task と resume attempt には stdout `logPath` と対応する `stderrLogPath` を保持し、
 stderr 側にしか fallback diagnostics が残らない timeout でも fallback transcript を引き継ぐ。
-stderr diagnostics に JSON status 行と embedded fallback marker が同居する場合も marker を採用し、
-同一 log に複数 marker が追記されている場合は最後の marker を最新として採用する。
+stderr diagnostics に JSON status 行と embedded fallback marker が同居する場合も marker を採用する。
+同一 log に複数の fallback metadata または marker が追記されている場合は、最後のものを最新として採用する。
 OpenClaw の raw stdout/stderr log は redaction 前の credential を含み得るため、
 log directory は `0700`、start/resume の stdout/stderr log file は `0600` で作成する。
 
@@ -128,7 +130,8 @@ JSON completion として解析できる場合は、本文に `CLI transcript co
 completion text/status は top-level と `result` の両方から解決し、`result` が metadata だけを
 持つ場合でも top-level の Outcome を落とさない。top-level の terminal runtime status は
 `result.status` より優先し、`error` / `timeout` alias も top-level にあれば失敗扱いとして採用する。
-同じ text に複数の Outcome がある場合は最後の Outcome を採用する。
+top-level final text は payload text より優先して Outcome を解決し、同じ text に複数の Outcome がある場合は
+最後の Outcome を採用する。
 resume helper は running pid を確認し、
 安定した resume attempt id を生成する。timeline reader は OpenClaw trajectory jsonl を読み、Codex activity 表示に
 必要な時刻、分類済み phase、redacted summary、status、redacted excerpt を返す。
@@ -144,7 +147,8 @@ fallbackSessionKey metadata と fallback marker は種類で後から優先順�
 `curl --oauth2-bearer token` / `curl --pass phrase` / `curl --tlspassword string` /
 `curl -E client.pem:password` / `curl --cert client.pem:password` /
 `curl --proxy-cert proxy.pem:password` / `curl -b session=value` / `curl --cookie session=value` /
-`curl -sHAuthorization: ...` / `curl -sHCookie: ...` / `curl -su user:password` / `curl -sb session=value`
+`curl -sHAuthorization: ...` / `curl -sHCookie: ...` / `curl -su user:password` / `curl -sb session=value` /
+`curl -suuser:password` / `curl -sbsession=value` / `curl -sEclient.pem:password`
 だけでなく JSON の `"token": "..."` /
 `"apiKey": "..."` / `"password": "..."`、`"webhookSecret"` / `"clientSecret"` /
 `"apiToken"` のような compound key、quoted shell assignment、`github_pat_...`、

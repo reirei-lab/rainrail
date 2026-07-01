@@ -197,8 +197,8 @@ export function extractRuntimeFallbackSessionId(log: string): string | undefined
   if (parsed.payloads.some((payload) => payloadHasCompletionText(payload))) {
     return undefined;
   }
-  const match = log.match(/EMBEDDED FALLBACK:[^\n\r]*fresh session\s+(gateway-fallback-[A-Za-z0-9._-]+)/i);
-  return match?.[1];
+  const matches = [...log.matchAll(/EMBEDDED FALLBACK:[^\n\r]*fresh session\s+(gateway-fallback-[A-Za-z0-9._-]+)/gi)];
+  return matches.at(-1)?.[1];
 }
 
 export function runtimeTrajectoryPathForSessionId(
@@ -320,7 +320,7 @@ function extractRuntimeFallbackSessionKey(log: string): string | undefined {
   if (!parsed.foundJson) {
     return undefined;
   }
-  for (const payload of parsed.payloads) {
+  for (const payload of parsed.payloads.slice().reverse()) {
     if (!isRecord(payload)) {
       continue;
     }
@@ -533,8 +533,10 @@ function redactSensitiveText(value: string): string {
     .replace(/(^|\s)(-[A-Za-z]*H)(Authorization:\s*)[\s\S]*?(?=(?:\s+-[A-Za-z]*H(?:Authorization|Cookie|Set-Cookie):)|(?:\s+-[A-Za-z])|[\n\r]|$)/gi, '$1$2$3[redacted-authorization]')
     .replace(/(^|\s)(-[A-Za-z]*H)(Set-Cookie:\s*)[\s\S]*?(?=(?:\s+-[A-Za-z]*H(?:Authorization|Cookie|Set-Cookie):)|(?:\s+-[A-Za-z])|[\n\r]|$)/gi, '$1$2$3[redacted-cookie]')
     .replace(/(^|\s)(-[A-Za-z]*H)(Cookie:\s*)[\s\S]*?(?=(?:\s+-[A-Za-z]*H(?:Authorization|Cookie|Set-Cookie):)|(?:\s+-[A-Za-z])|[\n\r]|$)/gi, '$1$2$3[redacted-cookie]')
-    .replace(/(^|\s)(-[A-Za-z]*[uUE])(\s+)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s'"]+)/g, '$1$2$3[redacted-credential]')
-    .replace(/(^|\s)(-[A-Za-z]*b)(\s+)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s'"]+)/g, '$1$2$3[redacted-cookie]')
+    .replace(/(^|\s)(-[A-GI-Za-gi-z]*?[uUE])(\s+)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s'"]+)/g, '$1$2$3[redacted-credential]')
+    .replace(/(^|\s)(-[A-GI-Za-gi-z]*?b)(\s+)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s'"]+)/g, '$1$2$3[redacted-cookie]')
+    .replace(/(^|\s)(-[A-GI-Za-gi-z]*?[uUE])(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s'"]+)/g, '$1$2[redacted-credential]')
+    .replace(/(^|\s)(-[A-GI-Za-gi-z]*?b)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s'"]+)/g, '$1$2[redacted-cookie]')
     .replace(/(^|\s)(-[uUE])(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s'"]+)/g, '$1$2[redacted-credential]')
     .replace(/(^|\s)(-b)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s'"]+)/g, '$1$2[redacted-cookie]')
     .replace(/(^|\s)(-u|--user|-U|--proxy-user|--oauth2-bearer|--pass|--proxy-pass|--tlspassword|--proxy-tlspassword|-E|--cert|--proxy-cert)(=|\s+)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s'"]+)/g, '$1$2$3[redacted-credential]')

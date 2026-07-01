@@ -185,6 +185,68 @@ describe('agent timeline', () => {
     }
   });
 
+  it('prefers the last fallback session key in an appended completion log', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'rainrail-last-fallback-key-timeline-'));
+    const logPath = join(directory, 'agent.log');
+    writeFileSync(logPath, [
+      JSON.stringify({
+        status: 'ok',
+        meta: { agentMeta: { fallbackSessionKey: 'agent:main:explicit:gateway-fallback-old' } },
+      }),
+      JSON.stringify({
+        status: 'ok',
+        meta: { agentMeta: { fallbackSessionKey: 'agent:main:explicit:gateway-fallback-new' } },
+      }),
+    ].join('\n'), 'utf8');
+    writeFileSync(join(directory, 'sessions.json'), JSON.stringify({
+      'agent:main:explicit:gateway-fallback-old': { sessionId: 'old-fallback-session' },
+      'agent:main:explicit:gateway-fallback-new': { sessionId: 'new-fallback-session' },
+    }), 'utf8');
+    writeFileSync(join(directory, 'old-fallback-session.trajectory.jsonl'), [
+      JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:08:00.000Z', seq: 1 }),
+    ].join('\n'), 'utf8');
+    writeFileSync(join(directory, 'new-fallback-session.trajectory.jsonl'), [
+      JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:09:00.000Z', seq: 1 }),
+    ].join('\n'), 'utf8');
+
+    try {
+      const timeline = await readRuntimeTimeline(
+        { logPath, agentSessionId: 'agent:main:original-session' },
+        { sessionsDirectory: directory },
+      );
+      expect(timeline.sessionId).toBe('new-fallback-session');
+      expect(timeline.fallback).toBe(true);
+      expect(timeline.missing).toBe(false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('prefers the last fallback marker in an appended diagnostics log', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'rainrail-last-fallback-marker-timeline-'));
+    const logPath = join(directory, 'agent.log');
+    writeFileSync(logPath, [
+      'EMBEDDED FALLBACK: Gateway timed out; running embedded agent with fresh session gateway-fallback-old',
+      'retry diagnostics',
+      'EMBEDDED FALLBACK: Gateway timed out; running embedded agent with fresh session gateway-fallback-new',
+    ].join('\n'), 'utf8');
+    writeFileSync(join(directory, 'gateway-fallback-new.trajectory.jsonl'), [
+      JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:09:00.000Z', seq: 1 }),
+    ].join('\n'), 'utf8');
+
+    try {
+      const timeline = await readRuntimeTimeline(
+        { logPath, agentSessionId: 'agent:main:original-session' },
+        { sessionsDirectory: directory },
+      );
+      expect(timeline.sessionId).toBe('gateway-fallback-new');
+      expect(timeline.fallback).toBe(true);
+      expect(timeline.missing).toBe(false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('prefers the newest fallback log regardless of key or marker source', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'rainrail-newest-fallback-timeline-'));
     const startLogPath = join(directory, 'agent.log');
@@ -652,7 +714,7 @@ describe('agent timeline', () => {
         data: {
           name: 'bash',
           arguments: {
-            command: 'curl -sHAuthorization: Basic joined-basic -sHCookie: session=joined-cookie -su user:cluster-password -sb session=cluster-cookie https://example.com',
+            command: 'curl -sHAuthorization: Basic joined-basic -sHCookie: session=joined-cookie -su user:cluster-password -sb session=cluster-cookie -suuser:joined-cluster-password -sbsession=joined-cluster-cookie -sEclient.pem:joined-cluster-cert-secret https://example.com',
           },
         },
       }),
@@ -662,10 +724,16 @@ describe('agent timeline', () => {
     expect(timeline[0]!.detail).toContain('-sHCookie: [redacted-cookie]');
     expect(timeline[0]!.detail).toContain('-su [redacted-credential]');
     expect(timeline[0]!.detail).toContain('-sb [redacted-cookie]');
+    expect(timeline[0]!.detail).toContain('-su[redacted-credential]');
+    expect(timeline[0]!.detail).toContain('-sb[redacted-cookie]');
+    expect(timeline[0]!.detail).toContain('-sE[redacted-credential]');
     expect(timeline[0]!.detail).not.toContain('joined-basic');
     expect(timeline[0]!.detail).not.toContain('joined-cookie');
     expect(timeline[0]!.detail).not.toContain('cluster-password');
     expect(timeline[0]!.detail).not.toContain('cluster-cookie');
+    expect(timeline[0]!.detail).not.toContain('joined-cluster-password');
+    expect(timeline[0]!.detail).not.toContain('joined-cluster-cookie');
+    expect(timeline[0]!.detail).not.toContain('joined-cluster-cert-secret');
   });
 
   it('classifies common commands into dashboard phases', () => {

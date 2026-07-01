@@ -374,6 +374,34 @@ describe('createOpenClawRuntimeProvider', () => {
     expect(first.metadata?.logPath).not.toBe(second.metadata?.logPath);
   });
 
+  it('includes workflow names in generated sessions when tasks omit agent session ids', async () => {
+    const spawnProcess = vi.fn(() => ({ pid: 4242, unref: vi.fn() }));
+    const logDirectory = temporaryDirectory();
+    const provider = createOpenClawRuntimeProvider({
+      enabled: true,
+      command: 'openclaw',
+      agentId: 'main',
+      sessionKeyPrefix: 'rainrail',
+      timeoutSeconds: 900,
+      logDirectory,
+      spawnProcess,
+    });
+
+    const triage = await provider.startRun({
+      ...runtimeRequest({ agentSessionId: null }),
+      workflow: 'triage',
+    });
+    const implementation = await provider.startRun({
+      ...runtimeRequest({ agentSessionId: null }),
+      workflow: 'implementation',
+    });
+
+    expect(triage.id).toContain('triage');
+    expect(implementation.id).toContain('implementation');
+    expect(triage.id).not.toBe(implementation.id);
+    expect(triage.metadata?.logPath).not.toBe(implementation.metadata?.logPath);
+  });
+
   it('passes top-level task issue fields into the start prompt', async () => {
     const spawnProcess = vi.fn(() => ({ pid: 4242, unref: vi.fn() }));
     const provider = createOpenClawRuntimeProvider({
@@ -1075,6 +1103,25 @@ describe('runtime task completion and resume helpers', () => {
         payloads: [{ text: 'Outcome: implemented' }],
       },
     }))).toMatchObject({ status: 'needs_human', outcome: 'implemented' });
+  });
+
+  it('prefers top-level final text over payload texts when resolving Outcome', () => {
+    expect(readRuntimeRunCompletionFromLog(JSON.stringify({
+      status: 'ok',
+      finalAssistantVisibleText: '実際の最終結果です。\nOutcome: implemented',
+      payloads: [
+        { text: '引用: Outcome: split_recommended' },
+        { text: '古い調査メモ: Outcome: needs_human' },
+      ],
+    }))).toMatchObject({ status: 'succeeded', outcome: 'implemented' });
+
+    expect(readRuntimeRunCompletionFromLog(JSON.stringify({
+      status: 'ok',
+      payloads: [
+        { text: '古い調査メモ: Outcome: needs_human' },
+        { text: '最後の payload: Outcome: implemented' },
+      ],
+    }))).toMatchObject({ status: 'succeeded', outcome: 'implemented' });
   });
 
   it('accepts canonical runtime completion statuses from JSON logs', () => {
