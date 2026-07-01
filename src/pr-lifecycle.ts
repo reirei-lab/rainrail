@@ -98,6 +98,20 @@ export interface AgentTaskIssue {
 export interface AgentTaskClaim {
   projectId?: string;
   projectItemId: string;
+  statusFieldId?: string;
+  statusOptionId?: string;
+  agentSessionIdFieldId?: string;
+  branchFieldId?: string;
+  contentId?: string;
+  commentBody?: string;
+  commentUrl?: string;
+  lockRefId?: string;
+  dispatchedLockRefId?: string;
+  lockRepositoryId?: string;
+  lockRepositoryNameWithOwner?: string;
+  lockDefaultBranchOid?: string;
+  lockDefaultBranchTreeOid?: string;
+  originalStatus?: string | null;
 }
 
 export interface AgentTask {
@@ -326,10 +340,6 @@ export async function handleCodexReviewEvent(
   if (repositorySkip !== undefined) return { handled: false, reason: repositorySkip, review, taskId: task.id };
   const skip = shouldIgnoreTask(task);
   if (skip !== undefined) return { handled: false, reason: skip, review, taskId: task.id };
-  if (task.issue?.contentId === undefined) {
-    return { handled: false, reason: 'agent task issue has no GitHub issue node id', review, taskId: task.id };
-  }
-
   const inlineComments = await safeReviewInlineComments(options.pullRequests, review, context);
   const update = await options.tasks.returnTaskToTodo({
     task,
@@ -754,6 +764,14 @@ function codexReviewComment(input: {
       for (const comment of input.inlineComments.comments.slice(0, 10)) {
         lines.push('', inlineCommentSummary(comment));
       }
+      const omitted = input.inlineComments.comments.length - 10;
+      if (omitted > 0) {
+        lines.push(
+          '',
+          `Only the first 10 inline comments are shown; ${omitted} more were omitted.`,
+          'Fetch the full PR review before replying so no inline discussion is missed.',
+        );
+      }
     }
   } else {
     lines.push(
@@ -1018,6 +1036,8 @@ function agentTaskProjectIssue(task: AgentTask): {
   title: string;
   provider: 'github';
   assigneeLogins: readonly string[];
+  contentId?: string;
+  contentType?: string;
   repository?: string;
   number?: number;
   state?: string;
@@ -1025,10 +1045,12 @@ function agentTaskProjectIssue(task: AgentTask): {
 } {
   const issue = task.issue;
   return {
-    id: issue?.contentId ?? `${issue?.repository ?? 'unknown'}#${issue?.number ?? 'unknown'}`,
+    id: task.claim?.projectItemId ?? `${issue?.repository ?? 'unknown'}#${issue?.number ?? 'unknown'}`,
     title: issue?.number === undefined ? task.branchName : `Issue #${issue.number}`,
     provider: 'github',
     assigneeLogins: [],
+    ...(issue?.contentId === undefined ? {} : { contentId: issue.contentId }),
+    ...(issue?.contentType === undefined ? {} : { contentType: issue.contentType }),
     ...(issue?.repository === undefined ? {} : { repository: issue.repository }),
     ...(issue?.number === undefined ? {} : { number: issue.number }),
     ...(issue?.state === undefined ? {} : { state: issue.state }),

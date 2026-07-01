@@ -81,6 +81,70 @@ describe('handleCodexReviewEvent', () => {
     expect(updates[0]?.commentBody).toContain('Review ID: 4493317816');
   });
 
+  it('does not require optional GitHub issue content ids', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+
+    const result = await handleCodexReviewEvent(reviewEvent(), {
+      agentLogin: 'reirei-agent',
+      reviewerLogin: 'hiragram',
+      targetRepositories: ['reirei-lab/rainrail'],
+      tasks: handoffRecorder({
+        updates,
+        taskOverride: { issue: { repository: 'reirei-lab/rainrail', number: 23, state: 'OPEN' } },
+      }),
+      pullRequests: {
+        async getPullRequest() {
+          throw new Error('not used');
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          throw new Error('not used');
+        },
+        async listReviewComments() {
+          return [{ id: 2, reviewId: 4493317816, path: 'src/pr-lifecycle.ts', body: 'comment' }];
+        },
+      },
+    });
+
+    expect(result.reason).toBe('Codex review returned issue to Todo');
+    expect(updates[0]?.commentBody).toContain('Codex inline review comments:');
+  });
+
+  it('marks truncated Codex inline comment summaries as incomplete', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+
+    await handleCodexReviewEvent(reviewEvent(), {
+      agentLogin: 'reirei-agent',
+      reviewerLogin: 'hiragram',
+      targetRepositories: ['reirei-lab/rainrail'],
+      tasks: handoffRecorder({ updates }),
+      pullRequests: {
+        async getPullRequest() {
+          throw new Error('not used');
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          throw new Error('not used');
+        },
+        async listReviewComments() {
+          return Array.from({ length: 12 }, (_, index) => ({
+            id: index + 1,
+            reviewId: 4493317816,
+            path: `src/file-${index + 1}.ts`,
+            body: `comment ${index + 1}`,
+          }));
+        },
+      },
+    });
+
+    expect(updates[0]?.commentBody).toContain('Only the first 10 inline comments are shown; 2 more were omitted.');
+    expect(updates[0]?.commentBody).toContain('Fetch the full PR review before replying so no inline discussion is missed.');
+  });
+
   it('still returns the issue to Todo when inline comments cannot be loaded', async () => {
     const updates: Array<{ reason: string; commentBody?: string }> = [];
 

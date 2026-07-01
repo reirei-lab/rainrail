@@ -49,6 +49,7 @@ describe('handleChangeRequestEvent', () => {
 
   it('releases the project issue before reporting Todo from the task provider handoff adapter', async () => {
     const calls: string[] = [];
+    const releases: unknown[] = [];
     const handoff = createTaskProviderPullRequestCommentHandoff({
       name: 'github',
       kind: 'task-provider',
@@ -61,17 +62,33 @@ describe('handleChangeRequestEvent', () => {
       },
     }, {
       releaseProjectIssue(input) {
+        releases.push(input);
         calls.push(`release:${input.reason}`);
       },
     });
 
     const result = await handoff.returnTaskToTodo({
-      task,
+      task: {
+        ...task,
+        claim: {
+          ...task.claim!,
+          lockRefId: 'REF_lock',
+          dispatchedLockRefId: 'REF_dispatched',
+        },
+      },
       reason: 'checks_failed',
       commentBody: 'body',
     });
 
     expect(calls).toEqual(['release:checks_failed', 'comment']);
+    expect(releases).toEqual([expect.objectContaining({
+      issue: expect.objectContaining({ id: 'PVTI_item', contentId: 'I_issue' }),
+      claim: expect.objectContaining({
+        projectItemId: 'PVTI_item',
+        lockRefId: 'REF_lock',
+        dispatchedLockRefId: 'REF_dispatched',
+      }),
+    })]);
     expect(result).toEqual({
       projectItemId: 'PVTI_item',
       status: 'Todo',
