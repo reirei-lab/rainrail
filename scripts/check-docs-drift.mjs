@@ -188,24 +188,7 @@ const statementExportKind = (sourceFile, statement, publicExport) => {
     return undefined;
   }
 
-  if (ts.isVariableStatement(statement)) {
-    return statement.declarationList.declarations.some(
-      (declaration) =>
-        ts.isIdentifier(declaration.name) && declaration.name.text === publicExport,
-    )
-      ? 'value'
-      : undefined;
-  }
-
-  if (ts.isClassDeclaration(statement) || ts.isEnumDeclaration(statement) || ts.isFunctionDeclaration(statement)) {
-    return statement.name?.text === publicExport ? 'value' : undefined;
-  }
-
-  if (ts.isInterfaceDeclaration(statement) || ts.isTypeAliasDeclaration(statement)) {
-    return statement.name.text === publicExport ? 'type' : undefined;
-  }
-
-  return undefined;
+  return directDeclarationKind(statement, publicExport);
 };
 
 /**
@@ -265,8 +248,10 @@ const localImportKind = (statement, localName) => {
  * @returns {'type' | 'value' | undefined}
  */
 const directDeclarationKind = (statement, publicExport) => {
+  const isDeclared = hasDeclareModifier(statement);
+
   if (ts.isVariableStatement(statement)) {
-    return statement.declarationList.declarations.some(
+    return !isDeclared && statement.declarationList.declarations.some(
       (declaration) =>
         ts.isIdentifier(declaration.name) && declaration.name.text === publicExport,
     )
@@ -275,7 +260,7 @@ const directDeclarationKind = (statement, publicExport) => {
   }
 
   if (ts.isClassDeclaration(statement) || ts.isEnumDeclaration(statement) || ts.isFunctionDeclaration(statement)) {
-    return statement.name?.text === publicExport ? 'value' : undefined;
+    return !isDeclared && statement.name?.text === publicExport ? 'value' : undefined;
   }
 
   if (ts.isInterfaceDeclaration(statement) || ts.isTypeAliasDeclaration(statement)) {
@@ -296,6 +281,12 @@ const hasExportModifier = (node) =>
  */
 const hasDefaultModifier = (node) =>
   hasModifier(node, ts.SyntaxKind.DefaultKeyword);
+
+/**
+ * @param {import('typescript').Node} node
+ */
+const hasDeclareModifier = (node) =>
+  hasModifier(node, ts.SyntaxKind.DeclareKeyword);
 
 /**
  * @param {import('typescript').Node} node

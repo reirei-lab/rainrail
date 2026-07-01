@@ -207,6 +207,12 @@ describe('docs drift checks', () => {
       'contract public export PublicThing is not exported as value by its sources',
     );
 
+    writeFileSync(join(root, 'src/contract.ts'), 'export declare function PublicThing(): void;\n');
+
+    expect(validateContractsManifest(root)).toContain(
+      'contract public export PublicThing is not exported by its sources',
+    );
+
     writeFileSync(
       join(root, 'src/contract.ts'),
       'type PublicThing = () => void;\nexport { PublicThing };\n',
