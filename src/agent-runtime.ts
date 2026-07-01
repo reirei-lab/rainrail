@@ -740,10 +740,11 @@ function isTrustedRuntimeCompletionLogObject(
 }
 
 function isStatusOnlyTerminalCompletion(payload: Record<string, unknown>): boolean {
-  const status = stringValue(payload.status);
+  const status = stringValue(completionPayloadFromResponse(payload).status);
   return status === 'ok'
     || status === 'error'
     || status === 'timeout'
+    || status === 'in_flight'
     || isTerminalRuntimeRunStatus(status);
 }
 

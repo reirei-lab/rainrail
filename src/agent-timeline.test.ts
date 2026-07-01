@@ -50,6 +50,18 @@ describe('agent timeline', () => {
     expect(extractRuntimeSessionId(log)).toBe('actual-session');
   });
 
+  it('does not extract session ids from diagnostic JSON fragments', () => {
+    const log = [
+      'tool result quoted target log:',
+      JSON.stringify({
+        status: 'ok',
+        meta: { agentMeta: { sessionId: 'wrong-session' } },
+      }),
+    ].join('\n');
+
+    expect(extractRuntimeSessionId(log)).toBeUndefined();
+  });
+
   it('extracts the last OpenClaw session id from appended JSON logs', () => {
     const log = [
       JSON.stringify({
@@ -295,6 +307,12 @@ describe('agent timeline', () => {
       }),
       JSON.stringify('EMBEDDED FALLBACK: Gateway timed out; running embedded agent with fresh session gateway-fallback-quoted'),
     ].join('\n');
+
+    expect(extractRuntimeFallbackSessionId(log)).toBeUndefined();
+  });
+
+  it('does not extract fallback markers from quoted JSON strings without completion JSON', () => {
+    const log = JSON.stringify('EMBEDDED FALLBACK: Gateway timed out; running embedded agent with fresh session gateway-fallback-quoted');
 
     expect(extractRuntimeFallbackSessionId(log)).toBeUndefined();
   });
@@ -808,6 +826,81 @@ describe('agent timeline', () => {
     }
   });
 
+  it('uses top-level terminal status before result status when clearing fallback lookup', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'rainrail-clear-top-level-status-fallback-timeline-'));
+    const startLogPath = join(directory, 'agent.log');
+    const resumeLogPath = join(directory, 'resume-1.log');
+    writeFileSync(startLogPath, 'EMBEDDED FALLBACK: Gateway timed out; running embedded agent with fresh session gateway-fallback-stale', 'utf8');
+    writeFileSync(resumeLogPath, JSON.stringify({
+      status: 'succeeded',
+      result: { status: 'failed' },
+    }), 'utf8');
+    writeFileSync(join(directory, 'sessions.json'), JSON.stringify({
+      'agent:main:original-session': { sessionId: 'original-session' },
+      'agent:main:explicit:gateway-fallback-stale': { sessionId: 'stale-fallback-session' },
+    }), 'utf8');
+    writeFileSync(join(directory, 'original-session.trajectory.jsonl'), [
+      JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:08:00.000Z', seq: 1 }),
+    ].join('\n'), 'utf8');
+    writeFileSync(join(directory, 'stale-fallback-session.trajectory.jsonl'), [
+      JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:09:00.000Z', seq: 1 }),
+    ].join('\n'), 'utf8');
+
+    try {
+      const timeline = await readRuntimeTimeline(
+        {
+          logPath: startLogPath,
+          agentSessionId: 'agent:main:original-session',
+          resumeAttempts: [{ logPath: resumeLogPath }],
+        },
+        { sessionsDirectory: directory },
+      );
+      expect(timeline.sessionId).toBe('original-session');
+      expect(timeline.fallback).toBe(false);
+      expect(timeline.missing).toBe(false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('clears fallback lookup for statusless successful Codex completions', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'rainrail-clear-statusless-success-fallback-timeline-'));
+    const startLogPath = join(directory, 'agent.log');
+    const resumeLogPath = join(directory, 'resume-1.log');
+    writeFileSync(startLogPath, 'EMBEDDED FALLBACK: Gateway timed out; running embedded agent with fresh session gateway-fallback-stale', 'utf8');
+    writeFileSync(resumeLogPath, JSON.stringify({
+      finalAssistantVisibleText: 'Outcome: implemented',
+      executionTrace: { result: 'success' },
+      completion: { finishReason: 'stop' },
+    }), 'utf8');
+    writeFileSync(join(directory, 'sessions.json'), JSON.stringify({
+      'agent:main:original-session': { sessionId: 'original-session' },
+      'agent:main:explicit:gateway-fallback-stale': { sessionId: 'stale-fallback-session' },
+    }), 'utf8');
+    writeFileSync(join(directory, 'original-session.trajectory.jsonl'), [
+      JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:08:00.000Z', seq: 1 }),
+    ].join('\n'), 'utf8');
+    writeFileSync(join(directory, 'stale-fallback-session.trajectory.jsonl'), [
+      JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:09:00.000Z', seq: 1 }),
+    ].join('\n'), 'utf8');
+
+    try {
+      const timeline = await readRuntimeTimeline(
+        {
+          logPath: startLogPath,
+          agentSessionId: 'agent:main:original-session',
+          resumeAttempts: [{ logPath: resumeLogPath }],
+        },
+        { sessionsDirectory: directory },
+      );
+      expect(timeline.sessionId).toBe('original-session');
+      expect(timeline.fallback).toBe(false);
+      expect(timeline.missing).toBe(false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('keeps fallback lookup when the latest resume log only reports in-flight', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'rainrail-keep-in-flight-fallback-timeline-'));
     const startLogPath = join(directory, 'agent.log');
@@ -1077,6 +1170,34 @@ describe('agent timeline', () => {
       expect(jsonl.raw).not.toContain('github_pat_jsonlSecret');
       expect(jsonl.raw).not.toContain('dXNlcjpwYXNz');
       expect(jsonl.raw).not.toContain('placeholder');
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('redacts private key fragments from truncated raw jsonl reads', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'rainrail-jsonl-truncated-key-redaction-'));
+    const sessionId = 'jsonl-truncated-key-session';
+    const logPath = join(directory, 'agent.log');
+    writeFileSync(logPath, JSON.stringify({
+      result: { status: 'ok', meta: { agentMeta: { sessionId } } },
+    }), 'utf8');
+    writeFileSync(join(directory, `${sessionId}.trajectory.jsonl`), [
+      'prefix before key',
+      '-----BEGIN OPENSSH PRIVATE KEY-----',
+      'MIIE-truncated-private-key-material',
+      '-----END OPENSSH PRIVATE KEY-----',
+    ].join('\n'), 'utf8');
+
+    try {
+      const jsonl = await readRuntimeJsonl(
+        { logPath, agentSessionId: 'agent:main:routing-key' },
+        { sessionsDirectory: directory, maxBytes: 75 },
+      );
+      expect(jsonl.truncated).toBe(true);
+      expect(jsonl.raw).toContain('[redacted-private-key]');
+      expect(jsonl.raw).not.toContain('truncated-private-key-material');
+      expect(jsonl.raw).not.toContain('END OPENSSH PRIVATE KEY');
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

@@ -1817,6 +1817,24 @@ describe('runtime task completion and resume helpers', () => {
     });
   });
 
+  it('uses appended result status-only completions as the latest runtime result', () => {
+    expect(readRuntimeRunCompletionFromLog([
+      JSON.stringify({ status: 'failed', summary: 'stale failed completion' }),
+      JSON.stringify({ result: { status: 'ok', summary: 'retry succeeded' } }),
+    ].join('\n'))).toMatchObject({
+      status: 'succeeded',
+      summary: 'retry succeeded',
+    });
+
+    expect(readRuntimeRunCompletionFromLog([
+      JSON.stringify({ status: 'failed', summary: 'stale failed completion' }),
+      JSON.stringify({ result: { status: 'in_flight', summary: 'retry is active' } }),
+    ].join('\n'))).toMatchObject({
+      status: 'running',
+      summary: 'retry is active',
+    });
+  });
+
   it('does not use prefixed diagnostic completion fragments as runtime completions', () => {
     const raw = [
       JSON.stringify({

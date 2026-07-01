@@ -180,17 +180,17 @@ export function extractRuntimeSessionId(log: string): string | undefined {
     const payload = JSON.parse(log) as unknown;
     return isTrustedRuntimeCompletionPayload(payload) ? runtimeSessionIdFromPayload(payload) : undefined;
   } catch {
-    const parsed = parseJsonObjectsFromLog(log);
-    for (const payload of parsed.payloads.slice().reverse()) {
-      if (!isTrustedRuntimeCompletionPayload(payload)) {
+    const objects = parseJsonObjectsFromLogWithPositions(log);
+    for (const object of objects.slice().reverse()) {
+      if (!isTrustedRuntimeCompletionLogObject(log, object)) {
         continue;
       }
-      const sessionId = runtimeSessionIdFromPayload(payload);
+      const sessionId = runtimeSessionIdFromPayload(object.payload);
       if (sessionId !== undefined) {
         return sessionId;
       }
     }
-    if (parsed.foundJson) {
+    if (objects.length > 0) {
       return undefined;
     }
   }
@@ -231,11 +231,14 @@ export function extractRuntimeFallbackSessionId(log: string): string | undefined
       return explicitFallbackMatch[1];
     }
   }
-  const jsonRanges = parseJsonObjectsFromLogWithPositions(log).map((object) => ({ start: object.index, end: object.end }));
+  const ignoredRanges = [
+    ...parseJsonObjectsFromLogWithPositions(log).map((object) => ({ start: object.index, end: object.end })),
+    ...parseJsonStringRangesFromLog(log),
+  ];
   let latest: string | undefined;
   for (const match of log.matchAll(/EMBEDDED FALLBACK:[^\n\r]*fresh session\s+(gateway-fallback-[A-Za-z0-9._-]+)/gi)) {
     const index = match.index ?? 0;
-    if (jsonRanges.some((range) => index >= range.start && index <= range.end)) {
+    if (ignoredRanges.some((range) => index >= range.start && index <= range.end)) {
       continue;
     }
     latest = match[1];
@@ -604,6 +607,7 @@ function stringifyField(record: Record<string, unknown> | undefined, key: string
 function redactSensitiveText(value: string): string {
   return redactSensitiveJsonKeyValues(value)
     .replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, '[redacted-private-key]')
+    .replace(/(^|[\n\r])[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, '$1[redacted-private-key]')
     .replace(/(^|\s)(-[A-Za-z]*H)(Authorization:\s*)[\s\S]*?(?=(?:\s+-[A-Za-z]*H(?:Authorization|Cookie|Set-Cookie):)|(?:\s+-[A-Za-z])|[\n\r]|$)/gi, '$1$2$3[redacted-authorization]')
     .replace(/(^|\s)(-[A-Za-z]*H)(Set-Cookie:\s*)[\s\S]*?(?=(?:\s+-[A-Za-z]*H(?:Authorization|Cookie|Set-Cookie):)|(?:\s+-[A-Za-z])|[\n\r]|$)/gi, '$1$2$3[redacted-cookie]')
     .replace(/(^|\s)(-[A-Za-z]*H)(Cookie:\s*)[\s\S]*?(?=(?:\s+-[A-Za-z]*H(?:Authorization|Cookie|Set-Cookie):)|(?:\s+-[A-Za-z])|[\n\r]|$)/gi, '$1$2$3[redacted-cookie]')
@@ -968,12 +972,11 @@ function isTrustedRuntimeCompletionLogObject(
 }
 
 function isStatusOnlyTerminalCompletionPayload(payload: Record<string, unknown>): boolean {
-  const status = stringField(payload, 'status');
+  const status = runtimeCompletionStatusFromPayload(payload);
   return status !== undefined
     && status !== 'queued'
     && status !== 'running'
-    && status !== 'in_flight'
-    && ['ok', 'error', 'timeout', 'succeeded', 'failed', 'canceled', 'stopped', 'timed_out', 'compaction_failed', 'needs_human', 'split_recommended'].includes(status);
+    && ['succeeded', 'failed', 'canceled', 'stopped', 'timed_out', 'compaction_failed', 'needs_human', 'split_recommended'].includes(status);
 }
 
 function isRuntimeInFlightPayload(payload: unknown): boolean {
@@ -985,15 +988,69 @@ function isRuntimeInFlightPayload(payload: unknown): boolean {
 }
 
 function isFallbackClearingRuntimeCompletionPayload(payload: Record<string, unknown>): boolean {
-  const status = completionStatusFromPayload(payload);
+  const status = runtimeCompletionStatusFromPayload(payload);
   return status !== undefined
     && !['queued', 'running', 'in_flight'].includes(status)
-    && !['error', 'timeout', 'failed', 'canceled', 'stopped', 'timed_out', 'compaction_failed'].includes(status);
+    && !['failed', 'canceled', 'stopped', 'timed_out', 'compaction_failed'].includes(status);
 }
 
-function completionStatusFromPayload(payload: Record<string, unknown>): string | undefined {
+function runtimeCompletionStatusFromPayload(payload: Record<string, unknown>): string | undefined {
+  const topLevelStatus = stringField(payload, 'status');
+  if (topLevelStatus === 'error') {
+    return 'failed';
+  }
+  if (topLevelStatus === 'timeout') {
+    return 'timed_out';
+  }
+  if (topLevelStatus === 'in_flight') {
+    return 'running';
+  }
+  if (topLevelStatus === 'ok') {
+    return 'succeeded';
+  }
+  if (isCanonicalRuntimeStatus(topLevelStatus)) {
+    return topLevelStatus;
+  }
   const result = isRecord(payload.result) ? payload.result : undefined;
-  return stringField(result, 'status') ?? stringField(payload, 'status');
+  const resultStatus = stringField(result, 'status');
+  if (resultStatus === 'error') {
+    return 'failed';
+  }
+  if (resultStatus === 'timeout') {
+    return 'timed_out';
+  }
+  if (resultStatus === 'in_flight') {
+    return 'running';
+  }
+  if (resultStatus === 'ok') {
+    return 'succeeded';
+  }
+  if (isCanonicalRuntimeStatus(resultStatus)) {
+    return resultStatus;
+  }
+  const executionTrace = isRecord(payload.executionTrace) ? payload.executionTrace : undefined;
+  const completion = isRecord(payload.completion) ? payload.completion : undefined;
+  if (
+    payloadHasCompletionText(payload)
+    && stringField(executionTrace, 'result') === 'success'
+    && stringField(completion, 'finishReason') === 'stop'
+  ) {
+    return 'succeeded';
+  }
+  return undefined;
+}
+
+function isCanonicalRuntimeStatus(status: string | undefined): boolean {
+  return status === 'queued'
+    || status === 'running'
+    || status === 'succeeded'
+    || status === 'failed'
+    || status === 'canceled'
+    || status === 'stopped'
+    || status === 'timed_out'
+    || status === 'compaction_failed'
+    || status === 'needs_human'
+    || status === 'split_recommended';
 }
 
 function hasDiagnosticPrefixBeforeJsonObject(raw: string, index: number): boolean {
