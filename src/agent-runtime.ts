@@ -255,6 +255,9 @@ function runtimeRunCompletionFromPayload(payload: Record<string, unknown>): Runt
 function redactRuntimeCompletionText(value: string | undefined): string | undefined {
   return value
     ?.replace(/Authorization:\s*[^\n\r]*/gi, 'Authorization: [redacted-authorization]')
+    .replace(/Set-Cookie:\s*[^\n\r]*/gi, 'Set-Cookie: [redacted-cookie]')
+    .replace(/Cookie:\s*[^\n\r]*/gi, 'Cookie: [redacted-cookie]')
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/-]+=*/g, 'Bearer [redacted-token]')
     .replace(/\bgithub_pat_[A-Za-z0-9_]+\b/g, '[redacted-token]')
     .replace(/\bgh[pousr]_[A-Za-z0-9_]+\b/g, '[redacted-token]')
     .replace(/\bsk-[A-Za-z0-9_-]{20,}\b/g, '[redacted-token]')

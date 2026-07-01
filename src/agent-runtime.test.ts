@@ -1760,12 +1760,23 @@ describe('runtime task completion and resume helpers', () => {
       status: 'failed',
       summary: 'failed with Authorization: Bearer github_pat_completionSecret',
       promptError: 'WEBHOOK_SECRET=correct horse battery',
+      timeoutPhase: 'Cookie: session=abc123; csrf=secret',
       stopReason: 'password=hunter2 backup phrase',
     }))).toMatchObject({
       status: 'failed',
       summary: 'failed with Authorization: [redacted-authorization]',
       promptError: 'WEBHOOK_SECRET=[redacted]',
+      timeoutPhase: 'Cookie: [redacted-cookie]',
       stopReason: 'password=[redacted]',
+    });
+    expect(readRuntimeRunCompletionFromLog(JSON.stringify({
+      status: 'failed',
+      summary: 'failed with Set-Cookie: session=abc123; csrf=secret',
+      promptError: 'standalone Bearer opaque-session-token',
+    }))).toMatchObject({
+      status: 'failed',
+      summary: 'failed with Set-Cookie: [redacted-cookie]',
+      promptError: 'standalone Bearer [redacted-token]',
     });
   });
 

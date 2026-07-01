@@ -245,6 +245,7 @@ export function extractRuntimeFallbackSessionId(log: string): string | undefined
     if (explicitFallbackMatch != null) {
       return explicitFallbackMatch[1];
     }
+    return undefined;
   }
   const ignoredRanges = [
     ...parseJsonObjectsFromLogWithPositions(log).map((object) => ({ start: object.index, end: object.end })),

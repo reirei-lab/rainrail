@@ -318,6 +318,22 @@ describe('agent timeline', () => {
     expect(extractRuntimeFallbackSessionId(log)).toBeUndefined();
   });
 
+  it('does not fall back to stale markers after newer unresolved fallback metadata', () => {
+    const log = [
+      'EMBEDDED FALLBACK: Gateway timed out; running embedded agent with fresh session gateway-fallback-stale',
+      JSON.stringify({
+        status: 'ok',
+        meta: {
+          agentMeta: {
+            fallbackSessionKey: 'agent:main:fallback-routing-key',
+          },
+        },
+      }),
+    ].join('\n');
+
+    expect(extractRuntimeFallbackSessionId(log)).toBeUndefined();
+  });
+
   it('does not use old fallback markers outside the bounded session log tail', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'rainrail-bounded-session-log-timeline-'));
     const sessionId = 'bounded-session-log-session';
