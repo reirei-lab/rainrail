@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import { getInProgressProjectIssues, getNextProjectIssueToStart, type ProjectIssue } from './project-issues.js';
 import type { ProjectIssueClaim, TaskQueueProvider } from './task-queue.js';
 
@@ -121,7 +123,8 @@ export async function assignNextProjectIssueToAgent(
 }
 
 function agentTaskForIssue(issue: ProjectIssue, runtime: AgentAssignmentRuntime): AgentAssignmentTask {
-  const taskId = `agent_task_${slug(issue.repository ?? 'unknown')}_${issue.number ?? slug(issue.id)}`;
+  const taskIssueId = taskIssueIdentity(issue);
+  const taskId = `agent_task_${slug(issue.repository ?? 'unknown')}_${taskIssueId}`;
   const runSlug = slug(runtime.runId);
   return {
     id: taskId,
@@ -134,9 +137,18 @@ function agentTaskForIssue(issue: ProjectIssue, runtime: AgentAssignmentRuntime)
 
 function branchNameForIssue(issue: ProjectIssue, runSlug: string): string {
   const repo = slug(issue.repository ?? 'repo');
-  const number = issue.number === undefined ? slug(issue.id) : String(issue.number);
+  const number = taskIssueIdentity(issue);
   const title = slug(issue.title).slice(0, 48);
   return `agent/${repo}-${number}${title.length === 0 ? '' : `-${title}`}-${runSlug}`;
+}
+
+function taskIssueIdentity(issue: ProjectIssue): string {
+  const base = issue.number === undefined ? slug(issue.id) : String(issue.number);
+  if (issue.contentType !== 'DraftIssue') {
+    return base;
+  }
+  const draftSource = issue.commentUrl ?? issue.id;
+  return `${base}-comment-${shortHash(draftSource)}`;
 }
 
 function issueStartComment(task: AgentAssignmentTask): string {
@@ -153,4 +165,8 @@ function issueStartComment(task: AgentAssignmentTask): string {
 function slug(value: string): string {
   const normalized = value.trim().toLowerCase().replace(/[^a-z0-9]+/gu, '-').replace(/^-+|-+$/gu, '');
   return normalized.length === 0 ? 'item' : normalized;
+}
+
+function shortHash(value: string): string {
+  return createHash('sha256').update(value).digest('hex').slice(0, 12);
 }
