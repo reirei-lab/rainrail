@@ -1024,6 +1024,47 @@ describe('createOpenClawRuntimeProvider', () => {
     ]), expect.anything());
   });
 
+  it('stops fallback lookup when the latest resume log has a strict status-only terminal completion', async () => {
+    const spawnProcess = vi.fn(() => ({ pid: 5151, unref: vi.fn() }));
+    const logDirectory = temporaryDirectory();
+    const startLogPath = `${logDirectory}/task.log`;
+    const resumeLogPath = `${logDirectory}/resume-1.log`;
+    const resumeStderrLogPath = `${logDirectory}/resume-1.stderr.log`;
+    writeFileSync(startLogPath, 'EMBEDDED FALLBACK: Gateway timed out; running embedded agent with fresh session gateway-fallback-stale', 'utf8');
+    writeFileSync(resumeStderrLogPath, 'EMBEDDED FALLBACK: Gateway timed out; running embedded agent with fresh session gateway-fallback-stderr', 'utf8');
+    writeFileSync(resumeLogPath, JSON.stringify({ status: 'succeeded', summary: 'done' }), 'utf8');
+    const provider = createOpenClawRuntimeProvider({
+      enabled: true,
+      command: 'openclaw',
+      agentId: 'main',
+      sessionKeyPrefix: 'rainrail',
+      timeoutSeconds: 900,
+      logDirectory,
+      spawnProcess,
+    });
+
+    await provider.resumeRun?.({
+      run: { id: 'agent:main:intended-session', provider: 'openclaw', status: 'stopped' },
+      task: {
+        id: 'agent_task_reirei-lab-rainrail_22',
+        title: 'OpenClaw runtime',
+        agentSessionId: 'agent:main:intended-session',
+        branchName: 'agent/reirei-lab-rainrail-22',
+        logPath: startLogPath,
+        resumeAttempts: [
+          { id: 'resume-1', status: 'stopped', logPath: resumeLogPath, stderrLogPath: resumeStderrLogPath },
+        ],
+      },
+      attemptId: 'agent_task_reirei-lab-rainrail_22_resume_02',
+      requestedBy: 'reirei-agent',
+    });
+
+    expect(spawnProcess).toHaveBeenCalledWith('openclaw', expect.arrayContaining([
+      '--session-key',
+      'agent:main:intended-session',
+    ]), expect.anything());
+  });
+
   it('clears same-attempt stderr fallback when stdout has a normal completion', async () => {
     const spawnProcess = vi.fn(() => ({ pid: 5151, unref: vi.fn() }));
     const logDirectory = temporaryDirectory();
@@ -1206,6 +1247,47 @@ describe('createOpenClawRuntimeProvider', () => {
         },
       }),
       'OpenClaw agent finished',
+    ].join('\n'), 'utf8');
+    const provider = createOpenClawRuntimeProvider({
+      enabled: true,
+      command: 'openclaw',
+      agentId: 'main',
+      sessionKeyPrefix: 'rainrail',
+      timeoutSeconds: 900,
+      logDirectory,
+      spawnProcess,
+    });
+
+    await provider.resumeRun?.({
+      run: { id: 'agent:main:intended-session', provider: 'openclaw', status: 'stopped' },
+      task: {
+        id: 'agent_task_reirei-lab-rainrail_22',
+        title: 'OpenClaw runtime',
+        agentSessionId: 'agent:main:intended-session',
+        branchName: 'agent/reirei-lab-rainrail-22',
+        logPath,
+        resumeAttempts: [],
+      },
+      attemptId: 'agent_task_reirei-lab-rainrail_22_resume_01',
+      requestedBy: 'reirei-agent',
+    });
+
+    expect(spawnProcess).toHaveBeenCalledWith('openclaw', expect.arrayContaining([
+      '--session-key',
+      'agent:main:intended-session',
+    ]), expect.anything());
+  });
+
+  it('does not resume fallback markers quoted inside escaped JSON strings', async () => {
+    const spawnProcess = vi.fn(() => ({ pid: 5151, unref: vi.fn() }));
+    const logDirectory = temporaryDirectory();
+    const logPath = `${logDirectory}/task.log`;
+    writeFileSync(logPath, [
+      JSON.stringify({
+        status: 'ok',
+        finalAssistantVisibleText: 'Outcome: implemented',
+      }),
+      JSON.stringify('EMBEDDED FALLBACK: Gateway timed out; running embedded agent with fresh session gateway-fallback-quoted'),
     ].join('\n'), 'utf8');
     const provider = createOpenClawRuntimeProvider({
       enabled: true,
@@ -1490,6 +1572,12 @@ describe('runtime task completion and resume helpers', () => {
     expect(readRuntimeRunCompletionFromLog(raw)).toBeUndefined();
   });
 
+  it('ignores compaction failure text quoted inside escaped diagnostic JSON', () => {
+    const raw = `diag: ${JSON.stringify(JSON.stringify({ message: 'CLI transcript compaction failed for quoted target log' }))}`;
+
+    expect(readRuntimeRunCompletionFromLog(raw)).toBeUndefined();
+  });
+
   it('does not let advisory Outcome text override explicit failure statuses', () => {
     expect(readRuntimeRunCompletionFromLog(JSON.stringify({
       status: 'error',
@@ -1600,6 +1688,39 @@ describe('runtime task completion and resume helpers', () => {
     expect(readRuntimeRunCompletionFromLog(raw)).toMatchObject({
       status: 'failed',
       summary: 'retry failed after append',
+    });
+  });
+
+  it('uses appended terminal completions even when they omit summary', () => {
+    const raw = [
+      JSON.stringify({
+        status: 'ok',
+        finalAssistantVisibleText: 'Outcome: implemented',
+        summary: 'stale successful completion',
+      }),
+      JSON.stringify({ status: 'failed', promptError: 'retry failed after append' }),
+    ].join('\n');
+
+    expect(readRuntimeRunCompletionFromLog(raw)).toMatchObject({
+      status: 'failed',
+      promptError: 'retry failed after append',
+    });
+  });
+
+  it('does not use prefixed diagnostic completion fragments as runtime completions', () => {
+    const raw = [
+      JSON.stringify({
+        status: 'ok',
+        finalAssistantVisibleText: 'Outcome: implemented',
+        summary: 'real completion',
+      }),
+      `diag: ${JSON.stringify({ status: 'failed', completion: { finishReason: 'stop' }, summary: 'quoted diagnostic failure' })}`,
+    ].join('\n');
+
+    expect(readRuntimeRunCompletionFromLog(raw)).toMatchObject({
+      status: 'succeeded',
+      outcome: 'implemented',
+      summary: 'real completion',
     });
   });
 

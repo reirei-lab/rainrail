@@ -259,7 +259,10 @@ function compactionFailureFromLog(raw: string): RuntimeRunCompletion | undefined
 function compactionFailureAfterLatestCompletionJson(raw: string): RuntimeRunCompletion | undefined {
   let latestCompletionEnd = -1;
   const jsonObjects = parseJsonObjectsFromLogWithPositions(raw);
-  const jsonRanges = jsonObjects.map((object) => ({ start: object.index, end: object.end }));
+  const ignoredRanges = [
+    ...jsonObjects.map((object) => ({ start: object.index, end: object.end })),
+    ...parseJsonStringRangesFromLog(raw),
+  ];
   for (const candidate of jsonObjects) {
     if (
       isRecord(candidate.payload)
@@ -273,7 +276,7 @@ function compactionFailureAfterLatestCompletionJson(raw: string): RuntimeRunComp
   for (const match of raw.matchAll(/[^\r\n]*CLI transcript compaction failed[^\r\n]*/gi)) {
     const phraseOffset = match[0].toLowerCase().indexOf('cli transcript compaction failed');
     const index = (match.index ?? -1) + phraseOffset;
-    if (jsonRanges.some((range) => index >= range.start && index <= range.end)) {
+    if (ignoredRanges.some((range) => index >= range.start && index <= range.end)) {
       continue;
     }
     if (index > latestCompletionEnd) {
@@ -284,12 +287,15 @@ function compactionFailureAfterLatestCompletionJson(raw: string): RuntimeRunComp
 }
 
 function compactionFailureOutsideJsonRanges(raw: string): RuntimeRunCompletion | undefined {
-  const jsonRanges = parseJsonObjectsFromLogWithPositions(raw).map((object) => ({ start: object.index, end: object.end }));
+  const ignoredRanges = [
+    ...parseJsonObjectsFromLogWithPositions(raw).map((object) => ({ start: object.index, end: object.end })),
+    ...parseJsonStringRangesFromLog(raw),
+  ];
   let latestFailure: RuntimeRunCompletion | undefined;
   for (const match of raw.matchAll(/[^\r\n]*CLI transcript compaction failed[^\r\n]*/gi)) {
     const phraseOffset = match[0].toLowerCase().indexOf('cli transcript compaction failed');
     const index = (match.index ?? -1) + phraseOffset;
-    if (jsonRanges.some((range) => index >= range.start && index <= range.end)) {
+    if (ignoredRanges.some((range) => index >= range.start && index <= range.end)) {
       continue;
     }
     latestFailure = compactionFailureFromLog(match[0]);
@@ -556,6 +562,29 @@ function parseJsonObjectsFromLogWithPositions(raw: string): Array<{ payload: unk
   return payloads;
 }
 
+function parseJsonStringRangesFromLog(raw: string): Array<{ start: number; end: number }> {
+  const ranges: Array<{ start: number; end: number }> = [];
+  for (let index = 0; index < raw.length; index += 1) {
+    if (raw[index] !== '"') {
+      continue;
+    }
+    let escaped = false;
+    for (let end = index + 1; end < raw.length; end += 1) {
+      const char = raw[end];
+      if (escaped) {
+        escaped = false;
+      } else if (char === '\\') {
+        escaped = true;
+      } else if (char === '"') {
+        ranges.push({ start: index, end });
+        index = end;
+        break;
+      }
+    }
+  }
+  return ranges;
+}
+
 function issueFieldsFromValue(value: Record<string, unknown>): RuntimeAgentTaskInput['issue'] {
   const source = isRecord(value.issue) ? value.issue : value;
   const repository = stringValue(source.repository);
@@ -612,7 +641,10 @@ function runtimeResumeLogPaths(task: RuntimeAgentTask): string[] {
 function extractFallbackRuntimeSessionKey(log: string, agentId: string): string | null | undefined {
   const strictPayload = parseStrictJsonObject(log);
   if (strictPayload !== undefined) {
-    if (runtimeRunCompletionFromPayload(strictPayload) === undefined || !isTrustedRuntimeCompletionFragment(strictPayload)) {
+    if (
+      runtimeRunCompletionFromPayload(strictPayload) === undefined
+      || (!isTrustedRuntimeCompletionFragment(strictPayload) && !isStatusOnlyTerminalCompletion(strictPayload))
+    ) {
       return undefined;
     }
     const fallbackSessionKey = fallbackSessionKeyFromPayload(strictPayload, agentId);
@@ -623,7 +655,10 @@ function extractFallbackRuntimeSessionKey(log: string, agentId: string): string 
   }
   let latest: { index: number; key: string | undefined } | undefined;
   const jsonObjects = parseJsonObjectsFromLogWithPositions(log);
-  const jsonRanges = jsonObjects.map((object) => ({ start: object.index, end: object.end }));
+  const ignoredRanges = [
+    ...jsonObjects.map((object) => ({ start: object.index, end: object.end })),
+    ...parseJsonStringRangesFromLog(log),
+  ];
   for (const object of jsonObjects) {
     if (
       !isRecord(object.payload)
@@ -639,7 +674,7 @@ function extractFallbackRuntimeSessionKey(log: string, agentId: string): string 
   }
   for (const match of log.matchAll(/EMBEDDED FALLBACK:[^\n\r]*fresh session\s+(gateway-fallback-[A-Za-z0-9._-]+)/gi)) {
     const index = match.index ?? 0;
-    if (jsonRanges.some((range) => index >= range.start && index <= range.end)) {
+    if (ignoredRanges.some((range) => index >= range.start && index <= range.end)) {
       continue;
     }
     if (latest === undefined || index > latest.index) {
@@ -650,7 +685,8 @@ function extractFallbackRuntimeSessionKey(log: string, agentId: string): string 
 }
 
 function fallbackLookupClearingCompletion(payload: Record<string, unknown>): boolean {
-  return stringValue(completionPayloadFromResponse(payload).status) !== 'in_flight';
+  const status = stringValue(completionPayloadFromResponse(payload).status);
+  return status !== undefined && status !== 'in_flight' && !isFailureRuntimeRunStatus(status);
 }
 
 function parseStrictJsonObject(raw: string): Record<string, unknown> | undefined {
@@ -694,16 +730,16 @@ function isTrustedRuntimeCompletionLogObject(
   if (!isRecord(object.payload)) {
     return false;
   }
-  if (isTrustedRuntimeCompletionFragment(object.payload)) {
-    return true;
+  if (hasDiagnosticPrefixBeforeJsonObject(raw, object.index)) {
+    return false;
   }
-  return isStatusOnlyTerminalCompletion(object.payload)
-    && !hasDiagnosticPrefixBeforeJsonObject(raw, object.index);
+  return isTrustedRuntimeCompletionFragment(object.payload)
+    || isStatusOnlyTerminalCompletion(object.payload);
 }
 
 function isStatusOnlyTerminalCompletion(payload: Record<string, unknown>): boolean {
   const status = stringValue(payload.status);
-  return isTerminalRuntimeRunStatus(status) && stringValue(payload.summary) !== undefined;
+  return isTerminalRuntimeRunStatus(status);
 }
 
 function hasDiagnosticPrefixBeforeJsonObject(raw: string, index: number): boolean {

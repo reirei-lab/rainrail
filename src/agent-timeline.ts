@@ -381,10 +381,13 @@ function extractRuntimeFallbackMetadata(log: string): RuntimeFallbackMetadata | 
   const jsonObjects = parseJsonObjectsFromLogWithPositions(log);
   const jsonRanges = jsonObjects.map((object) => ({ start: object.index, end: object.end }));
   for (const object of jsonObjects) {
-    if (!isTrustedRuntimeCompletionPayload(object.payload)) {
+    if (!isTrustedRuntimeCompletionLogObject(log, object)) {
       continue;
     }
     const metadata = fallbackMetadataFromPayload(object.payload);
+    if (metadata === undefined && !isFallbackClearingRuntimeCompletionPayload(object.payload)) {
+      continue;
+    }
     if (latest === undefined || object.index > latest.index) {
       latest = { index: object.index, metadata };
     }
@@ -695,7 +698,11 @@ function findEscapedJsonValueEnd(value: string, start: number): number {
 
 function findEscapedJsonStringEnd(value: string, start: number): number | undefined {
   for (let index = start + 2; index < value.length; index += 1) {
-    if (value[index] === '\\' && value[index + 1] === '"') {
+    if (
+      value[index] === '\\'
+      && value[index + 1] === '"'
+      && countConsecutiveBackslashesBefore(value, index + 1) === 1
+    ) {
       return index + 2;
     }
   }
@@ -708,7 +715,11 @@ function findBalancedEscapedJsonEnd(value: string, start: number, opener: string
   for (let index = start + 1; index < value.length; index += 1) {
     const char = value[index];
     if (inString) {
-      if (char === '\\' && value[index + 1] === '"') {
+      if (
+        char === '\\'
+        && value[index + 1] === '"'
+        && countConsecutiveBackslashesBefore(value, index + 1) === 1
+      ) {
         inString = false;
         index += 1;
       }
@@ -729,6 +740,14 @@ function findBalancedEscapedJsonEnd(value: string, start: number, opener: string
     }
   }
   return undefined;
+}
+
+function countConsecutiveBackslashesBefore(value: string, index: number): number {
+  let count = 0;
+  for (let cursor = index - 1; cursor >= 0 && value[cursor] === '\\'; cursor -= 1) {
+    count += 1;
+  }
+  return count;
 }
 
 function findJsonValueEnd(value: string, start: number): number {
@@ -907,6 +926,58 @@ function isTrustedRuntimeCompletionPayload(payload: unknown): payload is Record<
     || hasRuntimeExecutionTraceSignal(result?.executionTrace)
     || (stringField(payload, 'status') !== undefined && runtimeAgentMetaFromPayload(result) !== undefined)
     || (stringField(result, 'status') !== undefined && runtimeAgentMetaFromPayload(result) !== undefined);
+}
+
+function isTrustedRuntimeCompletionLogObject(
+  raw: string,
+  object: { payload: unknown; index: number; end: number },
+): object is { payload: Record<string, unknown>; index: number; end: number } {
+  if (!isRecord(object.payload) || hasDiagnosticPrefixBeforeJsonObject(raw, object.index)) {
+    return false;
+  }
+  return isTrustedRuntimeCompletionPayload(object.payload)
+    || isStatusOnlyTerminalCompletionPayload(object.payload);
+}
+
+function isStatusOnlyTerminalCompletionPayload(payload: Record<string, unknown>): boolean {
+  const status = stringField(payload, 'status');
+  return status !== undefined
+    && status !== 'queued'
+    && status !== 'running'
+    && status !== 'in_flight'
+    && ['succeeded', 'failed', 'canceled', 'stopped', 'timed_out', 'compaction_failed', 'needs_human', 'split_recommended'].includes(status);
+}
+
+function isRuntimeInFlightPayload(payload: unknown): boolean {
+  if (!isRecord(payload)) {
+    return false;
+  }
+  const result = isRecord(payload.result) ? payload.result : undefined;
+  return stringField(payload, 'status') === 'in_flight' || stringField(result, 'status') === 'in_flight';
+}
+
+function isFallbackClearingRuntimeCompletionPayload(payload: Record<string, unknown>): boolean {
+  const status = completionStatusFromPayload(payload);
+  return status !== undefined
+    && status !== 'in_flight'
+    && !['failed', 'canceled', 'stopped', 'timed_out', 'compaction_failed'].includes(status);
+}
+
+function completionStatusFromPayload(payload: Record<string, unknown>): string | undefined {
+  const result = isRecord(payload.result) ? payload.result : undefined;
+  return stringField(result, 'status') ?? stringField(payload, 'status');
+}
+
+function hasDiagnosticPrefixBeforeJsonObject(raw: string, index: number): boolean {
+  const lineStart = Math.max(raw.lastIndexOf('\n', index - 1), raw.lastIndexOf('\r', index - 1)) + 1;
+  const sameLinePrefix = raw.slice(lineStart, index).trim();
+  if (/\b(?:diag|diagnostic|quoted|tool result)\b/i.test(sameLinePrefix)) {
+    return true;
+  }
+  const previousText = raw.slice(0, lineStart).trimEnd();
+  const previousLineStart = Math.max(previousText.lastIndexOf('\n'), previousText.lastIndexOf('\r')) + 1;
+  const previousLine = previousText.slice(previousLineStart).trim();
+  return /(?:quoted|diagnostic|tool result)[^{}]*:\s*$/i.test(previousLine);
 }
 
 function hasRuntimeCompletionObjectSignal(value: unknown): boolean {

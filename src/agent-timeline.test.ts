@@ -681,6 +681,73 @@ describe('agent timeline', () => {
     }
   });
 
+  it('stops fallback lookup when the latest resume log has a status-only terminal completion', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'rainrail-clear-status-only-fallback-timeline-'));
+    const startLogPath = join(directory, 'agent.log');
+    const resumeLogPath = join(directory, 'resume-1.log');
+    writeFileSync(startLogPath, 'EMBEDDED FALLBACK: Gateway timed out; running embedded agent with fresh session gateway-fallback-stale', 'utf8');
+    writeFileSync(resumeLogPath, JSON.stringify({
+      status: 'succeeded',
+      summary: 'done',
+    }), 'utf8');
+    writeFileSync(join(directory, 'sessions.json'), JSON.stringify({
+      'agent:main:original-session': { sessionId: 'original-session' },
+      'agent:main:explicit:gateway-fallback-stale': { sessionId: 'stale-fallback-session' },
+    }), 'utf8');
+    writeFileSync(join(directory, 'original-session.trajectory.jsonl'), [
+      JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:08:00.000Z', seq: 1 }),
+    ].join('\n'), 'utf8');
+    writeFileSync(join(directory, 'stale-fallback-session.trajectory.jsonl'), [
+      JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:09:00.000Z', seq: 1 }),
+    ].join('\n'), 'utf8');
+
+    try {
+      const timeline = await readRuntimeTimeline(
+        {
+          logPath: startLogPath,
+          agentSessionId: 'agent:main:original-session',
+          resumeAttempts: [{ logPath: resumeLogPath }],
+        },
+        { sessionsDirectory: directory },
+      );
+      expect(timeline.sessionId).toBe('original-session');
+      expect(timeline.fallback).toBe(false);
+      expect(timeline.missing).toBe(false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps fallback lookup when the latest resume log only reports in-flight', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'rainrail-keep-in-flight-fallback-timeline-'));
+    const startLogPath = join(directory, 'agent.log');
+    const resumeLogPath = join(directory, 'resume-1.log');
+    writeFileSync(startLogPath, 'EMBEDDED FALLBACK: Gateway timed out; running embedded agent with fresh session gateway-fallback-active', 'utf8');
+    writeFileSync(resumeLogPath, JSON.stringify({
+      status: 'in_flight',
+      meta: { agentMeta: {} },
+    }), 'utf8');
+    writeFileSync(join(directory, 'gateway-fallback-active.trajectory.jsonl'), [
+      JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:09:00.000Z', seq: 1 }),
+    ].join('\n'), 'utf8');
+
+    try {
+      const timeline = await readRuntimeTimeline(
+        {
+          logPath: startLogPath,
+          agentSessionId: 'agent:main:original-session',
+          resumeAttempts: [{ logPath: resumeLogPath }],
+        },
+        { sessionsDirectory: directory },
+      );
+      expect(timeline.sessionId).toBe('gateway-fallback-active');
+      expect(timeline.fallback).toBe(true);
+      expect(timeline.missing).toBe(false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('clears same-attempt stderr fallback when stdout has a normal completion', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'rainrail-clear-same-attempt-stderr-fallback-timeline-'));
     const startLogPath = join(directory, 'agent.log');
@@ -1452,6 +1519,26 @@ describe('agent timeline', () => {
     expect(timeline[0]!.excerpt).toContain(String.raw`\"apiKeys\":\"[redacted]\"`);
     expect(timeline[0]!.excerpt).not.toContain('opaque-session-token');
     expect(timeline[0]!.excerpt).not.toContain('live-secret');
+  });
+
+  it('redacts escaped JSON string secrets that contain escaped quotes', () => {
+    const timeline = parseRuntimeTrajectoryTimeline([
+      JSON.stringify({
+        type: 'tool.result',
+        ts: '2026-06-30T15:09:10.000Z',
+        seq: 1,
+        data: {
+          name: 'bash',
+          status: 'completed',
+          output: String.raw`escaped {\"password\":\"abc\\\"def\",\"safe\":\"visible\"}`,
+        },
+      }),
+    ].join('\n'));
+
+    expect(timeline[0]!.excerpt).toContain(String.raw`\"password\":\"[redacted]\"`);
+    expect(timeline[0]!.excerpt).toContain(String.raw`\"safe\":\"visible\"`);
+    expect(timeline[0]!.excerpt).not.toContain('abc');
+    expect(timeline[0]!.excerpt).not.toContain('def');
   });
 
   it('redacts nested sensitive keys inside escaped JSON strings', () => {
