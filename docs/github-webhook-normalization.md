@@ -2,6 +2,8 @@
 
 Rainrail の GitHub webhook source は、GitHub の webhook payload をそのまま workflow plugin に渡さない。
 workflow plugin が受け取る `event.payload` は Rainrail 側で安定させた要約形にする。
+公開 API の入口は `createGitHubWebhookSourcePlugin`、入力は
+`GitHubWebhookPayload`、正規化後 payload は `NormalizedGitHubWebhookPayload`。
 
 ## 方針
 

@@ -26,6 +26,7 @@ Workflow plugin の routing API には直接漏らさない。
 ## Source plugin
 
 Source plugin は provider 固有入力を受け取り、`RainrailEventEnvelope` を返す。
+公開 API は `SourcePlugin` と `defineSourcePlugin` を入口にする。
 `normalize(input, context)` の `context` には delivery id、受信時刻、
 plugin 名、raw payload reference、provider メタデータを渡す。
 
@@ -59,6 +60,8 @@ fallback delivery id に batch index を混ぜ、同一 ms の Cron/Queue tail �
 大文字小文字だけが違う場合や末尾記号を落とす場合も含め、元の suffix 由来の安定 hash も混ぜる。
 `eventTimestamp` が欠落または壊れている場合は
 `receivedAt` を occurredAt / delivery id の時刻要素として使う。
+実装の入口は `createCloudflareTailSourcePlugin` で、入力 payload は
+`CloudflareTailEvent` として扱う。
 
 ## Task provider
 
@@ -66,6 +69,7 @@ Task provider は forge/task system の操作面を表す。初期 contract は
 GitHub と Forgejo の issue 操作を同じ workflow から使えるように、
 `getIssue`、`createComment`、`addToProject`、`setStatus`、`createProposal`
 を持つ。
+公開 contract は `TaskProvider` として提供する。
 
 `TaskIssueRef` は provider、repository、id、number、url を持てる。
 Workflow plugin は GitHub webhook payload ではなく、中立 event の
@@ -161,12 +165,15 @@ OpenClaw agent でも呼び出し側が毎回 sessionsDirectory を上書きし�
 
 secret や provider 固有 token は runtime provider の実装が保持し、
 contract には含めない。
+公開 contract は `RuntimeProvider` として提供する。
 
 ## Workflow plugin
 
 Workflow plugin は `accepts(event)` で対象イベントを絞り込み、
 `handle(event, context)` で処理する。`context` は `providers.tasks` と
 `runtime` を受け取り、必要なら既存の `capabilities` も使える。
+公開 API は `WorkflowPlugin`、`PluginRuntimeContext`、
+`defineWorkflowPlugin` を入口にする。
 
 Workflow plugin は event に反応し、Task provider と Runtime provider を
 組み合わせるだけにする。GitHub/Forgejo の API 呼び出しや OpenClaw/devteam/Codex
@@ -326,6 +333,7 @@ GitHub CLI と同じく `GH_TOKEN`、`GITHUB_TOKEN` の順で最初の非空値�
 fallback は Rainrail の GitHub API URL に合わせて `github.com` host だけから
 取得する。`GitHubTaskProvider` は `auth.getAuthToken()` を注入できるため、
 workflow test や別 runtime では実 GitHub App/PAT 実装を差し替えられる。
+実装の入口は `createGitHubTaskProvider`。
 デフォルト provider は GitHub App token 発行が GitHub API 側の auth/rate-limit
 エラーで失敗したとき、設定済み env/gh fallback token があればそれを使う。
 
@@ -335,7 +343,8 @@ provider 実装の観測性に使う。secret や token 値は snapshot に含�
 
 ## Dispatcher
 
-`createRuntimeDispatcher` は workflow plugin 配列と runtime context を受け取る。
+`RuntimeDispatcher` の生成入口である `createRuntimeDispatcher` は
+workflow plugin 配列と runtime context を受け取る。
 `dispatch(event)` は `accepts` が true の workflow だけを呼び、
 plugin ごとに fulfilled/rejected の結果を返す。`accepts` が例外を投げた場合も
 その plugin の rejected result として隔離し、後続 workflow の評価は続ける。

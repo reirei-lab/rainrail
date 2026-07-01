@@ -18,6 +18,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
@@ -34,6 +36,11 @@ jobs:
 
       - name: Run typecheck
         run: pnpm typecheck
+
+      - name: Run docs drift checks
+        run: pnpm docs:check
+        env:
+          DOCS_DRIFT_CHANGED_FROM: origin/${{ github.base_ref }}
 
       - name: Run tests
         run: pnpm test
