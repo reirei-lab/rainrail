@@ -255,15 +255,14 @@ export function createGitHubPullRequestProvider(options: GitHubTaskProviderOptio
     const url = new URL(`https://api.github.com/repos/${input.repository}/pulls`);
     url.searchParams.set('state', 'open');
     url.searchParams.set('per_page', '100');
-    if (input.headRefName !== undefined) {
+    if (input.headSha === undefined && input.headRefName !== undefined) {
       const owner = input.repository.split('/')[0];
       url.searchParams.set('head', `${owner}:${input.headRefName}`);
     }
     const candidates = await listPagedArray<GitHubPullRequestResponse>(request, url.pathname.slice(1) + url.search, 'GitHub pull request list request', context);
-    const payloads = candidates.filter((candidate) =>
-      (input.headRefName !== undefined && stringValue(candidate.head?.ref) === input.headRefName)
-      || (input.headSha !== undefined && stringValue(candidate.head?.sha) === input.headSha)
-    );
+    const payloads = candidates.filter((candidate) => input.headSha !== undefined
+      ? stringValue(candidate.head?.sha) === input.headSha
+      : input.headRefName !== undefined && stringValue(candidate.head?.ref) === input.headRefName);
     return Promise.all(payloads.flatMap((payload) => {
       const number = numberValue(payload.number);
       return number === undefined ? [] : [loadPullRequest(request, input.repository, number, context)];

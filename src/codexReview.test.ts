@@ -133,6 +133,37 @@ describe('handleCodexReviewEvent', () => {
     expect(updates).toEqual([]);
   });
 
+  it('does not hand off Codex reviews when the live pull request is already closed', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+
+    const result = await handleCodexReviewEvent(reviewEvent({
+      headSha: 'abc123',
+      reviewCommitId: 'abc123',
+    }), {
+      agentLogin: 'reirei-agent',
+      reviewerLogin: 'hiragram',
+      targetRepositories: ['reirei-lab/rainrail'],
+      tasks: handoffRecorder({ updates }),
+      pullRequests: {
+        async getPullRequest(input) {
+          return pullRequest({ ...input, state: 'CLOSED', headSha: 'abc123' });
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          throw new Error('not used');
+        },
+        async listReviewComments() {
+          throw new Error('not used');
+        },
+      },
+    });
+
+    expect(result.reason).toBe('pull request is already closed');
+    expect(updates).toEqual([]);
+  });
+
   it('checks live pull request head before handing off Codex reviews when payload head is missing', async () => {
     const updates: Array<{ reason: string; commentBody?: string }> = [];
 

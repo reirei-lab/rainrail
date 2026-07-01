@@ -348,6 +348,9 @@ export async function handleChangeRequestEvent(
   const livePullRequest = options.pullRequests !== undefined && (target.reviewCommitId !== undefined || reviewTargetConfig !== undefined)
     ? await livePullRequestForReview(options.pullRequests, target, context)
     : undefined;
+  if (normalize(livePullRequest?.state) === 'closed') {
+    return { handled: false, reason: 'pull request is already closed', pullRequestNumber: target.number, branchName: target.branchName };
+  }
   const currentHeadSha = livePullRequest?.headSha ?? target.headSha;
   if (
     target.reviewCommitId !== undefined
@@ -406,6 +409,9 @@ export async function handleCodexReviewEvent(
   const livePullRequest = review.reviewCommitId === undefined
     ? undefined
     : await livePullRequestForReview(options.pullRequests, { repository: review.repository, number: review.pullRequestNumber }, context);
+  if (normalize(livePullRequest?.state) === 'closed') {
+    return { handled: false, reason: 'pull request is already closed', review };
+  }
   const currentHeadSha = livePullRequest?.headSha ?? review.headSha;
   if (
     review.reviewCommitId !== undefined
@@ -1345,6 +1351,6 @@ function agentTaskProjectIssue(task: AgentTask): {
     ...(issue?.number === undefined ? {} : { number: issue.number }),
     ...(issue?.state === undefined ? {} : { state: issue.state }),
     ...(issue?.url === undefined ? {} : { url: issue.url }),
-    ...(task.claim?.originalStatus === undefined ? {} : { status: task.claim.originalStatus }),
+    status: 'Todo',
   };
 }

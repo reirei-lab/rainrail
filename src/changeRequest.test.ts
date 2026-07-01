@@ -82,6 +82,32 @@ describe('handleChangeRequestEvent', () => {
     expect(updates).toEqual([]);
   });
 
+  it('does not hand off change requests when the live pull request is already closed', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+
+    const result = await handleChangeRequestEvent(reviewEvent({
+      state: 'changes_requested',
+      headSha: 'abc123',
+      reviewCommitId: 'abc123',
+    }), {
+      tasks: handoffRecorder({ updates }),
+      pullRequests: {
+        async getPullRequest(input) {
+          return pullRequestForChangeRequest({ ...input, state: 'CLOSED', headSha: 'abc123' });
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          throw new Error('not used');
+        },
+      },
+    });
+
+    expect(result.reason).toBe('pull request is already closed');
+    expect(updates).toEqual([]);
+  });
+
   it('removes stale pending review requests when change requests return the issue to Todo', async () => {
     const updates: Array<{ reason: string; commentBody?: string }> = [];
     const removedReviewRequests: Array<{ repository: string; number: number; reviewerLogin: string }> = [];
@@ -313,7 +339,7 @@ describe('handleChangeRequestEvent', () => {
 
     expect(calls).toEqual(['comment', 'release:checks_failed']);
     expect(releases).toEqual([expect.objectContaining({
-      issue: expect.objectContaining({ id: 'PVTI_item', contentId: 'I_issue', status: 'Backlog' }),
+      issue: expect.objectContaining({ id: 'PVTI_item', contentId: 'I_issue', status: 'Todo' }),
       claim: expect.objectContaining({
         projectItemId: 'PVTI_item',
         lockRefId: 'REF_lock',

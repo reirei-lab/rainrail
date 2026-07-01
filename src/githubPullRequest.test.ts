@@ -156,11 +156,13 @@ describe('createGitHubPullRequestProvider', () => {
 
     await expect(provider.findPullRequestsByHead?.({
       repository: 'reirei-lab/rainrail',
+      headRefName: 'agent/test-pr',
       headSha: 'abc123',
     })).resolves.toMatchObject([
       { number: 45, authorLogin: 'someone-else' },
       { number: 44, authorLogin: 'reirei-agent' },
     ]);
+    expect(requests[0]).toBe('https://api.github.com/repos/reirei-lab/rainrail/pulls?state=open&per_page=100');
     expect(requests).toContain('https://api.github.com/repos/reirei-lab/rainrail/pulls/45');
     expect(requests).toContain('https://api.github.com/repos/reirei-lab/rainrail/pulls/44');
   });
