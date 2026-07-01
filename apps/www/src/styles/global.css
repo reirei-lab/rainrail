@@ -206,6 +206,53 @@ h3 {
   font-weight: 720;
 }
 
+.concept-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.concept-item {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 18px;
+  background: var(--surface);
+}
+
+.guide-panel,
+.example-summary {
+  display: grid;
+  gap: 8px;
+  padding: 24px;
+}
+
+.guide-panel strong,
+.example-summary strong {
+  font-size: 1.2rem;
+  line-height: 1.2;
+}
+
+.guide-panel span,
+.example-summary span {
+  color: var(--muted);
+}
+
+.timeline {
+  display: grid;
+  gap: 14px;
+}
+
+.timeline-step {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.3fr) minmax(0, 0.7fr);
+  gap: 18px;
+  border-top: 1px solid var(--line);
+  padding-top: 18px;
+}
+
+.timeline-step p {
+  margin: 0;
+  color: var(--muted);
+}
+
 .site-footer {
   width: min(1120px, calc(100% - 32px));
   margin: 48px auto 0;
@@ -233,7 +280,13 @@ h3 {
   }
 
   .grid,
+  .concept-grid,
   .doc-list {
     grid-template-columns: 1fr;
+  }
+
+  .timeline-step {
+    grid-template-columns: 1fr;
+    gap: 6px;
   }
 }
