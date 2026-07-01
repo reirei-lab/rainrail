@@ -102,7 +102,7 @@ export async function readRuntimeTimeline(
     return {
       ...result,
       trajectoryPath,
-      entries: parseRuntimeTrajectoryTimeline(await readFile(trajectoryPath, 'utf8')),
+      entries: parseRuntimeTrajectoryTimeline((await readTailText(trajectoryPath, maxJsonlBytes)).text),
     };
   } catch (error) {
     return {
@@ -630,7 +630,7 @@ function redactLeadingPrivateKeyFragment(text: string, context: TailRedactionCon
 }
 
 function hasSensitiveCredentialPrefix(value: string): boolean {
-  return /(?:authorization\s*:\s*(?:bearer|basic|digest|ntlm|negotiate)?\s*|(?:set-cookie|cookie)\s*:\s*|bearer\s+|(?:api[-_]?key|token|secret|password|passphrase|_auth|authorization|set[-_]?cookie|cookie)\s*[:=]\s*|(?:["\\])(?:api[-_]?key|token|secret|password|passphrase|_auth|authorization|set[-_]?cookie|cookie)(?:["\\])\s*:\s*(?:["\\])?|(?:https?|all)_proxy[A-Za-z0-9_-]*\s*[:=]\s*|[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s/@:]+:[^\s@]*|(?:--proxy|--preproxy|--proxy1\.0|--proxy-user|--user|-x|-U|-u|-[A-Za-z]*u)(?:=|\s+))[^\n\r]*$/i.test(value);
+  return /(?:authorization\s*:\s*(?:bearer|basic|digest|ntlm|negotiate)?\s*|(?:set-cookie|cookie)\s*:\s*|bearer\s+|(?:api[-_]?key|token|secret|password|passphrase|_auth|authorization|set[-_]?cookie|cookie)\s*[:=]\s*|(?:["\\])(?:api[-_]?key|token|secret|password|passphrase|_auth|authorization|set[-_]?cookie|cookie)(?:["\\])\s*:\s*(?:["\\])?|(?:https?|all)_proxy[A-Za-z0-9_-]*\s*[:=]\s*|[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s/@:]+:[^\s@]*|(?:--proxy|--preproxy|--proxy1\.0|--proxy-user|--user|-x|-U|-u|-[A-Za-z]*u)(?:=|\s+)|\b(?:github_pat_[A-Za-z0-9_]*|gh[pousr]_[A-Za-z0-9_]*|sk-[A-Za-z0-9_-]*))[^\n\r]*$/i.test(value);
 }
 
 function hasPartialPrivateKeyBegin(value: string): boolean {
@@ -777,13 +777,30 @@ async function readMappedRuntimeSession(
     if (typeof sessionId !== 'string' || sessionId.trim() === '') {
       return undefined;
     }
-    const sessionFile = entry.sessionFile;
-    return typeof sessionFile === 'string' && sessionFile.trim() !== ''
-      ? { sessionId, sessionFile: isAbsolute(sessionFile) ? sessionFile : join(runtimeSessionsDirectory(options), sessionFile) }
-      : { sessionId };
+    const sessionFile = await resolveRuntimeSessionFile(entry.sessionFile, options);
+    return sessionFile === undefined ? { sessionId } : { sessionId, sessionFile };
   } catch {
     return undefined;
   }
+}
+
+async function resolveRuntimeSessionFile(
+  value: unknown,
+  options: RuntimeTimelineReadOptions,
+): Promise<string | undefined> {
+  if (typeof value !== 'string' || value.trim() === '') {
+    return undefined;
+  }
+  const sessionsDirectory = runtimeSessionsDirectory(options);
+  const sessionFile = isAbsolute(value) ? value : join(sessionsDirectory, value);
+  const [root, target] = await Promise.all([
+    realpath(sessionsDirectory).catch(() => resolve(sessionsDirectory)),
+    realpath(sessionFile).catch(() => resolve(sessionFile)),
+  ]);
+  const relativeTarget = relative(root, target);
+  return relativeTarget === '' || (!relativeTarget.startsWith('..') && !isAbsolute(relativeTarget))
+    ? sessionFile
+    : undefined;
 }
 
 function timelineEntryId(event: TrajectoryEvent, index: number): string {

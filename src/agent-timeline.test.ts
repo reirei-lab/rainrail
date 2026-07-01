@@ -1621,6 +1621,33 @@ describe('agent timeline', () => {
     }
   });
 
+  it('redacts bare token fragments from truncated raw jsonl reads', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'rainrail-jsonl-truncated-bare-token-redaction-'));
+    const sessionId = 'jsonl-truncated-bare-token-session';
+    const logPath = join(directory, 'agent.log');
+    const token = `github_pat_${'x'.repeat(3000)}_bareTailSecret`;
+    writeFileSync(logPath, JSON.stringify({
+      result: { status: 'ok', meta: { agentMeta: { sessionId } } },
+    }), 'utf8');
+    writeFileSync(join(directory, `${sessionId}.trajectory.jsonl`), JSON.stringify({
+      type: 'tool.result',
+      data: { output: token },
+    }), 'utf8');
+
+    try {
+      const jsonl = await readRuntimeJsonl(
+        { logPath, agentSessionId: 'agent:main:routing-key' },
+        { sessionsDirectory: directory, maxBytes: 80 },
+      );
+      expect(jsonl.truncated).toBe(true);
+      expect(jsonl.raw).toContain('[redacted-truncated-credential]');
+      expect(jsonl.raw).not.toContain('bareTailSecret');
+      expect(jsonl.raw).not.toContain('github_pat_');
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('redacts JSON sensitive value fragments from truncated raw jsonl reads', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'rainrail-jsonl-truncated-json-secret-redaction-'));
     const sessionId = 'jsonl-truncated-json-secret-session';
@@ -1727,6 +1754,39 @@ describe('agent timeline', () => {
     }
   });
 
+  it('bounds timeline rendering to the trajectory tail', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'rainrail-timeline-tail-bound-'));
+    const sessionId = 'timeline-tail-bound-session';
+    const logPath = join(directory, 'agent.log');
+    const oldSecret = 'old-entry-that-should-not-be-rendered';
+    const latestOutput = 'visible-tail-entry';
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(logPath, JSON.stringify({
+      result: { status: 'ok', meta: { agentMeta: { sessionId } } },
+    }), 'utf8');
+    writeFileSync(join(directory, `${sessionId}.trajectory.jsonl`), [
+      JSON.stringify({ type: 'tool.result', ts: '2026-06-30T15:09:10.000Z', seq: 1, data: { output: oldSecret } }),
+      'x'.repeat(450 * 1024),
+      JSON.stringify({ type: 'tool.result', ts: '2026-06-30T15:19:10.000Z', seq: 2, data: { output: latestOutput } }),
+    ].join('\n'), 'utf8');
+
+    try {
+      const timeline = await readRuntimeTimeline(
+        { logPath, agentSessionId: sessionId },
+        { sessionsDirectory: directory },
+      );
+      expect(timeline.missing).toBe(false);
+      expect(timeline.entries).toEqual([
+        expect.objectContaining({ excerpt: latestOutput }),
+      ]);
+      expect(timeline.entries).not.toEqual(expect.arrayContaining([
+        expect.objectContaining({ excerpt: oldSecret }),
+      ]));
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('ignores relocated trajectory pointers for a different session', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'rainrail-wrong-pointer-timeline-'));
     const otherDirectory = join(directory, 'other-sidecar');
@@ -1823,6 +1883,46 @@ describe('agent timeline', () => {
       expect(timeline.missing).toBe(false);
     } finally {
       rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('ignores sessions.json sessionFile entries outside the sessions directory', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'rainrail-session-file-outside-root-'));
+    const directory = join(root, 'sessions');
+    const outsideDirectory = join(root, 'outside-store');
+    const logPath = join(directory, 'agent.log');
+    const sessionKey = 'agent:main:routing-key';
+    const sessionId = 'actual-session-id';
+    const outsideSessionFile = join(outsideDirectory, 'custom-session.jsonl');
+    const outsideTrajectoryFile = join(outsideDirectory, 'custom-session.trajectory.jsonl');
+    const defaultTrajectoryFile = join(directory, `${sessionId}.trajectory.jsonl`);
+    mkdirSync(directory, { recursive: true });
+    mkdirSync(outsideDirectory, { recursive: true });
+    writeFileSync(logPath, '', 'utf8');
+    writeFileSync(join(directory, 'sessions.json'), JSON.stringify({
+      [sessionKey]: { sessionId, sessionFile: outsideSessionFile },
+    }), 'utf8');
+    writeFileSync(outsideSessionFile, '', 'utf8');
+    writeFileSync(outsideTrajectoryFile, [
+      JSON.stringify({ type: 'tool.result', ts: '2026-06-30T15:09:10.000Z', data: { output: 'outside-secret-content' } }),
+    ].join('\n'), 'utf8');
+    writeFileSync(defaultTrajectoryFile, [
+      JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:08:00.000Z', seq: 1 }),
+    ].join('\n'), 'utf8');
+
+    try {
+      const timeline = await readRuntimeTimeline(
+        { logPath, agentSessionId: sessionKey },
+        { sessionsDirectory: directory },
+      );
+      expect(timeline.sessionId).toBe(sessionId);
+      expect(timeline.trajectoryPath).toBe(defaultTrajectoryFile);
+      expect(timeline.missing).toBe(false);
+      expect(timeline.entries).toEqual([
+        expect.objectContaining({ summary: 'session.started' }),
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 
