@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { createEventEnvelope, RainrailBridgeRoom, type RainrailBridgeRoomOptions, type RainrailBridgeRoomState } from './index.js';
+import {
+  createEventEnvelope,
+  mentionDraftRequestFromEvent,
+  RainrailBridgeRoom,
+  type RainrailBridgeRoomOptions,
+  type RainrailBridgeRoomState,
+} from './index.js';
 
 const TEST_PUBLISH_TOKEN = 'test-publish-token';
 
@@ -880,6 +886,157 @@ describe('Rainrail bridge room', () => {
     expect(chunk).not.toContain('secret-action');
   });
 
+  it('preserves sanitized GitHub mention payloads for downstream workflows', async () => {
+    const storage = fakeState();
+    const room = createTestRoom(storage, { replayLimit: 10 });
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook', repository: 'reirei-lab/rainrail' },
+      name: 'github.review',
+      delivery: {
+        id: 'delivery-review-comment-1',
+        receivedAt: '2026-06-29T18:18:21.000Z',
+      },
+      occurredAt: '2026-06-29T18:18:20.000Z',
+      subject: {
+        type: 'pull_request',
+        id: '49',
+        url: 'https://github.com/reirei-lab/rainrail/pull/49#secret-fragment',
+      },
+      payload: {
+        provider: 'github',
+        event: 'pull_request_review_comment',
+        action: 'created',
+        actor: { login: 'hiragram', token: 'secret-actor-token' },
+        repository: {
+          fullName: 'reirei-lab/rainrail',
+          secret: 'secret-repository-token',
+        },
+        resource: {
+          type: 'pull_request',
+          id: '49',
+          number: 49,
+          title: 'Mention workflow token=secret-title-token',
+          url: 'https://github.com/reirei-lab/rainrail/pull/49?token=secret-query#access_token=secret-resource-fragment',
+        },
+        comment: {
+          id: '3500091217',
+          body: 'Please handle this @reirei-agent token=secret-comment-token',
+          url: 'https://github.com/reirei-lab/rainrail/pull/49#discussion_r3500091217',
+          author: 'hiragram',
+          secret: 'secret-comment-field',
+        },
+        unexpected: { body: 'secret nested body' },
+      },
+      rawPayload: {
+        kind: 'inline-redacted',
+        reference: 'github://deliveries/delivery-review-comment-1',
+      },
+    });
+
+    const publishResponse = await room.fetch(publishRequest(event));
+
+    expect(publishResponse.status).toBe(200);
+    const storedEvent = storage.storedEvents()[0];
+    expect(storedEvent?.payload).toEqual({
+      provider: 'github',
+      event: 'pull_request_review_comment',
+      action: 'created',
+      actor: { login: 'hiragram' },
+      repository: { fullName: 'reirei-lab/rainrail' },
+      resource: {
+        type: 'pull_request',
+        id: '49',
+        number: 49,
+        title: 'Mention workflow token=[redacted]',
+        url: 'https://github.com/reirei-lab/rainrail/pull/49',
+      },
+      comment: {
+        id: '3500091217',
+        url: 'https://github.com/reirei-lab/rainrail/pull/49#discussion_r3500091217',
+        author: 'hiragram',
+        mentionedLogins: ['reirei-agent'],
+      },
+    });
+    expect(mentionDraftRequestFromEvent(storedEvent!, 'reirei-agent')).toMatchObject({
+      commentUrl: 'https://github.com/reirei-lab/rainrail/pull/49#discussion_r3500091217',
+      title: 'Respond to reirei-lab/rainrail#49: Mention workflow token=[redacted]',
+      repository: 'reirei-lab/rainrail',
+      number: 49,
+    });
+
+    const eventsResponse = await room.fetch(eventsRequest());
+    const reader = eventsResponse.body?.getReader();
+    expect(reader).toBeDefined();
+    const chunk = await readUntil(reader!, 'discussion_r3500091217');
+    await reader?.cancel();
+
+    expect(chunk).toContain('token=[redacted]');
+    expect(chunk).toContain('#discussion_r3500091217');
+    expect(chunk).not.toContain('secret-comment-token');
+    expect(chunk).not.toContain('secret-query');
+    expect(chunk).not.toContain('secret-resource-fragment');
+    expect(chunk).not.toContain('secret-actor-token');
+    expect(chunk).not.toContain('secret nested body');
+  });
+
+  it('preserves submitted GitHub review mentions through Bridge payload normalization', async () => {
+    const storage = fakeState();
+    const room = createTestRoom(storage, { replayLimit: 10 });
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook', repository: 'reirei-lab/rainrail' },
+      name: 'github.review',
+      delivery: {
+        id: 'delivery-review-1',
+        receivedAt: '2026-06-29T18:18:21.000Z',
+      },
+      occurredAt: '2026-06-29T18:18:20.000Z',
+      subject: {
+        type: 'review',
+        id: '4594627585',
+        url: 'https://github.com/reirei-lab/rainrail/pull/49#pullrequestreview-4594627585',
+      },
+      payload: {
+        provider: 'github',
+        event: 'pull_request_review',
+        action: 'submitted',
+        actor: { login: 'hiragram' },
+        repository: { fullName: 'reirei-lab/rainrail' },
+        resource: {
+          type: 'review',
+          id: '4594627585',
+          url: 'https://github.com/reirei-lab/rainrail/pull/49#pullrequestreview-4594627585',
+        },
+        review: {
+          id: '4594627585',
+          body: '@reirei-agent please address this review',
+          url: 'https://github.com/reirei-lab/rainrail/pull/49#pullrequestreview-4594627585',
+          author: 'hiragram',
+        },
+        pullRequest: {
+          type: 'pull_request',
+          id: '49',
+          number: 49,
+          title: 'Mention workflow',
+          url: 'https://github.com/reirei-lab/rainrail/pull/49',
+        },
+      },
+      rawPayload: {
+        kind: 'inline-redacted',
+        reference: 'github://deliveries/delivery-review-1',
+      },
+    });
+
+    const publishResponse = await room.fetch(publishRequest(event));
+
+    expect(publishResponse.status).toBe(200);
+    expect(mentionDraftRequestFromEvent(storage.storedEvents()[0]!, 'reirei-agent')).toMatchObject({
+      commentUrl: 'https://github.com/reirei-lab/rainrail/pull/49#pullrequestreview-4594627585',
+      title: 'Respond to reirei-lab/rainrail#49: Mention workflow',
+      repository: 'reirei-lab/rainrail',
+      number: 49,
+    });
+  });
+
   it('normalizes scalar payloads to an empty object before storage and SSE delivery', async () => {
     const storage = fakeState();
     const room = createTestRoom(storage, { replayLimit: 10 });
@@ -919,6 +1076,160 @@ describe('Rainrail bridge room', () => {
 
     expect(chunk).toContain(valid.id);
     expect(chunk).not.toContain('bad\\nid');
+  });
+
+  it('preserves stored GitHub mentioned logins during replay restore', async () => {
+    const storedMention = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook', repository: 'reirei-lab/rainrail' },
+      name: 'github.issue_comment',
+      delivery: {
+        id: 'delivery-mention-1',
+        receivedAt: '2026-06-29T18:18:21.000Z',
+      },
+      occurredAt: '2026-06-29T18:18:20.000Z',
+      subject: { type: 'issue', id: '24' },
+      payload: {
+        provider: 'github',
+        event: 'issue_comment',
+        action: 'created',
+        comment: {
+          id: '123456',
+          url: 'https://github.com/reirei-lab/rainrail/issues/24#issuecomment-123456',
+          mentionedLogins: ['reirei-agent'],
+        },
+      },
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'github://deliveries/delivery-mention-1',
+      },
+    });
+    const room = createTestRoom(storedReplayState([storedMention]), { replayLimit: 10 });
+
+    const eventsResponse = await room.fetch(eventsRequest());
+    const reader = eventsResponse.body?.getReader();
+    expect(reader).toBeDefined();
+    const chunk = await readUntil(reader!, 'github.issue_comment');
+    await reader?.cancel();
+
+    expect(chunk).toContain('"mentionedLogins":["reirei-agent"]');
+  });
+
+  it('truncates Cloudflare exception details before storing replay events', async () => {
+    const storage = fakeState();
+    const room = createTestRoom(storage, { replayLimit: 10 });
+    const event = createEventEnvelope({
+      source: { type: 'cloudflare', name: 'cloudflare-tail' },
+      name: 'cloudflare.error',
+      delivery: {
+        id: 'tail-large-exception',
+        receivedAt: '2026-06-29T18:18:21.000Z',
+      },
+      occurredAt: '2026-06-29T18:18:20.000Z',
+      subject: { type: 'worker', id: 'asme-site' },
+      payload: {
+        action: 'exception',
+        status: '500',
+        conclusion: 'failure',
+        scriptName: 'asme-site',
+        exceptions: [{
+          name: `HugeError ${'n'.repeat(2_000)} name-tail`,
+          message: `prefix {"password":"storage-secret","escapedPassword":"abc\\"escaped-tail","code":123456,"tokens":["bridge-array-secret]bridge-array-tail"],"apiKeys":["bridge-camel-secret"],"apiKeyValue":"bridge-key-value-secret","auth.token":"bridge-dot-token-secret","password.hash":"bridge-dot-hash-secret","password_hash":"bridge-hash-secret","token":{"meta":{},"value":"bridge-nested-object-secret"}} passwords: "bridge-plural-secret" secretValue=bridge-secret-value tokens=["bridge-kv-array-secret-1","bridge-kv-array-secret-2"] passwords=[bridge-kv-password-1,bridge-kv-password-2] token="bridge-quoted-token-secret" password='bridge-quoted-password-secret' token = "bridge-spaced-token-secret" password = bridge-spaced-password-secret DATABASE_URL=postgres://app:bridge-db-pass@db/prod CACHE_URL=redis://bridge-user-token@cache/0 sessionId=bridge-session-id-secret {token=bridge-brace-token-secret} details=[token=bridge-bracket-token-secret] (sessionId=bridge-paren-session-secret) details=[token={"a":"bridge-bracket-structured-secret"}] (sessionId={"x":"bridge-paren-structured-secret"}) x-api-key: bridge-key-secret x-api-key: "bridge-quoted-key-secret" authorization=Basic bridge-basic-secret cookie=session=bridge-cookie-secret; csrf=bridge-csrf-secret ${'m'.repeat(2_000)} suffix`,
+          stack: [
+            `HugeError: ${'s'.repeat(1_500)} token=bridge-stack-secret {"password":"bridge-unclosed-quote-secret {"password":{"x":"bridge-unclosed-structured-secret"`,
+            ...Array.from({ length: 12 }, (_, index) => `message detail ${index}`),
+            '    at resolveCurrentHumanAccount (worker.js:1510:24)',
+            ...Array.from({ length: 40 }, (_, index) => `    at frame${index} (worker.js:${index}:1)`),
+          ].join('\n'),
+        }],
+      },
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'cloudflare://deliveries/tail-large-exception',
+      },
+    });
+
+    const publishResponse = await room.fetch(publishRequest(event));
+
+    expect(publishResponse.status).toBe(200);
+    const payload = storage.storedEvents()[0]?.payload as { exceptions?: Array<{ name: string; message: string; stack: string }> };
+    const exception = payload.exceptions?.[0];
+    expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('name-tail');
+    expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('storage-secret');
+    expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('123456');
+    expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-array-secret');
+    expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-array-tail');
+    expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-camel-secret');
+    expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-key-value-secret');
+    expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-dot-token-secret');
+    expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-dot-hash-secret');
+    expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-hash-secret');
+    expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-nested-object-secret');
+    expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-secret-value');
+    expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-kv-array-secret-1');
+    expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-kv-array-secret-2');
+    expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-kv-password-1');
+    expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-kv-password-2');
+    expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-quoted-token-secret');
+    expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-quoted-password-secret');
+    expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-spaced-token-secret');
+    expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-spaced-password-secret');
+    expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-db-pass');
+    expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-user-token');
+    expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-session-id-secret');
+    expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-brace-token-secret');
+    expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-bracket-token-secret');
+    expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-paren-session-secret');
+    expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-bracket-structured-secret');
+    expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-paren-structured-secret');
+    expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('escaped-tail');
+    expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-plural-secret');
+    expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-key-secret');
+    expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-quoted-key-secret');
+    expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-basic-secret');
+    expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-cookie-secret');
+    expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-csrf-secret');
+    expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-stack-secret');
+    expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-unclosed-quote-secret');
+    expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('bridge-unclosed-structured-secret');
+    expect(exception?.name.length).toBeLessThan(260);
+    expect(exception?.message.length).toBeLessThan(700);
+    expect(exception?.stack.length).toBeLessThan(1_500);
+    expect(exception?.stack).toContain('resolveCurrentHumanAccount');
+    expect(exception?.name).toContain('... truncated ...');
+    expect(exception?.message).toContain('... truncated ...');
+    expect(exception?.stack).toContain('... truncated ...');
+  });
+
+  it('does not preserve exception details for non-Cloudflare payloads', async () => {
+    const storage = fakeState();
+    const room = createTestRoom(storage, { replayLimit: 10 });
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook', repository: 'reirei-lab/rainrail' },
+      name: 'github.issue',
+      delivery: {
+        id: 'github-exception-shaped-payload',
+        receivedAt: '2026-06-29T18:18:21.000Z',
+      },
+      occurredAt: '2026-06-29T18:18:20.000Z',
+      subject: { type: 'issue', id: '24' },
+      payload: {
+        action: 'created',
+        exceptions: [{
+          message: 'provider body should not be stored',
+          stack: '    at provider (github-webhook.js:1:1)',
+        }],
+      },
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'github://deliveries/github-exception-shaped-payload',
+      },
+    });
+
+    const publishResponse = await room.fetch(publishRequest(event));
+
+    expect(publishResponse.status).toBe(200);
+    expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('provider body should not be stored');
+    expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('exceptions');
   });
 
   it('passes Last-Event-ID to the SSE replay policy', async () => {

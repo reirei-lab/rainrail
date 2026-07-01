@@ -285,6 +285,7 @@ export interface NormalizedGitHubWebhookPayload {
   pages?: NormalizedGitHubWikiPage[];
   changes?: NormalizedGitHubChange[];
   comment?: NormalizedGitHubComment;
+  review?: NormalizedGitHubComment;
   dispatch?: NormalizedGitHubDispatch;
   requestedAction?: NormalizedGitHubRequestedAction;
 }
@@ -991,6 +992,7 @@ function normalizeGitHubWebhookPayload(
     ...normalizedCustomPropertyChanges(payload),
   ];
   const comment = normalizedComment(payload.comment);
+  const review = normalizedReview(payload.review);
   const dispatch = normalizedDispatch(githubEvent, payload);
   const requestedAction = normalizedRequestedAction(payload.requested_action);
 
@@ -1016,6 +1018,7 @@ function normalizeGitHubWebhookPayload(
     ...(pages.length > 0 ? { pages } : {}),
     ...(changes.length > 0 ? { changes } : {}),
     ...(comment ? { comment } : {}),
+    ...(review ? { review } : {}),
     ...(dispatch ? { dispatch } : {}),
     ...(requestedAction ? { requestedAction } : {}),
   };
@@ -1416,6 +1419,7 @@ function resourceFromReview(review: GitHubWebhookRecord): NormalizedGitHubResour
     type: 'review',
     id: String(review.id ?? 'unknown'),
     ...optionalStringProperty('state', stringField(review, 'state')),
+    ...optionalStringProperty('body', stringField(review, 'body')),
     ...optionalStringProperty('url', stringField(review, 'html_url')),
   };
 }
@@ -2121,6 +2125,20 @@ function normalizedComment(comment: unknown): NormalizedGitHubComment | undefine
     ...optionalNumberProperty('originalStartLine', numberField(record, 'original_start_line')),
     ...optionalStringProperty('commitId', stringField(record, 'commit_id')),
     ...optionalNumberProperty('position', numberField(record, 'position')),
+  };
+}
+
+function normalizedReview(review: unknown): NormalizedGitHubComment | undefined {
+  if (!review || typeof review !== 'object' || Array.isArray(review)) {
+    return undefined;
+  }
+  const record = review as GitHubWebhookRecord;
+
+  return {
+    id: String(record.id ?? 'unknown'),
+    ...optionalStringProperty('body', stringField(record, 'body')),
+    ...optionalStringProperty('url', stringField(record, 'html_url')),
+    ...optionalStringProperty('author', stringField(recordField(record, 'user'), 'login')),
   };
 }
 

@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import type { GitHubAuthToken } from './github-auth.js';
 import {
   getGitHubAuthToken,
@@ -5,6 +7,7 @@ import {
   isGitHubAuthFallbackEligibleError,
   type GitHubAuthConfig,
 } from './github-auth.js';
+import { mentionDraftMarker } from './mention-draft.js';
 import { recordGitHubRateLimit } from './github-rate-limit.js';
 import {
   getNextProjectIssueToStart,
@@ -17,6 +20,8 @@ import type {
   ProjectIssueClaimInput,
   ProjectIssueFinalizeInput,
   ProjectIssueReleaseInput,
+  ProjectMentionDraftInput,
+  ProjectMentionDraftItem,
   TaskQueueProvider,
 } from './task-queue.js';
 
@@ -66,6 +71,11 @@ interface ProjectItemsData {
       };
     };
   };
+}
+
+interface MentionDraftProjectItem {
+  id: string;
+  status?: string;
 }
 
 interface ProjectMetadata {
@@ -126,6 +136,21 @@ interface ProjectMetadataData {
   };
 }
 
+interface RepositoryLockMetadata {
+  id?: string;
+  nameWithOwner?: string;
+  defaultBranchOid?: string;
+  defaultBranchTreeOid?: string;
+}
+
+interface AddProjectDraftIssueData {
+  addProjectV2DraftIssue?: {
+    projectItem?: {
+      id?: unknown;
+    };
+  };
+}
+
 export function createGitHubProjectTaskQueueProvider(
   options: GitHubProjectTaskQueueOptions,
 ): TaskQueueProvider {
@@ -149,6 +174,7 @@ export function createGitHubProjectTaskQueueProvider(
     selection,
     listProjectIssues: async () => fetchProjectIssues(options.config, fetchImpl, auth),
     claimProjectIssue: async (input) => claimProjectIssue(options.config, input, fetchImpl, auth),
+    addMentionDraftItem: async (input) => addMentionDraftItem(options.config, input, fetchImpl, auth),
     finalizeProjectIssueClaim: async (input) => finalizeProjectIssueClaim(options.config, input, fetchImpl, auth),
     releaseProjectIssue: async (input) => releaseProjectIssue(options.config, input, fetchImpl, auth),
   };
@@ -183,6 +209,319 @@ async function fetchProjectIssues(
   } while (after !== undefined);
 
   return issues;
+}
+
+async function addMentionDraftItem(
+  config: GitHubProjectTaskQueueConfig,
+  input: ProjectMentionDraftInput,
+  fetchImpl: typeof fetch,
+  auth: GitHubProjectAuthTokenProvider,
+): Promise<ProjectMentionDraftItem> {
+  const normalizedInput = normalizeMentionDraftInput(input);
+  const metadata = await loadProjectMetadata(config, fetchImpl, auth);
+  const existing = await findExistingMentionDraftItem(config, normalizedInput, fetchImpl, auth);
+  if (existing !== undefined) {
+    return reuseMentionDraftItem(config, metadata, existing, fetchImpl, auth);
+  }
+
+  return withMentionDraftCreationLock(config, normalizedInput, fetchImpl, auth, async () => {
+    const lockedExisting = await findExistingMentionDraftItem(config, normalizedInput, fetchImpl, auth);
+    if (lockedExisting !== undefined) {
+      return reuseMentionDraftItem(config, metadata, lockedExisting, fetchImpl, auth);
+    }
+
+    return createMentionDraftItem(metadata, normalizedInput, fetchImpl, auth);
+  });
+}
+
+function normalizeMentionDraftInput(input: ProjectMentionDraftInput): ProjectMentionDraftInput {
+  const fromUrl = mentionDraftRepositoryFromUrl(input.commentUrl);
+  const repository = normalizeRepositoryNameWithOwner(input.repository) ?? fromUrl?.repository;
+  const number = input.number ?? fromUrl?.number;
+  if (repository === undefined) {
+    throw new Error('Mention draft repository is required');
+  }
+  return {
+    ...input,
+    repository,
+    ...(number === undefined ? {} : { number }),
+    body: mentionDraftBodyWithRepository(input.body, repository, number),
+  };
+}
+
+function mentionDraftRepositoryFromUrl(value: string): { repository: string; number?: number } | undefined {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'https:' || url.hostname !== 'github.com') return undefined;
+    const parts = url.pathname.split('/').filter((part) => part.length > 0);
+    if (parts.length < 4 || !/^(issues|pull)$/u.test(parts[2] ?? '')) return undefined;
+    const number = Number.parseInt(parts[3] ?? '', 10);
+    return {
+      repository: `${parts[0]}/${parts[1]}`,
+      ...(Number.isInteger(number) ? { number } : {}),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function mentionDraftBodyWithRepository(body: string, repository: string, number: number | undefined): string {
+  const lines = body
+    .split('\n')
+    .filter((line) => !/^(Repository|Number):/iu.test(line.trim()));
+  lines.push(`Repository: ${repository}`);
+  if (number !== undefined) {
+    lines.push(`Number: ${number}`);
+  }
+  return lines.join('\n');
+}
+
+function normalizeRepositoryNameWithOwner(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  if (normalized === undefined || normalized.length === 0 || /[\r\n]/u.test(normalized)) {
+    return undefined;
+  }
+  try {
+    const [owner, repo] = splitRepositoryNameWithOwner(normalized);
+    if (!/^[A-Za-z0-9_.-]+$/u.test(owner) || !/^[A-Za-z0-9_.-]+$/u.test(repo)) {
+      return undefined;
+    }
+    return `${owner}/${repo}`;
+  } catch {
+    return undefined;
+  }
+}
+
+async function reuseMentionDraftItem(
+  config: GitHubProjectTaskQueueConfig,
+  metadata: ProjectMetadata,
+  existing: MentionDraftProjectItem,
+  fetchImpl: typeof fetch,
+  auth: GitHubProjectAuthTokenProvider,
+): Promise<ProjectMentionDraftItem> {
+  if (shouldResetExistingMentionDraftStatus(config, existing)) {
+    await updateProjectFieldWithRetry(
+      fetchImpl,
+      auth,
+      metadata.projectId,
+      existing.id,
+      metadata.statusFieldId,
+      { singleSelectOptionId: metadata.todoStatusOptionId },
+    );
+  }
+
+  return {
+    projectId: metadata.projectId,
+    projectItemId: existing.id,
+    statusFieldId: metadata.statusFieldId,
+    statusOptionId: metadata.todoStatusOptionId,
+    created: false,
+  };
+}
+
+async function createMentionDraftItem(
+  metadata: ProjectMetadata,
+  input: ProjectMentionDraftInput,
+  fetchImpl: typeof fetch,
+  auth: GitHubProjectAuthTokenProvider,
+): Promise<ProjectMentionDraftItem> {
+  const payload = await runGraphql<AddProjectDraftIssueData>(fetchImpl, auth, addProjectDraftIssueMutation, {
+    projectId: metadata.projectId,
+    title: input.title,
+    body: input.body,
+  });
+  const projectItemId = payload.addProjectV2DraftIssue?.projectItem?.id;
+  if (typeof projectItemId !== 'string' || projectItemId.length === 0) {
+    throw new Error('GitHub Project draft issue response is missing project item id');
+  }
+
+  await updateProjectFieldWithRetry(
+    fetchImpl,
+    auth,
+    metadata.projectId,
+    projectItemId,
+    metadata.statusFieldId,
+    { singleSelectOptionId: metadata.todoStatusOptionId },
+  );
+
+  return {
+    projectId: metadata.projectId,
+    projectItemId,
+    statusFieldId: metadata.statusFieldId,
+    statusOptionId: metadata.todoStatusOptionId,
+    created: true,
+  };
+}
+
+async function withMentionDraftCreationLock<T>(
+  config: GitHubProjectTaskQueueConfig,
+  input: ProjectMentionDraftInput,
+  fetchImpl: typeof fetch,
+  auth: GitHubProjectAuthTokenProvider,
+  fn: () => Promise<T>,
+): Promise<T> {
+  if (input.repository === undefined) {
+    return fn();
+  }
+  const repository = await loadRepositoryLockMetadata(input.repository, fetchImpl, auth);
+  if (
+    repository.id === undefined
+    || repository.nameWithOwner === undefined
+    || repository.defaultBranchOid === undefined
+    || repository.defaultBranchTreeOid === undefined
+  ) {
+    throw new Error('Mention draft creation lock metadata is required');
+  }
+
+  const issue = mentionDraftCreationLockIssue(config, input);
+  const lockInput = mentionDraftCreationLockInput(issue);
+  const lockOid = await createProjectIssueClaimLockCommit({
+    repositoryNameWithOwner: repository.nameWithOwner,
+    defaultBranchOid: repository.defaultBranchOid,
+    defaultBranchTreeOid: repository.defaultBranchTreeOid,
+  }, lockInput, fetchImpl, auth);
+  const lockRefId = await acquireMentionDraftCreationLock(
+    repository.id,
+    issue,
+    lockOid,
+    fetchImpl,
+    auth,
+  );
+  try {
+    return await fn();
+  } finally {
+    await deleteProjectIssueClaimLock({ projectItemId: issue.id, lockRefId }, fetchImpl, auth).catch(() => undefined);
+  }
+}
+
+async function acquireMentionDraftCreationLock(
+  repositoryId: string,
+  issue: ProjectIssue,
+  lockOid: string,
+  fetchImpl: typeof fetch,
+  auth: GitHubProjectAuthTokenProvider,
+): Promise<string> {
+  const name = projectIssueLockRefName(issue);
+  try {
+    return await createProjectIssueClaimLock(repositoryId, name, lockOid, fetchImpl, auth);
+  } catch (error) {
+    if (!isReferenceAlreadyExistsError(error)) {
+      throw error;
+    }
+    const existingLock = await loadProjectIssueClaimLockIfExists(repositoryId, name, fetchImpl, auth);
+    if (existingLock === undefined || !isRecoverableStaleLock(existingLock, { issue })) {
+      throw error;
+    }
+    const currentLock = await loadProjectIssueClaimLockIfExists(repositoryId, name, fetchImpl, auth);
+    if (
+      currentLock === undefined
+      || !isSameProjectIssueClaimLock(existingLock, currentLock)
+      || !isRecoverableStaleLock(currentLock, { issue })
+    ) {
+      throw error;
+    }
+    await deleteProjectIssueClaimLock({ projectItemId: issue.id, lockRefId: currentLock.id }, fetchImpl, auth);
+    return createProjectIssueClaimLock(repositoryId, name, lockOid, fetchImpl, auth);
+  }
+}
+
+function mentionDraftCreationLockIssue(
+  config: GitHubProjectTaskQueueConfig,
+  input: ProjectMentionDraftInput,
+): ProjectIssue {
+  const targetAgentLogin = input.targetAgentLogin ?? config.assigneeLogin;
+  return {
+    id: `mention-draft-${shortHash(`${targetAgentLogin}\n${input.commentUrl}`)}`,
+    contentType: 'DraftIssue',
+    title: input.title,
+    state: 'OPEN',
+    status: config.todoStatus,
+    assigneeLogins: [targetAgentLogin],
+    ...(input.repository === undefined ? {} : { repository: input.repository }),
+    ...(input.number === undefined ? {} : { number: input.number }),
+    commentUrl: input.commentUrl,
+  };
+}
+
+function mentionDraftCreationLockInput(issue: ProjectIssue): ProjectIssueClaimInput {
+  return {
+    issue,
+    agentSessionId: `mention-draft:${slug(issue.assigneeLogins[0] ?? 'agent')}:${slug(issue.commentUrl ?? issue.id)}`,
+    branchName: `mention-draft/${slug(issue.repository ?? 'repo')}-${slug(issue.id)}`,
+    commentBody: 'Rainrail is creating a mention draft.',
+  };
+}
+
+async function findExistingMentionDraftItem(
+  config: GitHubProjectTaskQueueConfig,
+  input: ProjectMentionDraftInput,
+  fetchImpl: typeof fetch,
+  auth: GitHubProjectAuthTokenProvider,
+): Promise<MentionDraftProjectItem | undefined> {
+  let after: string | undefined;
+
+  do {
+    const payload = await runGraphql<ProjectItemsData>(fetchImpl, auth, mentionDraftItemsQuery, {
+      organization: config.organization,
+      projectNumber: config.projectNumber,
+      after,
+      statusFieldName: config.statusFieldName,
+    });
+    const items = payload.organization?.projectV2?.items;
+    if (items === undefined || !Array.isArray(items.nodes)) {
+      throw new Error('GitHub Project items response is missing project items');
+    }
+    for (const item of items.nodes) {
+      const draft = mentionDraftItemMatch(item, input.commentUrl, input.targetAgentLogin ?? config.assigneeLogin, config);
+      if (draft !== undefined) {
+        return draft;
+      }
+    }
+    after = items.pageInfo?.hasNextPage === true && typeof items.pageInfo.endCursor === 'string'
+      ? items.pageInfo.endCursor
+      : undefined;
+  } while (after !== undefined);
+
+  return undefined;
+}
+
+function mentionDraftItemMatch(
+  item: unknown,
+  commentUrl: string,
+  targetAgentLogin: string,
+  config: GitHubProjectTaskQueueConfig,
+): MentionDraftProjectItem | undefined {
+  if (!isRecord(item) || typeof item.id !== 'string' || !isRecord(item.content)) {
+    return undefined;
+  }
+  const content = item.content;
+  if (content.__typename !== 'DraftIssue' || typeof content.body !== 'string') {
+    return undefined;
+  }
+  if (
+    !content.body.includes(mentionDraftMarker)
+    || !hasExactMentionUrlLine(content.body, commentUrl)
+    || !hasMentionDraftTargetAgent(content.body, targetAgentLogin)
+  ) {
+    return undefined;
+  }
+  const status = fieldValue(item, config.statusFieldName);
+  return {
+    id: item.id,
+    ...(status === undefined ? {} : { status }),
+  };
+}
+
+function hasExactMentionUrlLine(body: string, commentUrl: string): boolean {
+  return mentionDraftLine(body, 'Mention URL') === commentUrl;
+}
+
+function shouldResetExistingMentionDraftStatus(
+  config: GitHubProjectTaskQueueConfig,
+  draft: MentionDraftProjectItem,
+): boolean {
+  const status = normalizeToken(draft.status ?? '');
+  return status.length === 0 || status === normalizeToken(config.backlogStatus);
 }
 
 async function reconcileProjectIssueClaimState(
@@ -369,17 +708,24 @@ async function claimProjectIssue(
   fetchImpl: typeof fetch,
   auth: GitHubProjectAuthTokenProvider,
 ): Promise<ProjectIssueClaim> {
-  if (input.issue.contentId === undefined) {
+  if (input.issue.contentType !== 'DraftIssue' && input.issue.contentId === undefined) {
     throw new Error('GitHub Project issue claim requires a content id');
   }
 
   const before = await loadProjectItemStatus(input.issue.id, fetchImpl, auth, config);
-  assertClaimable(before, input, config);
+  const claimStatus = await projectItemStatusWithClaimMetadata(before, input.issue, fetchImpl, auth);
+  assertClaimable(claimStatus, input, config);
   await assertParentIssueExecutionConditions(config, input.issue, fetchImpl, auth);
   const metadata = await loadProjectMetadata(config, fetchImpl, auth);
   let claim: ProjectIssueClaim | undefined;
+  const useClaimLock = shouldUseProjectIssueClaimLock(claimStatus);
+  if (!useClaimLock) {
+    throw new Error('Project issue claim lock is required for non-draft project issues and mention drafts');
+  }
   try {
-    const lockRefId = await acquireProjectIssueClaimLock(before, input, config, fetchImpl, auth);
+    const lockRefId = useClaimLock
+      ? await acquireProjectIssueClaimLock(claimStatus, input, config, fetchImpl, auth)
+      : undefined;
     claim = {
       projectId: metadata.projectId,
       projectItemId: input.issue.id,
@@ -387,15 +733,19 @@ async function claimProjectIssue(
       statusOptionId: metadata.statusOptionId,
       agentSessionIdFieldId: metadata.agentSessionIdFieldId,
       branchFieldId: metadata.branchFieldId,
-      contentId: input.issue.contentId,
       commentBody: input.commentBody,
-      lockRefId,
-      ...(before.repositoryId === undefined ? {} : { lockRepositoryId: before.repositoryId }),
-      ...(before.repositoryNameWithOwner === undefined ? {} : { lockRepositoryNameWithOwner: before.repositoryNameWithOwner }),
-      ...(before.defaultBranchOid === undefined ? {} : { lockDefaultBranchOid: before.defaultBranchOid }),
-      ...(before.defaultBranchTreeOid === undefined ? {} : { lockDefaultBranchTreeOid: before.defaultBranchTreeOid }),
+      ...(input.issue.contentId === undefined ? {} : { contentId: input.issue.contentId }),
+      ...(lockRefId === undefined ? {} : { lockRefId }),
+      ...(claimStatus.repositoryId === undefined ? {} : { lockRepositoryId: claimStatus.repositoryId }),
+      ...(claimStatus.repositoryNameWithOwner === undefined ? {} : { lockRepositoryNameWithOwner: claimStatus.repositoryNameWithOwner }),
+      ...(claimStatus.defaultBranchOid === undefined ? {} : { lockDefaultBranchOid: claimStatus.defaultBranchOid }),
+      ...(claimStatus.defaultBranchTreeOid === undefined ? {} : { lockDefaultBranchTreeOid: claimStatus.defaultBranchTreeOid }),
       ...(input.issue.status === undefined ? {} : { originalStatus: input.issue.status }),
     };
+    if (!useClaimLock) {
+      await claimDraftProjectIssue(config, input, claim, claimStatus, metadata, fetchImpl, auth);
+      return claim;
+    }
     assertClaimable(await loadProjectItemStatus(input.issue.id, fetchImpl, auth, config), input, config);
     await assertParentIssueExecutionConditions(config, input.issue, fetchImpl, auth);
     await assertProjectIssueSelectionStillAvailable(config, input.issue, fetchImpl, auth);
@@ -407,6 +757,111 @@ async function claimProjectIssue(
   }
 
   return claim;
+}
+
+function shouldUseProjectIssueClaimLock(status: ProjectItemStatus): boolean {
+  return status.repositoryId !== undefined && status.defaultBranchOid !== undefined;
+}
+
+async function projectItemStatusWithClaimMetadata(
+  status: ProjectItemStatus,
+  issue: ProjectIssue,
+  fetchImpl: typeof fetch,
+  auth: GitHubProjectAuthTokenProvider,
+): Promise<ProjectItemStatus> {
+  if (status.repositoryId !== undefined || issue.repository === undefined) {
+    return status;
+  }
+  const repository = await loadRepositoryLockMetadata(issue.repository, fetchImpl, auth);
+  return {
+    ...status,
+    ...(repository.id === undefined ? {} : { repositoryId: repository.id }),
+    ...(repository.nameWithOwner === undefined ? {} : { repositoryNameWithOwner: repository.nameWithOwner }),
+    ...(repository.defaultBranchOid === undefined ? {} : { defaultBranchOid: repository.defaultBranchOid }),
+    ...(repository.defaultBranchTreeOid === undefined ? {} : { defaultBranchTreeOid: repository.defaultBranchTreeOid }),
+  };
+}
+
+async function loadRepositoryLockMetadata(
+  repositoryNameWithOwner: string,
+  fetchImpl: typeof fetch,
+  auth: GitHubProjectAuthTokenProvider,
+): Promise<RepositoryLockMetadata> {
+  const [owner, repo] = splitRepositoryNameWithOwner(repositoryNameWithOwner);
+  const payload = await runGraphql<{
+    repository?: {
+      id?: unknown;
+      nameWithOwner?: unknown;
+      defaultBranchRef?: {
+        target?: {
+          oid?: unknown;
+          tree?: { oid?: unknown };
+        };
+      };
+    };
+  }>(fetchImpl, auth, repositoryLockMetadataQuery, { owner, repo });
+  const repository = payload.repository;
+  const target = repository?.defaultBranchRef?.target;
+  return {
+    ...(typeof repository?.id === 'string' ? { id: repository.id } : {}),
+    ...(typeof repository?.nameWithOwner === 'string' ? { nameWithOwner: repository.nameWithOwner } : {}),
+    ...(typeof target?.oid === 'string' ? { defaultBranchOid: target.oid } : {}),
+    ...(typeof target?.tree?.oid === 'string' ? { defaultBranchTreeOid: target.tree.oid } : {}),
+  };
+}
+
+async function claimDraftProjectIssue(
+  config: GitHubProjectTaskQueueConfig,
+  input: ProjectIssueClaimInput,
+  claim: ProjectIssueClaim,
+  before: ProjectItemStatus,
+  metadata: ProjectMetadata,
+  fetchImpl: typeof fetch,
+  auth: GitHubProjectAuthTokenProvider,
+): Promise<void> {
+  try {
+    await updateProjectField(fetchImpl, auth, metadata.projectId, input.issue.id, metadata.statusFieldId, {
+      singleSelectOptionId: metadata.statusOptionId,
+    });
+    await updateProjectField(fetchImpl, auth, metadata.projectId, input.issue.id, metadata.agentSessionIdFieldId, {
+      text: input.agentSessionId,
+    });
+    await updateProjectField(fetchImpl, auth, metadata.projectId, input.issue.id, metadata.branchFieldId, {
+      text: input.branchName,
+    });
+    const after = await loadProjectItemStatus(input.issue.id, fetchImpl, auth, config);
+    assertClaimMatches(after, {
+      issue: input.issue,
+      agentSessionId: input.agentSessionId,
+      branchName: input.branchName,
+      commentBody: claim.commentBody ?? '',
+    }, config);
+  } catch (error) {
+    await rollbackDraftProjectIssueClaim(config, input.issue.id, before, metadata, fetchImpl, auth);
+    throw error;
+  }
+}
+
+async function rollbackDraftProjectIssueClaim(
+  config: GitHubProjectTaskQueueConfig,
+  projectItemId: string,
+  before: ProjectItemStatus,
+  metadata: ProjectMetadata,
+  fetchImpl: typeof fetch,
+  auth: GitHubProjectAuthTokenProvider,
+): Promise<void> {
+  const releaseStatusOptionId = normalizeToken(before.status ?? config.todoStatus) === normalizeToken(config.backlogStatus)
+    ? metadata.backlogStatusOptionId
+    : metadata.todoStatusOptionId;
+  await updateProjectField(fetchImpl, auth, metadata.projectId, projectItemId, metadata.agentSessionIdFieldId, {
+    text: before.agentSessionId ?? '',
+  }).catch(() => undefined);
+  await updateProjectField(fetchImpl, auth, metadata.projectId, projectItemId, metadata.branchFieldId, {
+    text: before.branchName ?? '',
+  }).catch(() => undefined);
+  await updateProjectField(fetchImpl, auth, metadata.projectId, projectItemId, metadata.statusFieldId, {
+    singleSelectOptionId: releaseStatusOptionId,
+  }).catch(() => undefined);
 }
 
 async function finalizeProjectIssueClaim(
@@ -424,6 +879,11 @@ async function finalizeProjectIssueClaim(
   }
   const metadata = await loadProjectMetadata(config, fetchImpl, auth);
   const before = await loadProjectItemStatus(input.issue.id, fetchImpl, auth, config);
+  if (input.issue.contentType === 'DraftIssue') {
+    await finalizeDraftProjectIssueClaim(config, input, before, metadata, fetchImpl, auth);
+    await deleteProjectIssueClaimLocks(input.claim, fetchImpl, auth);
+    return;
+  }
   assertClaimable(before, {
     issue: input.issue,
     agentSessionId: input.agentSessionId,
@@ -461,6 +921,54 @@ async function finalizeProjectIssueClaim(
   }
 }
 
+async function finalizeDraftProjectIssueClaim(
+  config: GitHubProjectTaskQueueConfig,
+  input: ProjectIssueFinalizeInput,
+  before: ProjectItemStatus,
+  metadata: ProjectMetadata,
+  fetchImpl: typeof fetch,
+  auth: GitHubProjectAuthTokenProvider,
+): Promise<void> {
+  const currentStatus = normalizeToken(before.status ?? '');
+  if (currentStatus !== normalizeToken(config.inProgressStatus)) {
+    assertClaimable(before, {
+      issue: input.issue,
+      agentSessionId: input.agentSessionId,
+      branchName: input.branchName,
+      commentBody: input.claim.commentBody ?? '',
+    }, config);
+    await updateProjectField(fetchImpl, auth, metadata.projectId, input.issue.id, metadata.statusFieldId, {
+      singleSelectOptionId: metadata.statusOptionId,
+    });
+  } else if (!isRestorableDispatchedClaimOwner(before, {
+    id: input.claim.lockRefId ?? '',
+    projectItemId: input.issue.id,
+    createdAt: new Date(0).toISOString(),
+    agentSessionId: input.agentSessionId,
+    branchName: input.branchName,
+  })) {
+    throw new Error('GitHub Project item claim was overwritten by another assignment');
+  }
+
+  if (before.agentSessionId !== input.agentSessionId) {
+    await updateProjectField(fetchImpl, auth, metadata.projectId, input.issue.id, metadata.agentSessionIdFieldId, {
+      text: input.agentSessionId,
+    });
+  }
+  if (before.branchName !== input.branchName) {
+    await updateProjectField(fetchImpl, auth, metadata.projectId, input.issue.id, metadata.branchFieldId, {
+      text: input.branchName,
+    });
+  }
+  const after = await loadProjectItemStatus(input.issue.id, fetchImpl, auth, config);
+  assertClaimMatches(after, {
+    issue: input.issue,
+    agentSessionId: input.agentSessionId,
+    branchName: input.branchName,
+    commentBody: input.claim.commentBody ?? '',
+  }, config);
+}
+
 async function releaseProjectIssue(
   config: GitHubProjectTaskQueueConfig,
   input: ProjectIssueReleaseInput,
@@ -469,9 +977,9 @@ async function releaseProjectIssue(
 ): Promise<void> {
   const current = await loadProjectItemStatus(input.issue.id, fetchImpl, auth, config);
   const canReleaseCurrentClaim = shouldReleaseCurrentClaim(current, input, config)
-    || await isRetryablePartialReleaseCurrentClaim(current, input, fetchImpl, auth);
+    || await isRetryablePartialReleaseCurrentClaim(config, current, input, fetchImpl, auth);
   if (!canReleaseCurrentClaim) {
-    await deleteProjectIssueClaimLocksIfOwned(current.repositoryId, input, fetchImpl, auth);
+    await deleteProjectIssueClaimLocksIfOwned(current.repositoryId ?? input.claim.lockRepositoryId, input, fetchImpl, auth);
     return;
   }
   const metadata = await loadProjectMetadata(config, fetchImpl, auth);
@@ -593,6 +1101,13 @@ async function markProjectIssueClaimDispatched(
         branchName: input.branchName,
         commentBody: input.claim.commentBody ?? '',
       }, fetchImpl, auth, { dispatchedAt: new Date().toISOString() });
+      try {
+        await assertCurrentStartingClaimLockOwned(input, fetchImpl, auth);
+      } catch (error) {
+        if (isClaimLockOwnershipError(error)) {
+          throw error;
+        }
+      }
       await updateProjectIssueClaimLock(input.claim.lockRefId, lockOid, fetchImpl, auth);
       return;
     } catch (error) {
@@ -639,8 +1154,11 @@ async function assertCurrentStartingClaimLockOwned(
   } catch (error) {
     throw new Error('GitHub Project issue claim lock ownership could not be verified', { cause: error });
   }
+  if (lock === undefined) {
+    throw new Error('GitHub Project issue ownership could not be verified');
+  }
   if (
-    lock?.projectItemId !== input.issue.id
+    lock.projectItemId !== input.issue.id
     || lock.agentSessionId !== input.agentSessionId
     || lock.branchName !== input.branchName
   ) {
@@ -649,7 +1167,12 @@ async function assertCurrentStartingClaimLockOwned(
 }
 
 function isClaimLockOwnershipError(error: unknown): boolean {
-  return error instanceof Error && error.message.includes('claim lock');
+  return error instanceof Error && (
+    error.message.includes('claim lock is no longer owned')
+    || error.message.includes('claim lock ownership could not be verified')
+    || error.message.includes('issue ownership could not be verified')
+    || error.message.includes('claim is missing lock commit metadata')
+  );
 }
 
 async function createProjectIssueClaimLockCommit(
@@ -909,10 +1432,10 @@ async function deleteProjectIssueClaimLocks(
   fetchImpl: typeof fetch,
   auth: GitHubProjectAuthTokenProvider,
 ): Promise<void> {
-  await deleteProjectIssueClaimLock(claim, fetchImpl, auth);
   if (claim.dispatchedLockRefId !== undefined) {
     await deleteProjectIssueClaimLock({ ...claim, lockRefId: claim.dispatchedLockRefId }, fetchImpl, auth);
   }
+  await deleteProjectIssueClaimLock(claim, fetchImpl, auth);
 }
 
 async function deleteProjectIssueClaimLocksIfOwned(
@@ -969,12 +1492,13 @@ async function loadOwnedProjectIssueClaimLock(
 }
 
 async function isRetryablePartialReleaseCurrentClaim(
+  config: GitHubProjectTaskQueueConfig,
   status: ProjectItemStatus,
   input: ProjectIssueReleaseInput,
   fetchImpl: typeof fetch,
   auth: GitHubProjectAuthTokenProvider,
 ): Promise<boolean> {
-  if (normalizeToken(status.status ?? '') !== 'inprogress') {
+  if (normalizeToken(status.status ?? '') !== normalizeToken(config.inProgressStatus)) {
     return false;
   }
   const session = status.agentSessionId?.trim() ?? '';
@@ -987,7 +1511,7 @@ async function isRetryablePartialReleaseCurrentClaim(
   if (session === input.agentSessionId || branch === input.branchName) {
     return true;
   }
-  const lock = await loadOwnedProjectIssueClaimLock(status.repositoryId, input, fetchImpl, auth);
+  const lock = await loadOwnedProjectIssueClaimLock(status.repositoryId ?? input.claim.lockRepositoryId, input, fetchImpl, auth);
   return lock !== undefined;
 }
 
@@ -1150,7 +1674,7 @@ async function loadProjectItemStatus(
     ...(repository?.defaultBranchTreeOid === undefined ? {} : { defaultBranchTreeOid: repository.defaultBranchTreeOid }),
     ...(parent === undefined ? {} : { parent }),
     ...(blockers.length === 0 ? {} : { blockedBy: blockers }),
-    assigneeLogins: projectItemAssigneeLogins(payload.node),
+    assigneeLogins: projectItemAssigneeLogins(payload.node, config),
   };
 }
 
@@ -1451,21 +1975,43 @@ function mapProjectIssueItem(item: unknown, config: GitHubProjectTaskQueueConfig
   if (title === undefined) {
     return [];
   }
+  const draftBody = contentType === 'DraftIssue' && typeof content.body === 'string'
+    ? content.body
+    : undefined;
+  const commentUrl = draftBody !== undefined
+    ? mentionDraftCommentUrl(draftBody)
+    : undefined;
+  if (contentType === 'DraftIssue' && commentUrl === undefined) {
+    return [];
+  }
+  if (contentType === 'DraftIssue' && !hasMentionDraftTargetAgent(draftBody ?? '', config.assigneeLogin)) {
+    return [];
+  }
 
-  const repository = repositoryName(content);
+  const repository = draftBody === undefined ? repositoryName(content) : mentionDraftRepository(draftBody);
+  if (contentType === 'DraftIssue' && repository === undefined) {
+    return [];
+  }
+  const assigneeLogins = projectItemAssigneeLogins(item, config);
+  if (contentType === 'DraftIssue' && assigneeLogins.length === 0) {
+    return [];
+  }
   const subIssueCount = typeof content.subIssuesSummary === 'object' && content.subIssuesSummary !== null
     && typeof (content.subIssuesSummary as { total?: unknown }).total === 'number'
-    ? (content.subIssuesSummary as { total: number }).total
+      ? (content.subIssuesSummary as { total: number }).total
     : undefined;
+  const draftNumber = draftBody === undefined ? undefined : mentionDraftNumber(draftBody);
   const issue: ProjectIssue = {
     id: item.id,
-    ...(typeof content.id === 'string' ? { contentId: content.id } : {}),
+    ...(contentType === 'Issue' && typeof content.id === 'string' ? { contentId: content.id } : {}),
     contentType,
     title,
-    assigneeLogins: assigneeLogins(content),
+    assigneeLogins,
     ...(typeof content.state === 'string' ? { state: content.state } : {}),
     ...(typeof content.number === 'number' ? { number: content.number } : {}),
+    ...(draftNumber === undefined ? {} : { number: draftNumber }),
     ...(typeof content.url === 'string' ? { url: content.url } : {}),
+    ...(commentUrl === undefined ? {} : { commentUrl }),
     ...(repository === undefined ? {} : { repository }),
     ...(subIssueCount === undefined ? {} : { subIssueCount }),
   };
@@ -1493,6 +2039,49 @@ function assigneeLogins(content: Record<string, unknown>): string[] {
   return assignees.nodes.flatMap((assignee) =>
     isRecord(assignee) && typeof assignee.login === 'string' ? [assignee.login] : []
   );
+}
+
+function projectItemAssigneeLogins(item: Record<string, unknown>, config: GitHubProjectTaskQueueConfig): string[] {
+  const content = isRecord(item.content) ? item.content : {};
+  if (
+    content.__typename === 'DraftIssue'
+    && typeof content.body === 'string'
+    && mentionDraftCommentUrl(content.body) !== undefined
+    && hasMentionDraftTargetAgent(content.body, config.assigneeLogin)
+  ) {
+    return [config.assigneeLogin];
+  }
+  return assigneeLogins(content);
+}
+
+function mentionDraftCommentUrl(body: string): string | undefined {
+  if (!body.includes(mentionDraftMarker)) {
+    return undefined;
+  }
+  const url = mentionDraftLine(body, 'Mention URL');
+  return url === undefined || url.length === 0 ? undefined : url;
+}
+
+function mentionDraftRepository(body: string): string | undefined {
+  const repository = mentionDraftLine(body, 'Repository');
+  return repository !== undefined && /^[^/\s]+\/[^/\s]+$/u.test(repository) ? repository : undefined;
+}
+
+function hasMentionDraftTargetAgent(body: string, assigneeLogin: string): boolean {
+  const target = mentionDraftLine(body, 'Agent');
+  return target !== undefined && sameLogin(target, assigneeLogin);
+}
+
+function mentionDraftNumber(body: string): number | undefined {
+  const parsed = Number(mentionDraftLine(body, 'Number') ?? NaN);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function mentionDraftLine(body: string, label: string): string | undefined {
+  const prefix = `${label}: `;
+  const line = body.split(/\r?\n/u).find((candidate) => candidate.trim().startsWith(prefix));
+  const value = line?.trim().slice(prefix.length).trim();
+  return value === undefined || value.length === 0 ? undefined : value;
 }
 
 function fieldValue(item: Record<string, unknown>, name: string): string | undefined {
@@ -1534,13 +2123,6 @@ function fixedAliasFieldValue(item: Record<string, unknown>, alias: string): str
     return direct.text;
   }
   return undefined;
-}
-
-function projectItemAssigneeLogins(item: Record<string, unknown>): string[] {
-  if (!isRecord(item.content)) {
-    return [];
-  }
-  return assigneeLogins(item.content);
 }
 
 function projectItemRepository(item: Record<string, unknown>): {
@@ -1873,6 +2455,10 @@ function slug(value: string): string {
   return normalized.length === 0 ? 'item' : normalized;
 }
 
+function shortHash(value: string): string {
+  return createHash('sha256').update(value).digest('hex').slice(0, 12);
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -1902,6 +2488,7 @@ const projectIssuesQuery = `
               ... on DraftIssue {
                 id
                 title
+                body
               }
             }
             fieldValues(first: 40) {
@@ -1914,6 +2501,40 @@ const projectIssuesQuery = `
             status: fieldValueByName(name: $statusFieldName) {
               ... on ProjectV2ItemFieldSingleSelectValue { name }
               ... on ProjectV2ItemFieldTextValue { text }
+            }
+          }
+          pageInfo { hasNextPage endCursor }
+        }
+      }
+    }
+  }
+`;
+
+const mentionDraftItemsQuery = `
+  query RainrailMentionDraftItems($organization: String!, $projectNumber: Int!, $after: String, $statusFieldName: String!) {
+    organization(login: $organization) {
+      projectV2(number: $projectNumber) {
+        items(first: 100, after: $after) {
+          nodes {
+            id
+            content {
+              __typename
+              ... on DraftIssue {
+                id
+                title
+                body
+              }
+            }
+            status: fieldValueByName(name: $statusFieldName) {
+              ... on ProjectV2ItemFieldSingleSelectValue { name }
+              ... on ProjectV2ItemFieldTextValue { text }
+            }
+            fieldValues(first: 10) {
+              nodes {
+                __typename
+                ... on ProjectV2ItemFieldSingleSelectValue { name field { ... on ProjectV2FieldCommon { name } } }
+                ... on ProjectV2ItemFieldTextValue { text field { ... on ProjectV2FieldCommon { name } } }
+              }
             }
           }
           pageInfo { hasNextPage endCursor }
@@ -1972,6 +2593,10 @@ const projectItemStatusQuery = `
             issueDependenciesSummary { blockedBy }
             blockedBy(first: 100) { totalCount nodes { number title state url repository { nameWithOwner } } }
           }
+          ... on DraftIssue {
+            title
+            body
+          }
         }
         status: fieldValueByName(name: $statusFieldName) {
           ... on ProjectV2ItemFieldSingleSelectValue { name }
@@ -1990,6 +2615,23 @@ const projectItemStatusQuery = `
   }
 `;
 
+const repositoryLockMetadataQuery = `
+  query RainrailRepositoryLockMetadata($owner: String!, $repo: String!) {
+    repository(owner: $owner, name: $repo) {
+      id
+      nameWithOwner
+      defaultBranchRef {
+        target {
+          ... on Commit {
+            oid
+            tree { oid }
+          }
+        }
+      }
+    }
+  }
+`;
+
 const updateProjectFieldMutation = `
   mutation RainrailUpdateProjectField($projectId: ID!, $itemId: ID!, $fieldId: ID!, $value: ProjectV2FieldValue!) {
     updateProjectV2ItemFieldValue(input: {
@@ -1999,6 +2641,14 @@ const updateProjectFieldMutation = `
       value: $value
     }) {
       projectV2Item { id }
+    }
+  }
+`;
+
+const addProjectDraftIssueMutation = `
+  mutation RainrailAddProjectDraftIssue($projectId: ID!, $title: String!, $body: String!) {
+    addProjectV2DraftIssue(input: { projectId: $projectId, title: $title, body: $body }) {
+      projectItem { id }
     }
   }
 `;

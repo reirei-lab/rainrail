@@ -68,6 +68,13 @@ export function createInMemoryBridgeRoomState(): RainrailBridgeRoomState {
       async put(key, value) {
         values.set(key, value);
       },
+      async compareAndSet(key, expected, value) {
+        if (!Object.is(values.get(key), expected)) {
+          return false;
+        }
+        values.set(key, value);
+        return true;
+      },
     },
   };
 }
