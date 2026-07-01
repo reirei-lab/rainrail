@@ -87,12 +87,14 @@ OpenClaw runtime provider は実 agent 起動を `enabled: true` の capability 
 spawn し、stdout log path、stderr log path、pid、agent session、branch を run metadata に残す。
 completion 解析は JSON stdout log を対象にし、Gateway/plugin/fallback diagnostics などの
 stderr は別 log に保存する。`startRun(request, { signal })` の signal が abort 済みなら
-spawn せず、spawn 後に abort された場合は child process へ `SIGTERM` を送る。spawn 後に
+spawn しない。detached process が `running` として返った後は runtime へ所有権が移るため、
+handler lifecycle cleanup の abort では child process を停止しない。spawn 後に
 Node が `error` を emit しても未処理例外で Rainrail を落とさないよう listener を置き、
 provider 利用側が `onSpawnError` で観測できるようにする。start run の log path は
 同じ issue task を別 run で再起動しても過去ログを切り詰めないよう、agent session id
-由来の一意な名前にする。resume run も session id を attempt id に含め、同じ issue
-task の別 session が同じ resume log に追記されないようにする。初回実行が gateway
+由来の正規化名と短い hash を含む一意な名前にする。resume run も attempt id 由来の
+正規化名と短い hash を含め、同じ issue task の別 session が同じ resume log に
+追記されないようにする。初回実行が gateway
 fallback session へ移った場合は、前回 completion metadata の top-level または
 `result` 配下の `meta.agentMeta.fallbackSessionKey` から fallback session key を、
 または stdout/stderr log の embedded fallback marker から fallback session id を検出して resume
@@ -114,7 +116,10 @@ JSON completion として解析できる場合は、本文に `CLI transcript co
 resume helper は running pid を確認し、
 安定した resume attempt id を生成する。timeline reader は OpenClaw trajectory jsonl を読み、Codex activity 表示に
 必要な時刻、分類済み phase、redacted summary、status、redacted excerpt を返す。
-redaction は shell 風の `token=...` や `curl -u user:password` だけでなく JSON の `"token": "..."` /
+timeline/status/jsonl の session 解決は stdout `logPath` と対応する `stderrLogPath` または
+`.stderr.log` の embedded fallback marker も参照する。redaction は shell 風の
+`token=...` や `curl -u user:password` / `curl --proxy-user user:password` /
+`curl --oauth2-bearer token` だけでなく JSON の `"token": "..."` /
 `"apiKey": "..."` / `"password": "..."`、`"webhookSecret"` / `"clientSecret"` /
 `"apiToken"` のような compound key、quoted shell assignment、`github_pat_...`、
 HTTP Authorization header 全体、Bearer credential も対象にする。timeline status は最後の lifecycle/event row を見て
@@ -226,8 +231,9 @@ handler timeout 後に handler 本体が遅れて処理を続けた場合でも�
 handler が fulfilled/rejected で settle した後も同じ signal を abort し、handler が
 残した timer や未awaitの処理から後続 action が実行されないようにする。
 さらに runtime 側の action implementation には第2引数で同じ `AbortSignal` を渡す。
-すでに開始済みの merge、runtime start、secret access も、この signal を見て中断や
-冪等化を行えるようにする。dispatcher は action implementation を runtime `actions`
+merge、runtime start、secret access は、この signal を見て起動前の拒否や
+冪等化を行えるようにする。detached runtime start/resume は `running` を返した時点で
+handler lifecycle から所有権が離れる。dispatcher は action implementation を runtime `actions`
 object を receiver として呼ぶため、`this.client` などに依存する object method も
 そのまま利用できる。
 `context.runtime.startRun` と `context.runtime.resumeRun` は handler へ直接 provider を渡さず gated wrapper にする。

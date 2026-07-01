@@ -1,5 +1,6 @@
 import { chmodSync, closeSync, mkdirSync, openSync, readFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 
 import type { AgentAssignmentRuntime } from './agent-assignment.js';
@@ -100,7 +101,7 @@ export function createOpenClawRuntimeProvider(options: OpenClawRuntimeProviderOp
       }
       throwIfAborted(context?.signal);
       ensurePrivateLogDirectory(options.logDirectory);
-      const logPath = join(options.logDirectory, `${safeFileName(request.attemptId)}.log`);
+      const logPath = join(options.logDirectory, `${safeLogFileName(request.attemptId)}.log`);
       const stderrLogPath = stderrLogPathFor(logPath);
       const outputFd = openPrivateLogFile(logPath, 'a');
       const stderrFd = openPrivateLogFile(stderrLogPath, 'a');
@@ -123,7 +124,6 @@ export function createOpenClawRuntimeProvider(options: OpenClawRuntimeProviderOp
           stdio: ['ignore', outputFd, stderrFd],
         });
         attachSpawnErrorHandler(child, options, 'resume');
-        attachAbortHandler(child, context?.signal);
         child.unref?.();
         return {
           id: resumeSessionId,
@@ -159,7 +159,7 @@ export async function startOpenClawRun(
   const task = runtimeAgentTaskInput(request.task);
   ensurePrivateLogDirectory(options.logDirectory);
   const agentSessionId = task.agentSessionId ?? generatedAgentSessionId(options, request, task);
-  const logPath = join(options.logDirectory, `${safeFileName(agentSessionId)}.log`);
+  const logPath = join(options.logDirectory, `${safeLogFileName(agentSessionId)}.log`);
   const stderrLogPath = stderrLogPathFor(logPath);
   const outputFd = openPrivateLogFile(logPath, 'w');
   const stderrFd = openPrivateLogFile(stderrLogPath, 'w');
@@ -182,7 +182,6 @@ export async function startOpenClawRun(
       stdio: ['ignore', outputFd, stderrFd],
     });
     attachSpawnErrorHandler(child, options, 'start');
-    attachAbortHandler(child, context?.signal);
     child.unref?.();
     return {
       id: agentSessionId,
@@ -574,20 +573,6 @@ function attachSpawnErrorHandler(
   });
 }
 
-function attachAbortHandler(child: SpawnedChild, signal: AbortSignal | undefined): void {
-  if (signal === undefined) {
-    return;
-  }
-  const abort = () => {
-    child.kill?.('SIGTERM');
-  };
-  if (signal.aborted) {
-    abort();
-    return;
-  }
-  signal.addEventListener('abort', abort, { once: true });
-}
-
 function throwIfAborted(signal: AbortSignal | undefined): void {
   if (signal?.aborted) {
     throw new Error('OpenClaw runtime start was aborted');
@@ -600,6 +585,11 @@ function stderrLogPathFor(logPath: string): string {
 
 function safeFileName(value: string): string {
   return value.replace(/[^A-Za-z0-9._-]/g, '_');
+}
+
+function safeLogFileName(value: string): string {
+  const hash = createHash('sha256').update(value).digest('hex').slice(0, 12);
+  return `${safeFileName(value)}_${hash}`;
 }
 
 function lastNonEmptyLine(value: string): string {

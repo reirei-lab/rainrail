@@ -35,6 +35,7 @@ export interface RuntimeTimelineStatus {
 
 interface RuntimeTaskForTimeline {
   logPath: string;
+  stderrLogPath?: string | undefined;
   agentSessionId?: string;
 }
 
@@ -241,19 +242,32 @@ async function readRuntimeSession(
   options: RuntimeTimelineReadOptions,
 ): Promise<RuntimeSessionResolution> {
   const mapped = await resolveTrajectorySession(task.agentSessionId, options);
-  try {
-    const log = await readFile(task.logPath, 'utf8');
-    const fallbackSessionId = extractRuntimeFallbackSessionId(log);
-    const logSessionId = extractRuntimeSessionId(log);
+  let fallbackSessionId: string | undefined;
+  let logSessionId: string | undefined;
+  for (const logPath of runtimeTaskLogPaths(task)) {
+    let log: string;
+    try {
+      log = await readFile(logPath, 'utf8');
+    } catch {
+      continue;
+    }
+    fallbackSessionId ??= extractRuntimeFallbackSessionId(log);
+    logSessionId ??= extractRuntimeSessionId(log);
+  }
+  if (fallbackSessionId !== undefined || mapped !== undefined || logSessionId !== undefined) {
     const sessionId = fallbackSessionId ?? mapped?.sessionId ?? logSessionId;
     return {
       sessionId,
       sessionFile: fallbackSessionId === undefined && sessionId === mapped?.sessionId ? mapped?.sessionFile : undefined,
       fallback: fallbackSessionId !== undefined,
     };
-  } catch {
-    return { sessionId: mapped?.sessionId, sessionFile: mapped?.sessionFile, fallback: false };
   }
+  return { fallback: false };
+}
+
+function runtimeTaskLogPaths(task: RuntimeTaskForTimeline): string[] {
+  const paths = [task.logPath, task.stderrLogPath ?? stderrLogPathFor(task.logPath)];
+  return [...new Set(paths)];
 }
 
 async function resolveRuntimeTrajectoryPathForSession(
@@ -449,7 +463,7 @@ function stringifyField(record: Record<string, unknown> | undefined, key: string
 function redactSensitiveText(value: string): string {
   return value
     .replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, '[redacted-private-key]')
-    .replace(/(^|\s)(-u|--user)(=|\s+)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s'"]+)/g, '$1$2$3[redacted-credential]')
+    .replace(/(^|\s)(-u|--user|-U|--proxy-user|--oauth2-bearer)(=|\s+)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s'"]+)/g, '$1$2$3[redacted-credential]')
     .replace(/\bgithub_pat_[A-Za-z0-9_]+\b/g, '[redacted-token]')
     .replace(/(gh[pousr]_[A-Za-z0-9_]+)/g, '[redacted-token]')
     .replace(/(sk-[A-Za-z0-9_-]{20,})/g, '[redacted-token]')
@@ -481,6 +495,10 @@ function runtimeTrajectoryPathForSessionFile(sessionFile: string): string {
   return sessionFile.endsWith('.jsonl')
     ? sessionFile.replace(/\.jsonl$/, '.trajectory.jsonl')
     : `${sessionFile}.trajectory.jsonl`;
+}
+
+function stderrLogPathFor(logPath: string): string {
+  return logPath.endsWith('.log') ? logPath.replace(/\.log$/, '.stderr.log') : `${logPath}.stderr`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

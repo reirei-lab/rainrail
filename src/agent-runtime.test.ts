@@ -246,6 +246,27 @@ describe('createOpenClawRuntimeProvider', () => {
     expect(first.metadata?.logPath).not.toBe(second.metadata?.logPath);
   });
 
+  it('uses collision-resistant start log paths for distinct session keys', async () => {
+    const spawnProcess = vi.fn(() => ({ pid: 4242, unref: vi.fn() }));
+    const logDirectory = temporaryDirectory();
+    const provider = createOpenClawRuntimeProvider({
+      enabled: true,
+      command: 'openclaw',
+      agentId: 'main',
+      sessionKeyPrefix: 'rainrail',
+      timeoutSeconds: 900,
+      logDirectory,
+      spawnProcess,
+    });
+
+    const first = await provider.startRun(runtimeRequest({ agentSessionId: 'agent:main:foo' }));
+    writeFileSync(String(first.metadata?.logPath), 'first run completion', 'utf8');
+    const second = await provider.startRun(runtimeRequest({ agentSessionId: 'agent_main_foo' }));
+
+    expect(first.metadata?.logPath).not.toBe(second.metadata?.logPath);
+    expect(readFileSync(String(first.metadata?.logPath), 'utf8')).toBe('first run completion');
+  });
+
   it('generates distinct start sessions and logs when tasks omit agent session ids', async () => {
     const spawnProcess = vi.fn(() => ({ pid: 4242, unref: vi.fn() }));
     const logDirectory = temporaryDirectory();
@@ -365,7 +386,7 @@ describe('createOpenClawRuntimeProvider', () => {
     expect(spawnProcess).not.toHaveBeenCalled();
   });
 
-  it('terminates a spawned OpenClaw start when the caller signal aborts', async () => {
+  it('does not terminate a started OpenClaw run when the caller signal aborts after ownership transfers', async () => {
     const kill = vi.fn();
     const provider = createOpenClawRuntimeProvider({
       enabled: true,
@@ -383,7 +404,40 @@ describe('createOpenClawRuntimeProvider', () => {
     });
     controller.abort();
 
-    expect(kill).toHaveBeenCalledWith('SIGTERM');
+    expect(kill).not.toHaveBeenCalled();
+  });
+
+  it('does not terminate a resumed OpenClaw run when the caller signal aborts after ownership transfers', async () => {
+    const kill = vi.fn();
+    const provider = createOpenClawRuntimeProvider({
+      enabled: true,
+      command: 'openclaw',
+      agentId: 'main',
+      sessionKeyPrefix: 'rainrail',
+      timeoutSeconds: 900,
+      logDirectory: temporaryDirectory(),
+      spawnProcess: vi.fn(() => ({ pid: 5151, unref: vi.fn(), kill })),
+    });
+    const controller = new AbortController();
+
+    await expect(provider.resumeRun?.({
+      run: { id: 'agent:main:existing-session', provider: 'openclaw', status: 'stopped' },
+      task: {
+        id: 'agent_task_reirei-lab-rainrail_22',
+        title: 'OpenClaw runtime',
+        agentSessionId: 'agent:main:existing-session',
+        branchName: 'agent/reirei-lab-rainrail-22',
+        logPath: 'var/agent-task-logs/task.log',
+        resumeAttempts: [],
+      },
+      attemptId: 'agent_task_reirei-lab-rainrail_22_resume_01',
+      requestedBy: 'reirei-agent',
+    }, { signal: controller.signal })).resolves.toMatchObject({
+      status: 'running',
+    });
+    controller.abort();
+
+    expect(kill).not.toHaveBeenCalled();
   });
 
   it('resumes the fallback session key recorded in the previous task log', async () => {
