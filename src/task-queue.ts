@@ -41,11 +41,29 @@ export interface ProjectIssueClaim {
   originalStatus?: string | null;
 }
 
+export interface ProjectMentionDraftInput {
+  title: string;
+  body: string;
+  commentUrl: string;
+  targetAgentLogin?: string;
+  repository?: string;
+  number?: number;
+}
+
+export interface ProjectMentionDraftItem {
+  projectId?: string;
+  projectItemId: string;
+  statusFieldId?: string;
+  statusOptionId?: string;
+  created: boolean;
+}
+
 export interface TaskQueueProvider {
   name: string;
   kind: 'task-queue-provider';
   listProjectIssues(): Promise<ProjectIssue[]> | ProjectIssue[];
   claimProjectIssue(input: ProjectIssueClaimInput): Promise<ProjectIssueClaim> | ProjectIssueClaim;
+  addMentionDraftItem?: (input: ProjectMentionDraftInput) => Promise<ProjectMentionDraftItem> | ProjectMentionDraftItem;
   finalizeProjectIssueClaim?: (input: ProjectIssueFinalizeInput) => Promise<void> | void;
   releaseProjectIssue?: (input: ProjectIssueReleaseInput) => Promise<void> | void;
   selection?: ProjectIssueSelectionOptions;

@@ -34,6 +34,22 @@ separate steps so failures identify the command that failed:
 Cloudflare Worker として deploy する手順、required secrets、local dev と
 production smoke は `docs/cloudflare-worker.md` にまとめている。
 
+## Mention Draft And Cloudflare Issue Reporter
+
+Rainrail exports workflow plugins for two automation paths that were first
+proven in reirei-harness:
+
+- `createMentionDraftWorkflow` turns GitHub issue comments and pull request
+  review comments that mention the configured agent into Project draft items.
+- `createCloudflareIssueReporterWorkflow` turns `cloudflare.error` envelopes
+  with stack traces into GitHub issues, stores `fingerprint -> issue` records in
+  Rainrail storage, and searches GitHub for an existing fingerprint marker before
+  creating a duplicate issue.
+
+GitHub issue comments, issue creation, and issue search are exposed through the
+generic task provider contract. Cloudflare fingerprint persistence can use the
+same key-value storage shape as `RainrailBridgeRoom`.
+
 ## Product site and docs boundary
 
 Product-facing content for the future `apps/www` site and engineering-facing

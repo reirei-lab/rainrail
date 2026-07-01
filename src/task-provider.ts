@@ -28,6 +28,21 @@ export interface TaskCommentInput {
   body: string;
 }
 
+export interface TaskIssueCreateInput {
+  provider: RainrailEventSourceType | TaskProviderName;
+  repository: string;
+  title: string;
+  body: string;
+  labels?: string[];
+}
+
+export interface TaskIssueSearchInput {
+  provider: RainrailEventSourceType | TaskProviderName;
+  repository: string;
+  query: string;
+  state?: 'open' | 'closed' | 'all' | (string & {});
+}
+
 export interface TaskProjectItemInput {
   target: TaskIssueRef;
   project: string;
@@ -61,6 +76,8 @@ export interface TaskProvider {
   name: string;
   kind: 'task-provider';
   getIssue(ref: TaskIssueRef, context?: TaskProviderContext): TaskIssue | Promise<TaskIssue>;
+  createIssue?: (input: TaskIssueCreateInput, context?: TaskProviderContext) => TaskIssue | Promise<TaskIssue>;
+  searchIssues?: (input: TaskIssueSearchInput, context?: TaskProviderContext) => TaskIssue[] | Promise<TaskIssue[]>;
   createComment(input: TaskCommentInput, context?: TaskProviderContext): TaskComment | Promise<TaskComment>;
   addToProject?: (input: TaskProjectItemInput, context?: TaskProviderContext) => unknown | Promise<unknown>;
   setStatus?: (input: TaskStatusInput, context?: TaskProviderContext) => unknown | Promise<unknown>;
