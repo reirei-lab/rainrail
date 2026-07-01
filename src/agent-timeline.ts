@@ -448,7 +448,7 @@ async function readTailText(path: string, maxBytes: number): Promise<{ text: str
     let text = buffer.subarray(0, bytesRead).toString('utf8');
     if (start > 0) {
       const firstNewline = text.indexOf('\n');
-      text = firstNewline === -1 ? '' : text.slice(firstNewline + 1);
+      text = firstNewline === -1 ? text : text.slice(firstNewline + 1);
     }
     return { text, truncated: start > 0 };
   } finally {
@@ -607,6 +607,7 @@ function stringifyField(record: Record<string, unknown> | undefined, key: string
 function redactSensitiveText(value: string): string {
   return redactSensitiveJsonKeyValues(value)
     .replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, '[redacted-private-key]')
+    .replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*$/g, '[redacted-private-key]')
     .replace(/(^|[\n\r])[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, '$1[redacted-private-key]')
     .replace(/(^|\s)(-[A-Za-z]*H)(Authorization:\s*)[\s\S]*?(?=(?:\s+-[A-Za-z]*H(?:Authorization|Cookie|Set-Cookie):)|(?:\s+-[A-Za-z])|[\n\r]|$)/gi, '$1$2$3[redacted-authorization]')
     .replace(/(^|\s)(-[A-Za-z]*H)(Set-Cookie:\s*)[\s\S]*?(?=(?:\s+-[A-Za-z]*H(?:Authorization|Cookie|Set-Cookie):)|(?:\s+-[A-Za-z])|[\n\r]|$)/gi, '$1$2$3[redacted-cookie]')
@@ -635,6 +636,7 @@ function redactSensitiveText(value: string): string {
     .replace(/(^|[\n\r])(\s*[A-Za-z0-9_-]*authorization[A-Za-z0-9_-]*\s*[:=]\s*)(?!\[redacted)[^\n\r]*/gi, '$1$2[redacted]')
     .replace(/(^|[\n\r])(\s*[A-Za-z0-9_-]*(?:set[-_]?cookie|cookie)[A-Za-z0-9_-]*\s*[:=]\s*)(?!\[redacted)[^\n\r]*/gi, '$1$2[redacted]')
     .replace(/(^|[\n\r])(\s*[A-Za-z0-9_-]*(?:password|passphrase)[A-Za-z0-9_-]*\s*[:=]\s*)(?!\[redacted)[^\n\r]*/gi, '$1$2[redacted]')
+    .replace(/(^|[\n\r])(\s*[A-Za-z0-9_-]*(?:api[-_]?key|token|secret)[A-Za-z0-9_-]*\s*=\s*)(?!\[redacted)[^\n\r]*/gi, '$1$2[redacted]')
     .replace(/(^|[\n\r])(\s*(?:(?:\/\/[^\s:=]+\/)?:)?_auth\s*[:=]\s*)(?!\[redacted)[^\s'",}]+/gi, '$1$2[redacted]')
     .replace(/(^|\s)((?!(?:no_proxy)\b)[A-Za-z0-9_-]*(?:https?|all)_proxy[A-Za-z0-9_-]*\s*[:=]\s*)(?:"[^"\s]*:[^"@\s]+@[^"\s]+"|'[^'\s]*:[^'@\s]+@[^'\s]+'|[^\s'"]*:[^\s'"]+@[^\s'"]+)/gi, '$1$2[redacted-proxy]')
     .replace(/("[^"]*(?:_auth|token|secret|password|api[_-]?key|private[_-]?key|authorization|set-cookie|cookie)[^"]*"\s*:\s*)"(?:(?:\\.)|[^"\\])*"/gi, '$1"[redacted]"')
@@ -996,23 +998,23 @@ function isFallbackClearingRuntimeCompletionPayload(payload: Record<string, unkn
 
 function runtimeCompletionStatusFromPayload(payload: Record<string, unknown>): string | undefined {
   const topLevelStatus = stringField(payload, 'status');
+  const result = isRecord(payload.result) ? payload.result : undefined;
+  const resultStatus = stringField(result, 'status');
   if (topLevelStatus === 'error') {
     return 'failed';
   }
   if (topLevelStatus === 'timeout') {
     return 'timed_out';
   }
-  if (topLevelStatus === 'in_flight') {
-    return 'running';
-  }
-  if (topLevelStatus === 'ok') {
-    return 'succeeded';
-  }
-  if (isCanonicalRuntimeStatus(topLevelStatus)) {
+  if (isTerminalRuntimeStatus(topLevelStatus)) {
     return topLevelStatus;
   }
-  const result = isRecord(payload.result) ? payload.result : undefined;
-  const resultStatus = stringField(result, 'status');
+  if (topLevelStatus === 'ok' && resultStatus === undefined) {
+    return 'succeeded';
+  }
+  if (topLevelStatus === 'in_flight' && resultStatus === undefined) {
+    return 'running';
+  }
   if (resultStatus === 'error') {
     return 'failed';
   }
@@ -1028,16 +1030,28 @@ function runtimeCompletionStatusFromPayload(payload: Record<string, unknown>): s
   if (isCanonicalRuntimeStatus(resultStatus)) {
     return resultStatus;
   }
-  const executionTrace = isRecord(payload.executionTrace) ? payload.executionTrace : undefined;
-  const completion = isRecord(payload.completion) ? payload.completion : undefined;
-  if (
-    payloadHasCompletionText(payload)
-    && stringField(executionTrace, 'result') === 'success'
-    && stringField(completion, 'finishReason') === 'stop'
-  ) {
+  if (isCanonicalRuntimeStatus(topLevelStatus)) {
+    return topLevelStatus;
+  }
+  if (hasStatuslessSuccessfulCompletion(payload) || hasStatuslessSuccessfulCompletion(result)) {
     return 'succeeded';
   }
   return undefined;
+}
+
+function hasStatuslessSuccessfulCompletion(payload: unknown): boolean {
+  if (!isRecord(payload)) {
+    return false;
+  }
+  const executionTrace = isRecord(payload.executionTrace) ? payload.executionTrace : undefined;
+  const completion = isRecord(payload.completion) ? payload.completion : undefined;
+  return payloadHasCompletionText(payload)
+    && stringField(executionTrace, 'result') === 'success'
+    && stringField(completion, 'finishReason') === 'stop';
+}
+
+function isTerminalRuntimeStatus(status: string | undefined): boolean {
+  return status !== 'queued' && status !== 'running' && isCanonicalRuntimeStatus(status);
 }
 
 function isCanonicalRuntimeStatus(status: string | undefined): boolean {

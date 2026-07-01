@@ -437,29 +437,25 @@ function createGatedRuntimeProvider(
     configurable: true,
     enumerable: true,
     get() {
+      const resumeRun = (
+        request: Parameters<NonNullable<RuntimeProvider['resumeRun']>>[0],
+        context?: Parameters<NonNullable<RuntimeProvider['resumeRun']>>[1],
+      ) =>
+        callRuntimeResumeRun(options, policy, event, lifecycle, getRuntime, request, context?.signal);
       if (!policy.capabilities.has('runtime:start')) {
-        return (
-          request: Parameters<NonNullable<RuntimeProvider['resumeRun']>>[0],
-          context?: Parameters<NonNullable<RuntimeProvider['resumeRun']>>[1],
-        ) =>
-          callRuntimeResumeRun(options, policy, event, lifecycle, getRuntime, request, context?.signal);
+        return resumeRun;
+      }
+      if (lifecycle.isSideEffectClosed()) {
+        return resumeRun;
       }
       try {
         if (getRuntime().resumeRun === undefined) {
           return undefined;
         }
       } catch {
-        return (
-          request: Parameters<NonNullable<RuntimeProvider['resumeRun']>>[0],
-          context?: Parameters<NonNullable<RuntimeProvider['resumeRun']>>[1],
-        ) =>
-          callRuntimeResumeRun(options, policy, event, lifecycle, getRuntime, request, context?.signal);
+        return resumeRun;
       }
-      return (
-        request: Parameters<NonNullable<RuntimeProvider['resumeRun']>>[0],
-        context?: Parameters<NonNullable<RuntimeProvider['resumeRun']>>[1],
-      ) =>
-        callRuntimeResumeRun(options, policy, event, lifecycle, getRuntime, request, context?.signal);
+      return resumeRun;
     },
   });
   return provider;
