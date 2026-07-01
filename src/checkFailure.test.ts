@@ -37,6 +37,42 @@ describe('handleCheckFailureEvent', () => {
     expect(updates[0]?.commentBody).toContain('Outcome: checks_failed');
   });
 
+  it('removes stale pending review requests when failed checks return the issue to Todo', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+    const removedReviewRequests: Array<{ repository: string; number: number; reviewerLogin: string }> = [];
+
+    const result = await handleCheckFailureEvent(checkRunEvent({ conclusion: 'failure' }), {
+      agentLogin: 'reirei-agent',
+      branchPrefix: 'agent/',
+      reviewRequest: { reviewerLogin: 'hiragram' },
+      tasks: handoffRecorder({ updates }),
+      pullRequests: {
+        async getPullRequest() {
+          return pullRequest({
+            reviewRequests: ['hiragram'],
+            statusCheckRollup: [
+              { type: 'CheckRun', name: 'Typecheck, Test, Build', status: 'COMPLETED', conclusion: 'FAILURE' },
+            ],
+          });
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          throw new Error('not used');
+        },
+        async removeReviewRequest(input) {
+          removedReviewRequests.push(input);
+        },
+      },
+    });
+
+    expect(result).toMatchObject({ reason: 'failed PR checks returned issue to Todo', reviewRequestRemoved: true });
+    expect(removedReviewRequests).toEqual([
+      { repository: 'reirei-lab/rainrail', number: 44, reviewerLogin: 'hiragram' },
+    ]);
+  });
+
   it('treats completed startup_failure check runs as current failures', async () => {
     const updates: Array<{ reason: string; commentBody?: string }> = [];
 

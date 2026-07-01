@@ -173,6 +173,20 @@ describe('handleAutoMergeEvent', () => {
     expect(runtimeMerges).toEqual([expect.objectContaining({ number: 44 })]);
   });
 
+  it('keeps retrying pending mergeability candidates when no later candidate can merge', async () => {
+    await expect(handleAutoMergeEvent(checkRunEvent({ pullRequests: [{ number: 45 }, { number: 44 }] }), {
+      ...options(),
+      pullRequests: {
+        ...options().pullRequests,
+        async getPullRequest(input) {
+          return input.number === 45
+            ? pullRequest({ ...input, headRefName: 'agent/pending-pr', mergeable: 'UNKNOWN', mergeStateStatus: 'UNKNOWN' })
+            : pullRequest({ ...input, reviews: [] });
+        },
+      },
+    })).rejects.toThrow('pull request mergeability is still being calculated');
+  });
+
   it('re-evaluates auto-merge after a skipped check completes the passing rollup', async () => {
     const runtimeMerges: unknown[] = [];
 

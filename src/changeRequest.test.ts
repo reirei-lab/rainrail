@@ -26,6 +26,19 @@ describe('handleChangeRequestEvent', () => {
     expect(statusRecords).toEqual(['change_requested:Todo']);
   });
 
+  it('truncates long change-request review bodies in handoff comments', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+    const longBody = `Please fix this.\n\n${'x'.repeat(10_000)}`;
+
+    await handleChangeRequestEvent(reviewEvent({ state: 'changes_requested', reviewBody: longBody }), {
+      tasks: handoffRecorder({ updates }),
+    });
+
+    expect(updates[0]?.commentBody).toContain('Review body:');
+    expect(updates[0]?.commentBody).toContain('...[truncated]');
+    expect(updates[0]?.commentBody).not.toContain('x'.repeat(5_000));
+  });
+
   it('ignores non-change-request reviews', async () => {
     const result = await handleChangeRequestEvent(reviewEvent({ state: 'approved' }), {
       tasks: handoffRecorder(),

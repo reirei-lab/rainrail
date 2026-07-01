@@ -77,6 +77,7 @@ export function reviewEvent(overrides: {
   missingHeadRepository?: boolean;
   branchName?: string;
   stringReviewId?: boolean;
+  reviewBody?: string;
   headSha?: string;
 } = {}): RainrailEventEnvelope {
   const repository = overrides.repository ?? 'reirei-lab/rainrail';
@@ -112,7 +113,7 @@ export function reviewEvent(overrides: {
         id: overrides.stringReviewId === true ? String(reviewId) : reviewId,
         state: overrides.state ?? 'approved',
         author: overrides.reviewerLogin ?? 'hiragram',
-        body: '### Codex Review',
+        body: overrides.reviewBody ?? '### Codex Review',
         url: `https://github.com/${repository}/pull/44#pullrequestreview-${reviewId}`,
       },
     },

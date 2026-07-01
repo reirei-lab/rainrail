@@ -110,6 +110,30 @@ describe('handleReviewRequestEvent', () => {
     ]);
   });
 
+  it('does not request review before the current head has any reported checks', async () => {
+    let requestCount = 0;
+
+    const result = await handleReviewRequestEvent(pullRequestEvent({ action: 'ready_for_review' }), {
+      agentLogin: 'reirei-agent',
+      reviewerLogin: 'hiragram',
+      branchPrefix: 'agent/',
+      pullRequests: {
+        async getPullRequest(input) {
+          return pullRequest({ ...input, reviews: [], statusCheckRollup: [] });
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          requestCount += 1;
+        },
+      },
+    });
+
+    expect(result.reason).toBe('not all checks have passed');
+    expect(requestCount).toBe(0);
+  });
+
   it('does not request twice while a reviewer request is already pending', async () => {
     let requestCount = 0;
 

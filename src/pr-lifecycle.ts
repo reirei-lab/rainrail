@@ -157,15 +157,18 @@ export interface CodexReviewWorkflowOptions extends TodoHandoffWorkflowOptions {
 export interface CheckFailureWorkflowOptions extends TodoHandoffWorkflowOptions {
   agentLogin: string;
   branchPrefix: string;
+  reviewRequest?: ReviewRequestRemovalOptions;
   pullRequests?: GitHubPullRequestProvider | undefined;
+}
+
+export interface ReviewRequestRemovalOptions {
+  enabled?: boolean;
+  reviewerLogin: string;
 }
 
 export interface ConflictCheckWorkflowOptions extends TodoHandoffWorkflowOptions {
   pullRequests?: GitHubPullRequestProvider | undefined;
-  reviewRequest?: {
-    enabled?: boolean;
-    reviewerLogin: string;
-  };
+  reviewRequest?: ReviewRequestRemovalOptions;
   delayMs?: number;
   sleep?: (delayMs: number) => Promise<void>;
 }
@@ -296,7 +299,7 @@ export async function handleReviewRequestEvent(
       fallback = { handled: false, reason: 'pull request has unresolved change requests', pullRequest };
       continue;
     }
-    if (!allChecksPassed(pullRequest)) {
+    if (!hasPassingCheckRollup(pullRequest)) {
       fallback = { handled: false, reason: 'not all checks have passed', pullRequest };
       continue;
     }
@@ -446,6 +449,7 @@ export async function handleCheckFailureEvent(
       commentBody: checkFailureComment({ task, pullRequest, check }),
     }, context);
     await options.tasks.recordTaskStatus?.({ task, result: `checks_failed:${update.status}` }, context);
+    const reviewRequestRemoved = await removePendingReviewRequest(pullRequests, pullRequest, options.reviewRequest, context);
     return {
       handled: true,
       reason: 'failed PR checks returned issue to Todo',
@@ -455,6 +459,7 @@ export async function handleCheckFailureEvent(
       projectItemId: update.projectItemId,
       status: update.status,
       commentUrl: update.commentUrl,
+      ...(reviewRequestRemoved ? { reviewRequestRemoved } : {}),
     };
   }
   return fallback;
@@ -555,7 +560,6 @@ export async function handleAutoMergeEvent(
   if (candidates.length === 0) return { handled: false, reason: 'pull request was not found', candidate };
   let fallback: WorkflowResult = { handled: false, reason: 'pull request was not found', candidate };
   let sawPendingMergeability = false;
-  let sawNonPendingMergeabilityBlocker = false;
   for (const pullRequest of candidates) {
     if (candidate.headSha !== undefined && pullRequest.headSha !== undefined && candidate.headSha !== pullRequest.headSha) {
       fallback = { handled: false, reason: 'check does not match the current pull request head', candidate, pullRequest };
@@ -571,27 +575,22 @@ export async function handleAutoMergeEvent(
     }
     if (!reviewApproved(options, pullRequest)) {
       fallback = { handled: false, reason: 'configured reviewer approval is not confirmed', pullRequest };
-      sawNonPendingMergeabilityBlocker = true;
       continue;
     }
     if (hasUnresolvedChangeRequest(pullRequest)) {
       fallback = { handled: false, reason: 'pull request has unresolved change requests', pullRequest };
-      sawNonPendingMergeabilityBlocker = true;
       continue;
     }
-    if (!allChecksPassedForAutoMerge(pullRequest)) {
+    if (!hasPassingCheckRollup(pullRequest)) {
       fallback = { handled: false, reason: 'not all checks have passed', pullRequest };
-      sawNonPendingMergeabilityBlocker = true;
       continue;
     }
     if (pullRequest.isDraft) {
       fallback = { handled: false, reason: 'pull request is draft', pullRequest };
-      sawNonPendingMergeabilityBlocker = true;
       continue;
     }
     if (normalize(pullRequest.state) !== 'open') {
       fallback = { handled: false, reason: 'pull request is not open', pullRequest };
-      sawNonPendingMergeabilityBlocker = true;
       continue;
     }
     if (isMergeabilityPending(pullRequest)) {
@@ -601,7 +600,6 @@ export async function handleAutoMergeEvent(
     }
     if (!isAutoMergeable(pullRequest)) {
       fallback = { handled: false, reason: 'pull request is not mergeable', pullRequest };
-      sawNonPendingMergeabilityBlocker = true;
       continue;
     }
 
@@ -618,7 +616,7 @@ export async function handleAutoMergeEvent(
     });
     return { handled: true, reason: 'pull_request_merged', pullRequest };
   }
-  if (sawPendingMergeability && !sawNonPendingMergeabilityBlocker) {
+  if (sawPendingMergeability) {
     throw new Error('pull request mergeability is still being calculated');
   }
   return fallback;
@@ -629,7 +627,7 @@ export function allChecksPassed(pullRequest: PullRequestReviewTarget): boolean {
   return pullRequest.statusCheckRollup.every(isPassingCheck);
 }
 
-function allChecksPassedForAutoMerge(pullRequest: PullRequestReviewTarget): boolean {
+function hasPassingCheckRollup(pullRequest: PullRequestReviewTarget): boolean {
   return pullRequest.statusCheckRollup.length > 0 && allChecksPassed(pullRequest);
 }
 
@@ -938,7 +936,7 @@ function changeRequestComment(target: { number: number; branchName: string; revi
     'Do not rely only on an issue or PR summary; each inline review discussion should get its own response.',
   );
   if (target.reviewBody !== undefined && target.reviewBody.trim().length > 0) {
-    lines.push('', 'Review body:', '', target.reviewBody.trim());
+    lines.push('', 'Review body:', '', truncate(target.reviewBody.trim(), 1200));
   }
   lines.push('', 'Outcome: changes_requested');
   return lines.join('\n');
@@ -1069,7 +1067,7 @@ function isAutoMergeable(pullRequest: PullRequestReviewTarget): boolean {
 async function removePendingReviewRequest(
   pullRequests: GitHubPullRequestProvider,
   pullRequest: PullRequestReviewTarget,
-  reviewRequest: ConflictCheckWorkflowOptions['reviewRequest'],
+  reviewRequest: ReviewRequestRemovalOptions | undefined,
   context: PluginRuntimeContext | undefined,
 ): Promise<boolean> {
   if (
