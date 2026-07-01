@@ -217,7 +217,7 @@ export function createChangeRequestWorkflow(options: ChangeRequestWorkflowOption
     name: 'change-request',
     accepts: (event) => event.source.type === 'github' && event.name === 'github.review',
     async handle(event, context) {
-      return handleChangeRequestEvent(event, options, context);
+      return handleChangeRequestEvent(event, { ...options, pullRequests: options.pullRequests ?? pullRequestsFromContext(context) }, context);
     },
   });
 }
@@ -391,6 +391,22 @@ export async function handleCodexReviewEvent(
   if (review === undefined) return { handled: false, reason: 'event is not a Codex review' };
   if (normalize(review.pullRequestState) === 'closed') {
     return { handled: false, reason: 'pull request is already closed', review };
+  }
+  const currentHeadSha = review.headSha ?? await livePullRequestHeadSha(
+    options.pullRequests,
+    {
+      repository: review.repository,
+      number: review.pullRequestNumber,
+      ...(review.reviewCommitId === undefined ? {} : { reviewCommitId: review.reviewCommitId }),
+    },
+    context,
+  );
+  if (
+    review.reviewCommitId !== undefined
+    && currentHeadSha !== undefined
+    && review.reviewCommitId !== currentHeadSha
+  ) {
+    return { handled: false, reason: 'review does not match the current pull request head', review };
   }
   const task = await options.tasks.getAgentTaskByBranchName(review.branchName);
   if (task === undefined) return { handled: false, reason: 'no agent task matched the PR branch', review };
@@ -779,7 +795,9 @@ function codexReviewTargetFromEvent(
   pullRequestNumber: number;
   branchName: string;
   reviewId: number;
+  headSha?: string;
   pullRequestState?: string;
+  reviewCommitId?: string;
   reviewUrl?: string;
   reviewBody?: string;
 } | undefined {
@@ -811,7 +829,9 @@ function codexReviewTargetFromEvent(
     pullRequestNumber,
     branchName,
     reviewId,
+    ...optionalString('headSha', stringValue(pullRequest.headSha)),
     ...optionalString('pullRequestState', stringValue(pullRequest.state)),
+    ...optionalString('reviewCommitId', stringValue(review.commitId ?? review.commit_id ?? resource.commitId ?? resource.commit_id)),
     ...optionalString('reviewUrl', stringValue(review.url ?? resource.url)),
     ...optionalString('reviewBody', stringValue(review.body ?? resource.body)),
   };
@@ -1070,11 +1090,24 @@ function latestActionableReviewsByReviewer(pullRequest: PullRequestReviewTarget)
   for (const review of pullRequest.reviews ?? []) {
     const reviewer = normalize(review.authorLogin);
     const state = normalize(review.state);
-    const previousState = normalize(latestByReviewer.get(reviewer)?.state);
+    const previous = latestByReviewer.get(reviewer);
+    const previousState = normalize(previous?.state);
     if ((state === 'commented' || state === 'pending') && ['approved', 'changes_requested'].includes(previousState)) continue;
+    if (
+      previous !== undefined
+      && ['approved', 'changes_requested'].includes(previousState)
+      && reviewIsForCurrentHead(previous, pullRequest)
+      && !reviewIsForCurrentHead(review, pullRequest)
+    ) {
+      continue;
+    }
     latestByReviewer.set(reviewer, review);
   }
   return latestByReviewer;
+}
+
+function reviewIsForCurrentHead(review: PullRequestReview, pullRequest: PullRequestReviewTarget): boolean {
+  return review.commitId === undefined || pullRequest.headSha === undefined || review.commitId === pullRequest.headSha;
 }
 
 function isConflicted(pullRequest: PullRequestReviewTarget): boolean {

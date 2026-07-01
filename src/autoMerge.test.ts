@@ -72,6 +72,19 @@ describe('handleAutoMergeEvent', () => {
     expect(result.reason).toBe('pull request has unresolved change requests');
   });
 
+  it('does not let stale actionable reviews hide current-head change requests', async () => {
+    const result = await handleAutoMergeEvent(checkRunEvent({ headSha: 'new-sha' }), options({
+      headSha: 'new-sha',
+      reviews: [
+        { authorLogin: 'hiragram', state: 'APPROVED', commitId: 'new-sha' },
+        { authorLogin: 'codex', state: 'CHANGES_REQUESTED', commitId: 'new-sha' },
+        { authorLogin: 'codex', state: 'APPROVED', commitId: 'old-sha' },
+      ],
+    }));
+
+    expect(result.reason).toBe('pull request has unresolved change requests');
+  });
+
   it('re-evaluates auto-merge after successful checks complete', async () => {
     const runtimeMerges: unknown[] = [];
 

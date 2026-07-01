@@ -1424,6 +1424,7 @@ function resourceFromReview(review: GitHubWebhookRecord): NormalizedGitHubResour
     id: String(review.id ?? 'unknown'),
     ...optionalStringProperty('state', stringField(review, 'state')),
     ...optionalStringProperty('body', stringField(review, 'body')),
+    ...optionalStringProperty('commitId', stringField(review, 'commit_id')),
     ...optionalStringProperty('url', stringField(review, 'html_url')),
   };
 }
@@ -2143,6 +2144,7 @@ function normalizedReview(review: unknown): NormalizedGitHubComment | undefined 
     ...optionalStringProperty('body', stringField(record, 'body')),
     ...optionalStringProperty('url', stringField(record, 'html_url')),
     ...optionalStringProperty('author', stringField(recordField(record, 'user'), 'login')),
+    ...optionalStringProperty('commitId', stringField(record, 'commit_id')),
   };
 }
 

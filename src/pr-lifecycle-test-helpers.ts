@@ -80,6 +80,7 @@ export function reviewEvent(overrides: {
   reviewBody?: string;
   reviewCommitId?: string;
   headSha?: string;
+  missingHeadSha?: boolean;
 } = {}): RainrailEventEnvelope {
   const repository = overrides.repository ?? 'reirei-lab/rainrail';
   const reviewId = 4493317816;
@@ -105,7 +106,7 @@ export function reviewEvent(overrides: {
         id: '44',
         number: 44,
         headRef: overrides.branchName ?? 'agent/test-pr',
-        headSha: overrides.headSha ?? 'abc123',
+        ...(overrides.missingHeadSha === true ? {} : { headSha: overrides.headSha ?? 'abc123' }),
         ...(overrides.missingHeadRepository === true ? {} : { headRepository: overrides.headRepository ?? repository }),
         state: overrides.prState ?? 'open',
         author: overrides.prAuthor ?? 'reirei-agent',

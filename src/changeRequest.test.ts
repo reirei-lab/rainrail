@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
-import { createTaskProviderPullRequestCommentHandoff, handleChangeRequestEvent } from './pr-lifecycle.js';
+import type { PluginRuntimeContext } from './workflow-plugin.js';
+import type { GitHubPullRequestProvider } from './pr-lifecycle.js';
+import { createChangeRequestWorkflow, createTaskProviderPullRequestCommentHandoff, handleChangeRequestEvent } from './pr-lifecycle.js';
 import { handoffRecorder, reviewEvent, task } from './pr-lifecycle-test-helpers.js';
 
 describe('handleChangeRequestEvent', () => {
@@ -92,6 +94,51 @@ describe('handleChangeRequestEvent', () => {
         },
       },
     });
+
+    expect(result).toMatchObject({ reason: 'change-requested pull request returned to Todo', reviewRequestRemoved: true });
+    expect(removedReviewRequests).toEqual([
+      { repository: 'reirei-lab/rainrail', number: 44, reviewerLogin: 'hiragram' },
+    ]);
+  });
+
+  it('uses the runtime pull request provider when created as a workflow', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+    const removedReviewRequests: Array<{ repository: string; number: number; reviewerLogin: string }> = [];
+    const workflow = createChangeRequestWorkflow({
+      reviewRequest: { reviewerLogin: 'hiragram' },
+      tasks: handoffRecorder({ updates }),
+    });
+
+    const result = await workflow.handle(reviewEvent({
+      state: 'changes_requested',
+      reviewerLogin: 'codex',
+    }), runtimeContext({
+      async getPullRequest(input) {
+        return {
+          repository: input.repository,
+          number: input.number,
+          title: 'feat: add PR lifecycle workflows',
+          url: 'https://github.com/reirei-lab/rainrail/pull/44',
+          authorLogin: 'reirei-agent',
+          headRefName: 'agent/test-pr',
+          headRepository: 'reirei-lab/rainrail',
+          headSha: 'abc123',
+          isDraft: false,
+          state: 'OPEN',
+          statusCheckRollup: [],
+          reviewRequests: ['hiragram'],
+        };
+      },
+      async findPullRequestByHead() {
+        throw new Error('not used');
+      },
+      async requestReview() {
+        throw new Error('not used');
+      },
+      async removeReviewRequest(input) {
+        removedReviewRequests.push(input);
+      },
+    }));
 
     expect(result).toMatchObject({ reason: 'change-requested pull request returned to Todo', reviewRequestRemoved: true });
     expect(removedReviewRequests).toEqual([
@@ -257,3 +304,24 @@ describe('handleChangeRequestEvent', () => {
     expect(commentCount).toBe(0);
   });
 });
+
+function runtimeContext(githubPullRequests: GitHubPullRequestProvider): PluginRuntimeContext {
+  return {
+    runId: 'run-change-request-test',
+    now: () => new Date('2026-07-01T00:00:00.000Z'),
+    providers: { githubPullRequests } as unknown as PluginRuntimeContext['providers'],
+    runtime: {} as PluginRuntimeContext['runtime'],
+    signal: new AbortController().signal,
+    actions: {
+      async mergePullRequest() {
+        throw new Error('not used');
+      },
+      async startRuntime() {
+        throw new Error('not used');
+      },
+      async readSecret() {
+        throw new Error('not used');
+      },
+    },
+  };
+}

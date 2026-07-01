@@ -1898,6 +1898,7 @@ describe('GitHub webhook source handling', () => {
           review: {
             id: 4594627585,
             state: 'approved',
+            commit_id: 'abc123',
             html_url: 'https://github.com/reirei-lab/rainrail/pull/39#pullrequestreview-4594627585',
           },
         },
@@ -1916,7 +1917,12 @@ describe('GitHub webhook source handling', () => {
           type: 'review',
           id: '4594627585',
           state: 'approved',
+          commitId: 'abc123',
           url: 'https://github.com/reirei-lab/rainrail/pull/39#pullrequestreview-4594627585',
+        },
+        review: {
+          id: '4594627585',
+          commitId: 'abc123',
         },
         pullRequest: {
           type: 'pull_request',

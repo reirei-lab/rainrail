@@ -85,6 +85,68 @@ describe('handleCodexReviewEvent', () => {
     ]);
   });
 
+  it('ignores stale Codex reviews for an old pull request head', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+
+    const result = await handleCodexReviewEvent(reviewEvent({
+      headSha: 'new-sha',
+      reviewCommitId: 'old-sha',
+    }), {
+      agentLogin: 'reirei-agent',
+      reviewerLogin: 'hiragram',
+      targetRepositories: ['reirei-lab/rainrail'],
+      tasks: handoffRecorder({ updates }),
+      pullRequests: {
+        async getPullRequest() {
+          throw new Error('not used');
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          throw new Error('not used');
+        },
+        async listReviewComments() {
+          throw new Error('not used');
+        },
+      },
+    });
+
+    expect(result.reason).toBe('review does not match the current pull request head');
+    expect(updates).toEqual([]);
+  });
+
+  it('checks live pull request head before handing off Codex reviews when payload head is missing', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+
+    const result = await handleCodexReviewEvent(reviewEvent({
+      missingHeadSha: true,
+      reviewCommitId: 'old-sha',
+    }), {
+      agentLogin: 'reirei-agent',
+      reviewerLogin: 'hiragram',
+      targetRepositories: ['reirei-lab/rainrail'],
+      tasks: handoffRecorder({ updates }),
+      pullRequests: {
+        async getPullRequest(input) {
+          return pullRequest({ ...input, headSha: 'new-sha' });
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          throw new Error('not used');
+        },
+        async listReviewComments() {
+          throw new Error('not used');
+        },
+      },
+    });
+
+    expect(result.reason).toBe('review does not match the current pull request head');
+    expect(updates).toEqual([]);
+  });
+
   it('accepts normalized GitHub review payloads with string review ids', async () => {
     const updates: Array<{ reason: string; commentBody?: string }> = [];
 
