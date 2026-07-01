@@ -1,7 +1,7 @@
 import { chmodSync, closeSync, constants, fchmodSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, statSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { isAbsolute, join, relative, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 
 import type { AgentAssignmentRuntime } from './agent-assignment.js';
 import type { RuntimeAgentTask, RuntimeProvider, RuntimeProviderContext, RuntimeRun, RuntimeRunRequest, RuntimeRunStatus } from './runtime-provider.js';
@@ -903,42 +903,55 @@ function defaultSpawnProcess(command: string, args: string[], options: { detache
 }
 
 function ensurePrivateLogDirectory(directory: string): void {
-  assertNoSymlinkPathComponents(directory);
+  const nearestExistingPath = nearestExistingPathComponent(directory);
+  assertNoSymlinkPathComponents(nearestExistingPath, directory);
   mkdirSync(directory, { recursive: true, mode: 0o700 });
-  assertNoSymlinkPathComponents(directory);
+  assertNoSymlinkPathComponents(nearestExistingPath, directory);
   chmodSync(directory, 0o700);
 }
 
-function assertNoSymlinkPathComponents(directory: string): void {
-  const absolutePath = resolve(directory);
-  assertPathIsNotSymlink(absolutePath);
-  const cwd = resolve(process.cwd());
-  const relativePath = relative(cwd, absolutePath);
-  if (relativePath === '' || relativePath.startsWith('..') || isAbsolute(relativePath)) {
-    return;
+function nearestExistingPathComponent(path: string): string {
+  let current = resolve(path);
+  while (true) {
+    try {
+      lstatSync(current);
+      return current;
+    } catch (error) {
+      if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) {
+        throw error;
+      }
+    }
+    const parent = dirname(current);
+    if (parent === current) {
+      return current;
+    }
+    current = parent;
   }
-  assertNoSymlinkPathComponentsFrom(cwd, relativePath);
 }
 
-function assertNoSymlinkPathComponentsFrom(root: string, relativePath: string): void {
-  const segments = relativePath.split(/[\\/]+/).filter((segment) => segment !== '');
-  let current = root;
-  for (const segment of segments) {
-    current = join(current, segment);
-    assertPathIsNotSymlink(current);
+function assertNoSymlinkPathComponents(startPath: string, targetPath: string): void {
+  const start = resolve(startPath);
+  const target = resolve(targetPath);
+  const paths = [start];
+  const relativePath = relative(start, target);
+  if (relativePath !== '') {
+    let current = start;
+    for (const segment of relativePath.split(/[\\/]+/).filter((part) => part !== '')) {
+      current = join(current, segment);
+      paths.push(current);
+    }
   }
-}
-
-function assertPathIsNotSymlink(path: string): void {
-  try {
-    if (lstatSync(path).isSymbolicLink()) {
-      throw new Error(`runtime log directory path contains a symlink: ${path}`);
+  for (const path of paths) {
+    try {
+      if (lstatSync(path).isSymbolicLink()) {
+        throw new Error(`runtime log directory path contains a symlink: ${path}`);
+      }
+    } catch (error) {
+      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+        continue;
+      }
+      throw error;
     }
-  } catch (error) {
-    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
-      return;
-    }
-    throw error;
   }
 }
 
