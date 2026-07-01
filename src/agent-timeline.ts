@@ -177,7 +177,8 @@ export async function readRuntimeJsonl(
 
 export function extractRuntimeSessionId(log: string): string | undefined {
   try {
-    return runtimeSessionIdFromPayload(JSON.parse(log) as unknown);
+    const payload = JSON.parse(log) as unknown;
+    return isTrustedRuntimeCompletionPayload(payload) ? runtimeSessionIdFromPayload(payload) : undefined;
   } catch {
     const parsed = parseJsonObjectsFromLog(log);
     for (const payload of parsed.payloads.slice().reverse()) {
@@ -544,6 +545,8 @@ function redactSensitiveText(value: string): string {
     .replace(/(^|\s)(-[A-GI-Za-gi-z]*?b)(\s+)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s'"]+)/g, '$1$2$3[redacted-cookie]')
     .replace(/(^|\s)(-[A-GI-Za-gi-z]*?[uUE])(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s'"]+)/g, '$1$2[redacted-credential]')
     .replace(/(^|\s)(-[A-GI-Za-gi-z]*?b)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s'"]+)/g, '$1$2[redacted-cookie]')
+    .replace(/(^|\s)(-[A-WY-Za-wy-z]*?x)(\s+)(?:"[^"\s]*:[^"@\s]+@[^"\s]+"|'[^'\s]*:[^'@\s]+@[^'\s]+'|[^\s'"]*:[^\s'"]+@[^\s'"]+)/g, '$1$2$3[redacted-proxy]')
+    .replace(/(^|\s)(-[A-WY-Za-wy-z]*?x)(?:"[^"\s]*:[^"@\s]+@[^"\s]+"|'[^'\s]*:[^'@\s]+@[^'\s]+'|[^\s'"]*:[^\s'"]+@[^\s'"]+)/g, '$1$2[redacted-proxy]')
     .replace(/(^|\s)(-[uUE])(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s'"]+)/g, '$1$2[redacted-credential]')
     .replace(/(^|\s)(-b)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s'"]+)/g, '$1$2[redacted-cookie]')
     .replace(/(^|\s)(-x|--proxy|--preproxy)(=|\s+)(?:"[^"\s]*:[^"@\s]+@[^"\s]+"|'[^'\s]*:[^'@\s]+@[^'\s]+'|[^\s'"]*:[^\s'"]+@[^\s'"]+)/g, '$1$2$3[redacted-proxy]')
@@ -553,18 +556,18 @@ function redactSensitiveText(value: string): string {
     .replace(/\bgithub_pat_[A-Za-z0-9_]+\b/g, '[redacted-token]')
     .replace(/(gh[pousr]_[A-Za-z0-9_]+)/g, '[redacted-token]')
     .replace(/(sk-[A-Za-z0-9_-]{20,})/g, '[redacted-token]')
-    .replace(/\b(Bearer\s+)[A-Za-z0-9._~+/-][A-Za-z0-9._~+/=-]{5,}/gi, '$1[redacted-bearer]')
+    .replace(/\b(Bearer\s+)[A-Za-z0-9._~+/-][A-Za-z0-9._~+/=_-]{5,}/gi, '$1[redacted-bearer]')
     .replace(/([A-Za-z][A-Za-z0-9+.-]*:\/\/)[^\s/@:]+:[^\s/@]+@/g, '$1[redacted]@')
     .replace(/\b(Authorization:\s*)[\s\S]*?(?=(?:"\s+-H\s+"(?:Authorization|Cookie|Set-Cookie):)|\s+(?:Authorization|Cookie|Set-Cookie):|[\n\r]|$)/gi, '$1[redacted-authorization]')
     .replace(/\b(Set-Cookie:\s*)[\s\S]*?(?=(?:"\s+-H\s+"(?:Authorization|Cookie|Set-Cookie):)|\s+(?:Authorization|Cookie|Set-Cookie):|[\n\r]|$)/gi, '$1[redacted-cookie]')
     .replace(/\b(Cookie:\s*)[\s\S]*?(?=(?:"\s+-H\s+"(?:Authorization|Cookie|Set-Cookie):)|\s+Set-Cookie:|[\n\r]|$)/gi, '$1[redacted-cookie]')
     .replace(/("[^"]*(?:token|secret|password|api[_-]?key|private[_-]?key|authorization|set-cookie|cookie)[^"]*"\s*:\s*)"(?:(?:\\.)|[^"\\])*"/gi, '$1"[redacted]"')
-    .replace(/([A-Za-z0-9_-]*(?:token|secret|password|api[_-]?key|private[_-]?key)[A-Za-z0-9_-]*\s*[:=]\s*)"(?:(?:\\.)|[^"\\])*"/gi, '$1"[redacted]"')
+    .replace(/([A-Za-z0-9_-]*(?:token|secret|password|api[_-]?key|private[_-]?key|set-cookie|cookie)[A-Za-z0-9_-]*\s*[:=]\s*)"(?:(?:\\.)|[^"\\])*"/gi, '$1"[redacted]"')
     .replace(/([A-Za-z0-9_-]*authorization[A-Za-z0-9_-]*\s*=\s*)"(?:(?:\\.)|[^"\\])*"/gi, '$1"[redacted]"')
-    .replace(/([A-Za-z0-9_-]*(?:token|secret|password|api[_-]?key|private[_-]?key)[A-Za-z0-9_-]*\s*[:=]\s*)'(?:(?:\\.)|[^'\\])*'/gi, "$1'[redacted]'")
+    .replace(/([A-Za-z0-9_-]*(?:token|secret|password|api[_-]?key|private[_-]?key|set-cookie|cookie)[A-Za-z0-9_-]*\s*[:=]\s*)'(?:(?:\\.)|[^'\\])*'/gi, "$1'[redacted]'")
     .replace(/([A-Za-z0-9_-]*authorization[A-Za-z0-9_-]*\s*=\s*)'(?:(?:\\.)|[^'\\])*'/gi, "$1'[redacted]'")
-    .replace(/([A-Za-z0-9_-]*(?:token|secret|password|api[_-]?key|private[_-]?key)[A-Za-z0-9_-]*\s*[:=]\s*)[^\s'",}]+/gi, '$1[redacted]')
-    .replace(/([A-Za-z0-9_-]*authorization[A-Za-z0-9_-]*\s*=\s*)[^\s'",}]+/gi, '$1[redacted]');
+    .replace(/([A-Za-z0-9_-]*(?:token|secret|password|api[_-]?key|private[_-]?key|set-cookie|cookie)[A-Za-z0-9_-]*\s*[:=]\s*)(?!\[redacted)[^\s'",}]+/gi, '$1[redacted]')
+    .replace(/([A-Za-z0-9_-]*authorization[A-Za-z0-9_-]*\s*=\s*)(?!\[redacted)[^\s'",}]+/gi, '$1[redacted]');
 }
 
 function truncate(value: string, maxLength: number): string {

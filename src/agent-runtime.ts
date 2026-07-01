@@ -647,8 +647,7 @@ function isTrustedRuntimeCompletionFragment(payload: Record<string, unknown>): b
 function hasRuntimeCompletionSignal(payload: Record<string, unknown>): boolean {
   return completionTextsFromPayload(payload).length > 0
     || recordValue(payload.completion) !== undefined
-    || recordValue(payload.executionTrace) !== undefined
-    || recordValue(payload.result) !== undefined;
+    || recordValue(payload.executionTrace) !== undefined;
 }
 
 function hasRuntimeAgentMeta(payload: Record<string, unknown>): boolean {

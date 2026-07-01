@@ -15,7 +15,7 @@ import {
 describe('agent timeline', () => {
   it('extracts OpenClaw session ids from JSON logs', () => {
     expect(extractRuntimeSessionId(JSON.stringify({
-      result: { meta: { agentMeta: { sessionId: '4920eb13-b75f-4680-8b21-54f40262d2ba' } } },
+      result: { status: 'ok', meta: { agentMeta: { sessionId: '4920eb13-b75f-4680-8b21-54f40262d2ba' } } },
     }))).toBe('4920eb13-b75f-4680-8b21-54f40262d2ba');
   });
 
@@ -87,6 +87,35 @@ describe('agent timeline', () => {
     }
   });
 
+  it('does not use strict stderr diagnostic JSON as session metadata', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'rainrail-strict-stderr-diagnostic-session-id-timeline-'));
+    const logPath = join(directory, 'agent.log');
+    const stderrLogPath = join(directory, 'agent.stderr.log');
+    writeFileSync(stderrLogPath, '{"meta":{"agentMeta":{"sessionId":"old-session"}}}', 'utf8');
+    writeFileSync(logPath, JSON.stringify({
+      status: 'ok',
+      meta: { agentMeta: { sessionId: 'actual-session' } },
+    }), 'utf8');
+    writeFileSync(join(directory, 'actual-session.trajectory.jsonl'), [
+      JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:08:00.000Z', seq: 1 }),
+    ].join('\n'), 'utf8');
+    writeFileSync(join(directory, 'old-session.trajectory.jsonl'), [
+      JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:09:00.000Z', seq: 1 }),
+    ].join('\n'), 'utf8');
+
+    try {
+      const timeline = await readRuntimeTimeline(
+        { logPath, stderrLogPath, agentSessionId: 'agent:main:routing-key' },
+        { sessionsDirectory: directory },
+      );
+      expect(timeline.sessionId).toBe('actual-session');
+      expect(timeline.fallback).toBe(false);
+      expect(timeline.missing).toBe(false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('does not extract quoted agentMeta session ids from valid JSON logs without metadata', () => {
     expect(extractRuntimeSessionId(JSON.stringify({
       status: 'ok',
@@ -100,7 +129,7 @@ describe('agent timeline', () => {
     const logPath = join(directory, 'agent.log');
     writeFileSync(logPath, [
       `EMBEDDED FALLBACK: Gateway agent timed out; running embedded agent with fresh session ${fallbackSessionId}`,
-      JSON.stringify({ result: { meta: { agentMeta: { sessionId: 'intended-session' } } } }),
+      JSON.stringify({ result: { status: 'ok', meta: { agentMeta: { sessionId: 'intended-session' } } } }),
     ].join('\n'), 'utf8');
     writeFileSync(join(directory, `${fallbackSessionId}.trajectory.jsonl`), [
       JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:08:00.000Z', seq: 1 }),
@@ -507,7 +536,7 @@ describe('agent timeline', () => {
     const runtimeFile = join(relocatedDirectory, `${sessionId}.trajectory.jsonl`);
     mkdirSync(relocatedDirectory, { recursive: true });
     writeFileSync(logPath, JSON.stringify({
-      result: { meta: { agentMeta: { sessionId } } },
+      result: { status: 'ok', meta: { agentMeta: { sessionId } } },
     }), 'utf8');
     writeFileSync(join(directory, `${sessionId}.trajectory-path.json`), JSON.stringify({
       traceSchema: 'openclaw-trajectory-pointer',
@@ -541,7 +570,7 @@ describe('agent timeline', () => {
     const otherFile = join(otherDirectory, 'other-session.trajectory.jsonl');
     mkdirSync(otherDirectory, { recursive: true });
     writeFileSync(logPath, JSON.stringify({
-      result: { meta: { agentMeta: { sessionId } } },
+      result: { status: 'ok', meta: { agentMeta: { sessionId } } },
     }), 'utf8');
     writeFileSync(join(directory, `${sessionId}.trajectory-path.json`), JSON.stringify({
       traceSchema: 'openclaw-trajectory-pointer',
@@ -762,7 +791,7 @@ describe('agent timeline', () => {
     const stderrLogPath = join(directory, 'agent.stderr.log');
     const resumeLogPath = join(directory, 'resume-1.log');
     const resumeStderrLogPath = join(directory, 'resume-1.stderr.log');
-    writeFileSync(logPath, JSON.stringify({ result: { meta: { agentMeta: { sessionId: 'original-session' } } } }), 'utf8');
+    writeFileSync(logPath, JSON.stringify({ result: { status: 'ok', meta: { agentMeta: { sessionId: 'original-session' } } } }), 'utf8');
     writeFileSync(stderrLogPath, 'EMBEDDED FALLBACK: Gateway timed out; running embedded agent with fresh session gateway-fallback-start', 'utf8');
     writeFileSync(resumeLogPath, 'resume stdout without completion metadata', 'utf8');
     writeFileSync(resumeStderrLogPath, 'EMBEDDED FALLBACK: Gateway timed out; running embedded agent with fresh session gateway-fallback-resume', 'utf8');
@@ -996,7 +1025,7 @@ describe('agent timeline', () => {
         data: {
           name: 'bash',
           arguments: {
-            command: 'curl -x user:proxy-secret@proxy.example --preproxy pre:pre-secret@preproxy.example https://example.com',
+            command: 'curl -x user:proxy-secret@proxy.example --preproxy pre:pre-secret@preproxy.example -sx user:cluster-proxy-secret@cluster.example -sxjoined:joined-proxy-secret@joined.example https://example.com',
           },
         },
       }),
@@ -1004,8 +1033,36 @@ describe('agent timeline', () => {
 
     expect(timeline[0]!.detail).toContain('-x [redacted-proxy]');
     expect(timeline[0]!.detail).toContain('--preproxy [redacted-proxy]');
+    expect(timeline[0]!.detail).toContain('-sx [redacted-proxy]');
+    expect(timeline[0]!.detail).toContain('-sx[redacted-proxy]');
     expect(timeline[0]!.detail).not.toContain('proxy-secret');
     expect(timeline[0]!.detail).not.toContain('pre-secret');
+    expect(timeline[0]!.detail).not.toContain('cluster-proxy-secret');
+    expect(timeline[0]!.detail).not.toContain('joined-proxy-secret');
+  });
+
+  it('redacts bearer tokens with underscores and cookie assignments', () => {
+    const timeline = parseRuntimeTrajectoryTimeline([
+      JSON.stringify({
+        type: 'tool.result',
+        ts: '2026-06-30T15:09:10.000Z',
+        seq: 1,
+        data: {
+          name: 'bash',
+          status: 'completed',
+          output: 'standalone Bearer abcdef_secret COOKIE=session=secret-cookie SESSION_COOKIE=session-secret Set-Cookie=refresh-secret',
+        },
+      }),
+    ].join('\n'));
+
+    expect(timeline[0]!.excerpt).toContain('Bearer [redacted-bearer]');
+    expect(timeline[0]!.excerpt).toContain('COOKIE=[redacted]');
+    expect(timeline[0]!.excerpt).toContain('SESSION_COOKIE=[redacted]');
+    expect(timeline[0]!.excerpt).toContain('Set-Cookie=[redacted]');
+    expect(timeline[0]!.excerpt).not.toContain('_secret');
+    expect(timeline[0]!.excerpt).not.toContain('secret-cookie');
+    expect(timeline[0]!.excerpt).not.toContain('session-secret');
+    expect(timeline[0]!.excerpt).not.toContain('refresh-secret');
   });
 
   it('classifies common commands into dashboard phases', () => {
@@ -1027,7 +1084,7 @@ describe('agent timeline', () => {
     const directory = mkdtempSync(join(tmpdir(), 'rainrail-missing-timeline-'));
     const logPath = join(directory, 'agent.log');
     writeFileSync(logPath, JSON.stringify({
-      result: { meta: { agentMeta: { sessionId: 'missing-session' } } },
+      result: { status: 'ok', meta: { agentMeta: { sessionId: 'missing-session' } } },
     }), 'utf8');
 
     try {

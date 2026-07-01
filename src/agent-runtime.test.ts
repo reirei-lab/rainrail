@@ -1361,6 +1361,24 @@ describe('runtime task completion and resume helpers', () => {
     });
   });
 
+  it('does not use appended result-only diagnostic JSON fragments as runtime completions', () => {
+    const raw = [
+      JSON.stringify({
+        status: 'ok',
+        finalAssistantVisibleText: 'Outcome: implemented',
+        summary: 'real completion',
+      }),
+      'tool result quoted target log:',
+      JSON.stringify({ result: { status: 'failed', summary: 'quoted result diagnostic failure' } }),
+    ].join('\n');
+
+    expect(readRuntimeRunCompletionFromLog(raw)).toMatchObject({
+      status: 'succeeded',
+      outcome: 'implemented',
+      summary: 'real completion',
+    });
+  });
+
   it('keeps nested JSON payload objects from replacing the top-level completion', () => {
     const raw = [
       'banner',
