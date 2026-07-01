@@ -95,7 +95,10 @@ provider 利用側が `onSpawnError` で観測できるようにする。start r
 由来の正規化名と短い hash を含む一意な名前にする。resume run も attempt id 由来の
 正規化名と短い hash を含め、同じ issue task の別 session が同じ resume log に
 追記されないようにする。resume attempt id も raw session key の短い hash を含め、
-正規化後に同名になる session key の attempt log が衝突しないようにする。初回実行が gateway
+正規化後に同名になる session key の attempt log が衝突しないようにしつつ、長い task/session でも
+一般的な filesystem filename limit に収まるよう prefix を短く保つ。OpenClaw agent 起動には
+start/resume とも delivery/task/attempt 由来の安定した `--run-id` を渡し、再配送や timeout retry が
+同一 run として冪等に扱われるようにする。初回実行が gateway
 fallback session へ移った場合は、前回 completion metadata の top-level または
 `result` 配下の `meta.agentMeta.fallbackSessionKey` から fallback session key を、
 または stdout/stderr log の embedded fallback marker から fallback session id を検出して resume
@@ -126,7 +129,8 @@ resume helper は running pid を確認し、
 必要な時刻、分類済み phase、redacted summary、status、redacted excerpt を返す。
 timeline/status/jsonl の session 解決は resume attempts を新しい順に読んだうえで、
 stdout `logPath` と対応する `stderrLogPath` または `.stderr.log` の embedded fallback marker も参照する。
-fallbackSessionKey metadata は元の agentSessionId mapping より優先し、fallback marker は
+fallbackSessionKey metadata と fallback marker は種類で後から優先順位を変えず、log 探索順で最初に
+見つかった fallback を元の agentSessionId mapping より優先する。fallback marker は
 `agent:<agent>:explicit:<session-id>` の `sessions.json` mapping を先に解決して relocated session file を
 見失わないようにする。redaction は shell 風の
 `token=...` や `curl -u user:password` / `curl -uuser:password` /

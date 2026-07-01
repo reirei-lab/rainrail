@@ -156,6 +156,51 @@ describe('agent timeline', () => {
     }
   });
 
+  it('prefers the newest fallback log regardless of key or marker source', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'rainrail-newest-fallback-timeline-'));
+    const startLogPath = join(directory, 'agent.log');
+    const resumeLogPath = join(directory, 'resume.log');
+    const resumeStderrLogPath = join(directory, 'resume.stderr.log');
+    writeFileSync(startLogPath, JSON.stringify({
+      status: 'ok',
+      meta: {
+        agentMeta: {
+          fallbackSessionKey: 'agent:main:explicit:gateway-fallback-old',
+        },
+      },
+    }), 'utf8');
+    writeFileSync(resumeLogPath, 'resume stdout without fallback marker', 'utf8');
+    writeFileSync(resumeStderrLogPath, 'EMBEDDED FALLBACK: Gateway timed out; running embedded agent with fresh session gateway-fallback-newest', 'utf8');
+    writeFileSync(join(directory, 'sessions.json'), JSON.stringify({
+      'agent:main:explicit:gateway-fallback-old': { sessionId: 'old-fallback-session' },
+      'agent:main:explicit:gateway-fallback-newest': { sessionId: 'newest-fallback-session' },
+    }), 'utf8');
+    writeFileSync(join(directory, 'old-fallback-session.trajectory.jsonl'), [
+      JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:08:00.000Z', seq: 1 }),
+    ].join('\n'), 'utf8');
+    writeFileSync(join(directory, 'newest-fallback-session.trajectory.jsonl'), [
+      JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:09:00.000Z', seq: 1 }),
+    ].join('\n'), 'utf8');
+
+    try {
+      const timeline = await readRuntimeTimeline(
+        {
+          logPath: startLogPath,
+          agentSessionId: 'agent:main:original-session',
+          resumeAttempts: [
+            { logPath: resumeLogPath, stderrLogPath: resumeStderrLogPath },
+          ],
+        },
+        { sessionsDirectory: directory },
+      );
+      expect(timeline.sessionId).toBe('newest-fallback-session');
+      expect(timeline.fallback).toBe(true);
+      expect(timeline.missing).toBe(false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('follows relocated trajectory pointers for timeline reads', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'rainrail-relocated-timeline-'));
     const relocatedDirectory = join(directory, 'runtime-sidecar');

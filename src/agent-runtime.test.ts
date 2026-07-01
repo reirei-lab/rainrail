@@ -141,6 +141,8 @@ describe('createOpenClawRuntimeProvider', () => {
       'main',
       '--session-key',
       'agent:main:rainrail-agent_task_reirei-lab-rainrail_22-run-22',
+      '--run-id',
+      'rainrail-start-project-issue-selection-delivery-22-agent-task-reirei-lab-rainrail-22',
       '--timeout',
       '900',
       '--json',
@@ -184,6 +186,45 @@ describe('createOpenClawRuntimeProvider', () => {
     expect(statMode(String(started.metadata?.stderrLogPath))).toBe(0o600);
     expect(statMode(String(resumed?.metadata?.logPath))).toBe(0o600);
     expect(statMode(String(resumed?.metadata?.stderrLogPath))).toBe(0o600);
+  });
+
+  it('passes stable run ids to start and resume OpenClaw invocations', async () => {
+    const spawnProcess = vi.fn(() => ({ pid: 4242, unref: vi.fn() }));
+    const logDirectory = temporaryDirectory();
+    const provider = createOpenClawRuntimeProvider({
+      enabled: true,
+      command: 'openclaw',
+      agentId: 'main',
+      sessionKeyPrefix: 'rainrail',
+      timeoutSeconds: 900,
+      logDirectory,
+      spawnProcess,
+    });
+
+    const started = await provider.startRun(runtimeRequest());
+    await provider.resumeRun?.({
+      run: started,
+      task: {
+        id: 'agent_task_reirei-lab-rainrail_22',
+        title: 'OpenClaw runtime',
+        agentSessionId: 'agent:main:rainrail-agent_task_reirei-lab-rainrail_22-run-22',
+        branchName: 'agent/reirei-lab-rainrail-22',
+        logPath: String(started.metadata?.logPath),
+        stderrLogPath: String(started.metadata?.stderrLogPath),
+        resumeAttempts: [],
+      },
+      attemptId: 'agent_task_reirei-lab-rainrail_22_resume_01',
+      requestedBy: 'reirei-agent',
+    });
+
+    expect(spawnProcess).toHaveBeenNthCalledWith(1, 'openclaw', expect.arrayContaining([
+      '--run-id',
+      'rainrail-start-project-issue-selection-delivery-22-agent-task-reirei-lab-rainrail-22',
+    ]), expect.anything());
+    expect(spawnProcess).toHaveBeenNthCalledWith(2, 'openclaw', expect.arrayContaining([
+      '--run-id',
+      'rainrail-resume-agent-task-reirei-lab-rainrail-22-resume-01',
+    ]), expect.anything());
   });
 
   it('keeps JSON stdout separate from diagnostic stderr for completion parsing', async () => {
@@ -934,7 +975,7 @@ describe('runtime task completion and resume helpers', () => {
     };
 
     expect(runningRuntimeTaskPid(task, (pid) => pid === 222)).toBe(222);
-    expect(nextRuntimeResumeAttemptId(task)).toMatch(/^agent_task_reirei-lab-rainrail_22_agent_main_session_[a-f0-9]{12}_resume_03$/);
+    expect(nextRuntimeResumeAttemptId(task)).toMatch(/^agent_task_reirei-lab-rainrail_22_agent_main_session_[a-f0-9]{12}_[a-f0-9]{12}_resume_03$/);
   });
 
   it('keeps resume attempt ids distinct for the same issue task in different sessions', () => {
@@ -967,6 +1008,23 @@ describe('runtime task completion and resume helpers', () => {
     });
 
     expect(first).not.toBe(second);
+  });
+
+  it('keeps long resume attempt ids within common filename limits', () => {
+    const longTaskId = `agent_task_${'very-long-owner-name-'.repeat(5)}${'very-long-repository-name-'.repeat(5)}_issue_${'1234567890'.repeat(6)}`;
+    const longSessionId = `agent:main:${longTaskId}:${'uuid-'.repeat(30)}`;
+    const attemptId = nextRuntimeResumeAttemptId({
+      id: longTaskId,
+      agentSessionId: longSessionId,
+      resumeAttempts: Array.from({ length: 98 }, (_, index) => ({
+        id: `attempt-${index + 1}`,
+        status: 'stopped',
+        logPath: `resume-${index + 1}.log`,
+      })),
+    });
+
+    expect(Buffer.byteLength(`${attemptId}.log`, 'utf8')).toBeLessThanOrEqual(180);
+    expect(attemptId).toMatch(/_[a-f0-9]{12}_[a-f0-9]{12}_resume_99$/);
   });
 });
 

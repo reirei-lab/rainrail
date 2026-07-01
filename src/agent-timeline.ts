@@ -254,8 +254,7 @@ async function readRuntimeSession(
   options: RuntimeTimelineReadOptions,
 ): Promise<RuntimeSessionResolution> {
   const mapped = await resolveTrajectorySession(task.agentSessionId, options);
-  let fallbackSessionKey: string | undefined;
-  let fallbackSessionId: string | undefined;
+  let fallbackSession: { sessionKey: string } | { sessionId: string } | undefined;
   let logSessionId: string | undefined;
   for (const logPath of runtimeTaskLogPaths(task)) {
     let log: string;
@@ -264,26 +263,27 @@ async function readRuntimeSession(
     } catch {
       continue;
     }
-    fallbackSessionKey ??= extractRuntimeFallbackSessionKey(log);
-    fallbackSessionId ??= extractRuntimeFallbackSessionId(log);
+    const fallbackSessionKey = extractRuntimeFallbackSessionKey(log);
+    const fallbackSessionId = extractRuntimeFallbackSessionId(log);
     const sessionId = extractRuntimeSessionId(log);
     logSessionId ??= sessionId;
-    if (fallbackSessionId === undefined && sessionId?.startsWith('gateway-fallback-') === true) {
-      fallbackSessionId = sessionId;
+    if (fallbackSession === undefined) {
+      if (fallbackSessionKey !== undefined) {
+        fallbackSession = { sessionKey: fallbackSessionKey };
+      } else if (fallbackSessionId !== undefined) {
+        fallbackSession = { sessionId: fallbackSessionId };
+      } else if (sessionId?.startsWith('gateway-fallback-') === true) {
+        fallbackSession = { sessionId };
+      }
     }
   }
-  if (fallbackSessionKey !== undefined) {
+  if (fallbackSession !== undefined) {
+    const fallbackSessionKey = 'sessionKey' in fallbackSession
+      ? fallbackSession.sessionKey
+      : `agent:${options.agentId ?? 'main'}:explicit:${fallbackSession.sessionId}`;
     const fallbackMapped = await resolveTrajectorySession(fallbackSessionKey, options);
     return {
-      sessionId: fallbackMapped?.sessionId ?? fallbackSessionKey,
-      sessionFile: fallbackMapped?.sessionFile,
-      fallback: true,
-    };
-  }
-  if (fallbackSessionId !== undefined) {
-    const fallbackMapped = await resolveTrajectorySession(`agent:${options.agentId ?? 'main'}:explicit:${fallbackSessionId}`, options);
-    return {
-      sessionId: fallbackMapped?.sessionId ?? fallbackSessionId,
+      sessionId: fallbackMapped?.sessionId ?? ('sessionId' in fallbackSession ? fallbackSession.sessionId : fallbackSession.sessionKey),
       sessionFile: fallbackMapped?.sessionFile,
       fallback: true,
     };

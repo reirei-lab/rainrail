@@ -112,6 +112,8 @@ export function createOpenClawRuntimeProvider(options: OpenClawRuntimeProviderOp
         options.agentId,
         '--session-key',
         resumeSessionId,
+        '--run-id',
+        runtimeResumeRunId(options, request),
         '--message',
         promptForRuntimeTaskResume(request.task, resumeSessionId),
         '--timeout',
@@ -169,6 +171,8 @@ export async function startOpenClawRun(
     options.agentId,
     '--session-key',
     agentSessionId,
+    '--run-id',
+    runtimeStartRunId(options, request, task),
     '--message',
     promptForRuntimeTask(task, agentSessionId),
     '--timeout',
@@ -261,10 +265,30 @@ export function runningRuntimeTaskPid(task: RuntimeAgentTask, isRunning: (pid: n
 export function nextRuntimeResumeAttemptId(
   task: Pick<RuntimeAgentTask, 'id' | 'resumeAttempts'> & { agentSessionId?: string },
 ): string {
+  const sequence = String(task.resumeAttempts.length + 1).padStart(2, '0');
+  const taskPrefix = boundedSafeFileName(task.id, 64);
   const sessionId = task.agentSessionId !== undefined
-    ? `_${safeFileName(task.agentSessionId)}_${shortHash(task.agentSessionId)}`
+    ? `_${boundedSafeFileName(task.agentSessionId, 40)}_${shortHash(task.agentSessionId)}`
     : '';
-  return `${task.id}${sessionId}_resume_${String(task.resumeAttempts.length + 1).padStart(2, '0')}`;
+  return `${taskPrefix}${sessionId}_${shortHash(`${task.id}:${task.agentSessionId ?? ''}`)}_resume_${sequence}`;
+}
+
+function runtimeStartRunId(
+  options: OpenClawRuntimeProviderOptions,
+  request: RuntimeRunRequest,
+  task: RuntimeAgentTaskInput,
+): string {
+  return boundedRunId([
+    options.sessionKeyPrefix,
+    'start',
+    request.workflow,
+    request.event.delivery.id,
+    task.id,
+  ].join('-'));
+}
+
+function runtimeResumeRunId(options: OpenClawRuntimeProviderOptions, request: { attemptId: string }): string {
+  return boundedRunId(`${options.sessionKeyPrefix}-resume-${request.attemptId}`);
 }
 
 function promptForRuntimeTask(task: RuntimeAgentTaskInput, sessionKey: string): string {
@@ -621,8 +645,33 @@ function safeFileName(value: string): string {
   return value.replace(/[^A-Za-z0-9._-]/g, '_');
 }
 
+function boundedSafeFileName(value: string, maxLength: number): string {
+  const safe = safeFileName(value);
+  if (safe.length <= maxLength) {
+    return safe;
+  }
+  const suffix = `_${shortHash(value)}`;
+  return `${safe.slice(0, Math.max(1, maxLength - suffix.length))}${suffix}`;
+}
+
 function safeLogFileName(value: string): string {
   return `${safeFileName(value)}_${shortHash(value)}`;
+}
+
+function safeRunId(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .replace(/-{2,}/g, '-');
+}
+
+function boundedRunId(value: string): string {
+  const safe = safeRunId(value);
+  if (safe.length <= 160) {
+    return safe;
+  }
+  return `${safe.slice(0, 147).replace(/-+$/g, '')}-${shortHash(value)}`;
 }
 
 function shortHash(value: string): string {
