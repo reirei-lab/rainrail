@@ -175,7 +175,7 @@ export function extractRuntimeSessionId(log: string): string | undefined {
     return runtimeSessionIdFromPayload(JSON.parse(log) as unknown);
   } catch {
     const parsed = parseJsonObjectsFromLog(log);
-    for (const payload of parsed.payloads) {
+    for (const payload of parsed.payloads.slice().reverse()) {
       const sessionId = runtimeSessionIdFromPayload(payload);
       if (sessionId !== undefined) {
         return sessionId;
@@ -185,8 +185,8 @@ export function extractRuntimeSessionId(log: string): string | undefined {
       return undefined;
     }
   }
-  const match = log.match(/"agentMeta"\s*:\s*\{[\s\S]*?"sessionId"\s*:\s*"([^"]+)"/);
-  return match?.[1];
+  const matches = [...log.matchAll(/"agentMeta"\s*:\s*\{[\s\S]*?"sessionId"\s*:\s*"([^"]+)"/g)];
+  return matches.at(-1)?.[1];
 }
 
 export function extractRuntimeFallbackSessionId(log: string): string | undefined {
@@ -306,11 +306,11 @@ async function readRuntimeSession(
 function runtimeTaskLogPaths(task: RuntimeTaskForTimeline): string[] {
   const paths = [
     ...(task.resumeAttempts ?? []).slice().reverse().flatMap((attempt) => [
-      attempt.logPath,
       attempt.stderrLogPath ?? stderrLogPathFor(attempt.logPath),
+      attempt.logPath,
     ]),
-    task.logPath,
     task.stderrLogPath ?? stderrLogPathFor(task.logPath),
+    task.logPath,
   ];
   return [...new Set(paths)];
 }

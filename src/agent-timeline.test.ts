@@ -41,6 +41,21 @@ describe('agent timeline', () => {
     expect(extractRuntimeSessionId(log)).toBe('actual-session');
   });
 
+  it('extracts the last OpenClaw session id from appended JSON logs', () => {
+    const log = [
+      JSON.stringify({
+        status: 'ok',
+        meta: { agentMeta: { sessionId: 'gateway-fallback-old' } },
+      }),
+      JSON.stringify({
+        status: 'ok',
+        meta: { agentMeta: { sessionId: 'gateway-fallback-new' } },
+      }),
+    ].join('\n');
+
+    expect(extractRuntimeSessionId(log)).toBe('gateway-fallback-new');
+  });
+
   it('does not extract quoted agentMeta session ids from valid JSON logs without metadata', () => {
     expect(extractRuntimeSessionId(JSON.stringify({
       status: 'ok',
@@ -285,6 +300,47 @@ describe('agent timeline', () => {
         { sessionsDirectory: directory },
       );
       expect(timeline.sessionId).toBe('newest-fallback-session');
+      expect(timeline.fallback).toBe(true);
+      expect(timeline.missing).toBe(false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('prefers stderr fallback markers over stale stdout fallback metadata in the same resume attempt', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'rainrail-stderr-over-stdout-timeline-'));
+    const startLogPath = join(directory, 'agent.log');
+    const resumeLogPath = join(directory, 'resume.log');
+    const resumeStderrLogPath = join(directory, 'resume.stderr.log');
+    writeFileSync(startLogPath, 'started intended session', 'utf8');
+    writeFileSync(resumeLogPath, JSON.stringify({
+      status: 'ok',
+      meta: { agentMeta: { fallbackSessionKey: 'agent:main:explicit:gateway-fallback-stale' } },
+    }), 'utf8');
+    writeFileSync(resumeStderrLogPath, 'EMBEDDED FALLBACK: Gateway timed out; running embedded agent with fresh session gateway-fallback-current', 'utf8');
+    writeFileSync(join(directory, 'sessions.json'), JSON.stringify({
+      'agent:main:explicit:gateway-fallback-stale': { sessionId: 'stale-fallback-session' },
+      'agent:main:explicit:gateway-fallback-current': { sessionId: 'current-fallback-session' },
+    }), 'utf8');
+    writeFileSync(join(directory, 'stale-fallback-session.trajectory.jsonl'), [
+      JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:08:00.000Z', seq: 1 }),
+    ].join('\n'), 'utf8');
+    writeFileSync(join(directory, 'current-fallback-session.trajectory.jsonl'), [
+      JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:09:00.000Z', seq: 1 }),
+    ].join('\n'), 'utf8');
+
+    try {
+      const timeline = await readRuntimeTimeline(
+        {
+          logPath: startLogPath,
+          agentSessionId: 'agent:main:original-session',
+          resumeAttempts: [
+            { logPath: resumeLogPath, stderrLogPath: resumeStderrLogPath },
+          ],
+        },
+        { sessionsDirectory: directory },
+      );
+      expect(timeline.sessionId).toBe('current-fallback-session');
       expect(timeline.fallback).toBe(true);
       expect(timeline.missing).toBe(false);
     } finally {

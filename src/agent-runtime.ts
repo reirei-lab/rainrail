@@ -524,11 +524,11 @@ function runtimeResumeSessionId(task: RuntimeAgentTask, agentId: string): string
 function runtimeResumeLogPaths(task: RuntimeAgentTask): string[] {
   return [
     ...task.resumeAttempts.slice().reverse().flatMap((attempt) => [
-      attempt.logPath,
       attempt.stderrLogPath ?? stderrLogPathFor(attempt.logPath),
+      attempt.logPath,
     ]),
-    task.logPath,
     task.stderrLogPath ?? stderrLogPathFor(task.logPath),
+    task.logPath,
   ];
 }
 
@@ -683,11 +683,12 @@ function safeRunId(value: string): string {
 }
 
 function boundedRunId(value: string): string {
-  const safe = safeRunId(value);
-  if (safe.length <= 160) {
-    return safe;
+  const safe = safeRunId(value) || 'run';
+  const suffix = `-${shortHash(value)}`;
+  if (safe.length + suffix.length <= 160) {
+    return `${safe}${suffix}`;
   }
-  return `${safe.slice(0, 147).replace(/-+$/g, '')}-${shortHash(value)}`;
+  return `${safe.slice(0, 160 - suffix.length).replace(/-+$/g, '')}${suffix}`;
 }
 
 function shortHash(value: string): string {

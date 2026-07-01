@@ -142,7 +142,7 @@ describe('createOpenClawRuntimeProvider', () => {
       '--session-key',
       'agent:main:rainrail-agent_task_reirei-lab-rainrail_22-run-22',
       '--run-id',
-      'rainrail-start-project-issue-selection-delivery-22-agent-task-reirei-lab-rainrail-22',
+      expect.stringMatching(/^rainrail-start-project-issue-selection-delivery-22-agent-task-reirei-lab-rainrail-22-[a-f0-9]{12}$/),
       '--timeout',
       '900',
       '--json',
@@ -219,12 +219,36 @@ describe('createOpenClawRuntimeProvider', () => {
 
     expect(spawnProcess).toHaveBeenNthCalledWith(1, 'openclaw', expect.arrayContaining([
       '--run-id',
-      'rainrail-start-project-issue-selection-delivery-22-agent-task-reirei-lab-rainrail-22',
+      expect.stringMatching(/^rainrail-start-project-issue-selection-delivery-22-agent-task-reirei-lab-rainrail-22-[a-f0-9]{12}$/),
     ]), expect.anything());
     expect(spawnProcess).toHaveBeenNthCalledWith(2, 'openclaw', expect.arrayContaining([
       '--run-id',
-      'rainrail-resume-agent-task-reirei-lab-rainrail-22-resume-01',
+      expect.stringMatching(/^rainrail-resume-agent-task-reirei-lab-rainrail-22-resume-01-[a-f0-9]{12}$/),
     ]), expect.anything());
+  });
+
+  it('keeps run ids distinct for task ids that normalize to the same value', async () => {
+    const spawnProcess = vi.fn((_command: string, _args: string[]) => ({ pid: 4242, unref: vi.fn() }));
+    const provider = createOpenClawRuntimeProvider({
+      enabled: true,
+      command: 'openclaw',
+      agentId: 'main',
+      sessionKeyPrefix: 'rainrail',
+      timeoutSeconds: 900,
+      logDirectory: temporaryDirectory(),
+      spawnProcess,
+    });
+
+    await provider.startRun(runtimeRequest({ taskId: 'task_a' }));
+    await provider.startRun(runtimeRequest({ taskId: 'task-a' }));
+
+    const firstArgs = spawnProcess.mock.calls[0]![1] as string[];
+    const secondArgs = spawnProcess.mock.calls[1]![1] as string[];
+    const firstRunId = firstArgs[firstArgs.indexOf('--run-id') + 1];
+    const secondRunId = secondArgs[secondArgs.indexOf('--run-id') + 1];
+    expect(firstRunId).toMatch(/^rainrail-start-project-issue-selection-delivery-22-task-a-[a-f0-9]{12}$/);
+    expect(secondRunId).toMatch(/^rainrail-start-project-issue-selection-delivery-22-task-a-[a-f0-9]{12}$/);
+    expect(firstRunId).not.toBe(secondRunId);
   });
 
   it('keeps JSON stdout separate from diagnostic stderr for completion parsing', async () => {
@@ -822,6 +846,50 @@ describe('createOpenClawRuntimeProvider', () => {
     ]), expect.anything());
   });
 
+  it('resumes stderr fallback markers before stale stdout fallback metadata in the same attempt', async () => {
+    const spawnProcess = vi.fn(() => ({ pid: 5151, unref: vi.fn() }));
+    const logDirectory = temporaryDirectory();
+    const startLogPath = `${logDirectory}/task.log`;
+    const resumeLogPath = `${logDirectory}/resume-1.log`;
+    const resumeStderrLogPath = `${logDirectory}/resume-1.stderr.log`;
+    writeFileSync(startLogPath, 'started intended session', 'utf8');
+    writeFileSync(resumeLogPath, JSON.stringify({
+      status: 'ok',
+      meta: { agentMeta: { fallbackSessionKey: 'agent:main:explicit:gateway-fallback-stale' } },
+    }), 'utf8');
+    writeFileSync(resumeStderrLogPath, 'EMBEDDED FALLBACK: Gateway timed out; running embedded agent with fresh session gateway-fallback-current', 'utf8');
+    const provider = createOpenClawRuntimeProvider({
+      enabled: true,
+      command: 'openclaw',
+      agentId: 'main',
+      sessionKeyPrefix: 'rainrail',
+      timeoutSeconds: 900,
+      logDirectory,
+      spawnProcess,
+    });
+
+    await provider.resumeRun?.({
+      run: { id: 'agent:main:intended-session', provider: 'openclaw', status: 'stopped' },
+      task: {
+        id: 'agent_task_reirei-lab-rainrail_22',
+        title: 'OpenClaw runtime',
+        agentSessionId: 'agent:main:intended-session',
+        branchName: 'agent/reirei-lab-rainrail-22',
+        logPath: startLogPath,
+        resumeAttempts: [
+          { id: 'resume-1', status: 'stopped', logPath: resumeLogPath, stderrLogPath: resumeStderrLogPath },
+        ],
+      },
+      attemptId: 'agent_task_reirei-lab-rainrail_22_resume_02',
+      requestedBy: 'reirei-agent',
+    });
+
+    expect(spawnProcess).toHaveBeenCalledWith('openclaw', expect.arrayContaining([
+      '--session-key',
+      'agent:main:explicit:gateway-fallback-current',
+    ]), expect.anything());
+  });
+
   it('does not resume fallback markers quoted inside JSON completion text', async () => {
     const spawnProcess = vi.fn(() => ({ pid: 5151, unref: vi.fn() }));
     const logDirectory = temporaryDirectory();
@@ -1230,7 +1298,7 @@ function statMode(path: string): number {
   return statSync(path).mode & 0o777;
 }
 
-function runtimeRequest(overrides: { agentSessionId?: string | null; deliveryId?: string } = {}) {
+function runtimeRequest(overrides: { agentSessionId?: string | null; deliveryId?: string; taskId?: string } = {}) {
   const event = createEventEnvelope({
     source: { type: 'github', name: 'github-project', repository: 'reirei-lab/rainrail' },
     name: 'github.issue',
@@ -1245,7 +1313,7 @@ function runtimeRequest(overrides: { agentSessionId?: string | null; deliveryId?
     event,
     requestedBy: 'reirei-agent',
     task: {
-      id: 'agent_task_reirei-lab-rainrail_22',
+      id: overrides.taskId ?? 'agent_task_reirei-lab-rainrail_22',
       title: 'OpenClaw runtime',
       ...(overrides.agentSessionId === null
         ? {}
