@@ -580,7 +580,7 @@ function extractFallbackRuntimeSessionKey(log: string, agentId: string): string 
       ? fallbackSessionKeyFromPayload(strictPayload, agentId)
       : undefined;
   }
-  let latest: { index: number; key: string } | undefined;
+  let latest: { index: number; key: string | undefined } | undefined;
   const jsonObjects = parseJsonObjectsFromLogWithPositions(log);
   const jsonRanges = jsonObjects.map((object) => ({ start: object.index, end: object.end }));
   for (const object of jsonObjects) {
@@ -592,10 +592,8 @@ function extractFallbackRuntimeSessionKey(log: string, agentId: string): string 
       continue;
     }
     const key = fallbackSessionKeyFromPayload(object.payload, agentId);
-    if (key !== undefined) {
-      if (latest === undefined || object.index > latest.index) {
-        latest = { index: object.index, key };
-      }
+    if (latest === undefined || object.index > latest.index) {
+      latest = { index: object.index, key };
     }
   }
   for (const match of log.matchAll(/EMBEDDED FALLBACK:[^\n\r]*fresh session\s+(gateway-fallback-[A-Za-z0-9._-]+)/gi)) {

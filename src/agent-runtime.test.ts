@@ -891,6 +891,51 @@ describe('createOpenClawRuntimeProvider', () => {
     ]), expect.anything());
   });
 
+  it('does not resume stale fallback candidates after a later normal completion', async () => {
+    const spawnProcess = vi.fn(() => ({ pid: 5151, unref: vi.fn() }));
+    const logDirectory = temporaryDirectory();
+    const logPath = `${logDirectory}/task.log`;
+    writeFileSync(logPath, [
+      JSON.stringify({
+        status: 'ok',
+        meta: { agentMeta: { fallbackSessionKey: 'agent:main:explicit:gateway-fallback-stale' } },
+      }),
+      JSON.stringify({
+        status: 'ok',
+        finalAssistantVisibleText: 'Outcome: implemented',
+        meta: { agentMeta: { sessionId: 'intended-session' } },
+      }),
+    ].join('\n'), 'utf8');
+    const provider = createOpenClawRuntimeProvider({
+      enabled: true,
+      command: 'openclaw',
+      agentId: 'main',
+      sessionKeyPrefix: 'rainrail',
+      timeoutSeconds: 900,
+      logDirectory,
+      spawnProcess,
+    });
+
+    await provider.resumeRun?.({
+      run: { id: 'agent:main:intended-session', provider: 'openclaw', status: 'stopped' },
+      task: {
+        id: 'agent_task_reirei-lab-rainrail_22',
+        title: 'OpenClaw runtime',
+        agentSessionId: 'agent:main:intended-session',
+        branchName: 'agent/reirei-lab-rainrail-22',
+        logPath,
+        resumeAttempts: [],
+      },
+      attemptId: 'agent_task_reirei-lab-rainrail_22_resume_01',
+      requestedBy: 'reirei-agent',
+    });
+
+    expect(spawnProcess).toHaveBeenCalledWith('openclaw', expect.arrayContaining([
+      '--session-key',
+      'agent:main:intended-session',
+    ]), expect.anything());
+  });
+
   it('resumes stderr fallback markers before stale stdout fallback metadata in the same attempt', async () => {
     const spawnProcess = vi.fn(() => ({ pid: 5151, unref: vi.fn() }));
     const logDirectory = temporaryDirectory();

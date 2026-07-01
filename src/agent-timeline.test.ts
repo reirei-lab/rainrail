@@ -318,6 +318,34 @@ describe('agent timeline', () => {
     }
   });
 
+  it('derives fallback session ids from explicit fallback session keys when mappings are unavailable', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'rainrail-fallback-key-derived-session-timeline-'));
+    const logPath = join(directory, 'agent.log');
+    writeFileSync(logPath, JSON.stringify({
+      status: 'ok',
+      meta: {
+        agentMeta: {
+          fallbackSessionKey: 'agent:main:explicit:gateway-fallback-derived',
+        },
+      },
+    }), 'utf8');
+    writeFileSync(join(directory, 'gateway-fallback-derived.trajectory.jsonl'), [
+      JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:08:00.000Z', seq: 1 }),
+    ].join('\n'), 'utf8');
+
+    try {
+      const timeline = await readRuntimeTimeline(
+        { logPath, agentSessionId: 'agent:main:original-session' },
+        { sessionsDirectory: directory },
+      );
+      expect(timeline.sessionId).toBe('gateway-fallback-derived');
+      expect(timeline.fallback).toBe(true);
+      expect(timeline.missing).toBe(false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('does not use raw diagnostic JSON fragments as fallback metadata', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'rainrail-diagnostic-fallback-key-timeline-'));
     const logPath = join(directory, 'agent.log');
@@ -1025,7 +1053,7 @@ describe('agent timeline', () => {
         data: {
           name: 'bash',
           arguments: {
-            command: 'curl -x user:proxy-secret@proxy.example --preproxy pre:pre-secret@preproxy.example -sx user:cluster-proxy-secret@cluster.example -sxjoined:joined-proxy-secret@joined.example https://example.com',
+            command: 'curl -x user:proxy-secret@proxy.example --preproxy pre:pre-secret@preproxy.example --proxy1.0 legacy:legacy-proxy-secret@legacy.example -sx user:cluster-proxy-secret@cluster.example -sxjoined:joined-proxy-secret@joined.example https://example.com',
           },
         },
       }),
@@ -1033,10 +1061,12 @@ describe('agent timeline', () => {
 
     expect(timeline[0]!.detail).toContain('-x [redacted-proxy]');
     expect(timeline[0]!.detail).toContain('--preproxy [redacted-proxy]');
+    expect(timeline[0]!.detail).toContain('--proxy1.0 [redacted-proxy]');
     expect(timeline[0]!.detail).toContain('-sx [redacted-proxy]');
     expect(timeline[0]!.detail).toContain('-sx[redacted-proxy]');
     expect(timeline[0]!.detail).not.toContain('proxy-secret');
     expect(timeline[0]!.detail).not.toContain('pre-secret');
+    expect(timeline[0]!.detail).not.toContain('legacy-proxy-secret');
     expect(timeline[0]!.detail).not.toContain('cluster-proxy-secret');
     expect(timeline[0]!.detail).not.toContain('joined-proxy-secret');
   });

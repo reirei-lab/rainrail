@@ -484,6 +484,10 @@ async function resolveTrajectorySession(
   if (runMatch !== null) {
     return { sessionId: runMatch[1]! };
   }
+  const explicitFallbackMatch = value.match(/:explicit:(gateway-fallback-[A-Za-z0-9._-]+)$/);
+  if (explicitFallbackMatch !== null) {
+    return { sessionId: explicitFallbackMatch[1]! };
+  }
   if (value.includes(':')) {
     return undefined;
   }
@@ -549,7 +553,7 @@ function redactSensitiveText(value: string): string {
     .replace(/(^|\s)(-[A-WY-Za-wy-z]*?x)(?:"[^"\s]*:[^"@\s]+@[^"\s]+"|'[^'\s]*:[^'@\s]+@[^'\s]+'|[^\s'"]*:[^\s'"]+@[^\s'"]+)/g, '$1$2[redacted-proxy]')
     .replace(/(^|\s)(-[uUE])(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s'"]+)/g, '$1$2[redacted-credential]')
     .replace(/(^|\s)(-b)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s'"]+)/g, '$1$2[redacted-cookie]')
-    .replace(/(^|\s)(-x|--proxy|--preproxy)(=|\s+)(?:"[^"\s]*:[^"@\s]+@[^"\s]+"|'[^'\s]*:[^'@\s]+@[^'\s]+'|[^\s'"]*:[^\s'"]+@[^\s'"]+)/g, '$1$2$3[redacted-proxy]')
+    .replace(/(^|\s)(-x|--proxy|--preproxy|--proxy1\.0)(=|\s+)(?:"[^"\s]*:[^"@\s]+@[^"\s]+"|'[^'\s]*:[^'@\s]+@[^'\s]+'|[^\s'"]*:[^\s'"]+@[^\s'"]+)/g, '$1$2$3[redacted-proxy]')
     .replace(/(^|\s)(-x)(?:"[^"\s]*:[^"@\s]+@[^"\s]+"|'[^'\s]*:[^'@\s]+@[^'\s]+'|[^\s'"]*:[^\s'"]+@[^\s'"]+)/g, '$1$2[redacted-proxy]')
     .replace(/(^|\s)(-u|--user|-U|--proxy-user|--oauth2-bearer|--pass|--proxy-pass|--tlspassword|--proxy-tlspassword|--ftp-account|-E|--cert|--proxy-cert)(=|\s+)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s'"]+)/g, '$1$2$3[redacted-credential]')
     .replace(/(^|\s)(-b|--cookie)(=|\s+)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s'"]+)/g, '$1$2$3[redacted-cookie]')
