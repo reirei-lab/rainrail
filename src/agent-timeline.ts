@@ -49,6 +49,12 @@ interface RuntimeTimelineReadOptions {
   openClawHome?: string;
 }
 
+interface TailRedactionContext {
+  prefix: string;
+  inCredentialLine: boolean;
+  inPrivateKeyBlock: boolean;
+}
+
 interface RuntimeSessionResolution {
   sessionId?: string | undefined;
   sessionFile?: string | undefined;
@@ -453,12 +459,11 @@ async function readTailText(path: string, maxBytes: number): Promise<{ text: str
   const start = Math.max(0, fileStat.size - maxBytes);
   const file = await open(path, 'r');
   try {
-    const contextStart = start > 0 ? await findTailContextStart(file, start) : start;
-    const prefixContext = contextStart < start ? await readFileRange(file, contextStart, start - contextStart) : '';
+    const context = start > 0 ? await readTailRedactionContext(file, start) : emptyTailRedactionContext();
     let text = await readFileRange(file, start, fileStat.size - start);
     if (start > 0) {
-      text = redactLeadingPrivateKeyFragment(text, prefixContext)
-        ?? redactLeadingCredentialFragment(text, prefixContext)
+      text = redactLeadingPrivateKeyFragment(text, context)
+        ?? redactLeadingCredentialFragment(text, context)
         ?? trimPartialLeadingLine(text);
     }
     return { text, truncated: start > 0 };
@@ -473,25 +478,50 @@ async function readFileRange(file: Awaited<ReturnType<typeof open>>, start: numb
   return buffer.subarray(0, bytesRead).toString('utf8');
 }
 
-async function findTailContextStart(file: Awaited<ReturnType<typeof open>>, start: number): Promise<number> {
-  const lineStart = await findPreviousLineStart(file, start);
-  const privateKeyStart = await findOpenPrivateKeyContextStart(file, start);
-  return privateKeyStart === undefined ? lineStart : Math.min(lineStart, privateKeyStart);
+function emptyTailRedactionContext(): TailRedactionContext {
+  return { prefix: '', inCredentialLine: false, inPrivateKeyBlock: false };
 }
 
-async function findPreviousLineStart(file: Awaited<ReturnType<typeof open>>, start: number): Promise<number> {
+async function readTailRedactionContext(file: Awaited<ReturnType<typeof open>>, start: number): Promise<TailRedactionContext> {
+  const prefixLength = Math.min(start, 512);
+  const prefix = prefixLength === 0 ? '' : await readFileRange(file, start - prefixLength, prefixLength);
+  const [inCredentialLine, openPrivateKeyStart, hasPartialBegin] = await Promise.all([
+    scanCurrentLineBeforeTail(file, start, hasSensitiveCredentialPrefix),
+    findOpenPrivateKeyContextStart(file, start),
+    scanCurrentLineBeforeTail(file, start, hasPartialPrivateKeyBegin),
+  ]);
+  return {
+    prefix,
+    inCredentialLine,
+    inPrivateKeyBlock: openPrivateKeyStart !== undefined || hasPartialBegin,
+  };
+}
+
+async function scanCurrentLineBeforeTail(
+  file: Awaited<ReturnType<typeof open>>,
+  start: number,
+  predicate: (value: string) => boolean,
+): Promise<boolean> {
   const chunkSize = 8192;
+  const boundaryOverlap = 512;
   let cursor = start;
+  let suffix = '';
   while (cursor > 0) {
     const chunkStart = Math.max(0, cursor - chunkSize);
     const text = await readFileRange(file, chunkStart, cursor - chunkStart);
     const newlineIndex = Math.max(text.lastIndexOf('\n'), text.lastIndexOf('\r'));
-    if (newlineIndex !== -1) {
-      return chunkStart + newlineIndex + 1;
+    const lineSegment = newlineIndex === -1 ? text : text.slice(newlineIndex + 1);
+    const candidate = `${lineSegment}${suffix}`;
+    if (predicate(candidate)) {
+      return true;
     }
+    if (newlineIndex !== -1) {
+      return false;
+    }
+    suffix = candidate.slice(0, boundaryOverlap);
     cursor = chunkStart;
   }
-  return 0;
+  return false;
 }
 
 async function findOpenPrivateKeyContextStart(file: Awaited<ReturnType<typeof open>>, start: number): Promise<number | undefined> {
@@ -517,10 +547,8 @@ function trimPartialLeadingLine(text: string): string {
   return firstNewline === -1 ? text : text.slice(firstNewline + 1);
 }
 
-function redactLeadingCredentialFragment(text: string, prefixContext: string): string | undefined {
-  const lineStart = Math.max(prefixContext.lastIndexOf('\n'), prefixContext.lastIndexOf('\r')) + 1;
-  const linePrefix = prefixContext.slice(lineStart);
-  if (!/(?:authorization\s*:\s*(?:bearer|basic|digest|ntlm|negotiate)?\s*|(?:set-cookie|cookie)\s*:\s*|bearer\s+|(?:api[-_]?key|token|secret|password|passphrase|_auth|authorization|set[-_]?cookie|cookie)\s*[:=]\s*)[^\n\r]*$/i.test(linePrefix)) {
+function redactLeadingCredentialFragment(text: string, context: TailRedactionContext): string | undefined {
+  if (!context.inCredentialLine) {
     return undefined;
   }
   const newlineIndex = text.search(/[\n\r]/);
@@ -529,8 +557,8 @@ function redactLeadingCredentialFragment(text: string, prefixContext: string): s
     : `[redacted-truncated-credential]${text.slice(newlineIndex)}`;
 }
 
-function redactLeadingPrivateKeyFragment(text: string, prefixContext: string): string | undefined {
-  if (!hasOpenPrivateKeyBlock(prefixContext)) {
+function redactLeadingPrivateKeyFragment(text: string, context: TailRedactionContext): string | undefined {
+  if (!context.inPrivateKeyBlock && !hasPrivateKeyBeginAcrossTailBoundary(context.prefix, text)) {
     return undefined;
   }
   const endMatch = /-----END [A-Z ]*PRIVATE KEY(?: BLOCK)?-----/.exec(text);
@@ -539,12 +567,16 @@ function redactLeadingPrivateKeyFragment(text: string, prefixContext: string): s
     : `[redacted-private-key]${text.slice(endMatch.index + endMatch[0].length)}`;
 }
 
-function hasOpenPrivateKeyBlock(value: string): boolean {
-  const boundary = findLastPrivateKeyBoundaryMatch(value, 0, value.length);
-  if (boundary === undefined) {
-    return false;
-  }
-  return boundary.kind === 'begin';
+function hasSensitiveCredentialPrefix(value: string): boolean {
+  return /(?:authorization\s*:\s*(?:bearer|basic|digest|ntlm|negotiate)?\s*|(?:set-cookie|cookie)\s*:\s*|bearer\s+|(?:api[-_]?key|token|secret|password|passphrase|_auth|authorization|set[-_]?cookie|cookie)\s*[:=]\s*|(?:https?|all)_proxy[A-Za-z0-9_-]*\s*[:=]\s*|(?:--proxy|--preproxy|--proxy1\.0|--proxy-user|-x|-U)(?:=|\s+))[^\n\r]*$/i.test(value);
+}
+
+function hasPartialPrivateKeyBegin(value: string): boolean {
+  return /-----BEGIN [A-Z ]*(?:P(?:R(?:I(?:V(?:A(?:T(?:E(?: KEY(?: BLOCK)?)?)?)?)?)?)?)?)?$/i.test(value);
+}
+
+function hasPrivateKeyBeginAcrossTailBoundary(prefix: string, text: string): boolean {
+  return /-----BEGIN [A-Z ]*PRIVATE KEY(?: BLOCK)?-----/.test(`${prefix}${text.slice(0, 256)}`);
 }
 
 function findLastPrivateKeyBoundaryMatch(

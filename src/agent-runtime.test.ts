@@ -810,6 +810,50 @@ describe('createOpenClawRuntimeProvider', () => {
     ]), expect.anything());
   });
 
+  it('does not resume fallback sessions from stderr completion JSON diagnostics', async () => {
+    const spawnProcess = vi.fn(() => ({ pid: 5151, unref: vi.fn() }));
+    const logDirectory = temporaryDirectory();
+    const startLogPath = `${logDirectory}/task.log`;
+    const resumeLogPath = `${logDirectory}/resume-1.log`;
+    const resumeStderrLogPath = `${logDirectory}/resume-1.stderr.log`;
+    writeFileSync(startLogPath, 'started intended session', 'utf8');
+    writeFileSync(resumeLogPath, 'resume stdout without fallback marker', 'utf8');
+    writeFileSync(resumeStderrLogPath, JSON.stringify({
+      status: 'ok',
+      meta: { agentMeta: { sessionId: 'gateway-fallback-diagnostic' } },
+    }), 'utf8');
+    const provider = createOpenClawRuntimeProvider({
+      enabled: true,
+      command: 'openclaw',
+      agentId: 'main',
+      sessionKeyPrefix: 'rainrail',
+      timeoutSeconds: 900,
+      logDirectory,
+      spawnProcess,
+    });
+
+    await provider.resumeRun?.({
+      run: { id: 'agent:main:intended-session', provider: 'openclaw', status: 'stopped' },
+      task: {
+        id: 'agent_task_reirei-lab-rainrail_22',
+        title: 'OpenClaw runtime',
+        agentSessionId: 'agent:main:intended-session',
+        branchName: 'agent/reirei-lab-rainrail-22',
+        logPath: startLogPath,
+        resumeAttempts: [
+          { id: 'resume-1', status: 'stopped', logPath: resumeLogPath, stderrLogPath: resumeStderrLogPath },
+        ],
+      },
+      attemptId: 'agent_task_reirei-lab-rainrail_22_resume_02',
+      requestedBy: 'reirei-agent',
+    });
+
+    expect(spawnProcess).toHaveBeenCalledWith('openclaw', expect.arrayContaining([
+      '--session-key',
+      'agent:main:intended-session',
+    ]), expect.anything());
+  });
+
   it('resumes the last fallback marker when a single stderr log contains retry history', async () => {
     const spawnProcess = vi.fn(() => ({ pid: 5151, unref: vi.fn() }));
     const logDirectory = temporaryDirectory();
@@ -1876,6 +1920,22 @@ describe('runtime task completion and resume helpers', () => {
     ].join('\n'))).toMatchObject({
       status: 'running',
       summary: 'retry is active',
+    });
+  });
+
+  it('uses appended queued and running status-only completions as the latest runtime result', () => {
+    expect(readRuntimeRunCompletionFromLog([
+      JSON.stringify({ status: 'failed', summary: 'stale failed completion' }),
+      JSON.stringify({ status: 'running' }),
+    ].join('\n'))).toMatchObject({
+      status: 'running',
+    });
+
+    expect(readRuntimeRunCompletionFromLog([
+      JSON.stringify({ status: 'failed', summary: 'stale failed completion' }),
+      JSON.stringify({ status: 'queued' }),
+    ].join('\n'))).toMatchObject({
+      status: 'queued',
     });
   });
 

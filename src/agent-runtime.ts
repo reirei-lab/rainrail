@@ -603,6 +603,7 @@ function runtimeResumeSessionId(task: RuntimeAgentTask, agentId: string): string
       try {
         const fallbackSessionKey = extractFallbackRuntimeSessionKey(readFileSync(logPath, 'utf8'), agentId, {
           allowClearingCompletion: !(index === 0 && logPaths.length > 1),
+          allowCompletionMetadata: !(index === 0 && logPaths.length > 1),
         });
         if (fallbackSessionKey === null) {
           groupFallbackSessionKey = null;
@@ -643,11 +644,15 @@ function runtimeResumeLogPaths(task: RuntimeAgentTask): string[] {
 function extractFallbackRuntimeSessionKey(
   log: string,
   agentId: string,
-  options: { allowClearingCompletion?: boolean } = {},
+  options: { allowClearingCompletion?: boolean; allowCompletionMetadata?: boolean } = {},
 ): string | null | undefined {
   const allowClearingCompletion = options.allowClearingCompletion !== false;
+  const allowCompletionMetadata = options.allowCompletionMetadata !== false;
   const strictPayload = parseStrictJsonObject(log);
   if (strictPayload !== undefined) {
+    if (!allowCompletionMetadata) {
+      return undefined;
+    }
     if (
       runtimeRunCompletionFromPayload(strictPayload) === undefined
       || (!isTrustedRuntimeCompletionFragment(strictPayload) && !isStatusOnlyTerminalCompletion(strictPayload))
@@ -668,6 +673,8 @@ function extractFallbackRuntimeSessionKey(
   ];
   for (const object of jsonObjects) {
     if (
+      !allowCompletionMetadata
+      ||
       !isRecord(object.payload)
       || runtimeRunCompletionFromPayload(object.payload) === undefined
       || !isTrustedRuntimeCompletionLogObject(log, object)
@@ -753,6 +760,8 @@ function isStatusOnlyTerminalCompletion(payload: Record<string, unknown>): boole
     || status === 'error'
     || status === 'timeout'
     || status === 'in_flight'
+    || status === 'queued'
+    || status === 'running'
     || isTerminalRuntimeRunStatus(status);
 }
 
