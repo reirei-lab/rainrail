@@ -599,9 +599,11 @@ function issueFieldsFromValue(value: Record<string, unknown>): RuntimeAgentTaskI
 function runtimeResumeSessionId(task: RuntimeAgentTask, agentId: string): string {
   for (const logPaths of runtimeResumeLogPathGroups(task)) {
     let groupFallbackSessionKey: string | null | undefined;
-    for (const logPath of logPaths) {
+    for (const [index, logPath] of logPaths.entries()) {
       try {
-        const fallbackSessionKey = extractFallbackRuntimeSessionKey(readFileSync(logPath, 'utf8'), agentId);
+        const fallbackSessionKey = extractFallbackRuntimeSessionKey(readFileSync(logPath, 'utf8'), agentId, {
+          allowClearingCompletion: !(index === 0 && logPaths.length > 1),
+        });
         if (fallbackSessionKey === null) {
           groupFallbackSessionKey = null;
         } else if (fallbackSessionKey !== undefined && groupFallbackSessionKey === undefined) {
@@ -638,7 +640,12 @@ function runtimeResumeLogPaths(task: RuntimeAgentTask): string[] {
   return runtimeResumeLogPathGroups(task).flat();
 }
 
-function extractFallbackRuntimeSessionKey(log: string, agentId: string): string | null | undefined {
+function extractFallbackRuntimeSessionKey(
+  log: string,
+  agentId: string,
+  options: { allowClearingCompletion?: boolean } = {},
+): string | null | undefined {
+  const allowClearingCompletion = options.allowClearingCompletion !== false;
   const strictPayload = parseStrictJsonObject(log);
   if (strictPayload !== undefined) {
     if (
@@ -651,7 +658,7 @@ function extractFallbackRuntimeSessionKey(log: string, agentId: string): string 
     if (fallbackSessionKey !== undefined) {
       return fallbackSessionKey;
     }
-    return fallbackLookupClearingCompletion(strictPayload) ? null : undefined;
+    return allowClearingCompletion && fallbackLookupClearingCompletion(strictPayload) ? null : undefined;
   }
   let latest: { index: number; key: string | undefined } | undefined;
   const jsonObjects = parseJsonObjectsFromLogWithPositions(log);
@@ -668,7 +675,8 @@ function extractFallbackRuntimeSessionKey(log: string, agentId: string): string 
       continue;
     }
     const key = fallbackSessionKeyFromPayload(object.payload, agentId);
-    if ((key !== undefined || fallbackLookupClearingCompletion(object.payload)) && (latest === undefined || object.index > latest.index)) {
+    const clearsFallback = allowClearingCompletion && fallbackLookupClearingCompletion(object.payload);
+    if ((key !== undefined || clearsFallback) && (latest === undefined || object.index > latest.index)) {
       latest = { index: object.index, key };
     }
   }

@@ -440,20 +440,40 @@ async function resolveRuntimeTrajectoryPathForSession(
 async function readTailText(path: string, maxBytes: number): Promise<{ text: string; truncated: boolean }> {
   const fileStat = await stat(path);
   const start = Math.max(0, fileStat.size - maxBytes);
-  const length = fileStat.size - start;
+  const contextStart = start > 0 ? Math.max(0, start - 2048) : start;
+  const offset = start - contextStart;
+  const length = fileStat.size - contextStart;
   const buffer = Buffer.alloc(length);
   const file = await open(path, 'r');
   try {
-    const { bytesRead } = await file.read(buffer, 0, length, start);
-    let text = buffer.subarray(0, bytesRead).toString('utf8');
+    const { bytesRead } = await file.read(buffer, 0, length, contextStart);
+    const rawText = buffer.subarray(0, bytesRead).toString('utf8');
+    const prefixContext = rawText.slice(0, offset);
+    let text = rawText.slice(offset);
     if (start > 0) {
-      const firstNewline = text.indexOf('\n');
-      text = firstNewline === -1 ? text : text.slice(firstNewline + 1);
+      text = redactLeadingCredentialFragment(text, prefixContext) ?? trimPartialLeadingLine(text);
     }
     return { text, truncated: start > 0 };
   } finally {
     await file.close();
   }
+}
+
+function trimPartialLeadingLine(text: string): string {
+  const firstNewline = text.indexOf('\n');
+  return firstNewline === -1 ? text : text.slice(firstNewline + 1);
+}
+
+function redactLeadingCredentialFragment(text: string, prefixContext: string): string | undefined {
+  const lineStart = Math.max(prefixContext.lastIndexOf('\n'), prefixContext.lastIndexOf('\r')) + 1;
+  const linePrefix = prefixContext.slice(lineStart);
+  if (!/(?:authorization\s*:\s*(?:bearer|basic|digest|ntlm|negotiate)?\s*|bearer\s+|(?:api[-_]?key|token|secret|password|passphrase|_auth|authorization)\s*[:=]\s*)[^\n\r]*$/i.test(linePrefix)) {
+    return undefined;
+  }
+  const newlineIndex = text.search(/[\n\r]/);
+  return newlineIndex === -1
+    ? '[redacted-truncated-credential]'
+    : `[redacted-truncated-credential]${text.slice(newlineIndex)}`;
 }
 
 function timelineEntryForEvent(event: TrajectoryEvent, index: number): RuntimeTimelineEntry {
@@ -959,6 +979,7 @@ function isTrustedRuntimeCompletionPayload(payload: unknown): payload is Record<
     || hasRuntimeCompletionObjectSignal(result?.completion)
     || hasRuntimeExecutionTraceSignal(result?.executionTrace)
     || (stringField(payload, 'status') !== undefined && runtimeAgentMetaFromPayload(result) !== undefined)
+    || (stringField(result, 'status') !== undefined && runtimeAgentMetaFromPayload(payload) !== undefined)
     || (stringField(result, 'status') !== undefined && runtimeAgentMetaFromPayload(result) !== undefined);
 }
 
@@ -1046,8 +1067,12 @@ function hasStatuslessSuccessfulCompletion(payload: unknown): boolean {
   const executionTrace = isRecord(payload.executionTrace) ? payload.executionTrace : undefined;
   const completion = isRecord(payload.completion) ? payload.completion : undefined;
   return payloadHasCompletionText(payload)
-    && stringField(executionTrace, 'result') === 'success'
-    && stringField(completion, 'finishReason') === 'stop';
+    && normalizeRuntimeCompletionSignal(stringField(executionTrace, 'result')) === 'success'
+    && normalizeRuntimeCompletionSignal(stringField(completion, 'finishReason')) === 'stop';
+}
+
+function normalizeRuntimeCompletionSignal(value: string | undefined): string | undefined {
+  return value?.trim().toLowerCase();
 }
 
 function isTerminalRuntimeStatus(status: string | undefined): boolean {

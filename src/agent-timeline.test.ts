@@ -28,6 +28,13 @@ describe('agent timeline', () => {
     }))).toBe('result-side-session');
   });
 
+  it('extracts top-level session metadata when result status marks a completion', () => {
+    expect(extractRuntimeSessionId(JSON.stringify({
+      result: { status: 'ok' },
+      meta: { agentMeta: { sessionId: 'top-level-session' } },
+    }))).toBe('top-level-session');
+  });
+
   it('extracts OpenClaw session ids from top-level JSON metadata without scanning quoted payload text', () => {
     expect(extractRuntimeSessionId(JSON.stringify({
       status: 'ok',
@@ -931,6 +938,44 @@ describe('agent timeline', () => {
     }
   });
 
+  it('normalizes statusless successful Codex completions before clearing fallback lookup', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'rainrail-clear-normalized-statusless-success-fallback-timeline-'));
+    const startLogPath = join(directory, 'agent.log');
+    const resumeLogPath = join(directory, 'resume-1.log');
+    writeFileSync(startLogPath, 'EMBEDDED FALLBACK: Gateway timed out; running embedded agent with fresh session gateway-fallback-stale', 'utf8');
+    writeFileSync(resumeLogPath, JSON.stringify({
+      finalAssistantVisibleText: 'Outcome: implemented',
+      executionTrace: { result: 'SUCCESS' },
+      completion: { finishReason: 'stop ' },
+    }), 'utf8');
+    writeFileSync(join(directory, 'sessions.json'), JSON.stringify({
+      'agent:main:original-session': { sessionId: 'original-session' },
+      'agent:main:explicit:gateway-fallback-stale': { sessionId: 'stale-fallback-session' },
+    }), 'utf8');
+    writeFileSync(join(directory, 'original-session.trajectory.jsonl'), [
+      JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:08:00.000Z', seq: 1 }),
+    ].join('\n'), 'utf8');
+    writeFileSync(join(directory, 'stale-fallback-session.trajectory.jsonl'), [
+      JSON.stringify({ type: 'session.started', ts: '2026-06-30T15:09:00.000Z', seq: 1 }),
+    ].join('\n'), 'utf8');
+
+    try {
+      const timeline = await readRuntimeTimeline(
+        {
+          logPath: startLogPath,
+          agentSessionId: 'agent:main:original-session',
+          resumeAttempts: [{ logPath: resumeLogPath }],
+        },
+        { sessionsDirectory: directory },
+      );
+      expect(timeline.sessionId).toBe('original-session');
+      expect(timeline.fallback).toBe(false);
+      expect(timeline.missing).toBe(false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('clears fallback lookup for result-wrapped statusless successful Codex completions', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'rainrail-clear-result-statusless-success-fallback-timeline-'));
     const startLogPath = join(directory, 'agent.log');
@@ -1319,6 +1364,33 @@ describe('agent timeline', () => {
       expect(jsonl.truncated).toBe(true);
       expect(jsonl.raw).not.toBe('');
       expect(jsonl.raw).toContain('visible-tail');
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('redacts credential fragments from truncated raw jsonl reads', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'rainrail-jsonl-truncated-token-redaction-'));
+    const sessionId = 'jsonl-truncated-token-session';
+    const logPath = join(directory, 'agent.log');
+    const token = `github_pat_${'x'.repeat(160)}_tailSecret`;
+    writeFileSync(logPath, JSON.stringify({
+      result: { status: 'ok', meta: { agentMeta: { sessionId } } },
+    }), 'utf8');
+    writeFileSync(join(directory, `${sessionId}.trajectory.jsonl`), JSON.stringify({
+      type: 'tool.result',
+      data: { output: `Authorization: Bearer ${token}` },
+    }), 'utf8');
+
+    try {
+      const jsonl = await readRuntimeJsonl(
+        { logPath, agentSessionId: 'agent:main:routing-key' },
+        { sessionsDirectory: directory, maxBytes: 80 },
+      );
+      expect(jsonl.truncated).toBe(true);
+      expect(jsonl.raw).toContain('[redacted-truncated-credential]');
+      expect(jsonl.raw).not.toContain('tailSecret');
+      expect(jsonl.raw).not.toContain('github_pat_');
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
