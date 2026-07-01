@@ -124,6 +124,72 @@ describe('handleAutoMergeEvent', () => {
     expect(merges).toEqual([{ repository: 'reirei-lab/rainrail', number: 44, mergeMethod: 'squash', sha: 'abc123' }]);
   });
 
+  it('uses only approvals for the current pull request head', async () => {
+    let mergeCount = 0;
+
+    const result = await handleAutoMergeEvent(checkRunEvent({ headSha: 'new-sha' }), {
+      agentLogin: 'reirei-agent',
+      reviewerLogin: 'hiragram',
+      branchPrefix: 'agent/',
+      mergeMethod: 'squash',
+      targetRepositories: ['reirei-lab/rainrail'],
+      pullRequests: {
+        async getPullRequest() {
+          return pullRequest({
+            headSha: 'new-sha',
+            reviews: [{ authorLogin: 'hiragram', state: 'APPROVED', commitId: 'old-sha' }],
+          });
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          throw new Error('not used');
+        },
+        async mergePullRequest() {
+          mergeCount += 1;
+        },
+      },
+    });
+
+    expect(result.reason).toBe('configured reviewer approval is not confirmed');
+    expect(mergeCount).toBe(0);
+  });
+
+  it('keeps approval when a later comment review is submitted by the same reviewer', async () => {
+    const merges: Array<{ repository: string; number: number; mergeMethod: string; sha?: string }> = [];
+
+    const result = await handleAutoMergeEvent(checkRunEvent(), {
+      agentLogin: 'reirei-agent',
+      reviewerLogin: 'hiragram',
+      branchPrefix: 'agent/',
+      mergeMethod: 'squash',
+      targetRepositories: ['reirei-lab/rainrail'],
+      pullRequests: {
+        async getPullRequest() {
+          return pullRequest({
+            reviews: [
+              { authorLogin: 'hiragram', state: 'APPROVED', commitId: 'abc123' },
+              { authorLogin: 'hiragram', state: 'COMMENTED', commitId: 'abc123' },
+            ],
+          });
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          throw new Error('not used');
+        },
+        async mergePullRequest(input) {
+          merges.push(input);
+        },
+      },
+    });
+
+    expect(result.reason).toBe('pull_request_merged');
+    expect(merges).toEqual([{ repository: 'reirei-lab/rainrail', number: 44, mergeMethod: 'squash', sha: 'abc123' }]);
+  });
+
   it('ignores stale approved reviews from old pull request heads', async () => {
     let mergeCount = 0;
 
@@ -247,5 +313,44 @@ describe('handleAutoMergeEvent', () => {
       mergeMethod: 'squash',
       sha: 'abc123',
     }]);
+  });
+
+  it('does not also call the runtime merge action after a provider merge', async () => {
+    let providerMergeCount = 0;
+    const runtimeMerges: unknown[] = [];
+    const context = {
+      signal: new AbortController().signal,
+      actions: {
+        async mergePullRequest(input: unknown) {
+          runtimeMerges.push(input);
+        },
+      },
+    } as PluginRuntimeContext;
+
+    const result = await handleAutoMergeEvent(reviewEvent(), {
+      agentLogin: 'reirei-agent',
+      reviewerLogin: 'hiragram',
+      branchPrefix: 'agent/',
+      mergeMethod: 'squash',
+      targetRepositories: ['reirei-lab/rainrail'],
+      pullRequests: {
+        async getPullRequest() {
+          return pullRequest();
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          throw new Error('not used');
+        },
+        async mergePullRequest() {
+          providerMergeCount += 1;
+        },
+      },
+    }, context);
+
+    expect(result.reason).toBe('pull_request_merged');
+    expect(providerMergeCount).toBe(1);
+    expect(runtimeMerges).toEqual([]);
   });
 });

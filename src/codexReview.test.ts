@@ -108,4 +108,18 @@ describe('handleCodexReviewEvent', () => {
     expect(result.handled).toBe(true);
     expect(updates[0]?.commentBody).toContain('Codex inline review comments could not be loaded automatically: boom');
   });
+
+  it('ignores Codex changes requested reviews so change-request handles the handoff', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+
+    const result = await handleCodexReviewEvent(reviewEvent({ state: 'changes_requested' }), {
+      agentLogin: 'reirei-agent',
+      reviewerLogin: 'hiragram',
+      targetRepositories: ['reirei-lab/rainrail'],
+      tasks: handoffRecorder({ updates }),
+    });
+
+    expect(result.reason).toBe('event is not a Codex review');
+    expect(updates).toEqual([]);
+  });
 });

@@ -13,7 +13,7 @@ describe('handleReviewRequestEvent', () => {
       branchPrefix: 'agent/',
       pullRequests: {
         async getPullRequest(input) {
-          return pullRequest(input);
+          return pullRequest({ ...input, reviews: [] });
         },
         async findPullRequestByHead() {
           throw new Error('not used');
@@ -39,7 +39,7 @@ describe('handleReviewRequestEvent', () => {
       branchPrefix: 'agent/',
       pullRequests: {
         async getPullRequest() {
-          return pullRequest({ reviewRequests: ['hiragram'] });
+          return pullRequest({ reviewRequests: ['hiragram'], reviews: [] });
         },
         async findPullRequestByHead() {
           throw new Error('not used');
@@ -51,6 +51,30 @@ describe('handleReviewRequestEvent', () => {
     });
 
     expect(result.reason).toBe('review was already requested');
+    expect(requestCount).toBe(0);
+  });
+
+  it('does not request review when the configured reviewer already approved the current head', async () => {
+    let requestCount = 0;
+
+    const result = await handleReviewRequestEvent(checkRunEvent(), {
+      agentLogin: 'reirei-agent',
+      reviewerLogin: 'hiragram',
+      branchPrefix: 'agent/',
+      pullRequests: {
+        async getPullRequest() {
+          return pullRequest({ reviews: [{ authorLogin: 'hiragram', state: 'APPROVED', commitId: 'abc123' }] });
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          requestCount += 1;
+        },
+      },
+    });
+
+    expect(result.reason).toBe('pull request is already approved by configured reviewer');
     expect(requestCount).toBe(0);
   });
 
@@ -124,7 +148,7 @@ describe('handleReviewRequestEvent', () => {
         },
         async findPullRequestByHead(input) {
           expect(input).toMatchObject({ repository: 'reirei-lab/rainrail', headSha: 'abc123' });
-          return pullRequest();
+          return pullRequest({ reviews: [] });
         },
         async requestReview(input) {
           reviewRequests.push(input);
@@ -149,7 +173,7 @@ describe('handleReviewRequestEvent', () => {
         },
         async findPullRequestByHead(input) {
           expect(input).toMatchObject({ repository: 'reirei-lab/rainrail', headSha: 'abc123' });
-          return pullRequest();
+          return pullRequest({ reviews: [] });
         },
         async requestReview(input) {
           reviewRequests.push(input);

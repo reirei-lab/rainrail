@@ -123,10 +123,10 @@ describe('createGitHubPullRequestProvider', () => {
         return new Response(JSON.stringify(githubPullRequest()), { status: 200 });
       }
       if (url.endsWith('/pulls/44/reviews?per_page=100')) {
-        return new Response(JSON.stringify(Array.from({ length: 100 }, () => ({ user: { login: 'hiragram' }, state: 'APPROVED' }))), { status: 200 });
+        return new Response(JSON.stringify(Array.from({ length: 100 }, () => ({ user: { login: 'hiragram' }, state: 'APPROVED', commit_id: 'abc123' }))), { status: 200 });
       }
       if (url.endsWith('/pulls/44/reviews?per_page=100&page=2')) {
-        return new Response(JSON.stringify([{ user: { login: 'hiragram' }, state: 'CHANGES_REQUESTED' }]), { status: 200 });
+        return new Response(JSON.stringify([{ user: { login: 'hiragram' }, state: 'CHANGES_REQUESTED', commit_id: 'abc123' }]), { status: 200 });
       }
       if (url.endsWith('/commits/abc123/status')) {
         return new Response(JSON.stringify({ statuses: [] }), { status: 200 });
@@ -146,8 +146,41 @@ describe('createGitHubPullRequestProvider', () => {
 
     await expect(provider.getPullRequest({ repository: 'reirei-lab/rainrail', number: 44 })).resolves.toMatchObject({
       headSha: 'abc123',
-      reviews: expect.arrayContaining([expect.objectContaining({ authorLogin: 'hiragram', state: 'CHANGES_REQUESTED' })]),
+      reviews: expect.arrayContaining([expect.objectContaining({ authorLogin: 'hiragram', state: 'CHANGES_REQUESTED', commitId: 'abc123' })]),
       statusCheckRollup: expect.arrayContaining([expect.objectContaining({ name: 'late', conclusion: 'failure' })]),
+    });
+  });
+
+  it('adds the combined commit status state to the check rollup', async () => {
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.endsWith('/pulls/44')) {
+        return new Response(JSON.stringify(githubPullRequest()), { status: 200 });
+      }
+      if (url.endsWith('/pulls/44/reviews?per_page=100')) {
+        return new Response(JSON.stringify([]), { status: 200 });
+      }
+      if (url.endsWith('/commits/abc123/status')) {
+        return new Response(JSON.stringify({
+          state: 'failure',
+          statuses: [{ context: 'first-page-ci', state: 'success' }],
+        }), { status: 200 });
+      }
+      if (url.endsWith('/commits/abc123/check-runs?per_page=100')) {
+        return new Response(JSON.stringify({ check_runs: [] }), { status: 200 });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    });
+    const provider = createGitHubPullRequestProvider({
+      auth: { getAuthToken: async () => undefined },
+      fetch: fetchImpl as unknown as typeof fetch,
+    });
+
+    await expect(provider.getPullRequest({ repository: 'reirei-lab/rainrail', number: 44 })).resolves.toMatchObject({
+      statusCheckRollup: expect.arrayContaining([
+        expect.objectContaining({ type: 'StatusRollup', name: 'combined-status', state: 'failure' }),
+        expect.objectContaining({ type: 'StatusContext', name: 'first-page-ci', state: 'success' }),
+      ]),
     });
   });
 

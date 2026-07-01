@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { handleChangeRequestEvent } from './pr-lifecycle.js';
-import { handoffRecorder, reviewEvent } from './pr-lifecycle-test-helpers.js';
+import { createTaskProviderPullRequestCommentHandoff, handleChangeRequestEvent } from './pr-lifecycle.js';
+import { handoffRecorder, reviewEvent, task } from './pr-lifecycle-test-helpers.js';
 
 describe('handleChangeRequestEvent', () => {
   it('returns the matching agent task to Todo when a PR review requests changes', async () => {
@@ -45,5 +45,37 @@ describe('handleChangeRequestEvent', () => {
 
     expect(result.reason).toBe('matched agent task belongs to another repository');
     expect(updates).toEqual([]);
+  });
+
+  it('releases the project issue before reporting Todo from the task provider handoff adapter', async () => {
+    const calls: string[] = [];
+    const handoff = createTaskProviderPullRequestCommentHandoff({
+      name: 'github',
+      kind: 'task-provider',
+      async getIssue() {
+        throw new Error('not used');
+      },
+      async createComment() {
+        calls.push('comment');
+        return { id: 'comment_1', url: 'https://github.com/reirei-lab/rainrail/issues/23#issuecomment-1' };
+      },
+    }, {
+      releaseProjectIssue(input) {
+        calls.push(`release:${input.reason}`);
+      },
+    });
+
+    const result = await handoff.returnTaskToTodo({
+      task,
+      reason: 'checks_failed',
+      commentBody: 'body',
+    });
+
+    expect(calls).toEqual(['release:checks_failed', 'comment']);
+    expect(result).toEqual({
+      projectItemId: 'PVTI_item',
+      status: 'Todo',
+      commentUrl: 'https://github.com/reirei-lab/rainrail/issues/23#issuecomment-1',
+    });
   });
 });

@@ -64,6 +64,33 @@ describe('handleConflictCheckEvent', () => {
     })).rejects.toThrow('pull request mergeability is still being calculated');
   });
 
+  it('retries even when some open PRs are already known conflicts', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+
+    await expect(handleConflictCheckEvent(pushEvent(), {
+      tasks: handoffRecorder({ updates }),
+      delayMs: 0,
+      pullRequests: {
+        async getPullRequest() {
+          throw new Error('not used');
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async findOpenPullRequestsByBase() {
+          return [
+            pullRequest({ mergeStateStatus: 'DIRTY' }),
+            pullRequest({ number: 45, headRefName: 'agent/pending', mergeable: 'UNKNOWN' }),
+          ];
+        },
+        async requestReview() {
+          throw new Error('not used');
+        },
+      },
+    })).rejects.toThrow('pull request mergeability is still being calculated');
+    expect(updates).toEqual([]);
+  });
+
   it('does not treat branch-protection blocked pull requests as conflicts', async () => {
     const result = await handleConflictCheckEvent(pushEvent(), {
       tasks: handoffRecorder(),

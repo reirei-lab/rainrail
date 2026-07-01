@@ -71,6 +71,7 @@ interface GitHubPullRequestResponse {
 interface GitHubReviewResponse {
   user?: { login?: unknown };
   state?: unknown;
+  commit_id?: unknown;
 }
 
 interface GitHubStatusResponse {
@@ -408,6 +409,7 @@ async function listChecks(
   );
   const statusPayload = await statuses.json() as GitHubStatusResponse;
   return [
+    ...optionalStatusRollup(statusPayload),
     ...arrayValue(statusPayload.statuses).map((status) => {
       const value = recordValue(status);
       return {
@@ -459,12 +461,23 @@ function pullRequestFromPayload(
     reviews: related.reviews.flatMap((review) => {
       const login = stringValue(review.user?.login);
       const state = stringValue(review.state);
-      return login === undefined || state === undefined ? [] : [{ authorLogin: login, state }];
+      return login === undefined || state === undefined
+        ? []
+        : [{
+            authorLogin: login,
+            state,
+            ...optionalString('commitId', stringValue(review.commit_id)),
+          }];
     }),
     ...optionalString('state', stringValue(payload.state)),
     ...optionalString('mergeable', mergeableValue(payload)),
     ...optionalString('mergeStateStatus', stringValue(payload.mergeable_state)),
   };
+}
+
+function optionalStatusRollup(statusPayload: GitHubStatusResponse): PullRequestCheck[] {
+  const state = stringValue(statusPayload.state);
+  return state === undefined ? [] : [{ type: 'StatusRollup', name: 'combined-status', state }];
 }
 
 async function listPagedArray<T>(
