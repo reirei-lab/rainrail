@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import type { PullRequestReviewTarget } from './pr-lifecycle.js';
 import type { PluginRuntimeContext } from './workflow-plugin.js';
 import { handleAutoMergeEvent } from './pr-lifecycle.js';
 import { checkRunEvent, pullRequest, reviewEvent } from './pr-lifecycle-test-helpers.js';
@@ -50,7 +51,6 @@ describe('handleAutoMergeEvent', () => {
 
   it('does not merge while another reviewer has unresolved change requests', async () => {
     const result = await handleAutoMergeEvent(checkRunEvent(), options({
-      reviewDecision: undefined,
       reviews: [
         { authorLogin: 'hiragram', state: 'APPROVED', commitId: 'abc123' },
         { authorLogin: 'codex', state: 'CHANGES_REQUESTED', commitId: 'abc123' },
@@ -63,10 +63,52 @@ describe('handleAutoMergeEvent', () => {
   it('re-evaluates auto-merge after successful checks complete', async () => {
     const runtimeMerges: unknown[] = [];
 
-    const result = await handleAutoMergeEvent(checkRunEvent(), options({ reviewDecision: undefined }), runtimeContext(runtimeMerges));
+    const result = await handleAutoMergeEvent(checkRunEvent(), options(), runtimeContext(runtimeMerges));
 
     expect(result.reason).toBe('pull_request_merged');
     expect(runtimeMerges).toHaveLength(1);
+  });
+
+  it('continues past non-agent check_run PRs and auto-merges a later agent PR', async () => {
+    const runtimeMerges: unknown[] = [];
+
+    const result = await handleAutoMergeEvent(checkRunEvent({
+      pullRequests: [{ number: 45 }, { number: 44 }],
+    }), {
+      ...options(),
+      pullRequests: {
+        ...options().pullRequests,
+        async getPullRequest(input) {
+          return input.number === 45
+            ? pullRequest({ ...input, authorLogin: 'someone-else', headRefName: 'feature/manual' })
+            : pullRequest(input);
+        },
+      },
+    }, runtimeContext(runtimeMerges));
+
+    expect(result.reason).toBe('pull_request_merged');
+    expect(runtimeMerges).toEqual([expect.objectContaining({ number: 44 })]);
+  });
+
+  it('auto-merges an agent PR found after non-agent SHA search matches', async () => {
+    const runtimeMerges: unknown[] = [];
+
+    const result = await handleAutoMergeEvent(checkRunEvent({ pullRequests: [] }), {
+      ...options(),
+      pullRequests: {
+        ...options().pullRequests,
+        async findPullRequestsByHead(input) {
+          expect(input).toMatchObject({ repository: 'reirei-lab/rainrail', headSha: 'abc123' });
+          return [
+            pullRequest({ number: 45, authorLogin: 'someone-else', headRefName: 'feature/manual' }),
+            pullRequest({ number: 44 }),
+          ];
+        },
+      },
+    }, runtimeContext(runtimeMerges));
+
+    expect(result.reason).toBe('pull_request_merged');
+    expect(runtimeMerges).toEqual([expect.objectContaining({ number: 44 })]);
   });
 
   it('re-evaluates auto-merge after a skipped check completes the passing rollup', async () => {
@@ -74,7 +116,7 @@ describe('handleAutoMergeEvent', () => {
 
     const result = await handleAutoMergeEvent(
       checkRunEvent({ conclusion: 'skipped' }),
-      options({ reviewDecision: undefined }),
+      options(),
       runtimeContext(runtimeMerges),
     );
 
@@ -127,9 +169,21 @@ describe('handleAutoMergeEvent', () => {
 
   it('retries when mergeability is still being calculated', async () => {
     await expect(handleAutoMergeEvent(reviewEvent(), options({
-      mergeable: undefined,
-      mergeStateStatus: undefined,
+      mergeable: '',
+      mergeStateStatus: '',
     }))).rejects.toThrow('pull request mergeability is still being calculated');
+  });
+
+  it('does not auto-merge branch-protection blocked pull requests even when mergeable is true', async () => {
+    const runtimeMerges: unknown[] = [];
+
+    const result = await handleAutoMergeEvent(reviewEvent(), options({
+      mergeable: 'MERGEABLE',
+      mergeStateStatus: 'BLOCKED',
+    }), runtimeContext(runtimeMerges));
+
+    expect(result.reason).toBe('pull request is not mergeable');
+    expect(runtimeMerges).toEqual([]);
   });
 
   it('requires a runtime merge action instead of calling the provider directly', async () => {
@@ -137,7 +191,7 @@ describe('handleAutoMergeEvent', () => {
   });
 });
 
-function options(overrides = {}) {
+function options(overrides: Partial<PullRequestReviewTarget> = {}) {
   return {
     agentLogin: 'reirei-agent',
     reviewerLogin: 'hiragram',

@@ -65,6 +65,11 @@ export interface GitHubPullRequestProvider {
     headRefName?: string;
     headSha?: string;
   }, context?: TaskProviderContext): Promise<PullRequestReviewTarget | undefined>;
+  findPullRequestsByHead?(input: {
+    repository: string;
+    headRefName?: string;
+    headSha?: string;
+  }, context?: TaskProviderContext): Promise<PullRequestReviewTarget[]>;
   requestReview(input: {
     repository: string;
     number: number;
@@ -181,6 +186,14 @@ export interface WorkflowResult {
   [key: string]: unknown;
 }
 
+type PullRequestCandidate = {
+  repository: string;
+  number?: number;
+  numbers?: number[];
+  headRefName?: string;
+  headSha?: string;
+};
+
 export function createReviewRequestWorkflow(options: ReviewRequestWorkflowOptions): WorkflowPlugin {
   return defineWorkflowPlugin({
     name: 'review-request',
@@ -254,35 +267,39 @@ export async function handleReviewRequestEvent(
   if (candidate === undefined) return { handled: false, reason: 'event is not a completed successful check for a pull request' };
 
   const pullRequests = requirePullRequests(options.pullRequests);
-  const pullRequest = candidate.number === undefined
-    ? await pullRequests.findPullRequestByHead(candidate, taskContext(context))
-    : await pullRequests.getPullRequest({ repository: candidate.repository, number: candidate.number }, taskContext(context));
-  if (pullRequest === undefined) return { handled: false, reason: 'pull request was not found' };
-  if (candidate.headSha !== undefined && pullRequest.headSha !== undefined && candidate.headSha !== pullRequest.headSha) {
-    return { handled: false, reason: 'check does not match the current pull request head', candidate, pullRequest };
-  }
-  if (!isReviewTarget(options, pullRequest)) {
-    return { handled: false, reason: 'pull request is not an agent-authored target', pullRequest };
-  }
-  if (normalize(pullRequest.state) !== 'open') return { handled: false, reason: 'pull request is not open', pullRequest };
-  if (pullRequest.isDraft) return { handled: false, reason: 'pull request is draft', pullRequest };
-  if (hasUnresolvedChangeRequest(pullRequest)) {
-    return { handled: false, reason: 'pull request has unresolved change requests', pullRequest };
-  }
-  if (!allChecksPassed(pullRequest)) return { handled: false, reason: 'not all checks have passed', pullRequest };
-  if (reviewApproved(options, pullRequest)) {
-    return { handled: false, reason: 'pull request is already approved by configured reviewer', pullRequest };
-  }
-  if (pullRequest.reviewRequests.some((login) => sameLogin(login, options.reviewerLogin))) {
-    return { handled: false, reason: 'review was already requested', pullRequest };
-  }
+  const candidates = await resolvePullRequestCandidates(candidate, pullRequests, context);
+  if (candidates.length === 0) return { handled: false, reason: 'pull request was not found' };
+  let fallback: WorkflowResult = { handled: false, reason: 'pull request was not found' };
+  for (const pullRequest of candidates) {
+    if (candidate.headSha !== undefined && pullRequest.headSha !== undefined && candidate.headSha !== pullRequest.headSha) {
+      fallback = { handled: false, reason: 'check does not match the current pull request head', candidate, pullRequest };
+      continue;
+    }
+    if (!isReviewTarget(options, pullRequest)) {
+      fallback = { handled: false, reason: 'pull request is not an agent-authored target', pullRequest };
+      continue;
+    }
+    if (normalize(pullRequest.state) !== 'open') return { handled: false, reason: 'pull request is not open', pullRequest };
+    if (pullRequest.isDraft) return { handled: false, reason: 'pull request is draft', pullRequest };
+    if (hasUnresolvedChangeRequest(pullRequest)) {
+      return { handled: false, reason: 'pull request has unresolved change requests', pullRequest };
+    }
+    if (!allChecksPassed(pullRequest)) return { handled: false, reason: 'not all checks have passed', pullRequest };
+    if (reviewApproved(options, pullRequest)) {
+      return { handled: false, reason: 'pull request is already approved by configured reviewer', pullRequest };
+    }
+    if (pullRequest.reviewRequests.some((login) => sameLogin(login, options.reviewerLogin))) {
+      return { handled: false, reason: 'review was already requested', pullRequest };
+    }
 
-  await pullRequests.requestReview({
-    repository: pullRequest.repository,
-    number: pullRequest.number,
-    reviewerLogin: options.reviewerLogin,
-  }, taskContext(context));
-  return { handled: true, reason: 'review_requested', pullRequest };
+    await pullRequests.requestReview({
+      repository: pullRequest.repository,
+      number: pullRequest.number,
+      reviewerLogin: options.reviewerLogin,
+    }, taskContext(context));
+    return { handled: true, reason: 'review_requested', pullRequest };
+  }
+  return fallback;
 }
 
 export async function handleChangeRequestEvent(
@@ -367,41 +384,45 @@ export async function handleCheckFailureEvent(
   if (check === undefined) return { handled: false, reason: 'event is not a completed failed check for a pull request' };
 
   const pullRequests = requirePullRequests(options.pullRequests);
-  const pullRequest = check.number === undefined
-    ? await pullRequests.findPullRequestByHead(check, taskContext(context))
-    : await pullRequests.getPullRequest({ repository: check.repository, number: check.number }, taskContext(context));
-  if (pullRequest === undefined) return { handled: false, reason: 'pull request was not found', check };
-  if (check.headSha !== undefined && pullRequest.headSha !== undefined && check.headSha !== pullRequest.headSha) {
-    return { handled: false, reason: 'check does not match the current pull request head', check, pullRequest };
-  }
-  if (!isReviewTarget(options, pullRequest)) {
-    return { handled: false, reason: 'pull request is not an agent-authored target', check, pullRequest };
-  }
-  if (normalize(pullRequest.state) !== 'open') return { handled: false, reason: 'pull request is not open', check, pullRequest };
-  if (!hasCurrentCheckFailure(pullRequest)) return { handled: false, reason: 'current pull request checks have passed', check, pullRequest };
-  const task = await options.tasks.getAgentTaskByBranchName(pullRequest.headRefName);
-  if (task === undefined) return { handled: false, reason: 'no agent task matched the PR branch', check, pullRequest };
-  const repositorySkip = repositoryMismatchReason(task, pullRequest.repository);
-  if (repositorySkip !== undefined) return { handled: false, reason: repositorySkip, check, pullRequest, taskId: task.id };
-  const skip = shouldIgnoreTask(task);
-  if (skip !== undefined) return { handled: false, reason: skip, check, pullRequest, taskId: task.id };
+  const candidates = await resolvePullRequestCandidates(check, pullRequests, context);
+  if (candidates.length === 0) return { handled: false, reason: 'pull request was not found', check };
+  let fallback: WorkflowResult = { handled: false, reason: 'pull request was not found', check };
+  for (const pullRequest of candidates) {
+    if (check.headSha !== undefined && pullRequest.headSha !== undefined && check.headSha !== pullRequest.headSha) {
+      fallback = { handled: false, reason: 'check does not match the current pull request head', check, pullRequest };
+      continue;
+    }
+    if (!isReviewTarget(options, pullRequest)) {
+      fallback = { handled: false, reason: 'pull request is not an agent-authored target', check, pullRequest };
+      continue;
+    }
+    if (normalize(pullRequest.state) !== 'open') return { handled: false, reason: 'pull request is not open', check, pullRequest };
+    if (!hasCurrentCheckFailure(pullRequest)) return { handled: false, reason: 'current pull request checks have passed', check, pullRequest };
+    const task = await options.tasks.getAgentTaskByBranchName(pullRequest.headRefName);
+    if (task === undefined) return { handled: false, reason: 'no agent task matched the PR branch', check, pullRequest };
+    const repositorySkip = repositoryMismatchReason(task, pullRequest.repository);
+    if (repositorySkip !== undefined) return { handled: false, reason: repositorySkip, check, pullRequest, taskId: task.id };
+    const skip = shouldIgnoreTask(task);
+    if (skip !== undefined) return { handled: false, reason: skip, check, pullRequest, taskId: task.id };
 
-  const update = await options.tasks.returnTaskToTodo({
-    task,
-    reason: 'checks_failed',
-    commentBody: checkFailureComment({ task, pullRequest, check }),
-  }, context);
-  await options.tasks.recordTaskStatus?.({ task, result: `checks_failed:${update.status}` }, context);
-  return {
-    handled: true,
-    reason: 'failed PR checks returned issue to Todo',
-    check,
-    pullRequest,
-    taskId: task.id,
-    projectItemId: update.projectItemId,
-    status: update.status,
-    commentUrl: update.commentUrl,
-  };
+    const update = await options.tasks.returnTaskToTodo({
+      task,
+      reason: 'checks_failed',
+      commentBody: checkFailureComment({ task, pullRequest, check }),
+    }, context);
+    await options.tasks.recordTaskStatus?.({ task, result: `checks_failed:${update.status}` }, context);
+    return {
+      handled: true,
+      reason: 'failed PR checks returned issue to Todo',
+      check,
+      pullRequest,
+      taskId: task.id,
+      projectItemId: update.projectItemId,
+      status: update.status,
+      commentUrl: update.commentUrl,
+    };
+  }
+  return fallback;
 }
 
 export async function handleConflictCheckEvent(
@@ -495,43 +516,48 @@ export async function handleAutoMergeEvent(
   if (!targetRepositoryAllowed(options.targetRepositories, candidate.repository)) return { handled: false, reason: 'repository is not an auto-merge target' };
 
   const pullRequests = requirePullRequests(options.pullRequests);
-  const pullRequest = candidate.number === undefined
-    ? await pullRequests.findPullRequestByHead(candidate, taskContext(context))
-    : await pullRequests.getPullRequest({ repository: candidate.repository, number: candidate.number }, taskContext(context));
-  if (pullRequest === undefined) return { handled: false, reason: 'pull request was not found', candidate };
-  if (candidate.headSha !== undefined && pullRequest.headSha !== undefined && candidate.headSha !== pullRequest.headSha) {
-    return { handled: false, reason: 'check does not match the current pull request head', candidate, pullRequest };
-  }
-  if (!targetRepositoryAllowed(options.targetRepositories, pullRequest.repository)) {
-    return { handled: false, reason: 'live pull request repository is not an auto-merge target', pullRequest };
-  }
-  if (!isReviewTarget(options, pullRequest)) {
-    return { handled: false, reason: 'pull request is not an agent-authored target', pullRequest };
-  }
-  if (!reviewApproved(options, pullRequest)) return { handled: false, reason: 'configured reviewer approval is not confirmed', pullRequest };
-  if (hasUnresolvedChangeRequest(pullRequest)) {
-    return { handled: false, reason: 'pull request has unresolved change requests', pullRequest };
-  }
-  if (!allChecksPassed(pullRequest)) return { handled: false, reason: 'not all checks have passed', pullRequest };
-  if (pullRequest.isDraft) return { handled: false, reason: 'pull request is draft', pullRequest };
-  if (normalize(pullRequest.state) !== 'open') return { handled: false, reason: 'pull request is not open', pullRequest };
-  if (isMergeabilityPending(pullRequest)) {
-    throw new Error('pull request mergeability is still being calculated');
-  }
-  if (normalize(pullRequest.mergeable) !== 'mergeable') return { handled: false, reason: 'pull request is not mergeable', pullRequest };
+  const candidates = await resolvePullRequestCandidates(candidate, pullRequests, context);
+  if (candidates.length === 0) return { handled: false, reason: 'pull request was not found', candidate };
+  let fallback: WorkflowResult = { handled: false, reason: 'pull request was not found', candidate };
+  for (const pullRequest of candidates) {
+    if (candidate.headSha !== undefined && pullRequest.headSha !== undefined && candidate.headSha !== pullRequest.headSha) {
+      fallback = { handled: false, reason: 'check does not match the current pull request head', candidate, pullRequest };
+      continue;
+    }
+    if (!targetRepositoryAllowed(options.targetRepositories, pullRequest.repository)) {
+      fallback = { handled: false, reason: 'live pull request repository is not an auto-merge target', pullRequest };
+      continue;
+    }
+    if (!isReviewTarget(options, pullRequest)) {
+      fallback = { handled: false, reason: 'pull request is not an agent-authored target', pullRequest };
+      continue;
+    }
+    if (!reviewApproved(options, pullRequest)) return { handled: false, reason: 'configured reviewer approval is not confirmed', pullRequest };
+    if (hasUnresolvedChangeRequest(pullRequest)) {
+      return { handled: false, reason: 'pull request has unresolved change requests', pullRequest };
+    }
+    if (!allChecksPassed(pullRequest)) return { handled: false, reason: 'not all checks have passed', pullRequest };
+    if (pullRequest.isDraft) return { handled: false, reason: 'pull request is draft', pullRequest };
+    if (normalize(pullRequest.state) !== 'open') return { handled: false, reason: 'pull request is not open', pullRequest };
+    if (isMergeabilityPending(pullRequest)) {
+      throw new Error('pull request mergeability is still being calculated');
+    }
+    if (!isAutoMergeable(pullRequest)) return { handled: false, reason: 'pull request is not mergeable', pullRequest };
 
-  const mergeInput = {
-    repository: pullRequest.repository,
-    number: pullRequest.number,
-    mergeMethod: options.mergeMethod,
-    ...optionalString('sha', pullRequest.headSha),
-  };
-  if (context === undefined) throw new Error('Auto-merge requires a gated runtime merge action');
-  await context.actions.mergePullRequest({
-    pullRequestId: `${pullRequest.repository}#${pullRequest.number}`,
-    ...mergeInput,
-  });
-  return { handled: true, reason: 'pull_request_merged', pullRequest };
+    const mergeInput = {
+      repository: pullRequest.repository,
+      number: pullRequest.number,
+      mergeMethod: options.mergeMethod,
+      ...optionalString('sha', pullRequest.headSha),
+    };
+    if (context === undefined) throw new Error('Auto-merge requires a gated runtime merge action');
+    await context.actions.mergePullRequest({
+      pullRequestId: `${pullRequest.repository}#${pullRequest.number}`,
+      ...mergeInput,
+    });
+    return { handled: true, reason: 'pull_request_merged', pullRequest };
+  }
+  return fallback;
 }
 
 export function allChecksPassed(pullRequest: PullRequestReviewTarget): boolean {
@@ -556,11 +582,31 @@ function requirePullRequests(provider: GitHubPullRequestProvider | undefined): G
   return provider;
 }
 
+async function resolvePullRequestCandidates(
+  candidate: PullRequestCandidate,
+  pullRequests: GitHubPullRequestProvider,
+  context: PluginRuntimeContext | undefined,
+): Promise<PullRequestReviewTarget[]> {
+  const numbers = candidate.number === undefined
+    ? [...new Set(candidate.numbers ?? [])]
+    : [candidate.number];
+  if (numbers.length > 0) {
+    return Promise.all(numbers.map((number) =>
+      pullRequests.getPullRequest({ repository: candidate.repository, number }, taskContext(context))
+    ));
+  }
+  if (pullRequests.findPullRequestsByHead !== undefined) {
+    return pullRequests.findPullRequestsByHead(candidate, taskContext(context));
+  }
+  const pullRequest = await pullRequests.findPullRequestByHead(candidate, taskContext(context));
+  return pullRequest === undefined ? [] : [pullRequest];
+}
+
 function taskContext(context: PluginRuntimeContext | undefined): TaskProviderContext | undefined {
   return context === undefined ? undefined : { signal: context.signal };
 }
 
-function pullRequestCandidateFromEvent(event: RainrailEventEnvelope): { repository: string; number?: number; headRefName?: string; headSha?: string } | undefined {
+function pullRequestCandidateFromEvent(event: RainrailEventEnvelope): PullRequestCandidate | undefined {
   const payload = recordValue(event.payload);
   if (event.name === 'github.check_run' && isPassingCompletedCheckRun(payload)) {
     return candidateFromPullRequests(payload, stringValue(recordValue(payload.resource).headSha));
@@ -592,13 +638,18 @@ function isPassingCompletedCheckRun(payload: Record<string, unknown>): boolean {
     && ['success', 'neutral', 'skipped'].includes(conclusion);
 }
 
-function candidateFromPullRequests(payload: Record<string, unknown>, headSha: string | undefined): { repository: string; number?: number; headRefName?: string; headSha?: string } | undefined {
+function candidateFromPullRequests(payload: Record<string, unknown>, headSha: string | undefined): PullRequestCandidate | undefined {
   const repository = repositoryName(payload);
   if (repository === undefined) return undefined;
-  const pullRequest = arrayValue(payload.pullRequests).map(recordValue).find((candidate) => Object.keys(candidate).length > 0);
+  const numbers = arrayValue(payload.pullRequests)
+    .map(recordValue)
+    .flatMap((candidate) => {
+      const number = numberValue(candidate.number);
+      return number === undefined ? [] : [number];
+    });
   return {
     repository,
-    ...optionalNumber('number', numberValue(pullRequest?.number)),
+    ...(numbers.length === 0 ? {} : { numbers }),
     ...optionalString('headRefName', stringValue(recordValue(payload.resource).headRef)),
     ...optionalString('headSha', headSha),
   };
@@ -671,7 +722,7 @@ function codexReviewTargetFromEvent(
   };
 }
 
-function failedCheckCandidateFromEvent(event: RainrailEventEnvelope): { repository: string; number?: number; headRefName?: string; headSha?: string; name?: string; conclusion: string; detailsUrl?: string } | undefined {
+function failedCheckCandidateFromEvent(event: RainrailEventEnvelope): (PullRequestCandidate & { name?: string; conclusion: string; detailsUrl?: string }) | undefined {
   const payload = recordValue(event.payload);
   if (event.name === 'github.status') {
     const conclusion = commitStatusState(payload);
@@ -710,7 +761,7 @@ function pushTargetFromEvent(event: RainrailEventEnvelope): { repository: string
   return { repository, baseRefName: ref.slice('refs/heads/'.length) };
 }
 
-function autoMergeCandidateFromEvent(event: RainrailEventEnvelope): { repository: string; number?: number; headRefName?: string; headSha?: string; reviewerLogin?: string } | undefined {
+function autoMergeCandidateFromEvent(event: RainrailEventEnvelope): (PullRequestCandidate & { reviewerLogin?: string }) | undefined {
   const payload = recordValue(event.payload);
   if (event.name === 'github.review' && payload.event === 'pull_request_review' && payload.action === 'submitted') {
     const review = recordValue(payload.review);
@@ -935,6 +986,12 @@ function isConflicted(pullRequest: PullRequestReviewTarget): boolean {
 function isMergeabilityPending(pullRequest: PullRequestReviewTarget): boolean {
   const mergeable = normalize(pullRequest.mergeable);
   return mergeable === '' || mergeable === 'unknown' || normalize(pullRequest.mergeStateStatus) === 'unknown';
+}
+
+function isAutoMergeable(pullRequest: PullRequestReviewTarget): boolean {
+  if (normalize(pullRequest.mergeable) !== 'mergeable') return false;
+  const mergeStateStatus = normalize(pullRequest.mergeStateStatus);
+  return mergeStateStatus === '' || ['clean', 'has_hooks', 'unstable'].includes(mergeStateStatus);
 }
 
 async function removePendingReviewRequest(

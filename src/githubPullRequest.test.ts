@@ -116,6 +116,55 @@ describe('createGitHubPullRequestProvider', () => {
     expect(requests[0]).toContain('head=reirei-lab%3Aagent%2Ftest-pr');
   });
 
+  it('returns every same-SHA pull request candidate for workflow filtering', async () => {
+    const requests: string[] = [];
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      requests.push(url);
+      if (url.endsWith('/pulls?state=open&per_page=100')) {
+        return new Response(JSON.stringify([
+          { number: 45, head: { ref: 'feature/manual', sha: 'abc123' } },
+          { number: 44, head: { ref: 'agent/test-pr', sha: 'abc123' } },
+          { number: 43, head: { ref: 'agent/other', sha: 'other-sha' } },
+        ]), { status: 200 });
+      }
+      if (url.endsWith('/pulls/45')) {
+        return new Response(JSON.stringify(githubPullRequest({
+          number: 45,
+          user: { login: 'someone-else' },
+          head: { ref: 'feature/manual', sha: 'abc123', repo: { full_name: 'reirei-lab/rainrail' } },
+        })), { status: 200 });
+      }
+      if (url.endsWith('/pulls/44')) {
+        return new Response(JSON.stringify(githubPullRequest()), { status: 200 });
+      }
+      if (url.includes('/reviews?per_page=100')) {
+        return new Response(JSON.stringify([]), { status: 200 });
+      }
+      if (url.endsWith('/commits/abc123/status')) {
+        return new Response(JSON.stringify({ statuses: [] }), { status: 200 });
+      }
+      if (url.endsWith('/commits/abc123/check-runs?per_page=100')) {
+        return new Response(JSON.stringify({ check_runs: [] }), { status: 200 });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    });
+    const provider = createGitHubPullRequestProvider({
+      auth: { getAuthToken: async () => undefined },
+      fetch: fetchImpl as unknown as typeof fetch,
+    });
+
+    await expect(provider.findPullRequestsByHead?.({
+      repository: 'reirei-lab/rainrail',
+      headSha: 'abc123',
+    })).resolves.toMatchObject([
+      { number: 45, authorLogin: 'someone-else' },
+      { number: 44, authorLogin: 'reirei-agent' },
+    ]);
+    expect(requests).toContain('https://api.github.com/repos/reirei-lab/rainrail/pulls/45');
+    expect(requests).toContain('https://api.github.com/repos/reirei-lab/rainrail/pulls/44');
+  });
+
   it('paginates reviews and check runs before deriving merge and check state', async () => {
     const fetchImpl = vi.fn(async (input: string | URL | Request) => {
       const url = String(input);

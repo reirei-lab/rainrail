@@ -65,6 +65,40 @@ describe('handleCheckFailureEvent', () => {
     expect(updates).toHaveLength(1);
   });
 
+  it('continues past non-agent check_run PRs and returns a later agent PR issue to Todo', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+
+    const result = await handleCheckFailureEvent(checkRunEvent({
+      conclusion: 'failure',
+      pullRequests: [{ number: 45 }, { number: 44 }],
+    }), {
+      agentLogin: 'reirei-agent',
+      branchPrefix: 'agent/',
+      tasks: handoffRecorder({ updates }),
+      pullRequests: {
+        async getPullRequest(input) {
+          return input.number === 45
+            ? pullRequest({ ...input, authorLogin: 'someone-else', headRefName: 'feature/manual' })
+            : pullRequest({
+                ...input,
+                statusCheckRollup: [
+                  { type: 'CheckRun', name: 'Typecheck, Test, Build', status: 'COMPLETED', conclusion: 'FAILURE' },
+                ],
+              });
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          throw new Error('not used');
+        },
+      },
+    });
+
+    expect(result.reason).toBe('failed PR checks returned issue to Todo');
+    expect(updates).toHaveLength(1);
+  });
+
   it('ignores successful checks', async () => {
     const result = await handleCheckFailureEvent(checkRunEvent(), {
       agentLogin: 'reirei-agent',

@@ -248,6 +248,28 @@ export function createGitHubPullRequestProvider(options: GitHubTaskProviderOptio
     return response;
   };
 
+  const findPullRequestsByHead = async (
+    input: { repository: string; headRefName?: string; headSha?: string },
+    context?: TaskProviderContext,
+  ): Promise<PullRequestReviewTarget[]> => {
+    const url = new URL(`https://api.github.com/repos/${input.repository}/pulls`);
+    url.searchParams.set('state', 'open');
+    url.searchParams.set('per_page', '100');
+    if (input.headRefName !== undefined) {
+      const owner = input.repository.split('/')[0];
+      url.searchParams.set('head', `${owner}:${input.headRefName}`);
+    }
+    const candidates = await listPagedArray<GitHubPullRequestResponse>(request, url.pathname.slice(1) + url.search, 'GitHub pull request list request', context);
+    const payloads = candidates.filter((candidate) =>
+      (input.headRefName !== undefined && stringValue(candidate.head?.ref) === input.headRefName)
+      || (input.headSha !== undefined && stringValue(candidate.head?.sha) === input.headSha)
+    );
+    return Promise.all(payloads.flatMap((payload) => {
+      const number = numberValue(payload.number);
+      return number === undefined ? [] : [loadPullRequest(request, input.repository, number, context)];
+    }));
+  };
+
   return {
     async getPullRequest(input, context) {
       const pullRequest = await getPullRequestPayload(request, input.repository, input.number, context);
@@ -271,24 +293,9 @@ export function createGitHubPullRequestProvider(options: GitHubTaskProviderOptio
       }));
     },
     async findPullRequestByHead(input, context) {
-      const url = new URL(`https://api.github.com/repos/${input.repository}/pulls`);
-      url.searchParams.set('state', 'open');
-      url.searchParams.set('per_page', '100');
-      if (input.headRefName !== undefined) {
-        const owner = input.repository.split('/')[0];
-        url.searchParams.set('head', `${owner}:${input.headRefName}`);
-      }
-      const candidates = await listPagedArray<GitHubPullRequestResponse>(request, url.pathname.slice(1) + url.search, 'GitHub pull request list request', context);
-      const payload = candidates.find((candidate) =>
-        (input.headRefName !== undefined && stringValue(candidate.head?.ref) === input.headRefName)
-        || (input.headSha !== undefined && stringValue(candidate.head?.sha) === input.headSha)
-      );
-      const number = numberValue(payload?.number);
-      if (payload === undefined || number === undefined) {
-        return undefined;
-      }
-      return loadPullRequest(request, input.repository, number, context);
+      return (await findPullRequestsByHead(input, context))[0];
     },
+    findPullRequestsByHead,
     async requestReview(input, context) {
       const response = await request(`repos/${input.repository}/pulls/${input.number}/requested_reviewers`, {
         method: 'POST',

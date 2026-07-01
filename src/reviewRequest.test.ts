@@ -56,6 +56,34 @@ describe('handleReviewRequestEvent', () => {
     ]);
   });
 
+  it('continues past non-agent check_run PRs and requests review for a later agent PR', async () => {
+    const reviewRequests: Array<{ repository: string; number: number; reviewerLogin: string }> = [];
+
+    const result = await handleReviewRequestEvent(checkRunEvent({ pullRequests: [{ number: 45 }, { number: 44 }] }), {
+      agentLogin: 'reirei-agent',
+      reviewerLogin: 'hiragram',
+      branchPrefix: 'agent/',
+      pullRequests: {
+        async getPullRequest(input) {
+          return input.number === 45
+            ? pullRequest({ ...input, authorLogin: 'someone-else', headRefName: 'feature/manual', reviews: [] })
+            : pullRequest({ ...input, reviews: [] });
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview(input) {
+          reviewRequests.push(input);
+        },
+      },
+    });
+
+    expect(result.reason).toBe('review_requested');
+    expect(reviewRequests).toEqual([
+      { repository: 'reirei-lab/rainrail', number: 44, reviewerLogin: 'hiragram' },
+    ]);
+  });
+
   it('re-evaluates review requests when a draft PR becomes ready for review', async () => {
     const reviewRequests: Array<{ repository: string; number: number; reviewerLogin: string }> = [];
 

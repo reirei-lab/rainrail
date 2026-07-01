@@ -143,7 +143,12 @@ export function pullRequestEvent(overrides: { action?: string; branchName?: stri
   });
 }
 
-export function checkRunEvent(overrides: { conclusion?: string; status?: string; headSha?: string } = {}): RainrailEventEnvelope {
+export function checkRunEvent(overrides: {
+  conclusion?: string;
+  status?: string;
+  headSha?: string;
+  pullRequests?: Array<{ number: number }>;
+} = {}): RainrailEventEnvelope {
   return createEventEnvelope({
     source: { type: 'github', name: 'github-webhook', repository: 'reirei-lab/rainrail' },
     name: 'github.check_run',
@@ -166,7 +171,8 @@ export function checkRunEvent(overrides: { conclusion?: string; status?: string;
         headSha: overrides.headSha ?? 'abc123',
         url: 'https://github.com/reirei-lab/rainrail/actions/runs/1/job/2',
       },
-      pullRequests: [{ type: 'pull_request', id: '44', number: 44 }],
+      pullRequests: (overrides.pullRequests ?? [{ number: 44 }])
+        .map((pullRequest) => ({ type: 'pull_request', id: String(pullRequest.number), number: pullRequest.number })),
     },
     rawPayload: { kind: 'inline-redacted', reference: 'github://deliveries/delivery-check' },
   });
