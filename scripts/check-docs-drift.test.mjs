@@ -206,6 +206,15 @@ describe('docs drift checks', () => {
     expect(validateContractsManifest(root)).toContain(
       'contract public export PublicThing is not exported as value by its sources',
     );
+
+    writeFileSync(
+      join(root, 'src/contract.ts'),
+      'type PublicThing = () => void;\nexport { PublicThing };\n',
+    );
+
+    expect(validateContractsManifest(root)).toContain(
+      'contract public export PublicThing is not exported as value by its sources',
+    );
   });
 
   it('requires docs to mention public exports as exact code spans', () => {
@@ -263,6 +272,42 @@ describe('docs drift checks', () => {
       validateChangedFiles(
         root,
         ['docs/contracts.manifest.json', 'src/removed.ts', 'tests/contract.test.ts'],
+        baseContracts,
+      ),
+    ).toEqual([]);
+  });
+
+  it('requires docs or tests when base public exports are removed or weakened', () => {
+    const root = makeRepo();
+    const baseContracts = [
+      {
+        id: 'contract',
+        sources: ['src/contract.ts'],
+        docs: ['docs/contract.md'],
+        tests: ['tests/contract.test.ts'],
+        publicExports: ['PublicThing', 'RemovedThing'],
+        publicExportKinds: {
+          PublicThing: 'value',
+          RemovedThing: 'value',
+        },
+      },
+    ];
+
+    expect(
+      validateChangedFiles(
+        root,
+        ['docs/contracts.manifest.json'],
+        baseContracts,
+      ),
+    ).toEqual([
+      'contract public export removed from manifest without matching docs or tests: RemovedThing',
+      'contract public export kind changed without matching docs or tests: PublicThing value -> type',
+    ]);
+
+    expect(
+      validateChangedFiles(
+        root,
+        ['docs/contracts.manifest.json', 'docs/contract.md'],
         baseContracts,
       ),
     ).toEqual([]);

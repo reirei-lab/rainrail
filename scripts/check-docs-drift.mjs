@@ -45,7 +45,7 @@ const getExportedDeclarationKind = (sourceText, publicExport) => {
   );
 
   for (const statement of sourceFile.statements) {
-    const kind = statementExportKind(statement, publicExport);
+    const kind = statementExportKind(sourceFile, statement, publicExport);
     if (kind !== undefined) {
       return kind;
     }
@@ -147,11 +147,12 @@ const indexReExportsPublicName = (indexSource, exportPath, publicExport, exportK
 };
 
 /**
+ * @param {import('typescript').SourceFile} sourceFile
  * @param {import('typescript').Statement} statement
  * @param {string} publicExport
  * @returns {'type' | 'value' | undefined}
  */
-const statementExportKind = (statement, publicExport) => {
+const statementExportKind = (sourceFile, statement, publicExport) => {
   if (ts.isExportDeclaration(statement)) {
     const exportClause = statement.exportClause;
     if (exportClause === undefined || !ts.isNamedExports(exportClause)) {
@@ -165,7 +166,18 @@ const statementExportKind = (statement, publicExport) => {
       return undefined;
     }
 
-    return statement.isTypeOnly || specifier.isTypeOnly ? 'type' : 'value';
+    if (statement.isTypeOnly || specifier.isTypeOnly) {
+      return 'type';
+    }
+
+    if (statement.moduleSpecifier !== undefined) {
+      return 'value';
+    }
+
+    return localBindingKind(
+      sourceFile,
+      specifier.propertyName?.text ?? specifier.name.text,
+    );
   }
 
   if (!hasExportModifier(statement)) {
@@ -176,6 +188,83 @@ const statementExportKind = (statement, publicExport) => {
     return undefined;
   }
 
+  if (ts.isVariableStatement(statement)) {
+    return statement.declarationList.declarations.some(
+      (declaration) =>
+        ts.isIdentifier(declaration.name) && declaration.name.text === publicExport,
+    )
+      ? 'value'
+      : undefined;
+  }
+
+  if (ts.isClassDeclaration(statement) || ts.isEnumDeclaration(statement) || ts.isFunctionDeclaration(statement)) {
+    return statement.name?.text === publicExport ? 'value' : undefined;
+  }
+
+  if (ts.isInterfaceDeclaration(statement) || ts.isTypeAliasDeclaration(statement)) {
+    return statement.name.text === publicExport ? 'type' : undefined;
+  }
+
+  return undefined;
+};
+
+/**
+ * @param {import('typescript').SourceFile} sourceFile
+ * @param {string} localName
+ * @returns {'type' | 'value' | undefined}
+ */
+const localBindingKind = (sourceFile, localName) => {
+  for (const statement of sourceFile.statements) {
+    const kind = localImportKind(statement, localName) ?? directDeclarationKind(statement, localName);
+    if (kind !== undefined) {
+      return kind;
+    }
+  }
+
+  return undefined;
+};
+
+/**
+ * @param {import('typescript').Statement} statement
+ * @param {string} localName
+ * @returns {'type' | 'value' | undefined}
+ */
+const localImportKind = (statement, localName) => {
+  if (!ts.isImportDeclaration(statement) || statement.importClause === undefined) {
+    return undefined;
+  }
+
+  if (statement.importClause.name?.text === localName) {
+    return statement.importClause.isTypeOnly ? 'type' : 'value';
+  }
+
+  const namedBindings = statement.importClause.namedBindings;
+  if (namedBindings === undefined) {
+    return undefined;
+  }
+
+  if (ts.isNamespaceImport(namedBindings)) {
+    return namedBindings.name.text === localName && !statement.importClause.isTypeOnly
+      ? 'value'
+      : undefined;
+  }
+
+  const specifier = namedBindings.elements.find(
+    (element) => element.name.text === localName,
+  );
+  if (specifier === undefined) {
+    return undefined;
+  }
+
+  return statement.importClause.isTypeOnly || specifier.isTypeOnly ? 'type' : 'value';
+};
+
+/**
+ * @param {import('typescript').Statement} statement
+ * @param {string} publicExport
+ * @returns {'type' | 'value' | undefined}
+ */
+const directDeclarationKind = (statement, publicExport) => {
   if (ts.isVariableStatement(statement)) {
     return statement.declarationList.declarations.some(
       (declaration) =>
@@ -519,14 +608,6 @@ export const validateChangedFiles = (root = repoRoot, changedFiles = [], baseCon
     const currentContract = typeof baseContract.id === 'string'
       ? currentContractsById.get(baseContract.id)
       : undefined;
-    const currentSources = new Set(currentContract?.sources ?? []);
-    const removedSources = (baseContract.sources ?? []).filter((path) => !currentSources.has(path));
-    const changedRemovedSources = removedSources.filter((path) => manifestChanged || changed.has(path));
-
-    if (changedRemovedSources.length === 0) {
-      continue;
-    }
-
     const docsAndTests = new Set([
       ...(baseContract.docs ?? []),
       ...(baseContract.tests ?? []),
@@ -534,9 +615,46 @@ export const validateChangedFiles = (root = repoRoot, changedFiles = [], baseCon
       ...(currentContract?.tests ?? []),
     ]);
     const hasMatchingDocsOrTests = [...docsAndTests].some((path) => changed.has(path));
-    if (!hasMatchingDocsOrTests) {
+    const currentSources = new Set(currentContract?.sources ?? []);
+    const removedSources = (baseContract.sources ?? []).filter((path) => !currentSources.has(path));
+    const changedRemovedSources = removedSources.filter((path) => manifestChanged || changed.has(path));
+
+    if (changedRemovedSources.length > 0 && !hasMatchingDocsOrTests) {
       errors.push(
         `${id} source removed from manifest without matching docs or tests: ${changedRemovedSources.join(', ')}`,
+      );
+    }
+
+    if (!manifestChanged) {
+      continue;
+    }
+
+    const currentPublicExports = new Set(currentContract?.publicExports ?? []);
+    const removedPublicExports = (baseContract.publicExports ?? []).filter(
+      (publicExport) => !currentPublicExports.has(publicExport),
+    );
+    if (removedPublicExports.length > 0 && !hasMatchingDocsOrTests) {
+      errors.push(
+        `${id} public export removed from manifest without matching docs or tests: ${removedPublicExports.join(', ')}`,
+      );
+    }
+
+    const currentPublicExportKinds = currentContract?.publicExportKinds ?? {};
+    const basePublicExportKinds = baseContract.publicExportKinds ?? {};
+    const changedPublicExportKinds = (baseContract.publicExports ?? [])
+      .filter((publicExport) => currentPublicExports.has(publicExport))
+      .map((publicExport) => ({
+        publicExport,
+        baseKind: basePublicExportKinds[publicExport],
+        currentKind: currentPublicExportKinds[publicExport],
+      }))
+      .filter(({ baseKind, currentKind }) => baseKind !== currentKind)
+      .map(({ publicExport, baseKind, currentKind }) =>
+        `${publicExport} ${baseKind ?? '<missing>'} -> ${currentKind ?? '<missing>'}`);
+
+    if (changedPublicExportKinds.length > 0 && !hasMatchingDocsOrTests) {
+      errors.push(
+        `${id} public export kind changed without matching docs or tests: ${changedPublicExportKinds.join(', ')}`,
       );
     }
   }
