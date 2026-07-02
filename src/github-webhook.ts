@@ -378,6 +378,7 @@ export interface NormalizedGitHubResource {
   title?: string;
   description?: string;
   color?: string;
+  author?: string;
   dueOn?: string;
   state?: string;
   merged?: boolean;
@@ -386,6 +387,7 @@ export interface NormalizedGitHubResource {
   context?: string;
   url?: string;
   headRef?: string;
+  headRepository?: string;
   headSha?: string;
   baseRef?: string;
   baseSha?: string;
@@ -1407,7 +1409,9 @@ function resourceFromPullRequest(
     ...optionalBooleanProperty('merged', booleanField(pullRequest, 'merged')),
     ...optionalBooleanProperty('draft', booleanField(pullRequest, 'draft')),
     ...optionalStringProperty('url', stringField(pullRequest, 'html_url')),
+    ...optionalStringProperty('author', stringField(recordField(pullRequest, 'user'), 'login')),
     ...optionalStringProperty('headRef', stringField(head, 'ref')),
+    ...optionalStringProperty('headRepository', stringField(recordField(head, 'repo'), 'full_name')),
     ...optionalStringProperty('beforeSha', stringField(payload, 'before')),
     ...optionalStringProperty('headSha', stringField(payload, 'after') ?? stringField(head, 'sha')),
     ...optionalStringProperty('baseRef', stringField(base, 'ref')),
@@ -1421,6 +1425,7 @@ function resourceFromReview(review: GitHubWebhookRecord): NormalizedGitHubResour
     id: String(review.id ?? 'unknown'),
     ...optionalStringProperty('state', stringField(review, 'state')),
     ...optionalStringProperty('body', stringField(review, 'body')),
+    ...optionalStringProperty('commitId', stringField(review, 'commit_id')),
     ...optionalStringProperty('url', stringField(review, 'html_url')),
   };
 }
@@ -2140,6 +2145,7 @@ function normalizedReview(review: unknown): NormalizedGitHubComment | undefined 
     ...optionalStringProperty('body', stringField(record, 'body')),
     ...optionalStringProperty('url', stringField(record, 'html_url')),
     ...optionalStringProperty('author', stringField(recordField(record, 'user'), 'login')),
+    ...optionalStringProperty('commitId', stringField(record, 'commit_id')),
   };
 }
 

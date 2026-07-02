@@ -13,6 +13,10 @@
     "cf:dev": "wrangler dev --local",
     "cf:smoke": "node scripts/smoke-cloudflare-worker.mjs",
     "docs:check": "node scripts/check-docs-drift.mjs && tsc -p tsconfig.docs.json",
+    "pages:build": "pnpm --filter www build",
+    "pages:deploy:preview": "pnpm pages:build && wrangler pages deploy apps/www/dist --project-name rainrail-www --branch \"${RAINRAIL_PAGES_BRANCH:-preview}\"",
+    "pages:deploy:production": "pnpm pages:build && wrangler pages deploy apps/www/dist --project-name rainrail-www --branch main",
+    "pages:smoke": "node scripts/smoke-cloudflare-pages.mjs",
     "test": "vitest run scripts src",
     "typecheck": "tsc --noEmit"
   },

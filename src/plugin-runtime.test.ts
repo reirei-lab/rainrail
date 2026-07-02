@@ -2217,6 +2217,170 @@ describe('plugin runtime contract', () => {
     }
   });
 
+  it('denies pull request provider side effects after the handler timeout has fired', async () => {
+    vi.useFakeTimers();
+    try {
+      const event = createEventEnvelope({
+        source: { type: 'github', name: 'github-webhook' },
+        name: 'github.review',
+        delivery: {
+          id: 'delivery-late-pull-request-provider',
+          receivedAt: '2026-06-29T14:00:00.000Z',
+        },
+        occurredAt: '2026-06-29T14:00:00.000Z',
+        subject: { type: 'review', id: '13' },
+        payload: { action: 'submitted' },
+        rawPayload: {
+          kind: 'external-reference',
+          reference: 'github://deliveries/delivery-late-pull-request-provider',
+        },
+      });
+      const requestReview = vi.fn(async () => undefined);
+      let lateProviderReason: unknown;
+      const loader = createPluginLoader({
+        runtime: mockRuntimeContext({
+          runId: 'run-13',
+          now: () => new Date('2026-06-29T14:01:00.000Z'),
+          providers: {
+            tasks: {
+              name: 'mock-tasks',
+              kind: 'task-provider',
+              getIssue: async () => ({
+                id: 'issue:13',
+                provider: 'github',
+                repository: 'reirei-lab/rainrail',
+                number: 13,
+                title: 'Mock issue',
+              }),
+              createComment: async () => ({ id: 'comment:mock' }),
+            },
+            githubPullRequests: {
+              name: 'mock-pull-requests',
+              getPullRequest: async () => {
+                throw new Error('not used');
+              },
+              findPullRequestByHead: async () => undefined,
+              requestReview,
+            },
+          } as unknown as PluginRuntimeContext['providers'],
+        }),
+        defaultTimeoutMs: 25,
+      });
+
+      loader.on(
+        'github.review',
+        async (_event, context) => {
+          const pullRequests = context.providers.githubPullRequests as {
+            requestReview(input: { repository: string; number: number; reviewerLogin: string }): Promise<void>;
+          };
+          await new Promise((resolve) => {
+            setTimeout(resolve, 100);
+          });
+
+          try {
+            await pullRequests.requestReview({
+              repository: 'reirei-lab/rainrail',
+              number: 13,
+              reviewerLogin: 'hiragram',
+            });
+          } catch (reason) {
+            lateProviderReason = reason;
+          }
+
+          return { late: true };
+        },
+        { name: 'late-pull-request-provider-handler' },
+      );
+
+      const dispatchPromise = loader.dispatch(event);
+      await vi.advanceTimersByTimeAsync(25);
+
+      await expect(dispatchPromise).resolves.toMatchObject([
+        {
+          pluginName: 'late-pull-request-provider-handler',
+          eventId: 'github-webhook:delivery-late-pull-request-provider:github.review',
+          status: 'rejected',
+        },
+      ]);
+
+      await vi.advanceTimersByTimeAsync(75);
+      expect(requestReview).not.toHaveBeenCalled();
+      expect(lateProviderReason).toBeInstanceOf(Error);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps missing optional pull request provider methods hidden through guarded context', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.review',
+      delivery: {
+        id: 'delivery-missing-pull-request-method',
+        receivedAt: '2026-06-29T14:00:00.000Z',
+      },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'review', id: '13' },
+      payload: { action: 'submitted' },
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'github://deliveries/delivery-missing-pull-request-method',
+      },
+    });
+    const loader = createPluginLoader({
+      runtime: mockRuntimeContext({
+        providers: {
+          tasks: {
+            name: 'mock-tasks',
+            kind: 'task-provider',
+            getIssue: async () => ({
+              id: 'issue:13',
+              provider: 'github',
+              repository: 'reirei-lab/rainrail',
+              number: 13,
+              title: 'Mock issue',
+            }),
+            createComment: async () => ({ id: 'comment:mock' }),
+          },
+          githubPullRequests: {
+            name: 'mock-pull-requests',
+            kind: 'pull-request-provider',
+            getPullRequest: async () => {
+              throw new Error('not used');
+            },
+            findPullRequestByHead: async () => undefined,
+            requestReview: async () => undefined,
+          },
+        } as unknown as PluginRuntimeContext['providers'],
+      }),
+    });
+
+    loader.on(
+      'github.review',
+      (_event, context) => {
+        const pullRequests = context.providers.githubPullRequests as {
+          findOpenPullRequestsByBase?: unknown;
+        };
+        return {
+          hasBaseSearch: 'findOpenPullRequestsByBase' in pullRequests,
+          baseSearch: pullRequests.findOpenPullRequestsByBase,
+        };
+      },
+      { name: 'pull-request-provider-introspection-handler' },
+    );
+
+    await expect(loader.dispatch(event)).resolves.toMatchObject([
+      {
+        pluginName: 'pull-request-provider-introspection-handler',
+        status: 'fulfilled',
+        value: {
+          hasBaseSearch: false,
+          baseSearch: undefined,
+        },
+      },
+    ]);
+  });
+
   it('keeps parent abort classification when handler abort cleanup resolves first', async () => {
     const event = createEventEnvelope({
       source: { type: 'github', name: 'github-webhook' },
@@ -4294,10 +4458,16 @@ describe('plugin runtime contract', () => {
       },
     });
     let capabilityReads = 0;
+    const auditEntries: unknown[] = [];
     const loader = createPluginLoader({
       runtime: {
         runId: 'run-13',
         now: () => new Date('2026-06-29T14:01:00.000Z'),
+      },
+      audit: {
+        record(entry) {
+          auditEntries.push(entry);
+        },
       },
     });
     const skippedWorkflow = {
@@ -4310,9 +4480,10 @@ describe('plugin runtime contract', () => {
       handle: async () => ({ unreachable: true }),
     } satisfies WorkflowPlugin;
 
-    expect(() => loader.register(skippedWorkflow)).not.toThrow();
+    loader.register(skippedWorkflow);
     await expect(loader.dispatch(event)).resolves.toEqual([]);
     expect(capabilityReads).toBe(0);
+    expect(auditEntries).toEqual([]);
   });
 
   it('isolates loader capability descriptor failures to the malformed workflow result', async () => {
@@ -4342,11 +4513,17 @@ describe('plugin runtime contract', () => {
         },
       },
     );
+    const auditEntries: unknown[] = [];
     const loader = createPluginLoader({
       runtime: mockRuntimeContext(),
+      audit: {
+        record(entry) {
+          auditEntries.push(entry);
+        },
+      },
     });
 
-    expect(() => loader.register(malformedWorkflow)).not.toThrow();
+    loader.register(malformedWorkflow);
     loader.register(
       defineWorkflowPlugin({
         name: 'loader-later-after-malformed-capability-descriptor',
@@ -4369,6 +4546,25 @@ describe('plugin runtime contract', () => {
       value: { continued: true },
     });
     expect(laterHandler).toHaveBeenCalledOnce();
+    expect(auditEntries).toEqual([
+      {
+        pluginId: 'loader-malformed-capability-descriptor-plugin',
+        eventId: 'github-webhook:delivery-loader-bad-capability-descriptor:github.issue',
+        action: 'plugin.handle',
+        result: 'rejected',
+        runId: 'run-1',
+        occurredAt: '2026-06-29T13:01:00.000Z',
+        reason: 'Error: loader capabilities descriptor is malformed',
+      },
+      {
+        pluginId: 'loader-later-after-malformed-capability-descriptor',
+        eventId: 'github-webhook:delivery-loader-bad-capability-descriptor:github.issue',
+        action: 'plugin.handle',
+        result: 'fulfilled',
+        runId: 'run-1',
+        occurredAt: '2026-06-29T13:01:00.000Z',
+      },
+    ]);
   });
 
   it('does not expose raw dispatchAgent through __lookupGetter__', async () => {
@@ -4445,10 +4641,16 @@ describe('plugin runtime contract', () => {
       },
     });
     const laterHandler = vi.fn(async () => ({ continued: true }));
+    const auditEntries: unknown[] = [];
     const loader = createPluginLoader({
       runtime: {
         runId: 'run-13',
         now: () => new Date('2026-06-29T14:01:00.000Z'),
+      },
+      audit: {
+        record(entry) {
+          auditEntries.push(entry);
+        },
       },
     });
     const malformedTimeoutWorkflow = {
@@ -4461,7 +4663,7 @@ describe('plugin runtime contract', () => {
       handle: async () => ({ unreachable: true }),
     } satisfies WorkflowPlugin;
 
-    expect(() => loader.register(malformedTimeoutWorkflow)).not.toThrow();
+    loader.register(malformedTimeoutWorkflow);
     loader.on('github.issue', laterHandler, { name: 'loader-later-after-timeout-metadata' });
 
     const results = await loader.dispatch(event);
@@ -4479,6 +4681,25 @@ describe('plugin runtime contract', () => {
       value: { continued: true },
     });
     expect(laterHandler).toHaveBeenCalledOnce();
+    expect(auditEntries).toEqual([
+      {
+        pluginId: 'loader-malformed-timeout-handler',
+        eventId: 'github-webhook:delivery-loader-timeout-metadata:github.issue',
+        action: 'plugin.handle',
+        result: 'rejected',
+        runId: 'run-13',
+        occurredAt: '2026-06-29T14:01:00.000Z',
+        reason: 'Error: timeout metadata is malformed',
+      },
+      {
+        pluginId: 'loader-later-after-timeout-metadata',
+        eventId: 'github-webhook:delivery-loader-timeout-metadata:github.issue',
+        action: 'plugin.handle',
+        result: 'fulfilled',
+        runId: 'run-13',
+        occurredAt: '2026-06-29T14:01:00.000Z',
+      },
+    ]);
   });
 
   it('isolates malformed loader accepts metadata to the workflow result', async () => {
@@ -4498,10 +4719,16 @@ describe('plugin runtime contract', () => {
       },
     });
     const laterHandler = vi.fn(async () => ({ continued: true }));
+    const auditEntries: unknown[] = [];
     const loader = createPluginLoader({
       runtime: {
         runId: 'run-13',
         now: () => new Date('2026-06-29T14:01:00.000Z'),
+      },
+      audit: {
+        record(entry) {
+          auditEntries.push(entry);
+        },
       },
     });
     const malformedAcceptsWorkflow = {
@@ -4513,7 +4740,7 @@ describe('plugin runtime contract', () => {
       handle: async () => ({ unreachable: true }),
     } satisfies WorkflowPlugin;
 
-    expect(() => loader.register(malformedAcceptsWorkflow)).not.toThrow();
+    loader.register(malformedAcceptsWorkflow);
     loader.on('github.issue', laterHandler, { name: 'loader-later-after-accepts-metadata' });
 
     const results = await loader.dispatch(event);
@@ -4531,6 +4758,25 @@ describe('plugin runtime contract', () => {
       value: { continued: true },
     });
     expect(laterHandler).toHaveBeenCalledOnce();
+    expect(auditEntries).toEqual([
+      {
+        pluginId: 'loader-malformed-accepts-handler',
+        eventId: 'github-webhook:delivery-loader-accepts-metadata:github.issue',
+        action: 'plugin.handle',
+        result: 'rejected',
+        runId: 'run-13',
+        occurredAt: '2026-06-29T14:01:00.000Z',
+        reason: 'Error: accepts metadata is malformed',
+      },
+      {
+        pluginId: 'loader-later-after-accepts-metadata',
+        eventId: 'github-webhook:delivery-loader-accepts-metadata:github.issue',
+        action: 'plugin.handle',
+        result: 'fulfilled',
+        runId: 'run-13',
+        occurredAt: '2026-06-29T14:01:00.000Z',
+      },
+    ]);
   });
 
   it('isolates malformed loader name metadata to the workflow result', async () => {
@@ -4550,10 +4796,16 @@ describe('plugin runtime contract', () => {
       },
     });
     const laterHandler = vi.fn(async () => ({ continued: true }));
+    const auditEntries: unknown[] = [];
     const loader = createPluginLoader({
       runtime: {
         runId: 'run-13',
         now: () => new Date('2026-06-29T14:01:00.000Z'),
+      },
+      audit: {
+        record(entry) {
+          auditEntries.push(entry);
+        },
       },
     });
     const malformedNameWorkflow = {
@@ -4565,7 +4817,7 @@ describe('plugin runtime contract', () => {
       handle: async () => ({ handled: true }),
     } satisfies WorkflowPlugin;
 
-    expect(() => loader.register(malformedNameWorkflow)).not.toThrow();
+    loader.register(malformedNameWorkflow);
     loader.on('github.issue', laterHandler, { name: 'loader-later-after-name-metadata' });
 
     const results = await loader.dispatch(event);
@@ -4583,6 +4835,25 @@ describe('plugin runtime contract', () => {
       value: { continued: true },
     });
     expect(laterHandler).toHaveBeenCalledOnce();
+    expect(auditEntries).toEqual([
+      {
+        pluginId: 'unknown-workflow',
+        eventId: 'github-webhook:delivery-loader-name-metadata:github.issue',
+        action: 'plugin.handle',
+        result: 'rejected',
+        runId: 'run-13',
+        occurredAt: '2026-06-29T14:01:00.000Z',
+        reason: 'Error: name metadata is malformed',
+      },
+      {
+        pluginId: 'loader-later-after-name-metadata',
+        eventId: 'github-webhook:delivery-loader-name-metadata:github.issue',
+        action: 'plugin.handle',
+        result: 'fulfilled',
+        runId: 'run-13',
+        occurredAt: '2026-06-29T14:01:00.000Z',
+      },
+    ]);
   });
 
   it('uses the timeout snapshot captured before accepts can mutate workflow metadata', async () => {
@@ -8334,11 +8605,20 @@ describe('plugin runtime contract', () => {
       },
       handle: async () => ({ ok: true }),
     } satisfies WorkflowPlugin;
-    const loader = createPluginLoader({ runtime: mockRuntimeContext() });
+    const auditEntries: unknown[] = [];
+    const loader = createPluginLoader({
+      runtime: mockRuntimeContext(),
+      audit: {
+        record(entry) {
+          auditEntries.push(entry);
+        },
+      },
+    });
 
-    expect(() => loader.register(workflow)).not.toThrow();
+    loader.register(workflow);
     await expect(loader.dispatch(event)).resolves.toEqual([]);
     expect(timeoutReads).toBe(0);
+    expect(auditEntries).toEqual([]);
   });
 
   it('keeps frozen array descriptors compatible with capability views', async () => {

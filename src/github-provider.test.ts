@@ -188,6 +188,79 @@ describe('createGitHubTaskProvider', () => {
     expect(searchUrl.searchParams.get('q')).toBe('repo:reirei-lab/rainrail is:issue is:open "<!-- error-fingerprint: sha256:abc"');
   });
 
+  it.each([
+    [
+      'getIssue',
+      async (provider: ReturnType<typeof createGitHubTaskProvider>) => provider.getIssue({
+        provider: 'github',
+        repository: 'reirei-lab/rainrail',
+        number: 84,
+      }),
+      { node_id: 'issue-node-id', title: 'Missing number' },
+    ],
+    [
+      'createIssue',
+      async (provider: ReturnType<typeof createGitHubTaskProvider>) => provider.createIssue?.({
+        provider: 'github',
+        repository: 'reirei-lab/rainrail',
+        title: 'Missing mapped title',
+        body: 'The response title is intentionally missing.',
+      }),
+      { node_id: 'issue-node-id', number: 84 },
+    ],
+    [
+      'searchIssues',
+      async (provider: ReturnType<typeof createGitHubTaskProvider>) => provider.searchIssues?.({
+        provider: 'github',
+        repository: 'reirei-lab/rainrail',
+        query: 'edge case',
+      }),
+      { items: [{ node_id: 'issue-node-id', number: 84 }] },
+    ],
+  ])('fails fast when %s receives an issue payload missing required fields', async (_name, callProvider, payload) => {
+    const provider = createGitHubTaskProvider({
+      auth: { getAuthToken: async () => undefined },
+      fetch: (async () => new Response(JSON.stringify(payload), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })) as typeof fetch,
+    });
+
+    await expect(callProvider(provider)).rejects.toThrow('GitHub issue response is missing required issue fields');
+  });
+
+  it('returns an empty issue search result for a valid empty GitHub search payload', async () => {
+    const provider = createGitHubTaskProvider({
+      auth: { getAuthToken: async () => undefined },
+      fetch: (async () => new Response(JSON.stringify({ items: [] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })) as typeof fetch,
+    });
+
+    await expect(provider.searchIssues?.({
+      provider: 'github',
+      repository: 'reirei-lab/rainrail',
+      query: 'no matches',
+    })).resolves.toEqual([]);
+  });
+
+  it('rejects GitHub comment creation when the REST API returns a non-OK response', async () => {
+    const provider = createGitHubTaskProvider({
+      auth: { getAuthToken: async () => undefined },
+      fetch: (async () => new Response(JSON.stringify({ message: 'Forbidden' }), { status: 403 })) as typeof fetch,
+    });
+
+    await expect(provider.createComment({
+      target: {
+        provider: 'github',
+        repository: 'reirei-lab/rainrail',
+        number: 84,
+      },
+      body: 'Outcome: updated_issue',
+    })).rejects.toThrow('GitHub comment request failed with HTTP 403');
+  });
+
   it('passes task context abort signals to issue fetches', async () => {
     const controller = new AbortController();
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({

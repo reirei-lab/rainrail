@@ -155,24 +155,27 @@ export class RainrailBridgeRoom {
           return abortedPublishResponse();
         }
 
-        if (!recentEvents.some((recentEvent) => recentEvent.id === event.id)) {
+        let responseEvent = event;
+        const existingEvent = recentEvents.find((recentEvent) => recentEvent.id === event.id);
+        if (existingEvent === undefined) {
           const nextRecentEvents = this.#nextRecentEvents(recentEvents, event);
           await this.#state.storage.put(RECENT_EVENTS_KEY, nextRecentEvents);
           this.#bus.loadReplay(nextRecentEvents.slice(0, -1));
           this.#bus.publish(event);
         } else {
           this.#bus.loadReplay(recentEvents);
+          responseEvent = existingEvent;
         }
+        return Response.json({
+          ok: true,
+          id: responseEvent.id,
+          name: responseEvent.name,
+          event: responseEvent,
+          clients: this.#bus.clientCount,
+        });
       } catch {
         return new Response('publish failed\n', { status: 500 });
       }
-
-      return Response.json({
-        ok: true,
-        id: eventResult.event.id,
-        name: eventResult.event.name,
-        clients: this.#bus.clientCount,
-      });
     });
 
     this.#publishQueue = publishResult.then(

@@ -60,6 +60,16 @@ describe('Cloudflare Worker operations', () => {
     expect(cloudflareDocs).toContain('署名不一致');
   });
 
+  it('documents the minimum Cloudflare event path from GitHub webhook to downstream consumers', () => {
+    expect(cloudflareDocs).toContain('## 最小経路');
+    expect(cloudflareDocs).toContain('`POST /webhooks/github`');
+    expect(cloudflareDocs).toContain('GitHub webhook');
+    expect(cloudflareDocs).toContain('Rainrail event');
+    expect(cloudflareDocs).toContain('`GET /events`');
+    expect(cloudflareDocs).toContain('downstream consumer');
+    expect(cloudflareDocs).toContain('`Authorization: Bearer <SSE_BEARER_TOKEN>`');
+  });
+
   it('parses required and registered Cloudflare secrets for predeploy validation', () => {
     expect(parseRequiredSecrets(wranglerConfig)).toEqual([
       'GITHUB_WEBHOOK_SECRET',
