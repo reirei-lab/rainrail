@@ -1,4 +1,5 @@
 import type { RainrailEventEnvelope } from './events.js';
+import type { GitHubPullRequestProvider } from './pr-lifecycle.js';
 import type { RuntimeProvider } from './runtime-provider.js';
 import type { TaskProvider, TaskProviderRegistry } from './task-provider.js';
 import type {
@@ -2050,6 +2051,19 @@ function createGuardedProviders(
     }
 
     if (lifecycle.isSideEffectClosed()) {
+      if (providerName === 'githubPullRequests') {
+        const guardedProvider = createGuardedPullRequestProvider(
+          options,
+          policy,
+          event,
+          lifecycle,
+          () => unavailablePullRequestsProvider,
+          providerName,
+        );
+        guardedProviderCache.set(providerName, guardedProvider);
+        return guardedProvider;
+      }
+
       const guardedProvider = createGuardedTaskProvider(
         options,
         policy,
@@ -2070,7 +2084,9 @@ function createGuardedProviders(
     const provider = Reflect.get(providers, property, providers);
     const guardedProvider = isTaskProvider(provider)
       ? createGuardedTaskProvider(options, policy, event, lifecycle, () => provider, providerName)
-      : provider;
+      : isPullRequestProvider(provider)
+        ? createGuardedPullRequestProvider(options, policy, event, lifecycle, () => provider, providerName)
+        : provider;
     guardedProviderCache.set(providerName, guardedProvider);
     return guardedProvider;
   };
@@ -2113,6 +2129,100 @@ function isTaskProvider(provider: unknown): provider is TaskProvider {
     typeof (provider as TaskProvider).getIssue === 'function' &&
     typeof (provider as TaskProvider).createComment === 'function'
   );
+}
+
+const unavailablePullRequestsProvider: GitHubPullRequestProvider = {
+  name: 'unavailable-pull-requests',
+  kind: 'pull-request-provider',
+  async getPullRequest() {
+    throw new PluginLifecycleEndedError();
+  },
+  async findPullRequestByHead() {
+    throw new PluginLifecycleEndedError();
+  },
+  async requestReview() {
+    throw new PluginLifecycleEndedError();
+  },
+};
+
+function isPullRequestProvider(provider: unknown): provider is GitHubPullRequestProvider {
+  return (
+    typeof provider === 'object' &&
+    provider !== null &&
+    (provider as GitHubPullRequestProvider).kind === 'pull-request-provider' &&
+    typeof (provider as GitHubPullRequestProvider).getPullRequest === 'function' &&
+    typeof (provider as GitHubPullRequestProvider).findPullRequestByHead === 'function' &&
+    typeof (provider as GitHubPullRequestProvider).requestReview === 'function'
+  );
+}
+
+function createGuardedPullRequestProvider(
+  options: RuntimeDispatcherOptions,
+  policy: WorkflowExecutionPolicy,
+  event: RainrailEventEnvelope,
+  lifecycle: WorkflowLifecycle,
+  getPullRequests: () => GitHubPullRequestProvider,
+  actionPrefix: string,
+): GitHubPullRequestProvider {
+  const auditAction = (name: string) => `${actionPrefix}.${name}` as WorkflowAuditEntry['action'];
+  const guardedPullRequests: GitHubPullRequestProvider = {
+    get name() {
+      return getPullRequests().name ?? actionPrefix;
+    },
+    get kind() {
+      return 'pull-request-provider' as const;
+    },
+    async getPullRequest(input, context) {
+      const denied = getDeniedProviderCallReason(options, policy, event, lifecycle, auditAction('getPullRequest'));
+      if (denied !== undefined) throw denied;
+      const pullRequests = getPullRequests();
+      return pullRequests.getPullRequest.call(pullRequests, input, { signal: combineAbortSignals(lifecycle.signal, context?.signal) });
+    },
+    async findOpenPullRequestsByBase(input, context) {
+      const denied = getDeniedProviderCallReason(options, policy, event, lifecycle, auditAction('findOpenPullRequestsByBase'));
+      if (denied !== undefined) throw denied;
+      const pullRequests = getPullRequests();
+      if (pullRequests.findOpenPullRequestsByBase === undefined) return [];
+      return pullRequests.findOpenPullRequestsByBase.call(pullRequests, input, { signal: combineAbortSignals(lifecycle.signal, context?.signal) });
+    },
+    async findPullRequestByHead(input, context) {
+      const denied = getDeniedProviderCallReason(options, policy, event, lifecycle, auditAction('findPullRequestByHead'));
+      if (denied !== undefined) throw denied;
+      const pullRequests = getPullRequests();
+      return pullRequests.findPullRequestByHead.call(pullRequests, input, { signal: combineAbortSignals(lifecycle.signal, context?.signal) });
+    },
+    async findPullRequestsByHead(input, context) {
+      const denied = getDeniedProviderCallReason(options, policy, event, lifecycle, auditAction('findPullRequestsByHead'));
+      if (denied !== undefined) throw denied;
+      const pullRequests = getPullRequests();
+      if (pullRequests.findPullRequestsByHead === undefined) {
+        const pullRequest = await pullRequests.findPullRequestByHead.call(pullRequests, input, { signal: combineAbortSignals(lifecycle.signal, context?.signal) });
+        return pullRequest === undefined ? [] : [pullRequest];
+      }
+      return pullRequests.findPullRequestsByHead.call(pullRequests, input, { signal: combineAbortSignals(lifecycle.signal, context?.signal) });
+    },
+    async requestReview(input, context) {
+      const denied = getDeniedProviderCallReason(options, policy, event, lifecycle, auditAction('requestReview'));
+      if (denied !== undefined) throw denied;
+      const pullRequests = getPullRequests();
+      return pullRequests.requestReview.call(pullRequests, input, { signal: combineAbortSignals(lifecycle.signal, context?.signal) });
+    },
+    async removeReviewRequest(input, context) {
+      const denied = getDeniedProviderCallReason(options, policy, event, lifecycle, auditAction('removeReviewRequest'));
+      if (denied !== undefined) throw denied;
+      const pullRequests = getPullRequests();
+      if (pullRequests.removeReviewRequest === undefined) return undefined;
+      return pullRequests.removeReviewRequest.call(pullRequests, input, { signal: combineAbortSignals(lifecycle.signal, context?.signal) });
+    },
+    async listReviewComments(input, context) {
+      const denied = getDeniedProviderCallReason(options, policy, event, lifecycle, auditAction('listReviewComments'));
+      if (denied !== undefined) throw denied;
+      const pullRequests = getPullRequests();
+      if (pullRequests.listReviewComments === undefined) return [];
+      return pullRequests.listReviewComments.call(pullRequests, input, { signal: combineAbortSignals(lifecycle.signal, context?.signal) });
+    },
+  };
+  return guardedPullRequests;
 }
 
 function createGuardedTaskProvider(

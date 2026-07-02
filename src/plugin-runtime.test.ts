@@ -2196,6 +2196,101 @@ describe('plugin runtime contract', () => {
     }
   });
 
+  it('denies pull request provider side effects after the handler timeout has fired', async () => {
+    vi.useFakeTimers();
+    try {
+      const event = createEventEnvelope({
+        source: { type: 'github', name: 'github-webhook' },
+        name: 'github.review',
+        delivery: {
+          id: 'delivery-late-pull-request-provider',
+          receivedAt: '2026-06-29T14:00:00.000Z',
+        },
+        occurredAt: '2026-06-29T14:00:00.000Z',
+        subject: { type: 'review', id: '13' },
+        payload: { action: 'submitted' },
+        rawPayload: {
+          kind: 'external-reference',
+          reference: 'github://deliveries/delivery-late-pull-request-provider',
+        },
+      });
+      const requestReview = vi.fn(async () => undefined);
+      let lateProviderReason: unknown;
+      const loader = createPluginLoader({
+        runtime: mockRuntimeContext({
+          runId: 'run-13',
+          now: () => new Date('2026-06-29T14:01:00.000Z'),
+          providers: {
+            tasks: {
+              name: 'mock-tasks',
+              kind: 'task-provider',
+              getIssue: async () => ({
+                id: 'issue:13',
+                provider: 'github',
+                repository: 'reirei-lab/rainrail',
+                number: 13,
+                title: 'Mock issue',
+              }),
+              createComment: async () => ({ id: 'comment:mock' }),
+            },
+            githubPullRequests: {
+              name: 'mock-pull-requests',
+              kind: 'pull-request-provider',
+              getPullRequest: async () => {
+                throw new Error('not used');
+              },
+              findPullRequestByHead: async () => undefined,
+              requestReview,
+            },
+          } as unknown as PluginRuntimeContext['providers'],
+        }),
+        defaultTimeoutMs: 25,
+      });
+
+      loader.on(
+        'github.review',
+        async (_event, context) => {
+          const pullRequests = context.providers.githubPullRequests as {
+            requestReview(input: { repository: string; number: number; reviewerLogin: string }): Promise<void>;
+          };
+          await new Promise((resolve) => {
+            setTimeout(resolve, 100);
+          });
+
+          try {
+            await pullRequests.requestReview({
+              repository: 'reirei-lab/rainrail',
+              number: 13,
+              reviewerLogin: 'hiragram',
+            });
+          } catch (reason) {
+            lateProviderReason = reason;
+          }
+
+          return { late: true };
+        },
+        { name: 'late-pull-request-provider-handler' },
+      );
+
+      const dispatchPromise = loader.dispatch(event);
+      await vi.advanceTimersByTimeAsync(25);
+
+      await expect(dispatchPromise).resolves.toMatchObject([
+        {
+          pluginName: 'late-pull-request-provider-handler',
+          eventId: 'github-webhook:delivery-late-pull-request-provider:github.review',
+          status: 'rejected',
+        },
+      ]);
+
+      await vi.advanceTimersByTimeAsync(75);
+      expect(requestReview).not.toHaveBeenCalled();
+      expect(lateProviderReason).toBeInstanceOf(Error);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('keeps parent abort classification when handler abort cleanup resolves first', async () => {
     const event = createEventEnvelope({
       source: { type: 'github', name: 'github-webhook' },

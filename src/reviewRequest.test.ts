@@ -110,6 +110,25 @@ describe('handleReviewRequestEvent', () => {
     ]);
   });
 
+  it('retries ready_for_review while the live draft state is not reflected yet', async () => {
+    await expect(handleReviewRequestEvent(pullRequestEvent({ action: 'ready_for_review' }), {
+      agentLogin: 'reirei-agent',
+      reviewerLogin: 'hiragram',
+      branchPrefix: 'agent/',
+      pullRequests: {
+        async getPullRequest(input) {
+          return pullRequest({ ...input, isDraft: true });
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          throw new Error('not used');
+        },
+      },
+    })).rejects.toThrow('pull request draft state is still being reflected');
+  });
+
   it('ignores pull request review_requested events for other reviewers', async () => {
     let requestCount = 0;
 

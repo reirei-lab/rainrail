@@ -254,6 +254,43 @@ describe('handleCodexReviewEvent', () => {
     expect(updates).toEqual([]);
   });
 
+  it('does not hand off delayed Codex comments after a later change request', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+
+    const result = await handleCodexReviewEvent(reviewEvent({
+      state: 'commented',
+      headSha: 'abc123',
+      reviewCommitId: 'abc123',
+    }), {
+      agentLogin: 'reirei-agent',
+      reviewerLogin: 'hiragram',
+      branchPrefix: 'agent/',
+      targetRepositories: ['reirei-lab/rainrail'],
+      tasks: handoffRecorder({ updates }),
+      pullRequests: {
+        async getPullRequest(input) {
+          return pullRequest({
+            ...input,
+            headSha: 'abc123',
+            reviews: [{ authorLogin: 'hiragram', state: 'CHANGES_REQUESTED', commitId: 'abc123' }],
+          });
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          throw new Error('not used');
+        },
+        async listReviewComments() {
+          throw new Error('not used');
+        },
+      },
+    });
+
+    expect(result.reason).toBe('Codex review was superseded');
+    expect(updates).toEqual([]);
+  });
+
   it('hands off Codex comments submitted after an approval review', async () => {
     const updates: Array<{ reason: string; commentBody?: string }> = [];
 

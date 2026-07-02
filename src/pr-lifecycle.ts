@@ -52,6 +52,8 @@ export interface PullRequestReviewComment {
 export type PullRequestMergeMethod = 'merge' | 'squash' | 'rebase' | (string & {});
 
 export interface GitHubPullRequestProvider {
+  name?: string;
+  kind?: 'pull-request-provider';
   getPullRequest(input: {
     repository: string;
     number: number;
@@ -209,6 +211,7 @@ type PullRequestCandidate = {
   dismissedReviewerLogin?: string;
   reviewerLogin?: string;
   reviewState?: 'APPROVED' | 'DISMISSED';
+  readyForReview?: boolean;
 };
 
 export function createReviewRequestWorkflow(options: ReviewRequestWorkflowOptions): WorkflowPlugin {
@@ -310,6 +313,9 @@ export async function handleReviewRequestEvent(
       continue;
     }
     if (pullRequest.isDraft) {
+      if (candidate.readyForReview === true) {
+        throw new Error('pull request draft state is still being reflected');
+      }
       fallback = { handled: false, reason: 'pull request is draft', pullRequest };
       continue;
     }
@@ -687,6 +693,9 @@ export async function handleAutoMergeEvent(
       fallback = { handled: false, reason: 'pull request is not an agent-authored target', pullRequest };
       continue;
     }
+    if (candidate.readyForReview === true && pullRequest.isDraft) {
+      throw new Error('pull request draft state is still being reflected');
+    }
     if (isUnreflectedReviewResolution(candidate, pullRequest, options.reviewerLogin)) {
       throw new Error('pull request reviews are still being reflected');
     }
@@ -893,6 +902,7 @@ function pullRequestCandidateFromEvent(event: RainrailEventEnvelope): PullReques
     return {
       repository,
       number,
+      readyForReview: true,
       ...optionalString('headRefName', stringValue(resource.headRef)),
       ...optionalString('headSha', stringValue(resource.headSha)),
     };
@@ -1359,7 +1369,7 @@ function codexReviewWasSuperseded(
   options: Pick<CodexReviewWorkflowOptions, 'reviewerLogin'>,
 ): boolean {
   const latest = latestReviewByReviewerForCurrentHead(pullRequest, options.reviewerLogin);
-  if (latest === undefined || !['approved', 'dismissed'].includes(normalize(latest.state))) return false;
+  if (latest === undefined || !['approved', 'changes_requested', 'dismissed'].includes(normalize(latest.state))) return false;
   if (!reviewIsForCurrentHead(latest, pullRequest)) return false;
   return review.reviewCommitId === undefined || latest.commitId === undefined || latest.commitId === review.reviewCommitId;
 }

@@ -180,6 +180,15 @@ describe('handleAutoMergeEvent', () => {
     expect(runtimeMerges).toEqual([expect.objectContaining({ number: 44 })]);
   });
 
+  it('retries ready_for_review while the live draft state is not reflected yet', async () => {
+    const runtimeMerges: unknown[] = [];
+
+    await expect(handleAutoMergeEvent(pullRequestEvent({ action: 'ready_for_review' }), options({
+      isDraft: true,
+    }), runtimeContext(runtimeMerges))).rejects.toThrow('pull request draft state is still being reflected');
+    expect(runtimeMerges).toEqual([]);
+  });
+
   it('re-evaluates auto-merge after a review dismissal removes the last blocker', async () => {
     const runtimeMerges: unknown[] = [];
 

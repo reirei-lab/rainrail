@@ -270,6 +270,8 @@ export function createGitHubPullRequestProvider(options: GitHubTaskProviderOptio
   };
 
   return {
+    name: 'github-pull-requests',
+    kind: 'pull-request-provider',
     async getPullRequest(input, context) {
       const pullRequest = await getPullRequestPayload(request, input.repository, input.number, context);
       return pullRequestFromPayload(input.repository, pullRequest, {
