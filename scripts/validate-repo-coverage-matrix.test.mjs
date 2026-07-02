@@ -70,6 +70,10 @@ describe('source repository test coverage matrix', () => {
     expect(matrix).toContain('github-eep-bridge');
     expect(matrix).toContain('eep-bridge-worker');
     expect(matrix).toContain('reirei-harness');
+    expect(matrix).toContain('Source repositories verified on 2026-07-02');
+    expect(matrix).toContain('https://github.com/hiragram/github-eep-bridge');
+    expect(matrix).toContain('https://github.com/reirei-lab/eep-bridge-worker');
+    expect(matrix).toContain('https://github.com/reirei-lab/reirei-harness');
     expect(matrix).toContain('`pnpm test`');
   });
 
