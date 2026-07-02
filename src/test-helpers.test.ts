@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { getReaderOrThrow, readUntil, waitForValue } from './test-helpers.js';
+import { expectGraphQLOperation, getReaderOrThrow, readUntil, waitForValue } from './test-helpers.js';
 
 describe('SSE and HTTP test helpers', () => {
   it('throws a clear error when a response has no readable body', () => {
@@ -41,5 +41,28 @@ describe('SSE and HTTP test helpers', () => {
     await expect(waitForValue(async () => clients += 1, 0, { attempts: 2, intervalMs: 1, label: 'client count' }))
       .rejects
       .toThrow('Timed out waiting for client count to become 0 after 2 attempt(s). Last observed value: 5');
+  });
+});
+
+describe('GraphQL test helpers', () => {
+  it('throws a clear operation list when an expected GraphQL operation is missing', () => {
+    const calls = [
+      {
+        query: 'query RainrailProjectItemStatus($itemId: ID!) { node(id: $itemId) { id } }',
+        variables: { itemId: 'item_21' },
+      },
+      {
+        query: 'mutation RainrailCreateProjectIssueClaimLock($repositoryId: ID!) { createRef(input: { repositoryId: $repositoryId }) { ref { id } } }',
+        variables: { repositoryId: 'R_repo', name: 'refs/notes/rainrail/locks/reirei-lab-rainrail-21-item-21' },
+      },
+    ];
+
+    expect(() => expectGraphQLOperation(calls, 'RainrailDeleteProjectIssueClaimLock'))
+      .toThrow([
+        'Expected GraphQL operation "RainrailDeleteProjectIssueClaimLock" to be recorded.',
+        'Recorded operations:',
+        '0: RainrailProjectItemStatus variables={"itemId":"item_21"}',
+        '1: RainrailCreateProjectIssueClaimLock variables={"repositoryId":"R_repo","name":"refs/notes/rainrail/locks/reirei-lab-rainrail-21-item-21"}',
+      ].join('\n'));
   });
 });
