@@ -60,7 +60,15 @@ describe('handleAutoMergeEvent', () => {
     const result = await handleAutoMergeEvent(reviewEvent({
       headSha: 'abc123',
       reviewCommitId: 'abc123',
-    }), options(target), runtimeContext(runtimeMerges));
+    }), {
+      ...options(),
+      pullRequests: {
+        ...options().pullRequests,
+        async getPullRequest() {
+          return target;
+        },
+      },
+    }, runtimeContext(runtimeMerges));
 
     expect(result.reason).toBe('pull request has unresolved change requests');
     expect(runtimeMerges).toEqual([]);
@@ -121,24 +129,23 @@ describe('handleAutoMergeEvent', () => {
     expect(runtimeMerges).toEqual([]);
   });
 
-  it('does not let delayed approval webhooks restore dismissed approvals', async () => {
+  it('retries delayed approval webhooks while dismissal is still live', async () => {
     const runtimeMerges: unknown[] = [];
 
-    const result = await handleAutoMergeEvent(reviewEvent({
+    await expect(handleAutoMergeEvent(reviewEvent({
       headSha: 'abc123',
       reviewCommitId: 'abc123',
     }), options({
       reviews: [{ authorLogin: 'hiragram', state: 'DISMISSED', commitId: 'abc123' }],
-    }), runtimeContext(runtimeMerges));
+    }), runtimeContext(runtimeMerges))).rejects.toThrow('pull request reviews are still being reflected');
 
-    expect(result.reason).toBe('configured reviewer approval is not confirmed');
     expect(runtimeMerges).toEqual([]);
   });
 
-  it('does not let later comment reviews hide dismissed approvals', async () => {
+  it('retries delayed approval webhooks when latest actionable review is still dismissed', async () => {
     const runtimeMerges: unknown[] = [];
 
-    const result = await handleAutoMergeEvent(reviewEvent({
+    await expect(handleAutoMergeEvent(reviewEvent({
       headSha: 'abc123',
       reviewCommitId: 'abc123',
     }), options({
@@ -146,9 +153,8 @@ describe('handleAutoMergeEvent', () => {
         { authorLogin: 'hiragram', state: 'DISMISSED', commitId: 'abc123' },
         { authorLogin: 'hiragram', state: 'COMMENTED', commitId: 'abc123' },
       ],
-    }), runtimeContext(runtimeMerges));
+    }), runtimeContext(runtimeMerges))).rejects.toThrow('pull request reviews are still being reflected');
 
-    expect(result.reason).toBe('configured reviewer approval is not confirmed');
     expect(runtimeMerges).toEqual([]);
   });
 
@@ -290,6 +296,20 @@ describe('handleAutoMergeEvent', () => {
     expect(runtimeMerges).toEqual([]);
   });
 
+  it('retries auto-merge when approval is not reflected over a live dismissal yet', async () => {
+    const runtimeMerges: unknown[] = [];
+
+    await expect(handleAutoMergeEvent(reviewEvent({
+      state: 'approved',
+      reviewerLogin: 'hiragram',
+      reviewCommitId: 'abc123',
+    }), options({
+      reviews: [{ authorLogin: 'hiragram', state: 'DISMISSED', commitId: 'abc123' }],
+    }), runtimeContext(runtimeMerges))).rejects.toThrow('pull request reviews are still being reflected');
+
+    expect(runtimeMerges).toEqual([]);
+  });
+
   it('retries when a configured reviewer dismissal is not reflected over a live approval', async () => {
     const runtimeMerges: unknown[] = [];
 
@@ -366,14 +386,27 @@ describe('handleAutoMergeEvent', () => {
     expect(runtimeMerges).toEqual([expect.objectContaining({ number: 44 })]);
   });
 
-  it('does not auto-merge before the current head has any reported checks', async () => {
+  it('retries review events before the current head has any reported checks', async () => {
     const runtimeMerges: unknown[] = [];
 
-    const result = await handleAutoMergeEvent(reviewEvent(), options({
+    await expect(handleAutoMergeEvent(reviewEvent(), options({
       statusCheckRollup: [],
-    }), runtimeContext(runtimeMerges));
+    }), runtimeContext(runtimeMerges))).rejects.toThrow('pull request checks are still being reflected');
 
-    expect(result.reason).toBe('not all checks have passed');
+    expect(runtimeMerges).toEqual([]);
+  });
+
+  it('retries review events while the live rollup is still empty', async () => {
+    const runtimeMerges: unknown[] = [];
+
+    await expect(handleAutoMergeEvent(reviewEvent({
+      state: 'approved',
+      reviewerLogin: 'hiragram',
+      reviewCommitId: 'abc123',
+    }), options({
+      statusCheckRollup: [],
+    }), runtimeContext(runtimeMerges))).rejects.toThrow('pull request checks are still being reflected');
+
     expect(runtimeMerges).toEqual([]);
   });
 
@@ -551,6 +584,24 @@ describe('handleAutoMergeEvent', () => {
     expect(runtimeMerges).toEqual([]);
   });
 
+  it('retries when aggregate change request decision is stale after approval', async () => {
+    const runtimeMerges: unknown[] = [];
+
+    await expect(handleAutoMergeEvent(reviewEvent({
+      state: 'approved',
+      reviewerLogin: 'codex',
+      reviewCommitId: 'abc123',
+    }), options({
+      reviewDecision: 'CHANGES_REQUESTED',
+      reviews: [
+        { authorLogin: 'hiragram', state: 'APPROVED', commitId: 'abc123' },
+        { authorLogin: 'codex', state: 'APPROVED', commitId: 'abc123' },
+      ],
+    }), runtimeContext(runtimeMerges))).rejects.toThrow('pull request review decision is still being reflected');
+
+    expect(runtimeMerges).toEqual([]);
+  });
+
   it('only auto-merges agent branch pull requests', async () => {
     const result = await handleAutoMergeEvent(reviewEvent({ branchName: 'dependabot/npm/pkg' }), options({
       headRefName: 'dependabot/npm/pkg',
@@ -597,6 +648,7 @@ function options(overrides: Partial<PullRequestReviewTarget> = {}) {
     mergeMethod: 'squash' as const,
     targetRepositories: ['reirei-lab/rainrail'],
     pullRequests: {
+      kind: 'pull-request-provider' as const,
       async getPullRequest() {
         return pullRequest(overrides);
       },

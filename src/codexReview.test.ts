@@ -13,6 +13,7 @@ describe('handleCodexReviewEvent', () => {
       targetRepositories: ['reirei-lab/rainrail'],
       tasks: handoffRecorder({ updates }),
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest() {
           throw new Error('not used');
         },
@@ -63,6 +64,7 @@ describe('handleCodexReviewEvent', () => {
       targetRepositories: ['reirei-lab/rainrail'],
       tasks: handoffRecorder({ updates }),
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest(input) {
           return pullRequest({ ...input, reviewRequests: ['hiragram'], reviews: [] });
         },
@@ -103,6 +105,7 @@ describe('handleCodexReviewEvent', () => {
       targetRepositories: ['reirei-lab/rainrail'],
       tasks: handoffRecorder({ updates }),
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest(input) {
           fetchCount += 1;
           return pullRequest({
@@ -165,6 +168,7 @@ describe('handleCodexReviewEvent', () => {
       targetRepositories: ['reirei-lab/rainrail'],
       tasks: handoffRecorder({ updates }),
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest(input) {
           return pullRequest({ ...input, headSha: 'new-sha' });
         },
@@ -198,6 +202,7 @@ describe('handleCodexReviewEvent', () => {
       targetRepositories: ['reirei-lab/rainrail'],
       tasks: handoffRecorder({ updates }),
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest(input) {
           return pullRequest({ ...input, state: 'CLOSED', headSha: 'abc123' });
         },
@@ -231,6 +236,7 @@ describe('handleCodexReviewEvent', () => {
       targetRepositories: ['reirei-lab/rainrail'],
       tasks: handoffRecorder({ updates }),
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest(input) {
           return pullRequest({
             ...input,
@@ -268,6 +274,7 @@ describe('handleCodexReviewEvent', () => {
       targetRepositories: ['reirei-lab/rainrail'],
       tasks: handoffRecorder({ updates }),
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest(input) {
           return pullRequest({
             ...input,
@@ -305,6 +312,7 @@ describe('handleCodexReviewEvent', () => {
       targetRepositories: ['reirei-lab/rainrail'],
       tasks: handoffRecorder({ updates }),
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest(input) {
           return pullRequest({
             ...input,
@@ -345,6 +353,7 @@ describe('handleCodexReviewEvent', () => {
       targetRepositories: ['reirei-lab/rainrail'],
       tasks: handoffRecorder({ updates }),
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest(input) {
           return pullRequest({ ...input, headSha: 'new-sha' });
         },
@@ -374,6 +383,7 @@ describe('handleCodexReviewEvent', () => {
       targetRepositories: ['reirei-lab/rainrail'],
       tasks: handoffRecorder({ updates }),
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest() {
           throw new Error('not used');
         },
@@ -409,6 +419,7 @@ describe('handleCodexReviewEvent', () => {
         taskOverride: { issue: { repository: 'reirei-lab/rainrail', number: 23, state: 'OPEN' } },
       }),
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest() {
           throw new Error('not used');
         },
@@ -468,6 +479,7 @@ describe('handleCodexReviewEvent', () => {
       targetRepositories: ['reirei-lab/rainrail'],
       tasks: handoffRecorder({ updates }),
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest() {
           throw new Error('not used');
         },
@@ -502,6 +514,7 @@ describe('handleCodexReviewEvent', () => {
       targetRepositories: ['reirei-lab/rainrail'],
       tasks: handoffRecorder({ updates }),
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest() {
           throw new Error('not used');
         },

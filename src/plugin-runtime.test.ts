@@ -2235,7 +2235,6 @@ describe('plugin runtime contract', () => {
             },
             githubPullRequests: {
               name: 'mock-pull-requests',
-              kind: 'pull-request-provider',
               getPullRequest: async () => {
                 throw new Error('not used');
               },

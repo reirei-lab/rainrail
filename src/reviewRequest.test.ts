@@ -12,6 +12,7 @@ describe('handleReviewRequestEvent', () => {
       reviewerLogin: 'hiragram',
       branchPrefix: 'agent/',
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest(input) {
           return pullRequest({ ...input, reviews: [] });
         },
@@ -38,6 +39,7 @@ describe('handleReviewRequestEvent', () => {
       reviewerLogin: 'hiragram',
       branchPrefix: 'agent/',
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest(input) {
           return pullRequest({ ...input, reviews: [] });
         },
@@ -64,6 +66,7 @@ describe('handleReviewRequestEvent', () => {
       reviewerLogin: 'hiragram',
       branchPrefix: 'agent/',
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest(input) {
           return input.number === 45
             ? pullRequest({ ...input, authorLogin: 'someone-else', headRefName: 'feature/manual', reviews: [] })
@@ -92,6 +95,7 @@ describe('handleReviewRequestEvent', () => {
       reviewerLogin: 'hiragram',
       branchPrefix: 'agent/',
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest(input) {
           return pullRequest({ ...input, reviews: [] });
         },
@@ -116,6 +120,7 @@ describe('handleReviewRequestEvent', () => {
       reviewerLogin: 'hiragram',
       branchPrefix: 'agent/',
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest(input) {
           return pullRequest({ ...input, isDraft: true });
         },
@@ -140,6 +145,7 @@ describe('handleReviewRequestEvent', () => {
       reviewerLogin: 'hiragram',
       branchPrefix: 'agent/',
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest() {
           throw new Error('not used');
         },
@@ -168,6 +174,7 @@ describe('handleReviewRequestEvent', () => {
       reviewerLogin: 'hiragram',
       branchPrefix: 'agent/',
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest(input) {
           return pullRequest({
             ...input,
@@ -199,10 +206,38 @@ describe('handleReviewRequestEvent', () => {
       reviewerLogin: 'hiragram',
       branchPrefix: 'agent/',
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest(input) {
           return pullRequest({
             ...input,
             reviews: [{ authorLogin: 'codex', state: 'CHANGES_REQUESTED', commitId: 'abc123' }],
+          });
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          throw new Error('not used');
+        },
+      },
+    })).rejects.toThrow('pull request reviews are still being reflected');
+  });
+
+  it('retries review request when approval is not reflected over a live dismissal yet', async () => {
+    await expect(handleReviewRequestEvent(reviewEvent({
+      state: 'approved',
+      reviewerLogin: 'codex',
+      reviewCommitId: 'abc123',
+    }), {
+      agentLogin: 'reirei-agent',
+      reviewerLogin: 'hiragram',
+      branchPrefix: 'agent/',
+      pullRequests: {
+        kind: 'pull-request-provider' as const,
+        async getPullRequest(input) {
+          return pullRequest({
+            ...input,
+            reviews: [{ authorLogin: 'codex', state: 'DISMISSED', commitId: 'abc123' }],
           });
         },
         async findPullRequestByHead() {
@@ -226,6 +261,7 @@ describe('handleReviewRequestEvent', () => {
       reviewerLogin: 'hiragram',
       branchPrefix: 'agent/',
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest(input) {
           return pullRequest({
             ...input,
@@ -255,6 +291,7 @@ describe('handleReviewRequestEvent', () => {
       reviewerLogin: 'hiragram',
       branchPrefix: 'agent/',
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest(input) {
           return pullRequest({
             ...input,
@@ -288,6 +325,7 @@ describe('handleReviewRequestEvent', () => {
       reviewerLogin: 'hiragram',
       branchPrefix: 'agent/',
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest(input) {
           return pullRequest({ ...input, reviews: [] });
         },
@@ -316,6 +354,7 @@ describe('handleReviewRequestEvent', () => {
       reviewerLogin: 'hiragram',
       branchPrefix: 'agent/',
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest(input) {
           return pullRequest({
             ...input,
@@ -348,6 +387,7 @@ describe('handleReviewRequestEvent', () => {
       reviewerLogin: 'hiragram',
       branchPrefix: 'agent/',
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest(input) {
           return pullRequest({
             ...input,
@@ -374,6 +414,7 @@ describe('handleReviewRequestEvent', () => {
       reviewerLogin: 'hiragram',
       branchPrefix: 'agent/',
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest(input) {
           return pullRequest({ ...input, reviews: [], statusCheckRollup: [] });
         },
@@ -396,6 +437,7 @@ describe('handleReviewRequestEvent', () => {
       reviewerLogin: 'hiragram',
       branchPrefix: 'agent/',
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest(input) {
           return pullRequest({
             ...input,
@@ -421,6 +463,7 @@ describe('handleReviewRequestEvent', () => {
       reviewerLogin: 'hiragram',
       branchPrefix: 'agent/',
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest(input) {
           return pullRequest({
             ...input,
@@ -450,6 +493,7 @@ describe('handleReviewRequestEvent', () => {
       reviewerLogin: 'hiragram',
       branchPrefix: 'agent/',
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest(input) {
           return input.number === 45
             ? pullRequest({
@@ -480,6 +524,7 @@ describe('handleReviewRequestEvent', () => {
       reviewerLogin: 'hiragram',
       branchPrefix: 'agent/',
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest() {
           return pullRequest({ reviewRequests: ['hiragram'], reviews: [] });
         },
@@ -504,6 +549,7 @@ describe('handleReviewRequestEvent', () => {
       reviewerLogin: 'hiragram',
       branchPrefix: 'agent/',
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest(input) {
           return input.number === 45
             ? pullRequest({ ...input, headRefName: 'agent/other-pr', reviewRequests: ['hiragram'], reviews: [] })
@@ -532,6 +578,7 @@ describe('handleReviewRequestEvent', () => {
       reviewerLogin: 'hiragram',
       branchPrefix: 'agent/',
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest(input) {
           return pullRequest({ ...input, headRefName: 'agent/first-pr', reviews: [] });
         },
@@ -563,6 +610,7 @@ describe('handleReviewRequestEvent', () => {
       reviewerLogin: 'hiragram',
       branchPrefix: 'agent/',
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest() {
           return pullRequest({ reviews: [{ authorLogin: 'hiragram', state: 'APPROVED', commitId: 'abc123' }] });
         },
@@ -587,6 +635,7 @@ describe('handleReviewRequestEvent', () => {
       reviewerLogin: 'hiragram',
       branchPrefix: 'agent/',
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest() {
           return pullRequest({ headRepository: 'external/fork', reviews: [] });
         },
@@ -611,6 +660,7 @@ describe('handleReviewRequestEvent', () => {
       reviewerLogin: 'hiragram',
       branchPrefix: 'agent/',
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest() {
           return pullRequest({ state: 'CLOSED', reviews: [] });
         },
@@ -635,6 +685,7 @@ describe('handleReviewRequestEvent', () => {
       reviewerLogin: 'hiragram',
       branchPrefix: 'agent/',
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest() {
           const target = pullRequest({ reviews: [{ authorLogin: 'hiragram', state: 'CHANGES_REQUESTED' }] });
           delete target.reviewDecision;
@@ -661,6 +712,7 @@ describe('handleReviewRequestEvent', () => {
       reviewerLogin: 'hiragram',
       branchPrefix: 'agent/',
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest() {
           const target = pullRequest({
             reviews: [
@@ -692,6 +744,7 @@ describe('handleReviewRequestEvent', () => {
       reviewerLogin: 'hiragram',
       branchPrefix: 'agent/',
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest(input) {
           const target = pullRequest({
             ...input,
@@ -724,6 +777,7 @@ describe('handleReviewRequestEvent', () => {
       reviewerLogin: 'hiragram',
       branchPrefix: 'agent/',
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest() {
           throw new Error('not used');
         },
@@ -749,6 +803,7 @@ describe('handleReviewRequestEvent', () => {
       reviewerLogin: 'hiragram',
       branchPrefix: 'agent/',
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest(input) {
           return pullRequest({ ...input, reviews: [] });
         },
@@ -778,6 +833,7 @@ describe('handleReviewRequestEvent', () => {
       reviewerLogin: 'hiragram',
       branchPrefix: 'agent/',
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest() {
           throw new Error('not used');
         },
@@ -803,6 +859,7 @@ describe('handleReviewRequestEvent', () => {
       reviewerLogin: 'hiragram',
       branchPrefix: 'agent/',
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest() {
           return pullRequest({ headSha: 'new-sha' });
         },
@@ -827,6 +884,7 @@ describe('handleReviewRequestEvent', () => {
       reviewerLogin: 'hiragram',
       branchPrefix: 'agent/',
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest() {
           const target = pullRequest({
             reviews: [
@@ -862,6 +920,7 @@ describe('handleReviewRequestEvent', () => {
       reviewerLogin: 'hiragram',
       branchPrefix: 'agent/',
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest(input) {
           const target = pullRequest({
             ...input,
@@ -881,5 +940,36 @@ describe('handleReviewRequestEvent', () => {
 
     expect(result.reason).toBe('pull request has unresolved change requests');
     expect(requestCount).toBe(0);
+  });
+
+  it('retries when aggregate change request decision is stale after approval', async () => {
+    await expect(handleReviewRequestEvent(reviewEvent({
+      state: 'approved',
+      reviewerLogin: 'codex',
+      reviewCommitId: 'abc123',
+    }), {
+      agentLogin: 'reirei-agent',
+      reviewerLogin: 'hiragram',
+      branchPrefix: 'agent/',
+      pullRequests: {
+        kind: 'pull-request-provider' as const,
+        async getPullRequest(input) {
+          return pullRequest({
+            ...input,
+            reviewDecision: 'CHANGES_REQUESTED',
+            reviews: [
+              { authorLogin: 'hiragram', state: 'APPROVED', commitId: 'abc123' },
+              { authorLogin: 'codex', state: 'APPROVED', commitId: 'abc123' },
+            ],
+          });
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          throw new Error('not used');
+        },
+      },
+    })).rejects.toThrow('pull request review decision is still being reflected');
   });
 });

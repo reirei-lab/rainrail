@@ -15,6 +15,7 @@ describe('handleConflictCheckEvent', () => {
       reviewRequest: { reviewerLogin: 'hiragram' },
       delayMs: 0,
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest() {
           throw new Error('not used');
         },
@@ -57,6 +58,7 @@ describe('handleConflictCheckEvent', () => {
       tasks: handoffRecorder({ updates }),
       delayMs: 0,
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest() {
           throw new Error('not used');
         },
@@ -83,6 +85,7 @@ describe('handleConflictCheckEvent', () => {
       tasks: handoffRecorder(),
       delayMs: 0,
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest() {
           throw new Error('not used');
         },
@@ -108,6 +111,7 @@ describe('handleConflictCheckEvent', () => {
       tasks: handoffRecorder({ updates }),
       delayMs: 0,
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest() {
           throw new Error('not used');
         },
@@ -140,6 +144,7 @@ describe('handleConflictCheckEvent', () => {
       tasks: handoffRecorder({ updates }),
       delayMs: 0,
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest() {
           throw new Error('not used');
         },
@@ -174,6 +179,7 @@ describe('handleConflictCheckEvent', () => {
       tasks: handoffRecorder({ updates }),
       delayMs: 0,
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest() {
           throw new Error('not used');
         },
@@ -201,6 +207,7 @@ describe('handleConflictCheckEvent', () => {
       tasks: handoffRecorder(),
       delayMs: 0,
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest() {
           throw new Error('not used');
         },

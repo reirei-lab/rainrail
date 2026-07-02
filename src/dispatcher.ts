@@ -2082,6 +2082,18 @@ function createGuardedProviders(
 
     const providers = getProviders();
     const provider = Reflect.get(providers, property, providers);
+    if (providerName === 'githubPullRequests' && !isPullRequestProvider(provider)) {
+      const guardedProvider = createGuardedPullRequestProvider(
+        options,
+        policy,
+        event,
+        lifecycle,
+        () => unavailablePullRequestsProvider,
+        providerName,
+      );
+      guardedProviderCache.set(providerName, guardedProvider);
+      return guardedProvider;
+    }
     const guardedProvider = isTaskProvider(provider)
       ? createGuardedTaskProvider(options, policy, event, lifecycle, () => provider, providerName)
       : isPullRequestProvider(provider)

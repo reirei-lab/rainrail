@@ -13,6 +13,7 @@ describe('handleCheckFailureEvent', () => {
       branchPrefix: 'agent/',
       tasks: handoffRecorder({ updates }),
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest() {
           return pullRequest({
             statusCheckRollup: [
@@ -48,6 +49,7 @@ describe('handleCheckFailureEvent', () => {
       reviewRequest: { reviewerLogin: 'hiragram' },
       tasks: handoffRecorder({ updates }),
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest() {
           return pullRequest({
             reviewRequests: ['hiragram'],
@@ -83,6 +85,7 @@ describe('handleCheckFailureEvent', () => {
       reviewRequest: { reviewerLogin: 'hiragram' },
       tasks: handoffRecorder({ updates }),
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest() {
           return pullRequest({
             reviewRequests: ['hiragram'],
@@ -116,6 +119,7 @@ describe('handleCheckFailureEvent', () => {
       branchPrefix: 'agent/',
       tasks: handoffRecorder({ updates }),
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest() {
           return pullRequest({
             statusCheckRollup: [
@@ -144,6 +148,7 @@ describe('handleCheckFailureEvent', () => {
       branchPrefix: 'agent/',
       tasks: handoffRecorder({ updates }),
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest(input) {
           return pullRequest({ ...input, headSha: 'abc123', statusCheckRollup: [] });
         },
@@ -168,6 +173,7 @@ describe('handleCheckFailureEvent', () => {
       branchPrefix: 'agent/',
       tasks: handoffRecorder({ updates }),
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest(input) {
           return pullRequest({
             ...input,
@@ -201,6 +207,7 @@ describe('handleCheckFailureEvent', () => {
       branchPrefix: 'agent/',
       tasks: handoffRecorder({ updates }),
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest(input) {
           return input.number === 45
             ? pullRequest({ ...input, authorLogin: 'someone-else', headRefName: 'feature/manual' })
@@ -235,6 +242,7 @@ describe('handleCheckFailureEvent', () => {
       branchPrefix: 'agent/',
       tasks: handoffRecorder({ updates }),
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest(input) {
           return pullRequest({
             ...input,
@@ -269,6 +277,7 @@ describe('handleCheckFailureEvent', () => {
       branchPrefix: 'agent/',
       tasks: branchTaskRecorder(updates),
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest(input) {
           return pullRequest({
             ...input,
@@ -319,6 +328,7 @@ describe('handleCheckFailureEvent', () => {
       branchPrefix: 'agent/',
       tasks: handoffRecorder({ updates }),
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest() {
           return pullRequest({ headSha: 'new-sha' });
         },
@@ -343,6 +353,7 @@ describe('handleCheckFailureEvent', () => {
       branchPrefix: 'agent/',
       tasks: handoffRecorder({ updates }),
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest() {
           return pullRequest({ state: 'CLOSED' });
         },
@@ -367,6 +378,7 @@ describe('handleCheckFailureEvent', () => {
       branchPrefix: 'agent/',
       tasks: handoffRecorder({ updates }),
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest() {
           return pullRequest();
         },
@@ -390,6 +402,7 @@ describe('handleCheckFailureEvent', () => {
       branchPrefix: 'agent/',
       tasks: handoffRecorder({ updates }),
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest() {
           return pullRequest({ headRepository: 'external/fork' });
         },
@@ -414,6 +427,7 @@ describe('handleCheckFailureEvent', () => {
       branchPrefix: 'agent/',
       tasks: handoffRecorder({ updates }),
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest() {
           throw new Error('not used');
         },

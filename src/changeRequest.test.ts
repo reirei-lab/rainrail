@@ -70,6 +70,7 @@ describe('handleChangeRequestEvent', () => {
       branchPrefix: 'agent/',
       tasks: handoffRecorder({ updates }),
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest(input) {
           return pullRequestForChangeRequest({ ...input, headSha: 'abc123', reviews: [] });
         },
@@ -127,6 +128,7 @@ describe('handleChangeRequestEvent', () => {
       ...managedChangeRequestOptions,
       tasks: handoffRecorder({ updates }),
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest(input) {
           return pullRequestForChangeRequest({ ...input, headSha: 'new-sha' });
         },
@@ -143,10 +145,10 @@ describe('handleChangeRequestEvent', () => {
     expect(updates).toEqual([]);
   });
 
-  it('does not hand off delayed change requests after the live PR is approved', async () => {
+  it('retries delayed change requests while approval is still live', async () => {
     const updates: Array<{ reason: string; commentBody?: string }> = [];
 
-    const result = await handleChangeRequestEvent(reviewEvent({
+    await expect(handleChangeRequestEvent(reviewEvent({
       state: 'changes_requested',
       headSha: 'abc123',
       reviewCommitId: 'abc123',
@@ -154,6 +156,7 @@ describe('handleChangeRequestEvent', () => {
       ...managedChangeRequestOptions,
       tasks: handoffRecorder({ updates }),
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest(input) {
           return pullRequestForChangeRequest({
             ...input,
@@ -169,9 +172,41 @@ describe('handleChangeRequestEvent', () => {
           throw new Error('not used');
         },
       },
-    });
+    })).rejects.toThrow('pull request reviews are still being reflected');
 
-    expect(result.reason).toBe('pull request has no unresolved change requests');
+    expect(updates).toEqual([]);
+  });
+
+  it('retries when a current change request is not reflected over a live approval yet', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+
+    await expect(handleChangeRequestEvent(reviewEvent({
+      state: 'changes_requested',
+      reviewerLogin: 'hiragram',
+      headSha: 'abc123',
+      reviewCommitId: 'abc123',
+    }), {
+      ...managedChangeRequestOptions,
+      tasks: handoffRecorder({ updates }),
+      pullRequests: {
+        kind: 'pull-request-provider' as const,
+        async getPullRequest(input) {
+          return pullRequestForChangeRequest({
+            ...input,
+            headSha: 'abc123',
+            reviewDecision: 'APPROVED',
+            reviews: [{ authorLogin: 'hiragram', state: 'APPROVED', commitId: 'abc123' }],
+          });
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          throw new Error('not used');
+        },
+      },
+    })).rejects.toThrow('pull request reviews are still being reflected');
+
     expect(updates).toEqual([]);
   });
 
@@ -186,6 +221,7 @@ describe('handleChangeRequestEvent', () => {
       ...managedChangeRequestOptions,
       tasks: handoffRecorder({ updates }),
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest(input) {
           return pullRequestForChangeRequest({ ...input, state: 'CLOSED', headSha: 'abc123' });
         },
@@ -214,6 +250,7 @@ describe('handleChangeRequestEvent', () => {
       reviewRequest: { reviewerLogin: 'hiragram' },
       tasks: handoffRecorder({ updates }),
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest(input) {
           return {
             repository: input.repository,
@@ -262,6 +299,7 @@ describe('handleChangeRequestEvent', () => {
       reviewRequest: { reviewerLogin: 'hiragram' },
       tasks: handoffRecorder({ updates }),
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest(input) {
           fetchCount += 1;
           return pullRequestForChangeRequest({
@@ -301,6 +339,7 @@ describe('handleChangeRequestEvent', () => {
       state: 'changes_requested',
       reviewerLogin: 'codex',
     }), runtimeContext({
+      kind: 'pull-request-provider' as const,
       async getPullRequest(input) {
         return {
           repository: input.repository,
@@ -342,6 +381,7 @@ describe('handleChangeRequestEvent', () => {
       branchPrefix: 'agent/',
       tasks: handoffRecorder({ updates }),
       pullRequests: {
+        kind: 'pull-request-provider' as const,
         async getPullRequest(input) {
           return pullRequestForChangeRequest({
             ...input,

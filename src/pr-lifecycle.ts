@@ -53,7 +53,7 @@ export type PullRequestMergeMethod = 'merge' | 'squash' | 'rebase' | (string & {
 
 export interface GitHubPullRequestProvider {
   name?: string;
-  kind?: 'pull-request-provider';
+  kind: 'pull-request-provider';
   getPullRequest(input: {
     repository: string;
     number: number;
@@ -322,6 +322,9 @@ export async function handleReviewRequestEvent(
     if (isUnreflectedReviewResolution(candidate, pullRequest)) {
       throw new Error('pull request reviews are still being reflected');
     }
+    if (hasStaleAggregateChangeRequest(candidate, pullRequest)) {
+      throw new Error('pull request review decision is still being reflected');
+    }
     const reviewAwarePullRequest = pullRequestWithCandidateReviewResolution(candidate, pullRequest);
     if (hasUnresolvedChangeRequest(reviewAwarePullRequest)) {
       fallback = { handled: false, reason: 'pull request has unresolved change requests', pullRequest };
@@ -396,6 +399,9 @@ export async function handleChangeRequestEvent(
   }
   if (livePullRequest !== undefined && !isReviewTarget(reviewTargetConfig, livePullRequest)) {
     return { handled: false, reason: 'pull request is not an agent-authored target', pullRequestNumber: target.number, branchName: target.branchName };
+  }
+  if (livePullRequest !== undefined && isUnreflectedChangeRequest(target, livePullRequest)) {
+    throw new Error('pull request reviews are still being reflected');
   }
   const changeAwarePullRequest = livePullRequest === undefined ? undefined : pullRequestWithCandidateChangeRequest(target, livePullRequest);
   if (target.reviewCommitId !== undefined && changeAwarePullRequest !== undefined && !hasUnresolvedChangeRequest(changeAwarePullRequest)) {
@@ -699,6 +705,9 @@ export async function handleAutoMergeEvent(
     if (isUnreflectedReviewResolution(candidate, pullRequest)) {
       throw new Error('pull request reviews are still being reflected');
     }
+    if (hasStaleAggregateChangeRequest(candidate, pullRequest)) {
+      throw new Error('pull request review decision is still being reflected');
+    }
     const reviewAwarePullRequest = pullRequestWithCandidateReviewResolution(candidate, pullRequest);
     if (!reviewApproved(options, reviewAwarePullRequest)) {
       fallback = { handled: false, reason: 'configured reviewer approval is not confirmed', pullRequest };
@@ -709,7 +718,7 @@ export async function handleAutoMergeEvent(
       continue;
     }
     if (!hasPassingCheckRollup(pullRequest)) {
-      if (candidate.expandByHeadSha === true && isUnreflectedCheckRollup(candidate, pullRequest)) {
+      if (shouldRetryUnreflectedCheckRollup(candidate) && isUnreflectedCheckRollup(candidate, pullRequest)) {
         sawUnreflectedCheckRollup = true;
       }
       fallback = { handled: false, reason: 'not all checks have passed', pullRequest };
@@ -820,6 +829,7 @@ function pullRequestsFromContext(context: PluginRuntimeContext): GitHubPullReque
 
 function isPullRequestProvider(value: unknown): value is GitHubPullRequestProvider {
   return typeof value === 'object' && value !== null
+    && (value as GitHubPullRequestProvider).kind === 'pull-request-provider'
     && 'getPullRequest' in value
     && 'findPullRequestByHead' in value
     && 'requestReview' in value;
@@ -1278,6 +1288,18 @@ function reviewApproved(config: { reviewerLogin: string }, pullRequest: PullRequ
   return review?.commitId === undefined || pullRequest.headSha === undefined || review.commitId === pullRequest.headSha;
 }
 
+function isUnreflectedChangeRequest(
+  target: { reviewAuthor?: string; reviewCommitId?: string },
+  pullRequest: PullRequestReviewTarget,
+): boolean {
+  const reviewerLogin = target.reviewAuthor;
+  if (reviewerLogin === undefined) return false;
+  if (target.reviewCommitId !== undefined && pullRequest.headSha !== undefined && target.reviewCommitId !== pullRequest.headSha) return false;
+  const latest = latestActionableReviewForCurrentHead(pullRequest, reviewerLogin);
+  const latestState = normalize(latest?.state);
+  return latestState === 'approved' || latestState === 'dismissed';
+}
+
 function pullRequestWithCandidateChangeRequest(
   target: { reviewAuthor?: string; reviewCommitId?: string },
   pullRequest: PullRequestReviewTarget,
@@ -1337,7 +1359,7 @@ function isUnreflectedReviewResolution(
   if (review === undefined) return false;
   const latest = latestActionableReviewForCurrentHead(pullRequest, review.authorLogin);
   const latestState = normalize(latest?.state);
-  return (review.state === 'APPROVED' && latestState === 'changes_requested')
+  return (review.state === 'APPROVED' && (latestState === 'changes_requested' || latestState === 'dismissed'))
     || (review.state === 'DISMISSED' && (latestState === 'changes_requested' || latestState === 'approved'));
 }
 
@@ -1359,11 +1381,31 @@ function candidateReviewResolution(
 
 function hasUnresolvedChangeRequest(pullRequest: PullRequestReviewTarget): boolean {
   if (normalize(pullRequest.reviewDecision) === 'changes_requested') return true;
+  return latestReviewsHaveCurrentChangeRequest(pullRequest);
+}
+
+function hasStaleAggregateChangeRequest(
+  candidate: PullRequestCandidate,
+  pullRequest: PullRequestReviewTarget,
+): boolean {
+  if (candidateReviewResolution(candidate, pullRequest) === undefined) return false;
+  if (normalize(pullRequest.reviewDecision) !== 'changes_requested') return false;
+  if (pullRequest.reviews === undefined) return false;
+  return !latestReviewsHaveCurrentChangeRequest(pullRequest);
+}
+
+function latestReviewsHaveCurrentChangeRequest(pullRequest: PullRequestReviewTarget): boolean {
   return Array.from(latestActionableReviewsByReviewer(pullRequest).values())
     .some((review) =>
       normalize(review.state) === 'changes_requested'
       && (review.commitId === undefined || pullRequest.headSha === undefined || review.commitId === pullRequest.headSha)
     );
+}
+
+function shouldRetryUnreflectedCheckRollup(candidate: PullRequestCandidate): boolean {
+  return candidate.expandByHeadSha === true
+    || candidate.reviewState === 'APPROVED'
+    || candidate.reviewState === 'DISMISSED';
 }
 
 function codexReviewWasSuperseded(
