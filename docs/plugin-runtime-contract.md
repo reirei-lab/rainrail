@@ -208,6 +208,39 @@ runtime action の戻り値を handler 内だけで扱う。互換 API の
 capabilities object 全体を plain object にコピーせず、`dispatchAgent` だけを wrapper で
 差し替えるため、provider 固有の prototype method や non-enumerable helper を保持する。
 
+## PR lifecycle workflow
+
+PR lifecycle workflow は GitHub の normalized PR/check/review/status event を
+review request、change request handoff、Codex review handoff、failed check
+handoff、base push conflict check、auto-merge の各 workflow に分ける。
+実 GitHub API は `GitHubPullRequestProvider` に閉じ込め、handler は
+`PullRequestReviewTarget`、`PullRequestCheck`、`PullRequestReview`、
+`PullRequestReviewComment` の正規化済み状態だけを見る。
+`GitHubPullRequestProvider` は read-only とし、merge は provider から直接公開しない。
+`findPullRequestsByHead` は同じ head SHA に複数の open PR が紐づく場合も全候補を返し、
+workflow 側で agent branch / head repository / task claim を評価する。
+auto-merge は `PullRequestMergeMethod` を明示的に扱い、実行は capability/policy gate
+付きの `context.actions.mergePullRequest` だけを通す。
+
+agent task handoff は `AgentTaskIssue`、`AgentTaskClaim`、`AgentTask`、
+`AgentTaskHandoffClient` で表す。Project item を Todo に戻す adapter は
+`createTaskProviderPullRequestCommentHandoff` で、Project claim の release と
+issue comment 作成を同じ handoff 境界で扱う。個別 workflow の options は
+`ReviewRequestWorkflowOptions`、`TodoHandoffWorkflowOptions`、
+`ChangeRequestWorkflowOptions`、`CodexReviewWorkflowOptions`、
+`CheckFailureWorkflowOptions`、`ConflictCheckWorkflowOptions`、
+`AutoMergeWorkflowOptions` で、handler の戻り値は `WorkflowResult` にそろえる。
+
+packaged workflow factory は `createReviewRequestWorkflow`、
+`createChangeRequestWorkflow`、`createCodexReviewWorkflow`、
+`createCheckFailureWorkflow`、`createConflictCheckWorkflow`、
+`createAutoMergeWorkflow` を公開する。外部 API なしの focused test では
+`handleReviewRequestEvent`、`handleChangeRequestEvent`、
+`handleCodexReviewEvent`、`handleCheckFailureEvent`、
+`handleConflictCheckEvent`、`handleAutoMergeEvent` を直接呼べる。
+check rollup 判定は `allChecksPassed` に集約し、`success` に加えて
+`neutral` / `skipped` の完了も成功扱いにする。
+
 ## Plugin loader と local handler
 
 `createPluginLoader` は packaged Workflow plugin と local handler を同じ
@@ -342,7 +375,8 @@ GitHub CLI と同じく `GH_TOKEN`、`GITHUB_TOKEN` の順で最初の非空値�
 fallback は Rainrail の GitHub API URL に合わせて `github.com` host だけから
 取得する。`GitHubTaskProvider` は `auth.getAuthToken()` を注入できるため、
 workflow test や別 runtime では実 GitHub App/PAT 実装を差し替えられる。
-実装の入口は `createGitHubTaskProvider`。
+実装の入口は issue/task 操作用の `createGitHubTaskProvider` と、
+PR lifecycle workflow 用の `createGitHubPullRequestProvider`。
 デフォルト provider は GitHub App token 発行が GitHub API 側の auth/rate-limit
 エラーで失敗したとき、設定済み env/gh fallback token があればそれを使う。
 
