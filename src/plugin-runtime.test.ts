@@ -2291,6 +2291,76 @@ describe('plugin runtime contract', () => {
     }
   });
 
+  it('keeps missing optional pull request provider methods hidden through guarded context', async () => {
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.review',
+      delivery: {
+        id: 'delivery-missing-pull-request-method',
+        receivedAt: '2026-06-29T14:00:00.000Z',
+      },
+      occurredAt: '2026-06-29T14:00:00.000Z',
+      subject: { type: 'review', id: '13' },
+      payload: { action: 'submitted' },
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'github://deliveries/delivery-missing-pull-request-method',
+      },
+    });
+    const loader = createPluginLoader({
+      runtime: mockRuntimeContext({
+        providers: {
+          tasks: {
+            name: 'mock-tasks',
+            kind: 'task-provider',
+            getIssue: async () => ({
+              id: 'issue:13',
+              provider: 'github',
+              repository: 'reirei-lab/rainrail',
+              number: 13,
+              title: 'Mock issue',
+            }),
+            createComment: async () => ({ id: 'comment:mock' }),
+          },
+          githubPullRequests: {
+            name: 'mock-pull-requests',
+            kind: 'pull-request-provider',
+            getPullRequest: async () => {
+              throw new Error('not used');
+            },
+            findPullRequestByHead: async () => undefined,
+            requestReview: async () => undefined,
+          },
+        } as unknown as PluginRuntimeContext['providers'],
+      }),
+    });
+
+    loader.on(
+      'github.review',
+      (_event, context) => {
+        const pullRequests = context.providers.githubPullRequests as {
+          findOpenPullRequestsByBase?: unknown;
+        };
+        return {
+          hasBaseSearch: 'findOpenPullRequestsByBase' in pullRequests,
+          baseSearch: pullRequests.findOpenPullRequestsByBase,
+        };
+      },
+      { name: 'pull-request-provider-introspection-handler' },
+    );
+
+    await expect(loader.dispatch(event)).resolves.toMatchObject([
+      {
+        pluginName: 'pull-request-provider-introspection-handler',
+        status: 'fulfilled',
+        value: {
+          hasBaseSearch: false,
+          baseSearch: undefined,
+        },
+      },
+    ]);
+  });
+
   it('keeps parent abort classification when handler abort cleanup resolves first', async () => {
     const event = createEventEnvelope({
       source: { type: 'github', name: 'github-webhook' },

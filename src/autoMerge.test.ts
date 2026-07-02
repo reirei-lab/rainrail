@@ -80,14 +80,13 @@ describe('handleAutoMergeEvent', () => {
   it('does not let delayed approval webhooks hide live current-head change requests', async () => {
     const runtimeMerges: unknown[] = [];
 
-    const result = await handleAutoMergeEvent(reviewEvent({
+    await expect(handleAutoMergeEvent(reviewEvent({
       headSha: 'abc123',
       reviewCommitId: 'abc123',
     }), options({
       reviews: [{ authorLogin: 'hiragram', state: 'CHANGES_REQUESTED', commitId: 'abc123' }],
-    }), runtimeContext(runtimeMerges));
+    }), runtimeContext(runtimeMerges))).rejects.toThrow('pull request reviews are still being reflected');
 
-    expect(result.reason).toBe('configured reviewer approval is not confirmed');
     expect(runtimeMerges).toEqual([]);
   });
 
@@ -211,7 +210,7 @@ describe('handleAutoMergeEvent', () => {
   it('does not let a stale dismissal webhook hide a live current-head change request', async () => {
     const runtimeMerges: unknown[] = [];
 
-    const result = await handleAutoMergeEvent(reviewEvent({
+    await expect(handleAutoMergeEvent(reviewEvent({
       action: 'dismissed',
       state: 'dismissed',
       reviewerLogin: 'codex',
@@ -221,9 +220,8 @@ describe('handleAutoMergeEvent', () => {
         { authorLogin: 'hiragram', state: 'APPROVED', commitId: 'abc123' },
         { authorLogin: 'codex', state: 'CHANGES_REQUESTED', commitId: 'abc123' },
       ],
-    }), runtimeContext(runtimeMerges));
+    }), runtimeContext(runtimeMerges))).rejects.toThrow('pull request reviews are still being reflected');
 
-    expect(result.reason).toBe('pull request has unresolved change requests');
     expect(runtimeMerges).toEqual([]);
   });
 
@@ -261,7 +259,7 @@ describe('handleAutoMergeEvent', () => {
     expect(runtimeMerges).toEqual([]);
   });
 
-  it('does not merge when the configured reviewer dismissal webhook is not reflected yet', async () => {
+  it('does not let an old configured reviewer dismissal hide a live approval', async () => {
     const runtimeMerges: unknown[] = [];
 
     const result = await handleAutoMergeEvent(reviewEvent({
@@ -273,8 +271,8 @@ describe('handleAutoMergeEvent', () => {
       reviews: [{ authorLogin: 'hiragram', state: 'APPROVED', commitId: 'abc123' }],
     }), runtimeContext(runtimeMerges));
 
-    expect(result.reason).toBe('configured reviewer approval is not confirmed');
-    expect(runtimeMerges).toEqual([]);
+    expect(result.reason).toBe('pull_request_merged');
+    expect(runtimeMerges).toEqual([expect.objectContaining({ number: 44 })]);
   });
 
   it('continues past non-agent check_run PRs and auto-merges a later agent PR', async () => {

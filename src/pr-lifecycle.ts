@@ -319,7 +319,7 @@ export async function handleReviewRequestEvent(
       fallback = { handled: false, reason: 'pull request is draft', pullRequest };
       continue;
     }
-    if (isUnreflectedReviewResolution(candidate, pullRequest, options.reviewerLogin)) {
+    if (isUnreflectedReviewResolution(candidate, pullRequest)) {
       throw new Error('pull request reviews are still being reflected');
     }
     const reviewAwarePullRequest = pullRequestWithCandidateReviewResolution(candidate, pullRequest);
@@ -696,7 +696,7 @@ export async function handleAutoMergeEvent(
     if (candidate.readyForReview === true && pullRequest.isDraft) {
       throw new Error('pull request draft state is still being reflected');
     }
-    if (isUnreflectedReviewResolution(candidate, pullRequest, options.reviewerLogin)) {
+    if (isUnreflectedReviewResolution(candidate, pullRequest)) {
       throw new Error('pull request reviews are still being reflected');
     }
     const reviewAwarePullRequest = pullRequestWithCandidateReviewResolution(candidate, pullRequest);
@@ -1314,7 +1314,7 @@ function pullRequestWithCandidateReviewResolution(
     return pullRequest;
   }
   if (review.state === 'DISMISSED') {
-    if (latestState === 'dismissed' || latestState === 'changes_requested') return pullRequest;
+    if (latestState === 'approved' || latestState === 'dismissed' || latestState === 'changes_requested') return pullRequest;
   }
   return {
     ...pullRequest,
@@ -1328,14 +1328,12 @@ function pullRequestWithCandidateReviewResolution(
 function isUnreflectedReviewResolution(
   candidate: PullRequestCandidate,
   pullRequest: PullRequestReviewTarget,
-  configuredReviewerLogin: string,
 ): boolean {
   const review = candidateReviewResolution(candidate, pullRequest);
   if (review === undefined) return false;
-  if (sameLogin(review.authorLogin, configuredReviewerLogin)) return false;
   const latest = latestActionableReviewForCurrentHead(pullRequest, review.authorLogin);
   const latestState = normalize(latest?.state);
-  return review.state === 'APPROVED' && (latestState === 'changes_requested' || latestState === 'dismissed');
+  return (review.state === 'APPROVED' || review.state === 'DISMISSED') && latestState === 'changes_requested';
 }
 
 function candidateReviewResolution(

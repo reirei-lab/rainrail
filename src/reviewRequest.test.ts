@@ -215,6 +215,33 @@ describe('handleReviewRequestEvent', () => {
     })).rejects.toThrow('pull request reviews are still being reflected');
   });
 
+  it('retries review request when a dismissal review is not reflected in live reviews yet', async () => {
+    await expect(handleReviewRequestEvent(reviewEvent({
+      action: 'dismissed',
+      state: 'dismissed',
+      reviewerLogin: 'codex',
+      reviewCommitId: 'abc123',
+    }), {
+      agentLogin: 'reirei-agent',
+      reviewerLogin: 'hiragram',
+      branchPrefix: 'agent/',
+      pullRequests: {
+        async getPullRequest(input) {
+          return pullRequest({
+            ...input,
+            reviews: [{ authorLogin: 'codex', state: 'CHANGES_REQUESTED', commitId: 'abc123' }],
+          });
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          throw new Error('not used');
+        },
+      },
+    })).rejects.toThrow('pull request reviews are still being reflected');
+  });
+
   it('requests review when a review dismissal resolves the last change request blocker', async () => {
     const reviewRequests: Array<{ repository: string; number: number; reviewerLogin: string }> = [];
 
@@ -277,7 +304,7 @@ describe('handleReviewRequestEvent', () => {
     expect(requestCount).toBe(0);
   });
 
-  it('requests review when the configured reviewer dismissal webhook is not reflected yet', async () => {
+  it('does not let an old configured reviewer dismissal hide a live approval', async () => {
     const reviewRequests: Array<{ repository: string; number: number; reviewerLogin: string }> = [];
 
     const result = await handleReviewRequestEvent(reviewEvent({
@@ -305,10 +332,8 @@ describe('handleReviewRequestEvent', () => {
       },
     });
 
-    expect(result.reason).toBe('review_requested');
-    expect(reviewRequests).toEqual([
-      { repository: 'reirei-lab/rainrail', number: 44, reviewerLogin: 'hiragram' },
-    ]);
+    expect(result.reason).toBe('pull request is already approved by configured reviewer');
+    expect(reviewRequests).toEqual([]);
   });
 
   it('does not request review before the current head has any reported checks', async () => {
