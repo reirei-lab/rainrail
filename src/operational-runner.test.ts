@@ -243,6 +243,41 @@ describe('operational retry helpers', () => {
     });
     store.close();
   });
+
+  it('does not clear a retry for a missing handler unless it can claim the row', async () => {
+    const store = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:00:00.000Z'),
+    });
+    const event = store.recordEvent(fixtureEvent());
+    const staleRetry = store.recordEventHandlerRetry({
+      eventId: event.id,
+      handlerName: 'new-handler',
+      nextRetryAt: '2026-07-02T00:00:00.000Z',
+      lastError: 'fetch failed',
+    });
+    expect(store.claimEventHandlerRetry(
+      staleRetry,
+      '2026-07-02T00:05:00.000Z',
+      '2026-07-02T00:00:00.000Z',
+    )).toBe(true);
+    const originalListDue = store.listDueEventHandlerRetries.bind(store);
+    store.listDueEventHandlerRetries = () => [staleRetry];
+
+    const result = await processDueEventHandlerRetries({
+      store,
+      now: '2026-07-02T00:00:00.000Z',
+      handlers: {},
+    });
+
+    expect(result).toEqual([]);
+    expect(store.getEventHandlerRetry(event.id, 'new-handler')).toMatchObject({
+      claimedUntilAt: '2026-07-02T00:05:00.000Z',
+    });
+    store.listDueEventHandlerRetries = originalListDue;
+    store.close();
+  });
 });
 
 describe('operational reconcile helpers', () => {

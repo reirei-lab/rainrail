@@ -1,7 +1,8 @@
-import { DatabaseSync } from 'node:sqlite';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 
 import type { RainrailEventEnvelope } from './events.js';
-import type { RuntimeRunStatus } from './runtime-provider.js';
+import type { RuntimeAgentResumeAttempt, RuntimeRunStatus } from './runtime-provider.js';
 
 export interface RainrailOperationalStoreOptions {
   databasePath: string;
@@ -55,6 +56,7 @@ export interface RecordAgentTaskInput {
   logPath?: string;
   stderrLogPath?: string;
   pid?: number;
+  resumeAttempts?: RuntimeAgentResumeAttempt[];
   result?: string;
   startedAt?: string;
   completedAt?: string;
@@ -103,146 +105,78 @@ interface SnapshotOptions {
   hideSkippedActivityEvents?: boolean;
 }
 
-interface EventRow {
-  id: string;
-  name: string;
-  source_json: string;
-  delivery_json: string;
-  subject_json: string;
-  occurred_at: string;
-  received_at: string;
-  envelope_json: string;
+interface OperationalStoreData {
+  events: Record<string, StoredOperationalEvent>;
+  activityEvents: Record<string, StoredActivityEvent>;
+  agentTasks: Record<string, StoredAgentTask>;
+  eventHandlerRetries: Record<string, StoredEventHandlerRetry>;
+  sequences: Record<string, number>;
 }
 
-interface ActivityRow {
-  id: string;
-  source_event_id: string | null;
-  source_event_name: string | null;
-  category: string;
-  target_type: string;
-  target_id: string | null;
-  target_url: string | null;
-  action_type: string;
-  outcome: string;
-  summary: string;
-  metadata_json: string | null;
-  created_at: string;
-}
-
-interface AgentTaskRow {
-  id: string;
-  title: string;
-  agent_session_id: string | null;
-  branch_name: string;
-  status: string;
-  issue_json: string | null;
-  claim_json: string | null;
-  log_path: string | null;
-  stderr_log_path: string | null;
-  pid: number | null;
-  result: string | null;
-  started_at: string;
-  completed_at: string | null;
-  updated_at: string;
-}
-
-interface RetryRow {
-  event_id: string;
-  handler_name: string;
-  attempts: number;
-  next_retry_at: string;
-  last_error: string;
-  updated_at: string;
-  claimed_until_at: string | null;
-}
+const sharedFileStores = new Map<string, OperationalStoreData>();
 
 export class RainrailOperationalStore {
-  readonly #db: DatabaseSync;
+  readonly #databasePath: string;
+  readonly #data: OperationalStoreData;
   readonly #eventLimit: number;
   readonly #now: () => Date;
+  #closed = false;
 
   constructor(options: RainrailOperationalStoreOptions) {
+    this.#databasePath = options.databasePath;
     this.#eventLimit = expectPositiveInteger(options.eventLimit, 'eventLimit');
     this.#now = options.now ?? (() => new Date());
-    this.#db = new DatabaseSync(options.databasePath);
-    this.#migrate();
+    this.#data = loadStoreData(options.databasePath);
   }
 
   close(): void {
-    this.#db.close();
+    if (this.#closed) return;
+    this.#persist();
+    this.#closed = true;
   }
 
   recordEvent<TPayload>(event: RainrailEventEnvelope<TPayload>): StoredOperationalEvent<TPayload> {
-    const receivedAt = event.delivery.receivedAt;
-    this.#db.prepare(`
-      insert into events (
-        id, name, source_json, delivery_json, subject_json, occurred_at, received_at, envelope_json
-      ) values (?, ?, ?, ?, ?, ?, ?, ?)
-      on conflict(id) do update set
-        name = excluded.name,
-        source_json = excluded.source_json,
-        delivery_json = excluded.delivery_json,
-        subject_json = excluded.subject_json,
-        occurred_at = excluded.occurred_at,
-        received_at = excluded.received_at,
-        envelope_json = excluded.envelope_json
-    `).run(
-      event.id,
-      event.name,
-      JSON.stringify(event.source),
-      JSON.stringify(event.delivery),
-      JSON.stringify(event.subject),
-      event.occurredAt,
-      receivedAt,
-      JSON.stringify(event),
-    );
+    this.#assertOpen();
+    const stored = eventToStoredOperationalEvent(event);
+    this.#data.events[event.id] = jsonClone(stored);
+    this.#persist();
 
     return this.getEvent(event.id) as StoredOperationalEvent<TPayload>;
   }
 
   getEvent(id: string): StoredOperationalEvent | undefined {
-    const row = this.#db.prepare(`
-      select id, name, source_json, delivery_json, subject_json, occurred_at, received_at, envelope_json
-      from events
-      where id = ?
-    `).get(id) as EventRow | undefined;
-
-    return row === undefined ? undefined : eventFromRow(row);
+    this.#assertOpen();
+    const event = this.#data.events[id];
+    return event === undefined ? undefined : jsonClone(event);
   }
 
   recordActivityEvent(input: RecordActivityEventInput): StoredActivityEvent {
-    const id = input.id ?? nextId(this.#db, 'activity', 'act');
-    const createdAt = this.#now().toISOString();
-    this.#db.prepare(`
-      insert into activity_events (
-        id, source_event_id, source_event_name, category, target_type, target_id, target_url,
-        action_type, outcome, summary, metadata_json, created_at
-      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
+    this.#assertOpen();
+    const id = input.id ?? nextId(this.#data, 'activity', 'act');
+    const activity: StoredActivityEvent = {
       id,
-      input.sourceEventId ?? null,
-      input.sourceEventName ?? null,
-      input.category,
-      input.targetType,
-      input.targetId ?? null,
-      input.targetUrl ?? null,
-      input.actionType,
-      input.outcome,
-      input.summary,
-      input.metadata === undefined ? null : JSON.stringify(input.metadata),
-      createdAt,
-    );
+      ...(input.sourceEventId === undefined ? {} : { sourceEventId: input.sourceEventId }),
+      ...(input.sourceEventName === undefined ? {} : { sourceEventName: input.sourceEventName }),
+      category: input.category,
+      targetType: input.targetType,
+      ...(input.targetId === undefined ? {} : { targetId: input.targetId }),
+      ...(input.targetUrl === undefined ? {} : { targetUrl: input.targetUrl }),
+      actionType: input.actionType,
+      outcome: input.outcome,
+      summary: input.summary,
+      ...(input.metadata === undefined ? {} : { metadata: jsonClone(input.metadata) }),
+      createdAt: this.#now().toISOString(),
+    };
+    this.#data.activityEvents[id] = activity;
+    this.#persist();
 
-    return activityFromRow(this.#db.prepare(`
-      select *
-      from activity_events
-      where id = ?
-    `).get(id) as unknown as ActivityRow);
+    return jsonClone(activity);
   }
 
   recordAgentTask(input: RecordAgentTaskInput): StoredAgentTask {
+    this.#assertOpen();
     const now = this.#now().toISOString();
-    const existing = this.getAgentTask(input.id);
+    const existing = this.#data.agentTasks[input.id];
     const startedAt = input.startedAt ?? existing?.startedAt ?? now;
     const status = input.status ?? existing?.status ?? 'running';
     const agentSessionId = input.agentSessionId ?? existing?.agentSessionId;
@@ -251,75 +185,48 @@ export class RainrailOperationalStore {
     const logPath = input.logPath ?? existing?.logPath;
     const stderrLogPath = input.stderrLogPath ?? existing?.stderrLogPath;
     const pid = input.pid ?? existing?.pid;
+    const resumeAttempts = input.resumeAttempts ?? existing?.resumeAttempts;
     const result = input.result ?? existing?.result;
     const completedAt = input.completedAt ?? existing?.completedAt;
-    this.#db.prepare(`
-      insert into agent_tasks (
-        id, title, agent_session_id, branch_name, status, issue_json, claim_json,
-        log_path, stderr_log_path, pid, result, started_at, completed_at, updated_at
-      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      on conflict(id) do update set
-        title = excluded.title,
-        agent_session_id = excluded.agent_session_id,
-        branch_name = excluded.branch_name,
-        status = excluded.status,
-        issue_json = excluded.issue_json,
-        claim_json = excluded.claim_json,
-        log_path = excluded.log_path,
-        stderr_log_path = excluded.stderr_log_path,
-        pid = excluded.pid,
-        result = excluded.result,
-        started_at = excluded.started_at,
-        completed_at = excluded.completed_at,
-        updated_at = excluded.updated_at
-    `).run(
-      input.id,
-      input.title,
-      agentSessionId ?? null,
-      input.branchName,
+    const task = agentTaskWithRuntime({
+      id: input.id,
+      title: input.title,
+      ...(agentSessionId === undefined ? {} : { agentSessionId }),
+      branchName: input.branchName,
       status,
-      issue === undefined ? null : JSON.stringify(issue),
-      claim === undefined ? null : JSON.stringify(claim),
-      logPath ?? null,
-      stderrLogPath ?? null,
-      pid ?? null,
-      result ?? null,
+      ...(issue === undefined ? {} : { issue: jsonClone(issue) }),
+      ...(claim === undefined ? {} : { claim: jsonClone(claim) }),
+      ...(logPath === undefined ? {} : { logPath }),
+      ...(stderrLogPath === undefined ? {} : { stderrLogPath }),
+      ...(pid === undefined ? {} : { pid }),
+      ...(resumeAttempts === undefined ? {} : { resumeAttempts: jsonClone(resumeAttempts) }),
+      ...(result === undefined ? {} : { result }),
       startedAt,
-      completedAt ?? null,
-      now,
-    );
+      ...(completedAt === undefined ? {} : { completedAt }),
+      updatedAt: now,
+    });
+    this.#data.agentTasks[input.id] = task;
+    this.#persist();
 
-    return this.getAgentTask(input.id)!;
+    return jsonClone(task);
   }
 
   getAgentTask(id: string): StoredAgentTask | undefined {
-    const row = this.#db.prepare(`
-      select *
-      from agent_tasks
-      where id = ?
-    `).get(id) as AgentTaskRow | undefined;
-
-    return row === undefined ? undefined : agentTaskFromRow(row);
+    this.#assertOpen();
+    const task = this.#data.agentTasks[id];
+    return task === undefined ? undefined : jsonClone(task);
   }
 
   getAgentTaskByBranchName(branchName: string): StoredAgentTask | undefined {
-    const row = this.#db.prepare(`
-      select *
-      from agent_tasks
-      where branch_name = ?
-      order by updated_at desc
-      limit 1
-    `).get(branchName) as AgentTaskRow | undefined;
-
-    return row === undefined ? undefined : agentTaskFromRow(row);
+    this.#assertOpen();
+    return this.listAgentTasks().find((task) => task.branchName === branchName);
   }
 
   listAgentTasks(): StoredAgentTask[] {
-    return (this.#db.prepare(`
-      select *
-      from agent_tasks
-      order by updated_at desc, id desc
-    `).all() as unknown as AgentTaskRow[]).map(agentTaskFromRow);
+    this.#assertOpen();
+    return Object.values(this.#data.agentTasks)
+      .map((task) => jsonClone(task))
+      .sort((left, right) => compareDesc(left.updatedAt, right.updatedAt) || compareDesc(left.id, right.id));
   }
 
   updateAgentTaskStatus(input: {
@@ -342,6 +249,7 @@ export class RainrailOperationalStore {
       ...(existing.logPath === undefined ? {} : { logPath: existing.logPath }),
       ...(existing.stderrLogPath === undefined ? {} : { stderrLogPath: existing.stderrLogPath }),
       ...(existing.pid === undefined ? {} : { pid: existing.pid }),
+      ...(existing.resumeAttempts === undefined ? {} : { resumeAttempts: existing.resumeAttempts }),
       ...((input.result ?? existing.result) === undefined ? {} : { result: input.result ?? existing.result }),
       startedAt: existing.startedAt,
       ...((input.completedAt ?? existing.completedAt) === undefined
@@ -351,296 +259,190 @@ export class RainrailOperationalStore {
   }
 
   recordEventHandlerRetry(input: RecordEventHandlerRetryInput): StoredEventHandlerRetry {
-    const existing = this.getEventHandlerRetry(input.eventId, input.handlerName);
-    const attempts = input.attempts ?? (existing?.attempts ?? 0) + 1;
-    const updatedAt = this.#now().toISOString();
-    this.#db.prepare(`
-      insert into event_handler_retries (
-        event_id, handler_name, attempts, next_retry_at, last_error, updated_at, claimed_until_at
-      ) values (?, ?, ?, ?, ?, ?, null)
-      on conflict(event_id, handler_name) do update set
-        attempts = excluded.attempts,
-        next_retry_at = excluded.next_retry_at,
-        last_error = excluded.last_error,
-        updated_at = excluded.updated_at,
-        claimed_until_at = null
-    `).run(input.eventId, input.handlerName, attempts, input.nextRetryAt, input.lastError, updatedAt);
+    this.#assertOpen();
+    const key = retryKey(input.eventId, input.handlerName);
+    const existing = this.#data.eventHandlerRetries[key];
+    const retry: StoredEventHandlerRetry = {
+      eventId: input.eventId,
+      handlerName: input.handlerName,
+      attempts: input.attempts ?? (existing?.attempts ?? 0) + 1,
+      nextRetryAt: input.nextRetryAt,
+      lastError: input.lastError,
+      updatedAt: this.#now().toISOString(),
+    };
+    this.#data.eventHandlerRetries[key] = retry;
+    this.#persist();
 
-    return this.getEventHandlerRetry(input.eventId, input.handlerName)!;
+    return jsonClone(retry);
   }
 
   getEventHandlerRetry(eventId: string, handlerName: string): StoredEventHandlerRetry | undefined {
-    const row = this.#db.prepare(`
-      select event_id, handler_name, attempts, next_retry_at, last_error, updated_at, claimed_until_at
-      from event_handler_retries
-      where event_id = ? and handler_name = ?
-    `).get(eventId, handlerName) as RetryRow | undefined;
-
-    return row === undefined ? undefined : retryFromRow(row);
+    this.#assertOpen();
+    const retry = this.#data.eventHandlerRetries[retryKey(eventId, handlerName)];
+    return retry === undefined ? undefined : jsonClone(retry);
   }
 
   claimEventHandlerRetry(retry: StoredEventHandlerRetry, claimedUntilAt: string, now: string): boolean {
-    const result = this.#db.prepare(`
-      update event_handler_retries
-      set claimed_until_at = ?,
-          updated_at = ?
-      where event_id = ?
-        and handler_name = ?
-        and attempts = ?
-        and next_retry_at = ?
-        and last_error = ?
-        and updated_at = ?
-        and (claimed_until_at is null or claimed_until_at <= ?)
-    `).run(
-      claimedUntilAt,
-      now,
-      retry.eventId,
-      retry.handlerName,
-      retry.attempts,
-      retry.nextRetryAt,
-      retry.lastError,
-      retry.updatedAt,
-      now,
-    );
+    this.#assertOpen();
+    const current = this.#data.eventHandlerRetries[retryKey(retry.eventId, retry.handlerName)];
+    if (current === undefined
+      || !sameRetryVersion(current, retry)
+      || (current.claimedUntilAt !== undefined && current.claimedUntilAt > now)) {
+      return false;
+    }
 
-    return result.changes === 1;
+    this.#data.eventHandlerRetries[retryKey(retry.eventId, retry.handlerName)] = {
+      ...current,
+      updatedAt: now,
+      claimedUntilAt,
+    };
+    this.#persist();
+    return true;
   }
 
   listDueEventHandlerRetries(now: string, limit?: number): StoredEventHandlerRetry[] {
-    const limitClause = limit === undefined ? '' : 'limit ?';
-    const args = limit === undefined ? [now] : [now, limit];
+    this.#assertOpen();
+    const retries = Object.values(this.#data.eventHandlerRetries)
+      .filter((retry) => retry.nextRetryAt <= now && (retry.claimedUntilAt === undefined || retry.claimedUntilAt <= now))
+      .sort((left, right) => left.nextRetryAt.localeCompare(right.nextRetryAt) || left.handlerName.localeCompare(right.handlerName))
+      .map((retry) => jsonClone(retry));
 
-    return (this.#db.prepare(`
-      select event_id, handler_name, attempts, next_retry_at, last_error, updated_at, claimed_until_at
-      from event_handler_retries
-      where next_retry_at <= ?
-        and (claimed_until_at is null or claimed_until_at <= ?)
-      order by next_retry_at asc, handler_name asc
-      ${limitClause}
-    `).all(...[now, ...args]) as unknown as RetryRow[]).map(retryFromRow);
+    return limit === undefined ? retries : retries.slice(0, limit);
   }
 
   clearEventHandlerRetry(eventId: string, handlerName: string): void {
-    this.#db.prepare(`
-      delete from event_handler_retries
-      where event_id = ? and handler_name = ?
-    `).run(eventId, handlerName);
+    this.#assertOpen();
+    delete this.#data.eventHandlerRetries[retryKey(eventId, handlerName)];
+    this.#persist();
   }
 
   clearClaimedEventHandlerRetry(retry: StoredEventHandlerRetry): boolean {
-    const result = this.#db.prepare(`
-      delete from event_handler_retries
-      where event_id = ?
-        and handler_name = ?
-        and attempts = ?
-        and next_retry_at = ?
-        and last_error = ?
-        and updated_at = ?
-        and claimed_until_at = ?
-    `).run(
-      retry.eventId,
-      retry.handlerName,
-      retry.attempts,
-      retry.nextRetryAt,
-      retry.lastError,
-      retry.updatedAt,
-      retry.claimedUntilAt ?? null,
-    );
+    this.#assertOpen();
+    const key = retryKey(retry.eventId, retry.handlerName);
+    const current = this.#data.eventHandlerRetries[key];
+    if (current === undefined || !sameRetryVersion(current, retry)) return false;
 
-    return result.changes === 1;
+    delete this.#data.eventHandlerRetries[key];
+    this.#persist();
+    return true;
   }
 
   rescheduleClaimedEventHandlerRetry(
     retry: StoredEventHandlerRetry,
     input: RecordEventHandlerRetryInput,
   ): StoredEventHandlerRetry | undefined {
-    const updatedAt = this.#now().toISOString();
-    const result = this.#db.prepare(`
-      update event_handler_retries
-      set attempts = ?,
-          next_retry_at = ?,
-          last_error = ?,
-          updated_at = ?,
-          claimed_until_at = null
-      where event_id = ?
-        and handler_name = ?
-        and attempts = ?
-        and next_retry_at = ?
-        and last_error = ?
-        and updated_at = ?
-        and claimed_until_at = ?
-    `).run(
-      input.attempts ?? retry.attempts + 1,
-      input.nextRetryAt,
-      input.lastError,
-      updatedAt,
-      retry.eventId,
-      retry.handlerName,
-      retry.attempts,
-      retry.nextRetryAt,
-      retry.lastError,
-      retry.updatedAt,
-      retry.claimedUntilAt ?? null,
-    );
+    this.#assertOpen();
+    const key = retryKey(retry.eventId, retry.handlerName);
+    const current = this.#data.eventHandlerRetries[key];
+    if (current === undefined || !sameRetryVersion(current, retry)) return undefined;
 
-    return result.changes === 1 ? this.getEventHandlerRetry(retry.eventId, retry.handlerName) : undefined;
+    const next: StoredEventHandlerRetry = {
+      eventId: input.eventId,
+      handlerName: input.handlerName,
+      attempts: input.attempts ?? retry.attempts + 1,
+      nextRetryAt: input.nextRetryAt,
+      lastError: input.lastError,
+      updatedAt: this.#now().toISOString(),
+    };
+    this.#data.eventHandlerRetries[key] = next;
+    this.#persist();
+    return jsonClone(next);
   }
 
   snapshot(options: SnapshotOptions = {}): OperationalStoreSnapshot {
-    const activityFilter = options.hideSkippedActivityEvents ? 'where outcome <> ?' : '';
-    const activityArgs = options.hideSkippedActivityEvents ? ['skipped', this.#eventLimit] : [this.#eventLimit];
+    this.#assertOpen();
+    const activityEvents = Object.values(this.#data.activityEvents)
+      .filter((activity) => !(options.hideSkippedActivityEvents === true && activity.outcome === 'skipped'))
+      .sort((left, right) => compareDesc(left.createdAt, right.createdAt) || compareDesc(left.id, right.id))
+      .slice(0, this.#eventLimit)
+      .map((activity) => jsonClone(activity));
+    const events = Object.values(this.#data.events)
+      .sort((left, right) => compareDesc(left.receivedAt, right.receivedAt) || compareDesc(left.id, right.id))
+      .slice(0, this.#eventLimit)
+      .map((event) => jsonClone(event));
 
     return {
-      events: (this.#db.prepare(`
-        select id, name, source_json, delivery_json, subject_json, occurred_at, received_at, envelope_json
-        from events
-        order by received_at desc, id desc
-        limit ?
-      `).all(this.#eventLimit) as unknown as EventRow[]).map(eventFromRow),
-      activityEvents: (this.#db.prepare(`
-        select *
-        from activity_events
-        ${activityFilter}
-        order by created_at desc, id desc
-        limit ?
-      `).all(...activityArgs) as unknown as ActivityRow[]).map(activityFromRow),
+      events,
+      activityEvents,
       agentTasks: this.listAgentTasks(),
-      eventHandlerRetries: (this.#db.prepare(`
-        select event_id, handler_name, attempts, next_retry_at, last_error, updated_at, claimed_until_at
-        from event_handler_retries
-        order by next_retry_at asc, handler_name asc
-      `).all() as unknown as RetryRow[]).map(retryFromRow),
+      eventHandlerRetries: Object.values(this.#data.eventHandlerRetries)
+        .sort((left, right) => left.nextRetryAt.localeCompare(right.nextRetryAt) || left.handlerName.localeCompare(right.handlerName))
+        .map((retry) => jsonClone(retry)),
       counts: {
-        events: countRows(this.#db, 'events'),
-        activityEvents: countRows(this.#db, 'activity_events'),
-        agentTasks: countRows(this.#db, 'agent_tasks'),
-        eventHandlerRetries: countRows(this.#db, 'event_handler_retries'),
+        events: Object.keys(this.#data.events).length,
+        activityEvents: Object.keys(this.#data.activityEvents).length,
+        agentTasks: Object.keys(this.#data.agentTasks).length,
+        eventHandlerRetries: Object.keys(this.#data.eventHandlerRetries).length,
       },
     };
   }
 
-  #migrate(): void {
-    this.#db.exec(`
-      create table if not exists sequences (
-        name text primary key,
-        value integer not null
-      );
+  #persist(): void {
+    if (this.#databasePath === ':memory:') return;
 
-      create table if not exists events (
-        id text primary key,
-        name text not null,
-        source_json text not null,
-        delivery_json text not null,
-        subject_json text not null,
-        occurred_at text not null,
-        received_at text not null,
-        envelope_json text not null
-      );
-      create index if not exists idx_events_received_at on events(received_at desc);
+    mkdirSync(dirname(this.#databasePath), { recursive: true });
+    writeFileSync(this.#databasePath, JSON.stringify(this.#data), { mode: 0o600 });
+  }
 
-      create table if not exists activity_events (
-        id text primary key,
-        source_event_id text,
-        source_event_name text,
-        category text not null,
-        target_type text not null,
-        target_id text,
-        target_url text,
-        action_type text not null,
-        outcome text not null,
-        summary text not null,
-        metadata_json text,
-        created_at text not null
-      );
-      create index if not exists idx_activity_events_created_at on activity_events(created_at desc);
-
-      create table if not exists agent_tasks (
-        id text primary key,
-        title text not null,
-        agent_session_id text,
-        branch_name text not null,
-        status text not null,
-        issue_json text,
-        claim_json text,
-        log_path text,
-        stderr_log_path text,
-        pid integer,
-        result text,
-        started_at text not null,
-        completed_at text,
-        updated_at text not null
-      );
-      create index if not exists idx_agent_tasks_branch_name on agent_tasks(branch_name);
-
-      create table if not exists event_handler_retries (
-        event_id text not null,
-        handler_name text not null,
-        attempts integer not null,
-        next_retry_at text not null,
-        last_error text not null,
-        updated_at text not null,
-        claimed_until_at text,
-        primary key(event_id, handler_name)
-      );
-      create index if not exists idx_event_handler_retries_next_retry_at
-        on event_handler_retries(next_retry_at asc);
-    `);
-    try {
-      this.#db.exec('alter table event_handler_retries add column claimed_until_at text;');
-    } catch {
-      // Existing databases may already have the column.
+  #assertOpen(): void {
+    if (this.#closed) {
+      throw new Error('operational store is closed');
     }
   }
 }
 
-function eventFromRow(row: EventRow): StoredOperationalEvent {
+function loadStoreData(databasePath: string): OperationalStoreData {
+  if (databasePath === ':memory:') return emptyStoreData();
+
+  const shared = sharedFileStores.get(databasePath);
+  if (shared !== undefined) return shared;
+
+  const data = existsSync(databasePath)
+    ? parseStoreData(readFileSync(databasePath, 'utf8'))
+    : emptyStoreData();
+  sharedFileStores.set(databasePath, data);
+  return data;
+}
+
+function parseStoreData(raw: string): OperationalStoreData {
+  try {
+    const value = JSON.parse(raw) as Partial<OperationalStoreData>;
+    return {
+      events: value.events ?? {},
+      activityEvents: value.activityEvents ?? {},
+      agentTasks: value.agentTasks ?? {},
+      eventHandlerRetries: value.eventHandlerRetries ?? {},
+      sequences: value.sequences ?? {},
+    };
+  } catch {
+    return emptyStoreData();
+  }
+}
+
+function emptyStoreData(): OperationalStoreData {
   return {
-    id: row.id,
-    name: row.name,
-    source: JSON.parse(row.source_json) as StoredOperationalEvent['source'],
-    delivery: JSON.parse(row.delivery_json) as StoredOperationalEvent['delivery'],
-    subject: JSON.parse(row.subject_json) as StoredOperationalEvent['subject'],
-    occurredAt: row.occurred_at,
-    receivedAt: row.received_at,
-    envelope: JSON.parse(row.envelope_json) as RainrailEventEnvelope,
+    events: {},
+    activityEvents: {},
+    agentTasks: {},
+    eventHandlerRetries: {},
+    sequences: {},
   };
 }
 
-function activityFromRow(row: ActivityRow): StoredActivityEvent {
+function eventToStoredOperationalEvent<TPayload>(event: RainrailEventEnvelope<TPayload>): StoredOperationalEvent<TPayload> {
   return {
-    id: row.id,
-    ...(row.source_event_id === null ? {} : { sourceEventId: row.source_event_id }),
-    ...(row.source_event_name === null ? {} : { sourceEventName: row.source_event_name }),
-    category: row.category,
-    targetType: row.target_type,
-    ...(row.target_id === null ? {} : { targetId: row.target_id }),
-    ...(row.target_url === null ? {} : { targetUrl: row.target_url }),
-    actionType: row.action_type,
-    outcome: row.outcome as StoredActivityEvent['outcome'],
-    summary: row.summary,
-    ...(row.metadata_json === null ? {} : { metadata: JSON.parse(row.metadata_json) as Record<string, unknown> }),
-    createdAt: row.created_at,
+    id: event.id,
+    name: event.name,
+    source: jsonClone(event.source),
+    delivery: jsonClone(event.delivery),
+    subject: jsonClone(event.subject),
+    occurredAt: event.occurredAt,
+    receivedAt: event.delivery.receivedAt,
+    envelope: jsonClone(event),
   };
 }
 
-function agentTaskFromRow(row: AgentTaskRow): StoredAgentTask {
-  const task = {
-    id: row.id,
-    title: row.title,
-    ...(row.agent_session_id === null ? {} : { agentSessionId: row.agent_session_id }),
-    branchName: row.branch_name,
-    status: row.status as RuntimeRunStatus,
-    ...(row.issue_json === null ? {} : { issue: JSON.parse(row.issue_json) as unknown }),
-    ...(row.claim_json === null ? {} : { claim: JSON.parse(row.claim_json) as unknown }),
-    ...(row.log_path === null ? {} : { logPath: row.log_path }),
-    ...(row.stderr_log_path === null ? {} : { stderrLogPath: row.stderr_log_path }),
-    ...(row.pid === null ? {} : { pid: row.pid }),
-    ...(row.result === null ? {} : { result: row.result }),
-    startedAt: row.started_at,
-    ...(row.completed_at === null ? {} : { completedAt: row.completed_at }),
-    updatedAt: row.updated_at,
-  };
-
+function agentTaskWithRuntime(task: Omit<StoredAgentTask, 'runtime'>): StoredAgentTask {
   return {
     ...task,
     runtime: {
@@ -652,32 +454,32 @@ function agentTaskFromRow(row: AgentTaskRow): StoredAgentTask {
   };
 }
 
-function retryFromRow(row: RetryRow): StoredEventHandlerRetry {
-  return {
-    eventId: row.event_id,
-    handlerName: row.handler_name,
-    attempts: row.attempts,
-    nextRetryAt: row.next_retry_at,
-    lastError: row.last_error,
-    updatedAt: row.updated_at,
-    ...(row.claimed_until_at === null ? {} : { claimedUntilAt: row.claimed_until_at }),
-  };
+function sameRetryVersion(left: StoredEventHandlerRetry, right: StoredEventHandlerRetry): boolean {
+  return left.eventId === right.eventId
+    && left.handlerName === right.handlerName
+    && left.attempts === right.attempts
+    && left.nextRetryAt === right.nextRetryAt
+    && left.lastError === right.lastError
+    && left.updatedAt === right.updatedAt
+    && left.claimedUntilAt === right.claimedUntilAt;
 }
 
-function nextId(db: DatabaseSync, name: string, prefix: string): string {
-  const row = db.prepare(`
-    insert into sequences (name, value)
-    values (?, 1)
-    on conflict(name) do update set value = value + 1
-    returning value
-  `).get(name) as { value: number };
-
-  return `${prefix}_${String(row.value).padStart(6, '0')}`;
+function retryKey(eventId: string, handlerName: string): string {
+  return `${JSON.stringify(eventId)}:${JSON.stringify(handlerName)}`;
 }
 
-function countRows(db: DatabaseSync, tableName: string): number {
-  const row = db.prepare(`select count(*) as count from ${tableName}`).get() as { count: number };
-  return row.count;
+function nextId(data: OperationalStoreData, name: string, prefix: string): string {
+  const value = (data.sequences[name] ?? 0) + 1;
+  data.sequences[name] = value;
+  return `${prefix}_${String(value).padStart(6, '0')}`;
+}
+
+function compareDesc(left: string, right: string): number {
+  return right.localeCompare(left);
+}
+
+function jsonClone<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
 }
 
 function expectPositiveInteger(value: number, name: string): number {

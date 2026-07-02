@@ -33,6 +33,12 @@ describe('RainrailOperationalStore', () => {
         status: 'running',
         issue: { repository: 'reirei-lab/rainrail', number: 25 },
         logPath: 'var/agent-task-logs/rainrail-25.log',
+        resumeAttempts: [{
+          id: 'resume-01',
+          status: 'running',
+          logPath: 'var/agent-task-logs/rainrail-25-resume.log',
+          stderrLogPath: 'var/agent-task-logs/rainrail-25-resume.stderr.log',
+        }],
         pid: 12345,
       });
       first.recordEventHandlerRetry({
@@ -61,7 +67,15 @@ describe('RainrailOperationalStore', () => {
         },
         events: [{ id: latest.id, name: 'github.pull_request' }],
         activityEvents: [{ summary: 'plugin execution completed' }],
-        agentTasks: [{ id: 'agent_task_rainrail_25', runtime: { status: 'running', pid: 12345 } }],
+        agentTasks: [{
+          id: 'agent_task_rainrail_25',
+          runtime: { status: 'running', pid: 12345 },
+          resumeAttempts: [{
+            id: 'resume-01',
+            logPath: 'var/agent-task-logs/rainrail-25-resume.log',
+            stderrLogPath: 'var/agent-task-logs/rainrail-25-resume.stderr.log',
+          }],
+        }],
       });
       second.close();
     } finally {
@@ -175,6 +189,11 @@ describe('RainrailOperationalStore', () => {
       logPath: 'var/log/rainrail-25.log',
       stderrLogPath: 'var/log/rainrail-25.stderr.log',
       pid: 123,
+      resumeAttempts: [{
+        id: 'resume-01',
+        status: 'running',
+        logPath: 'var/log/rainrail-25-resume.log',
+      }],
     });
 
     store.recordAgentTask({
@@ -196,6 +215,11 @@ describe('RainrailOperationalStore', () => {
       logPath: 'var/log/rainrail-25.log',
       stderrLogPath: 'var/log/rainrail-25.stderr.log',
       pid: 123,
+      resumeAttempts: [{
+        id: 'resume-01',
+        status: 'running',
+        logPath: 'var/log/rainrail-25-resume.log',
+      }],
       result: 'Outcome: implemented',
       completedAt: '2026-07-02T01:30:00.000Z',
     });

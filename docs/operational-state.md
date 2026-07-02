@@ -1,7 +1,7 @@
 # Rainrail operational state
 
 Rainrail operational state は event delivery とは別に、dashboard/API や retry/reconcile が読む
-SQLite-backed な運用状態を扱う。Source provider や runtime provider の生 payload に依存せず、
+file-backed な運用状態を扱う。Source provider や runtime provider の生 payload に依存せず、
 正規化済み event、activity、agent task、handler retry を保存する。
 
 ## Store
@@ -10,13 +10,14 @@ SQLite-backed な運用状態を扱う。Source provider や runtime provider �
 `eventLimit`、任意の clock を受け取る。store は `StoredOperationalEvent`、
 `StoredActivityEvent`、`StoredAgentTask`、`StoredEventHandlerRetry` を永続化し、
 `OperationalStoreSnapshot` として recent state と counts を返す。
-activity id の採番は SQLite の atomic upsert / returning で進め、同じ databasePath を
-複数 process が共有しても同じ id を返さない。
+activity id の採番は store data 内の sequence で進め、同じ process 内で同じ
+`databasePath` を共有する store instance 間でも同じ id を返さない。`:memory:` は
+instance-local な一時 store として扱う。
 
 record input は `RecordActivityEventInput`、`RecordAgentTaskInput`、
 `RecordEventHandlerRetryInput` を使う。`recordAgentTask` は同じ task id の再記録で
 未指定 optional field を既存値で保持し、status/result だけの更新で session、log path、
-issue、claim、pid などの runtime metadata を消さない。
+issue、claim、pid、`resumeAttempts` などの runtime metadata を消さない。
 
 ## Retry and Reconcile
 

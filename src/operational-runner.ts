@@ -88,8 +88,15 @@ export async function processDueEventHandlerRetries(
 
     const handler = options.handlers[retry.handlerName];
     if (handler === undefined) {
-      options.store.clearEventHandlerRetry(retry.eventId, retry.handlerName);
-      results.push({ eventId: retry.eventId, handlerName: retry.handlerName, status: 'cleared', reason: 'missing_handler' });
+      if (options.store.claimEventHandlerRetry(
+        retry,
+        claimLeaseUntil,
+        options.now,
+      )) {
+        const claimedRetry = { ...retry, updatedAt: options.now, claimedUntilAt: claimLeaseUntil };
+        options.store.clearClaimedEventHandlerRetry(claimedRetry);
+        results.push({ eventId: retry.eventId, handlerName: retry.handlerName, status: 'cleared', reason: 'missing_handler' });
+      }
       continue;
     }
 

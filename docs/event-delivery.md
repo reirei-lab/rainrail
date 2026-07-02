@@ -72,7 +72,9 @@ event だけを再送する。指定 id が buffer に無い場合は、consumer
 - `POST /publish`: request JSON を `RainrailEventEnvelope` として検証し、replay
   snapshot を storage に保存してから live subscriber へ publish する。成功 response には
   検証・正規化後の `event` を含め、adapter が追加の operational store を持つ場合も
-  storage / replay と同じ envelope を保存できるようにする。
+  storage / replay と同じ envelope を保存できるようにする。同じ event id が replay に
+  既にある duplicate publish では、後続 request の envelope ではなく保存済み envelope を
+  response の `event` として返す。
 - `GET /events`: storage から replay buffer を復元し、SSE stream を返す。
 
 `POST /publish` と `GET /events` は capability token で保護する。adapter は
