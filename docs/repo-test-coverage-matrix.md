@@ -4,6 +4,12 @@ This inventory tracks the original test viewpoints from `github-eep-bridge`,
 `eep-bridge-worker`, and `reirei-harness`, and records where the equivalent
 coverage now lives in Rainrail.
 
+Source repositories verified on 2026-07-02:
+
+- `github-eep-bridge`: https://github.com/hiragram/github-eep-bridge
+- `eep-bridge-worker`: https://github.com/reirei-lab/eep-bridge-worker
+- `reirei-harness`: https://github.com/reirei-lab/reirei-harness
+
 ## Verification
 
 Rainrail pull request CI runs `pnpm test`, which executes `vitest run scripts src`.
