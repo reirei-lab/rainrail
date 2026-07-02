@@ -50,6 +50,7 @@ jobs:
 
   cloudflare-deployability:
     name: Cloudflare deployability
+    needs: validate
     runs-on: ${{ (github.event.pull_request.head.repo.full_name == github.repository || contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.pull_request.author_association)) && 'self-hosted' || 'ubuntu-latest' }}
     steps:
       - name: Check out repository

@@ -11,6 +11,7 @@ describe('Cloudflare deployability CI', () => {
   it('runs a side-effect-free Wrangler deploy dry run from pull request CI', () => {
     expect(packageJson.scripts['cf:deploy:check']).toBe('node scripts/check-cloudflare-deployability.mjs');
     expect(prCiWorkflow).toContain('name: Cloudflare deployability');
+    expect(prCiWorkflow).toMatch(/^ {2}cloudflare-deployability:\n {4}name: Cloudflare deployability\n {4}needs: validate/m);
     expect(prCiWorkflow).toContain('run: pnpm cf:deploy:check');
     expect(deployabilityScript).toContain("'deploy'");
     expect(deployabilityScript).toContain("'--dry-run'");
