@@ -206,6 +206,7 @@
         "src/sse.test.ts",
         "src/bridge-room.test.ts",
         "src/events-auth.test.ts",
+        "src/dashboard-api.test.ts",
         "src/http-app.test.ts",
         "src/http-utils.test.ts",
         "src/node-server.test.ts"
@@ -295,6 +296,74 @@
         "assignNextProjectIssueToAgent": "value",
         "getNextProjectIssueToStart": "value",
         "createGitHubProjectTaskQueueProvider": "value"
+      }
+    },
+    {
+      "id": "operational-state",
+      "title": "Operational state, retry, reconcile, and dashboard activity",
+      "sources": [
+        "src/operational-store.ts",
+        "src/operational-runner.ts",
+        "src/codex-activity.ts"
+      ],
+      "docs": ["docs/operational-state.md"],
+      "tests": [
+        "src/operational-store.test.ts",
+        "src/operational-runner.test.ts",
+        "src/codex-activity.test.ts",
+        "src/dashboard-api.test.ts"
+      ],
+      "publicExports": [
+        "RainrailOperationalStore",
+        "RainrailOperationalStoreOptions",
+        "StoredOperationalEvent",
+        "RecordActivityEventInput",
+        "StoredActivityEvent",
+        "RecordAgentTaskInput",
+        "StoredAgentTask",
+        "RecordEventHandlerRetryInput",
+        "StoredEventHandlerRetry",
+        "OperationalStoreSnapshot",
+        "EventHandlerRetryHandler",
+        "ProcessDueEventHandlerRetriesOptions",
+        "ProcessDueEventHandlerRetryResult",
+        "ReconcileOperationalAgentTasksOptions",
+        "OperationalRuntimeStatus",
+        "isRetryableOperationalError",
+        "retryDelayMs",
+        "prioritizeEventHandlerRetriesForProcessing",
+        "processDueEventHandlerRetries",
+        "reconcileOperationalAgentTasks",
+        "CodexActivityTask",
+        "SummarizeCodexActivityOptions",
+        "CodexActivitySummary",
+        "summarizeCodexActivity"
+      ],
+      "publicExportKinds": {
+        "RainrailOperationalStore": "value",
+        "RainrailOperationalStoreOptions": "type",
+        "StoredOperationalEvent": "type",
+        "RecordActivityEventInput": "type",
+        "StoredActivityEvent": "type",
+        "RecordAgentTaskInput": "type",
+        "StoredAgentTask": "type",
+        "RecordEventHandlerRetryInput": "type",
+        "StoredEventHandlerRetry": "type",
+        "OperationalStoreSnapshot": "type",
+        "EventHandlerRetryHandler": "type",
+        "ProcessDueEventHandlerRetriesOptions": "type",
+        "ProcessDueEventHandlerRetryResult": "type",
+        "ReconcileOperationalAgentTasksOptions": "type",
+        "OperationalRuntimeStatus": "type",
+        "isRetryableOperationalError": "value",
+        "retryDelayMs": "value",
+        "prioritizeEventHandlerRetriesForProcessing": "value",
+        "processDueEventHandlerRetries": "value",
+        "reconcileOperationalAgentTasks": "value",
+        "CodexActivityTask": "type",
+        "SummarizeCodexActivityOptions": "type",
+        "CodexActivitySummary": "type",
+        "summarizeCodexActivity": "value"
       }
     },
     {

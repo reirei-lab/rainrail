@@ -145,7 +145,15 @@ describe('Rainrail bridge room', () => {
   it('treats duplicate event ids as successful no-ops', async () => {
     const storage = fakeState();
     const room = createTestRoom(storage, { replayLimit: 10 });
-    const event = fixtureEvent('delivery-1', 'github.issue');
+    const event = {
+      ...fixtureEvent('delivery-1', 'github.issue'),
+      payload: { action: 'opened' },
+    };
+    const duplicate = {
+      ...event,
+      payload: { action: 'closed' },
+      subject: { ...event.subject, id: 'mutated-duplicate' },
+    };
 
     const eventsResponse = await room.fetch(eventsRequest());
     const reader = eventsResponse.body?.getReader();
@@ -154,7 +162,15 @@ describe('Rainrail bridge room', () => {
 
     expect((await room.fetch(publishRequest(event))).status).toBe(200);
     expect(await readNext(reader!)).toContain(event.id);
-    expect((await room.fetch(publishRequest(event))).status).toBe(200);
+    const duplicateResponse = await room.fetch(publishRequest(duplicate));
+    expect(duplicateResponse.status).toBe(200);
+    await expect(duplicateResponse.json()).resolves.toMatchObject({
+      event: {
+        id: event.id,
+        payload: { action: 'opened' },
+        subject: { id: 'delivery-1' },
+      },
+    });
 
     expect(storage.storedEvents().map((storedEvent) => storedEvent.id)).toEqual([event.id]);
     await expect(readNextOrTimeout(reader!)).resolves.toBe('timeout');

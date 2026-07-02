@@ -31,6 +31,7 @@ export function createRainrailNodeServer(options: RainrailNodeServerOptions): Ra
     runtime: options.runtime ?? 'node',
     ...(options.githubSourceName === undefined ? {} : { githubSourceName: options.githubSourceName }),
     ...(options.maxWebhookBodyBytes === undefined ? {} : { maxWebhookBodyBytes: options.maxWebhookBodyBytes }),
+    ...(options.operationalStore === undefined ? {} : { operationalStore: options.operationalStore }),
   });
 
   const server = http.createServer(async (request, response) => {

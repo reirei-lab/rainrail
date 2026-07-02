@@ -70,7 +70,11 @@ event だけを再送する。指定 id が buffer に無い場合は、consumer
 
 - `GET /healthz`: `{ ok, clients, recent }` を返す。
 - `POST /publish`: request JSON を `RainrailEventEnvelope` として検証し、replay
-  snapshot を storage に保存してから live subscriber へ publish する。
+  snapshot を storage に保存してから live subscriber へ publish する。成功 response には
+  検証・正規化後の `event` を含め、adapter が追加の operational store を持つ場合も
+  storage / replay と同じ envelope を保存できるようにする。同じ event id が replay に
+  既にある duplicate publish では、後続 request の envelope ではなく保存済み envelope を
+  response の `event` として返す。
 - `GET /events`: storage から replay buffer を復元し、SSE stream を返す。
 
 `POST /publish` と `GET /events` は capability token で保護する。adapter は
@@ -84,6 +88,22 @@ missing bearer は `missing_bearer_token` の 401、token 不一致は `invalid_
 の 403、サーバ側未設定は `events_auth_not_configured` の 503 として扱う。
 HTTP entrypoint の公開入口は Fetch adapter の `createRainrailHttpApp` と Node adapter の
 `createRainrailNodeServer`。
+
+HTTP app は任意で operational store を受け取り、dashboard/API 用の provider-neutral
+state も同じ Fetch app から返せる。operational store が設定された場合、dashboard API は
+`/events` と同じ `Authorization: Bearer <token>` を要求する。`GET /api/state` は
+event / activity / agent task / handler retry の snapshot と counts を返す。`hideSkippedActivity=1` が指定された場合、
+activity list は skipped outcome を除外するが、counts は全件数のままにする。
+`GET /api/events/:id` は保存済み event の detail と envelope を返す。operational store
+未設定の app ではどちらも `operational_store_not_configured` の 503 を返し、event が
+存在しない場合は `event_not_found` の 404 を返す。不正な percent encoding の event id は
+`invalid_event_id` の 400 として扱う。これらの API は Source provider や
+runtime provider の具体 payload に依存せず、operational store の正規化済み snapshot を
+そのまま配信する。HTTP app の webhook / tail ingress は room publish 成功後に、room が
+検証・正規化した envelope を operational store へ記録する。publish 前の provider event に
+任意 payload が含まれていても、store には replay / SSE と同じ sanitized envelope だけを残す。
+operational store への記録が失敗しても、room publish が
+成功済みの外部 delivery は失敗応答に戻さない。
 
 `GET /healthz` と `GET /events` は storage 復元失敗を generic 500 応答に変換する。
 adapter/runtime の未処理例外として落とさず、呼び出し元に安定した失敗を返すため。
