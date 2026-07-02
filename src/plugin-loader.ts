@@ -141,31 +141,39 @@ function createRegisteredWorkflow(plugin: WorkflowPlugin): WorkflowPlugin {
     };
   }
 
-  Object.defineProperty(workflow, 'capabilities', {
-    configurable: true,
-    enumerable: true,
-    get() {
-      if (hasAccessorCapabilities) {
-        const currentCapabilities = plugin.capabilities;
-        return currentCapabilities === undefined ? undefined : [...currentCapabilities];
-      }
-
-      if (!capabilitySnapshot) {
-        try {
-          capabilities = plugin.capabilities === undefined ? undefined : [...plugin.capabilities];
-        } catch (reason) {
-          capabilityError = reason;
+  if (!hasAccessorCapabilities && capabilitySnapshot && capabilityError === undefined) {
+    Object.defineProperty(workflow, 'capabilities', {
+      configurable: true,
+      enumerable: true,
+      value: capabilities === undefined ? undefined : [...capabilities],
+    });
+  } else {
+    Object.defineProperty(workflow, 'capabilities', {
+      configurable: true,
+      enumerable: true,
+      get() {
+        if (hasAccessorCapabilities) {
+          const currentCapabilities = plugin.capabilities;
+          return currentCapabilities === undefined ? undefined : [...currentCapabilities];
         }
-        capabilitySnapshot = true;
-      }
 
-      if (capabilityError !== undefined) {
-        throw capabilityError;
-      }
+        if (!capabilitySnapshot) {
+          try {
+            capabilities = plugin.capabilities === undefined ? undefined : [...plugin.capabilities];
+          } catch (reason) {
+            capabilityError = reason;
+          }
+          capabilitySnapshot = true;
+        }
 
-      return capabilities === undefined ? undefined : [...capabilities];
-    },
-  });
+        if (capabilityError !== undefined) {
+          throw capabilityError;
+        }
+
+        return capabilities === undefined ? undefined : [...capabilities];
+      },
+    });
+  }
 
   Object.defineProperty(workflow, 'timeoutMs', {
     configurable: true,
