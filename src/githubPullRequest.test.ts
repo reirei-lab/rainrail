@@ -51,6 +51,58 @@ describe('createGitHubPullRequestProvider', () => {
     ]);
   });
 
+  it('drops malformed review comment entries while keeping valid comments from the same page', async () => {
+    const provider = createGitHubPullRequestProvider({
+      auth: { getAuthToken: async () => undefined },
+      fetch: (async () => new Response(JSON.stringify([
+        { id: 1, pull_request_review_id: 111, path: 'src/old.ts' },
+        { id: 2, pull_request_review_id: 112, body: 'missing path' },
+        {
+          id: 3,
+          pull_request_review_id: 113,
+          path: 'src/github-provider.ts',
+          body: 'keep this one',
+          original_line: 18,
+        },
+      ]), { status: 200 })) as typeof fetch,
+    });
+
+    await expect(provider.listReviewComments?.({
+      repository: 'reirei-lab/rainrail',
+      number: 84,
+    })).resolves.toEqual([{
+      id: 3,
+      reviewId: 113,
+      path: 'src/github-provider.ts',
+      body: 'keep this one',
+      originalLine: 18,
+    }]);
+  });
+
+  it('treats an empty review comments page as a valid empty result', async () => {
+    const provider = createGitHubPullRequestProvider({
+      auth: { getAuthToken: async () => undefined },
+      fetch: (async () => new Response(JSON.stringify([]), { status: 200 })) as typeof fetch,
+    });
+
+    await expect(provider.listReviewComments?.({
+      repository: 'reirei-lab/rainrail',
+      number: 84,
+    })).resolves.toEqual([]);
+  });
+
+  it('rejects review comment listing when GitHub returns a non-OK response', async () => {
+    const provider = createGitHubPullRequestProvider({
+      auth: { getAuthToken: async () => undefined },
+      fetch: (async () => new Response(JSON.stringify({ message: 'Server error' }), { status: 502 })) as typeof fetch,
+    });
+
+    await expect(provider.listReviewComments?.({
+      repository: 'reirei-lab/rainrail',
+      number: 84,
+    })).rejects.toThrow('GitHub review comments request failed with HTTP 502');
+  });
+
   it('loads PR details for base searches so conflict checks see mergeability', async () => {
     const requests: string[] = [];
     const fetchImpl = vi.fn(async (input: string | URL | Request) => {
@@ -83,6 +135,25 @@ describe('createGitHubPullRequestProvider', () => {
       baseRefName: 'main',
     })).resolves.toMatchObject([{ number: 44, mergeStateStatus: 'dirty' }]);
     expect(requests).toContain('https://api.github.com/repos/reirei-lab/rainrail/pulls/44');
+  });
+
+  it('returns no head matches when GitHub returns an empty pull request list', async () => {
+    const requests: string[] = [];
+    const provider = createGitHubPullRequestProvider({
+      auth: { getAuthToken: async () => undefined },
+      fetch: (async (input: string | URL | Request) => {
+        requests.push(String(input));
+        return new Response(JSON.stringify([]), { status: 200 });
+      }) as typeof fetch,
+    });
+
+    await expect(provider.findPullRequestsByHead?.({
+      repository: 'reirei-lab/rainrail',
+      headRefName: 'agent/missing-pr',
+    })).resolves.toEqual([]);
+    expect(requests).toEqual([
+      'https://api.github.com/repos/reirei-lab/rainrail/pulls?state=open&per_page=100&head=reirei-lab%3Aagent%2Fmissing-pr',
+    ]);
   });
 
   it('uses owner-qualified head filters and fetches matching PR details', async () => {
@@ -168,6 +239,36 @@ describe('createGitHubPullRequestProvider', () => {
     expect(requests[0]).toBe('https://api.github.com/repos/reirei-lab/rainrail/pulls?state=open&per_page=100');
     expect(requests).toContain('https://api.github.com/repos/reirei-lab/rainrail/pulls/45');
     expect(requests).toContain('https://api.github.com/repos/reirei-lab/rainrail/pulls/44');
+  });
+
+  it('characterizes missing head criteria as an unfiltered open PR list that returns no matches', async () => {
+    const requests: string[] = [];
+    const provider = createGitHubPullRequestProvider({
+      auth: { getAuthToken: async () => undefined },
+      fetch: (async (input: string | URL | Request) => {
+        requests.push(String(input));
+        return new Response(JSON.stringify([{ number: 44, head: { ref: 'agent/test-pr', sha: 'abc123' } }]), { status: 200 });
+      }) as typeof fetch,
+    });
+
+    await expect(provider.findPullRequestsByHead?.({
+      repository: 'reirei-lab/rainrail',
+    })).resolves.toEqual([]);
+    expect(requests).toEqual([
+      'https://api.github.com/repos/reirei-lab/rainrail/pulls?state=open&per_page=100',
+    ]);
+  });
+
+  it('rejects pull request head searches when GitHub returns a non-OK list response', async () => {
+    const provider = createGitHubPullRequestProvider({
+      auth: { getAuthToken: async () => undefined },
+      fetch: (async () => new Response(JSON.stringify({ message: 'rate limited' }), { status: 429 })) as typeof fetch,
+    });
+
+    await expect(provider.findPullRequestsByHead?.({
+      repository: 'reirei-lab/rainrail',
+      headSha: 'abc123',
+    })).rejects.toThrow('GitHub pull request list request failed with HTTP 429');
   });
 
   it('paginates reviews and check runs before deriving merge and check state', async () => {
@@ -276,6 +377,32 @@ describe('createGitHubPullRequestProvider', () => {
     });
 
     expect('mergePullRequest' in provider).toBe(false);
+  });
+
+  it('rejects review requests when GitHub returns a non-OK response', async () => {
+    const provider = createGitHubPullRequestProvider({
+      auth: { getAuthToken: async () => undefined },
+      fetch: (async () => new Response(JSON.stringify({ message: 'Validation Failed' }), { status: 422 })) as typeof fetch,
+    });
+
+    await expect(provider.requestReview({
+      repository: 'reirei-lab/rainrail',
+      number: 84,
+      reviewerLogin: 'hiragram',
+    })).rejects.toThrow('GitHub review request failed with HTTP 422');
+  });
+
+  it('rejects review request removals when GitHub returns a non-OK response', async () => {
+    const provider = createGitHubPullRequestProvider({
+      auth: { getAuthToken: async () => undefined },
+      fetch: (async () => new Response(JSON.stringify({ message: 'Not Found' }), { status: 404 })) as typeof fetch,
+    });
+
+    await expect(provider.removeReviewRequest?.({
+      repository: 'reirei-lab/rainrail',
+      number: 84,
+      reviewerLogin: 'hiragram',
+    })).rejects.toThrow('GitHub review request removal failed with HTTP 404');
   });
 });
 
