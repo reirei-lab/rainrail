@@ -170,6 +170,32 @@ describe('handleReviewRequestEvent', () => {
     ]);
   });
 
+  it('retries review request when a resolution review is not reflected in live reviews yet', async () => {
+    await expect(handleReviewRequestEvent(reviewEvent({
+      state: 'approved',
+      reviewerLogin: 'codex',
+      reviewCommitId: 'abc123',
+    }), {
+      agentLogin: 'reirei-agent',
+      reviewerLogin: 'hiragram',
+      branchPrefix: 'agent/',
+      pullRequests: {
+        async getPullRequest(input) {
+          return pullRequest({
+            ...input,
+            reviews: [{ authorLogin: 'codex', state: 'CHANGES_REQUESTED', commitId: 'abc123' }],
+          });
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          throw new Error('not used');
+        },
+      },
+    })).rejects.toThrow('pull request reviews are still being reflected');
+  });
+
   it('requests review when a review dismissal resolves the last change request blocker', async () => {
     const reviewRequests: Array<{ repository: string; number: number; reviewerLogin: string }> = [];
 
@@ -187,6 +213,68 @@ describe('handleReviewRequestEvent', () => {
           return pullRequest({
             ...input,
             reviews: [{ authorLogin: 'codex', state: 'DISMISSED', commitId: 'abc123' }],
+          });
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview(input) {
+          reviewRequests.push(input);
+        },
+      },
+    });
+
+    expect(result.reason).toBe('review_requested');
+    expect(reviewRequests).toEqual([
+      { repository: 'reirei-lab/rainrail', number: 44, reviewerLogin: 'hiragram' },
+    ]);
+  });
+
+  it('does not request review again while the configured reviewer approval webhook is not reflected yet', async () => {
+    let requestCount = 0;
+
+    const result = await handleReviewRequestEvent(reviewEvent({
+      state: 'approved',
+      reviewerLogin: 'hiragram',
+      reviewCommitId: 'abc123',
+    }), {
+      agentLogin: 'reirei-agent',
+      reviewerLogin: 'hiragram',
+      branchPrefix: 'agent/',
+      pullRequests: {
+        async getPullRequest(input) {
+          return pullRequest({ ...input, reviews: [] });
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          requestCount += 1;
+        },
+      },
+    });
+
+    expect(result.reason).toBe('pull request is already approved by configured reviewer');
+    expect(requestCount).toBe(0);
+  });
+
+  it('requests review when the configured reviewer dismissal webhook is not reflected yet', async () => {
+    const reviewRequests: Array<{ repository: string; number: number; reviewerLogin: string }> = [];
+
+    const result = await handleReviewRequestEvent(reviewEvent({
+      action: 'dismissed',
+      state: 'dismissed',
+      reviewerLogin: 'hiragram',
+      reviewCommitId: 'abc123',
+    }), {
+      agentLogin: 'reirei-agent',
+      reviewerLogin: 'hiragram',
+      branchPrefix: 'agent/',
+      pullRequests: {
+        async getPullRequest(input) {
+          return pullRequest({
+            ...input,
+            reviews: [{ authorLogin: 'hiragram', state: 'APPROVED', commitId: 'abc123' }],
           });
         },
         async findPullRequestByHead() {

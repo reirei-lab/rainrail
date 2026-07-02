@@ -207,6 +207,8 @@ type PullRequestCandidate = {
   expandByHeadSha?: boolean;
   checkName?: string;
   dismissedReviewerLogin?: string;
+  reviewerLogin?: string;
+  reviewState?: 'APPROVED' | 'DISMISSED';
 };
 
 export function createReviewRequestWorkflow(options: ReviewRequestWorkflowOptions): WorkflowPlugin {
@@ -311,7 +313,11 @@ export async function handleReviewRequestEvent(
       fallback = { handled: false, reason: 'pull request is draft', pullRequest };
       continue;
     }
-    if (hasUnresolvedChangeRequest(pullRequest)) {
+    if (isUnreflectedReviewResolution(candidate, pullRequest, options.reviewerLogin)) {
+      throw new Error('pull request reviews are still being reflected');
+    }
+    const reviewAwarePullRequest = pullRequestWithCandidateReviewResolution(candidate, pullRequest);
+    if (hasUnresolvedChangeRequest(reviewAwarePullRequest)) {
       fallback = { handled: false, reason: 'pull request has unresolved change requests', pullRequest };
       continue;
     }
@@ -319,11 +325,11 @@ export async function handleReviewRequestEvent(
       fallback = { handled: false, reason: 'not all checks have passed', pullRequest };
       continue;
     }
-    if (reviewApproved(options, pullRequest)) {
+    if (reviewApproved(options, reviewAwarePullRequest)) {
       fallback = { handled: false, reason: 'pull request is already approved by configured reviewer', pullRequest };
       continue;
     }
-    if (pullRequest.reviewRequests.some((login) => sameLogin(login, options.reviewerLogin))) {
+    if (reviewAwarePullRequest.reviewRequests.some((login) => sameLogin(login, options.reviewerLogin))) {
       fallback = { handled: false, reason: 'review was already requested', pullRequest };
       continue;
     }
@@ -681,10 +687,10 @@ export async function handleAutoMergeEvent(
       fallback = { handled: false, reason: 'pull request is not an agent-authored target', pullRequest };
       continue;
     }
-    const reviewAwarePullRequest = pullRequestWithCandidateDismissal(
-      candidate,
-      pullRequestWithCandidateApproval(options, candidate, pullRequest),
-    );
+    if (isUnreflectedReviewResolution(candidate, pullRequest, options.reviewerLogin)) {
+      throw new Error('pull request reviews are still being reflected');
+    }
+    const reviewAwarePullRequest = pullRequestWithCandidateReviewResolution(candidate, pullRequest);
     if (!reviewApproved(options, reviewAwarePullRequest)) {
       fallback = { handled: false, reason: 'configured reviewer approval is not confirmed', pullRequest };
       continue;
@@ -903,10 +909,13 @@ function reviewResolutionCandidateFromEvent(payload: Record<string, unknown>): P
   const repository = repositoryName(payload);
   const number = numberValue(recordValue(payload.pullRequest).number);
   const headSha = stringValue(review.commitId ?? review.commit_id ?? resource.commitId ?? resource.commit_id ?? recordValue(payload.pullRequest).headSha);
+  const reviewerLogin = stringValue(review.author);
   if (repository === undefined || number === undefined) return undefined;
   return {
     repository,
     number,
+    ...optionalString('reviewerLogin', reviewerLogin),
+    reviewState: action === 'dismissed' ? 'DISMISSED' : 'APPROVED',
     ...optionalString('headSha', headSha),
   };
 }
@@ -1068,6 +1077,8 @@ function autoMergeCandidateFromEvent(event: RainrailEventEnvelope): (PullRequest
       repository,
       number,
       ...optionalString('dismissedReviewerLogin', dismissedReviewerLogin),
+      ...optionalString('reviewerLogin', dismissedReviewerLogin),
+      reviewState: 'DISMISSED',
       ...optionalString('headSha', headSha),
     };
   }
@@ -1084,6 +1095,7 @@ function autoMergeCandidateFromEvent(event: RainrailEventEnvelope): (PullRequest
       repository,
       number,
       reviewerLogin,
+      reviewState: 'APPROVED',
       ...optionalString('headSha', headSha),
     };
   }
@@ -1280,60 +1292,55 @@ function pullRequestWithCandidateChangeRequest(
   };
 }
 
-function pullRequestWithCandidateDismissal(
+function pullRequestWithCandidateReviewResolution(
   candidate: PullRequestCandidate,
   pullRequest: PullRequestReviewTarget,
 ): PullRequestReviewTarget {
-  const reviewerLogin = candidate.dismissedReviewerLogin;
-  if (reviewerLogin === undefined) return pullRequest;
-  if (candidate.headSha !== undefined && pullRequest.headSha !== undefined && candidate.headSha !== pullRequest.headSha) return pullRequest;
-  const latest = latestActionableReviewsByReviewer(pullRequest).get(normalize(reviewerLogin));
-  if (
-    latest !== undefined
-    && ['approved', 'changes_requested', 'dismissed'].includes(normalize(latest.state))
-    && reviewIsForCurrentHead(latest, pullRequest)
-  ) {
+  const review = candidateReviewResolution(candidate, pullRequest);
+  if (review === undefined) return pullRequest;
+  const latest = latestActionableReviewForCurrentHead(pullRequest, review.authorLogin);
+  const latestState = normalize(latest?.state);
+  if (review.state === 'APPROVED' && latest !== undefined) {
     return pullRequest;
+  }
+  if (review.state === 'DISMISSED') {
+    if (latestState === 'dismissed' || latestState === 'changes_requested') return pullRequest;
   }
   return {
     ...pullRequest,
     reviews: [
       ...(pullRequest.reviews ?? []),
-      {
-        authorLogin: reviewerLogin,
-        state: 'DISMISSED',
-        ...(candidate.headSha === undefined ? optionalString('commitId', pullRequest.headSha) : { commitId: candidate.headSha }),
-      },
+      review,
     ],
   };
 }
 
-function pullRequestWithCandidateApproval(
-  config: { reviewerLogin: string },
-  candidate: PullRequestCandidate & { reviewerLogin?: string },
+function isUnreflectedReviewResolution(
+  candidate: PullRequestCandidate,
   pullRequest: PullRequestReviewTarget,
-): PullRequestReviewTarget {
-  const reviewerLogin = candidate.reviewerLogin;
-  if (reviewerLogin === undefined || !sameLogin(reviewerLogin, config.reviewerLogin)) return pullRequest;
-  if (candidate.headSha !== undefined && pullRequest.headSha !== undefined && candidate.headSha !== pullRequest.headSha) return pullRequest;
-  const latest = latestActionableReviewsByReviewer(pullRequest).get(normalize(reviewerLogin));
-  if (
-    latest !== undefined
-    && ['approved', 'changes_requested', 'dismissed'].includes(normalize(latest.state))
-    && reviewIsForCurrentHead(latest, pullRequest)
-  ) {
-    return pullRequest;
-  }
+  configuredReviewerLogin: string,
+): boolean {
+  const review = candidateReviewResolution(candidate, pullRequest);
+  if (review === undefined) return false;
+  if (sameLogin(review.authorLogin, configuredReviewerLogin)) return false;
+  const latest = latestActionableReviewForCurrentHead(pullRequest, review.authorLogin);
+  const latestState = normalize(latest?.state);
+  return review.state === 'APPROVED' && (latestState === 'changes_requested' || latestState === 'dismissed');
+}
+
+function candidateReviewResolution(
+  candidate: PullRequestCandidate,
+  pullRequest: PullRequestReviewTarget,
+): PullRequestReview | undefined {
+  const reviewerLogin = candidate.reviewerLogin ?? candidate.dismissedReviewerLogin;
+  if (reviewerLogin === undefined) return undefined;
+  if (candidate.headSha !== undefined && pullRequest.headSha !== undefined && candidate.headSha !== pullRequest.headSha) return undefined;
+  const state = candidate.reviewState;
+  if (state !== 'APPROVED' && state !== 'DISMISSED') return undefined;
   return {
-    ...pullRequest,
-    reviews: [
-      ...(pullRequest.reviews ?? []),
-      {
-        authorLogin: reviewerLogin,
-        state: 'APPROVED',
-        ...(candidate.headSha === undefined ? optionalString('commitId', pullRequest.headSha) : { commitId: candidate.headSha }),
-      },
-    ],
+    authorLogin: reviewerLogin,
+    state,
+    ...(candidate.headSha === undefined ? optionalString('commitId', pullRequest.headSha) : { commitId: candidate.headSha }),
   };
 }
 
@@ -1406,6 +1413,12 @@ function latestActionableReviewsByReviewer(pullRequest: PullRequestReviewTarget)
     latestByReviewer.set(reviewer, review);
   }
   return latestByReviewer;
+}
+
+function latestActionableReviewForCurrentHead(pullRequest: PullRequestReviewTarget, reviewerLogin: string): PullRequestReview | undefined {
+  const latest = latestActionableReviewsByReviewer(pullRequest).get(normalize(reviewerLogin));
+  if (latest === undefined || !reviewIsForCurrentHead(latest, pullRequest)) return undefined;
+  return latest;
 }
 
 function latestReviewByReviewerForCurrentHead(pullRequest: PullRequestReviewTarget, reviewerLogin: string): PullRequestReview | undefined {

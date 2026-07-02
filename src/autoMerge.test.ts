@@ -236,6 +236,38 @@ describe('handleAutoMergeEvent', () => {
     expect(runtimeMerges).toEqual([expect.objectContaining({ number: 44 })]);
   });
 
+  it('retries auto-merge when another reviewer approval is not reflected in live reviews yet', async () => {
+    const runtimeMerges: unknown[] = [];
+
+    await expect(handleAutoMergeEvent(reviewEvent({
+      state: 'approved',
+      reviewerLogin: 'codex',
+      reviewCommitId: 'abc123',
+    }), options({
+      reviews: [
+        { authorLogin: 'hiragram', state: 'APPROVED', commitId: 'abc123' },
+        { authorLogin: 'codex', state: 'CHANGES_REQUESTED', commitId: 'abc123' },
+      ],
+    }), runtimeContext(runtimeMerges))).rejects.toThrow('pull request reviews are still being reflected');
+    expect(runtimeMerges).toEqual([]);
+  });
+
+  it('does not merge when the configured reviewer dismissal webhook is not reflected yet', async () => {
+    const runtimeMerges: unknown[] = [];
+
+    const result = await handleAutoMergeEvent(reviewEvent({
+      action: 'dismissed',
+      state: 'dismissed',
+      reviewerLogin: 'hiragram',
+      reviewCommitId: 'abc123',
+    }), options({
+      reviews: [{ authorLogin: 'hiragram', state: 'APPROVED', commitId: 'abc123' }],
+    }), runtimeContext(runtimeMerges));
+
+    expect(result.reason).toBe('configured reviewer approval is not confirmed');
+    expect(runtimeMerges).toEqual([]);
+  });
+
   it('continues past non-agent check_run PRs and auto-merges a later agent PR', async () => {
     const runtimeMerges: unknown[] = [];
 
