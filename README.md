@@ -50,6 +50,14 @@ GitHub issue comments, issue creation, and issue search are exposed through the
 generic task provider contract. Cloudflare fingerprint persistence can use the
 same key-value storage shape as `RainrailBridgeRoom`.
 
+## Source repository test coverage
+
+The original test viewpoints from `github-eep-bridge`, `eep-bridge-worker`,
+and `reirei-harness` are inventoried in
+[docs/repo-test-coverage-matrix.md](docs/repo-test-coverage-matrix.md),
+including the Rainrail test files that cover each migrated behavior and the
+alternate checks for behavior that is no longer a separate Rainrail workflow.
+
 ## Product site and docs boundary
 
 Product-facing content for the future `apps/www` site and engineering-facing
