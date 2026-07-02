@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import { getReaderOrThrow, readNext } from './test-helpers.js';
+
 import {
   RainrailBridgeRoom,
   createGitHubWebhookSignature,
@@ -76,10 +78,9 @@ describe('Rainrail HTTP app', () => {
     expect(events.status).toBe(200);
     expect(events.headers.get('Content-Type')).toBe('text/event-stream');
 
-    const reader = events.body?.getReader();
-    expect(reader).toBeDefined();
-    await expect(readNext(reader!)).resolves.toBe(': connected\n\n');
-    await reader?.cancel();
+    const reader = getReaderOrThrow(events);
+    await expect(readNext(reader)).resolves.toBe(': connected\n\n');
+    await reader.cancel();
   });
 
   it('requires event stream auth configuration instead of opening events publicly', async () => {
@@ -200,10 +201,4 @@ function fakeState(initialEvents: unknown[] = []): RainrailBridgeRoomState & {
       return values.get('rainrail:recent-events') as Array<{ id: string }>;
     },
   };
-}
-
-async function readNext(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<string> {
-  const { value } = await reader.read();
-
-  return new TextDecoder().decode(value);
 }
