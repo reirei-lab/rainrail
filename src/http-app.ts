@@ -1,5 +1,6 @@
 import { publishCloudflareTailEvents, type CloudflareTailEvent, type PublishCloudflareTailEventResult } from './cloudflare-tail.js';
 import { rainrailEventsAuthErrorResponse, verifyRainrailEventsBearerToken } from './events-auth.js';
+import type { RainrailEventEnvelope } from './events.js';
 import { handleGitHubWebhookRequest } from './github-webhook.js';
 import {
   DEFAULT_MAX_REQUEST_BODY_BYTES,
@@ -10,6 +11,7 @@ import {
   textResponse,
   withCors,
 } from './http-utils.js';
+import type { RainrailOperationalStore } from './operational-store.js';
 
 export interface RainrailBridgeRoomFetchTarget {
   fetch(request: Request): Response | Promise<Response>;
@@ -23,6 +25,7 @@ export interface RainrailHttpAppOptions {
   runtime?: string;
   githubSourceName?: string;
   maxWebhookBodyBytes?: number;
+  operationalStore?: RainrailOperationalStore;
 }
 
 export interface RainrailHttpApp {
@@ -91,7 +94,61 @@ async function routeRainrailHttpRequest(request: Request, options: RainrailHttpA
     return handleGitHubWebhook(request, options);
   }
 
+  if (url.pathname === '/api/state') {
+    if (request.method !== 'GET') return methodNotAllowedResponse(['GET', 'OPTIONS']);
+
+    const auth = verifyDashboardReadRequest(request, options);
+    if (auth !== undefined) return auth;
+
+    return dashboardStateResponse(url, options);
+  }
+
+  const eventDetailMatch = /^\/api\/events\/([^/]+)$/.exec(url.pathname);
+  if (eventDetailMatch !== null) {
+    if (request.method !== 'GET') return methodNotAllowedResponse(['GET', 'OPTIONS']);
+
+    const auth = verifyDashboardReadRequest(request, options);
+    if (auth !== undefined) return auth;
+
+    const eventId = safeDecodeURIComponent(eventDetailMatch[1]!);
+    if (eventId === undefined) {
+      return jsonResponse({ error: 'invalid_event_id' }, { status: 400 });
+    }
+
+    return dashboardEventDetailResponse(eventId, options);
+  }
+
   return textResponse('not found\n', { status: 404 });
+}
+
+function verifyDashboardReadRequest(request: Request, options: RainrailHttpAppOptions): Response | undefined {
+  if (options.operationalStore === undefined) return undefined;
+
+  const auth = verifyRainrailEventsBearerToken(request, options.eventsBearerToken);
+  return auth.ok ? undefined : rainrailEventsAuthErrorResponse(auth);
+}
+
+function dashboardStateResponse(url: URL, options: RainrailHttpAppOptions): Response {
+  if (options.operationalStore === undefined) {
+    return jsonResponse({ error: 'operational_store_not_configured' }, { status: 503 });
+  }
+
+  return jsonResponse(options.operationalStore.snapshot({
+    hideSkippedActivityEvents: url.searchParams.get('hideSkippedActivity') === '1',
+  }));
+}
+
+function dashboardEventDetailResponse(eventId: string, options: RainrailHttpAppOptions): Response {
+  if (options.operationalStore === undefined) {
+    return jsonResponse({ error: 'operational_store_not_configured' }, { status: 503 });
+  }
+
+  const event = options.operationalStore.getEvent(eventId);
+  if (event === undefined) {
+    return jsonResponse({ error: 'event_not_found' }, { status: 404 });
+  }
+
+  return jsonResponse(event);
 }
 
 async function handleGitHubWebhook(request: Request, options: RainrailHttpAppOptions): Promise<Response> {
@@ -134,8 +191,8 @@ async function handleGitHubWebhook(request: Request, options: RainrailHttpAppOpt
   }, { status: 202 });
 }
 
-function publishEvent(options: RainrailHttpAppOptions, event: unknown): Promise<Response> | Response {
-  return options.room.fetch(new Request(`${INTERNAL_ROOM_ORIGIN}/publish`, {
+async function publishEvent(options: RainrailHttpAppOptions, event: unknown): Promise<Response> {
+  const response = await options.room.fetch(new Request(`${INTERNAL_ROOM_ORIGIN}/publish`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${options.publishToken}`,
@@ -143,6 +200,45 @@ function publishEvent(options: RainrailHttpAppOptions, event: unknown): Promise<
     },
     body: JSON.stringify(event),
   }));
+
+  if (response.ok) {
+    try {
+      const publishedEvent = await readPublishedEvent(response);
+      if (publishedEvent !== undefined) {
+        options.operationalStore?.recordEvent(publishedEvent);
+      }
+    } catch {
+      // Event delivery already succeeded. Operational dashboard persistence must not turn
+      // an accepted external delivery into a provider-visible failure and duplicate retry.
+    }
+  }
+
+  return response;
+}
+
+async function readPublishedEvent(response: Response): Promise<RainrailEventEnvelope | undefined> {
+  const body = await response.clone().json() as unknown;
+  if (typeof body !== 'object' || body === null || !('event' in body)) {
+    return undefined;
+  }
+
+  const { event } = body;
+  return isRainrailEventEnvelope(event) ? event : undefined;
+}
+
+function safeDecodeURIComponent(value: string): string | undefined {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function isRainrailEventEnvelope(value: unknown): value is RainrailEventEnvelope {
+  return typeof value === 'object'
+    && value !== null
+    && 'schemaVersion' in value
+    && value.schemaVersion === 'rainrail.event.v1';
 }
 
 function bridgeAuthorizationHeaders(request: Request, publishToken: string): Headers {

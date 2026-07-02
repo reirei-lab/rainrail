@@ -131,7 +131,7 @@ function parseOpenClawRuntimeProvider(value: unknown): OpenClawRuntimeProviderCo
       ?? defaultOpenClawRuntimeProviderConfig.agentId,
     sessionKeyPrefix: parseOptionalString(value.sessionKeyPrefix, 'config.runtimeProviders.openclaw.sessionKeyPrefix')
       ?? defaultOpenClawRuntimeProviderConfig.sessionKeyPrefix,
-    timeoutSeconds: parseOptionalNumber(value.timeoutSeconds, 'config.runtimeProviders.openclaw.timeoutSeconds')
+    timeoutSeconds: parseOptionalNonNegativeNumber(value.timeoutSeconds, 'config.runtimeProviders.openclaw.timeoutSeconds')
       ?? defaultOpenClawRuntimeProviderConfig.timeoutSeconds,
     logDirectory: parseOptionalString(value.logDirectory, 'config.runtimeProviders.openclaw.logDirectory')
       ?? defaultOpenClawRuntimeProviderConfig.logDirectory,
@@ -185,12 +185,15 @@ function parseOptionalString(value: unknown, path: string): string | undefined {
   return parseRequiredString(value, path);
 }
 
-function parseOptionalNumber(value: unknown, path: string): number | undefined {
+function parseOptionalNonNegativeNumber(value: unknown, path: string): number | undefined {
   if (value === undefined) {
     return undefined;
   }
   if (typeof value !== 'number' || !Number.isFinite(value)) {
     throw new Error(`${path} must be a finite number`);
+  }
+  if (value < 0) {
+    throw new Error(`${path} must be a finite non-negative number`);
   }
   return value;
 }

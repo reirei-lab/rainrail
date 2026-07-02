@@ -45,6 +45,19 @@ describe('package scripts used by pull request CI', () => {
     expect(sitePackageJson.scripts.build).toBe('astro check && astro build');
   });
 
+  it('defines repeatable Cloudflare Pages commands for product site deploys', () => {
+    expect(packageJson.scripts['pages:build']).toBe('pnpm --filter www build');
+    expect(packageJson.scripts['pages:deploy:preview']).toBe(
+      'pnpm pages:build && wrangler pages deploy apps/www/dist --project-name rainrail-www --branch "${RAINRAIL_PAGES_BRANCH:-preview}"',
+    );
+    expect(packageJson.scripts['pages:deploy:production']).toBe(
+      'pnpm pages:build && wrangler pages deploy apps/www/dist --project-name rainrail-www --branch main',
+    );
+    expect(packageJson.scripts['pages:smoke']).toBe(
+      'node scripts/smoke-cloudflare-pages.mjs',
+    );
+  });
+
   it('ships the initial product site MVP routes', () => {
     expect(existsSync(new URL('../apps/www/src/pages/index.astro', import.meta.url))).toBe(
       true,

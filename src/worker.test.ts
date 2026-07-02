@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import { getReaderOrThrow, readUntil } from './test-helpers.js';
+
 import rainrailWorker, { RainrailBridgeRoom, createGitHubWebhookSignature } from './index.js';
 
 describe('Rainrail Cloudflare Worker entrypoint', () => {
@@ -58,10 +60,9 @@ describe('Rainrail Cloudflare Worker entrypoint', () => {
     }), env);
     expect(events.status).toBe(200);
 
-    const reader = events.body?.getReader();
-    expect(reader).toBeDefined();
-    const chunk = await readUntil(reader!, 'cloudflare.tail');
-    await reader?.cancel();
+    const reader = getReaderOrThrow(events);
+    const chunk = await readUntil(reader, 'cloudflare.tail');
+    await reader.cancel();
 
     expect(chunk).toContain('event: github.issue\n');
     expect(chunk).toContain('event: cloudflare.tail\n');
@@ -104,18 +105,4 @@ function fakeEnv() {
       },
     },
   };
-}
-
-async function readUntil(reader: ReadableStreamDefaultReader<Uint8Array>, expected: string): Promise<string> {
-  const decoder = new TextDecoder();
-  let text = '';
-
-  for (let index = 0; index < 20; index += 1) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    text += decoder.decode(value);
-    if (text.includes(expected)) break;
-  }
-
-  return text;
 }

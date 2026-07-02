@@ -2,7 +2,14 @@ import { once } from 'node:events';
 
 import { describe, expect, it } from 'vitest';
 
-import { DEFAULT_MAX_REQUEST_BODY_BYTES, createGitHubWebhookSignature, createRainrailNodeServer } from './index.js';
+import { getReaderOrThrow, readUntil, waitForValue } from './test-helpers.js';
+
+import {
+  DEFAULT_MAX_REQUEST_BODY_BYTES,
+  RainrailOperationalStore,
+  createGitHubWebhookSignature,
+  createRainrailNodeServer,
+} from './index.js';
 
 describe('Rainrail Node server', () => {
   it('adapts Node HTTP requests to the shared Rainrail HTTP app', async () => {
@@ -48,10 +55,9 @@ describe('Rainrail Node server', () => {
       });
       expect(events.status).toBe(200);
 
-      const reader = events.body?.getReader();
-      expect(reader).toBeDefined();
-      const chunk = await readUntil(reader!, 'github.issue');
-      await reader?.cancel();
+      const reader = getReaderOrThrow(events);
+      const chunk = await readUntil(reader, 'github.issue');
+      await reader.cancel();
 
       expect(chunk).toContain(': connected\n\n');
       expect(chunk).toContain('event: github.issue\n');
@@ -85,7 +91,7 @@ describe('Rainrail Node server', () => {
       expect(events.status).toBe(200);
 
       await events.body?.cancel();
-      await waitFor(async () => {
+      await waitForValue(async () => {
         const health = await room.fetch(new Request('https://rainrail.local/healthz'));
         const body = await health.json() as { clients: number };
         return body.clients;
@@ -136,6 +142,39 @@ describe('Rainrail Node server', () => {
     }
   });
 
+  it('forwards operationalStore to the shared HTTP app', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:00:00.000Z'),
+    });
+    const { server } = createRainrailNodeServer({
+      githubWebhookSecret: 'secret',
+      publishToken: 'test-publish-token',
+      eventsBearerToken: 'events-token',
+      operationalStore,
+    });
+
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const address = server.address();
+    if (address === null || typeof address === 'string') {
+      throw new Error('expected TCP server address');
+    }
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${address.port}/api/state`, {
+        headers: { authorization: 'Bearer events-token' },
+      });
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toMatchObject({ counts: { events: 0 } });
+    } finally {
+      await closeServer(server);
+      operationalStore.close();
+    }
+  });
+
   it('does not read bodies for non-webhook routes before method handling', async () => {
     const { server } = createRainrailNodeServer({
       githubWebhookSecret: 'secret',
@@ -165,29 +204,8 @@ describe('Rainrail Node server', () => {
   });
 });
 
-async function readUntil(reader: ReadableStreamDefaultReader<Uint8Array>, expected: string): Promise<string> {
-  const decoder = new TextDecoder();
-  let text = '';
-
-  for (let index = 0; index < 10; index += 1) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    text += decoder.decode(value);
-    if (text.includes(expected)) break;
-  }
-
-  return text;
-}
-
 async function closeServer(server: { listening: boolean; closeAllConnections?: () => void; close: (callback: () => void) => void }): Promise<void> {
   if (!server.listening) return;
   server.closeAllConnections?.();
   await new Promise<void>((resolve) => server.close(resolve));
-}
-
-async function waitFor<T>(read: () => T | Promise<T>, expected: T): Promise<void> {
-  for (let index = 0; index < 20; index += 1) {
-    if (Object.is(await read(), expected)) return;
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
 }

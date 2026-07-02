@@ -672,6 +672,7 @@ describe('GitHub webhook source handling', () => {
           pull_request: {
             number: 39,
             html_url: 'https://github.com/reirei-lab/rainrail/pull/39',
+            user: { login: 'reirei-agent' },
           },
           comment: {
             id: 500,
@@ -1887,10 +1888,17 @@ describe('GitHub webhook source handling', () => {
           pull_request: {
             number: 39,
             html_url: 'https://github.com/reirei-lab/rainrail/pull/39',
+            user: { login: 'reirei-agent' },
+            head: {
+              ref: 'agent/test-pr',
+              sha: 'abc123',
+              repo: { full_name: 'reirei-lab/rainrail' },
+            },
           },
           review: {
             id: 4594627585,
             state: 'approved',
+            commit_id: 'abc123',
             html_url: 'https://github.com/reirei-lab/rainrail/pull/39#pullrequestreview-4594627585',
           },
         },
@@ -1909,13 +1917,22 @@ describe('GitHub webhook source handling', () => {
           type: 'review',
           id: '4594627585',
           state: 'approved',
+          commitId: 'abc123',
           url: 'https://github.com/reirei-lab/rainrail/pull/39#pullrequestreview-4594627585',
+        },
+        review: {
+          id: '4594627585',
+          commitId: 'abc123',
         },
         pullRequest: {
           type: 'pull_request',
           id: '39',
           number: 39,
           url: 'https://github.com/reirei-lab/rainrail/pull/39',
+          author: 'reirei-agent',
+          headRef: 'agent/test-pr',
+          headSha: 'abc123',
+          headRepository: 'reirei-lab/rainrail',
         },
       },
     });

@@ -1,0 +1,658 @@
+import { describe, expect, it } from 'vitest';
+
+import type { PluginRuntimeContext } from './workflow-plugin.js';
+import type { GitHubPullRequestProvider, PullRequestReviewTarget } from './pr-lifecycle.js';
+import { createChangeRequestWorkflow, createTaskProviderPullRequestCommentHandoff, handleChangeRequestEvent } from './pr-lifecycle.js';
+import { handoffRecorder, reviewEvent, task } from './pr-lifecycle-test-helpers.js';
+
+describe('handleChangeRequestEvent', () => {
+  it('returns the matching agent task to Todo when a PR review requests changes', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+    const statusRecords: string[] = [];
+
+    const result = await handleChangeRequestEvent(reviewEvent({ state: 'changes_requested' }), {
+      ...managedChangeRequestOptions,
+      tasks: handoffRecorder({ updates, statusRecords }),
+    });
+
+    expect(result).toMatchObject({
+      handled: true,
+      reason: 'change-requested pull request returned to Todo',
+      pullRequestNumber: 44,
+      branchName: 'agent/test-pr',
+      taskId: 'agent_task_1',
+      projectItemId: 'PVTI_item',
+      status: 'Todo',
+    });
+    expect(updates[0]?.commentBody).toContain('reply directly on that GitHub review discussion');
+    expect(updates[0]?.commentBody).toContain('Outcome: changes_requested');
+    expect(statusRecords).toEqual(['change_requested:Todo']);
+  });
+
+  it('does not hand off when the managed PR target cannot be verified', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+
+    const result = await handleChangeRequestEvent(reviewEvent({ state: 'changes_requested' }), {
+      tasks: handoffRecorder({ updates }),
+    });
+
+    expect(result.reason).toBe('change-request target verification is not configured');
+    expect(updates).toEqual([]);
+  });
+
+  it('keeps the change-request handoff successful when status recording fails', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+
+    const result = await handleChangeRequestEvent(reviewEvent({ state: 'changes_requested' }), {
+      agentLogin: 'reirei-agent',
+      branchPrefix: 'agent/',
+      tasks: {
+        ...handoffRecorder({ updates }),
+        async recordTaskStatus() {
+          throw new Error('status store unavailable');
+        },
+      },
+    });
+
+    expect(result.reason).toBe('change-requested pull request returned to Todo');
+    expect(updates).toHaveLength(1);
+  });
+
+  it('treats the change-request webhook as current while live reviews are not reflected yet', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+
+    const result = await handleChangeRequestEvent(reviewEvent({
+      state: 'changes_requested',
+      headSha: 'abc123',
+      reviewCommitId: 'abc123',
+    }), {
+      agentLogin: 'reirei-agent',
+      branchPrefix: 'agent/',
+      tasks: handoffRecorder({ updates }),
+      pullRequests: {
+        kind: 'pull-request-provider' as const,
+        async getPullRequest(input) {
+          return pullRequestForChangeRequest({ ...input, headSha: 'abc123', reviews: [] });
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          throw new Error('not used');
+        },
+      },
+    });
+
+    expect(result.reason).toBe('change-requested pull request returned to Todo');
+    expect(updates).toHaveLength(1);
+  });
+
+  it('truncates long change-request review bodies in handoff comments', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+    const longBody = `Please fix this.\n\n${'x'.repeat(10_000)}`;
+
+    await handleChangeRequestEvent(reviewEvent({ state: 'changes_requested', reviewBody: longBody }), {
+      ...managedChangeRequestOptions,
+      tasks: handoffRecorder({ updates }),
+    });
+
+    expect(updates[0]?.commentBody).toContain('Review body:');
+    expect(updates[0]?.commentBody).toContain('...[truncated]');
+    expect(updates[0]?.commentBody).not.toContain('x'.repeat(5_000));
+  });
+
+  it('ignores stale change-request reviews for an old pull request head', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+
+    const result = await handleChangeRequestEvent(reviewEvent({
+      state: 'changes_requested',
+      headSha: 'new-sha',
+      reviewCommitId: 'old-sha',
+    }), {
+      ...managedChangeRequestOptions,
+      tasks: handoffRecorder({ updates }),
+    });
+
+    expect(result.reason).toBe('review does not match the current pull request head');
+    expect(updates).toEqual([]);
+  });
+
+  it('prefers the live pull request head over the review payload head when detecting stale change requests', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+
+    const result = await handleChangeRequestEvent(reviewEvent({
+      state: 'changes_requested',
+      headSha: 'old-sha',
+      reviewCommitId: 'old-sha',
+    }), {
+      ...managedChangeRequestOptions,
+      tasks: handoffRecorder({ updates }),
+      pullRequests: {
+        kind: 'pull-request-provider' as const,
+        async getPullRequest(input) {
+          return pullRequestForChangeRequest({ ...input, headSha: 'new-sha' });
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          throw new Error('not used');
+        },
+      },
+    });
+
+    expect(result.reason).toBe('review does not match the current pull request head');
+    expect(updates).toEqual([]);
+  });
+
+  it('retries delayed change requests while approval is still live', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+
+    await expect(handleChangeRequestEvent(reviewEvent({
+      state: 'changes_requested',
+      headSha: 'abc123',
+      reviewCommitId: 'abc123',
+    }), {
+      ...managedChangeRequestOptions,
+      tasks: handoffRecorder({ updates }),
+      pullRequests: {
+        kind: 'pull-request-provider' as const,
+        async getPullRequest(input) {
+          return pullRequestForChangeRequest({
+            ...input,
+            headSha: 'abc123',
+            reviewDecision: 'APPROVED',
+            reviews: [{ authorLogin: 'hiragram', state: 'APPROVED', commitId: 'abc123' }],
+          });
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          throw new Error('not used');
+        },
+      },
+    })).rejects.toThrow('pull request reviews are still being reflected');
+
+    expect(updates).toEqual([]);
+  });
+
+  it('retries when a current change request is not reflected over a live approval yet', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+
+    await expect(handleChangeRequestEvent(reviewEvent({
+      state: 'changes_requested',
+      reviewerLogin: 'hiragram',
+      headSha: 'abc123',
+      reviewCommitId: 'abc123',
+    }), {
+      ...managedChangeRequestOptions,
+      tasks: handoffRecorder({ updates }),
+      pullRequests: {
+        kind: 'pull-request-provider' as const,
+        async getPullRequest(input) {
+          return pullRequestForChangeRequest({
+            ...input,
+            headSha: 'abc123',
+            reviewDecision: 'APPROVED',
+            reviews: [{ authorLogin: 'hiragram', state: 'APPROVED', commitId: 'abc123' }],
+          });
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          throw new Error('not used');
+        },
+      },
+    })).rejects.toThrow('pull request reviews are still being reflected');
+
+    expect(updates).toEqual([]);
+  });
+
+  it('does not hand off change requests when the live pull request is already closed', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+
+    const result = await handleChangeRequestEvent(reviewEvent({
+      state: 'changes_requested',
+      headSha: 'abc123',
+      reviewCommitId: 'abc123',
+    }), {
+      ...managedChangeRequestOptions,
+      tasks: handoffRecorder({ updates }),
+      pullRequests: {
+        kind: 'pull-request-provider' as const,
+        async getPullRequest(input) {
+          return pullRequestForChangeRequest({ ...input, state: 'CLOSED', headSha: 'abc123' });
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          throw new Error('not used');
+        },
+      },
+    });
+
+    expect(result.reason).toBe('pull request is already closed');
+    expect(updates).toEqual([]);
+  });
+
+  it('removes stale pending review requests when change requests return the issue to Todo', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+    const removedReviewRequests: Array<{ repository: string; number: number; reviewerLogin: string }> = [];
+
+    const result = await handleChangeRequestEvent(reviewEvent({
+      state: 'changes_requested',
+      reviewerLogin: 'codex',
+    }), {
+      ...managedChangeRequestOptions,
+      reviewRequest: { reviewerLogin: 'hiragram' },
+      tasks: handoffRecorder({ updates }),
+      pullRequests: {
+        kind: 'pull-request-provider' as const,
+        async getPullRequest(input) {
+          return {
+            repository: input.repository,
+            number: input.number,
+            title: 'feat: add PR lifecycle workflows',
+            url: 'https://github.com/reirei-lab/rainrail/pull/44',
+            authorLogin: 'reirei-agent',
+            headRefName: 'agent/test-pr',
+            headRepository: 'reirei-lab/rainrail',
+            headSha: 'abc123',
+            isDraft: false,
+            state: 'OPEN',
+            statusCheckRollup: [],
+            reviewRequests: ['hiragram'],
+          };
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          throw new Error('not used');
+        },
+        async removeReviewRequest(input) {
+          removedReviewRequests.push(input);
+        },
+      },
+    });
+
+    expect(result).toMatchObject({ reason: 'change-requested pull request returned to Todo', reviewRequestRemoved: true });
+    expect(removedReviewRequests).toEqual([
+      { repository: 'reirei-lab/rainrail', number: 44, reviewerLogin: 'hiragram' },
+    ]);
+  });
+
+  it('does not remove review requests that appear after the change-request snapshot', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+    const removedReviewRequests: Array<{ repository: string; number: number; reviewerLogin: string }> = [];
+    let fetchCount = 0;
+
+    const result = await handleChangeRequestEvent(reviewEvent({
+      state: 'changes_requested',
+      reviewerLogin: 'codex',
+      reviewCommitId: 'abc123',
+    }), {
+      ...managedChangeRequestOptions,
+      reviewRequest: { reviewerLogin: 'hiragram' },
+      tasks: handoffRecorder({ updates }),
+      pullRequests: {
+        kind: 'pull-request-provider' as const,
+        async getPullRequest(input) {
+          fetchCount += 1;
+          return pullRequestForChangeRequest({
+            ...input,
+            headSha: 'abc123',
+            reviews: [{ authorLogin: 'codex', state: 'CHANGES_REQUESTED', commitId: 'abc123' }],
+            reviewRequests: fetchCount === 1 ? [] : ['hiragram'],
+          });
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          throw new Error('not used');
+        },
+        async removeReviewRequest(input) {
+          removedReviewRequests.push(input);
+        },
+      },
+    });
+
+    expect(result).toMatchObject({ reason: 'change-requested pull request returned to Todo' });
+    expect(fetchCount).toBe(1);
+    expect(removedReviewRequests).toEqual([]);
+  });
+
+  it('uses the runtime pull request provider when created as a workflow', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+    const removedReviewRequests: Array<{ repository: string; number: number; reviewerLogin: string }> = [];
+    const workflow = createChangeRequestWorkflow({
+      ...managedChangeRequestOptions,
+      reviewRequest: { reviewerLogin: 'hiragram' },
+      tasks: handoffRecorder({ updates }),
+    });
+
+    const result = await workflow.handle(reviewEvent({
+      state: 'changes_requested',
+      reviewerLogin: 'codex',
+    }), runtimeContext({
+      kind: 'pull-request-provider' as const,
+      async getPullRequest(input) {
+        return {
+          repository: input.repository,
+          number: input.number,
+          title: 'feat: add PR lifecycle workflows',
+          url: 'https://github.com/reirei-lab/rainrail/pull/44',
+          authorLogin: 'reirei-agent',
+          headRefName: 'agent/test-pr',
+          headRepository: 'reirei-lab/rainrail',
+          headSha: 'abc123',
+          isDraft: false,
+          state: 'OPEN',
+          statusCheckRollup: [],
+          reviewRequests: ['hiragram'],
+        };
+      },
+      async findPullRequestByHead() {
+        throw new Error('not used');
+      },
+      async requestReview() {
+        throw new Error('not used');
+      },
+      async removeReviewRequest(input) {
+        removedReviewRequests.push(input);
+      },
+    }));
+
+    expect(result).toMatchObject({ reason: 'change-requested pull request returned to Todo', reviewRequestRemoved: true });
+    expect(removedReviewRequests).toEqual([
+      { repository: 'reirei-lab/rainrail', number: 44, reviewerLogin: 'hiragram' },
+    ]);
+  });
+
+  it('does not hand off changes requested on a pull request outside the managed agent target', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+
+    const result = await handleChangeRequestEvent(reviewEvent({ state: 'changes_requested' }), {
+      agentLogin: 'reirei-agent',
+      branchPrefix: 'agent/',
+      tasks: handoffRecorder({ updates }),
+      pullRequests: {
+        kind: 'pull-request-provider' as const,
+        async getPullRequest(input) {
+          return pullRequestForChangeRequest({
+            ...input,
+            authorLogin: 'someone-else',
+            headRefName: 'agent/test-pr',
+          });
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          throw new Error('not used');
+        },
+      },
+    });
+
+    expect(result.reason).toBe('pull request is not an agent-authored target');
+    expect(updates).toEqual([]);
+  });
+
+  it('ignores non-change-request reviews', async () => {
+    const result = await handleChangeRequestEvent(reviewEvent({ state: 'approved' }), {
+      tasks: handoffRecorder(),
+    });
+
+    expect(result.reason).toBe('event is not a pull request change request');
+  });
+
+  it('does not hand off a task from a different repository with the same branch', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+    const result = await handleChangeRequestEvent(reviewEvent({ state: 'changes_requested' }), {
+      ...managedChangeRequestOptions,
+      tasks: handoffRecorder({
+        updates,
+        taskOverride: { issue: { contentId: 'I_other', repository: 'reirei-lab/other' } },
+      }),
+    });
+
+    expect(result.reason).toBe('matched agent task belongs to another repository');
+    expect(updates).toEqual([]);
+  });
+
+  it('does not hand off a task claimed in a different repository when issue metadata is missing', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+    const result = await handleChangeRequestEvent(reviewEvent({ state: 'changes_requested' }), {
+      ...managedChangeRequestOptions,
+      tasks: handoffRecorder({
+        updates,
+        taskOverride: {
+          issue: { contentId: 'DI_draft', contentType: 'DraftIssue' },
+          claim: {
+            ...task.claim!,
+            lockRepositoryNameWithOwner: 'reirei-lab/other',
+          },
+        },
+      }),
+    });
+
+    expect(result.reason).toBe('matched agent task belongs to another repository');
+    expect(updates).toEqual([]);
+  });
+
+  it('does not hand off a task for a fork pull request that only matches the branch name', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+    const result = await handleChangeRequestEvent(reviewEvent({
+      state: 'changes_requested',
+      headRepository: 'external/fork',
+    }), {
+      ...managedChangeRequestOptions,
+      tasks: handoffRecorder({ updates }),
+    });
+
+    expect(result.reason).toBe('pull request head repository does not match the base repository');
+    expect(updates).toEqual([]);
+  });
+
+  it('does not hand off a task when the pull request head repository is missing', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+    const result = await handleChangeRequestEvent(reviewEvent({
+      state: 'changes_requested',
+      missingHeadRepository: true,
+    }), {
+      ...managedChangeRequestOptions,
+      tasks: handoffRecorder({ updates }),
+    });
+
+    expect(result.reason).toBe('pull request head repository does not match the base repository');
+    expect(updates).toEqual([]);
+  });
+
+  it('does not hand off delayed change requests for closed pull requests', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+
+    const result = await handleChangeRequestEvent(reviewEvent({ state: 'changes_requested', prState: 'closed' }), {
+      ...managedChangeRequestOptions,
+      tasks: handoffRecorder({ updates }),
+    });
+
+    expect(result.reason).toBe('pull request is already closed');
+    expect(updates).toEqual([]);
+  });
+
+  it('creates the handoff comment before releasing the project issue', async () => {
+    const calls: string[] = [];
+    const releases: unknown[] = [];
+    const handoff = createTaskProviderPullRequestCommentHandoff({
+      name: 'github',
+      kind: 'task-provider',
+      async getIssue() {
+        throw new Error('not used');
+      },
+      async createComment() {
+        calls.push('comment');
+        return { id: 'comment_1', url: 'https://github.com/reirei-lab/rainrail/issues/23#issuecomment-1' };
+      },
+    }, {
+      releaseProjectIssue(input) {
+        releases.push(input);
+        calls.push(`release:${input.reason}`);
+      },
+    });
+
+    const result = await handoff.returnTaskToTodo({
+      task: {
+        ...task,
+        claim: {
+          ...task.claim!,
+          lockRefId: 'REF_lock',
+          dispatchedLockRefId: 'REF_dispatched',
+          originalStatus: 'Backlog',
+        },
+      },
+      reason: 'checks_failed',
+      commentBody: 'body',
+    });
+
+    expect(calls).toEqual(['comment', 'release:checks_failed']);
+    expect(releases).toEqual([expect.objectContaining({
+      issue: expect.objectContaining({ id: 'PVTI_item', contentId: 'I_issue', status: 'Todo' }),
+      claim: expect.objectContaining({
+        projectItemId: 'PVTI_item',
+        lockRefId: 'REF_lock',
+        dispatchedLockRefId: 'REF_dispatched',
+      }),
+    })]);
+    expect(result).toEqual({
+      projectItemId: 'PVTI_item',
+      status: 'Todo',
+      commentUrl: 'https://github.com/reirei-lab/rainrail/issues/23#issuecomment-1',
+    });
+  });
+
+  it('does not release the project issue when creating the handoff comment fails', async () => {
+    const releases: unknown[] = [];
+    const handoff = createTaskProviderPullRequestCommentHandoff({
+      name: 'github',
+      kind: 'task-provider',
+      async getIssue() {
+        throw new Error('not used');
+      },
+      async createComment() {
+        throw new Error('comment failed');
+      },
+    }, {
+      releaseProjectIssue(input) {
+        releases.push(input);
+      },
+    });
+
+    await expect(handoff.returnTaskToTodo({
+      task,
+      reason: 'checks_failed',
+      commentBody: 'body',
+    })).rejects.toThrow('comment failed');
+    expect(releases).toEqual([]);
+  });
+
+  it('requires a comment target for comment-only handoffs', async () => {
+    let commentCount = 0;
+    const handoff = createTaskProviderPullRequestCommentHandoff({
+      name: 'github',
+      kind: 'task-provider',
+      async getIssue() {
+        throw new Error('not used');
+      },
+      async createComment() {
+        commentCount += 1;
+        throw new Error('not used');
+      },
+    });
+
+    await expect(handoff.returnTaskToTodo({
+      task: {
+        ...task,
+        issue: { contentId: 'DI_draft', contentType: 'DraftIssue', state: 'OPEN' },
+      },
+      reason: 'codex_review',
+      commentBody: 'body',
+    })).rejects.toThrow('handoff requires issue repository and number');
+    expect(commentCount).toBe(0);
+  });
+
+  it('does not release queued project issues when the handoff comment has no target', async () => {
+    const releases: unknown[] = [];
+    const handoff = createTaskProviderPullRequestCommentHandoff({
+      name: 'github',
+      kind: 'task-provider',
+      async getIssue() {
+        throw new Error('not used');
+      },
+      async createComment() {
+        throw new Error('not used');
+      },
+    }, {
+      releaseProjectIssue(input) {
+        releases.push(input);
+      },
+    });
+
+    await expect(handoff.returnTaskToTodo({
+      task: {
+        ...task,
+        issue: { contentId: 'DI_draft', contentType: 'DraftIssue', state: 'OPEN' },
+      },
+      reason: 'codex_review',
+      commentBody: 'body',
+    })).rejects.toThrow('handoff requires issue repository and number');
+    expect(releases).toEqual([]);
+  });
+});
+
+const managedChangeRequestOptions = {
+  agentLogin: 'reirei-agent',
+  branchPrefix: 'agent/',
+};
+
+function pullRequestForChangeRequest(overrides: Partial<PullRequestReviewTarget> = {}): PullRequestReviewTarget {
+  return {
+    repository: 'reirei-lab/rainrail',
+    number: 44,
+    title: 'feat: add PR lifecycle workflows',
+    url: 'https://github.com/reirei-lab/rainrail/pull/44',
+    authorLogin: 'reirei-agent',
+    headRefName: 'agent/test-pr',
+    headRepository: 'reirei-lab/rainrail',
+    headSha: 'abc123',
+    isDraft: false,
+    state: 'OPEN',
+    statusCheckRollup: [],
+    reviewRequests: [],
+    ...overrides,
+  };
+}
+
+function runtimeContext(githubPullRequests: GitHubPullRequestProvider): PluginRuntimeContext {
+  return {
+    runId: 'run-change-request-test',
+    now: () => new Date('2026-07-01T00:00:00.000Z'),
+    providers: { githubPullRequests } as unknown as PluginRuntimeContext['providers'],
+    runtime: {} as PluginRuntimeContext['runtime'],
+    signal: new AbortController().signal,
+    actions: {
+      async mergePullRequest() {
+        throw new Error('not used');
+      },
+      async startRuntime() {
+        throw new Error('not used');
+      },
+      async readSecret() {
+        throw new Error('not used');
+      },
+    },
+  };
+}

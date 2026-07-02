@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { createGitHubProjectTaskQueueProvider, type GitHubProjectTaskQueueConfig } from './github-project.js';
+import { expectGraphQLOperation } from './test-helpers.js';
 
 describe('createGitHubProjectTaskQueueProvider', () => {
   it('loads all GitHub Project pages and maps issue fields into task queue issues', async () => {
@@ -707,7 +708,13 @@ describe('createGitHubProjectTaskQueueProvider', () => {
       lockRepositoryNameWithOwner: 'reirei-lab/rainrail',
     });
     expect(calls.filter((call) => call.query?.includes('updateProjectV2ItemFieldValue'))).toHaveLength(0);
-    expect(calls.some((call) => call.query?.includes('RainrailCreateProjectIssueClaimLock'))).toBe(true);
+    expectGraphQLOperation(calls, 'RainrailCreateProjectIssueClaimLock', {
+      variables: {
+        repositoryId: 'R_repo',
+        name: 'refs/notes/rainrail/locks/reirei-lab-rainrail-24-pvti-draft-queue',
+        oid: 'lock_sha',
+      },
+    });
   });
 
   it('does not list mention draft items for a different target agent login', async () => {
@@ -1189,10 +1196,20 @@ describe('createGitHubProjectTaskQueueProvider', () => {
     });
     expect(calls.filter((call) => call.query?.includes('updateProjectV2ItemFieldValue'))).toHaveLength(0);
     expect(calls.filter((call) => call.query?.includes('RainrailProjectItemStatus'))).toHaveLength(2);
-    expect(calls.find((call) => call.query?.includes('RainrailCreateProjectIssueClaimLock'))?.variables).toMatchObject({
-      repositoryId: 'R_repo',
-      name: 'refs/notes/rainrail/locks/reirei-lab-rainrail-21-item-21',
-      oid: 'lock_sha',
+    expectGraphQLOperation(calls, 'RainrailProjectItemStatus', {
+      variables: {
+        itemId: 'item_21',
+        statusFieldName: 'Status',
+        agentSessionIdFieldName: 'Agent session ID',
+        branchFieldName: 'Branch',
+      },
+    });
+    expectGraphQLOperation(calls, 'RainrailCreateProjectIssueClaimLock', {
+      variables: {
+        repositoryId: 'R_repo',
+        name: 'refs/notes/rainrail/locks/reirei-lab-rainrail-21-item-21',
+        oid: 'lock_sha',
+      },
     });
     expect(fetchImpl).toHaveBeenCalledWith(
       'https://api.github.com/repos/reirei-lab/rainrail/git/commits',
@@ -1393,11 +1410,16 @@ describe('createGitHubProjectTaskQueueProvider', () => {
       '{"text":"agent:main:rainrail-21"}',
       '{"text":"agent/reirei-lab-rainrail-21-project-issue-selection"}',
     ]);
-    expect(calls.find((call) => call.query?.includes('addComment'))?.variables).toMatchObject({
-      subjectId: 'issue_node_21',
-      body: 'started',
+    expectGraphQLOperation(calls, 'RainrailAddIssueComment', {
+      variables: {
+        subjectId: 'issue_node_21',
+        body: 'started',
+      },
+      query: 'addComment',
     });
-    expect(calls.find((call) => call.query?.includes('RainrailDeleteProjectIssueClaimLock'))).toBeDefined();
+    expectGraphQLOperation(calls, 'RainrailDeleteProjectIssueClaimLock', {
+      variables: { refId: 'REF_lock' },
+    });
   });
 
   it('does not update Project fields while acquiring a starting claim', async () => {
@@ -3951,7 +3973,9 @@ describe('createGitHubProjectTaskQueueProvider', () => {
       branchName: 'agent/reirei-lab-rainrail-21-project-issue-selection',
     })).rejects.toThrow('field update failed');
 
-    expect(calls.find((call) => call.query?.includes('RainrailUpdateProjectIssueClaimLock'))).toBeDefined();
+    expectGraphQLOperation(calls, 'RainrailUpdateProjectIssueClaimLock', {
+      variables: { refId: 'REF_lock' },
+    });
     expect(calls.some((call) => JSON.stringify(call).includes('dispatchedAt'))).toBe(true);
   });
 
@@ -4207,14 +4231,15 @@ describe('createGitHubProjectTaskQueueProvider', () => {
       branchName: 'agent/reirei-lab-rainrail-21-project-issue-selection',
     })).resolves.toBeUndefined();
 
-    expect(calls.find((call) =>
-      call.query?.includes('RainrailCreateProjectIssueClaimLock')
-      && String(call.variables?.name).includes('refs/notes/rainrail/dispatched-locks/')
-    )).toBeDefined();
-    expect(calls.find((call) =>
-      call.query?.includes('RainrailDeleteProjectIssueClaimLock')
-      && call.variables?.refId === 'REF_dispatched'
-    )).toBeDefined();
+    const fallbackMarker = expectGraphQLOperation(calls, 'RainrailCreateProjectIssueClaimLock', {
+      occurrence: 1,
+      variables: { repositoryId: 'R_repo' },
+      query: 'createRef',
+    });
+    expect(String(fallbackMarker.variables?.name)).toContain('refs/notes/rainrail/dispatched-locks/');
+    expectGraphQLOperation(calls, 'RainrailDeleteProjectIssueClaimLock', {
+      variables: { refId: 'REF_dispatched' },
+    });
   });
 
   it('finalizes project fields when dispatched marker writes keep failing', async () => {
