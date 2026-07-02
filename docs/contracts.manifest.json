@@ -206,6 +206,7 @@
         "src/sse.test.ts",
         "src/bridge-room.test.ts",
         "src/events-auth.test.ts",
+        "src/dashboard-api.test.ts",
         "src/http-app.test.ts",
         "src/http-utils.test.ts",
         "src/node-server.test.ts"

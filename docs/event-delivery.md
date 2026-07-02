@@ -85,6 +85,16 @@ missing bearer は `missing_bearer_token` の 401、token 不一致は `invalid_
 HTTP entrypoint の公開入口は Fetch adapter の `createRainrailHttpApp` と Node adapter の
 `createRainrailNodeServer`。
 
+HTTP app は任意で operational store を受け取り、dashboard/API 用の provider-neutral
+state も同じ Fetch app から返せる。`GET /api/state` は event / activity / agent task /
+handler retry の snapshot と counts を返す。`hideSkippedActivity=1` が指定された場合、
+activity list は skipped outcome を除外するが、counts は全件数のままにする。
+`GET /api/events/:id` は保存済み event の detail と envelope を返す。operational store
+未設定の app ではどちらも `operational_store_not_configured` の 503 を返し、event が
+存在しない場合は `event_not_found` の 404 を返す。これらの API は Source provider や
+runtime provider の具体 payload に依存せず、operational store の正規化済み snapshot を
+そのまま配信する。
+
 `GET /healthz` と `GET /events` は storage 復元失敗を generic 500 応答に変換する。
 adapter/runtime の未処理例外として落とさず、呼び出し元に安定した失敗を返すため。
 `GET /events` は subscribe 直前に storage refresh を行い、room 内 replay buffer を
