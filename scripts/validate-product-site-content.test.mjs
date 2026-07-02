@@ -70,4 +70,18 @@ describe('product site concepts, guides, and examples', () => {
       expect(examples).toContain(step);
     }
   });
+
+  it('links product readers back to repository work surfaces and engineering contracts', () => {
+    const homepage = page('index');
+
+    for (const target of [
+      'https://github.com/reirei-lab/rainrail',
+      'https://github.com/reirei-lab/rainrail/issues',
+      'https://github.com/reirei-lab/rainrail/blob/main/docs/plugin-runtime-contract.md',
+      'https://github.com/reirei-lab/rainrail/blob/main/docs/README.md',
+    ]) {
+      expect(homepage).toContain(target);
+      expect(docsPage).toContain(target);
+    }
+  });
 });
