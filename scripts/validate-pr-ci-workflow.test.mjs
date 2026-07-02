@@ -35,4 +35,11 @@ describe('pull request CI workflow', () => {
     expect(workflow).toMatch(/^ {6}- name: Run tests\n {8}run: pnpm test$/m);
     expect(workflow).toMatch(/^ {6}- name: Run build\n {8}run: pnpm build$/m);
   });
+
+  it('uploads the product site build artifact for trusted preview deploys without secrets', () => {
+    expect(workflow).toContain('uses: actions/upload-artifact@v4');
+    expect(workflow).toContain('name: rainrail-pages-dist');
+    expect(workflow).toContain('path: apps/www/dist');
+    expect(workflow).toContain('github.event.pull_request.head.repo.full_name == github.repository');
+  });
 });

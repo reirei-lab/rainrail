@@ -1,12 +1,11 @@
 name: Cloudflare Pages Deploy
 
 on:
-  pull_request:
+  workflow_run:
+    workflows:
+      - Pull Request CI
     types:
-      - opened
-      - synchronize
-      - reopened
-      - ready_for_review
+      - completed
   push:
     branches:
       - main
@@ -14,25 +13,28 @@ on:
 
 permissions:
   contents: read
-  deployments: write
-
-concurrency:
-  group: cloudflare-pages-${{ github.event_name == 'pull_request' && github.head_ref || github.ref_name }}
-  cancel-in-progress: true
+  actions: read
 
 jobs:
   preview:
     name: Deploy preview
     if: >-
-      github.event_name == 'pull_request' &&
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      !github.event.pull_request.draft
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.pull_requests[0].head.repo.full_name == github.repository
     runs-on: ubuntu-latest
+    concurrency:
+      group: cloudflare-pages-preview-${{ github.event.workflow_run.pull_requests[0].head.ref }}
+      cancel-in-progress: true
     env:
-      RAINRAIL_PAGES_BRANCH: ${{ github.head_ref }}
+      RAINRAIL_PAGES_BRANCH: ${{ github.event.workflow_run.pull_requests[0].head.ref }}
     steps:
-      - name: Check out repository
+      - name: Check out trusted deploy tooling
         uses: actions/checkout@v5
+        with:
+          ref: main
+          persist-credentials: false
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
@@ -44,11 +46,13 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
 
-      - name: Install dependencies
+      - name: Install trusted dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build Cloudflare Pages preview
-        run: pnpm pages:build
+      - name: Download Cloudflare Pages preview artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run download "${{ github.event.workflow_run.id }}" --name rainrail-pages-dist --dir apps/www/dist
 
       - name: Deploy Cloudflare Pages preview
         env:
@@ -64,11 +68,16 @@ jobs:
 
   production:
     name: Deploy production
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    if: github.ref_name == 'main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
+    concurrency:
+      group: cloudflare-pages-production-main
+      cancel-in-progress: true
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
+        with:
+          persist-credentials: false
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
