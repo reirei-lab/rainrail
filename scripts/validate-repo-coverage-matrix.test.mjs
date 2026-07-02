@@ -7,16 +7,62 @@ const matrix = readFileSync(
 );
 const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
 
-/** @param {RegExp} pattern */
-const extractBacktickPaths = (pattern) => [...matrix.matchAll(pattern)].flatMap((match) => {
+/**
+ * @param {string} text
+ * @param {RegExp} pattern
+ */
+const extractBacktickPathsFromText = (text, pattern) => [...text.matchAll(pattern)].flatMap((match) => {
   const path = match[1];
   return path === undefined ? [] : [path];
 });
+
+/** @param {RegExp} pattern */
+const extractBacktickPaths = (pattern) => extractBacktickPathsFromText(matrix, pattern);
 
 const rainrailTestPaths = extractBacktickPaths(/`((?:src|scripts)\/[^`]+\.test\.(?:ts|mjs))`/g);
 
 const rainrailSourcePaths = extractBacktickPaths(/`(src\/[^`]+\.ts)`/g)
   .filter((path) => !path.endsWith('.test.ts'));
+
+/**
+ * @param {string} markdown
+ */
+const parseCoverageRows = (markdown) => markdown
+  .split('\n')
+  .filter((line) => line.startsWith('| `'))
+  .flatMap((line) => {
+    const columns = line.slice(1, -1).split('|').map((column) => column.trim());
+    const [originalCell, , , coverageCell = '', statusCell = ''] = columns;
+    const originalTest = extractBacktickPathsFromText(originalCell ?? '', /`([^`]+)`/g)[0];
+
+    return originalTest === undefined
+      ? []
+      : [{ originalTest, coverageCell, statusCell }];
+  });
+
+/**
+ * @param {string} markdown
+ */
+const validateCoverageRows = (markdown) => parseCoverageRows(markdown).flatMap((row) => {
+  const coverageTests = extractBacktickPathsFromText(
+    row.coverageCell,
+    /`((?:src|scripts)\/[^`]+\.test\.(?:ts|mjs))`/g,
+  );
+  const hasAlternateStatus = /\b(?:Alternate check|Not ported)\b/.test(row.statusCell);
+  const errors = [];
+
+  if (coverageTests.length === 0 && !hasAlternateStatus) {
+    errors.push(`${row.originalTest} must map to a Rainrail test or explicit alternate/not ported status`);
+  }
+
+  for (const coverageTest of coverageTests) {
+    if (!existsSync(new URL(`../${coverageTest}`, import.meta.url))) {
+      errors.push(`${row.originalTest} references missing Rainrail test ${coverageTest}`);
+    }
+  }
+
+  return errors;
+});
 
 describe('source repository test coverage matrix', () => {
   it('records the source repositories and current Rainrail verification command', () => {
@@ -72,6 +118,7 @@ describe('source repository test coverage matrix', () => {
       expect(existsSync(new URL(`../${rainrailTest}`, import.meta.url)), rainrailTest).toBe(true);
     }
 
+    expect(validateCoverageRows(matrix)).toEqual([]);
     expect(matrix).toContain('Not ported as a separate Rainrail workflow');
   });
 
@@ -81,6 +128,18 @@ describe('source repository test coverage matrix', () => {
     for (const rainrailSource of rainrailSourcePaths) {
       expect(existsSync(new URL(`../${rainrailSource}`, import.meta.url)), rainrailSource).toBe(true);
     }
+  });
+
+  it('rejects coverage rows whose Rainrail coverage column has no test or alternate status', () => {
+    const brokenMatrix = [
+      '| Original test | Original viewpoint | Rainrail package/module | Rainrail test coverage | Status and notes |',
+      '| --- | --- | --- | --- | --- |',
+      '| `source/test/missing.test.ts` | Missing mapping. | `src/index.ts` |  | Ported. |',
+    ].join('\n');
+
+    expect(validateCoverageRows(brokenMatrix)).toContain(
+      'source/test/missing.test.ts must map to a Rainrail test or explicit alternate/not ported status',
+    );
   });
 
   it('links the matrix from the README', () => {
