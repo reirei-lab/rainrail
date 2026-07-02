@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import { getReaderOrThrow, readNext, readUntil } from './test-helpers.js';
+
 import {
   RainrailBridgeRoom,
   createCloudflareIssueReporterWorkflow,
@@ -318,9 +320,8 @@ describe('Cloudflare tail source', () => {
     const storage = fakeState();
     const room = new RainrailBridgeRoom(storage, { publishToken: TEST_PUBLISH_TOKEN, replayLimit: 10 });
     const eventsResponse = await room.fetch(eventsRequest());
-    const reader = eventsResponse.body?.getReader();
-    expect(reader).toBeDefined();
-    expect(await readNext(reader!)).toBe(': connected\n\n');
+    const reader = getReaderOrThrow(eventsResponse);
+    expect(await readNext(reader)).toBe(': connected\n\n');
 
     const result = await publishCloudflareTailEvents([
       cloudflareTailFixture({
@@ -332,8 +333,8 @@ describe('Cloudflare tail source', () => {
       publish: (event) => room.fetch(publishRequest(event)),
     });
 
-    const chunk = await readUntil(reader!, 'cloudflare.error');
-    await reader?.cancel();
+    const chunk = await readUntil(reader, 'cloudflare.error');
+    await reader.cancel();
 
     expect(result).toEqual([{ ok: true, id: 'cloudflare-tail:tail-asme-site-20260615T081200000Z-ray-1:cloudflare.error' }]);
     expect(chunk).toContain('event: cloudflare.error\n');
@@ -814,26 +815,6 @@ function eventsRequest(): Request {
   return new Request('https://rainrail.local/events', {
     headers: { Authorization: `Bearer ${TEST_PUBLISH_TOKEN}` },
   });
-}
-
-async function readNext(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<string> {
-  const { value, done } = await reader.read();
-  expect(done).toBe(false);
-  return new TextDecoder().decode(value);
-}
-
-async function readUntil(reader: ReadableStreamDefaultReader<Uint8Array>, expected: string): Promise<string> {
-  const decoder = new TextDecoder();
-  let text = '';
-
-  for (let index = 0; index < 10; index += 1) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    text += decoder.decode(value);
-    if (text.includes(expected)) return text;
-  }
-
-  return text;
 }
 
 async function delay(ms: number): Promise<void> {

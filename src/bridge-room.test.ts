@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import { getReaderOrThrow, readNext, readUntil } from './test-helpers.js';
+
 import {
   createEventEnvelope,
   mentionDraftRequestFromEvent,
@@ -44,10 +46,9 @@ describe('Rainrail bridge room', () => {
     expect(eventsResponse.status).toBe(200);
     expect(eventsResponse.headers.get('Content-Type')).toBe('text/event-stream');
 
-    const reader = eventsResponse.body?.getReader();
-    expect(reader).toBeDefined();
-    const chunk = await readUntil(reader!, 'github.issue');
-    await reader?.cancel();
+    const reader = getReaderOrThrow(eventsResponse);
+    const chunk = await readUntil(reader, 'github.issue');
+    await reader.cancel();
 
     expect(chunk).toContain(': connected\n\n');
     expect(chunk).toContain('event: github.issue\n');
@@ -130,16 +131,15 @@ describe('Rainrail bridge room', () => {
   it('does not broadcast when persistence fails', async () => {
     const room = createTestRoom(failingPutState(), { replayLimit: 10 });
     const eventsResponse = await room.fetch(eventsRequest());
-    const reader = eventsResponse.body?.getReader();
-    expect(reader).toBeDefined();
-    expect(await readNext(reader!)).toBe(': connected\n\n');
+    const reader = getReaderOrThrow(eventsResponse);
+    expect(await readNext(reader)).toBe(': connected\n\n');
 
     const publishResponse = await room.fetch(publishRequest(fixtureEvent('delivery-1', 'github.issue')));
 
     expect(publishResponse.status).toBe(500);
     await expect(publishResponse.text()).resolves.toBe('publish failed\n');
-    await expect(readNextOrTimeout(reader!)).resolves.toBe('timeout');
-    await reader?.cancel();
+    await expect(readNextOrTimeout(reader)).resolves.toBe('timeout');
+    await reader.cancel();
   });
 
   it('treats duplicate event ids as successful no-ops', async () => {
@@ -156,12 +156,11 @@ describe('Rainrail bridge room', () => {
     };
 
     const eventsResponse = await room.fetch(eventsRequest());
-    const reader = eventsResponse.body?.getReader();
-    expect(reader).toBeDefined();
-    expect(await readNext(reader!)).toBe(': connected\n\n');
+    const reader = getReaderOrThrow(eventsResponse);
+    expect(await readNext(reader)).toBe(': connected\n\n');
 
     expect((await room.fetch(publishRequest(event))).status).toBe(200);
-    expect(await readNext(reader!)).toContain(event.id);
+    expect(await readNext(reader)).toContain(event.id);
     const duplicateResponse = await room.fetch(publishRequest(duplicate));
     expect(duplicateResponse.status).toBe(200);
     await expect(duplicateResponse.json()).resolves.toMatchObject({
@@ -173,8 +172,8 @@ describe('Rainrail bridge room', () => {
     });
 
     expect(storage.storedEvents().map((storedEvent) => storedEvent.id)).toEqual([event.id]);
-    await expect(readNextOrTimeout(reader!)).resolves.toBe('timeout');
-    await reader?.cancel();
+    await expect(readNextOrTimeout(reader)).resolves.toBe('timeout');
+    await reader.cancel();
   });
 
   it('rejects multiple rooms using the same storage backend', () => {
@@ -211,13 +210,12 @@ describe('Rainrail bridge room', () => {
 
     storage.resolveNextGet([]);
     const eventsResponse = await events;
-    const reader = eventsResponse.body?.getReader();
-    expect(reader).toBeDefined();
-    expect(await readNext(reader!)).toBe(': connected\n\n');
+    const reader = getReaderOrThrow(eventsResponse);
+    expect(await readNext(reader)).toBe(': connected\n\n');
 
     expect((await publish).status).toBe(200);
-    expect(await readNext(reader!)).toContain(event.id);
-    await reader?.cancel();
+    expect(await readNext(reader)).toContain(event.id);
+    await reader.cancel();
   });
 
   it('skips aborted event subscription refreshes queued behind publishes', async () => {
@@ -600,9 +598,8 @@ describe('Rainrail bridge room', () => {
     await health;
 
     const eventsResponse = await room.fetch(eventsRequest());
-    const reader = eventsResponse.body?.getReader();
-    expect(reader).toBeDefined();
-    expect(await readNext(reader!)).toBe(': connected\n\n');
+    const reader = getReaderOrThrow(eventsResponse);
+    expect(await readNext(reader)).toBe(': connected\n\n');
 
     storage.pauseNextPut();
     const controller = new AbortController();
@@ -614,8 +611,8 @@ describe('Rainrail bridge room', () => {
 
     expect((await publish).status).toBe(200);
     expect(storage.storedEvents().map((event) => event.id)).toEqual(['github.issue-source:delivery-1:github.issue']);
-    await expect(readNext(reader!)).resolves.toContain('github.issue-source:delivery-1:github.issue');
-    await reader?.cancel();
+    await expect(readNext(reader)).resolves.toContain('github.issue-source:delivery-1:github.issue');
+    await reader.cancel();
   });
 
   it('strips non-contract envelope fields before storage and SSE delivery', async () => {
@@ -669,10 +666,9 @@ describe('Rainrail bridge room', () => {
     expect(storage.storedEvents()[0]?.rawPayload).not.toHaveProperty('sha256');
 
     const eventsResponse = await room.fetch(eventsRequest());
-    const reader = eventsResponse.body?.getReader();
-    expect(reader).toBeDefined();
-    const chunk = await readUntil(reader!, 'github.issue');
-    await reader?.cancel();
+    const reader = getReaderOrThrow(eventsResponse);
+    const chunk = await readUntil(reader, 'github.issue');
+    await reader.cancel();
 
     expect(chunk).not.toContain('secret raw webhook body');
     expect(chunk).not.toContain('secret-subject-token');
@@ -712,10 +708,9 @@ describe('Rainrail bridge room', () => {
     });
 
     const eventsResponse = await room.fetch(eventsRequest());
-    const reader = eventsResponse.body?.getReader();
-    expect(reader).toBeDefined();
-    const chunk = await readUntil(reader!, 'github.issue');
-    await reader?.cancel();
+    const reader = getReaderOrThrow(eventsResponse);
+    const chunk = await readUntil(reader, 'github.issue');
+    await reader.cancel();
 
     expect(chunk).not.toContain('secret-repository');
     expect(chunk).not.toContain('secret-account');
@@ -864,10 +859,9 @@ describe('Rainrail bridge room', () => {
     expect(storage.storedEvents()[0]?.rawPayload.contentType).toBe('application/json');
 
     const eventsResponse = await room.fetch(eventsRequest());
-    const reader = eventsResponse.body?.getReader();
-    expect(reader).toBeDefined();
-    const chunk = await readUntil(reader!, 'github.issue');
-    await reader?.cancel();
+    const reader = getReaderOrThrow(eventsResponse);
+    const chunk = await readUntil(reader, 'github.issue');
+    await reader.cancel();
 
     expect(chunk).toContain('"contentType":"application/json"');
     expect(chunk).not.toContain('secret-parameter');
@@ -894,10 +888,9 @@ describe('Rainrail bridge room', () => {
     });
 
     const eventsResponse = await room.fetch(eventsRequest());
-    const reader = eventsResponse.body?.getReader();
-    expect(reader).toBeDefined();
-    const chunk = await readUntil(reader!, 'github.issue');
-    await reader?.cancel();
+    const reader = getReaderOrThrow(eventsResponse);
+    const chunk = await readUntil(reader, 'github.issue');
+    await reader.cancel();
 
     expect(chunk).not.toContain('secret-action');
   });
@@ -981,10 +974,9 @@ describe('Rainrail bridge room', () => {
     });
 
     const eventsResponse = await room.fetch(eventsRequest());
-    const reader = eventsResponse.body?.getReader();
-    expect(reader).toBeDefined();
-    const chunk = await readUntil(reader!, 'discussion_r3500091217');
-    await reader?.cancel();
+    const reader = getReaderOrThrow(eventsResponse);
+    const chunk = await readUntil(reader, 'discussion_r3500091217');
+    await reader.cancel();
 
     expect(chunk).toContain('token=[redacted]');
     expect(chunk).toContain('#discussion_r3500091217');
@@ -1067,10 +1059,9 @@ describe('Rainrail bridge room', () => {
     expect(storage.storedEvents()[0]?.payload).toEqual({});
 
     const eventsResponse = await room.fetch(eventsRequest());
-    const reader = eventsResponse.body?.getReader();
-    expect(reader).toBeDefined();
-    const chunk = await readUntil(reader!, 'github.issue');
-    await reader?.cancel();
+    const reader = getReaderOrThrow(eventsResponse);
+    const chunk = await readUntil(reader, 'github.issue');
+    await reader.cancel();
 
     expect(chunk).not.toContain('secret scalar webhook body');
   });
@@ -1085,10 +1076,9 @@ describe('Rainrail bridge room', () => {
     await expect(health.json()).resolves.toMatchObject({ recent: 1 });
 
     const eventsResponse = await room.fetch(eventsRequest());
-    const reader = eventsResponse.body?.getReader();
-    expect(reader).toBeDefined();
-    const chunk = await readUntil(reader!, 'github.issue');
-    await reader?.cancel();
+    const reader = getReaderOrThrow(eventsResponse);
+    const chunk = await readUntil(reader, 'github.issue');
+    await reader.cancel();
 
     expect(chunk).toContain(valid.id);
     expect(chunk).not.toContain('bad\\nid');
@@ -1122,10 +1112,9 @@ describe('Rainrail bridge room', () => {
     const room = createTestRoom(storedReplayState([storedMention]), { replayLimit: 10 });
 
     const eventsResponse = await room.fetch(eventsRequest());
-    const reader = eventsResponse.body?.getReader();
-    expect(reader).toBeDefined();
-    const chunk = await readUntil(reader!, 'github.issue_comment');
-    await reader?.cancel();
+    const reader = getReaderOrThrow(eventsResponse);
+    const chunk = await readUntil(reader, 'github.issue_comment');
+    await reader.cancel();
 
     expect(chunk).toContain('"mentionedLogins":["reirei-agent"]');
   });
@@ -1259,10 +1248,9 @@ describe('Rainrail bridge room', () => {
     const response = await room.fetch(
       eventsRequest(TEST_PUBLISH_TOKEN, { 'Last-Event-ID': first.id }),
     );
-    const reader = response.body?.getReader();
-    expect(reader).toBeDefined();
-    const chunk = await readUntil(reader!, 'cloudflare.tail');
-    await reader?.cancel();
+    const reader = getReaderOrThrow(response);
+    const chunk = await readUntil(reader, 'cloudflare.tail');
+    await reader.cancel();
 
     expect(chunk).not.toContain('event: github.issue\n');
     expect(chunk).toContain('event: cloudflare.tail\n');
@@ -1289,26 +1277,6 @@ function fakeState(initialEvents: unknown[] = []) {
     },
     storedEvents: () => (map.get('rainrail:recent-events') ?? []) as ReturnType<typeof fixtureEvent>[],
   };
-}
-
-async function readUntil(reader: ReadableStreamDefaultReader<Uint8Array>, expected: string): Promise<string> {
-  const decoder = new TextDecoder();
-  let text = '';
-
-  for (let index = 0; index < 10; index += 1) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    text += decoder.decode(value);
-    if (text.includes(expected)) return text;
-  }
-
-  return text;
-}
-
-async function readNext(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<string> {
-  const { value, done } = await reader.read();
-  expect(done).toBe(false);
-  return new TextDecoder().decode(value);
 }
 
 async function readNextOrTimeout(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<string> {
