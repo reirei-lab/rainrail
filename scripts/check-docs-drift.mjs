@@ -722,6 +722,56 @@ export const validateChangedFiles = (root = repoRoot, changedFiles = [], baseCon
   return errors;
 };
 
+const dependencyOnlyPackageJsonFields = [
+  'dependencies',
+  'devDependencies',
+  'peerDependencies',
+  'optionalDependencies',
+  'bundleDependencies',
+  'bundledDependencies',
+  'overrides',
+  'pnpm',
+];
+
+/**
+ * @param {unknown} value
+ */
+const stripDependencyOnlyPackageJsonFields = (value) => {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return value;
+  }
+
+  /** @type {Record<string, unknown>} */
+  const copy = { ...value };
+  for (const field of dependencyOnlyPackageJsonFields) {
+    delete copy[field];
+  }
+
+  return copy;
+};
+
+/**
+ * @param {string} root
+ * @param {string[]} changedFiles
+ * @param {(path: string) => string} readBaseText
+ * @returns {string[]}
+ */
+export const filterDependencyOnlyPackageJsonChanges = (root, changedFiles, readBaseText) =>
+  changedFiles.filter((path) => {
+    if (!path.endsWith('package.json')) {
+      return true;
+    }
+
+    try {
+      const basePackageJson = stripDependencyOnlyPackageJsonFields(JSON.parse(readBaseText(path)));
+      const currentPackageJson = stripDependencyOnlyPackageJsonFields(JSON.parse(readText(root, path)));
+
+      return JSON.stringify(basePackageJson) !== JSON.stringify(currentPackageJson);
+    } catch {
+      return true;
+    }
+  });
+
 /**
  * @param {string} baseRef
  * @returns {string[]}
@@ -732,7 +782,11 @@ const changedFilesFromGit = (baseRef) => {
     encoding: 'utf8',
   });
 
-  return output.split('\n').filter(Boolean);
+  return filterDependencyOnlyPackageJsonChanges(repoRoot, output.split('\n').filter(Boolean), (path) =>
+    execFileSync('git', ['show', `${baseRef}:${path}`], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+    }));
 };
 
 const main = () => {
