@@ -1310,7 +1310,7 @@ function pullRequestWithCandidateReviewResolution(
   if (review === undefined) return pullRequest;
   const latest = latestActionableReviewForCurrentHead(pullRequest, review.authorLogin);
   const latestState = normalize(latest?.state);
-  if (review.state === 'APPROVED' && latest !== undefined) {
+  if (review.state === 'APPROVED' && ['approved', 'changes_requested', 'dismissed'].includes(latestState)) {
     return pullRequest;
   }
   if (review.state === 'DISMISSED') {

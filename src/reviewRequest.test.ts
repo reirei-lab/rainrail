@@ -304,6 +304,37 @@ describe('handleReviewRequestEvent', () => {
     expect(requestCount).toBe(0);
   });
 
+  it('does not request review again when current approval follows a live comment-only review', async () => {
+    let requestCount = 0;
+
+    const result = await handleReviewRequestEvent(reviewEvent({
+      state: 'approved',
+      reviewerLogin: 'hiragram',
+      reviewCommitId: 'abc123',
+    }), {
+      agentLogin: 'reirei-agent',
+      reviewerLogin: 'hiragram',
+      branchPrefix: 'agent/',
+      pullRequests: {
+        async getPullRequest(input) {
+          return pullRequest({
+            ...input,
+            reviews: [{ authorLogin: 'hiragram', state: 'COMMENTED', commitId: 'abc123' }],
+          });
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          requestCount += 1;
+        },
+      },
+    });
+
+    expect(result.reason).toBe('pull request is already approved by configured reviewer');
+    expect(requestCount).toBe(0);
+  });
+
   it('does not let an old configured reviewer dismissal hide a live approval', async () => {
     const reviewRequests: Array<{ repository: string; number: number; reviewerLogin: string }> = [];
 

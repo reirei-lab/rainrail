@@ -79,6 +79,20 @@ describe('handleAutoMergeEvent', () => {
     expect(runtimeMerges).toEqual([expect.objectContaining({ number: 44 })]);
   });
 
+  it('uses the current approval webhook when live latest review is only commented', async () => {
+    const runtimeMerges: unknown[] = [];
+
+    const result = await handleAutoMergeEvent(reviewEvent({
+      headSha: 'abc123',
+      reviewCommitId: 'abc123',
+    }), options({
+      reviews: [{ authorLogin: 'hiragram', state: 'COMMENTED', commitId: 'abc123' }],
+    }), runtimeContext(runtimeMerges));
+
+    expect(result.reason).toBe('pull_request_merged');
+    expect(runtimeMerges).toEqual([expect.objectContaining({ number: 44 })]);
+  });
+
   it('ignores approval webhooks submitted for an old review commit', async () => {
     const runtimeMerges: unknown[] = [];
 
