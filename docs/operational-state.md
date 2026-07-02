@@ -10,6 +10,8 @@ SQLite-backed な運用状態を扱う。Source provider や runtime provider �
 `eventLimit`、任意の clock を受け取る。store は `StoredOperationalEvent`、
 `StoredActivityEvent`、`StoredAgentTask`、`StoredEventHandlerRetry` を永続化し、
 `OperationalStoreSnapshot` として recent state と counts を返す。
+activity id の採番は SQLite の atomic upsert / returning で進め、同じ databasePath を
+複数 process が共有しても同じ id を返さない。
 
 record input は `RecordActivityEventInput`、`RecordAgentTaskInput`、
 `RecordEventHandlerRetryInput` を使う。`recordAgentTask` は同じ task id の再記録で
@@ -21,7 +23,9 @@ issue、claim、pid などの runtime metadata を消さない。
 handler retry は `EventHandlerRetryHandler` として event envelope と retry row を受ける。
 `processDueEventHandlerRetries` は `ProcessDueEventHandlerRetriesOptions` に従って due retry を
 読み、`prioritizeEventHandlerRetriesForProcessing` で conflict check を優先してから batch
-`limit` を適用する。結果は `ProcessDueEventHandlerRetryResult` として返す。
+`limit` を適用する。handler 実行前には retry row を条件付き delete で claim し、
+同じ store を複数 runner が処理しても同じ handler side effect が二重に走らないようにする。
+結果は `ProcessDueEventHandlerRetryResult` として返す。
 
 `isRetryableOperationalError` は rate limit、HTTP 429/5xx、fetch failure、GitHub の
 mergeability / checks / draft state / reviews の反映待ちを一時エラーとして扱う。

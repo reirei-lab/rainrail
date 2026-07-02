@@ -75,6 +75,7 @@ export interface StoredAgentTask extends RecordAgentTaskInput {
 export interface RecordEventHandlerRetryInput {
   eventId: string;
   handlerName: string;
+  attempts?: number;
   nextRetryAt: string;
   lastError: string;
 }
@@ -349,7 +350,7 @@ export class RainrailOperationalStore {
 
   recordEventHandlerRetry(input: RecordEventHandlerRetryInput): StoredEventHandlerRetry {
     const existing = this.getEventHandlerRetry(input.eventId, input.handlerName);
-    const attempts = (existing?.attempts ?? 0) + 1;
+    const attempts = input.attempts ?? (existing?.attempts ?? 0) + 1;
     const updatedAt = this.#now().toISOString();
     this.#db.prepare(`
       insert into event_handler_retries (
@@ -373,6 +374,27 @@ export class RainrailOperationalStore {
     `).get(eventId, handlerName) as RetryRow | undefined;
 
     return row === undefined ? undefined : retryFromRow(row);
+  }
+
+  claimEventHandlerRetry(retry: StoredEventHandlerRetry): boolean {
+    const result = this.#db.prepare(`
+      delete from event_handler_retries
+      where event_id = ?
+        and handler_name = ?
+        and attempts = ?
+        and next_retry_at = ?
+        and last_error = ?
+        and updated_at = ?
+    `).run(
+      retry.eventId,
+      retry.handlerName,
+      retry.attempts,
+      retry.nextRetryAt,
+      retry.lastError,
+      retry.updatedAt,
+    );
+
+    return result.changes === 1;
   }
 
   listDueEventHandlerRetries(now: string, limit?: number): StoredEventHandlerRetry[] {
@@ -567,19 +589,14 @@ function retryFromRow(row: RetryRow): StoredEventHandlerRetry {
 }
 
 function nextId(db: DatabaseSync, name: string, prefix: string): string {
-  const current = db.prepare(`
-    select value
-    from sequences
-    where name = ?
-  `).get(name) as { value: number } | undefined;
-  const next = (current?.value ?? 0) + 1;
-  db.prepare(`
+  const row = db.prepare(`
     insert into sequences (name, value)
-    values (?, ?)
-    on conflict(name) do update set value = excluded.value
-  `).run(name, next);
+    values (?, 1)
+    on conflict(name) do update set value = value + 1
+    returning value
+  `).get(name) as { value: number };
 
-  return `${prefix}_${String(next).padStart(6, '0')}`;
+  return `${prefix}_${String(row.value).padStart(6, '0')}`;
 }
 
 function countRows(db: DatabaseSync, tableName: string): number {

@@ -120,6 +120,44 @@ describe('operational retry helpers', () => {
     expect(handled).toEqual(['conflict-check']);
     store.close();
   });
+
+  it('claims a retry row before running a handler so concurrent processors do not duplicate side effects', async () => {
+    const store = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:00:00.000Z'),
+    });
+    const event = store.recordEvent(fixtureEvent());
+    store.recordEventHandlerRetry({
+      eventId: event.id,
+      handlerName: 'review-request',
+      nextRetryAt: '2026-07-02T00:00:00.000Z',
+      lastError: 'fetch failed',
+    });
+    let handlerCalls = 0;
+    const handler = async () => {
+      handlerCalls += 1;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    };
+
+    const [first, second] = await Promise.all([
+      processDueEventHandlerRetries({
+        store,
+        now: '2026-07-02T00:00:00.000Z',
+        handlers: { 'review-request': handler },
+      }),
+      processDueEventHandlerRetries({
+        store,
+        now: '2026-07-02T00:00:00.000Z',
+        handlers: { 'review-request': handler },
+      }),
+    ]);
+
+    expect([...first, ...second].filter((item) => item.status === 'fulfilled')).toHaveLength(1);
+    expect(handlerCalls).toBe(1);
+    expect(store.getEventHandlerRetry(event.id, 'review-request')).toBeUndefined();
+    store.close();
+  });
 });
 
 describe('operational reconcile helpers', () => {

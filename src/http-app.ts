@@ -1,5 +1,6 @@
 import { publishCloudflareTailEvents, type CloudflareTailEvent, type PublishCloudflareTailEventResult } from './cloudflare-tail.js';
 import { rainrailEventsAuthErrorResponse, verifyRainrailEventsBearerToken } from './events-auth.js';
+import type { RainrailEventEnvelope } from './events.js';
 import { handleGitHubWebhookRequest } from './github-webhook.js';
 import {
   DEFAULT_MAX_REQUEST_BODY_BYTES,
@@ -109,7 +110,12 @@ async function routeRainrailHttpRequest(request: Request, options: RainrailHttpA
     const auth = verifyDashboardReadRequest(request, options);
     if (auth !== undefined) return auth;
 
-    return dashboardEventDetailResponse(decodeURIComponent(eventDetailMatch[1]!), options);
+    const eventId = safeDecodeURIComponent(eventDetailMatch[1]!);
+    if (eventId === undefined) {
+      return jsonResponse({ error: 'invalid_event_id' }, { status: 400 });
+    }
+
+    return dashboardEventDetailResponse(eventId, options);
   }
 
   return textResponse('not found\n', { status: 404 });
@@ -185,8 +191,8 @@ async function handleGitHubWebhook(request: Request, options: RainrailHttpAppOpt
   }, { status: 202 });
 }
 
-function publishEvent(options: RainrailHttpAppOptions, event: unknown): Promise<Response> | Response {
-  return options.room.fetch(new Request(`${INTERNAL_ROOM_ORIGIN}/publish`, {
+async function publishEvent(options: RainrailHttpAppOptions, event: unknown): Promise<Response> {
+  const response = await options.room.fetch(new Request(`${INTERNAL_ROOM_ORIGIN}/publish`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${options.publishToken}`,
@@ -194,6 +200,27 @@ function publishEvent(options: RainrailHttpAppOptions, event: unknown): Promise<
     },
     body: JSON.stringify(event),
   }));
+
+  if (response.ok && isRainrailEventEnvelope(event)) {
+    options.operationalStore?.recordEvent(event);
+  }
+
+  return response;
+}
+
+function safeDecodeURIComponent(value: string): string | undefined {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function isRainrailEventEnvelope(value: unknown): value is RainrailEventEnvelope {
+  return typeof value === 'object'
+    && value !== null
+    && 'schemaVersion' in value
+    && value.schemaVersion === 'rainrail.event.v1';
 }
 
 function bridgeAuthorizationHeaders(request: Request, publishToken: string): Headers {

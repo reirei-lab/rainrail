@@ -89,9 +89,12 @@ export async function processDueEventHandlerRetries(
       continue;
     }
 
+    if (!options.store.claimEventHandlerRetry(retry)) {
+      continue;
+    }
+
     try {
       await handler(event.envelope, retry);
-      options.store.clearEventHandlerRetry(retry.eventId, retry.handlerName);
       results.push({ eventId: retry.eventId, handlerName: retry.handlerName, status: 'fulfilled' });
     } catch (error) {
       if (!isRetryableOperationalError(error)) {
@@ -108,6 +111,7 @@ export async function processDueEventHandlerRetries(
       options.store.recordEventHandlerRetry({
         eventId: retry.eventId,
         handlerName: retry.handlerName,
+        attempts: retry.attempts + 1,
         nextRetryAt: new Date(new Date(options.now).getTime() + retryDelayMs(retry.attempts)).toISOString(),
         lastError: error instanceof Error ? error.message : String(error),
       });

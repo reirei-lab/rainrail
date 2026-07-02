@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   createEventEnvelope,
+  createGitHubWebhookSignature,
   createRainrailHttpApp,
   RainrailBridgeRoom,
   RainrailOperationalStore,
@@ -117,6 +118,77 @@ describe('Rainrail dashboard API', () => {
 
     expect(response.status).toBe(503);
     await expect(response.json()).resolves.toEqual({ error: 'operational_store_not_configured' });
+  });
+
+  it('records HTTP-ingressed events in the operational store after publish succeeds', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:00:00.000Z'),
+    });
+    const app = createRainrailHttpApp({
+      room: new RainrailBridgeRoom(fakeState(), { publishToken: 'publish-token' }),
+      githubWebhookSecret: 'secret',
+      publishToken: 'publish-token',
+      eventsBearerToken: 'events-token',
+      operationalStore,
+    });
+    const rawBody = JSON.stringify({
+      action: 'opened',
+      repository: {
+        full_name: 'reirei-lab/rainrail',
+        html_url: 'https://github.com/reirei-lab/rainrail',
+      },
+      issue: {
+        number: 25,
+        title: 'store、retry/reconcile、dashboard/API を移植する',
+        html_url: 'https://github.com/reirei-lab/rainrail/issues/25',
+      },
+    });
+
+    const webhook = await app.fetch(new Request('https://rainrail.local/webhooks/github', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-github-event': 'issues',
+        'x-github-delivery': 'delivery-operational-store',
+        'x-hub-signature-256': await createGitHubWebhookSignature('secret', rawBody),
+      },
+      body: rawBody,
+    }));
+    expect(webhook.status).toBe(202);
+
+    const state = await app.fetch(new Request('https://rainrail.local/api/state', {
+      headers: { authorization: 'Bearer events-token' },
+    }));
+    await expect(state.json()).resolves.toMatchObject({
+      events: [{ id: 'github-webhook:delivery-operational-store:github.issue' }],
+    });
+
+    operationalStore.close();
+  });
+
+  it('treats malformed percent-encoded event ids as client errors', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:00:00.000Z'),
+    });
+    const app = createRainrailHttpApp({
+      room: new RainrailBridgeRoom(fakeState(), { publishToken: 'publish-token' }),
+      githubWebhookSecret: 'secret',
+      publishToken: 'publish-token',
+      eventsBearerToken: 'events-token',
+      operationalStore,
+    });
+
+    const response = await app.fetch(new Request('https://rainrail.local/api/events/%E0%A4%A', {
+      headers: { authorization: 'Bearer events-token' },
+    }));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: 'invalid_event_id' });
+    operationalStore.close();
   });
 });
 

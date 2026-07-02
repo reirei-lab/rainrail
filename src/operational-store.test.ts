@@ -96,6 +96,62 @@ describe('RainrailOperationalStore', () => {
     store.close();
   });
 
+  it('claims retry rows atomically across store connections', () => {
+    const { databasePath, cleanup } = temporaryDatabasePath();
+    try {
+      const first = new RainrailOperationalStore({ databasePath, eventLimit: 10, now: fixedClock() });
+      const second = new RainrailOperationalStore({ databasePath, eventLimit: 10, now: fixedClock() });
+      const event = first.recordEvent(fixtureEvent('delivery-1', 'github.issue'));
+      first.recordEventHandlerRetry({
+        eventId: event.id,
+        handlerName: 'review-request',
+        nextRetryAt: '2026-07-02T01:00:00.000Z',
+        lastError: 'fetch failed',
+      });
+      const firstRetry = first.getEventHandlerRetry(event.id, 'review-request')!;
+      const staleSecondRetry = second.getEventHandlerRetry(event.id, 'review-request')!;
+
+      expect(first.claimEventHandlerRetry(firstRetry)).toBe(true);
+      expect(second.claimEventHandlerRetry(staleSecondRetry)).toBe(false);
+      expect(first.getEventHandlerRetry(event.id, 'review-request')).toBeUndefined();
+
+      first.close();
+      second.close();
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('generates unique activity ids across store connections', () => {
+    const { databasePath, cleanup } = temporaryDatabasePath();
+    try {
+      const first = new RainrailOperationalStore({ databasePath, eventLimit: 10, now: fixedClock() });
+      const second = new RainrailOperationalStore({ databasePath, eventLimit: 10, now: fixedClock() });
+
+      const firstActivity = first.recordActivityEvent({
+        category: 'plugin',
+        targetType: 'event',
+        actionType: 'plugin_executed',
+        outcome: 'success',
+        summary: 'first activity',
+      });
+      const secondActivity = second.recordActivityEvent({
+        category: 'plugin',
+        targetType: 'event',
+        actionType: 'plugin_executed',
+        outcome: 'success',
+        summary: 'second activity',
+      });
+
+      expect(firstActivity.id).toBe('act_000001');
+      expect(secondActivity.id).toBe('act_000002');
+      first.close();
+      second.close();
+    } finally {
+      cleanup();
+    }
+  });
+
   it('preserves existing runtime metadata when re-recording a task with partial updates', () => {
     const store = new RainrailOperationalStore({ databasePath: ':memory:', eventLimit: 10, now: fixedClock() });
     store.recordAgentTask({
