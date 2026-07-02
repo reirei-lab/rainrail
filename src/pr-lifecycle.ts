@@ -746,12 +746,6 @@ export async function handleAutoMergeEvent(
     });
     mergedPullRequests.push(pullRequest);
   }
-  if (sawPendingMergeability) {
-    throw new Error('pull request mergeability is still being calculated');
-  }
-  if (sawUnreflectedCheckRollup) {
-    throw new Error('pull request checks are still being reflected');
-  }
   if (mergedPullRequests.length > 0) {
     return {
       handled: true,
@@ -759,6 +753,12 @@ export async function handleAutoMergeEvent(
       pullRequest: mergedPullRequests[0],
       pullRequests: mergedPullRequests,
     };
+  }
+  if (sawPendingMergeability) {
+    throw new Error('pull request mergeability is still being calculated');
+  }
+  if (sawUnreflectedCheckRollup) {
+    throw new Error('pull request checks are still being reflected');
   }
   return fallback;
 }
@@ -1353,7 +1353,7 @@ function candidateReviewResolution(
 }
 
 function hasUnresolvedChangeRequest(pullRequest: PullRequestReviewTarget): boolean {
-  if (normalize(pullRequest.reviewDecision) === 'changes_requested' && (pullRequest.reviews?.length ?? 0) === 0) return true;
+  if (normalize(pullRequest.reviewDecision) === 'changes_requested') return true;
   return Array.from(latestActionableReviewsByReviewer(pullRequest).values())
     .some((review) =>
       normalize(review.state) === 'changes_requested'

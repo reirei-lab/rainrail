@@ -49,6 +49,23 @@ describe('handleAutoMergeEvent', () => {
     expect(result.reason).toBe('configured reviewer approval is not confirmed');
   });
 
+  it('keeps aggregate changes requested when an approval webhook is synthesized without live reviews', async () => {
+    const runtimeMerges: unknown[] = [];
+
+    const target = pullRequest({
+      reviewDecision: 'CHANGES_REQUESTED',
+    });
+    delete target.reviews;
+
+    const result = await handleAutoMergeEvent(reviewEvent({
+      headSha: 'abc123',
+      reviewCommitId: 'abc123',
+    }), options(target), runtimeContext(runtimeMerges));
+
+    expect(result.reason).toBe('pull request has unresolved change requests');
+    expect(runtimeMerges).toEqual([]);
+  });
+
   it('uses the current approval webhook while live reviews are not reflected yet', async () => {
     const runtimeMerges: unknown[] = [];
 
@@ -400,10 +417,10 @@ describe('handleAutoMergeEvent', () => {
     expect(runtimeMerges).toEqual([expect.objectContaining({ number: 44 })]);
   });
 
-  it('retries pending mergeability candidates after merging later ready PRs', async () => {
+  it('returns success for already merged candidates instead of retrying pending mergeability', async () => {
     const runtimeMerges: unknown[] = [];
 
-    await expect(handleAutoMergeEvent(checkRunEvent({ pullRequests: [{ number: 45 }, { number: 44 }] }), {
+    const result = await handleAutoMergeEvent(checkRunEvent({ pullRequests: [{ number: 45 }, { number: 44 }] }), {
       ...options(),
       pullRequests: {
         ...options().pullRequests,
@@ -413,8 +430,9 @@ describe('handleAutoMergeEvent', () => {
             : pullRequest(input);
         },
       },
-    }, runtimeContext(runtimeMerges))).rejects.toThrow('pull request mergeability is still being calculated');
+    }, runtimeContext(runtimeMerges));
 
+    expect(result.reason).toBe('pull_request_merged');
     expect(runtimeMerges).toEqual([expect.objectContaining({ number: 44 })]);
   });
 

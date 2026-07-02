@@ -819,4 +819,37 @@ describe('handleReviewRequestEvent', () => {
     expect(result.reason).toBe('pull request has unresolved change requests');
     expect(requestCount).toBe(0);
   });
+
+  it('keeps aggregate changes requested when a resolution review is synthesized without live reviews', async () => {
+    let requestCount = 0;
+
+    const result = await handleReviewRequestEvent(reviewEvent({
+      state: 'approved',
+      reviewerLogin: 'codex',
+      reviewCommitId: 'abc123',
+    }), {
+      agentLogin: 'reirei-agent',
+      reviewerLogin: 'hiragram',
+      branchPrefix: 'agent/',
+      pullRequests: {
+        async getPullRequest(input) {
+          const target = pullRequest({
+            ...input,
+            reviewDecision: 'CHANGES_REQUESTED',
+          });
+          delete target.reviews;
+          return target;
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          requestCount += 1;
+        },
+      },
+    });
+
+    expect(result.reason).toBe('pull request has unresolved change requests');
+    expect(requestCount).toBe(0);
+  });
 });
