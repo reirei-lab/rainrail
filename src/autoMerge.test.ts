@@ -91,6 +91,20 @@ describe('handleAutoMergeEvent', () => {
     expect(runtimeMerges).toEqual([]);
   });
 
+  it('does not let delayed approval webhooks restore dismissed approvals', async () => {
+    const runtimeMerges: unknown[] = [];
+
+    const result = await handleAutoMergeEvent(reviewEvent({
+      headSha: 'abc123',
+      reviewCommitId: 'abc123',
+    }), options({
+      reviews: [{ authorLogin: 'hiragram', state: 'DISMISSED', commitId: 'abc123' }],
+    }), runtimeContext(runtimeMerges));
+
+    expect(result.reason).toBe('configured reviewer approval is not confirmed');
+    expect(runtimeMerges).toEqual([]);
+  });
+
   it('does not merge while another reviewer has unresolved change requests', async () => {
     const result = await handleAutoMergeEvent(checkRunEvent(), options({
       reviews: [

@@ -1180,7 +1180,7 @@ function pullRequestWithCandidateApproval(
   const latest = latestActionableReviewsByReviewer(pullRequest).get(normalize(reviewerLogin));
   if (
     latest !== undefined
-    && ['approved', 'changes_requested'].includes(normalize(latest.state))
+    && ['approved', 'changes_requested', 'dismissed'].includes(normalize(latest.state))
     && reviewIsForCurrentHead(latest, pullRequest)
   ) {
     return pullRequest;
