@@ -80,6 +80,21 @@ Cloudflare Workers Secrets には、この文書の Secrets 節にある
 template は `pnpm cf:deploy:check` で dry-run と不足入力検出を行ってから `pnpm cf:deploy`、
 最後に `RAINRAIL_WORKER_URL` を使って `pnpm cf:smoke` を実行する。
 
+## 最小経路
+
+Cloudflare 上での GitHub webhook から downstream consumer までの最小経路は次の通り。
+
+1. GitHub webhook は production Worker の `POST /webhooks/github` に delivery する。
+2. Worker は `GITHUB_WEBHOOK_SECRET` で `x-hub-signature-256` を検証する。
+3. 署名検証後、GitHub payload は Rainrail event に正規化され、`BRIDGE_ROOM` Durable Object
+   の replay buffer に保存される。
+4. downstream consumer は `GET /events` に `Authorization: Bearer <SSE_BEARER_TOKEN>` を付けて接続し、
+   replay buffer と live broadcast から同じ Rainrail event を SSE として受け取る。
+
+この経路の smoke は production event を作らない。実 event の end-to-end 確認を行う場合は、
+対象 repository / workflow が処理してよい webhook delivery だけを使い、dummy issue を
+production replay stream に混ぜない。
+
 ## Smoke
 
 deploy 後、health endpoint と webhook endpoint を smoke する。
