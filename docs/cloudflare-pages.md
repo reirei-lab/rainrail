@@ -15,6 +15,11 @@ GitHub Actions と手元の Wrangler deploy には Cloudflare API credential が
 GitHub Actions は secrets が未設定の場合でも build まで実行し、deploy だけを skip する。
 これにより preview / production の buildability は PR 上で確認できる。実際に Cloudflare
 Pages へ公開するには、上記 2 つの secrets を repository に設定する。
+Cloudflare secrets は Wrangler deploy step の env にだけ渡す。`pnpm install` と
+`pnpm pages:build` には渡さない。
+
+deploy workflow は Cloudflare Pages branch ごとに直列化し、新しい run が始まったら同じ branch
+向けの古い run を cancel する。
 
 ## Preview Deploy
 
@@ -39,7 +44,8 @@ PR ごとの preview deployment を分ける。手動実行では未指定なら
 
 `main` への push は `.github/workflows/cloudflare-pages.yml` の `Deploy production` job で
 production deploy する。Cloudflare Pages project 側の production branch も `main` に揃える。
-preview と同じく、secrets が未設定の場合は build のみ実行し、deploy は skip する。
+`workflow_dispatch` で手動実行した場合も production deploy path を使う。preview と同じく、
+secrets が未設定の場合は build のみ実行し、deploy は skip する。
 
 手動 deploy:
 

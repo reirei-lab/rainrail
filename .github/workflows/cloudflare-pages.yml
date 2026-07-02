@@ -16,6 +16,10 @@ permissions:
   contents: read
   deployments: write
 
+concurrency:
+  group: cloudflare-pages-${{ github.event_name == 'pull_request' && github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
 jobs:
   preview:
     name: Deploy preview
@@ -25,8 +29,6 @@ jobs:
       !github.event.pull_request.draft
     runs-on: ubuntu-latest
     env:
-      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       RAINRAIL_PAGES_BRANCH: ${{ github.head_ref }}
     steps:
       - name: Check out repository
@@ -49,20 +51,21 @@ jobs:
         run: pnpm pages:build
 
       - name: Deploy Cloudflare Pages preview
-        if: env.CLOUDFLARE_ACCOUNT_ID != '' && env.CLOUDFLARE_API_TOKEN != ''
-        run: wrangler pages deploy apps/www/dist --project-name rainrail-www --branch "${RAINRAIL_PAGES_BRANCH}"
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          if [ -z "${CLOUDFLARE_ACCOUNT_ID}" ] || [ -z "${CLOUDFLARE_API_TOKEN}" ]; then
+            echo "::notice::Skipping Cloudflare Pages preview deploy because CLOUDFLARE_ACCOUNT_ID or CLOUDFLARE_API_TOKEN is not configured."
+            exit 0
+          fi
 
-      - name: Skip Cloudflare Pages preview deploy
-        if: env.CLOUDFLARE_ACCOUNT_ID == '' || env.CLOUDFLARE_API_TOKEN == ''
-        run: echo "::notice::Skipping Cloudflare Pages preview deploy because CLOUDFLARE_ACCOUNT_ID or CLOUDFLARE_API_TOKEN is not configured."
+          pnpm exec wrangler pages deploy apps/www/dist --project-name rainrail-www --branch "${RAINRAIL_PAGES_BRANCH}"
 
   production:
     name: Deploy production
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    env:
-      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
@@ -84,9 +87,13 @@ jobs:
         run: pnpm pages:build
 
       - name: Deploy Cloudflare Pages production
-        if: env.CLOUDFLARE_ACCOUNT_ID != '' && env.CLOUDFLARE_API_TOKEN != ''
-        run: wrangler pages deploy apps/www/dist --project-name rainrail-www --branch main
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          if [ -z "${CLOUDFLARE_ACCOUNT_ID}" ] || [ -z "${CLOUDFLARE_API_TOKEN}" ]; then
+            echo "::notice::Skipping Cloudflare Pages production deploy because CLOUDFLARE_ACCOUNT_ID or CLOUDFLARE_API_TOKEN is not configured."
+            exit 0
+          fi
 
-      - name: Skip Cloudflare Pages production deploy
-        if: env.CLOUDFLARE_ACCOUNT_ID == '' || env.CLOUDFLARE_API_TOKEN == ''
-        run: echo "::notice::Skipping Cloudflare Pages production deploy because CLOUDFLARE_ACCOUNT_ID or CLOUDFLARE_API_TOKEN is not configured."
+          pnpm exec wrangler pages deploy apps/www/dist --project-name rainrail-www --branch main

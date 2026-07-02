@@ -17,6 +17,8 @@ describe('Cloudflare Pages product site deploys', () => {
     expect(docs).toContain('pnpm pages:deploy:preview');
     expect(docs).toContain('pnpm pages:deploy:production');
     expect(docs).toContain('GitHub Actions は secrets が未設定の場合でも build まで実行し、deploy だけを skip する');
+    expect(docs).toContain('Cloudflare secrets は Wrangler deploy step の env にだけ渡す');
+    expect(docs).toContain('workflow_dispatch');
     expect(docs).toContain('RAINRAIL_PAGES_URL=https://<pages-host> pnpm pages:smoke');
   });
 
@@ -36,14 +38,18 @@ describe('Cloudflare Pages product site deploys', () => {
     expect(workflow).toMatch(/^name: Cloudflare Pages Deploy$/m);
     expect(workflow).toMatch(/^ {2}pull_request:/m);
     expect(workflow).toMatch(/^ {2}push:\n {4}branches:\n {6}- main$/m);
+    expect(workflow).toContain('concurrency:');
+    expect(workflow).toContain("group: cloudflare-pages-${{ github.event_name == 'pull_request' && github.head_ref || github.ref_name }}");
+    expect(workflow).toContain('cancel-in-progress: true');
     expect(workflow).toContain('github.event.pull_request.head.repo.full_name == github.repository');
+    expect(workflow).not.toMatch(/^ {4}env:\n {6}CLOUDFLARE_ACCOUNT_ID:/m);
     expect(workflow).toContain('CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}');
     expect(workflow).toContain('CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}');
     expect(workflow).toContain('RAINRAIL_PAGES_BRANCH: ${{ github.head_ref }}');
     expect(workflow).toContain('pnpm pages:build');
-    expect(workflow).toContain("if: env.CLOUDFLARE_ACCOUNT_ID != '' && env.CLOUDFLARE_API_TOKEN != ''");
-    expect(workflow).toContain("if: env.CLOUDFLARE_ACCOUNT_ID == '' || env.CLOUDFLARE_API_TOKEN == ''");
-    expect(workflow).toContain('wrangler pages deploy apps/www/dist --project-name rainrail-www --branch "${RAINRAIL_PAGES_BRANCH}"');
-    expect(workflow).toContain('wrangler pages deploy apps/www/dist --project-name rainrail-www --branch main');
+    expect(workflow).toContain("if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'");
+    expect(workflow).toContain('if [ -z "${CLOUDFLARE_ACCOUNT_ID}" ] || [ -z "${CLOUDFLARE_API_TOKEN}" ]; then');
+    expect(workflow).toContain('pnpm exec wrangler pages deploy apps/www/dist --project-name rainrail-www --branch "${RAINRAIL_PAGES_BRANCH}"');
+    expect(workflow).toContain('pnpm exec wrangler pages deploy apps/www/dist --project-name rainrail-www --branch main');
   });
 });
