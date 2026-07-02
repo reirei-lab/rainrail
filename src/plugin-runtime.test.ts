@@ -4713,7 +4713,7 @@ describe('plugin runtime contract', () => {
         result: 'rejected',
         runId: 'run-13',
         occurredAt: '2026-06-29T14:01:00.000Z',
-        reason: 'Error: redacted secret-capable plugin failure',
+        reason: 'Error: accepts metadata is malformed',
       },
       {
         pluginId: 'loader-later-after-accepts-metadata',
