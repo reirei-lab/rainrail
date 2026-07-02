@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 const matrix = readFileSync(
@@ -6,6 +6,17 @@ const matrix = readFileSync(
   'utf8',
 );
 const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
+
+/** @param {RegExp} pattern */
+const extractBacktickPaths = (pattern) => [...matrix.matchAll(pattern)].flatMap((match) => {
+  const path = match[1];
+  return path === undefined ? [] : [path];
+});
+
+const rainrailTestPaths = extractBacktickPaths(/`((?:src|scripts)\/[^`]+\.test\.(?:ts|mjs))`/g);
+
+const rainrailSourcePaths = extractBacktickPaths(/`(src\/[^`]+\.ts)`/g)
+  .filter((path) => !path.endsWith('.test.ts'));
 
 describe('source repository test coverage matrix', () => {
   it('records the source repositories and current Rainrail verification command', () => {
@@ -56,42 +67,23 @@ describe('source repository test coverage matrix', () => {
       expect(matrix, originalTest).toContain(`\`${originalTest}\``);
     }
 
-    for (const rainrailTest of [
-      'src/http-app.test.ts',
-      'src/worker.test.ts',
-      'src/bridge-room.test.ts',
-      'src/github-webhook.test.ts',
-      'src/events-auth.test.ts',
-      'src/cloudflare-tail.test.ts',
-      'src/sse.test.ts',
-      'src/agent-assignment.test.ts',
-      'src/agent-runtime.test.ts',
-      'src/agent-timeline.test.ts',
-      'src/autoMerge.test.ts',
-      'src/changeRequest.test.ts',
-      'src/checkFailure.test.ts',
-      'src/cloudflare-issue-reporter.test.ts',
-      'src/codexReview.test.ts',
-      'src/config.test.ts',
-      'src/conflictCheck.test.ts',
-      'src/dashboard-api.test.ts',
-      'src/github-auth.test.ts',
-      'src/github-project.test.ts',
-      'src/githubPullRequest.test.ts',
-      'src/mention-draft.test.ts',
-      'src/project-issues.test.ts',
-      'src/reviewRequest.test.ts',
-      'src/route-workflow.test.ts',
-      'src/operational-runner.test.ts',
-      'src/operational-store.test.ts',
-    ]) {
+    for (const rainrailTest of rainrailTestPaths) {
       expect(matrix, rainrailTest).toContain(`\`${rainrailTest}\``);
+      expect(existsSync(new URL(`../${rainrailTest}`, import.meta.url)), rainrailTest).toBe(true);
     }
 
     expect(matrix).toContain('Not ported as a separate Rainrail workflow');
   });
 
+  it('points Rainrail module references at files that exist in this repository', () => {
+    expect(rainrailSourcePaths.length).toBeGreaterThan(0);
+
+    for (const rainrailSource of rainrailSourcePaths) {
+      expect(existsSync(new URL(`../${rainrailSource}`, import.meta.url)), rainrailSource).toBe(true);
+    }
+  });
+
   it('links the matrix from the README', () => {
-    expect(readme).toContain('docs/repo-test-coverage-matrix.md');
+    expect(readme).toContain('[docs/repo-test-coverage-matrix.md](docs/repo-test-coverage-matrix.md)');
   });
 });

@@ -54,9 +54,9 @@ same key-value storage shape as `RainrailBridgeRoom`.
 
 The original test viewpoints from `github-eep-bridge`, `eep-bridge-worker`,
 and `reirei-harness` are inventoried in
-`docs/repo-test-coverage-matrix.md`, including the Rainrail test files that
-cover each migrated behavior and the alternate checks for behavior that is no
-longer a separate Rainrail workflow.
+[docs/repo-test-coverage-matrix.md](docs/repo-test-coverage-matrix.md),
+including the Rainrail test files that cover each migrated behavior and the
+alternate checks for behavior that is no longer a separate Rainrail workflow.
 
 ## Product site and docs boundary
 
