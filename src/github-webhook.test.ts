@@ -19,6 +19,19 @@ describe('GitHub webhook signature core', () => {
     });
   });
 
+  it('verifies signatures from ArrayBufferView bodies with non-zero offsets', async () => {
+    const encodedBody = new TextEncoder().encode(JSON.stringify({ action: 'opened' }));
+    const paddedBody = new Uint8Array(encodedBody.byteLength + 2);
+    paddedBody.set(encodedBody, 1);
+    const rawBody = new Uint8Array(paddedBody.buffer, 1, encodedBody.byteLength);
+    const signature = await createGitHubWebhookSignature('secret', encodedBody);
+
+    await expect(verifyGitHubWebhookSignature({ secret: 'secret', rawBody, signature })).resolves.toEqual({
+      ok: true,
+      reason: 'signature_mismatch',
+    });
+  });
+
   it('rejects invalid, missing, and unsupported signatures', async () => {
     const rawBody = new TextEncoder().encode('{}');
     const signature = await createGitHubWebhookSignature('secret', rawBody);

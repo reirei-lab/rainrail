@@ -945,7 +945,7 @@ async function sha256Hex(value: GitHubWebhookRawBody): Promise<string> {
   return toHex(new Uint8Array(digest));
 }
 
-function toUint8Array(value: GitHubWebhookRawBody): Uint8Array {
+function toUint8Array(value: GitHubWebhookRawBody): Uint8Array<ArrayBuffer> {
   if (typeof value === 'string') {
     return encoder.encode(value);
   }
@@ -954,7 +954,8 @@ function toUint8Array(value: GitHubWebhookRawBody): Uint8Array {
     return new Uint8Array(value);
   }
 
-  return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  const bytes = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  return Uint8Array.from(bytes);
 }
 
 function toHex(bytes: Uint8Array): string {

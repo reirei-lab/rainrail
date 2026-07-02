@@ -17,6 +17,11 @@ import {
   type WorkflowPlugin,
 } from './index.js';
 
+type AbortSignalEventType = Parameters<AbortSignal['addEventListener']>[0];
+type AbortSignalListener = NonNullable<Parameters<AbortSignal['addEventListener']>[1]>;
+type AbortSignalAddOptions = Parameters<AbortSignal['addEventListener']>[2];
+type AbortSignalRemoveOptions = Parameters<AbortSignal['removeEventListener']>[2];
+
 function mockRuntimeContext(overrides: Partial<PluginRuntimeContext> = {}): PluginRuntimeContext {
   return {
     runId: 'run-1',
@@ -1447,16 +1452,32 @@ describe('plugin runtime contract', () => {
     const parentController = new AbortController();
     const originalAddEventListener = parentController.signal.addEventListener.bind(parentController.signal);
     const originalRemoveEventListener = parentController.signal.removeEventListener.bind(parentController.signal);
-    const listeners = new Set<NonNullable<Parameters<AbortSignal['addEventListener']>[1]>>();
+    const listeners = new Set<AbortSignalListener>();
 
-    parentController.signal.addEventListener = ((type, listener, options) => {
+    parentController.signal.addEventListener = ((
+      type: AbortSignalEventType,
+      listener: AbortSignalListener | null,
+      options?: AbortSignalAddOptions,
+    ) => {
+      if (listener === null) {
+        return;
+      }
+
       if (type === 'abort' && listener !== null) {
         listeners.add(listener);
       }
 
       return originalAddEventListener(type, listener, options);
     }) as AbortSignal['addEventListener'];
-    parentController.signal.removeEventListener = ((type, listener, options) => {
+    parentController.signal.removeEventListener = ((
+      type: AbortSignalEventType,
+      listener: AbortSignalListener | null,
+      options?: AbortSignalRemoveOptions,
+    ) => {
+      if (listener === null) {
+        return;
+      }
+
       if (type === 'abort' && listener !== null) {
         listeners.delete(listener);
       }
@@ -3059,16 +3080,32 @@ describe('plugin runtime contract', () => {
     const parentController = new AbortController();
     const originalAddEventListener = parentController.signal.addEventListener.bind(parentController.signal);
     const originalRemoveEventListener = parentController.signal.removeEventListener.bind(parentController.signal);
-    const listeners = new Set<NonNullable<Parameters<AbortSignal['addEventListener']>[1]>>();
+    const listeners = new Set<AbortSignalListener>();
 
-    parentController.signal.addEventListener = ((type, listener, options) => {
+    parentController.signal.addEventListener = ((
+      type: AbortSignalEventType,
+      listener: AbortSignalListener | null,
+      options?: AbortSignalAddOptions,
+    ) => {
+      if (listener === null) {
+        return;
+      }
+
       if (type === 'abort' && listener !== null) {
         listeners.add(listener);
       }
 
       return originalAddEventListener(type, listener, options);
     }) as AbortSignal['addEventListener'];
-    parentController.signal.removeEventListener = ((type, listener, options) => {
+    parentController.signal.removeEventListener = ((
+      type: AbortSignalEventType,
+      listener: AbortSignalListener | null,
+      options?: AbortSignalRemoveOptions,
+    ) => {
+      if (listener === null) {
+        return;
+      }
+
       if (type === 'abort' && listener !== null) {
         listeners.delete(listener);
       }
@@ -3591,16 +3628,32 @@ describe('plugin runtime contract', () => {
     const parentController = new AbortController();
     const originalAddEventListener = parentController.signal.addEventListener.bind(parentController.signal);
     const originalRemoveEventListener = parentController.signal.removeEventListener.bind(parentController.signal);
-    const listeners = new Set<NonNullable<Parameters<AbortSignal['addEventListener']>[1]>>();
+    const listeners = new Set<AbortSignalListener>();
 
-    parentController.signal.addEventListener = ((type, listener, options) => {
+    parentController.signal.addEventListener = ((
+      type: AbortSignalEventType,
+      listener: AbortSignalListener | null,
+      options?: AbortSignalAddOptions,
+    ) => {
+      if (listener === null) {
+        return;
+      }
+
       if (type === 'abort' && listener !== null) {
         listeners.add(listener);
       }
 
       return originalAddEventListener(type, listener, options);
     }) as AbortSignal['addEventListener'];
-    parentController.signal.removeEventListener = ((type, listener, options) => {
+    parentController.signal.removeEventListener = ((
+      type: AbortSignalEventType,
+      listener: AbortSignalListener | null,
+      options?: AbortSignalRemoveOptions,
+    ) => {
+      if (listener === null) {
+        return;
+      }
+
       if (type === 'abort' && listener !== null) {
         listeners.delete(listener);
       }

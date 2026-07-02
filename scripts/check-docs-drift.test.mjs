@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join, win32 } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
+  filterDependencyOnlyPackageJsonChanges,
   isPathInsideRoot,
   validateChangedFiles,
   validateContractsManifest,
@@ -272,6 +273,52 @@ describe('docs drift checks', () => {
     expect(validateChangedFiles(root, ['src/contract.ts'])).toContain(
       'contract source changed without matching docs or tests: src/contract.ts',
     );
+  });
+
+  it('ignores package manifest changes that only bump dependency declarations', () => {
+    const root = makeRepo();
+    writeFileSync(
+      join(root, 'package.json'),
+      JSON.stringify(
+        {
+          name: 'rainrail',
+          scripts: { test: 'vitest run' },
+          devDependencies: { vitest: '^4.1.9' },
+        },
+        null,
+        2,
+      ),
+    );
+    const basePackageJson = JSON.stringify(
+      {
+        name: 'rainrail',
+        scripts: { test: 'vitest run' },
+        devDependencies: { vitest: '^3.2.6' },
+      },
+      null,
+      2,
+    );
+
+    expect(
+      filterDependencyOnlyPackageJsonChanges(root, ['package.json', 'src/contract.ts'], () => basePackageJson),
+    ).toEqual(['src/contract.ts']);
+
+    writeFileSync(
+      join(root, 'package.json'),
+      JSON.stringify(
+        {
+          name: 'rainrail',
+          scripts: { test: 'vitest run scripts src' },
+          devDependencies: { vitest: '^4.1.9' },
+        },
+        null,
+        2,
+      ),
+    );
+
+    expect(
+      filterDependencyOnlyPackageJsonChanges(root, ['package.json'], () => basePackageJson),
+    ).toEqual(['package.json']);
   });
 
   it('requires docs or tests when a base contract source is removed from the manifest', () => {
