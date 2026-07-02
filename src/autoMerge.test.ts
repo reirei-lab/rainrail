@@ -105,6 +105,23 @@ describe('handleAutoMergeEvent', () => {
     expect(runtimeMerges).toEqual([]);
   });
 
+  it('does not let later comment reviews hide dismissed approvals', async () => {
+    const runtimeMerges: unknown[] = [];
+
+    const result = await handleAutoMergeEvent(reviewEvent({
+      headSha: 'abc123',
+      reviewCommitId: 'abc123',
+    }), options({
+      reviews: [
+        { authorLogin: 'hiragram', state: 'DISMISSED', commitId: 'abc123' },
+        { authorLogin: 'hiragram', state: 'COMMENTED', commitId: 'abc123' },
+      ],
+    }), runtimeContext(runtimeMerges));
+
+    expect(result.reason).toBe('configured reviewer approval is not confirmed');
+    expect(runtimeMerges).toEqual([]);
+  });
+
   it('does not merge while another reviewer has unresolved change requests', async () => {
     const result = await handleAutoMergeEvent(checkRunEvent(), options({
       reviews: [
@@ -160,6 +177,25 @@ describe('handleAutoMergeEvent', () => {
     const result = await workflow.handle(event, runtimeContext(runtimeMerges));
 
     expect(result).toMatchObject({ reason: 'pull_request_merged' });
+    expect(runtimeMerges).toEqual([expect.objectContaining({ number: 44 })]);
+  });
+
+  it('re-evaluates auto-merge after a review dismissal removes the last blocker', async () => {
+    const runtimeMerges: unknown[] = [];
+
+    const result = await handleAutoMergeEvent(reviewEvent({
+      action: 'dismissed',
+      state: 'dismissed',
+      reviewerLogin: 'codex',
+      reviewCommitId: 'abc123',
+    }), options({
+      reviews: [
+        { authorLogin: 'hiragram', state: 'APPROVED', commitId: 'abc123' },
+        { authorLogin: 'codex', state: 'DISMISSED', commitId: 'abc123' },
+      ],
+    }), runtimeContext(runtimeMerges));
+
+    expect(result.reason).toBe('pull_request_merged');
     expect(runtimeMerges).toEqual([expect.objectContaining({ number: 44 })]);
   });
 
@@ -240,6 +276,17 @@ describe('handleAutoMergeEvent', () => {
 
     await expect(handleAutoMergeEvent(checkRunEvent(), options({
       statusCheckRollup: [],
+    }), runtimeContext(runtimeMerges))).rejects.toThrow('pull request checks are still being reflected');
+    expect(runtimeMerges).toEqual([]);
+  });
+
+  it('retries successful check events while the live rollup still shows an old failure', async () => {
+    const runtimeMerges: unknown[] = [];
+
+    await expect(handleAutoMergeEvent(checkRunEvent(), options({
+      statusCheckRollup: [
+        { type: 'CheckRun', name: 'Typecheck, Test, Build', status: 'COMPLETED', conclusion: 'FAILURE' },
+      ],
     }), runtimeContext(runtimeMerges))).rejects.toThrow('pull request checks are still being reflected');
     expect(runtimeMerges).toEqual([]);
   });

@@ -254,6 +254,46 @@ describe('handleCodexReviewEvent', () => {
     expect(updates).toEqual([]);
   });
 
+  it('hands off Codex comments submitted after an approval review', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+
+    const result = await handleCodexReviewEvent(reviewEvent({
+      state: 'commented',
+      headSha: 'abc123',
+      reviewCommitId: 'abc123',
+    }), {
+      agentLogin: 'reirei-agent',
+      reviewerLogin: 'hiragram',
+      branchPrefix: 'agent/',
+      targetRepositories: ['reirei-lab/rainrail'],
+      tasks: handoffRecorder({ updates }),
+      pullRequests: {
+        async getPullRequest(input) {
+          return pullRequest({
+            ...input,
+            headSha: 'abc123',
+            reviews: [
+              { authorLogin: 'hiragram', state: 'APPROVED', commitId: 'abc123' },
+              { authorLogin: 'hiragram', state: 'COMMENTED', commitId: 'abc123' },
+            ],
+          });
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          throw new Error('not used');
+        },
+        async listReviewComments() {
+          return [{ id: 2, reviewId: 4493317816, path: 'src/pr-lifecycle.ts', body: 'comment' }];
+        },
+      },
+    });
+
+    expect(result.reason).toBe('Codex review returned issue to Todo');
+    expect(updates).toHaveLength(1);
+  });
+
   it('checks live pull request head before handing off Codex reviews when payload head is missing', async () => {
     const updates: Array<{ reason: string; commentBody?: string }> = [];
 

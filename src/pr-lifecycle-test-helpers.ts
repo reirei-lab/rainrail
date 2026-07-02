@@ -68,6 +68,7 @@ export function handoffRecorder(records: {
 }
 
 export function reviewEvent(overrides: {
+  action?: string;
   state?: string;
   reviewerLogin?: string;
   prAuthor?: string;
@@ -93,7 +94,7 @@ export function reviewEvent(overrides: {
     payload: {
       provider: 'github',
       event: 'pull_request_review',
-      action: 'submitted',
+      action: overrides.action ?? 'submitted',
       repository: { fullName: repository },
       resource: {
         type: 'review',

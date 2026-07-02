@@ -359,10 +359,10 @@ describe('handleCheckFailureEvent', () => {
     expect(updates).toEqual([]);
   });
 
-  it('ignores old failed check events once the live rollup has passed', async () => {
+  it('retries failed check events while the live rollup still shows an old success', async () => {
     const updates: Array<{ reason: string; commentBody?: string }> = [];
 
-    const result = await handleCheckFailureEvent(checkRunEvent({ conclusion: 'failure' }), {
+    await expect(handleCheckFailureEvent(checkRunEvent({ conclusion: 'failure' }), {
       agentLogin: 'reirei-agent',
       branchPrefix: 'agent/',
       tasks: handoffRecorder({ updates }),
@@ -377,9 +377,8 @@ describe('handleCheckFailureEvent', () => {
           throw new Error('not used');
         },
       },
-    });
+    })).rejects.toThrow('pull request checks are still being reflected');
 
-    expect(result.reason).toBe('current pull request checks have passed');
     expect(updates).toEqual([]);
   });
 
