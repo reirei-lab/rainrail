@@ -74,6 +74,40 @@ describe('handleCheckFailureEvent', () => {
     ]);
   });
 
+  it('keeps the failed-check handoff successful when stale review request cleanup fails', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+
+    const result = await handleCheckFailureEvent(checkRunEvent({ conclusion: 'failure' }), {
+      agentLogin: 'reirei-agent',
+      branchPrefix: 'agent/',
+      reviewRequest: { reviewerLogin: 'hiragram' },
+      tasks: handoffRecorder({ updates }),
+      pullRequests: {
+        async getPullRequest() {
+          return pullRequest({
+            reviewRequests: ['hiragram'],
+            statusCheckRollup: [
+              { type: 'CheckRun', name: 'Typecheck, Test, Build', status: 'COMPLETED', conclusion: 'FAILURE' },
+            ],
+          });
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          throw new Error('not used');
+        },
+        async removeReviewRequest() {
+          throw new Error('review request already gone');
+        },
+      },
+    });
+
+    expect(result).toMatchObject({ reason: 'failed PR checks returned issue to Todo' });
+    expect(result).not.toHaveProperty('reviewRequestRemoved');
+    expect(updates).toHaveLength(1);
+  });
+
   it('treats completed startup_failure check runs as current failures', async () => {
     const updates: Array<{ reason: string; commentBody?: string }> = [];
 

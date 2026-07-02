@@ -990,10 +990,11 @@ function autoMergeCandidateFromEvent(event: RainrailEventEnvelope): (PullRequest
   const payload = recordValue(event.payload);
   if (event.name === 'github.review' && payload.event === 'pull_request_review' && payload.action === 'submitted') {
     const review = recordValue(payload.review);
+    const resource = recordValue(payload.resource);
     if (normalize(review.state ?? recordValue(payload.resource).state) !== 'approved') return undefined;
     const repository = repositoryName(payload);
     const number = numberValue(recordValue(payload.pullRequest).number);
-    const headSha = stringValue(recordValue(payload.pullRequest).headSha);
+    const headSha = stringValue(review.commitId ?? review.commit_id ?? resource.commitId ?? resource.commit_id ?? recordValue(payload.pullRequest).headSha);
     const reviewerLogin = stringValue(review.author);
     if (repository === undefined || number === undefined || reviewerLogin === undefined) return undefined;
     return {
@@ -1176,6 +1177,14 @@ function pullRequestWithCandidateApproval(
   const reviewerLogin = candidate.reviewerLogin;
   if (reviewerLogin === undefined || !sameLogin(reviewerLogin, config.reviewerLogin)) return pullRequest;
   if (candidate.headSha !== undefined && pullRequest.headSha !== undefined && candidate.headSha !== pullRequest.headSha) return pullRequest;
+  const latest = latestActionableReviewsByReviewer(pullRequest).get(normalize(reviewerLogin));
+  if (
+    latest !== undefined
+    && ['approved', 'changes_requested'].includes(normalize(latest.state))
+    && reviewIsForCurrentHead(latest, pullRequest)
+  ) {
+    return pullRequest;
+  }
   return {
     ...pullRequest,
     reviews: [
@@ -1293,11 +1302,15 @@ async function removePendingReviewRequest(
   ) {
     return false;
   }
-  await pullRequests.removeReviewRequest({
-    repository: pullRequest.repository,
-    number: pullRequest.number,
-    reviewerLogin: reviewRequest.reviewerLogin,
-  }, taskContext(context));
+  try {
+    await pullRequests.removeReviewRequest({
+      repository: pullRequest.repository,
+      number: pullRequest.number,
+      reviewerLogin: reviewRequest.reviewerLogin,
+    }, taskContext(context));
+  } catch {
+    return false;
+  }
   return true;
 }
 

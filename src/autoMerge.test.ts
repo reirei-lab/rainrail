@@ -62,6 +62,35 @@ describe('handleAutoMergeEvent', () => {
     expect(runtimeMerges).toEqual([expect.objectContaining({ number: 44 })]);
   });
 
+  it('ignores approval webhooks submitted for an old review commit', async () => {
+    const runtimeMerges: unknown[] = [];
+
+    const result = await handleAutoMergeEvent(reviewEvent({
+      headSha: 'new-sha',
+      reviewCommitId: 'old-sha',
+    }), options({
+      headSha: 'new-sha',
+      reviews: [],
+    }), runtimeContext(runtimeMerges));
+
+    expect(result.reason).toBe('check does not match the current pull request head');
+    expect(runtimeMerges).toEqual([]);
+  });
+
+  it('does not let delayed approval webhooks hide live current-head change requests', async () => {
+    const runtimeMerges: unknown[] = [];
+
+    const result = await handleAutoMergeEvent(reviewEvent({
+      headSha: 'abc123',
+      reviewCommitId: 'abc123',
+    }), options({
+      reviews: [{ authorLogin: 'hiragram', state: 'CHANGES_REQUESTED', commitId: 'abc123' }],
+    }), runtimeContext(runtimeMerges));
+
+    expect(result.reason).toBe('configured reviewer approval is not confirmed');
+    expect(runtimeMerges).toEqual([]);
+  });
+
   it('does not merge while another reviewer has unresolved change requests', async () => {
     const result = await handleAutoMergeEvent(checkRunEvent(), options({
       reviews: [
