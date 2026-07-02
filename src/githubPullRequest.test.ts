@@ -3,7 +3,10 @@ import { describe, expect, it, vi } from 'vitest';
 import { createGitHubPullRequestProvider } from './github-provider.js';
 
 describe('createGitHubPullRequestProvider', () => {
-  it('paginates pull request review comments before workflow filtering by review id', async () => {
+  it.each([
+    ['GitHub App token', { token: 'app-token', provider: 'github-app' as const, fallback: false }],
+    ['fallback token', { token: 'fallback-token', provider: 'gh-cli' as const, fallback: true }],
+  ])('paginates pull request review comments with a %s before workflow filtering by review id', async (_label, authToken) => {
     const requests: string[] = [];
     const pageOne = Array.from({ length: 100 }, (_, index) => ({
       id: index + 1,
@@ -25,7 +28,7 @@ describe('createGitHubPullRequestProvider', () => {
       return new Response(JSON.stringify(requests.length === 1 ? pageOne : pageTwo), { status: 200 });
     });
     const provider = createGitHubPullRequestProvider({
-      auth: { getAuthToken: async () => ({ token: 'token', provider: 'configured-token', fallback: false }) },
+      auth: { getAuthToken: async () => authToken },
       fetch: fetchImpl as unknown as typeof fetch,
     });
 
