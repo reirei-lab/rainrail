@@ -54,6 +54,32 @@ GitHub webhook の delivery URL は production Worker の
 `https://<worker-host>/webhooks/github` を使う。GitHub 側の webhook secret は
 `GITHUB_WEBHOOK_SECRET` と同じ値にする。
 
+## CI Deployability Check
+
+Rainrail 本体の PR CI は production deploy を行わない。代わりに `pnpm cf:deploy:check`
+で `wrangler deploy --dry-run` を実行し、Worker bundle / wrangler config の deployability
+と smoke template の副作用なし条件を検証する。結果は GitHub Actions の step summary に
+`Worker bundle dry run`、`Wrangler deploy dry run`、`Smoke template guard`、
+`Required deploy inputs` として出る。
+
+## Self-host Deploy Workflow Template
+
+自分の Cloudflare account / fork / repository から deploy する場合は
+`docs/templates/cloudflare-self-host-deploy.yml` を `.github/workflows/deploy-rainrail-worker.yml`
+としてコピーして使う。
+
+GitHub 側に次の Secrets / Vars を登録する。
+
+- Secret `CLOUDFLARE_API_TOKEN`: Worker deploy と secret list ができる Cloudflare API token。
+- Secret `CLOUDFLARE_ACCOUNT_ID`: deploy 対象の Cloudflare account id。
+- Variable `RAINRAIL_WORKER_URL`: deploy 後の Worker URL。例:
+  `https://rainrail.<your-subdomain>.workers.dev`。
+
+Cloudflare Workers Secrets には、この文書の Secrets 節にある
+`GITHUB_WEBHOOK_SECRET`、`RAINRAIL_PUBLISH_TOKEN`、`SSE_BEARER_TOKEN` を事前登録する。
+template は `pnpm cf:deploy:check` で dry-run と不足入力検出を行ってから `pnpm cf:deploy`、
+最後に `RAINRAIL_WORKER_URL` を使って `pnpm cf:smoke` を実行する。
+
 ## Smoke
 
 deploy 後、health endpoint と webhook endpoint を smoke する。
