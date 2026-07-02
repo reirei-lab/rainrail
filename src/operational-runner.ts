@@ -153,7 +153,12 @@ export async function reconcileOperationalAgentTasks(options: ReconcileOperation
   const updated: StoredAgentTask[] = [];
 
   for (const task of options.store.listAgentTasks()) {
-    if (TERMINAL_STATUSES.has(task.status)) continue;
+    if (TERMINAL_STATUSES.has(task.status)) {
+      if (shouldReleaseStaleProjectClaim(task) && options.queue?.releaseProjectIssue !== undefined) {
+        await releaseStaleProjectClaim(options, task);
+      }
+      continue;
+    }
 
     const runtimeStatus = await options.readRuntimeStatus(task);
     if (runtimeStatus === undefined || !TERMINAL_STATUSES.has(runtimeStatus.status)) continue;
@@ -178,20 +183,17 @@ async function releaseStaleProjectClaim(
   options: ReconcileOperationalAgentTasksOptions,
   task: StoredAgentTask,
 ): Promise<void> {
-  if (
-    options.queue?.releaseProjectIssue === undefined
-    || task.issue === undefined
-    || task.claim === undefined
-    || task.agentSessionId === undefined
-  ) {
+  const claim = task.claim as ProjectIssueClaim | undefined;
+  const issue = releaseProjectIssueForTask(task.issue, claim);
+  if (options.queue?.releaseProjectIssue === undefined || issue === undefined || claim === undefined || task.agentSessionId === undefined) {
     return;
   }
 
   const reason = `runtime ${task.status}`;
   try {
     await options.queue.releaseProjectIssue({
-      issue: task.issue as ProjectIssue,
-      claim: task.claim as ProjectIssueClaim,
+      issue,
+      claim,
       agentSessionId: task.agentSessionId,
       branchName: task.branchName,
       reason,
@@ -246,6 +248,22 @@ function shouldReleaseStaleProjectClaim(task: StoredAgentTask): boolean {
     && task.issue !== undefined
     && task.claim !== undefined
     && task.agentSessionId !== undefined;
+}
+
+function releaseProjectIssueForTask(issue: unknown, claim: ProjectIssueClaim | undefined): ProjectIssue | undefined {
+  if (!isRecord(issue)) return undefined;
+  if (typeof issue.id === 'string' && issue.id.length > 0) {
+    return issue as unknown as ProjectIssue;
+  }
+  if (typeof claim?.projectItemId !== 'string' || claim.projectItemId.length === 0) {
+    return undefined;
+  }
+
+  return { ...issue, id: claim.projectItemId } as unknown as ProjectIssue;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function retryHandlerPriority(handlerName: string): number {

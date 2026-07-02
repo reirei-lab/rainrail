@@ -439,6 +439,111 @@ describe('operational reconcile helpers', () => {
     ]);
     store.close();
   });
+
+  it('retries release for terminal tasks that still have unreleased Project claims', async () => {
+    const store = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:10:00.000Z'),
+    });
+    const issue = {
+      id: 'item_47',
+      title: 'agent 停止後に stale In Progress と未完了 handoff を残さない',
+      status: 'In Progress',
+      assigneeLogins: ['reirei-agent'],
+      repository: 'reirei-lab/rainrail',
+      number: 47,
+    };
+    const claim = { projectItemId: 'item_47', lockRefId: 'REF_lock_47' };
+    store.recordAgentTask({
+      id: 'agent_task_rainrail_47',
+      title: issue.title,
+      agentSessionId: 'agent:main:rainrail-47',
+      branchName: 'agent/reirei-lab-rainrail-47-agent-stale-in-progress-handoff',
+      status: 'compaction_failed',
+      issue,
+      claim,
+      projectClaim: {
+        status: 'release_failed',
+        reason: 'runtime compaction_failed',
+        error: 'GitHub Project item claim was overwritten by another assignment',
+        updatedAt: '2026-07-02T00:05:00.000Z',
+      },
+    });
+    const releases: unknown[] = [];
+
+    await reconcileOperationalAgentTasks({
+      store,
+      readRuntimeStatus: async () => undefined,
+      queue: {
+        releaseProjectIssue: async (input) => {
+          releases.push(input);
+        },
+      },
+    });
+
+    expect(releases).toEqual([{
+      issue,
+      claim,
+      agentSessionId: 'agent:main:rainrail-47',
+      branchName: 'agent/reirei-lab-rainrail-47-agent-stale-in-progress-handoff',
+      reason: 'runtime compaction_failed',
+    }]);
+    expect(store.getAgentTask('agent_task_rainrail_47')?.projectClaim).toMatchObject({
+      status: 'released',
+      reason: 'runtime compaction_failed',
+    });
+    expect(store.snapshot().warnings.staleProjectClaims).toEqual([]);
+    store.close();
+  });
+
+  it('uses the claim project item id when releasing a stored issue without an id', async () => {
+    const store = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:00:00.000Z'),
+    });
+    const issue = {
+      title: 'agent 停止後に stale In Progress と未完了 handoff を残さない',
+      status: 'In Progress',
+      assigneeLogins: ['reirei-agent'],
+      repository: 'reirei-lab/rainrail',
+      number: 47,
+    };
+    const claim = { projectItemId: 'item_47', lockRefId: 'REF_lock_47' };
+    store.recordAgentTask({
+      id: 'agent_task_rainrail_47',
+      title: issue.title,
+      agentSessionId: 'agent:main:rainrail-47',
+      branchName: 'agent/reirei-lab-rainrail-47-agent-stale-in-progress-handoff',
+      status: 'running',
+      issue,
+      claim,
+    });
+    const releases: unknown[] = [];
+
+    await reconcileOperationalAgentTasks({
+      store,
+      readRuntimeStatus: async () => ({
+        status: 'stopped',
+        completedAt: '2026-07-02T00:05:00.000Z',
+      }),
+      queue: {
+        releaseProjectIssue: async (input) => {
+          releases.push(input);
+        },
+      },
+    });
+
+    expect(releases).toEqual([{
+      issue: { ...issue, id: 'item_47' },
+      claim,
+      agentSessionId: 'agent:main:rainrail-47',
+      branchName: 'agent/reirei-lab-rainrail-47-agent-stale-in-progress-handoff',
+      reason: 'runtime stopped',
+    }]);
+    store.close();
+  });
 });
 
 function retry(handlerName: string, eventId: string, nextRetryAt: string) {

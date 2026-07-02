@@ -210,9 +210,14 @@ export class RainrailOperationalStore {
     const stderrLogPath = input.stderrLogPath ?? existing?.stderrLogPath;
     const pid = input.pid ?? existing?.pid;
     const resumeAttempts = input.resumeAttempts ?? existing?.resumeAttempts;
-    const projectClaim = input.projectClaim ?? existing?.projectClaim;
     const result = input.result ?? existing?.result;
     const completedAt = input.completedAt ?? existing?.completedAt;
+    const projectClaim = input.projectClaim ?? carryForwardProjectClaim(existing, {
+      agentSessionId,
+      branchName: input.branchName,
+      claim,
+      status,
+    });
     const task = agentTaskWithRuntime({
       id: input.id,
       title: input.title,
@@ -516,6 +521,33 @@ function agentTaskWithRuntime(task: Omit<StoredAgentTask, 'runtime'>): StoredAge
       ...('completedAt' in task ? { completedAt: task.completedAt } : {}),
     },
   };
+}
+
+function carryForwardProjectClaim(
+  existing: StoredAgentTask | undefined,
+  next: {
+    agentSessionId: string | undefined;
+    branchName: string;
+    claim: unknown;
+    status: RuntimeRunStatus;
+  },
+): StoredAgentTaskProjectClaimState | undefined {
+  if (existing?.projectClaim === undefined || next.status === 'running') {
+    return undefined;
+  }
+  if (
+    existing.agentSessionId !== next.agentSessionId
+    || existing.branchName !== next.branchName
+    || !sameJsonValue(existing.claim, next.claim)
+  ) {
+    return undefined;
+  }
+
+  return existing.projectClaim;
+}
+
+function sameJsonValue(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 const staleProjectClaimRuntimeStatuses = new Set<RuntimeRunStatus>([

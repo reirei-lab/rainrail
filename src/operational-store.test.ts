@@ -225,6 +225,43 @@ describe('RainrailOperationalStore', () => {
     });
     store.close();
   });
+
+  it('clears a previous project claim release state when re-recording a task for a new claim', () => {
+    const store = new RainrailOperationalStore({ databasePath: ':memory:', eventLimit: 10, now: fixedClock() });
+    store.recordAgentTask({
+      id: 'agent_task_rainrail_47',
+      title: 'stale claim recovery',
+      agentSessionId: 'agent:main:rainrail-47-first',
+      branchName: 'agent/reirei-lab-rainrail-47-first',
+      status: 'stopped',
+      issue: { id: 'item_47', repository: 'reirei-lab/rainrail', number: 47 },
+      claim: { projectItemId: 'item_47', lockRefId: 'REF_first' },
+      projectClaim: {
+        status: 'released',
+        reason: 'runtime stopped',
+        updatedAt: '2026-07-02T00:05:00.000Z',
+      },
+    });
+
+    store.recordAgentTask({
+      id: 'agent_task_rainrail_47',
+      title: 'stale claim recovery',
+      agentSessionId: 'agent:main:rainrail-47-second',
+      branchName: 'agent/reirei-lab-rainrail-47-second',
+      status: 'running',
+      issue: { id: 'item_47', repository: 'reirei-lab/rainrail', number: 47 },
+      claim: { projectItemId: 'item_47', lockRefId: 'REF_second' },
+    });
+
+    expect(store.getAgentTask('agent_task_rainrail_47')).toMatchObject({
+      status: 'running',
+      agentSessionId: 'agent:main:rainrail-47-second',
+      branchName: 'agent/reirei-lab-rainrail-47-second',
+      claim: { lockRefId: 'REF_second' },
+    });
+    expect(store.getAgentTask('agent_task_rainrail_47')?.projectClaim).toBeUndefined();
+    store.close();
+  });
 });
 
 function fixtureEvent(deliveryId: string, name: 'github.issue' | 'github.pull_request') {
