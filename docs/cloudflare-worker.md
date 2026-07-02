@@ -47,8 +47,12 @@ pnpm install --frozen-lockfile
 pnpm typecheck
 pnpm test
 pnpm build
+pnpm cf:deploy:check
 pnpm cf:deploy
 ```
+
+`pnpm cf:deploy:check` は CI と同じ deployability dry run を実行し、template の required
+inputs と `wrangler deploy --dry-run` の bundle 生成を確認する。
 
 GitHub webhook の delivery URL は production Worker の
 `https://<worker-host>/webhooks/github` を使う。GitHub 側の webhook secret は
