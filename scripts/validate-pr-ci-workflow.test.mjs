@@ -17,6 +17,8 @@ describe('pull request CI workflow', () => {
     expect(workflow).toMatch(/^permissions:\n {2}contents: read$/m);
     expect(workflow).not.toMatch(/^ {2}issues: write$/m);
     expect(workflow).not.toMatch(/^ {2}pull-requests: write$/m);
+    expect(workflow).not.toContain('deployments: write');
+    expect(workflow.match(/persist-credentials: false/g)).toHaveLength(2);
   });
 
   it('uses self-hosted only for trusted pull requests with pnpm cached by lockfile', () => {
