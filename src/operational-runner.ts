@@ -1,6 +1,8 @@
 import type { RainrailEventEnvelope } from './events.js';
 import type { RainrailOperationalStore, StoredAgentTask, StoredEventHandlerRetry } from './operational-store.js';
+import type { ProjectIssue } from './project-issues.js';
 import type { RuntimeRunStatus } from './runtime-provider.js';
+import type { ProjectIssueClaim, TaskQueueProvider } from './task-queue.js';
 
 const RETRY_BASE_DELAY_MS = 60_000;
 const RETRY_MAX_DELAY_MS = 15 * 60_000;
@@ -13,6 +15,13 @@ const TERMINAL_STATUSES = new Set<RuntimeRunStatus>([
   'compaction_failed',
   'needs_human',
   'split_recommended',
+]);
+const RELEASE_STALE_PROJECT_CLAIM_STATUSES = new Set<RuntimeRunStatus>([
+  'failed',
+  'canceled',
+  'stopped',
+  'timed_out',
+  'compaction_failed',
 ]);
 
 export type EventHandlerRetryHandler = (event: RainrailEventEnvelope, retry: StoredEventHandlerRetry) => unknown | Promise<unknown>;
@@ -33,6 +42,7 @@ export type ProcessDueEventHandlerRetryResult =
 export interface ReconcileOperationalAgentTasksOptions {
   store: RainrailOperationalStore;
   readRuntimeStatus(task: StoredAgentTask): Promise<OperationalRuntimeStatus | undefined> | OperationalRuntimeStatus | undefined;
+  queue?: Pick<TaskQueueProvider, 'releaseProjectIssue'>;
 }
 
 export interface OperationalRuntimeStatus {
@@ -156,9 +166,86 @@ export async function reconcileOperationalAgentTasks(options: ReconcileOperation
     };
     const next = options.store.updateAgentTaskStatus(update);
     if (next !== undefined) updated.push(next);
+    if (next !== undefined && shouldReleaseStaleProjectClaim(next) && options.queue?.releaseProjectIssue !== undefined) {
+      await releaseStaleProjectClaim(options, next);
+    }
   }
 
   return updated;
+}
+
+async function releaseStaleProjectClaim(
+  options: ReconcileOperationalAgentTasksOptions,
+  task: StoredAgentTask,
+): Promise<void> {
+  if (
+    options.queue?.releaseProjectIssue === undefined
+    || task.issue === undefined
+    || task.claim === undefined
+    || task.agentSessionId === undefined
+  ) {
+    return;
+  }
+
+  const reason = `runtime ${task.status}`;
+  try {
+    await options.queue.releaseProjectIssue({
+      issue: task.issue as ProjectIssue,
+      claim: task.claim as ProjectIssueClaim,
+      agentSessionId: task.agentSessionId,
+      branchName: task.branchName,
+      reason,
+    });
+    options.store.updateAgentTaskProjectClaim({
+      id: task.id,
+      status: 'released',
+      reason,
+      ...(task.completedAt === undefined ? {} : { updatedAt: task.completedAt }),
+    });
+    options.store.recordActivityEvent({
+      category: 'agent_task',
+      targetType: 'project_claim',
+      targetId: task.id,
+      actionType: 'project_claim_released',
+      outcome: 'success',
+      summary: `Released stale Project claim for ${task.title} after ${reason}`,
+      metadata: {
+        status: task.status,
+        agentSessionId: task.agentSessionId,
+        branchName: task.branchName,
+      },
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    options.store.updateAgentTaskProjectClaim({
+      id: task.id,
+      status: 'release_failed',
+      reason,
+      error: message,
+      ...(task.completedAt === undefined ? {} : { updatedAt: task.completedAt }),
+    });
+    options.store.recordActivityEvent({
+      category: 'agent_task',
+      targetType: 'project_claim',
+      targetId: task.id,
+      actionType: 'project_claim_release_failed',
+      outcome: 'failed',
+      summary: `Failed to release stale Project claim for ${task.title}: ${message}`,
+      metadata: {
+        status: task.status,
+        agentSessionId: task.agentSessionId,
+        branchName: task.branchName,
+      },
+    });
+  }
+}
+
+function shouldReleaseStaleProjectClaim(task: StoredAgentTask): boolean {
+  return RELEASE_STALE_PROJECT_CLAIM_STATUSES.has(task.status)
+    && task.projectClaim?.status !== 'released'
+    && task.issue !== undefined
+    && task.claim !== undefined
+    && task.agentSessionId !== undefined;
 }
 
 function retryHandlerPriority(handlerName: string): number {

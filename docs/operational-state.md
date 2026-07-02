@@ -40,6 +40,13 @@ mergeability / checks / draft state / reviews の反映待ちを一時エラー�
 agent task reconcile は `reconcileOperationalAgentTasks` と
 `ReconcileOperationalAgentTasksOptions` で行う。runtime が terminal state を返した場合、
 `OperationalRuntimeStatus` の status、completedAt、summary を store に反映する。
+`failed`、`canceled`、`stopped`、`timed_out`、`compaction_failed` のような abnormal terminal
+state で task に Project claim metadata が残っている場合、queue provider の
+`releaseProjectIssue` を呼び、Project item の Status、`Agent session ID`、`Branch` を
+owner 検証つきで release する。release 成功/失敗は activity event と task の
+`projectClaim` state に残す。release が失敗した場合、または release provider が無いまま
+terminal task と claim metadata が残る場合、`snapshot().warnings.staleProjectClaims` に
+dashboard/API 用の structured warning を出す。
 
 ## Codex Activity
 

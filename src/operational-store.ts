@@ -57,9 +57,17 @@ export interface RecordAgentTaskInput {
   stderrLogPath?: string;
   pid?: number;
   resumeAttempts?: RuntimeAgentResumeAttempt[];
+  projectClaim?: StoredAgentTaskProjectClaimState;
   result?: string;
   startedAt?: string;
   completedAt?: string;
+}
+
+export interface StoredAgentTaskProjectClaimState {
+  status: 'released' | 'release_failed';
+  reason: string;
+  updatedAt: string;
+  error?: string;
 }
 
 export interface StoredAgentTask extends RecordAgentTaskInput {
@@ -93,12 +101,28 @@ export interface OperationalStoreSnapshot {
   activityEvents: StoredActivityEvent[];
   agentTasks: StoredAgentTask[];
   eventHandlerRetries: StoredEventHandlerRetry[];
+  warnings: OperationalStoreWarnings;
   counts: {
     events: number;
     activityEvents: number;
     agentTasks: number;
     eventHandlerRetries: number;
   };
+}
+
+export interface OperationalStoreWarnings {
+  staleProjectClaims: StoredStaleProjectClaimWarning[];
+}
+
+export interface StoredStaleProjectClaimWarning {
+  taskId: string;
+  title: string;
+  status: RuntimeRunStatus;
+  agentSessionId?: string;
+  branchName: string;
+  issue?: unknown;
+  claim?: unknown;
+  releaseError?: string;
 }
 
 interface SnapshotOptions {
@@ -186,6 +210,7 @@ export class RainrailOperationalStore {
     const stderrLogPath = input.stderrLogPath ?? existing?.stderrLogPath;
     const pid = input.pid ?? existing?.pid;
     const resumeAttempts = input.resumeAttempts ?? existing?.resumeAttempts;
+    const projectClaim = input.projectClaim ?? existing?.projectClaim;
     const result = input.result ?? existing?.result;
     const completedAt = input.completedAt ?? existing?.completedAt;
     const task = agentTaskWithRuntime({
@@ -200,6 +225,7 @@ export class RainrailOperationalStore {
       ...(stderrLogPath === undefined ? {} : { stderrLogPath }),
       ...(pid === undefined ? {} : { pid }),
       ...(resumeAttempts === undefined ? {} : { resumeAttempts: jsonClone(resumeAttempts) }),
+      ...(projectClaim === undefined ? {} : { projectClaim: jsonClone(projectClaim) }),
       ...(result === undefined ? {} : { result }),
       startedAt,
       ...(completedAt === undefined ? {} : { completedAt }),
@@ -250,11 +276,46 @@ export class RainrailOperationalStore {
       ...(existing.stderrLogPath === undefined ? {} : { stderrLogPath: existing.stderrLogPath }),
       ...(existing.pid === undefined ? {} : { pid: existing.pid }),
       ...(existing.resumeAttempts === undefined ? {} : { resumeAttempts: existing.resumeAttempts }),
+      ...(existing.projectClaim === undefined ? {} : { projectClaim: existing.projectClaim }),
       ...((input.result ?? existing.result) === undefined ? {} : { result: input.result ?? existing.result }),
       startedAt: existing.startedAt,
       ...((input.completedAt ?? existing.completedAt) === undefined
         ? {}
         : { completedAt: input.completedAt ?? existing.completedAt }),
+    });
+  }
+
+  updateAgentTaskProjectClaim(input: {
+    id: string;
+    status: StoredAgentTaskProjectClaimState['status'];
+    reason: string;
+    error?: string;
+    updatedAt?: string;
+  }): StoredAgentTask | undefined {
+    const existing = this.getAgentTask(input.id);
+    if (existing === undefined) return undefined;
+
+    return this.recordAgentTask({
+      id: existing.id,
+      title: existing.title,
+      ...(existing.agentSessionId === undefined ? {} : { agentSessionId: existing.agentSessionId }),
+      branchName: existing.branchName,
+      status: existing.status,
+      ...(existing.issue === undefined ? {} : { issue: existing.issue }),
+      ...(existing.claim === undefined ? {} : { claim: existing.claim }),
+      ...(existing.logPath === undefined ? {} : { logPath: existing.logPath }),
+      ...(existing.stderrLogPath === undefined ? {} : { stderrLogPath: existing.stderrLogPath }),
+      ...(existing.pid === undefined ? {} : { pid: existing.pid }),
+      ...(existing.resumeAttempts === undefined ? {} : { resumeAttempts: existing.resumeAttempts }),
+      projectClaim: {
+        status: input.status,
+        reason: input.reason,
+        updatedAt: input.updatedAt ?? this.#now().toISOString(),
+        ...(input.error === undefined ? {} : { error: input.error }),
+      },
+      ...(existing.result === undefined ? {} : { result: existing.result }),
+      startedAt: existing.startedAt,
+      ...(existing.completedAt === undefined ? {} : { completedAt: existing.completedAt }),
     });
   }
 
@@ -368,6 +429,9 @@ export class RainrailOperationalStore {
       eventHandlerRetries: Object.values(this.#data.eventHandlerRetries)
         .sort((left, right) => left.nextRetryAt.localeCompare(right.nextRetryAt) || left.handlerName.localeCompare(right.handlerName))
         .map((retry) => jsonClone(retry)),
+      warnings: {
+        staleProjectClaims: staleProjectClaimWarnings(this.listAgentTasks()),
+      },
       counts: {
         events: Object.keys(this.#data.events).length,
         activityEvents: Object.keys(this.#data.activityEvents).length,
@@ -452,6 +516,33 @@ function agentTaskWithRuntime(task: Omit<StoredAgentTask, 'runtime'>): StoredAge
       ...('completedAt' in task ? { completedAt: task.completedAt } : {}),
     },
   };
+}
+
+const staleProjectClaimRuntimeStatuses = new Set<RuntimeRunStatus>([
+  'failed',
+  'canceled',
+  'stopped',
+  'timed_out',
+  'compaction_failed',
+]);
+
+function staleProjectClaimWarnings(tasks: StoredAgentTask[]): StoredStaleProjectClaimWarning[] {
+  return tasks
+    .filter((task) =>
+      staleProjectClaimRuntimeStatuses.has(task.status)
+      && task.claim !== undefined
+      && task.projectClaim?.status !== 'released'
+    )
+    .map((task) => ({
+      taskId: task.id,
+      title: task.title,
+      status: task.status,
+      ...(task.agentSessionId === undefined ? {} : { agentSessionId: task.agentSessionId }),
+      branchName: task.branchName,
+      ...(task.issue === undefined ? {} : { issue: jsonClone(task.issue) }),
+      ...(task.claim === undefined ? {} : { claim: jsonClone(task.claim) }),
+      ...(task.projectClaim?.error === undefined ? {} : { releaseError: task.projectClaim.error }),
+    }));
 }
 
 function sameRetryVersion(left: StoredEventHandlerRetry, right: StoredEventHandlerRetry): boolean {

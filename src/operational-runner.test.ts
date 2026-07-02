@@ -311,6 +311,132 @@ describe('operational reconcile helpers', () => {
       completedAt: '2026-07-02T00:05:00.000Z',
       result: 'Outcome: implemented',
     });
+    expect(store.snapshot().warnings.staleProjectClaims).toEqual([]);
+    store.close();
+  });
+
+  it('releases stale Project claims for abnormal terminal agent tasks', async () => {
+    const store = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:00:00.000Z'),
+    });
+    const issue = {
+      id: 'item_47',
+      title: 'agent 停止後に stale In Progress と未完了 handoff を残さない',
+      status: 'In Progress',
+      assigneeLogins: ['reirei-agent'],
+      repository: 'reirei-lab/rainrail',
+      number: 47,
+    };
+    const claim = {
+      projectItemId: 'item_47',
+      agentSessionIdFieldId: 'PVTF_session',
+      branchFieldId: 'PVTF_branch',
+      lockRefId: 'REF_lock_47',
+    };
+    store.recordAgentTask({
+      id: 'agent_task_rainrail_47',
+      title: issue.title,
+      agentSessionId: 'agent:main:rainrail-47',
+      branchName: 'agent/reirei-lab-rainrail-47-agent-stale-in-progress-handoff',
+      status: 'running',
+      issue,
+      claim,
+    });
+    const releases: unknown[] = [];
+
+    await reconcileOperationalAgentTasks({
+      store,
+      readRuntimeStatus: async () => ({
+        status: 'stopped',
+        completedAt: '2026-07-02T00:05:00.000Z',
+        summary: 'GatewayClientRequestError: Compaction timed out',
+      }),
+      queue: {
+        releaseProjectIssue: async (input) => {
+          releases.push(input);
+        },
+      },
+    });
+
+    expect(releases).toEqual([{
+      issue,
+      claim,
+      agentSessionId: 'agent:main:rainrail-47',
+      branchName: 'agent/reirei-lab-rainrail-47-agent-stale-in-progress-handoff',
+      reason: 'runtime stopped',
+    }]);
+    expect(store.getAgentTask('agent_task_rainrail_47')).toMatchObject({
+      status: 'stopped',
+      projectClaim: {
+        status: 'released',
+        reason: 'runtime stopped',
+        updatedAt: '2026-07-02T00:05:00.000Z',
+      },
+    });
+    expect(store.snapshot().warnings.staleProjectClaims).toEqual([]);
+    expect(store.snapshot().activityEvents).toEqual([
+      expect.objectContaining({
+        actionType: 'project_claim_released',
+        outcome: 'success',
+      }),
+    ]);
+    store.close();
+  });
+
+  it('keeps a dashboard warning when stale Project claim release fails owner verification', async () => {
+    const store = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:00:00.000Z'),
+    });
+    const issue = {
+      id: 'item_47',
+      title: 'agent 停止後に stale In Progress と未完了 handoff を残さない',
+      status: 'In Progress',
+      assigneeLogins: ['reirei-agent'],
+      repository: 'reirei-lab/rainrail',
+      number: 47,
+    };
+    store.recordAgentTask({
+      id: 'agent_task_rainrail_47',
+      title: issue.title,
+      agentSessionId: 'agent:main:rainrail-47',
+      branchName: 'agent/reirei-lab-rainrail-47-agent-stale-in-progress-handoff',
+      status: 'running',
+      issue,
+      claim: { projectItemId: 'item_47', lockRefId: 'REF_lock_47' },
+    });
+
+    await reconcileOperationalAgentTasks({
+      store,
+      readRuntimeStatus: async () => ({
+        status: 'compaction_failed',
+        completedAt: '2026-07-02T00:05:00.000Z',
+      }),
+      queue: {
+        releaseProjectIssue: async () => {
+          throw new Error('GitHub Project item claim was overwritten by another assignment');
+        },
+      },
+    });
+
+    expect(store.snapshot().warnings.staleProjectClaims).toEqual([
+      expect.objectContaining({
+        taskId: 'agent_task_rainrail_47',
+        status: 'compaction_failed',
+        agentSessionId: 'agent:main:rainrail-47',
+        branchName: 'agent/reirei-lab-rainrail-47-agent-stale-in-progress-handoff',
+        releaseError: 'GitHub Project item claim was overwritten by another assignment',
+      }),
+    ]);
+    expect(store.snapshot().activityEvents).toEqual([
+      expect.objectContaining({
+        actionType: 'project_claim_release_failed',
+        outcome: 'failed',
+      }),
+    ]);
     store.close();
   });
 });
