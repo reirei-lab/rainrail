@@ -290,20 +290,19 @@ describe('handleAutoMergeEvent', () => {
     expect(runtimeMerges).toEqual([]);
   });
 
-  it('does not let an old configured reviewer dismissal hide a live approval', async () => {
+  it('retries when a configured reviewer dismissal is not reflected over a live approval', async () => {
     const runtimeMerges: unknown[] = [];
 
-    const result = await handleAutoMergeEvent(reviewEvent({
+    await expect(handleAutoMergeEvent(reviewEvent({
       action: 'dismissed',
       state: 'dismissed',
       reviewerLogin: 'hiragram',
       reviewCommitId: 'abc123',
     }), options({
       reviews: [{ authorLogin: 'hiragram', state: 'APPROVED', commitId: 'abc123' }],
-    }), runtimeContext(runtimeMerges));
+    }), runtimeContext(runtimeMerges))).rejects.toThrow('pull request reviews are still being reflected');
 
-    expect(result.reason).toBe('pull_request_merged');
-    expect(runtimeMerges).toEqual([expect.objectContaining({ number: 44 })]);
+    expect(runtimeMerges).toEqual([]);
   });
 
   it('continues past non-agent check_run PRs and auto-merges a later agent PR', async () => {
@@ -531,6 +530,25 @@ describe('handleAutoMergeEvent', () => {
     const result = await handleAutoMergeEvent(reviewEvent({ headSha: 'old-sha' }), options({ headSha: 'new-sha' }));
 
     expect(result.reason).toBe('check does not match the current pull request head');
+  });
+
+  it('does not auto-merge when the current head SHA is unavailable', async () => {
+    const runtimeMerges: unknown[] = [];
+    const target = pullRequest();
+    delete target.headSha;
+
+    const result = await handleAutoMergeEvent(checkRunEvent(), {
+      ...options(),
+      pullRequests: {
+        ...options().pullRequests,
+        async getPullRequest() {
+          return target;
+        },
+      },
+    }, runtimeContext(runtimeMerges));
+
+    expect(result.reason).toBe('pull request head SHA is unavailable');
+    expect(runtimeMerges).toEqual([]);
   });
 
   it('only auto-merges agent branch pull requests', async () => {

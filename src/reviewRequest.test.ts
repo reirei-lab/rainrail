@@ -335,10 +335,10 @@ describe('handleReviewRequestEvent', () => {
     expect(requestCount).toBe(0);
   });
 
-  it('does not let an old configured reviewer dismissal hide a live approval', async () => {
+  it('retries when a configured reviewer dismissal is not reflected over a live approval', async () => {
     const reviewRequests: Array<{ repository: string; number: number; reviewerLogin: string }> = [];
 
-    const result = await handleReviewRequestEvent(reviewEvent({
+    await expect(handleReviewRequestEvent(reviewEvent({
       action: 'dismissed',
       state: 'dismissed',
       reviewerLogin: 'hiragram',
@@ -361,9 +361,8 @@ describe('handleReviewRequestEvent', () => {
           reviewRequests.push(input);
         },
       },
-    });
+    })).rejects.toThrow('pull request reviews are still being reflected');
 
-    expect(result.reason).toBe('pull request is already approved by configured reviewer');
     expect(reviewRequests).toEqual([]);
   });
 

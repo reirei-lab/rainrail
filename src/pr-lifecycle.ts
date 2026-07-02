@@ -732,12 +732,16 @@ export async function handleAutoMergeEvent(
       fallback = { handled: false, reason: 'pull request is not mergeable', pullRequest };
       continue;
     }
+    if (pullRequest.headSha === undefined) {
+      fallback = { handled: false, reason: 'pull request head SHA is unavailable', pullRequest };
+      continue;
+    }
 
     const mergeInput = {
       repository: pullRequest.repository,
       number: pullRequest.number,
       mergeMethod: options.mergeMethod,
-      ...optionalString('sha', pullRequest.headSha),
+      sha: pullRequest.headSha,
     };
     if (context === undefined) throw new Error('Auto-merge requires a gated runtime merge action');
     await context.actions.mergePullRequest({
@@ -1333,7 +1337,8 @@ function isUnreflectedReviewResolution(
   if (review === undefined) return false;
   const latest = latestActionableReviewForCurrentHead(pullRequest, review.authorLogin);
   const latestState = normalize(latest?.state);
-  return (review.state === 'APPROVED' || review.state === 'DISMISSED') && latestState === 'changes_requested';
+  return (review.state === 'APPROVED' && latestState === 'changes_requested')
+    || (review.state === 'DISMISSED' && (latestState === 'changes_requested' || latestState === 'approved'));
 }
 
 function candidateReviewResolution(
