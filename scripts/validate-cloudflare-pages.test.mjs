@@ -53,6 +53,7 @@ describe('Cloudflare Pages product site deploys', () => {
     expect(workflow).toContain('persist-credentials: false');
     expect(workflow).not.toMatch(/^ {4}env:\n {6}CLOUDFLARE_ACCOUNT_ID:/m);
     expect(workflow).toContain('id: pages-artifact');
+    expect(workflow).toContain('shell: bash');
     expect(workflow).toContain('found=false');
     expect(workflow).toContain("if: steps.pages-artifact.outputs.found == 'true'");
     expect(workflow).toContain('gh run download "${{ github.event.workflow_run.id }}" --name rainrail-pages-dist --dir apps/www/dist');

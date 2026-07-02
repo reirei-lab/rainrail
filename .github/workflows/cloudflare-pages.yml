@@ -51,6 +51,7 @@ jobs:
 
       - name: Download Cloudflare Pages preview artifact
         id: pages-artifact
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
