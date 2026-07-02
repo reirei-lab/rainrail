@@ -16,6 +16,7 @@ describe('Cloudflare Pages product site deploys', () => {
     expect(docs).toContain('CLOUDFLARE_API_TOKEN');
     expect(docs).toContain('pnpm pages:deploy:preview');
     expect(docs).toContain('pnpm pages:deploy:production');
+    expect(docs).toContain('GitHub Actions は secrets が未設定の場合でも build まで実行し、deploy だけを skip する');
     expect(docs).toContain('RAINRAIL_PAGES_URL=https://<pages-host> pnpm pages:smoke');
   });
 
@@ -39,7 +40,10 @@ describe('Cloudflare Pages product site deploys', () => {
     expect(workflow).toContain('CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}');
     expect(workflow).toContain('CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}');
     expect(workflow).toContain('RAINRAIL_PAGES_BRANCH: ${{ github.head_ref }}');
-    expect(workflow).toContain('pnpm pages:deploy:preview');
-    expect(workflow).toContain('pnpm pages:deploy:production');
+    expect(workflow).toContain('pnpm pages:build');
+    expect(workflow).toContain("if: env.CLOUDFLARE_ACCOUNT_ID != '' && env.CLOUDFLARE_API_TOKEN != ''");
+    expect(workflow).toContain("if: env.CLOUDFLARE_ACCOUNT_ID == '' || env.CLOUDFLARE_API_TOKEN == ''");
+    expect(workflow).toContain('wrangler pages deploy apps/www/dist --project-name rainrail-www --branch "${RAINRAIL_PAGES_BRANCH}"');
+    expect(workflow).toContain('wrangler pages deploy apps/www/dist --project-name rainrail-www --branch main');
   });
 });

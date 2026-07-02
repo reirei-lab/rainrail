@@ -45,8 +45,16 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Build Cloudflare Pages preview
+        run: pnpm pages:build
+
       - name: Deploy Cloudflare Pages preview
-        run: pnpm pages:deploy:preview
+        if: env.CLOUDFLARE_ACCOUNT_ID != '' && env.CLOUDFLARE_API_TOKEN != ''
+        run: wrangler pages deploy apps/www/dist --project-name rainrail-www --branch "${RAINRAIL_PAGES_BRANCH}"
+
+      - name: Skip Cloudflare Pages preview deploy
+        if: env.CLOUDFLARE_ACCOUNT_ID == '' || env.CLOUDFLARE_API_TOKEN == ''
+        run: echo "::notice::Skipping Cloudflare Pages preview deploy because CLOUDFLARE_ACCOUNT_ID or CLOUDFLARE_API_TOKEN is not configured."
 
   production:
     name: Deploy production
@@ -72,5 +80,13 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Build Cloudflare Pages production
+        run: pnpm pages:build
+
       - name: Deploy Cloudflare Pages production
-        run: pnpm pages:deploy:production
+        if: env.CLOUDFLARE_ACCOUNT_ID != '' && env.CLOUDFLARE_API_TOKEN != ''
+        run: wrangler pages deploy apps/www/dist --project-name rainrail-www --branch main
+
+      - name: Skip Cloudflare Pages production deploy
+        if: env.CLOUDFLARE_ACCOUNT_ID == '' || env.CLOUDFLARE_API_TOKEN == ''
+        run: echo "::notice::Skipping Cloudflare Pages production deploy because CLOUDFLARE_ACCOUNT_ID or CLOUDFLARE_API_TOKEN is not configured."
