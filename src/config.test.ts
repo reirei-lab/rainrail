@@ -162,6 +162,11 @@ describe('parseConfig', () => {
       Number.POSITIVE_INFINITY,
       'config.runtimeProviders.openclaw.timeoutSeconds must be a finite number',
     ],
+    [
+      'timeoutSeconds',
+      -1,
+      'config.runtimeProviders.openclaw.timeoutSeconds must be a finite non-negative number',
+    ],
     ['logDirectory', '', 'config.runtimeProviders.openclaw.logDirectory must be a non-empty string'],
     ['logDirectory', 42, 'config.runtimeProviders.openclaw.logDirectory must be a non-empty string'],
   ])('rejects invalid openclaw %s with a config path', (key, value, message) => {
@@ -200,7 +205,7 @@ describe('parseConfig', () => {
     });
   });
 
-  it.each([0, -1, 0.5])('allows finite timeoutSeconds boundary value %s', (timeoutSeconds) => {
+  it.each([0, 0.5])('allows finite non-negative timeoutSeconds boundary value %s', (timeoutSeconds) => {
     expect(parseConfig({
       runtimeProviders: {
         openclaw: {
@@ -245,13 +250,15 @@ describe('parseConfig', () => {
   });
 
   it('expands undefined environment variables to empty string content before parsing', async () => {
+    const envName = `RAINRAIL_UNDEFINED_${crypto.randomUUID().replaceAll('-', '_').toUpperCase()}`;
+    delete process.env[envName];
     const directory = join(tmpdir(), `rainrail-config-${crypto.randomUUID()}`);
     temporaryDirectories.push(directory);
     await mkdir(directory, { recursive: true });
     const path = join(directory, 'rainrail.json');
     await writeFile(path, JSON.stringify({
       sources: [
-        { type: 'github', name: 'github-${RAINRAIL_UNDEFINED_ENV}-webhook' },
+        { type: 'github', name: `github-\${${envName}}-webhook` },
       ],
     }), 'utf8');
 
