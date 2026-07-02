@@ -31,7 +31,7 @@ jobs:
       RAINRAIL_PAGES_BRANCH: ${{ github.event.workflow_run.pull_requests[0].head.ref }}
     steps:
       - name: Check out trusted deploy tooling
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           ref: main
           persist-credentials: false
@@ -92,7 +92,7 @@ jobs:
       cancel-in-progress: true
     steps:
       - name: Check out repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
