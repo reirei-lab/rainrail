@@ -26,7 +26,7 @@ describe('pull request CI workflow', () => {
     expect(workflow).toContain('github.event.pull_request.head.repo.full_name == github.repository');
     expect(workflow).toContain('"OWNER", "MEMBER", "COLLABORATOR"');
     expect(workflow).toContain('github.event.pull_request.author_association');
-    expect(workflow).toContain('uses: pnpm/action-setup@v4');
+    expect(workflow).toContain('uses: pnpm/action-setup@v6');
     expect(workflow).toContain('cache: pnpm');
     expect(workflow).toContain('cache-dependency-path: pnpm-lock.yaml');
     expect(workflow).toContain('pnpm install --frozen-lockfile');
