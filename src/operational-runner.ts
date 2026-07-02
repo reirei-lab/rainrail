@@ -1,0 +1,145 @@
+import type { RainrailEventEnvelope } from './events.js';
+import type { RainrailOperationalStore, StoredAgentTask, StoredEventHandlerRetry } from './operational-store.js';
+import type { RuntimeRunStatus } from './runtime-provider.js';
+
+const RETRY_BASE_DELAY_MS = 60_000;
+const RETRY_MAX_DELAY_MS = 15 * 60_000;
+const TERMINAL_STATUSES = new Set<RuntimeRunStatus>([
+  'succeeded',
+  'failed',
+  'canceled',
+  'stopped',
+  'timed_out',
+  'compaction_failed',
+  'needs_human',
+  'split_recommended',
+]);
+
+export type EventHandlerRetryHandler = (event: RainrailEventEnvelope, retry: StoredEventHandlerRetry) => unknown | Promise<unknown>;
+
+export interface ProcessDueEventHandlerRetriesOptions {
+  store: RainrailOperationalStore;
+  now: string;
+  handlers: Record<string, EventHandlerRetryHandler | undefined>;
+  limit?: number;
+}
+
+export type ProcessDueEventHandlerRetryResult =
+  | { eventId: string; handlerName: string; status: 'fulfilled' }
+  | { eventId: string; handlerName: string; status: 'scheduled' }
+  | { eventId: string; handlerName: string; status: 'cleared'; reason: 'missing_event' | 'missing_handler' }
+  | { eventId: string; handlerName: string; status: 'failed'; error: string };
+
+export interface ReconcileOperationalAgentTasksOptions {
+  store: RainrailOperationalStore;
+  readRuntimeStatus(task: StoredAgentTask): Promise<OperationalRuntimeStatus | undefined> | OperationalRuntimeStatus | undefined;
+}
+
+export interface OperationalRuntimeStatus {
+  status: RuntimeRunStatus;
+  completedAt?: string;
+  summary?: string;
+}
+
+export function isRetryableOperationalError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /rate limit/i.test(message)
+    || /HTTP 5\d\d/i.test(message)
+    || /fetch failed/i.test(message)
+    || /mergeability is still being calculated/i.test(message);
+}
+
+export function retryDelayMs(previousAttempts: number): number {
+  return Math.min(RETRY_BASE_DELAY_MS * (2 ** previousAttempts), RETRY_MAX_DELAY_MS);
+}
+
+export function prioritizeEventHandlerRetriesForProcessing<T extends Pick<StoredEventHandlerRetry, 'handlerName' | 'nextRetryAt'>>(
+  retries: T[],
+): T[] {
+  return [...retries].sort((left, right) => {
+    const priorityDelta = retryHandlerPriority(left.handlerName) - retryHandlerPriority(right.handlerName);
+    if (priorityDelta !== 0) return priorityDelta;
+
+    return left.nextRetryAt.localeCompare(right.nextRetryAt);
+  });
+}
+
+export async function processDueEventHandlerRetries(
+  options: ProcessDueEventHandlerRetriesOptions,
+): Promise<ProcessDueEventHandlerRetryResult[]> {
+  const results: ProcessDueEventHandlerRetryResult[] = [];
+  const dueRetries = prioritizeEventHandlerRetriesForProcessing(
+    options.store.listDueEventHandlerRetries(options.now, options.limit ?? 100),
+  );
+
+  for (const retry of dueRetries) {
+    const event = options.store.getEvent(retry.eventId);
+    if (event === undefined) {
+      options.store.clearEventHandlerRetry(retry.eventId, retry.handlerName);
+      results.push({ eventId: retry.eventId, handlerName: retry.handlerName, status: 'cleared', reason: 'missing_event' });
+      continue;
+    }
+
+    const handler = options.handlers[retry.handlerName];
+    if (handler === undefined) {
+      options.store.clearEventHandlerRetry(retry.eventId, retry.handlerName);
+      results.push({ eventId: retry.eventId, handlerName: retry.handlerName, status: 'cleared', reason: 'missing_handler' });
+      continue;
+    }
+
+    try {
+      await handler(event.envelope, retry);
+      options.store.clearEventHandlerRetry(retry.eventId, retry.handlerName);
+      results.push({ eventId: retry.eventId, handlerName: retry.handlerName, status: 'fulfilled' });
+    } catch (error) {
+      if (!isRetryableOperationalError(error)) {
+        options.store.clearEventHandlerRetry(retry.eventId, retry.handlerName);
+        results.push({
+          eventId: retry.eventId,
+          handlerName: retry.handlerName,
+          status: 'failed',
+          error: error instanceof Error ? error.message : String(error),
+        });
+        continue;
+      }
+
+      options.store.recordEventHandlerRetry({
+        eventId: retry.eventId,
+        handlerName: retry.handlerName,
+        nextRetryAt: new Date(new Date(options.now).getTime() + retryDelayMs(retry.attempts)).toISOString(),
+        lastError: error instanceof Error ? error.message : String(error),
+      });
+      results.push({ eventId: retry.eventId, handlerName: retry.handlerName, status: 'scheduled' });
+    }
+  }
+
+  return results;
+}
+
+export async function reconcileOperationalAgentTasks(options: ReconcileOperationalAgentTasksOptions): Promise<StoredAgentTask[]> {
+  const updated: StoredAgentTask[] = [];
+
+  for (const task of options.store.listAgentTasks()) {
+    if (TERMINAL_STATUSES.has(task.status)) continue;
+
+    const runtimeStatus = await options.readRuntimeStatus(task);
+    if (runtimeStatus === undefined || !TERMINAL_STATUSES.has(runtimeStatus.status)) continue;
+
+    const update = {
+      id: task.id,
+      status: runtimeStatus.status,
+      ...(runtimeStatus.completedAt === undefined ? {} : { completedAt: runtimeStatus.completedAt }),
+      ...(runtimeStatus.summary === undefined ? {} : { result: runtimeStatus.summary }),
+    };
+    const next = options.store.updateAgentTaskStatus(update);
+    if (next !== undefined) updated.push(next);
+  }
+
+  return updated;
+}
+
+function retryHandlerPriority(handlerName: string): number {
+  if (handlerName === 'conflict-check') return 0;
+  if (handlerName === '__auto_assign_next_issue') return 2;
+  return 1;
+}

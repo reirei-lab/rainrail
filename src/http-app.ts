@@ -10,6 +10,7 @@ import {
   textResponse,
   withCors,
 } from './http-utils.js';
+import type { RainrailOperationalStore } from './operational-store.js';
 
 export interface RainrailBridgeRoomFetchTarget {
   fetch(request: Request): Response | Promise<Response>;
@@ -23,6 +24,7 @@ export interface RainrailHttpAppOptions {
   runtime?: string;
   githubSourceName?: string;
   maxWebhookBodyBytes?: number;
+  operationalStore?: RainrailOperationalStore;
 }
 
 export interface RainrailHttpApp {
@@ -91,7 +93,43 @@ async function routeRainrailHttpRequest(request: Request, options: RainrailHttpA
     return handleGitHubWebhook(request, options);
   }
 
+  if (url.pathname === '/api/state') {
+    if (request.method !== 'GET') return methodNotAllowedResponse(['GET', 'OPTIONS']);
+
+    return dashboardStateResponse(url, options);
+  }
+
+  const eventDetailMatch = /^\/api\/events\/([^/]+)$/.exec(url.pathname);
+  if (eventDetailMatch !== null) {
+    if (request.method !== 'GET') return methodNotAllowedResponse(['GET', 'OPTIONS']);
+
+    return dashboardEventDetailResponse(decodeURIComponent(eventDetailMatch[1]!), options);
+  }
+
   return textResponse('not found\n', { status: 404 });
+}
+
+function dashboardStateResponse(url: URL, options: RainrailHttpAppOptions): Response {
+  if (options.operationalStore === undefined) {
+    return jsonResponse({ error: 'operational_store_not_configured' }, { status: 503 });
+  }
+
+  return jsonResponse(options.operationalStore.snapshot({
+    hideSkippedActivityEvents: url.searchParams.get('hideSkippedActivity') === '1',
+  }));
+}
+
+function dashboardEventDetailResponse(eventId: string, options: RainrailHttpAppOptions): Response {
+  if (options.operationalStore === undefined) {
+    return jsonResponse({ error: 'operational_store_not_configured' }, { status: 503 });
+  }
+
+  const event = options.operationalStore.getEvent(eventId);
+  if (event === undefined) {
+    return jsonResponse({ error: 'event_not_found' }, { status: 404 });
+  }
+
+  return jsonResponse(event);
 }
 
 async function handleGitHubWebhook(request: Request, options: RainrailHttpAppOptions): Promise<Response> {
