@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { handleReviewRequestEvent } from './pr-lifecycle.js';
-import { checkRunEvent, pullRequest, pullRequestEvent, statusEvent } from './pr-lifecycle-test-helpers.js';
+import { checkRunEvent, pullRequest, pullRequestEvent, reviewEvent, statusEvent } from './pr-lifecycle-test-helpers.js';
 
 describe('handleReviewRequestEvent', () => {
   it('requests a review for an agent PR when all checks pass', async () => {
@@ -135,6 +135,73 @@ describe('handleReviewRequestEvent', () => {
 
     expect(result.reason).toBe('event is not a completed successful check for a pull request');
     expect(requestCount).toBe(0);
+  });
+
+  it('requests review when another reviewer approval resolves the last change request blocker', async () => {
+    const reviewRequests: Array<{ repository: string; number: number; reviewerLogin: string }> = [];
+
+    const result = await handleReviewRequestEvent(reviewEvent({
+      state: 'approved',
+      reviewerLogin: 'codex',
+      reviewCommitId: 'abc123',
+    }), {
+      agentLogin: 'reirei-agent',
+      reviewerLogin: 'hiragram',
+      branchPrefix: 'agent/',
+      pullRequests: {
+        async getPullRequest(input) {
+          return pullRequest({
+            ...input,
+            reviews: [{ authorLogin: 'codex', state: 'APPROVED', commitId: 'abc123' }],
+          });
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview(input) {
+          reviewRequests.push(input);
+        },
+      },
+    });
+
+    expect(result.reason).toBe('review_requested');
+    expect(reviewRequests).toEqual([
+      { repository: 'reirei-lab/rainrail', number: 44, reviewerLogin: 'hiragram' },
+    ]);
+  });
+
+  it('requests review when a review dismissal resolves the last change request blocker', async () => {
+    const reviewRequests: Array<{ repository: string; number: number; reviewerLogin: string }> = [];
+
+    const result = await handleReviewRequestEvent(reviewEvent({
+      action: 'dismissed',
+      state: 'dismissed',
+      reviewerLogin: 'codex',
+      reviewCommitId: 'abc123',
+    }), {
+      agentLogin: 'reirei-agent',
+      reviewerLogin: 'hiragram',
+      branchPrefix: 'agent/',
+      pullRequests: {
+        async getPullRequest(input) {
+          return pullRequest({
+            ...input,
+            reviews: [{ authorLogin: 'codex', state: 'DISMISSED', commitId: 'abc123' }],
+          });
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview(input) {
+          reviewRequests.push(input);
+        },
+      },
+    });
+
+    expect(result.reason).toBe('review_requested');
+    expect(reviewRequests).toEqual([
+      { repository: 'reirei-lab/rainrail', number: 44, reviewerLogin: 'hiragram' },
+    ]);
   });
 
   it('does not request review before the current head has any reported checks', async () => {

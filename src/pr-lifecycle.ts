@@ -205,6 +205,7 @@ type PullRequestCandidate = {
   headRefName?: string;
   headSha?: string;
   expandByHeadSha?: boolean;
+  checkName?: string;
   dismissedReviewerLogin?: string;
 };
 
@@ -212,7 +213,7 @@ export function createReviewRequestWorkflow(options: ReviewRequestWorkflowOption
   return defineWorkflowPlugin({
     name: 'review-request',
     accepts: (event) => event.source.type === 'github'
-      && (event.name === 'github.check_run' || event.name === 'github.status' || event.name === 'github.pull_request'),
+      && (event.name === 'github.check_run' || event.name === 'github.status' || event.name === 'github.pull_request' || event.name === 'github.review'),
     async handle(event, context) {
       return handleReviewRequestEvent(event, { ...options, pullRequests: options.pullRequests ?? pullRequestsFromContext(context) }, context);
     },
@@ -658,9 +659,6 @@ export async function handleAutoMergeEvent(
   if (options.enabled === false) return { handled: false, reason: 'auto-merge is disabled' };
   const candidate = autoMergeCandidateFromEvent(event);
   if (candidate === undefined) return { handled: false, reason: 'event is not an approved review or successful check for a pull request' };
-  if (candidate.reviewerLogin !== undefined && !sameLogin(candidate.reviewerLogin, options.reviewerLogin)) {
-    return { handled: false, reason: 'reviewer is not the configured reviewer' };
-  }
   if (!targetRepositoryAllowed(options.targetRepositories, candidate.repository)) return { handled: false, reason: 'repository is not an auto-merge target' };
 
   const pullRequests = requirePullRequests(options.pullRequests);
@@ -696,7 +694,7 @@ export async function handleAutoMergeEvent(
       continue;
     }
     if (!hasPassingCheckRollup(pullRequest)) {
-      if (candidate.expandByHeadSha === true && isUnreflectedCheckRollup(pullRequest)) {
+      if (candidate.expandByHeadSha === true && isUnreflectedCheckRollup(candidate, pullRequest)) {
         sawUnreflectedCheckRollup = true;
       }
       fallback = { handled: false, reason: 'not all checks have passed', pullRequest };
@@ -759,8 +757,15 @@ function hasPassingCheckRollup(pullRequest: PullRequestReviewTarget): boolean {
   return pullRequest.statusCheckRollup.length > 0 && allChecksPassed(pullRequest);
 }
 
-function isUnreflectedCheckRollup(pullRequest: PullRequestReviewTarget): boolean {
-  return pullRequest.statusCheckRollup.length === 0 || pullRequest.statusCheckRollup.some((check) => isPendingCheck(check) || isFailingCheck(check));
+function isUnreflectedCheckRollup(candidate: PullRequestCandidate, pullRequest: PullRequestReviewTarget): boolean {
+  return pullRequest.statusCheckRollup.length === 0
+    || pullRequest.statusCheckRollup.some(isPendingCheck)
+    || pullRequest.statusCheckRollup.some((check) => isFailingCheck(check) && checkMatchesCandidate(candidate, check));
+}
+
+function checkMatchesCandidate(candidate: PullRequestCandidate, check: PullRequestCheck): boolean {
+  if (candidate.checkName === undefined) return false;
+  return normalize(check.name) === normalize(candidate.checkName);
 }
 
 function shouldRetryUnreflectedCheckFailureCandidate(
@@ -786,7 +791,7 @@ function shouldRetryUnreflectedReviewRequestCandidate(
   if (hasUnresolvedChangeRequest(pullRequest)) return false;
   if (reviewApproved(options, pullRequest)) return false;
   if (pullRequest.reviewRequests.some((login) => sameLogin(login, options.reviewerLogin))) return false;
-  return !hasPassingCheckRollup(pullRequest) && isUnreflectedCheckRollup(pullRequest);
+  return !hasPassingCheckRollup(pullRequest) && isUnreflectedCheckRollup(candidate, pullRequest);
 }
 
 function pullRequestsFromContext(context: PluginRuntimeContext): GitHubPullRequestProvider | undefined {
@@ -862,10 +867,17 @@ async function safeRecordTaskStatus(
 function pullRequestCandidateFromEvent(event: RainrailEventEnvelope): PullRequestCandidate | undefined {
   const payload = recordValue(event.payload);
   if (event.name === 'github.check_run' && isPassingCompletedCheckRun(payload)) {
-    return candidateFromPullRequests(payload, stringValue(recordValue(payload.resource).headSha));
+    const resource = recordValue(payload.resource);
+    const candidate = candidateFromPullRequests(payload, stringValue(resource.headSha));
+    return candidate === undefined
+      ? undefined
+      : { ...candidate, ...optionalString('checkName', stringValue(resource.name ?? resource.context)) };
   }
   if (event.name === 'github.status' && commitStatusState(payload) === 'success') {
     return headCandidateFromStatus(payload);
+  }
+  if (event.name === 'github.review' && payload.event === 'pull_request_review') {
+    return reviewResolutionCandidateFromEvent(payload);
   }
   if (event.name === 'github.pull_request' && payload.action === 'ready_for_review') {
     const resource = recordValue(payload.resource);
@@ -880,6 +892,23 @@ function pullRequestCandidateFromEvent(event: RainrailEventEnvelope): PullReques
     };
   }
   return undefined;
+}
+
+function reviewResolutionCandidateFromEvent(payload: Record<string, unknown>): PullRequestCandidate | undefined {
+  const action = stringValue(payload.action);
+  const review = recordValue(payload.review);
+  const resource = recordValue(payload.resource);
+  const reviewState = normalize(review.state ?? resource.state);
+  if (!(action === 'dismissed' || (action === 'submitted' && reviewState === 'approved'))) return undefined;
+  const repository = repositoryName(payload);
+  const number = numberValue(recordValue(payload.pullRequest).number);
+  const headSha = stringValue(review.commitId ?? review.commit_id ?? resource.commitId ?? resource.commit_id ?? recordValue(payload.pullRequest).headSha);
+  if (repository === undefined || number === undefined) return undefined;
+  return {
+    repository,
+    number,
+    ...optionalString('headSha', headSha),
+  };
 }
 
 function isPassingCompletedCheckRun(payload: Record<string, unknown>): boolean {
@@ -1259,7 +1288,11 @@ function pullRequestWithCandidateDismissal(
   if (reviewerLogin === undefined) return pullRequest;
   if (candidate.headSha !== undefined && pullRequest.headSha !== undefined && candidate.headSha !== pullRequest.headSha) return pullRequest;
   const latest = latestActionableReviewsByReviewer(pullRequest).get(normalize(reviewerLogin));
-  if (latest !== undefined && normalize(latest.state) === 'dismissed' && reviewIsForCurrentHead(latest, pullRequest)) {
+  if (
+    latest !== undefined
+    && ['approved', 'changes_requested', 'dismissed'].includes(normalize(latest.state))
+    && reviewIsForCurrentHead(latest, pullRequest)
+  ) {
     return pullRequest;
   }
   return {
@@ -1485,6 +1518,7 @@ function headCandidateFromStatus(payload: Record<string, unknown>): PullRequestC
   return {
     repository,
     expandByHeadSha: true,
+    ...optionalString('checkName', stringValue(resource.context ?? resource.name)),
     ...optionalString('headSha', stringValue(resource.headSha ?? resource.id)),
   };
 }

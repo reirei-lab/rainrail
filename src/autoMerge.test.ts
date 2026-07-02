@@ -199,7 +199,7 @@ describe('handleAutoMergeEvent', () => {
     expect(runtimeMerges).toEqual([expect.objectContaining({ number: 44 })]);
   });
 
-  it('uses the dismissal webhook while live reviews still show the dismissed change request', async () => {
+  it('does not let a stale dismissal webhook hide a live current-head change request', async () => {
     const runtimeMerges: unknown[] = [];
 
     const result = await handleAutoMergeEvent(reviewEvent({
@@ -211,6 +211,24 @@ describe('handleAutoMergeEvent', () => {
       reviews: [
         { authorLogin: 'hiragram', state: 'APPROVED', commitId: 'abc123' },
         { authorLogin: 'codex', state: 'CHANGES_REQUESTED', commitId: 'abc123' },
+      ],
+    }), runtimeContext(runtimeMerges));
+
+    expect(result.reason).toBe('pull request has unresolved change requests');
+    expect(runtimeMerges).toEqual([]);
+  });
+
+  it('re-evaluates auto-merge after another reviewer approves and clears their blocker', async () => {
+    const runtimeMerges: unknown[] = [];
+
+    const result = await handleAutoMergeEvent(reviewEvent({
+      state: 'approved',
+      reviewerLogin: 'codex',
+      reviewCommitId: 'abc123',
+    }), options({
+      reviews: [
+        { authorLogin: 'hiragram', state: 'APPROVED', commitId: 'abc123' },
+        { authorLogin: 'codex', state: 'APPROVED', commitId: 'abc123' },
       ],
     }), runtimeContext(runtimeMerges));
 
@@ -307,6 +325,19 @@ describe('handleAutoMergeEvent', () => {
         { type: 'CheckRun', name: 'Typecheck, Test, Build', status: 'COMPLETED', conclusion: 'FAILURE' },
       ],
     }), runtimeContext(runtimeMerges))).rejects.toThrow('pull request checks are still being reflected');
+    expect(runtimeMerges).toEqual([]);
+  });
+
+  it('does not retry successful check events for a different remaining failed check', async () => {
+    const runtimeMerges: unknown[] = [];
+
+    const result = await handleAutoMergeEvent(checkRunEvent(), options({
+      statusCheckRollup: [
+        { type: 'CheckRun', name: 'lint', status: 'COMPLETED', conclusion: 'FAILURE' },
+      ],
+    }), runtimeContext(runtimeMerges));
+
+    expect(result.reason).toBe('not all checks have passed');
     expect(runtimeMerges).toEqual([]);
   });
 
