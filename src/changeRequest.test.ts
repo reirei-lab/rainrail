@@ -11,6 +11,7 @@ describe('handleChangeRequestEvent', () => {
     const statusRecords: string[] = [];
 
     const result = await handleChangeRequestEvent(reviewEvent({ state: 'changes_requested' }), {
+      ...managedChangeRequestOptions,
       tasks: handoffRecorder({ updates, statusRecords }),
     });
 
@@ -28,11 +29,69 @@ describe('handleChangeRequestEvent', () => {
     expect(statusRecords).toEqual(['change_requested:Todo']);
   });
 
+  it('does not hand off when the managed PR target cannot be verified', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+
+    const result = await handleChangeRequestEvent(reviewEvent({ state: 'changes_requested' }), {
+      tasks: handoffRecorder({ updates }),
+    });
+
+    expect(result.reason).toBe('change-request target verification is not configured');
+    expect(updates).toEqual([]);
+  });
+
+  it('keeps the change-request handoff successful when status recording fails', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+
+    const result = await handleChangeRequestEvent(reviewEvent({ state: 'changes_requested' }), {
+      agentLogin: 'reirei-agent',
+      branchPrefix: 'agent/',
+      tasks: {
+        ...handoffRecorder({ updates }),
+        async recordTaskStatus() {
+          throw new Error('status store unavailable');
+        },
+      },
+    });
+
+    expect(result.reason).toBe('change-requested pull request returned to Todo');
+    expect(updates).toHaveLength(1);
+  });
+
+  it('treats the change-request webhook as current while live reviews are not reflected yet', async () => {
+    const updates: Array<{ reason: string; commentBody?: string }> = [];
+
+    const result = await handleChangeRequestEvent(reviewEvent({
+      state: 'changes_requested',
+      headSha: 'abc123',
+      reviewCommitId: 'abc123',
+    }), {
+      agentLogin: 'reirei-agent',
+      branchPrefix: 'agent/',
+      tasks: handoffRecorder({ updates }),
+      pullRequests: {
+        async getPullRequest(input) {
+          return pullRequestForChangeRequest({ ...input, headSha: 'abc123', reviews: [] });
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          throw new Error('not used');
+        },
+      },
+    });
+
+    expect(result.reason).toBe('change-requested pull request returned to Todo');
+    expect(updates).toHaveLength(1);
+  });
+
   it('truncates long change-request review bodies in handoff comments', async () => {
     const updates: Array<{ reason: string; commentBody?: string }> = [];
     const longBody = `Please fix this.\n\n${'x'.repeat(10_000)}`;
 
     await handleChangeRequestEvent(reviewEvent({ state: 'changes_requested', reviewBody: longBody }), {
+      ...managedChangeRequestOptions,
       tasks: handoffRecorder({ updates }),
     });
 
@@ -49,6 +108,7 @@ describe('handleChangeRequestEvent', () => {
       headSha: 'new-sha',
       reviewCommitId: 'old-sha',
     }), {
+      ...managedChangeRequestOptions,
       tasks: handoffRecorder({ updates }),
     });
 
@@ -64,6 +124,7 @@ describe('handleChangeRequestEvent', () => {
       headSha: 'old-sha',
       reviewCommitId: 'old-sha',
     }), {
+      ...managedChangeRequestOptions,
       tasks: handoffRecorder({ updates }),
       pullRequests: {
         async getPullRequest(input) {
@@ -90,6 +151,7 @@ describe('handleChangeRequestEvent', () => {
       headSha: 'abc123',
       reviewCommitId: 'abc123',
     }), {
+      ...managedChangeRequestOptions,
       tasks: handoffRecorder({ updates }),
       pullRequests: {
         async getPullRequest(input) {
@@ -121,6 +183,7 @@ describe('handleChangeRequestEvent', () => {
       headSha: 'abc123',
       reviewCommitId: 'abc123',
     }), {
+      ...managedChangeRequestOptions,
       tasks: handoffRecorder({ updates }),
       pullRequests: {
         async getPullRequest(input) {
@@ -147,6 +210,7 @@ describe('handleChangeRequestEvent', () => {
       state: 'changes_requested',
       reviewerLogin: 'codex',
     }), {
+      ...managedChangeRequestOptions,
       reviewRequest: { reviewerLogin: 'hiragram' },
       tasks: handoffRecorder({ updates }),
       pullRequests: {
@@ -194,6 +258,7 @@ describe('handleChangeRequestEvent', () => {
       reviewerLogin: 'codex',
       reviewCommitId: 'abc123',
     }), {
+      ...managedChangeRequestOptions,
       reviewRequest: { reviewerLogin: 'hiragram' },
       tasks: handoffRecorder({ updates }),
       pullRequests: {
@@ -227,6 +292,7 @@ describe('handleChangeRequestEvent', () => {
     const updates: Array<{ reason: string; commentBody?: string }> = [];
     const removedReviewRequests: Array<{ repository: string; number: number; reviewerLogin: string }> = [];
     const workflow = createChangeRequestWorkflow({
+      ...managedChangeRequestOptions,
       reviewRequest: { reviewerLogin: 'hiragram' },
       tasks: handoffRecorder({ updates }),
     });
@@ -307,6 +373,7 @@ describe('handleChangeRequestEvent', () => {
   it('does not hand off a task from a different repository with the same branch', async () => {
     const updates: Array<{ reason: string; commentBody?: string }> = [];
     const result = await handleChangeRequestEvent(reviewEvent({ state: 'changes_requested' }), {
+      ...managedChangeRequestOptions,
       tasks: handoffRecorder({
         updates,
         taskOverride: { issue: { contentId: 'I_other', repository: 'reirei-lab/other' } },
@@ -320,6 +387,7 @@ describe('handleChangeRequestEvent', () => {
   it('does not hand off a task claimed in a different repository when issue metadata is missing', async () => {
     const updates: Array<{ reason: string; commentBody?: string }> = [];
     const result = await handleChangeRequestEvent(reviewEvent({ state: 'changes_requested' }), {
+      ...managedChangeRequestOptions,
       tasks: handoffRecorder({
         updates,
         taskOverride: {
@@ -342,6 +410,7 @@ describe('handleChangeRequestEvent', () => {
       state: 'changes_requested',
       headRepository: 'external/fork',
     }), {
+      ...managedChangeRequestOptions,
       tasks: handoffRecorder({ updates }),
     });
 
@@ -355,6 +424,7 @@ describe('handleChangeRequestEvent', () => {
       state: 'changes_requested',
       missingHeadRepository: true,
     }), {
+      ...managedChangeRequestOptions,
       tasks: handoffRecorder({ updates }),
     });
 
@@ -366,6 +436,7 @@ describe('handleChangeRequestEvent', () => {
     const updates: Array<{ reason: string; commentBody?: string }> = [];
 
     const result = await handleChangeRequestEvent(reviewEvent({ state: 'changes_requested', prState: 'closed' }), {
+      ...managedChangeRequestOptions,
       tasks: handoffRecorder({ updates }),
     });
 
@@ -501,6 +572,11 @@ describe('handleChangeRequestEvent', () => {
     expect(releases).toEqual([]);
   });
 });
+
+const managedChangeRequestOptions = {
+  agentLogin: 'reirei-agent',
+  branchPrefix: 'agent/',
+};
 
 function pullRequestForChangeRequest(overrides: Partial<PullRequestReviewTarget> = {}): PullRequestReviewTarget {
   return {

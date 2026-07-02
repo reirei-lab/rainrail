@@ -110,6 +110,33 @@ describe('handleReviewRequestEvent', () => {
     ]);
   });
 
+  it('ignores pull request review_requested events for other reviewers', async () => {
+    let requestCount = 0;
+
+    const result = await handleReviewRequestEvent(pullRequestEvent({
+      action: 'review_requested',
+      requestedReviewer: 'someone-else',
+    }), {
+      agentLogin: 'reirei-agent',
+      reviewerLogin: 'hiragram',
+      branchPrefix: 'agent/',
+      pullRequests: {
+        async getPullRequest() {
+          throw new Error('not used');
+        },
+        async findPullRequestByHead() {
+          throw new Error('not used');
+        },
+        async requestReview() {
+          requestCount += 1;
+        },
+      },
+    });
+
+    expect(result.reason).toBe('event is not a completed successful check for a pull request');
+    expect(requestCount).toBe(0);
+  });
+
   it('does not request review before the current head has any reported checks', async () => {
     let requestCount = 0;
 

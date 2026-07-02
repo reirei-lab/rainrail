@@ -205,6 +205,7 @@ type PullRequestCandidate = {
   headRefName?: string;
   headSha?: string;
   expandByHeadSha?: boolean;
+  dismissedReviewerLogin?: string;
 };
 
 export function createReviewRequestWorkflow(options: ReviewRequestWorkflowOptions): WorkflowPlugin {
@@ -359,6 +360,12 @@ export async function handleChangeRequestEvent(
     return { handled: false, reason: 'pull request is already closed', pullRequestNumber: target.number, branchName: target.branchName };
   }
   const reviewTargetConfig = changeRequestReviewTargetConfig(options);
+  if (reviewTargetConfig === undefined) {
+    return { handled: false, reason: 'change-request target verification is not configured', pullRequestNumber: target.number, branchName: target.branchName };
+  }
+  if (!sameLogin(target.pullRequestAuthor, reviewTargetConfig.agentLogin) || !target.branchName.startsWith(reviewTargetConfig.branchPrefix)) {
+    return { handled: false, reason: 'pull request is not an agent-authored target', pullRequestNumber: target.number, branchName: target.branchName };
+  }
   const shouldSnapshotReviewRequest = options.reviewRequest !== undefined && options.reviewRequest.enabled !== false;
   const livePullRequest = options.pullRequests !== undefined && (target.reviewCommitId !== undefined || reviewTargetConfig !== undefined || shouldSnapshotReviewRequest)
     ? await livePullRequestForReview(options.pullRequests, target, context)
@@ -374,10 +381,11 @@ export async function handleChangeRequestEvent(
   ) {
     return { handled: false, reason: 'review does not match the current pull request head', pullRequestNumber: target.number, branchName: target.branchName };
   }
-  if (reviewTargetConfig !== undefined && livePullRequest !== undefined && !isReviewTarget(reviewTargetConfig, livePullRequest)) {
+  if (livePullRequest !== undefined && !isReviewTarget(reviewTargetConfig, livePullRequest)) {
     return { handled: false, reason: 'pull request is not an agent-authored target', pullRequestNumber: target.number, branchName: target.branchName };
   }
-  if (target.reviewCommitId !== undefined && livePullRequest !== undefined && !hasUnresolvedChangeRequest(livePullRequest)) {
+  const changeAwarePullRequest = livePullRequest === undefined ? undefined : pullRequestWithCandidateChangeRequest(target, livePullRequest);
+  if (target.reviewCommitId !== undefined && changeAwarePullRequest !== undefined && !hasUnresolvedChangeRequest(changeAwarePullRequest)) {
     return { handled: false, reason: 'pull request has no unresolved change requests', pullRequestNumber: target.number, branchName: target.branchName };
   }
   const task = await options.tasks.getAgentTaskByBranchName(target.branchName);
@@ -394,7 +402,7 @@ export async function handleChangeRequestEvent(
     reason: 'change_requested',
     commentBody: changeRequestComment(target, task),
   }, context);
-  await options.tasks.recordTaskStatus?.({ task, result: `change_requested:${update.status}` }, context);
+  await safeRecordTaskStatus(options.tasks, { task, result: `change_requested:${update.status}` }, context);
   const reviewRequestRemoved = options.pullRequests === undefined || livePullRequest === undefined
     ? false
     : await removePendingReviewRequest(options.pullRequests, livePullRequest, options.reviewRequest, context);
@@ -451,7 +459,7 @@ export async function handleCodexReviewEvent(
     reason: 'codex_review',
     commentBody: codexReviewComment({ task, review, inlineComments }),
   }, context);
-  await options.tasks.recordTaskStatus?.({ task, result: `codex_review:${update.status}` }, context);
+  await safeRecordTaskStatus(options.tasks, { task, result: `codex_review:${update.status}` }, context);
   const reviewRequestRemoved = options.pullRequests === undefined || livePullRequest === undefined
     ? false
     : await removePendingReviewRequest(options.pullRequests, livePullRequest, options.reviewRequest, context);
@@ -529,7 +537,7 @@ export async function handleCheckFailureEvent(
       reason: 'checks_failed',
       commentBody: checkFailureComment({ task, pullRequest, check }),
     }, context);
-    await options.tasks.recordTaskStatus?.({ task, result: `checks_failed:${update.status}` }, context);
+    await safeRecordTaskStatus(options.tasks, { task, result: `checks_failed:${update.status}` }, context);
     const reviewRequestRemoved = await removePendingReviewRequest(pullRequests, pullRequest, options.reviewRequest, context);
     updates.push({
       pullRequest,
@@ -613,7 +621,7 @@ export async function handleConflictCheckEvent(
       reason: 'conflict',
       commentBody: conflictComment({ task, pullRequest }),
     }, context);
-    await options.tasks.recordTaskStatus?.({ task, result: `conflict:${update.status}` }, context);
+    await safeRecordTaskStatus(options.tasks, { task, result: `conflict:${update.status}` }, context);
     const reviewRequestRemoved = await removePendingReviewRequest(pullRequests, pullRequest, options.reviewRequest, context);
     updatedTasks.push({
       taskId: task.id,
@@ -675,7 +683,10 @@ export async function handleAutoMergeEvent(
       fallback = { handled: false, reason: 'pull request is not an agent-authored target', pullRequest };
       continue;
     }
-    const reviewAwarePullRequest = pullRequestWithCandidateApproval(options, candidate, pullRequest);
+    const reviewAwarePullRequest = pullRequestWithCandidateDismissal(
+      candidate,
+      pullRequestWithCandidateApproval(options, candidate, pullRequest),
+    );
     if (!reviewApproved(options, reviewAwarePullRequest)) {
       fallback = { handled: false, reason: 'configured reviewer approval is not confirmed', pullRequest };
       continue;
@@ -836,6 +847,18 @@ function taskContext(context: PluginRuntimeContext | undefined): TaskProviderCon
   return context === undefined ? undefined : { signal: context.signal };
 }
 
+async function safeRecordTaskStatus(
+  tasks: AgentTaskHandoffClient,
+  input: { task: AgentTask; result: string },
+  context: PluginRuntimeContext | undefined,
+): Promise<void> {
+  try {
+    await tasks.recordTaskStatus?.(input, context);
+  } catch {
+    // Handoff side effects have already succeeded; status recording is observability only.
+  }
+}
+
 function pullRequestCandidateFromEvent(event: RainrailEventEnvelope): PullRequestCandidate | undefined {
   const payload = recordValue(event.payload);
   if (event.name === 'github.check_run' && isPassingCompletedCheckRun(payload)) {
@@ -844,7 +867,7 @@ function pullRequestCandidateFromEvent(event: RainrailEventEnvelope): PullReques
   if (event.name === 'github.status' && commitStatusState(payload) === 'success') {
     return headCandidateFromStatus(payload);
   }
-  if (event.name === 'github.pull_request' && (payload.action === 'review_requested' || payload.action === 'ready_for_review')) {
+  if (event.name === 'github.pull_request' && payload.action === 'ready_for_review') {
     const resource = recordValue(payload.resource);
     const repository = repositoryName(payload);
     const number = numberValue(resource.number);
@@ -886,7 +909,7 @@ function candidateFromPullRequests(payload: Record<string, unknown>, headSha: st
   };
 }
 
-function changeRequestTargetFromEvent(event: RainrailEventEnvelope): { repository: string; number: number; branchName: string; headRepository?: string; headSha?: string; pullRequestState?: string; reviewCommitId?: string; reviewId?: number; reviewUrl?: string; reviewBody?: string } | undefined {
+function changeRequestTargetFromEvent(event: RainrailEventEnvelope): { repository: string; number: number; branchName: string; pullRequestAuthor?: string; headRepository?: string; headSha?: string; pullRequestState?: string; reviewAuthor?: string; reviewCommitId?: string; reviewId?: number; reviewUrl?: string; reviewBody?: string } | undefined {
   const payload = recordValue(event.payload);
   if (event.name !== 'github.review' || payload.event !== 'pull_request_review' || payload.action !== 'submitted') return undefined;
   const review = recordValue(payload.review);
@@ -900,9 +923,11 @@ function changeRequestTargetFromEvent(event: RainrailEventEnvelope): { repositor
     repository,
     number,
     branchName,
+    ...optionalString('pullRequestAuthor', stringValue(pullRequest.author)),
     ...optionalString('headRepository', stringValue(pullRequest.headRepository ?? pullRequest.headRepo)),
     ...optionalString('headSha', stringValue(pullRequest.headSha)),
     ...optionalString('pullRequestState', stringValue(pullRequest.state)),
+    ...optionalString('reviewAuthor', stringValue(review.author)),
     ...optionalString('reviewCommitId', stringValue(review.commitId ?? review.commit_id ?? recordValue(payload.resource).commitId ?? recordValue(payload.resource).commit_id)),
     ...optionalNumber('reviewId', numberValue(review.id ?? recordValue(payload.resource).id)),
     ...optionalString('reviewUrl', stringValue(review.url ?? recordValue(payload.resource).url)),
@@ -1008,10 +1033,12 @@ function autoMergeCandidateFromEvent(event: RainrailEventEnvelope): (PullRequest
     const repository = repositoryName(payload);
     const number = numberValue(recordValue(payload.pullRequest).number);
     const headSha = stringValue(review.commitId ?? review.commit_id ?? resource.commitId ?? resource.commit_id ?? recordValue(payload.pullRequest).headSha);
+    const dismissedReviewerLogin = stringValue(review.author);
     if (repository === undefined || number === undefined) return undefined;
     return {
       repository,
       number,
+      ...optionalString('dismissedReviewerLogin', dismissedReviewerLogin),
       ...optionalString('headSha', headSha),
     };
   }
@@ -1194,6 +1221,58 @@ function reviewApproved(config: { reviewerLogin: string }, pullRequest: PullRequ
   const review = latestActionableReviewsByReviewer(pullRequest).get(normalize(config.reviewerLogin));
   if (normalize(review?.state) !== 'approved') return false;
   return review?.commitId === undefined || pullRequest.headSha === undefined || review.commitId === pullRequest.headSha;
+}
+
+function pullRequestWithCandidateChangeRequest(
+  target: { reviewAuthor?: string; reviewCommitId?: string },
+  pullRequest: PullRequestReviewTarget,
+): PullRequestReviewTarget {
+  const reviewerLogin = target.reviewAuthor;
+  if (reviewerLogin === undefined) return pullRequest;
+  if (target.reviewCommitId !== undefined && pullRequest.headSha !== undefined && target.reviewCommitId !== pullRequest.headSha) return pullRequest;
+  const latest = latestActionableReviewsByReviewer(pullRequest).get(normalize(reviewerLogin));
+  if (
+    latest !== undefined
+    && ['approved', 'changes_requested', 'dismissed'].includes(normalize(latest.state))
+    && reviewIsForCurrentHead(latest, pullRequest)
+  ) {
+    return pullRequest;
+  }
+  return {
+    ...pullRequest,
+    reviews: [
+      ...(pullRequest.reviews ?? []),
+      {
+        authorLogin: reviewerLogin,
+        state: 'CHANGES_REQUESTED',
+        ...(target.reviewCommitId === undefined ? optionalString('commitId', pullRequest.headSha) : { commitId: target.reviewCommitId }),
+      },
+    ],
+  };
+}
+
+function pullRequestWithCandidateDismissal(
+  candidate: PullRequestCandidate,
+  pullRequest: PullRequestReviewTarget,
+): PullRequestReviewTarget {
+  const reviewerLogin = candidate.dismissedReviewerLogin;
+  if (reviewerLogin === undefined) return pullRequest;
+  if (candidate.headSha !== undefined && pullRequest.headSha !== undefined && candidate.headSha !== pullRequest.headSha) return pullRequest;
+  const latest = latestActionableReviewsByReviewer(pullRequest).get(normalize(reviewerLogin));
+  if (latest !== undefined && normalize(latest.state) === 'dismissed' && reviewIsForCurrentHead(latest, pullRequest)) {
+    return pullRequest;
+  }
+  return {
+    ...pullRequest,
+    reviews: [
+      ...(pullRequest.reviews ?? []),
+      {
+        authorLogin: reviewerLogin,
+        state: 'DISMISSED',
+        ...(candidate.headSha === undefined ? optionalString('commitId', pullRequest.headSha) : { commitId: candidate.headSha }),
+      },
+    ],
+  };
 }
 
 function pullRequestWithCandidateApproval(

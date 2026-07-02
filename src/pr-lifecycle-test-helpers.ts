@@ -125,7 +125,7 @@ export function reviewEvent(overrides: {
   });
 }
 
-export function pullRequestEvent(overrides: { action?: string; branchName?: string; headSha?: string } = {}): RainrailEventEnvelope {
+export function pullRequestEvent(overrides: { action?: string; branchName?: string; headSha?: string; requestedReviewer?: string } = {}): RainrailEventEnvelope {
   return createEventEnvelope({
     source: { type: 'github', name: 'github-webhook', repository: 'reirei-lab/rainrail' },
     name: 'github.pull_request',
@@ -144,6 +144,11 @@ export function pullRequestEvent(overrides: { action?: string; branchName?: stri
         headRef: overrides.branchName ?? 'agent/test-pr',
         headSha: overrides.headSha ?? 'abc123',
       },
+      ...(overrides.requestedReviewer === undefined ? {} : {
+        requestedReviewer: {
+          login: overrides.requestedReviewer,
+        },
+      }),
     },
     rawPayload: { kind: 'inline-redacted', reference: 'github://deliveries/delivery-pr' },
   });

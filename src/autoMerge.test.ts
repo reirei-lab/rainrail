@@ -199,6 +199,25 @@ describe('handleAutoMergeEvent', () => {
     expect(runtimeMerges).toEqual([expect.objectContaining({ number: 44 })]);
   });
 
+  it('uses the dismissal webhook while live reviews still show the dismissed change request', async () => {
+    const runtimeMerges: unknown[] = [];
+
+    const result = await handleAutoMergeEvent(reviewEvent({
+      action: 'dismissed',
+      state: 'dismissed',
+      reviewerLogin: 'codex',
+      reviewCommitId: 'abc123',
+    }), options({
+      reviews: [
+        { authorLogin: 'hiragram', state: 'APPROVED', commitId: 'abc123' },
+        { authorLogin: 'codex', state: 'CHANGES_REQUESTED', commitId: 'abc123' },
+      ],
+    }), runtimeContext(runtimeMerges));
+
+    expect(result.reason).toBe('pull_request_merged');
+    expect(runtimeMerges).toEqual([expect.objectContaining({ number: 44 })]);
+  });
+
   it('continues past non-agent check_run PRs and auto-merges a later agent PR', async () => {
     const runtimeMerges: unknown[] = [];
 
