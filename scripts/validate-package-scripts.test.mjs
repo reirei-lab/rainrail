@@ -23,8 +23,8 @@ describe('package scripts used by pull request CI', () => {
     );
   });
 
-  it('matches Node type declarations to the Node 24 CI runtime', () => {
-    expect(packageJson.devDependencies['@types/node']).toMatch(/^\^24\./);
+  it('matches Node type declarations to the Node 26 CI runtime', () => {
+    expect(packageJson.devDependencies['@types/node']).toMatch(/^\^26\./);
   });
 
   it('typechecks JavaScript automation scripts through tsconfig', () => {
