@@ -29,6 +29,7 @@ pull request preview は `.github/workflows/pr-ci.yml` が作った `rainrail-pa
 の non-draft PR だけを preview deploy 対象にする。
 `CLOUDFLARE_ACCOUNT_ID` と `CLOUDFLARE_API_TOKEN` が設定されている場合だけ Wrangler deploy を実行し、
 未設定の場合は artifact download までを検証して job を成功させる。
+draft PR や artifact がない workflow_run は preview deploy を skip する。
 
 手動で preview deploy を再現する場合:
 

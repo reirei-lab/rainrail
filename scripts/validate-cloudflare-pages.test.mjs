@@ -18,6 +18,7 @@ describe('Cloudflare Pages product site deploys', () => {
     expect(docs).toContain('pnpm pages:deploy:production');
     expect(docs).toContain('GitHub Actions は secrets が未設定の場合でも build または artifact download まで実行し');
     expect(docs).toContain('PR workflow では Cloudflare secrets を扱わない');
+    expect(docs).toContain('artifact がない workflow_run は preview deploy を skip する');
     expect(docs).toContain('workflow_run');
     expect(docs).toContain('workflow_dispatch');
     expect(docs).toContain('RAINRAIL_PAGES_URL=https://<pages-host> pnpm pages:smoke');
@@ -51,6 +52,9 @@ describe('Cloudflare Pages product site deploys', () => {
     expect(workflow).toContain('ref: main');
     expect(workflow).toContain('persist-credentials: false');
     expect(workflow).not.toMatch(/^ {4}env:\n {6}CLOUDFLARE_ACCOUNT_ID:/m);
+    expect(workflow).toContain('id: pages-artifact');
+    expect(workflow).toContain('found=false');
+    expect(workflow).toContain("if: steps.pages-artifact.outputs.found == 'true'");
     expect(workflow).toContain('gh run download "${{ github.event.workflow_run.id }}" --name rainrail-pages-dist --dir apps/www/dist');
     expect(workflow).toContain('CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}');
     expect(workflow).toContain('CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}');
