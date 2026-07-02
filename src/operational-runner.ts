@@ -48,7 +48,8 @@ export function isRetryableOperationalError(error: unknown): boolean {
     || /fetch failed/i.test(message)
     || /mergeability is still being calculated/i.test(message)
     || /pull request (?:checks|reviews) are still being reflected/i.test(message)
-    || /pull request draft state is still being reflected/i.test(message);
+    || /pull request draft state is still being reflected/i.test(message)
+    || /pull request review decision is still being reflected/i.test(message);
 }
 
 export function retryDelayMs(previousAttempts: number): number {
@@ -70,6 +71,8 @@ export async function processDueEventHandlerRetries(
   options: ProcessDueEventHandlerRetriesOptions,
 ): Promise<ProcessDueEventHandlerRetryResult[]> {
   const results: ProcessDueEventHandlerRetryResult[] = [];
+  const nowMs = new Date(options.now).getTime();
+  const claimLeaseMs = 5 * 60_000;
   const dueRetries = prioritizeEventHandlerRetriesForProcessing(
     options.store.listDueEventHandlerRetries(options.now),
   ).slice(0, options.limit ?? 100);
@@ -89,12 +92,17 @@ export async function processDueEventHandlerRetries(
       continue;
     }
 
-    if (!options.store.claimEventHandlerRetry(retry)) {
+    if (!options.store.claimEventHandlerRetry(
+      retry,
+      new Date(nowMs + claimLeaseMs).toISOString(),
+      options.now,
+    )) {
       continue;
     }
 
     try {
       await handler(event.envelope, retry);
+      options.store.clearEventHandlerRetry(retry.eventId, retry.handlerName);
       results.push({ eventId: retry.eventId, handlerName: retry.handlerName, status: 'fulfilled' });
     } catch (error) {
       if (!isRetryableOperationalError(error)) {

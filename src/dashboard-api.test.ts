@@ -168,6 +168,50 @@ describe('Rainrail dashboard API', () => {
     operationalStore.close();
   });
 
+  it('does not fail an already-published webhook when operational event recording fails', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:00:00.000Z'),
+    });
+    const app = createRainrailHttpApp({
+      room: new RainrailBridgeRoom(fakeState(), { publishToken: 'publish-token' }),
+      githubWebhookSecret: 'secret',
+      publishToken: 'publish-token',
+      eventsBearerToken: 'events-token',
+      operationalStore,
+    });
+    operationalStore.close();
+    const rawBody = JSON.stringify({
+      action: 'opened',
+      repository: {
+        full_name: 'reirei-lab/rainrail',
+        html_url: 'https://github.com/reirei-lab/rainrail',
+      },
+      issue: {
+        number: 25,
+        title: 'store、retry/reconcile、dashboard/API を移植する',
+        html_url: 'https://github.com/reirei-lab/rainrail/issues/25',
+      },
+    });
+
+    const webhook = await app.fetch(new Request('https://rainrail.local/webhooks/github', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-github-event': 'issues',
+        'x-github-delivery': 'delivery-operational-store-failure',
+        'x-hub-signature-256': await createGitHubWebhookSignature('secret', rawBody),
+      },
+      body: rawBody,
+    }));
+
+    expect(webhook.status).toBe(202);
+    await expect(webhook.json()).resolves.toMatchObject({
+      id: 'github-webhook:delivery-operational-store-failure:github.issue',
+    });
+  });
+
   it('treats malformed percent-encoded event ids as client errors', async () => {
     const operationalStore = new RainrailOperationalStore({
       databasePath: ':memory:',

@@ -23,9 +23,11 @@ issue、claim、pid などの runtime metadata を消さない。
 handler retry は `EventHandlerRetryHandler` として event envelope と retry row を受ける。
 `processDueEventHandlerRetries` は `ProcessDueEventHandlerRetriesOptions` に従って due retry を
 読み、`prioritizeEventHandlerRetriesForProcessing` で conflict check を優先してから batch
-`limit` を適用する。handler 実行前には retry row を条件付き delete で claim し、
+`limit` を適用する。handler 実行前には retry row を lease 付きで claim し、
 同じ store を複数 runner が処理しても同じ handler side effect が二重に走らないようにする。
-結果は `ProcessDueEventHandlerRetryResult` として返す。
+claim は row を削除せず、lease 失効後は `listDueEventHandlerRetries` が再取得できるため、
+handler 完了前に runner が終了しても retry を永久に失わない。結果は
+`ProcessDueEventHandlerRetryResult` として返す。
 
 `isRetryableOperationalError` は rate limit、HTTP 429/5xx、fetch failure、GitHub の
 mergeability / checks / draft state / reviews の反映待ちを一時エラーとして扱う。

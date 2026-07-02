@@ -83,6 +83,7 @@ export interface RecordEventHandlerRetryInput {
 export interface StoredEventHandlerRetry extends RecordEventHandlerRetryInput {
   attempts: number;
   updatedAt: string;
+  claimedUntilAt?: string;
 }
 
 export interface OperationalStoreSnapshot {
@@ -152,6 +153,7 @@ interface RetryRow {
   next_retry_at: string;
   last_error: string;
   updated_at: string;
+  claimed_until_at: string | null;
 }
 
 export class RainrailOperationalStore {
@@ -354,13 +356,14 @@ export class RainrailOperationalStore {
     const updatedAt = this.#now().toISOString();
     this.#db.prepare(`
       insert into event_handler_retries (
-        event_id, handler_name, attempts, next_retry_at, last_error, updated_at
-      ) values (?, ?, ?, ?, ?, ?)
+        event_id, handler_name, attempts, next_retry_at, last_error, updated_at, claimed_until_at
+      ) values (?, ?, ?, ?, ?, ?, null)
       on conflict(event_id, handler_name) do update set
         attempts = excluded.attempts,
         next_retry_at = excluded.next_retry_at,
         last_error = excluded.last_error,
-        updated_at = excluded.updated_at
+        updated_at = excluded.updated_at,
+        claimed_until_at = null
     `).run(input.eventId, input.handlerName, attempts, input.nextRetryAt, input.lastError, updatedAt);
 
     return this.getEventHandlerRetry(input.eventId, input.handlerName)!;
@@ -368,7 +371,7 @@ export class RainrailOperationalStore {
 
   getEventHandlerRetry(eventId: string, handlerName: string): StoredEventHandlerRetry | undefined {
     const row = this.#db.prepare(`
-      select event_id, handler_name, attempts, next_retry_at, last_error, updated_at
+      select event_id, handler_name, attempts, next_retry_at, last_error, updated_at, claimed_until_at
       from event_handler_retries
       where event_id = ? and handler_name = ?
     `).get(eventId, handlerName) as RetryRow | undefined;
@@ -376,22 +379,28 @@ export class RainrailOperationalStore {
     return row === undefined ? undefined : retryFromRow(row);
   }
 
-  claimEventHandlerRetry(retry: StoredEventHandlerRetry): boolean {
+  claimEventHandlerRetry(retry: StoredEventHandlerRetry, claimedUntilAt: string, now: string): boolean {
     const result = this.#db.prepare(`
-      delete from event_handler_retries
+      update event_handler_retries
+      set claimed_until_at = ?,
+          updated_at = ?
       where event_id = ?
         and handler_name = ?
         and attempts = ?
         and next_retry_at = ?
         and last_error = ?
         and updated_at = ?
+        and (claimed_until_at is null or claimed_until_at <= ?)
     `).run(
+      claimedUntilAt,
+      now,
       retry.eventId,
       retry.handlerName,
       retry.attempts,
       retry.nextRetryAt,
       retry.lastError,
       retry.updatedAt,
+      now,
     );
 
     return result.changes === 1;
@@ -402,12 +411,13 @@ export class RainrailOperationalStore {
     const args = limit === undefined ? [now] : [now, limit];
 
     return (this.#db.prepare(`
-      select event_id, handler_name, attempts, next_retry_at, last_error, updated_at
+      select event_id, handler_name, attempts, next_retry_at, last_error, updated_at, claimed_until_at
       from event_handler_retries
       where next_retry_at <= ?
+        and (claimed_until_at is null or claimed_until_at <= ?)
       order by next_retry_at asc, handler_name asc
       ${limitClause}
-    `).all(...args) as unknown as RetryRow[]).map(retryFromRow);
+    `).all(...[now, ...args]) as unknown as RetryRow[]).map(retryFromRow);
   }
 
   clearEventHandlerRetry(eventId: string, handlerName: string): void {
@@ -510,11 +520,17 @@ export class RainrailOperationalStore {
         next_retry_at text not null,
         last_error text not null,
         updated_at text not null,
+        claimed_until_at text,
         primary key(event_id, handler_name)
       );
       create index if not exists idx_event_handler_retries_next_retry_at
         on event_handler_retries(next_retry_at asc);
     `);
+    try {
+      this.#db.exec('alter table event_handler_retries add column claimed_until_at text;');
+    } catch {
+      // Existing databases may already have the column.
+    }
   }
 }
 
@@ -585,6 +601,7 @@ function retryFromRow(row: RetryRow): StoredEventHandlerRetry {
     nextRetryAt: row.next_retry_at,
     lastError: row.last_error,
     updatedAt: row.updated_at,
+    ...(row.claimed_until_at === null ? {} : { claimedUntilAt: row.claimed_until_at }),
   };
 }
 

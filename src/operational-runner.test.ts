@@ -20,6 +20,7 @@ describe('operational retry helpers', () => {
     expect(isRetryableOperationalError(new Error('pull request checks are still being reflected'))).toBe(true);
     expect(isRetryableOperationalError(new Error('pull request draft state is still being reflected'))).toBe(true);
     expect(isRetryableOperationalError(new Error('pull request reviews are still being reflected'))).toBe(true);
+    expect(isRetryableOperationalError(new Error('pull request review decision is still being reflected'))).toBe(true);
     expect(isRetryableOperationalError(new Error('pull request is not mergeable'))).toBe(false);
 
     expect(retryDelayMs(0)).toBe(60_000);
@@ -156,6 +157,33 @@ describe('operational retry helpers', () => {
     expect([...first, ...second].filter((item) => item.status === 'fulfilled')).toHaveLength(1);
     expect(handlerCalls).toBe(1);
     expect(store.getEventHandlerRetry(event.id, 'review-request')).toBeUndefined();
+    store.close();
+  });
+
+  it('keeps claimed retries recoverable after their lease expires', () => {
+    const store = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:00:00.000Z'),
+    });
+    const event = store.recordEvent(fixtureEvent());
+    const retry = store.recordEventHandlerRetry({
+      eventId: event.id,
+      handlerName: 'review-request',
+      nextRetryAt: '2026-07-02T00:00:00.000Z',
+      lastError: 'fetch failed',
+    });
+
+    expect(store.claimEventHandlerRetry(retry, '2026-07-02T00:05:00.000Z', '2026-07-02T00:00:00.000Z')).toBe(true);
+
+    expect(store.listDueEventHandlerRetries('2026-07-02T00:04:59.000Z')).toEqual([]);
+    expect(store.listDueEventHandlerRetries('2026-07-02T00:05:00.000Z')).toEqual([
+      expect.objectContaining({
+        eventId: event.id,
+        handlerName: 'review-request',
+        claimedUntilAt: '2026-07-02T00:05:00.000Z',
+      }),
+    ]);
     store.close();
   });
 });

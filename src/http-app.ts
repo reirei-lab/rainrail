@@ -202,7 +202,12 @@ async function publishEvent(options: RainrailHttpAppOptions, event: unknown): Pr
   }));
 
   if (response.ok && isRainrailEventEnvelope(event)) {
-    options.operationalStore?.recordEvent(event);
+    try {
+      options.operationalStore?.recordEvent(event);
+    } catch {
+      // Event delivery already succeeded. Operational dashboard persistence must not turn
+      // an accepted external delivery into a provider-visible failure and duplicate retry.
+    }
   }
 
   return response;

@@ -96,7 +96,8 @@ activity list は skipped outcome を除外するが、counts は全件数のま
 `invalid_event_id` の 400 として扱う。これらの API は Source provider や
 runtime provider の具体 payload に依存せず、operational store の正規化済み snapshot を
 そのまま配信する。HTTP app の webhook / tail ingress は room publish 成功後に同じ event を
-operational store へ記録する。
+operational store へ記録する。operational store への記録が失敗しても、room publish が
+成功済みの外部 delivery は失敗応答に戻さない。
 
 `GET /healthz` と `GET /events` は storage 復元失敗を generic 500 応答に変換する。
 adapter/runtime の未処理例外として落とさず、呼び出し元に安定した失敗を返すため。

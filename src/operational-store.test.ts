@@ -111,9 +111,19 @@ describe('RainrailOperationalStore', () => {
       const firstRetry = first.getEventHandlerRetry(event.id, 'review-request')!;
       const staleSecondRetry = second.getEventHandlerRetry(event.id, 'review-request')!;
 
-      expect(first.claimEventHandlerRetry(firstRetry)).toBe(true);
-      expect(second.claimEventHandlerRetry(staleSecondRetry)).toBe(false);
-      expect(first.getEventHandlerRetry(event.id, 'review-request')).toBeUndefined();
+      expect(first.claimEventHandlerRetry(
+        firstRetry,
+        '2026-07-02T01:05:00.000Z',
+        '2026-07-02T01:00:00.000Z',
+      )).toBe(true);
+      expect(second.claimEventHandlerRetry(
+        staleSecondRetry,
+        '2026-07-02T01:05:00.000Z',
+        '2026-07-02T01:00:00.000Z',
+      )).toBe(false);
+      expect(first.getEventHandlerRetry(event.id, 'review-request')).toMatchObject({
+        claimedUntilAt: '2026-07-02T01:05:00.000Z',
+      });
 
       first.close();
       second.close();
