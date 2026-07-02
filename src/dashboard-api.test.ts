@@ -168,6 +168,50 @@ describe('Rainrail dashboard API', () => {
     operationalStore.close();
   });
 
+  it('stores the bridge-validated envelope instead of the raw webhook envelope', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:00:00.000Z'),
+    });
+    const app = createRainrailHttpApp({
+      room: new RainrailBridgeRoom(fakeState(), { publishToken: 'publish-token' }),
+      githubWebhookSecret: 'secret',
+      publishToken: 'publish-token',
+      eventsBearerToken: 'events-token',
+      operationalStore,
+    });
+    const rawBody = JSON.stringify({
+      action: 'agent-run',
+      branch: 'agent/reirei-lab-rainrail-25',
+      repository: {
+        full_name: 'reirei-lab/rainrail',
+        html_url: 'https://github.com/reirei-lab/rainrail',
+      },
+      client_payload: {
+        issue: 25,
+        token: 'should-not-be-persisted',
+      },
+    });
+
+    const webhook = await app.fetch(new Request('https://rainrail.local/webhooks/github', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-github-event': 'repository_dispatch',
+        'x-github-delivery': 'delivery-validated-envelope',
+        'x-hub-signature-256': await createGitHubWebhookSignature('secret', rawBody),
+      },
+      body: rawBody,
+    }));
+    expect(webhook.status).toBe(202);
+
+    const event = operationalStore.getEvent('github-webhook:delivery-validated-envelope:github.repository_dispatch');
+    expect(event?.envelope.payload).toEqual({ action: 'agent_run' });
+    expect(JSON.stringify(event?.envelope)).not.toContain('should-not-be-persisted');
+    operationalStore.close();
+  });
+
   it('does not fail an already-published webhook when operational event recording fails', async () => {
     const operationalStore = new RainrailOperationalStore({
       databasePath: ':memory:',

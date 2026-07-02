@@ -186,6 +186,63 @@ describe('operational retry helpers', () => {
     ]);
     store.close();
   });
+
+  it('does not let stale claimed success clear a newly scheduled retry', async () => {
+    const store = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:00:00.000Z'),
+    });
+    const event = store.recordEvent(fixtureEvent());
+    store.recordEventHandlerRetry({
+      eventId: event.id,
+      handlerName: 'review-request',
+      nextRetryAt: '2026-07-02T00:00:00.000Z',
+      lastError: 'fetch failed',
+    });
+    let markFirstHandlerStarted!: () => void;
+    let releaseFirstHandler!: () => void;
+    const firstHandlerDone = new Promise<void>((resolve) => {
+      releaseFirstHandler = resolve;
+    });
+    const firstHandlerStarted = new Promise<void>((resolve) => {
+      markFirstHandlerStarted = resolve;
+    });
+    let firstHandlerCalls = 0;
+
+    const firstRun = processDueEventHandlerRetries({
+      store,
+      now: '2026-07-02T00:00:00.000Z',
+      handlers: {
+        'review-request': async () => {
+          firstHandlerCalls += 1;
+          markFirstHandlerStarted();
+          await firstHandlerDone;
+        },
+      },
+    });
+    await firstHandlerStarted;
+
+    const secondRun = await processDueEventHandlerRetries({
+      store,
+      now: '2026-07-02T00:05:00.000Z',
+      handlers: {
+        'review-request': async () => {
+          throw new Error('GitHub GraphQL request failed with HTTP 503');
+        },
+      },
+    });
+    releaseFirstHandler();
+    await firstRun;
+
+    expect(firstHandlerCalls).toBe(1);
+    expect(secondRun).toEqual([{ eventId: event.id, handlerName: 'review-request', status: 'scheduled' }]);
+    expect(store.getEventHandlerRetry(event.id, 'review-request')).toMatchObject({
+      attempts: 2,
+      nextRetryAt: '2026-07-02T00:07:00.000Z',
+    });
+    store.close();
+  });
 });
 
 describe('operational reconcile helpers', () => {

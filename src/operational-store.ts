@@ -427,6 +427,65 @@ export class RainrailOperationalStore {
     `).run(eventId, handlerName);
   }
 
+  clearClaimedEventHandlerRetry(retry: StoredEventHandlerRetry): boolean {
+    const result = this.#db.prepare(`
+      delete from event_handler_retries
+      where event_id = ?
+        and handler_name = ?
+        and attempts = ?
+        and next_retry_at = ?
+        and last_error = ?
+        and updated_at = ?
+        and claimed_until_at = ?
+    `).run(
+      retry.eventId,
+      retry.handlerName,
+      retry.attempts,
+      retry.nextRetryAt,
+      retry.lastError,
+      retry.updatedAt,
+      retry.claimedUntilAt ?? null,
+    );
+
+    return result.changes === 1;
+  }
+
+  rescheduleClaimedEventHandlerRetry(
+    retry: StoredEventHandlerRetry,
+    input: RecordEventHandlerRetryInput,
+  ): StoredEventHandlerRetry | undefined {
+    const updatedAt = this.#now().toISOString();
+    const result = this.#db.prepare(`
+      update event_handler_retries
+      set attempts = ?,
+          next_retry_at = ?,
+          last_error = ?,
+          updated_at = ?,
+          claimed_until_at = null
+      where event_id = ?
+        and handler_name = ?
+        and attempts = ?
+        and next_retry_at = ?
+        and last_error = ?
+        and updated_at = ?
+        and claimed_until_at = ?
+    `).run(
+      input.attempts ?? retry.attempts + 1,
+      input.nextRetryAt,
+      input.lastError,
+      updatedAt,
+      retry.eventId,
+      retry.handlerName,
+      retry.attempts,
+      retry.nextRetryAt,
+      retry.lastError,
+      retry.updatedAt,
+      retry.claimedUntilAt ?? null,
+    );
+
+    return result.changes === 1 ? this.getEventHandlerRetry(retry.eventId, retry.handlerName) : undefined;
+  }
+
   snapshot(options: SnapshotOptions = {}): OperationalStoreSnapshot {
     const activityFilter = options.hideSkippedActivityEvents ? 'where outcome <> ?' : '';
     const activityArgs = options.hideSkippedActivityEvents ? ['skipped', this.#eventLimit] : [this.#eventLimit];
@@ -447,7 +506,7 @@ export class RainrailOperationalStore {
       `).all(...activityArgs) as unknown as ActivityRow[]).map(activityFromRow),
       agentTasks: this.listAgentTasks(),
       eventHandlerRetries: (this.#db.prepare(`
-        select event_id, handler_name, attempts, next_retry_at, last_error, updated_at
+        select event_id, handler_name, attempts, next_retry_at, last_error, updated_at, claimed_until_at
         from event_handler_retries
         order by next_retry_at asc, handler_name asc
       `).all() as unknown as RetryRow[]).map(retryFromRow),

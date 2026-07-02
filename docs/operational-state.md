@@ -27,7 +27,10 @@ handler retry は `EventHandlerRetryHandler` として event envelope と retry 
 同じ store を複数 runner が処理しても同じ handler side effect が二重に走らないようにする。
 claim は row を削除せず、lease 失効後は `listDueEventHandlerRetries` が再取得できるため、
 handler 完了前に runner が終了しても retry を永久に失わない。結果は
-`ProcessDueEventHandlerRetryResult` として返す。
+`ProcessDueEventHandlerRetryResult` として返す。handler 完了時の clear / reschedule は
+claim した attempts、retry schedule、lease に一致する row だけを対象にする。lease 失効後に
+別 runner が同じ retry を再 claim して新しい retry row を作った場合、古い runner の成功や
+失敗はその新しい row を消したり上書きしたりしない。
 
 `isRetryableOperationalError` は rate limit、HTTP 429/5xx、fetch failure、GitHub の
 mergeability / checks / draft state / reviews の反映待ちを一時エラーとして扱う。

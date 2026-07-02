@@ -171,6 +171,7 @@ export class RainrailBridgeRoom {
         ok: true,
         id: eventResult.event.id,
         name: eventResult.event.name,
+        event: eventResult.event,
         clients: this.#bus.clientCount,
       });
     });

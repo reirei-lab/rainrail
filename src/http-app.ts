@@ -201,9 +201,12 @@ async function publishEvent(options: RainrailHttpAppOptions, event: unknown): Pr
     body: JSON.stringify(event),
   }));
 
-  if (response.ok && isRainrailEventEnvelope(event)) {
+  if (response.ok) {
     try {
-      options.operationalStore?.recordEvent(event);
+      const publishedEvent = await readPublishedEvent(response);
+      if (publishedEvent !== undefined) {
+        options.operationalStore?.recordEvent(publishedEvent);
+      }
     } catch {
       // Event delivery already succeeded. Operational dashboard persistence must not turn
       // an accepted external delivery into a provider-visible failure and duplicate retry.
@@ -211,6 +214,16 @@ async function publishEvent(options: RainrailHttpAppOptions, event: unknown): Pr
   }
 
   return response;
+}
+
+async function readPublishedEvent(response: Response): Promise<RainrailEventEnvelope | undefined> {
+  const body = await response.clone().json() as unknown;
+  if (typeof body !== 'object' || body === null || !('event' in body)) {
+    return undefined;
+  }
+
+  const { event } = body;
+  return isRainrailEventEnvelope(event) ? event : undefined;
 }
 
 function safeDecodeURIComponent(value: string): string | undefined {

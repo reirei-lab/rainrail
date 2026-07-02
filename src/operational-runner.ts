@@ -73,6 +73,7 @@ export async function processDueEventHandlerRetries(
   const results: ProcessDueEventHandlerRetryResult[] = [];
   const nowMs = new Date(options.now).getTime();
   const claimLeaseMs = 5 * 60_000;
+  const claimLeaseUntil = new Date(nowMs + claimLeaseMs).toISOString();
   const dueRetries = prioritizeEventHandlerRetriesForProcessing(
     options.store.listDueEventHandlerRetries(options.now),
   ).slice(0, options.limit ?? 100);
@@ -94,19 +95,20 @@ export async function processDueEventHandlerRetries(
 
     if (!options.store.claimEventHandlerRetry(
       retry,
-      new Date(nowMs + claimLeaseMs).toISOString(),
+      claimLeaseUntil,
       options.now,
     )) {
       continue;
     }
+    const claimedRetry = { ...retry, updatedAt: options.now, claimedUntilAt: claimLeaseUntil };
 
     try {
       await handler(event.envelope, retry);
-      options.store.clearEventHandlerRetry(retry.eventId, retry.handlerName);
+      options.store.clearClaimedEventHandlerRetry(claimedRetry);
       results.push({ eventId: retry.eventId, handlerName: retry.handlerName, status: 'fulfilled' });
     } catch (error) {
       if (!isRetryableOperationalError(error)) {
-        options.store.clearEventHandlerRetry(retry.eventId, retry.handlerName);
+        options.store.clearClaimedEventHandlerRetry(claimedRetry);
         results.push({
           eventId: retry.eventId,
           handlerName: retry.handlerName,
@@ -116,7 +118,7 @@ export async function processDueEventHandlerRetries(
         continue;
       }
 
-      options.store.recordEventHandlerRetry({
+      options.store.rescheduleClaimedEventHandlerRetry(claimedRetry, {
         eventId: retry.eventId,
         handlerName: retry.handlerName,
         attempts: retry.attempts + 1,

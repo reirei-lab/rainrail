@@ -70,7 +70,9 @@ event だけを再送する。指定 id が buffer に無い場合は、consumer
 
 - `GET /healthz`: `{ ok, clients, recent }` を返す。
 - `POST /publish`: request JSON を `RainrailEventEnvelope` として検証し、replay
-  snapshot を storage に保存してから live subscriber へ publish する。
+  snapshot を storage に保存してから live subscriber へ publish する。成功 response には
+  検証・正規化後の `event` を含め、adapter が追加の operational store を持つ場合も
+  storage / replay と同じ envelope を保存できるようにする。
 - `GET /events`: storage から replay buffer を復元し、SSE stream を返す。
 
 `POST /publish` と `GET /events` は capability token で保護する。adapter は
@@ -95,8 +97,10 @@ activity list は skipped outcome を除外するが、counts は全件数のま
 存在しない場合は `event_not_found` の 404 を返す。不正な percent encoding の event id は
 `invalid_event_id` の 400 として扱う。これらの API は Source provider や
 runtime provider の具体 payload に依存せず、operational store の正規化済み snapshot を
-そのまま配信する。HTTP app の webhook / tail ingress は room publish 成功後に同じ event を
-operational store へ記録する。operational store への記録が失敗しても、room publish が
+そのまま配信する。HTTP app の webhook / tail ingress は room publish 成功後に、room が
+検証・正規化した envelope を operational store へ記録する。publish 前の provider event に
+任意 payload が含まれていても、store には replay / SSE と同じ sanitized envelope だけを残す。
+operational store への記録が失敗しても、room publish が
 成功済みの外部 delivery は失敗応答に戻さない。
 
 `GET /healthz` と `GET /events` は storage 復元失敗を generic 500 応答に変換する。
