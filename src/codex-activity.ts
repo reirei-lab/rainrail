@@ -1,4 +1,5 @@
 import { readRuntimeTimeline, type RuntimeTimelineResult } from './agent-timeline.js';
+import type { RuntimeAgentResumeAttempt } from './runtime-provider.js';
 
 export interface CodexActivityTask {
   id: string;
@@ -7,6 +8,7 @@ export interface CodexActivityTask {
   startedAt: string;
   logPath?: string;
   stderrLogPath?: string;
+  resumeAttempts?: RuntimeAgentResumeAttempt[];
 }
 
 export interface SummarizeCodexActivityOptions {
@@ -59,7 +61,7 @@ export async function summarizeCodexActivity(options: SummarizeCodexActivityOpti
         ...(task.agentSessionId === undefined ? {} : { agentSessionId: task.agentSessionId }),
         logPath: task.logPath ?? '',
         ...(task.stderrLogPath === undefined ? {} : { stderrLogPath: task.stderrLogPath }),
-        resumeAttempts: [],
+        resumeAttempts: task.resumeAttempts ?? [],
       },
       options.sessionsDirectory === undefined ? {} : { sessionsDirectory: options.sessionsDirectory },
     );

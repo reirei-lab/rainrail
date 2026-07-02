@@ -14,8 +14,12 @@ describe('operational retry helpers', () => {
   it('recognizes transient failures and uses bounded exponential backoff', () => {
     expect(isRetryableOperationalError(new Error('API rate limit already exceeded'))).toBe(true);
     expect(isRetryableOperationalError(new Error('GitHub GraphQL request failed with HTTP 503'))).toBe(true);
+    expect(isRetryableOperationalError(new Error('GitHub GraphQL request failed with HTTP 429'))).toBe(true);
     expect(isRetryableOperationalError(new Error('fetch failed'))).toBe(true);
     expect(isRetryableOperationalError(new Error('pull request mergeability is still being calculated'))).toBe(true);
+    expect(isRetryableOperationalError(new Error('pull request checks are still being reflected'))).toBe(true);
+    expect(isRetryableOperationalError(new Error('pull request draft state is still being reflected'))).toBe(true);
+    expect(isRetryableOperationalError(new Error('pull request reviews are still being reflected'))).toBe(true);
     expect(isRetryableOperationalError(new Error('pull request is not mergeable'))).toBe(false);
 
     expect(retryDelayMs(0)).toBe(60_000);
@@ -75,6 +79,45 @@ describe('operational retry helpers', () => {
 
     expect(second).toEqual([{ eventId: event.id, handlerName: 'flaky-handler', status: 'fulfilled' }]);
     expect(store.getEventHandlerRetry(event.id, 'flaky-handler')).toBeUndefined();
+    store.close();
+  });
+
+  it('applies the processing limit after handler priority under retry backlog', async () => {
+    const store = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:00:00.000Z'),
+    });
+    const event = store.recordEvent(fixtureEvent());
+    for (let index = 0; index < 120; index += 1) {
+      store.recordEventHandlerRetry({
+        eventId: event.id,
+        handlerName: `__auto_assign_next_issue_${index}`,
+        nextRetryAt: `2026-07-02T00:00:${String(index % 60).padStart(2, '0')}.000Z`,
+        lastError: 'fetch failed',
+      });
+    }
+    store.recordEventHandlerRetry({
+      eventId: event.id,
+      handlerName: 'conflict-check',
+      nextRetryAt: '2026-07-02T01:00:00.000Z',
+      lastError: 'fetch failed',
+    });
+    const handled: string[] = [];
+
+    const result = await processDueEventHandlerRetries({
+      store,
+      now: '2026-07-02T01:00:00.000Z',
+      limit: 1,
+      handlers: new Proxy({}, {
+        get: (_target, property) => async () => {
+          handled.push(String(property));
+        },
+      }) as Record<string, () => Promise<void>>,
+    });
+
+    expect(result).toEqual([{ eventId: event.id, handlerName: 'conflict-check', status: 'fulfilled' }]);
+    expect(handled).toEqual(['conflict-check']);
     store.close();
   });
 });

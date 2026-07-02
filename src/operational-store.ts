@@ -242,6 +242,14 @@ export class RainrailOperationalStore {
     const existing = this.getAgentTask(input.id);
     const startedAt = input.startedAt ?? existing?.startedAt ?? now;
     const status = input.status ?? existing?.status ?? 'running';
+    const agentSessionId = input.agentSessionId ?? existing?.agentSessionId;
+    const issue = input.issue ?? existing?.issue;
+    const claim = input.claim ?? existing?.claim;
+    const logPath = input.logPath ?? existing?.logPath;
+    const stderrLogPath = input.stderrLogPath ?? existing?.stderrLogPath;
+    const pid = input.pid ?? existing?.pid;
+    const result = input.result ?? existing?.result;
+    const completedAt = input.completedAt ?? existing?.completedAt;
     this.#db.prepare(`
       insert into agent_tasks (
         id, title, agent_session_id, branch_name, status, issue_json, claim_json,
@@ -264,17 +272,17 @@ export class RainrailOperationalStore {
     `).run(
       input.id,
       input.title,
-      input.agentSessionId ?? null,
+      agentSessionId ?? null,
       input.branchName,
       status,
-      input.issue === undefined ? null : JSON.stringify(input.issue),
-      input.claim === undefined ? null : JSON.stringify(input.claim),
-      input.logPath ?? null,
-      input.stderrLogPath ?? null,
-      input.pid ?? null,
-      input.result ?? null,
+      issue === undefined ? null : JSON.stringify(issue),
+      claim === undefined ? null : JSON.stringify(claim),
+      logPath ?? null,
+      stderrLogPath ?? null,
+      pid ?? null,
+      result ?? null,
       startedAt,
-      input.completedAt ?? null,
+      completedAt ?? null,
       now,
     );
 
@@ -367,14 +375,17 @@ export class RainrailOperationalStore {
     return row === undefined ? undefined : retryFromRow(row);
   }
 
-  listDueEventHandlerRetries(now: string, limit = 100): StoredEventHandlerRetry[] {
+  listDueEventHandlerRetries(now: string, limit?: number): StoredEventHandlerRetry[] {
+    const limitClause = limit === undefined ? '' : 'limit ?';
+    const args = limit === undefined ? [now] : [now, limit];
+
     return (this.#db.prepare(`
       select event_id, handler_name, attempts, next_retry_at, last_error, updated_at
       from event_handler_retries
       where next_retry_at <= ?
       order by next_retry_at asc, handler_name asc
-      limit ?
-    `).all(now, limit) as unknown as RetryRow[]).map(retryFromRow);
+      ${limitClause}
+    `).all(...args) as unknown as RetryRow[]).map(retryFromRow);
   }
 
   clearEventHandlerRetry(eventId: string, handlerName: string): void {
@@ -582,8 +593,4 @@ function expectPositiveInteger(value: number, name: string): number {
   }
 
   return value;
-}
-
-function stripUndefined<T extends Record<string, unknown>>(value: T): T {
-  return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined)) as T;
 }

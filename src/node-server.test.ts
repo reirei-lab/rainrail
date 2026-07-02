@@ -2,7 +2,12 @@ import { once } from 'node:events';
 
 import { describe, expect, it } from 'vitest';
 
-import { DEFAULT_MAX_REQUEST_BODY_BYTES, createGitHubWebhookSignature, createRainrailNodeServer } from './index.js';
+import {
+  DEFAULT_MAX_REQUEST_BODY_BYTES,
+  RainrailOperationalStore,
+  createGitHubWebhookSignature,
+  createRainrailNodeServer,
+} from './index.js';
 
 describe('Rainrail Node server', () => {
   it('adapts Node HTTP requests to the shared Rainrail HTTP app', async () => {
@@ -133,6 +138,39 @@ describe('Rainrail Node server', () => {
       await expect(response.json()).resolves.toEqual({ error: 'request_body_too_large' });
     } finally {
       await closeServer(server);
+    }
+  });
+
+  it('forwards operationalStore to the shared HTTP app', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:00:00.000Z'),
+    });
+    const { server } = createRainrailNodeServer({
+      githubWebhookSecret: 'secret',
+      publishToken: 'test-publish-token',
+      eventsBearerToken: 'events-token',
+      operationalStore,
+    });
+
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const address = server.address();
+    if (address === null || typeof address === 'string') {
+      throw new Error('expected TCP server address');
+    }
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${address.port}/api/state`, {
+        headers: { authorization: 'Bearer events-token' },
+      });
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toMatchObject({ counts: { events: 0 } });
+    } finally {
+      await closeServer(server);
+      operationalStore.close();
     }
   });
 

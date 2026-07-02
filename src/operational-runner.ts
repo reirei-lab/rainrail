@@ -44,9 +44,11 @@ export interface OperationalRuntimeStatus {
 export function isRetryableOperationalError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return /rate limit/i.test(message)
-    || /HTTP 5\d\d/i.test(message)
+    || /HTTP (?:429|5\d\d)/i.test(message)
     || /fetch failed/i.test(message)
-    || /mergeability is still being calculated/i.test(message);
+    || /mergeability is still being calculated/i.test(message)
+    || /pull request (?:checks|reviews) are still being reflected/i.test(message)
+    || /pull request draft state is still being reflected/i.test(message);
 }
 
 export function retryDelayMs(previousAttempts: number): number {
@@ -69,8 +71,8 @@ export async function processDueEventHandlerRetries(
 ): Promise<ProcessDueEventHandlerRetryResult[]> {
   const results: ProcessDueEventHandlerRetryResult[] = [];
   const dueRetries = prioritizeEventHandlerRetriesForProcessing(
-    options.store.listDueEventHandlerRetries(options.now, options.limit ?? 100),
-  );
+    options.store.listDueEventHandlerRetries(options.now),
+  ).slice(0, options.limit ?? 100);
 
   for (const retry of dueRetries) {
     const event = options.store.getEvent(retry.eventId);

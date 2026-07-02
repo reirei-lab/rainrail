@@ -95,6 +95,46 @@ describe('RainrailOperationalStore', () => {
     expect(store.snapshot().counts.eventHandlerRetries).toBe(1);
     store.close();
   });
+
+  it('preserves existing runtime metadata when re-recording a task with partial updates', () => {
+    const store = new RainrailOperationalStore({ databasePath: ':memory:', eventLimit: 10, now: fixedClock() });
+    store.recordAgentTask({
+      id: 'agent_task_rainrail_25',
+      title: 'initial run',
+      agentSessionId: 'agent:main:rainrail-25',
+      branchName: 'agent/reirei-lab-rainrail-25-store-retry-reconcile-dashboard-api',
+      status: 'running',
+      issue: { repository: 'reirei-lab/rainrail', number: 25 },
+      claim: { projectItemId: 'PVTI_item' },
+      logPath: 'var/log/rainrail-25.log',
+      stderrLogPath: 'var/log/rainrail-25.stderr.log',
+      pid: 123,
+    });
+
+    store.recordAgentTask({
+      id: 'agent_task_rainrail_25',
+      title: 'completed run',
+      branchName: 'agent/reirei-lab-rainrail-25-store-retry-reconcile-dashboard-api',
+      status: 'succeeded',
+      result: 'Outcome: implemented',
+      completedAt: '2026-07-02T01:30:00.000Z',
+    });
+
+    expect(store.getAgentTask('agent_task_rainrail_25')).toMatchObject({
+      title: 'completed run',
+      agentSessionId: 'agent:main:rainrail-25',
+      branchName: 'agent/reirei-lab-rainrail-25-store-retry-reconcile-dashboard-api',
+      status: 'succeeded',
+      issue: { repository: 'reirei-lab/rainrail', number: 25 },
+      claim: { projectItemId: 'PVTI_item' },
+      logPath: 'var/log/rainrail-25.log',
+      stderrLogPath: 'var/log/rainrail-25.stderr.log',
+      pid: 123,
+      result: 'Outcome: implemented',
+      completedAt: '2026-07-02T01:30:00.000Z',
+    });
+    store.close();
+  });
 });
 
 function fixtureEvent(deliveryId: string, name: 'github.issue' | 'github.pull_request') {

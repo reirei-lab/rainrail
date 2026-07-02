@@ -96,6 +96,9 @@ async function routeRainrailHttpRequest(request: Request, options: RainrailHttpA
   if (url.pathname === '/api/state') {
     if (request.method !== 'GET') return methodNotAllowedResponse(['GET', 'OPTIONS']);
 
+    const auth = verifyDashboardReadRequest(request, options);
+    if (auth !== undefined) return auth;
+
     return dashboardStateResponse(url, options);
   }
 
@@ -103,10 +106,20 @@ async function routeRainrailHttpRequest(request: Request, options: RainrailHttpA
   if (eventDetailMatch !== null) {
     if (request.method !== 'GET') return methodNotAllowedResponse(['GET', 'OPTIONS']);
 
+    const auth = verifyDashboardReadRequest(request, options);
+    if (auth !== undefined) return auth;
+
     return dashboardEventDetailResponse(decodeURIComponent(eventDetailMatch[1]!), options);
   }
 
   return textResponse('not found\n', { status: 404 });
+}
+
+function verifyDashboardReadRequest(request: Request, options: RainrailHttpAppOptions): Response | undefined {
+  if (options.operationalStore === undefined) return undefined;
+
+  const auth = verifyRainrailEventsBearerToken(request, options.eventsBearerToken);
+  return auth.ok ? undefined : rainrailEventsAuthErrorResponse(auth);
 }
 
 function dashboardStateResponse(url: URL, options: RainrailHttpAppOptions): Response {

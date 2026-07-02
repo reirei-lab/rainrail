@@ -36,10 +36,13 @@ describe('Rainrail dashboard API', () => {
       room: new RainrailBridgeRoom(fakeState(), { publishToken: 'publish-token' }),
       githubWebhookSecret: 'secret',
       publishToken: 'publish-token',
+      eventsBearerToken: 'events-token',
       operationalStore,
     });
 
-    const stateResponse = await app.fetch(new Request('https://rainrail.local/api/state'));
+    const stateResponse = await app.fetch(new Request('https://rainrail.local/api/state', {
+      headers: { authorization: 'Bearer events-token' },
+    }));
     expect(stateResponse.status).toBe(200);
     await expect(stateResponse.json()).resolves.toMatchObject({
       counts: { events: 1, activityEvents: 1 },
@@ -47,12 +50,58 @@ describe('Rainrail dashboard API', () => {
       activityEvents: [{ summary: 'plugin execution completed' }],
     });
 
-    const detailResponse = await app.fetch(new Request(`https://rainrail.local/api/events/${encodeURIComponent(event.id)}`));
+    const detailResponse = await app.fetch(new Request(`https://rainrail.local/api/events/${encodeURIComponent(event.id)}`, {
+      headers: { authorization: 'Bearer events-token' },
+    }));
     expect(detailResponse.status).toBe(200);
     await expect(detailResponse.json()).resolves.toMatchObject({
       id: event.id,
       envelope: { subject: { type: 'issue', id: '25' } },
     });
+
+    operationalStore.close();
+  });
+
+  it('protects operational dashboard API with the event bearer token', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:00:00.000Z'),
+    });
+    const event = operationalStore.recordEvent(createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook', repository: 'reirei-lab/rainrail' },
+      name: 'github.issue',
+      delivery: { id: 'delivery-auth', receivedAt: '2026-07-02T00:00:00.000Z' },
+      occurredAt: '2026-07-02T00:00:00.000Z',
+      subject: { type: 'issue', id: '25' },
+      payload: { action: 'opened' },
+      rawPayload: { kind: 'external-reference', reference: 'github://deliveries/delivery-auth' },
+    }));
+    const app = createRainrailHttpApp({
+      room: new RainrailBridgeRoom(fakeState(), { publishToken: 'publish-token' }),
+      githubWebhookSecret: 'secret',
+      publishToken: 'publish-token',
+      eventsBearerToken: 'events-token',
+      operationalStore,
+    });
+
+    const missingStateAuth = await app.fetch(new Request('https://rainrail.local/api/state'));
+    expect(missingStateAuth.status).toBe(401);
+    await expect(missingStateAuth.json()).resolves.toEqual({ error: 'missing_bearer_token' });
+
+    const missingDetailAuth = await app.fetch(new Request(`https://rainrail.local/api/events/${event.id}`));
+    expect(missingDetailAuth.status).toBe(401);
+    await expect(missingDetailAuth.json()).resolves.toEqual({ error: 'missing_bearer_token' });
+
+    const state = await app.fetch(new Request('https://rainrail.local/api/state', {
+      headers: { authorization: 'Bearer events-token' },
+    }));
+    expect(state.status).toBe(200);
+
+    const detail = await app.fetch(new Request(`https://rainrail.local/api/events/${event.id}`, {
+      headers: { authorization: 'Bearer events-token' },
+    }));
+    expect(detail.status).toBe(200);
 
     operationalStore.close();
   });
