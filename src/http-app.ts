@@ -1,6 +1,7 @@
 import { rainrailEventsAuthErrorResponse, verifyRainrailEventsBearerToken } from './events-auth.js';
 import type { RainrailEventEnvelope } from './events.js';
 import {
+  DEFAULT_MAX_REQUEST_BODY_BYTES,
   corsPreflightResponse,
   jsonResponse,
   methodNotAllowedResponse,
@@ -17,6 +18,7 @@ import type {
   RainrailOperationalStore,
   StoredActivityEvent,
   StoredAgentTask,
+  StoredCommandResult,
   StoredEventHandlerRetry,
   StoredOperationalEvent,
   StoredStaleProjectClaimWarning,
@@ -25,6 +27,37 @@ import { getNextProjectIssueToStart, type ProjectIssue } from './project-issues.
 import type { TaskQueueProvider } from './task-queue.js';
 
 const DEFAULT_MAX_CONCURRENT_AGENT_TASKS = 1;
+
+export type RainrailDashboardScope = 'read-only' | 'operator' | 'admin';
+
+export interface RainrailDashboardAuthOptions {
+  readOnlyToken?: string;
+  operatorToken?: string;
+  adminToken?: string;
+}
+
+export interface RainrailCommandRequest {
+  actionType: RainrailCommandActionType;
+  targetType: RainrailCommandTargetType;
+  targetId: string;
+  actor: string;
+  client?: string;
+  requestId: string;
+  dryRun: boolean;
+  inputs: Record<string, unknown>;
+}
+
+export type RainrailCommandActionType =
+  | 'agent_task_resume'
+  | 'agent_task_reset'
+  | 'agent_task_terminate'
+  | 'agent_task_terminate_all'
+  | 'queue_assign_next'
+  | 'settings_update';
+
+export type RainrailCommandTargetType = 'agent_task' | 'agent_tasks' | 'queue' | 'settings';
+
+export type RainrailCommandHandler = (command: RainrailCommandRequest) => unknown | Promise<unknown>;
 
 export interface RainrailBridgeRoomFetchTarget {
   fetch(request: Request): Response | Promise<Response>;
@@ -38,6 +71,9 @@ export interface RainrailHttpAppOptions {
   intakeAdapters?: readonly RainrailIntakeAdapter[];
   operationalStore?: RainrailOperationalStore;
   taskQueue?: Pick<TaskQueueProvider, 'listProjectIssues' | 'selection'>;
+  dashboardCommandMaxBodyBytes?: number;
+  dashboardAuth?: RainrailDashboardAuthOptions;
+  commandHandler?: RainrailCommandHandler;
 }
 
 export interface RainrailHttpApp {
@@ -48,6 +84,7 @@ export interface RainrailHttpApp {
 const INTERNAL_ROOM_ORIGIN = 'https://rainrail-room.local';
 
 export function createRainrailHttpApp(options: RainrailHttpAppOptions): RainrailHttpApp {
+  assertUniqueDashboardTokenScopes(options);
   const intakeRegistry = createRainrailIntakeRegistry(options.intakeAdapters);
 
   return {
@@ -82,6 +119,7 @@ export function rainrailHttpRequestBodyLimit(
   method: string,
   options: RainrailHttpAppOptions,
 ): number | undefined {
+  if (isDashboardCommandRoute(pathname, method)) return options.dashboardCommandMaxBodyBytes;
   return createRainrailIntakeRegistry(options.intakeAdapters).routeBodyLimit(pathname, method);
 }
 
@@ -240,6 +278,63 @@ async function routeRainrailHttpRequest(
     return dashboardV1AgentTaskDetailResponse(taskId, options);
   }
 
+  const agentTaskActionMatch = /^\/api\/v1\/agent-tasks\/([^/]+)\/actions\/(resume|reset|terminate)$/.exec(url.pathname);
+  if (agentTaskActionMatch !== null) {
+    if (request.method !== 'POST') return methodNotAllowedResponse(['POST', 'OPTIONS']);
+
+    const taskId = safeDecodeURIComponent(agentTaskActionMatch[1]!);
+    if (taskId === undefined) {
+      return jsonResponse({ error: 'invalid_agent_task_id' }, { status: 400 });
+    }
+
+    return handleDashboardCommandRequest(request, options, {
+      actionType: `agent_task_${agentTaskActionMatch[2]}` as RainrailCommandActionType,
+      targetType: 'agent_task',
+      targetId: taskId,
+      requiredScope: 'operator',
+      confirmationRequired: agentTaskActionMatch[2] !== 'resume',
+      validateTarget: () => options.operationalStore?.getAgentTask(taskId) === undefined
+        ? jsonResponse({ error: 'agent_task_not_found' }, { status: 404 })
+        : undefined,
+    });
+  }
+
+  if (url.pathname === '/api/v1/agent-tasks/actions/terminate-all') {
+    if (request.method !== 'POST') return methodNotAllowedResponse(['POST', 'OPTIONS']);
+
+    return handleDashboardCommandRequest(request, options, {
+      actionType: 'agent_task_terminate_all',
+      targetType: 'agent_tasks',
+      targetId: 'all',
+      requiredScope: 'operator',
+      confirmationRequired: true,
+    });
+  }
+
+  if (url.pathname === '/api/v1/queue/actions/assign-next') {
+    if (request.method !== 'POST') return methodNotAllowedResponse(['POST', 'OPTIONS']);
+
+    return handleDashboardCommandRequest(request, options, {
+      actionType: 'queue_assign_next',
+      targetType: 'queue',
+      targetId: 'next',
+      requiredScope: 'operator',
+      confirmationRequired: false,
+    });
+  }
+
+  if (url.pathname === '/api/v1/settings/actions/update') {
+    if (request.method !== 'POST') return methodNotAllowedResponse(['POST', 'OPTIONS']);
+
+    return handleDashboardCommandRequest(request, options, {
+      actionType: 'settings_update',
+      targetType: 'settings',
+      targetId: 'global',
+      requiredScope: 'admin',
+      confirmationRequired: true,
+    });
+  }
+
   const eventDetailMatch = /^\/api\/events\/([^/]+)$/.exec(url.pathname);
   if (eventDetailMatch !== null) {
     if (request.method !== 'GET') return methodNotAllowedResponse(['GET', 'OPTIONS']);
@@ -306,6 +401,13 @@ function methodCanHaveBody(method: string): boolean {
   return normalized !== 'GET' && normalized !== 'HEAD';
 }
 
+function isDashboardCommandRoute(pathname: string, method: string): boolean {
+  return method.toUpperCase() === 'POST'
+    && (/^\/api\/v1\/agent-tasks\/(?:[^/]+\/actions\/(?:resume|reset|terminate)|actions\/terminate-all)$/.test(pathname)
+      || pathname === '/api/v1/queue/actions/assign-next'
+      || pathname === '/api/v1/settings/actions/update');
+}
+
 function isStatusCodeError(error: unknown): error is { statusCode: number } {
   return typeof error === 'object'
     && error !== null
@@ -316,8 +418,8 @@ function isStatusCodeError(error: unknown): error is { statusCode: number } {
 function verifyDashboardReadRequest(request: Request, options: RainrailHttpAppOptions): Response | undefined {
   if (options.operationalStore === undefined) return undefined;
 
-  const auth = verifyRainrailEventsBearerToken(request, options.eventsBearerToken);
-  return auth.ok ? undefined : rainrailEventsAuthErrorResponse(auth);
+  const auth = verifyDashboardScopedRequest(request, options, 'read-only');
+  return auth.ok ? undefined : auth.response;
 }
 
 function dashboardStateResponse(url: URL, options: RainrailHttpAppOptions): Response {
@@ -354,7 +456,10 @@ function dashboardV1OverviewResponse(options: RainrailHttpAppOptions): Response 
     data: {
       counts: snapshot.counts,
       warnings: snapshot.warnings,
-      recentActivity: store.listActivityEvents({ hideSkippedActivityEvents: true, limit: 5 }).map(activityToWorkflowRunRow),
+      recentActivity: store.listActivityEvents({ hideSkippedActivityEvents: true })
+        .filter(isWorkflowRunActivity)
+        .slice(0, 5)
+        .map(activityToWorkflowRunRow),
       links: {
         events: '/api/v1/events',
         workflowRuns: '/api/v1/workflow-runs',
@@ -439,6 +544,7 @@ function dashboardV1WorkflowRunsResponse(url: URL, options: RainrailHttpAppOptio
   if (!collection.ok) return collection.response;
 
   const filtered = store.listActivityEvents({ hideSkippedActivityEvents: url.searchParams.get('hideSkippedActivity') === '1' })
+    .filter(isWorkflowRunActivity)
     .filter((activity) => matchesOptionalFilter(activity.outcome, url.searchParams.get('filter[status]')));
   const page = pageRows(filtered, collection.limit, collection.cursor, activityCursorValue);
   if (!page.ok) return page.response;
@@ -456,7 +562,7 @@ function dashboardV1WorkflowRunDetailResponse(workflowRunId: string, options: Ra
   }
 
   const activity = store.getActivityEvent(workflowRunId);
-  if (activity === undefined) {
+  if (activity === undefined || !isWorkflowRunActivity(activity)) {
     return jsonResponse({ error: 'workflow_run_not_found' }, { status: 404 });
   }
 
@@ -785,6 +891,10 @@ function activityToWorkflowRunRow(activity: StoredActivityEvent) {
   };
 }
 
+function isWorkflowRunActivity(activity: StoredActivityEvent): boolean {
+  return activity.category !== 'command';
+}
+
 function agentTaskToCompactRow(task: StoredAgentTask, staleTaskIds: Set<string>) {
   return {
     id: task.id,
@@ -1054,7 +1164,509 @@ function numberField(record: Record<string, unknown> | undefined, field: string)
   return typeof value === 'number' ? value : undefined;
 }
 
-async function publishEvent(options: RainrailHttpAppOptions, event: RainrailEventEnvelope): Promise<Response> {
+async function handleDashboardCommandRequest(
+  request: Request,
+  options: RainrailHttpAppOptions,
+  command: {
+    actionType: RainrailCommandActionType;
+    targetType: RainrailCommandTargetType;
+    targetId: string;
+    requiredScope: RainrailDashboardScope;
+    confirmationRequired: boolean;
+    validateTarget?: () => Response | undefined;
+  },
+): Promise<Response> {
+  if (options.operationalStore === undefined) {
+    return jsonResponse({ error: 'operational_store_not_configured' }, { status: 503 });
+  }
+
+  const auth = verifyDashboardScopedRequest(request, options, command.requiredScope);
+  if (!auth.ok) return auth.response;
+
+  const targetError = command.validateTarget?.();
+  if (targetError !== undefined) return targetError;
+
+  const requestId = sanitizeAuditHeaderValue(request.headers.get('x-request-id')) ?? generatedRequestId();
+  const client = sanitizeAuditHeaderValue(request.headers.get('x-rainrail-client'));
+  const body = await readJsonObjectBody(request, options.dashboardCommandMaxBodyBytes ?? DEFAULT_MAX_REQUEST_BODY_BYTES);
+  if (!body.ok) return commandResponse({ error: body.error }, requestId, body.status);
+
+  const dryRun = body.value.dryRun === true;
+  const confirmationToken = confirmationTokenFor(command.actionType, command.targetType, command.targetId);
+  const preview = {
+    action: command.actionType,
+    targetType: command.targetType,
+    targetId: command.targetId,
+    confirmationRequired: command.confirmationRequired,
+    ...(command.confirmationRequired ? { confirmationToken } : {}),
+  };
+
+  if (dryRun) {
+    let result: StoredCommandResult;
+    try {
+      result = options.operationalStore.recordCommandResult({
+        actionType: command.actionType,
+        targetType: command.targetType,
+        targetId: command.targetId,
+        status: 'preview',
+        actor: auth.principal.actor,
+        ...(client === undefined ? {} : { client }),
+        requestId,
+        dryRun: true,
+        result: preview,
+      });
+      options.operationalStore.recordActivityEvent({
+        category: 'command',
+        targetType: command.targetType,
+        targetId: command.targetId,
+        actionType: command.actionType,
+        outcome: 'skipped',
+        summary: `Previewed ${command.actionType} for ${command.targetType} ${command.targetId}`,
+        metadata: auditMetadata(auth.principal.actor, client, requestId, true),
+      });
+    } catch {
+      return commandResponse({ error: 'operational_store_unavailable' }, requestId, 503);
+    }
+
+    return commandResponse({
+      data: {
+        action: command.actionType,
+        targetType: command.targetType,
+        targetId: command.targetId,
+        status: 'preview',
+        dryRun: true,
+        confirmationRequired: command.confirmationRequired,
+        ...(command.confirmationRequired ? { confirmationToken } : {}),
+        auditId: result.id,
+      },
+    }, requestId, 200);
+  }
+
+  if (command.confirmationRequired && body.value.confirmationToken !== confirmationToken) {
+    return commandResponse({
+      error: 'action_confirmation_required',
+      data: preview,
+    }, requestId, 409);
+  }
+
+  if (options.commandHandler === undefined) {
+    return commandResponse({ error: 'command_handler_not_configured' }, requestId, 503);
+  }
+
+  const sensitiveInputValues = sensitiveStringValues(body.value);
+  const commandInputs = JSON.parse(JSON.stringify(body.value)) as Record<string, unknown>;
+  let dispatchAuditId: string;
+  try {
+    const dispatchResult = options.operationalStore.recordCommandResult({
+      actionType: command.actionType,
+      targetType: command.targetType,
+      targetId: command.targetId,
+      status: 'dispatching',
+      actor: auth.principal.actor,
+      ...(client === undefined ? {} : { client }),
+      requestId,
+      dryRun: false,
+    });
+    dispatchAuditId = dispatchResult.id;
+  } catch {
+    return commandResponse({ error: 'operational_store_unavailable' }, requestId, 503);
+  }
+
+  const commandRequest: RainrailCommandRequest = {
+    actionType: command.actionType,
+    targetType: command.targetType,
+    targetId: command.targetId,
+    actor: auth.principal.actor,
+    ...(client === undefined ? {} : { client }),
+    requestId,
+    dryRun: false,
+    inputs: commandInputs,
+  };
+
+  let handlerResult: unknown;
+  try {
+    handlerResult = await options.commandHandler(commandRequest);
+  } catch (error) {
+    const rawMessage = error instanceof Error ? error.message : String(error);
+    const message = sanitizeCommandErrorMessage(rawMessage, sensitiveInputValues);
+    let auditId = dispatchAuditId;
+    let auditWarning: string | undefined;
+    try {
+      const result = options.operationalStore.recordCommandResult({
+        actionType: command.actionType,
+        targetType: command.targetType,
+        targetId: command.targetId,
+        status: 'failed',
+        actor: auth.principal.actor,
+        ...(client === undefined ? {} : { client }),
+        requestId,
+        dryRun: false,
+        error: message,
+      });
+      auditId = result.id;
+      options.operationalStore.recordActivityEvent({
+        category: 'command',
+        targetType: command.targetType,
+        targetId: command.targetId,
+        actionType: command.actionType,
+        outcome: 'failed',
+        summary: `Failed ${command.actionType} for ${command.targetType} ${command.targetId}`,
+        metadata: auditMetadata(auth.principal.actor, client, requestId, false),
+      });
+    } catch {
+      auditWarning = 'post_dispatch_audit_failed';
+    }
+
+    return commandResponse({
+      data: {
+        action: command.actionType,
+        targetType: command.targetType,
+        targetId: command.targetId,
+        status: 'failed',
+        dryRun: false,
+        auditId,
+        ...(auditWarning === undefined ? {} : { auditWarning }),
+        error: message,
+      },
+    }, requestId, 502);
+  }
+
+  const storedHandlerResult = sanitizeCommandResult(handlerResult, sensitiveInputValues);
+  let auditId = dispatchAuditId;
+  let auditWarning: string | undefined;
+  try {
+    const result = options.operationalStore.recordCommandResult({
+      actionType: command.actionType,
+      targetType: command.targetType,
+      targetId: command.targetId,
+      status: 'accepted',
+      actor: auth.principal.actor,
+      ...(client === undefined ? {} : { client }),
+      requestId,
+      dryRun: false,
+      result: storedHandlerResult,
+    });
+    auditId = result.id;
+    options.operationalStore.recordActivityEvent({
+      category: 'command',
+      targetType: command.targetType,
+      targetId: command.targetId,
+      actionType: command.actionType,
+      outcome: 'success',
+      summary: `Accepted ${command.actionType} for ${command.targetType} ${command.targetId}`,
+      metadata: auditMetadata(auth.principal.actor, client, requestId, false),
+    });
+  } catch {
+    auditWarning = 'post_dispatch_audit_failed';
+  }
+
+  return commandResponse({
+    data: {
+      action: command.actionType,
+      targetType: command.targetType,
+      targetId: command.targetId,
+      status: 'accepted',
+      dryRun: false,
+      auditId,
+      ...(auditWarning === undefined ? {} : { auditWarning }),
+      result: storedHandlerResult,
+    },
+  }, requestId, 202);
+}
+
+type DashboardScopedAuthResult =
+  | { ok: true; principal: { actor: string; scope: RainrailDashboardScope } }
+  | { ok: false; response: Response };
+
+function verifyDashboardScopedRequest(
+  request: Request,
+  options: RainrailHttpAppOptions,
+  requiredScope: RainrailDashboardScope,
+): DashboardScopedAuthResult {
+  const hasConfiguredToken = dashboardTokens(options).some((configured) => configured !== undefined && configured.length > 0);
+  if (!hasConfiguredToken) {
+    return { ok: false, response: jsonResponse({ error: 'events_auth_not_configured' }, { status: 503 }) };
+  }
+
+  const authorization = request.headers.get('authorization') ?? '';
+  const prefix = 'Bearer ';
+  if (!authorization.startsWith(prefix)) {
+    return { ok: false, response: jsonResponse({ error: 'missing_bearer_token' }, { status: 401 }) };
+  }
+
+  const token = authorization.slice(prefix.length);
+  const principal = principalForDashboardToken(token, options);
+  if (principal === undefined) {
+    return { ok: false, response: jsonResponse({ error: 'invalid_bearer_token' }, { status: 403 }) };
+  }
+
+  if (!scopeIncludes(principal.scope, requiredScope)) {
+    return {
+      ok: false,
+      response: jsonResponse({ error: 'insufficient_scope', requiredScope }, { status: 403 }),
+    };
+  }
+
+  return { ok: true, principal };
+}
+
+function principalForDashboardToken(
+  token: string,
+  options: RainrailHttpAppOptions,
+): { actor: string; scope: RainrailDashboardScope } | undefined {
+  if (matchesToken(token, options.dashboardAuth?.adminToken)) {
+    return { actor: 'admin', scope: 'admin' };
+  }
+  if (matchesToken(token, options.dashboardAuth?.operatorToken)) {
+    return { actor: 'operator', scope: 'operator' };
+  }
+  if (matchesToken(token, options.dashboardAuth?.readOnlyToken) || matchesToken(token, options.eventsBearerToken)) {
+    return { actor: 'read-only', scope: 'read-only' };
+  }
+
+  return undefined;
+}
+
+function matchesToken(token: string, expectedToken: string | undefined): boolean {
+  return expectedToken !== undefined && expectedToken.length > 0 && constantTimeStringEqual(token, expectedToken);
+}
+
+function dashboardTokens(options: RainrailHttpAppOptions): Array<string | undefined> {
+  return dashboardTokenEntries(options).map((entry) => entry.token);
+}
+
+function assertUniqueDashboardTokenScopes(options: RainrailHttpAppOptions): void {
+  const scopesByToken = new Map<string, Set<RainrailDashboardScope>>();
+  for (const { token, scope } of dashboardTokenEntries(options)) {
+    if (token === undefined || token.length === 0) continue;
+
+    const scopes = scopesByToken.get(token) ?? new Set<RainrailDashboardScope>();
+    scopes.add(scope);
+    scopesByToken.set(token, scopes);
+  }
+
+  for (const scopes of scopesByToken.values()) {
+    if (scopes.size > 1) {
+      throw new Error('duplicate dashboard token scopes are not allowed');
+    }
+  }
+}
+
+function dashboardTokenEntries(options: RainrailHttpAppOptions): Array<{ token: string | undefined; scope: RainrailDashboardScope }> {
+  return [
+    { token: options.dashboardAuth?.adminToken, scope: 'admin' },
+    { token: options.dashboardAuth?.operatorToken, scope: 'operator' },
+    { token: options.dashboardAuth?.readOnlyToken, scope: 'read-only' },
+    { token: options.eventsBearerToken, scope: 'read-only' },
+  ];
+}
+
+function scopeIncludes(actual: RainrailDashboardScope, required: RainrailDashboardScope): boolean {
+  const rank: Record<RainrailDashboardScope, number> = {
+    'read-only': 1,
+    operator: 2,
+    admin: 3,
+  };
+  return rank[actual] >= rank[required];
+}
+
+function confirmationTokenFor(actionType: RainrailCommandActionType, targetType: RainrailCommandTargetType, targetId: string): string {
+  return `confirm:${actionType}:${targetType}:${targetId}`;
+}
+
+function generatedRequestId(): string {
+  return `req_${globalThis.crypto.randomUUID()}`;
+}
+
+async function readJsonObjectBody(request: Request, maxBytes: number): Promise<
+  | { ok: true; value: Record<string, unknown> }
+  | { ok: false; error: string; status: number }
+> {
+  if (request.body === null) return { ok: true, value: {} };
+
+  let rawBody: ArrayBuffer;
+  try {
+    rawBody = await readFetchRequestBody(request, maxBytes);
+  } catch (error) {
+    if (isStatusCodeError(error) && error.statusCode === 413) {
+      return { ok: false, error: 'request_body_too_large', status: 413 };
+    }
+
+    throw error;
+  }
+
+  if (rawBody.byteLength === 0) return { ok: true, value: {} };
+
+  try {
+    const value = JSON.parse(new TextDecoder().decode(rawBody)) as unknown;
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+      return { ok: false, error: 'invalid_json_body', status: 400 };
+    }
+
+    return { ok: true, value: value as Record<string, unknown> };
+  } catch {
+    return { ok: false, error: 'invalid_json_body', status: 400 };
+  }
+}
+
+function sanitizeCommandResult(value: unknown, sensitiveValues: readonly string[] = [], seen = new WeakSet<object>()): unknown {
+  if (value === undefined || typeof value === 'function' || typeof value === 'symbol') {
+    return undefined;
+  }
+  if (typeof value === 'bigint') {
+    return '[unserializable]';
+  }
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : '[unserializable]';
+  }
+  if (typeof value === 'string') {
+    return redactKnownSensitiveValues(value, sensitiveValues);
+  }
+  if (typeof value !== 'object' || value === null) {
+    return value;
+  }
+
+  if (seen.has(value)) {
+    return '[circular]';
+  }
+
+  seen.add(value);
+  if (Array.isArray(value)) {
+    try {
+      return value.map((item) => {
+        const sanitized = sanitizeCommandResult(item, sensitiveValues, seen);
+        return sanitized === undefined ? null : sanitized;
+      });
+    } catch {
+      return '[unserializable]';
+    } finally {
+      seen.delete(value);
+    }
+  }
+
+  const sanitized: Record<string, unknown> = {};
+  try {
+    for (const [key, nested] of Object.entries(value)) {
+      if (isSensitiveCommandResultKey(key)) {
+        sanitized[key] = '[redacted]';
+        continue;
+      }
+
+      const sanitizedNested = sanitizeCommandResult(nested, sensitiveValues, seen);
+      if (sanitizedNested !== undefined) {
+        sanitized[key] = sanitizedNested;
+      }
+    }
+  } catch {
+    return '[unserializable]';
+  } finally {
+    seen.delete(value);
+  }
+
+  return sanitized;
+}
+
+function sanitizeCommandErrorMessage(message: string, sensitiveValues: readonly string[]): string {
+  let sanitized = redactSensitiveText(message);
+  const orderedValues = [...sensitiveValues]
+    .filter((value) => value.length > 0)
+    .sort((left, right) => right.length - left.length);
+
+  for (const value of orderedValues) {
+    sanitized = sanitized.split(value).join('[redacted]');
+  }
+
+  return sanitized;
+}
+
+function redactKnownSensitiveValues(value: string, sensitiveValues: readonly string[]): string {
+  let sanitized = redactSensitiveText(value);
+  const orderedValues = [...sensitiveValues]
+    .filter((sensitiveValue) => sensitiveValue.length > 0)
+    .sort((left, right) => right.length - left.length);
+
+  for (const sensitiveValue of orderedValues) {
+    sanitized = sanitized.split(sensitiveValue).join('[redacted]');
+  }
+
+  return sanitized;
+}
+
+function sanitizeAuditHeaderValue(value: string | null): string | undefined {
+  if (value === null) return undefined;
+
+  const sanitized = redactSensitiveText(value)
+    .replace(/[\r\n]/gu, ' ')
+    .replace(/[^A-Za-z0-9 ._:@/+=\-[\]]/gu, '_')
+    .trim()
+    .slice(0, 128);
+
+  return sanitized.length === 0 ? undefined : sanitized;
+}
+
+function sensitiveStringValues(value: unknown, sensitiveContext = false): string[] {
+  if (typeof value === 'string') {
+    return sensitiveContext ? [value] : [];
+  }
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => sensitiveStringValues(item, sensitiveContext));
+  }
+  if (typeof value !== 'object' || value === null) {
+    return [];
+  }
+
+  return Object.entries(value).flatMap(([key, nested]) => (
+    sensitiveStringValues(nested, sensitiveContext || isSensitiveCommandResultKey(key))
+  ));
+}
+
+function redactSensitiveText(value: string): string {
+  return value
+    .replace(/\b(authorization\s*[:=]\s*)[^\r\n]+/giu, '$1[redacted]')
+    .replace(/\b([\w.-]*(?:authorization|token|secret|password|key|code|reset|verification|session|confirmation)[\w.-]*\b\s*[:=]\s*)(?:bearer|token)\s+[^\s"',}]+/giu, '$1[redacted]')
+    .replace(/\b((?:set-)?cookie\s*:\s*)[^\r\n]+/giu, '$1[redacted]')
+    .replace(
+      /((["'])[\w.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification|session|confirmation)[\w.-]*\2\s*:\s*)(["'])(?:\\.|(?!\3).)*\3/giu,
+      '$1$3[redacted]$3',
+    )
+    .replace(
+      /(\b[\w.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification|session|confirmation)[\w.-]*\b\s*[:=]\s*)(["']?)([^\s"',}]+)/giu,
+      '$1$2[redacted]',
+    );
+}
+
+function isSensitiveCommandResultKey(key: string): boolean {
+  return /(?:authorization|cookie|token|secret|password|key|code|reset|verification|session|confirmation)/iu.test(key);
+}
+
+function auditMetadata(actor: string, client: string | undefined, requestId: string, dryRun: boolean): Record<string, unknown> {
+  return {
+    actor,
+    ...(client === undefined ? {} : { client }),
+    requestId,
+    dryRun,
+  };
+}
+
+function commandResponse(body: unknown, requestId: string, status: number): Response {
+  return jsonResponse(body, {
+    status,
+    headers: { 'X-Request-ID': requestId },
+  });
+}
+
+function constantTimeStringEqual(left: string, right: string): boolean {
+  let diff = left.length ^ right.length;
+  const maxLength = Math.max(left.length, right.length);
+
+  for (let index = 0; index < maxLength; index += 1) {
+    diff |= (left.charCodeAt(index) || 0) ^ (right.charCodeAt(index) || 0);
+  }
+
+  return diff === 0;
+}
+
+async function publishEvent(options: RainrailHttpAppOptions, event: unknown): Promise<Response> {
   const response = await options.room.fetch(new Request(`${INTERNAL_ROOM_ORIGIN}/publish`, {
     method: 'POST',
     headers: {

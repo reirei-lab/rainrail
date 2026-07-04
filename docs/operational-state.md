@@ -9,13 +9,16 @@ file-backed な運用状態を扱う。Source provider や runtime provider の�
 `RainrailOperationalStore` は `RainrailOperationalStoreOptions` で `databasePath`、
 `eventLimit`、任意の clock を受け取る。store は `StoredOperationalEvent`、
 `StoredActivityEvent`、`StoredAgentTask`、`StoredEventHandlerRetry` を永続化し、
-`OperationalStoreSnapshot` として recent state と counts を返す。
+`StoredCommandResult`、`OperationalStoreSnapshot` として recent state と counts を返す。
 activity id の採番は store data 内の sequence で進め、同じ process 内で同じ
 `databasePath` を共有する store instance 間でも同じ id を返さない。`:memory:` は
 instance-local な一時 store として扱う。
 
-record input は `RecordActivityEventInput`、`RecordAgentTaskInput`、
-`RecordEventHandlerRetryInput` を使う。`recordAgentTask` は同じ task id の再記録で
+record input は `RecordActivityEventInput`、`RecordCommandResultInput`、`RecordAgentTaskInput`、
+`RecordEventHandlerRetryInput` を使う。`recordCommandResult` は dashboard command API の
+preview / dispatching / accepted / failed audit row を保存し、`requestId`、`actor`、
+`dryRun`、任意の redacted `result` / `error` を `StoredCommandResult` として snapshot に返す。
+`recordAgentTask` は同じ task id の再記録で
 未指定 optional field を既存値で保持し、status/result だけの更新で session、log path、
 issue、claim、pid、`resumeAttempts` などの runtime metadata を消さない。
 

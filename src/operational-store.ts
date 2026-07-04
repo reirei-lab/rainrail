@@ -45,6 +45,30 @@ export interface StoredActivityEvent extends Required<Omit<RecordActivityEventIn
   createdAt: string;
 }
 
+export interface RecordCommandResultInput {
+  id?: string;
+  actionType: string;
+  targetType: string;
+  targetId: string;
+  status: 'preview' | 'accepted' | 'failed' | (string & {});
+  actor: string;
+  client?: string;
+  requestId: string;
+  dryRun: boolean;
+  result?: unknown;
+  error?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface StoredCommandResult extends Omit<RecordCommandResultInput, 'id' | 'client' | 'result' | 'error' | 'metadata'> {
+  id: string;
+  client?: string;
+  result?: unknown;
+  error?: string;
+  metadata?: Record<string, unknown>;
+  createdAt: string;
+}
+
 export interface RecordAgentTaskInput {
   id: string;
   title: string;
@@ -100,12 +124,14 @@ export interface OperationalStoreSnapshot {
   events: StoredOperationalEvent[];
   activityEvents: StoredActivityEvent[];
   agentTasks: StoredAgentTask[];
+  commandResults: StoredCommandResult[];
   eventHandlerRetries: StoredEventHandlerRetry[];
   warnings: OperationalStoreWarnings;
   counts: {
     events: number;
     activityEvents: number;
     agentTasks: number;
+    commandResults: number;
     eventHandlerRetries: number;
   };
 }
@@ -142,6 +168,7 @@ interface OperationalStoreData {
   events: Record<string, StoredOperationalEvent>;
   activityEvents: Record<string, StoredActivityEvent>;
   agentTasks: Record<string, StoredAgentTask>;
+  commandResults: Record<string, StoredCommandResult>;
   eventHandlerRetries: Record<string, StoredEventHandlerRetry>;
   sequences: Record<string, number>;
 }
@@ -230,6 +257,30 @@ export class RainrailOperationalStore {
       .filter((activity) => !(options.hideSkippedActivityEvents === true && activity.outcome === 'skipped'))
       .sort((left, right) => compareDesc(left.createdAt, right.createdAt) || compareDesc(left.id, right.id))
       .map((activity) => jsonClone(activity)), options.limit);
+  }
+
+  recordCommandResult(input: RecordCommandResultInput): StoredCommandResult {
+    this.#assertOpen();
+    const id = input.id ?? nextId(this.#data, 'command', 'cmd');
+    const commandResult: StoredCommandResult = {
+      id,
+      actionType: input.actionType,
+      targetType: input.targetType,
+      targetId: input.targetId,
+      status: input.status,
+      actor: input.actor,
+      ...(input.client === undefined ? {} : { client: input.client }),
+      requestId: input.requestId,
+      dryRun: input.dryRun,
+      ...(input.result === undefined ? {} : { result: jsonClone(input.result) }),
+      ...(input.error === undefined ? {} : { error: input.error }),
+      ...(input.metadata === undefined ? {} : { metadata: jsonClone(input.metadata) }),
+      createdAt: this.#now().toISOString(),
+    };
+    this.#data.commandResults[id] = commandResult;
+    this.#persist();
+
+    return jsonClone(commandResult);
   }
 
   recordAgentTask(input: RecordAgentTaskInput): StoredAgentTask {
@@ -469,6 +520,10 @@ export class RainrailOperationalStore {
       events,
       activityEvents,
       agentTasks: this.listAgentTasks(),
+      commandResults: Object.values(this.#data.commandResults)
+        .sort((left, right) => compareDesc(left.createdAt, right.createdAt) || compareDesc(left.id, right.id))
+        .slice(0, this.#eventLimit)
+        .map((result) => jsonClone(result)),
       eventHandlerRetries: this.listEventHandlerRetries(),
       warnings: {
         staleProjectClaims: staleProjectClaimWarnings(this.listAgentTasks()),
@@ -477,6 +532,7 @@ export class RainrailOperationalStore {
         events: Object.keys(this.#data.events).length,
         activityEvents: Object.keys(this.#data.activityEvents).length,
         agentTasks: Object.keys(this.#data.agentTasks).length,
+        commandResults: Object.keys(this.#data.commandResults).length,
         eventHandlerRetries: Object.keys(this.#data.eventHandlerRetries).length,
       },
     };
@@ -516,6 +572,7 @@ function parseStoreData(raw: string): OperationalStoreData {
       events: value.events ?? {},
       activityEvents: value.activityEvents ?? {},
       agentTasks: value.agentTasks ?? {},
+      commandResults: value.commandResults ?? {},
       eventHandlerRetries: value.eventHandlerRetries ?? {},
       sequences: value.sequences ?? {},
     };
@@ -529,6 +586,7 @@ function emptyStoreData(): OperationalStoreData {
     events: {},
     activityEvents: {},
     agentTasks: {},
+    commandResults: {},
     eventHandlerRetries: {},
     sequences: {},
   };

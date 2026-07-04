@@ -96,6 +96,10 @@ missing bearer は `missing_bearer_token` の 401、token 不一致は `invalid_
 の 403、サーバ側未設定は `events_auth_not_configured` の 503 として扱う。
 HTTP entrypoint の公開入口は Fetch adapter の `createRainrailHttpApp` と Node adapter の
 `createRainrailNodeServer`。
+Dashboard command API を組み込む caller 向けには、scoped token の `RainrailDashboardScope`、
+`RainrailDashboardAuthOptions`、handler 入力の `RainrailCommandRequest`、
+`RainrailCommandActionType`、`RainrailCommandTargetType`、および handler 型の
+`RainrailCommandHandler` を public contract として公開する。
 
 `createRainrailHttpApp` は provider 固有の ingress route を直接持たない。HTTP webhook、
 manual publish UI、Worker tail などの外部入力は `RainrailIntakeAdapter` として登録し、

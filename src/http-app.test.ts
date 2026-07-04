@@ -7,10 +7,10 @@ import {
   createCloudflareTailIntakeAdapter,
   RainrailBridgeRoom,
   createGitHubWebhookSignature,
-	  createGitHubWebhookIntakeAdapter,
-	  createRainrailHttpApp,
-	  isCoreRoutePath,
-	  stableIntakeFallbackDeliveryId,
+  createGitHubWebhookIntakeAdapter,
+  createRainrailHttpApp,
+  isCoreRoutePath,
+  stableIntakeFallbackDeliveryId,
   type CloudflareTailEvent,
   type RainrailIntakeAdapter,
   type RainrailBridgeRoomState,
@@ -116,8 +116,8 @@ describe('Rainrail HTTP app', () => {
       intakeAdapters: [adapter('first'), adapter('second')],
     })).toThrow(/conflicting intake route/i);
 
-	    expect(() => createTestApp(fakeState(), {
-	      intakeAdapters: [{
+    expect(() => createTestApp(fakeState(), {
+      intakeAdapters: [{
         name: 'core-health-conflict',
         routes: [{
           path: '/healthz',
@@ -139,12 +139,12 @@ describe('Rainrail HTTP app', () => {
             return Response.json({ ok: true });
           },
         }],
-	      }],
-	    })).toThrow(/reserved by Rainrail core/i);
+      }],
+    })).toThrow(/reserved by Rainrail core/i);
 
     expect(() => createTestApp(fakeState(), {
       intakeAdapters: [{
-        name: 'core-v1-queue-conflict',
+        name: 'core-v1-queue-release-conflict',
         routes: [{
           path: '/api/v1/queue/PVTI_1/release',
           methods: ['POST'],
@@ -154,11 +154,40 @@ describe('Rainrail HTTP app', () => {
         }],
       }],
     })).toThrow(/reserved by Rainrail core/i);
-	    expect(isCoreRoutePath('/healthz')).toBe(true);
-	    expect(isCoreRoutePath('/api/v1/events/evt_1')).toBe(true);
+
+    expect(() => createTestApp(fakeState(), {
+      intakeAdapters: [{
+        name: 'core-queue-command-conflict',
+        routes: [{
+          path: '/api/v1/queue/actions/assign-next',
+          methods: ['POST'],
+          async handle() {
+            return Response.json({ ok: true });
+          },
+        }],
+      }],
+    })).toThrow(/reserved by Rainrail core/i);
+
+    expect(() => createTestApp(fakeState(), {
+      intakeAdapters: [{
+        name: 'core-settings-command-conflict',
+        routes: [{
+          path: '/api/v1/settings/actions/update',
+          methods: ['POST'],
+          async handle() {
+            return Response.json({ ok: true });
+          },
+        }],
+      }],
+    })).toThrow(/reserved by Rainrail core/i);
+
+    expect(isCoreRoutePath('/healthz')).toBe(true);
+    expect(isCoreRoutePath('/api/v1/events/evt_1')).toBe(true);
     expect(isCoreRoutePath('/api/v1/queue/PVTI_1/release')).toBe(true);
-	    expect(isCoreRoutePath('/intake/manual')).toBe(false);
-	  });
+    expect(isCoreRoutePath('/api/v1/queue/actions/assign-next')).toBe(true);
+    expect(isCoreRoutePath('/api/v1/settings/actions/update')).toBe(true);
+    expect(isCoreRoutePath('/intake/manual')).toBe(false);
+  });
 
   it('dispatches tail batches to a registered intake adapter', async () => {
     const published = createEventEnvelope({
@@ -221,6 +250,7 @@ describe('Rainrail HTTP app', () => {
 
     expect(response.status).toBe(202);
     expect(response.headers.get('Access-Control-Allow-Origin')).toBe('*');
+    expect(response.headers.get('Access-Control-Expose-Headers')).toContain('X-Request-ID');
     await expect(response.json()).resolves.toEqual({
       ok: true,
       id: 'github-webhook:delivery-19:github.issue',
