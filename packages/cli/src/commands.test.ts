@@ -185,6 +185,7 @@ describe('Rainrail CLI built-in commands', () => {
             name: 'plugins',
             alias: 'plugins',
             aliases: ['plugins'],
+            version: '0.1.0',
             summary: 'Conflicting plugin.',
             helpText: 'Conflicting plugin metadata.',
             commands: [
@@ -200,7 +201,7 @@ describe('Rainrail CLI built-in commands', () => {
 
     expect(result.exitCode).toBe(2);
     expect(result.stdout).toBe('');
-    expect(result.stderr).toContain('rainrail plugins is not implemented yet.');
+    expect(result.stderr).toContain('rainrail plugins is a built-in command.');
     expect(result.stderr).toContain('A plugin named "plugins" also exists.');
     expect(result.stderr).toContain('Use `rainrail plugin plugins run` to call the plugin.');
   });
@@ -214,6 +215,7 @@ describe('Rainrail CLI built-in commands', () => {
               name: 'new',
               alias: 'new',
               aliases: ['new'],
+              version: '0.1.0',
               summary: 'Conflicting implemented built-in plugin.',
               helpText: 'Conflicting implemented built-in plugin metadata.',
               commands: [
@@ -242,6 +244,7 @@ describe('Rainrail CLI built-in commands', () => {
             name: 'plugins',
             alias: 'plugins',
             aliases: ['plugins'],
+            version: '0.1.0',
             summary: 'Conflicting plugin.',
             helpText: 'Conflicting plugin metadata.',
             commands: [
@@ -267,6 +270,7 @@ describe('Rainrail CLI built-in commands', () => {
             name: 'plugins',
             alias: 'plugins',
             aliases: ['plugins'],
+            version: '0.1.0',
             summary: 'Conflicting plugin.',
             helpText: 'Conflicting plugin metadata.',
             commands: [
