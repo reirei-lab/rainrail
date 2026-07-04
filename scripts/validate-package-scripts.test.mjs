@@ -14,12 +14,15 @@ const workspace = readFileSync(
 const sitePackageJson = JSON.parse(
   readFileSync(new URL('../apps/www/package.json', import.meta.url), 'utf8'),
 );
+const cliPackageJson = JSON.parse(
+  readFileSync(new URL('../packages/cli/package.json', import.meta.url), 'utf8'),
+);
 
 describe('package scripts used by pull request CI', () => {
-  it('builds repository scripts and the product site from the root command', () => {
+  it('builds repository scripts, the CLI package, and the product site from the root command', () => {
     expect(packageJson.scripts['build:scripts']).toBe('node scripts/check-scripts.mjs');
     expect(packageJson.scripts.build).toBe(
-      'pnpm run build:scripts && pnpm --filter www build',
+      'pnpm run build:scripts && pnpm --filter @rainrail/cli build && pnpm --filter www build',
     );
   });
 
@@ -28,14 +31,28 @@ describe('package scripts used by pull request CI', () => {
   });
 
   it('typechecks JavaScript automation scripts through tsconfig', () => {
-    expect(packageJson.scripts.typecheck).toBe('tsc --noEmit');
+    expect(packageJson.scripts.typecheck).toBe(
+      'tsc --noEmit && pnpm --filter @rainrail/cli typecheck',
+    );
     expect(tsconfig.compilerOptions.allowJs).toBe(true);
     expect(tsconfig.compilerOptions.checkJs).toBe(true);
     expect(tsconfig.include).toContain('scripts/**/*.mjs');
   });
 
-  it('treats apps as pnpm workspace packages', () => {
+  it('treats apps and packages as pnpm workspace packages', () => {
     expect(workspace).toMatch(/^packages:\n {2}- 'apps\/\*'/);
+    expect(workspace).toContain("  - 'packages/*'");
+  });
+
+  it('defines the Rainrail CLI workspace package and binary entrypoint', () => {
+    expect(packageJson.scripts.test).toBe('vitest run scripts src packages');
+    expect(cliPackageJson.name).toBe('@rainrail/cli');
+    expect(cliPackageJson.bin.rainrail).toBe('./dist/bin/rainrail.js');
+    expect(cliPackageJson.scripts.build).toBe(
+      'tsc -p tsconfig.json && chmod +x dist/bin/rainrail.js',
+    );
+    expect(cliPackageJson.scripts.test).toBe('vitest run src');
+    expect(cliPackageJson.scripts.typecheck).toBe('tsc -p tsconfig.json --noEmit');
   });
 
   it('defines focused validation scripts for the Astro product site', () => {
