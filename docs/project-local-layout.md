@@ -14,7 +14,8 @@ project; generated plugin state is not global.
   as `{ name, version, resolvedSource }`; for example
   `github@0.1.0` resolves to `official:github@0.1.0`.
   Plugin entries are treated as external input when read back: the project name
-  must remain present, and plugin names must be official canonical aliases.
+  must remain present, plugin names must be unique official canonical aliases,
+  and plugin versions must be valid semantic versions.
 - `.rainrail/plugins/`: the project-local plugin installation directory.
 
 ## Re-run behavior
@@ -38,7 +39,8 @@ the project root instead of discovering from the current directory.
 `rainrail plugins add <officialPluginName>` resolves the name or alias through
 the official plugin catalog, writes the canonical lockfile entry, and creates
 the matching project-local manifest. Re-adding an installed plugin is
-idempotent.
+idempotent. If lockfile update fails after creating a plugin manifest, the
+command removes that manifest before returning the filesystem error.
 
 `rainrail plugins remove <officialPluginName>` removes the canonical lockfile
 entry and deletes the matching project-local plugin directory. Removing a plugin

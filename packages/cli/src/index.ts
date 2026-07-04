@@ -124,6 +124,8 @@ const rainrailLockFileName = 'rainrail.lock';
 const rainrailDirectoryName = '.rainrail';
 const rainrailPluginDirectoryName = 'plugins';
 const safeProjectNamePattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
+const semverVersionPattern =
+  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u;
 const defaultRainrailCliFileSystem: RainrailCliFileSystem = {
   existsSync,
   mkdirSync,
@@ -907,7 +909,12 @@ function addProjectPlugin(
     plugins: sortLockPlugins([...lockfile.plugins, pluginEntry]),
   };
   writeProjectPluginManifest(project, pluginEntry, fileSystem);
-  fileSystem.writeFileSync(project.lockPath, formatJson(nextLockfile), { flag: 'w' });
+  try {
+    fileSystem.writeFileSync(project.lockPath, formatJson(nextLockfile), { flag: 'w' });
+  } catch (error) {
+    fileSystem.rmSync(join(project.pluginDirectory, name), { recursive: true, force: true });
+    throw error;
+  }
 
   return {
     exitCode: 0,
@@ -989,6 +996,13 @@ function readRainrailLockfile(path: string, fileSystem: RainrailCliFileSystem): 
     }
     return plugin;
   });
+  const pluginNames = new Set<string>();
+  for (const plugin of plugins) {
+    if (pluginNames.has(plugin.name)) {
+      throw new Error(`Duplicate Rainrail lockfile plugin entry in ${path}: ${plugin.name}`);
+    }
+    pluginNames.add(plugin.name);
+  }
 
   return {
     lockfileVersion: 1,
@@ -1013,6 +1027,7 @@ function isLockPlugin(value: unknown): value is RainrailLockPlugin {
   const plugin = value as RainrailLockPlugin;
   const officialPlugin = getOfficialPluginByAlias(plugin.name);
   return officialPlugin?.alias === plugin.name &&
+    semverVersionPattern.test(plugin.version) &&
     plugin.resolvedSource === `official:${plugin.name}@${plugin.version}`;
 }
 

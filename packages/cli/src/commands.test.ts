@@ -1,3 +1,4 @@
+import { writeFileSync as realWriteFileSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -693,10 +694,11 @@ describe('Rainrail CLI built-in commands', () => {
       const result = runRainrailCli(['plugins', 'remove', 'github'], {
         cwd: projectRoot,
         fileSystem: {
-          writeFileSync: (path) => {
+          writeFileSync: (path, data, options) => {
             if (path === lockPath) {
               throw new Error('mock lock write failed');
             }
+            realWriteFileSync(path, data, options);
           },
         },
       });
@@ -707,6 +709,33 @@ describe('Rainrail CLI built-in commands', () => {
       expect(result.stderr).not.toContain('Error:');
       await expect(readFile(manifestPath, 'utf8')).resolves.toContain('"name": "github"');
       await expect(readFile(lockPath, 'utf8')).resolves.toContain('"name": "github"');
+    });
+  });
+
+  it('removes the created plugin manifest when add cannot update the lockfile', async () => {
+    await withTempDirectory(async (directory) => {
+      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
+      const projectRoot = join(directory, 'my-agent-ops');
+      const lockPath = join(projectRoot, 'rainrail.lock');
+      const pluginPath = join(projectRoot, '.rainrail', 'plugins', 'github');
+
+      const result = runRainrailCli(['plugins', 'add', 'github'], {
+        cwd: projectRoot,
+        fileSystem: {
+          writeFileSync: (path, data, options) => {
+            if (path === lockPath) {
+              throw new Error('mock lock write failed');
+            }
+            realWriteFileSync(path, data, options);
+          },
+        },
+      });
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toBe('mock lock write failed\n');
+      await expect(readFile(lockPath, 'utf8')).resolves.toContain('"plugins": []');
+      await expect(stat(pluginPath)).rejects.toThrow();
     });
   });
 
@@ -783,6 +812,63 @@ describe('Rainrail CLI built-in commands', () => {
         exitCode: 1,
         stdout: '',
         stderr: `Unsupported Rainrail lockfile plugin entry in ${join(projectRoot, 'rainrail.lock')}\n`,
+      });
+    });
+  });
+
+  it('rejects lockfile plugin entries with invalid versions', async () => {
+    await withTempDirectory(async (directory) => {
+      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
+      const projectRoot = join(directory, 'my-agent-ops');
+      await writeFile(join(projectRoot, 'rainrail.lock'), `${JSON.stringify({
+        lockfileVersion: 1,
+        project: { name: 'my-agent-ops' },
+        plugins: [
+          {
+            name: 'github',
+            version: 'not-semver',
+            resolvedSource: 'official:github@not-semver',
+          },
+        ],
+      }, null, 2)}\n`);
+
+      const result = runRainrailCli(['plugins', 'add', 'github'], { cwd: projectRoot });
+
+      expect(result).toEqual({
+        exitCode: 1,
+        stdout: '',
+        stderr: `Unsupported Rainrail lockfile plugin entry in ${join(projectRoot, 'rainrail.lock')}\n`,
+      });
+    });
+  });
+
+  it('rejects duplicate lockfile plugin names', async () => {
+    await withTempDirectory(async (directory) => {
+      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
+      const projectRoot = join(directory, 'my-agent-ops');
+      await writeFile(join(projectRoot, 'rainrail.lock'), `${JSON.stringify({
+        lockfileVersion: 1,
+        project: { name: 'my-agent-ops' },
+        plugins: [
+          {
+            name: 'github',
+            version: '0.1.0',
+            resolvedSource: 'official:github@0.1.0',
+          },
+          {
+            name: 'github',
+            version: '0.2.0',
+            resolvedSource: 'official:github@0.2.0',
+          },
+        ],
+      }, null, 2)}\n`);
+
+      const result = runRainrailCli(['plugins', 'list'], { cwd: projectRoot });
+
+      expect(result).toEqual({
+        exitCode: 1,
+        stdout: '',
+        stderr: `Duplicate Rainrail lockfile plugin entry in ${join(projectRoot, 'rainrail.lock')}: github\n`,
       });
     });
   });
