@@ -2,8 +2,12 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 const agents = readFileSync(new URL('../AGENTS.md', import.meta.url), 'utf8');
+const dispatcherAgents = readFileSync(new URL('../src/dispatcher/AGENTS.md', import.meta.url), 'utf8');
+const dispatcherImplementation = readFileSync(new URL('../src/dispatcher/index.ts', import.meta.url), 'utf8');
+const pluginRuntimeContract = readFileSync(new URL('../docs/plugin-runtime-contract.md', import.meta.url), 'utf8');
 const githubWebhookAgents = readFileSync(new URL('../src/github-webhook/AGENTS.md', import.meta.url), 'utf8');
 const agentRuntimeAgents = readFileSync(new URL('../src/agent-runtime/AGENTS.md', import.meta.url), 'utf8');
+/** @type {{contracts: Array<{id: string, sources: string[]}>}} */
 const contractsManifest = JSON.parse(
   readFileSync(new URL('../docs/contracts.manifest.json', import.meta.url), 'utf8'),
 );
@@ -12,11 +16,16 @@ const contractsManifest = JSON.parse(
  * @param {string} id
  * @returns {{ sources: string[] }}
  */
-const contractById = (id) =>
-  contractsManifest.contracts.find(
+const contractById = (id) => {
+  const contract = contractsManifest.contracts.find(
     /** @param {{ id: string }} contract */
     (contract) => contract.id === id,
   );
+  if (contract === undefined) {
+    throw new Error(`Missing contract ${id}`);
+  }
+  return contract;
+};
 
 describe('AGENTS.md development rules', () => {
   it('documents Rainrail as a TypeScript monorepo for event orchestration work', () => {
@@ -53,6 +62,39 @@ describe('AGENTS.md development rules', () => {
     expect(agents).toContain('Write review comments in Japanese');
     expect(agents).toContain('security risks');
     expect(agents).toContain('edge cases');
+  });
+
+  it('keeps dispatcher capability boundary rules in a scoped AGENTS.md', () => {
+    expect(dispatcherAgents).toContain('capability getter');
+    expect(dispatcherAgents).toContain('context.actions');
+    expect(dispatcherAgents).toContain('context.runtime');
+    expect(dispatcherAgents).toContain('readSecret');
+    expect(dispatcherAgents).toContain('timeout / abort');
+    expect(dispatcherAgents).toContain('audit');
+    expect(dispatcherAgents).toContain('raw descriptor');
+    expect(dispatcherAgents).toContain('internal reason');
+    expect(dispatcherAgents).toContain('this binding');
+  });
+
+  it('keeps provider-specific dispatcher guards outside the dispatcher directory', () => {
+    expect(dispatcherImplementation).not.toContain('githubPullRequests');
+    expect(dispatcherImplementation).not.toContain('GitHubPullRequestProvider');
+    expect(dispatcherImplementation).not.toContain('pull-request-provider');
+  });
+
+  it('documents the dispatcher module split and compatibility shim decision', () => {
+    expect(pluginRuntimeContract).toContain('src/dispatcher/index.ts');
+    expect(pluginRuntimeContract).toContain('src/dispatcher.ts');
+    expect(pluginRuntimeContract).toContain('compatibility shim');
+    expect(pluginRuntimeContract).toContain('capability policy');
+    expect(pluginRuntimeContract).toContain('lifecycle');
+    expect(pluginRuntimeContract).toContain('capability view');
+  });
+
+  it('tracks the dispatcher implementation as a plugin runtime contract source', () => {
+    const pluginRuntime = contractById('plugin-runtime');
+    expect(pluginRuntime?.sources).toContain('src/dispatcher.ts');
+    expect(pluginRuntime?.sources).toContain('src/dispatcher/index.ts');
   });
 });
 
@@ -93,9 +135,11 @@ describe('agent runtime scoped agent rules', () => {
   it('tracks runtime and timeline implementation files in the contracts manifest', () => {
     const runtimeContract = contractById('plugin-runtime');
 
+    expect(runtimeContract.sources).toContain('src/agent-runtime.ts');
     expect(runtimeContract.sources).toContain('src/agent-runtime/index.ts');
+    expect(runtimeContract.sources).toContain('src/agent-timeline.ts');
     expect(runtimeContract.sources).toContain('src/agent-runtime/timeline.ts');
-    expect(runtimeContract.sources).not.toContain('src/agent-runtime.ts');
-    expect(runtimeContract.sources).not.toContain('src/agent-timeline.ts');
+    expect(pluginRuntimeContract).toContain('src/agent-runtime/AGENTS.md');
+    expect(pluginRuntimeContract).toContain('runtime compatibility shim');
   });
 });

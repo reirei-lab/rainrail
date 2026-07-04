@@ -1,9 +1,6 @@
-import { publishCloudflareTailEvents, type CloudflareTailEvent, type PublishCloudflareTailEventResult } from './cloudflare-tail.js';
 import { rainrailEventsAuthErrorResponse, verifyRainrailEventsBearerToken } from './events-auth.js';
 import type { RainrailEventEnvelope } from './events.js';
-import { handleGitHubWebhookRequest } from './github-webhook.js';
 import {
-  DEFAULT_MAX_REQUEST_BODY_BYTES,
   corsPreflightResponse,
   jsonResponse,
   methodNotAllowedResponse,
@@ -11,6 +8,11 @@ import {
   textResponse,
   withCors,
 } from './http-utils.js';
+import {
+  createRainrailIntakeRegistry,
+  type RainrailIntakeAdapter,
+  type RainrailIntakeRegistry,
+} from './intake-adapter.js';
 import type {
   RainrailOperationalStore,
   StoredActivityEvent,
@@ -25,46 +27,67 @@ export interface RainrailBridgeRoomFetchTarget {
 
 export interface RainrailHttpAppOptions {
   room: RainrailBridgeRoomFetchTarget;
-  githubWebhookSecret: string;
   publishToken: string;
   eventsBearerToken?: string;
   runtime?: string;
-  githubSourceName?: string;
-  maxWebhookBodyBytes?: number;
+  intakeAdapters?: readonly RainrailIntakeAdapter[];
   operationalStore?: RainrailOperationalStore;
 }
 
 export interface RainrailHttpApp {
   fetch(request: Request): Promise<Response>;
-  tail?(events: CloudflareTailEvent[]): Promise<PublishCloudflareTailEventResult[]>;
+  tail?(events: unknown[]): Promise<unknown>;
 }
 
 const INTERNAL_ROOM_ORIGIN = 'https://rainrail-room.local';
 
 export function createRainrailHttpApp(options: RainrailHttpAppOptions): RainrailHttpApp {
+  const intakeRegistry = createRainrailIntakeRegistry(options.intakeAdapters);
+
   return {
     async fetch(request): Promise<Response> {
       try {
-        return withCors(await routeRainrailHttpRequest(request, options));
+        return withCors(await routeRainrailHttpRequest(request, options, intakeRegistry));
       } catch {
         return jsonResponse({ error: 'internal_server_error' }, { status: 500 });
       }
     },
 
-    async tail(events): Promise<PublishCloudflareTailEventResult[]> {
-      return publishCloudflareTailEvents(events, {
-        fallbackDeliveryId: await stableTailFallbackDeliveryId(events),
-        publish: (event) => publishEvent(options, event),
-      });
-    },
+    ...(intakeRegistry.tail === undefined ? {} : {
+      async tail(events): Promise<unknown> {
+        return intakeRegistry.tail?.(events, {
+          publish: (event) => publishEvent(options, event),
+        });
+      },
+    }),
   };
 }
 
-async function routeRainrailHttpRequest(request: Request, options: RainrailHttpAppOptions): Promise<Response> {
+export function shouldReadRainrailHttpRequestBody(
+  pathname: string,
+  method: string,
+  options: RainrailHttpAppOptions,
+): boolean {
+  return createRainrailIntakeRegistry(options.intakeAdapters).routeNeedsBody(pathname, method);
+}
+
+export function rainrailHttpRequestBodyLimit(
+  pathname: string,
+  method: string,
+  options: RainrailHttpAppOptions,
+): number | undefined {
+  return createRainrailIntakeRegistry(options.intakeAdapters).routeBodyLimit(pathname, method);
+}
+
+async function routeRainrailHttpRequest(
+  request: Request,
+  options: RainrailHttpAppOptions,
+  intakeRegistry: RainrailIntakeRegistry,
+): Promise<Response> {
   const url = new URL(request.url);
 
   if (request.method === 'OPTIONS') {
-    return corsPreflightResponse();
+    return corsPreflightResponse(preflightMethodsForPath(url.pathname, intakeRegistry));
   }
 
   if (url.pathname === '/healthz') {
@@ -92,12 +115,6 @@ async function routeRainrailHttpRequest(request: Request, options: RainrailHttpA
       headers: bridgeAuthorizationHeaders(request, options.publishToken),
       signal: request.signal,
     }));
-  }
-
-  if (url.pathname === '/webhooks/github') {
-    if (request.method !== 'POST') return methodNotAllowedResponse(['POST', 'OPTIONS']);
-
-    return handleGitHubWebhook(request, options);
   }
 
   if (url.pathname === '/api/state') {
@@ -205,7 +222,62 @@ async function routeRainrailHttpRequest(request: Request, options: RainrailHttpA
     return dashboardEventDetailResponse(eventId, options);
   }
 
+  const intakeRoute = intakeRegistry.routeFor(request);
+  if (intakeRoute !== undefined) {
+    if ('allowedMethods' in intakeRoute) {
+      return methodNotAllowedResponse([...intakeRoute.allowedMethods, 'OPTIONS']);
+    }
+
+    const limitedRequest = await requestWithAppliedBodyLimit(request, intakeRoute.route.maxBodyBytes);
+    if (limitedRequest instanceof Response) return limitedRequest;
+
+    return intakeRoute.route.handle(limitedRequest, {
+      publish: (event) => publishEvent(options, event),
+    });
+  }
+
   return textResponse('not found\n', { status: 404 });
+}
+
+function preflightMethodsForPath(pathname: string, intakeRegistry: RainrailIntakeRegistry): readonly string[] | undefined {
+  const allowedMethods = intakeRegistry.allowedMethodsForPath(pathname);
+  return allowedMethods === undefined ? undefined : [...allowedMethods, 'OPTIONS'];
+}
+
+async function requestWithAppliedBodyLimit(request: Request, maxBodyBytes: number | undefined): Promise<Request | Response> {
+  if (maxBodyBytes === undefined || !methodCanHaveBody(request.method)) {
+    return request;
+  }
+
+  let body: ArrayBuffer;
+  try {
+    body = await readFetchRequestBody(request, maxBodyBytes);
+  } catch (error) {
+    if (isStatusCodeError(error) && error.statusCode === 413) {
+      return jsonResponse({ error: 'request_body_too_large' }, { status: 413 });
+    }
+
+    throw error;
+  }
+
+  return new Request(request.url, {
+    method: request.method,
+    headers: request.headers,
+    body,
+    signal: request.signal,
+  });
+}
+
+function methodCanHaveBody(method: string): boolean {
+  const normalized = method.toUpperCase();
+  return normalized !== 'GET' && normalized !== 'HEAD';
+}
+
+function isStatusCodeError(error: unknown): error is { statusCode: number } {
+  return typeof error === 'object'
+    && error !== null
+    && 'statusCode' in error
+    && typeof error.statusCode === 'number';
 }
 
 function verifyDashboardReadRequest(request: Request, options: RainrailHttpAppOptions): Response | undefined {
@@ -558,47 +630,7 @@ function agentTaskToCompactRow(task: StoredAgentTask, staleTaskIds: Set<string>)
   };
 }
 
-async function handleGitHubWebhook(request: Request, options: RainrailHttpAppOptions): Promise<Response> {
-  let rawBody: ArrayBuffer;
-  try {
-    rawBody = await readFetchRequestBody(request, options.maxWebhookBodyBytes ?? DEFAULT_MAX_REQUEST_BODY_BYTES);
-  } catch (error) {
-    if (isStatusCodeError(error) && error.statusCode === 413) {
-      return jsonResponse({ error: 'request_body_too_large' }, { status: 413 });
-    }
-
-    throw error;
-  }
-
-  const limitedRequest = new Request(request.url, {
-    method: request.method,
-    headers: request.headers,
-    body: rawBody,
-    signal: request.signal,
-  });
-  const result = await handleGitHubWebhookRequest(limitedRequest, {
-    secret: options.githubWebhookSecret,
-    ...(options.githubSourceName === undefined ? {} : { sourceName: options.githubSourceName }),
-  });
-
-  if (!result.ok) {
-    return jsonResponse({ error: result.reason }, { status: result.status });
-  }
-
-  const publishResponse = await publishEvent(options, result.event);
-  if (!publishResponse.ok) {
-    return jsonResponse({ error: 'failed_to_publish_event' }, { status: 502 });
-  }
-
-  return jsonResponse({
-    ok: true,
-    id: result.event.id,
-    name: result.event.name,
-    source: 'github',
-  }, { status: 202 });
-}
-
-async function publishEvent(options: RainrailHttpAppOptions, event: unknown): Promise<Response> {
+async function publishEvent(options: RainrailHttpAppOptions, event: RainrailEventEnvelope): Promise<Response> {
   const response = await options.room.fetch(new Request(`${INTERNAL_ROOM_ORIGIN}/publish`, {
     method: 'POST',
     headers: {
@@ -660,7 +692,7 @@ function bridgeAuthorizationHeaders(request: Request, publishToken: string): Hea
   return headers;
 }
 
-async function stableTailFallbackDeliveryId(events: CloudflareTailEvent[]): Promise<string> {
+export async function stableIntakeFallbackDeliveryId(events: unknown[]): Promise<string> {
   const digest = await globalThis.crypto.subtle.digest(
     'SHA-256',
     new TextEncoder().encode(stableStringify(events)),
@@ -686,11 +718,4 @@ function stableStringify(value: unknown): string {
 
 function toHex(bytes: Uint8Array): string {
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
-}
-
-function isStatusCodeError(error: unknown): error is { statusCode: number } {
-  return typeof error === 'object'
-    && error !== null
-    && 'statusCode' in error
-    && typeof error.statusCode === 'number';
 }

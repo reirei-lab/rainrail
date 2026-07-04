@@ -154,6 +154,10 @@ root package は OpenClaw runtime/timeline helper として `OpenClawRuntimeProv
 `readRuntimeJsonl`、`extractRuntimeSessionId`、`extractRuntimeFallbackSessionId`、
 `runtimeTrajectoryPathForSessionId`、`parseRuntimeTrajectoryTimeline`、
 `classifyRuntimeToolCall` を公開 API として re-export する。
+runtime / timeline の実体は `src/agent-runtime/AGENTS.md` の scoped rules が適用される
+`src/agent-runtime/index.ts` と `src/agent-runtime/timeline.ts` に置く。既存の
+`src/agent-runtime.ts` と `src/agent-timeline.ts` は runtime compatibility shim として残し、
+root package の re-export と既存 import path を壊さない。
 timeline/status/jsonl の session 解決は resume attempts を新しい順に読んだうえで、
 stdout `logPath` と対応する `stderrLogPath` または `.stderr.log` の embedded fallback marker も参照する。
 fallbackSessionKey metadata と fallback marker は種類で後から優先順位を変えず、log 探索順で最初に
@@ -399,6 +403,13 @@ provider 実装の観測性に使う。secret や token 値は snapshot に含�
 
 `RuntimeDispatcher` の生成入口である `createRuntimeDispatcher` は
 workflow plugin 配列と runtime context を受け取る。
+実装本体は `src/dispatcher/index.ts` に置き、`src/dispatcher.ts` は既存 import を
+壊さない compatibility shim として re-export だけを持つ。dispatcher 配下には
+scoped `AGENTS.md` を置き、capability policy、lifecycle、audit、capability view の
+境界を変更する開発者に近い場所で hard rule を読ませる。
+次に分割する場合は、互換 shim を維持したまま capability policy、lifecycle/timeout
+制御、audit recording、capability view/proxy を小さな module に切り出し、それぞれを
+既存の plugin runtime test か追加 regression test で保護してから移動する。
 `dispatch(event)` は `accepts` が true の workflow だけを呼び、
 plugin ごとに fulfilled/rejected の結果を返す。`accepts` が例外を投げた場合も
 その plugin の rejected result として隔離し、後続 workflow の評価は続ける。

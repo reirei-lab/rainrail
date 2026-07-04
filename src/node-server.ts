@@ -1,10 +1,22 @@
 import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 
 import { RainrailBridgeRoom, type RainrailBridgeRoomState } from './bridge-room.js';
-import { createRainrailHttpApp, type RainrailHttpApp, type RainrailHttpAppOptions } from './http-app.js';
+import { createGitHubWebhookIntakeAdapter } from './github-webhook.js';
+import {
+  createRainrailHttpApp,
+  rainrailHttpRequestBodyLimit,
+  shouldReadRainrailHttpRequestBody,
+  type RainrailHttpApp,
+  type RainrailHttpAppOptions,
+} from './http-app.js';
 import { jsonResponse, readRequestBody, writeFetchResponse } from './http-utils.js';
+import type { RainrailIntakeAdapter } from './intake-adapter.js';
 
 export interface RainrailNodeServerOptions extends Omit<RainrailHttpAppOptions, 'room'> {
+  githubWebhookSecret: string;
+  githubSourceName?: string;
+  maxWebhookBodyBytes?: number;
+  intakeAdapters?: readonly RainrailIntakeAdapter[];
   state?: RainrailBridgeRoomState;
   replayLimit?: number;
   keepAliveIntervalMs?: number;
@@ -23,16 +35,24 @@ export function createRainrailNodeServer(options: RainrailNodeServerOptions): Ra
     ...(options.replayLimit === undefined ? {} : { replayLimit: options.replayLimit }),
     ...(options.keepAliveIntervalMs === undefined ? {} : { keepAliveIntervalMs: options.keepAliveIntervalMs }),
   });
-  const app = createRainrailHttpApp({
+  const appOptions: RainrailHttpAppOptions = {
     room,
-    githubWebhookSecret: options.githubWebhookSecret,
     publishToken: options.publishToken,
     ...(options.eventsBearerToken === undefined ? {} : { eventsBearerToken: options.eventsBearerToken }),
     runtime: options.runtime ?? 'node',
-    ...(options.githubSourceName === undefined ? {} : { githubSourceName: options.githubSourceName }),
-    ...(options.maxWebhookBodyBytes === undefined ? {} : { maxWebhookBodyBytes: options.maxWebhookBodyBytes }),
     ...(options.operationalStore === undefined ? {} : { operationalStore: options.operationalStore }),
-  });
+    intakeAdapters: [
+      createGitHubWebhookIntakeAdapter({
+        secret: options.githubWebhookSecret,
+        ...(options.githubSourceName === undefined ? {} : { sourceName: options.githubSourceName }),
+        ...(options.maxWebhookBodyBytes === undefined && options.maxBodyBytes === undefined ? {} : {
+          maxBodyBytes: options.maxWebhookBodyBytes ?? options.maxBodyBytes,
+        }),
+      }),
+      ...(options.intakeAdapters ?? []),
+    ],
+  };
+  const app = createRainrailHttpApp(appOptions);
 
   const server = http.createServer(async (request, response) => {
     const abortController = new AbortController();
@@ -43,7 +63,7 @@ export function createRainrailNodeServer(options: RainrailNodeServerOptions): Ra
     try {
       await writeFetchResponse(
         response,
-        await app.fetch(await toFetchRequest(request, options, abortController.signal)),
+        await app.fetch(await toFetchRequest(request, options, appOptions, abortController.signal)),
         { signal: abortController.signal },
       );
     } catch (error) {
@@ -82,7 +102,8 @@ export function createInMemoryBridgeRoomState(): RainrailBridgeRoomState {
 
 async function toFetchRequest(
   request: IncomingMessage,
-  options: Pick<RainrailNodeServerOptions, 'maxBodyBytes' | 'maxWebhookBodyBytes'>,
+  options: Pick<RainrailNodeServerOptions, 'maxBodyBytes'>,
+  appOptions: RainrailHttpAppOptions,
   signal: AbortSignal,
 ): Promise<Request> {
   const host = request.headers.host ?? '127.0.0.1';
@@ -106,11 +127,20 @@ async function toFetchRequest(
     signal,
   };
 
-  if (request.method === 'POST' && url.pathname === '/webhooks/github') {
-    init.body = await readRequestBody(request, options.maxWebhookBodyBytes ?? options.maxBodyBytes);
+  const method = request.method ?? 'GET';
+  if (methodCanHaveBody(method) && shouldReadRainrailHttpRequestBody(url.pathname, method, appOptions)) {
+    init.body = await readRequestBody(
+      request,
+      rainrailHttpRequestBodyLimit(url.pathname, method, appOptions) ?? options.maxBodyBytes,
+    );
   }
 
   return new Request(url, init);
+}
+
+function methodCanHaveBody(method: string): boolean {
+  const normalized = method.toUpperCase();
+  return normalized !== 'GET' && normalized !== 'HEAD';
 }
 
 function isStatusCodeError(error: unknown): error is { statusCode: number } {
