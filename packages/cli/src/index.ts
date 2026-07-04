@@ -48,7 +48,7 @@ export type RainrailProject = {
   readonly pluginDirectory: string;
 };
 
-const rainrailConfigFileName = 'rainrail.config.ts';
+const rainrailConfigFileName = 'rainrail.config.json';
 const rainrailLockFileName = 'rainrail.lock';
 const rainrailDirectoryName = '.rainrail';
 const rainrailPluginDirectoryName = 'plugins';
@@ -350,18 +350,13 @@ function writeGeneratedFile(path: string, content: string): void {
 }
 
 function formatRainrailConfig(projectName: string): string {
-  return [
-    'export default {',
-    '  project: {',
-    `    name: '${projectName}',`,
-    '  },',
-    '  sourceBundles: [],',
-    '  sources: [],',
-    '  taskProviders: {},',
-    '  runtimeProviders: {},',
-    '};',
-    '',
-  ].join('\n');
+  return `${JSON.stringify({
+    project: { name: projectName },
+    sourceBundles: [],
+    sources: [],
+    taskProviders: {},
+    runtimeProviders: {},
+  }, null, 2)}\n`;
 }
 
 function formatRainrailLock(projectName: string): string {

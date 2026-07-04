@@ -125,9 +125,14 @@ describe('Rainrail CLI built-in commands', () => {
         stdout: `Created Rainrail project at ${projectRoot}\n`,
         stderr: '',
       });
-      await expect(readFile(join(projectRoot, 'rainrail.config.ts'), 'utf8')).resolves.toContain(
-        "name: 'my-agent-ops'",
-      );
+      const config = await readFile(join(projectRoot, 'rainrail.config.json'), 'utf8');
+      expect(JSON.parse(config) as unknown).toEqual({
+        project: { name: 'my-agent-ops' },
+        sourceBundles: [],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      });
       await expect(readFile(join(projectRoot, 'rainrail.lock'), 'utf8')).resolves.toBe(
         `${JSON.stringify({
           lockfileVersion: 1,
@@ -171,7 +176,7 @@ describe('Rainrail CLI built-in commands', () => {
 
       expect(discoverRainrailProject(nested)).toEqual({
         root: join(directory, 'my-agent-ops'),
-        configPath: join(directory, 'my-agent-ops', 'rainrail.config.ts'),
+        configPath: join(directory, 'my-agent-ops', 'rainrail.config.json'),
         lockPath: join(directory, 'my-agent-ops', 'rainrail.lock'),
         pluginDirectory: join(directory, 'my-agent-ops', '.rainrail', 'plugins'),
       });
