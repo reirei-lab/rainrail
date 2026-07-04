@@ -10,6 +10,7 @@ const encoder = new TextEncoder();
 const MAX_MANUAL_INPUT_TEXT_LENGTH = 8_000;
 const MAX_MANUAL_INPUT_ATTACHMENTS = 20;
 const CREDENTIAL_LIKE_IDENTIFIER_PATTERN = /\b(?:github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9_]{20,})\b|(?:^|[\s"'<>`,;{[(?&])["']?[A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification|session)[A-Za-z0-9_.-]*["']?\s*[:=]\s*\S+/iu;
+const CREDENTIAL_LIKE_SEGMENT_PATTERN = /(?:authorization|cookie|token|secret|password|key|code|reset|verification|session)/iu;
 
 export type ManualInputChannel = 'manual' | 'chat';
 
@@ -466,13 +467,26 @@ function safeDeliveryReferenceSuffix(value: string, fallback: string, maxLength:
 }
 
 function redactedIdentifierSegment(value: string, fallback: string, maxLength = 128): string | undefined {
-  if (!isCredentialLikeIdentifier(value)) return undefined;
-  return compactIdentifierWithHash(fallback, value, maxLength, { includeHash: true });
+  if (isCredentialLikeIdentifier(value)) return fallback.slice(0, maxLength);
+  if (isUrlLikeIdentifier(value)) {
+    return compactIdentifierWithHash(fallback, value, maxLength, { includeHash: true });
+  }
+  return undefined;
 }
 
 function isCredentialLikeIdentifier(value: string): boolean {
   if (CREDENTIAL_LIKE_IDENTIFIER_PATTERN.test(value)) return true;
 
+  try {
+    const url = new URL(value);
+    if (url.username.length > 0 || url.password.length > 0) return true;
+    return url.pathname.split('/').some((segment) => CREDENTIAL_LIKE_SEGMENT_PATTERN.test(segment));
+  } catch {
+    return false;
+  }
+}
+
+function isUrlLikeIdentifier(value: string): boolean {
   try {
     new URL(value);
     return true;

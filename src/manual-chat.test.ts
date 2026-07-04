@@ -476,7 +476,7 @@ describe('manual and chat input source contract', () => {
     expect(second.subject.id).toMatch(/^conversation-[A-Za-z0-9]+$/);
   });
 
-  it('hashes credential-looking conversation and message identifiers before storage', async () => {
+  it('redacts credential-looking conversation and message identifiers without stable suffixes before storage', async () => {
     const tokenLikeConversationId = 'ghp_abcdefghijklmnopqrstuvwxyz0123456789';
     const tokenLikeMessageId = 'github_pat_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     const event = await createManualInputEvent({
@@ -488,10 +488,10 @@ describe('manual and chat input source contract', () => {
     });
 
     const serialized = JSON.stringify(event);
-    expect(event.subject.id).toMatch(/^conversation-[A-Za-z0-9]+$/);
+    expect(event.subject.id).toBe('conversation');
     expect(event.payload.conversation.id).toBe(event.subject.id);
-    expect(event.payload.message.id).toMatch(/^message-[A-Za-z0-9]+$/);
-    expect(event.delivery.id).toMatch(/^chat-delivery-[A-Za-z0-9]+-message-[A-Za-z0-9]+$/);
+    expect(event.payload.message.id).toBe('message');
+    expect(event.delivery.id).toBe('chat-delivery-message');
     expect(serialized).not.toContain(tokenLikeConversationId);
     expect(serialized).not.toContain(tokenLikeMessageId);
   });
@@ -508,10 +508,10 @@ describe('manual and chat input source contract', () => {
     });
 
     const serialized = JSON.stringify(event);
-    expect(event.source.name).toMatch(/^source-[A-Za-z0-9]+$/);
-    expect(event.subject.id).toMatch(/^conversation-[A-Za-z0-9]+$/);
-    expect(event.payload.message.id).toMatch(/^message-[A-Za-z0-9]+$/);
-    expect(event.delivery.id).toMatch(/^chat-delivery-[A-Za-z0-9]+$/);
+    expect(event.source.name).toBe('source');
+    expect(event.subject.id).toBe('conversation');
+    expect(event.payload.message.id).toBe('message');
+    expect(event.delivery.id).toBe('chat-delivery');
     expect(serialized).not.toContain('source-secret');
     expect(serialized).not.toContain('delivery-secret');
     expect(serialized).not.toContain('conversation-secret');
@@ -520,7 +520,7 @@ describe('manual and chat input source contract', () => {
     expect(serialized).not.toContain('token:');
   });
 
-  it('hashes URL credential-looking identifiers before storage', async () => {
+  it('redacts credential-looking URL identifiers without stable suffixes before storage', async () => {
     const event = await createManualInputEvent({
       channel: 'chat',
       receivedAt: new Date('2026-07-04T09:21:23.000Z'),
@@ -530,10 +530,10 @@ describe('manual and chat input source contract', () => {
     });
 
     const serialized = JSON.stringify(event);
-    expect(event.subject.id).toMatch(/^conversation-[A-Za-z0-9]+$/);
+    expect(event.subject.id).toBe('conversation');
     expect(event.payload.conversation.id).toBe(event.subject.id);
-    expect(event.payload.message.id).toMatch(/^message-[A-Za-z0-9]+$/);
-    expect(event.delivery.id).toMatch(/^chat-delivery-[A-Za-z0-9]+-message-[A-Za-z0-9]+$/);
+    expect(event.payload.message.id).toBe('message');
+    expect(event.delivery.id).toBe('chat-delivery-message');
     expect(serialized).not.toContain('conversation-secret');
     expect(serialized).not.toContain('secret-message-token');
     expect(serialized).not.toContain('user:');

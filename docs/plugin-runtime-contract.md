@@ -105,12 +105,13 @@ port なしの `deliveries` host と安全な 1 path segment の delivery id だ
 末尾の一意要素と短い hash を残し、Bridge room の 128 文字 id 制限を超える場合は top-level
 event id も短い明示 id にする。`sourceName` は `source.name` と event id に使う前に
 安全な identifier へ正規化する。credential-looking な conversation id / message id /
-delivery id / source name は元値を永続化せず、fallback 名と安定 hash だけを残す。対象は
+delivery id / source name は元値も元値由来の安定 hash も永続化せず、fallback 名だけを残す。対象は
 standalone GitHub token 形式だけでなく、`token=...` や `session: ...` などの
 credential key/value 形式も含む。先頭記号へ fallback prefix を足す場合も、元から
 prefix 付きだった identifier と衝突しないよう短い hash を残す。
-URL 形式の identifier は userinfo や credential らしい path segment の有無にかかわらず
-fallback 名と安定 hash へ縮約し、任意の host/path は Core storage に残さない。
+URL 形式の identifier は fallback 名と安定 hash へ縮約し、任意の host/path は Core storage に
+残さない。ただし URL userinfo や credential らしい path segment を含む URL は
+credential-looking identifier と同じく fallback 名だけを残す。
 空文字または空白だけの `messageId` は未指定として扱い、UUID fallback で delivery id の
 一意性を保つ。明示された `deliveryId` が空文字または空白だけの場合も未指定として扱い、
 conversation/message 由来の delivery id 生成へ戻す。空文字または空白だけの `conversationId` /
