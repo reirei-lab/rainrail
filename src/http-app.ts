@@ -64,6 +64,7 @@ export interface RainrailHttpAppOptions {
   runtime?: string;
   intakeAdapters?: readonly RainrailIntakeAdapter[];
   operationalStore?: RainrailOperationalStore;
+  dashboardCommandMaxBodyBytes?: number;
   dashboardAuth?: RainrailDashboardAuthOptions;
   commandHandler?: RainrailCommandHandler;
 }
@@ -111,7 +112,7 @@ export function rainrailHttpRequestBodyLimit(
   method: string,
   options: RainrailHttpAppOptions,
 ): number | undefined {
-  if (isDashboardCommandRoute(pathname, method)) return DEFAULT_MAX_REQUEST_BODY_BYTES;
+  if (isDashboardCommandRoute(pathname, method)) return options.dashboardCommandMaxBodyBytes ?? DEFAULT_MAX_REQUEST_BODY_BYTES;
   return createRainrailIntakeRegistry(options.intakeAdapters).routeBodyLimit(pathname, method);
 }
 
@@ -792,7 +793,7 @@ async function handleDashboardCommandRequest(
 
   const requestId = request.headers.get('x-request-id') ?? generatedRequestId();
   const client = request.headers.get('x-rainrail-client') ?? undefined;
-  const body = await readJsonObjectBody(request, DEFAULT_MAX_REQUEST_BODY_BYTES);
+  const body = await readJsonObjectBody(request, options.dashboardCommandMaxBodyBytes ?? DEFAULT_MAX_REQUEST_BODY_BYTES);
   if (!body.ok) return body.response;
 
   const dryRun = body.value.dryRun === true;

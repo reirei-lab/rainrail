@@ -629,13 +629,98 @@ describe('Rainrail dashboard API', () => {
     operationalStore.close();
   });
 
+  it('rejects accepted commands when no command handler is configured', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:00:00.000Z'),
+    });
+    operationalStore.recordAgentTask({
+      id: 'agent_task_rainrail_111',
+      title: 'command API',
+      agentSessionId: 'agent:main:rainrail-111',
+      branchName: 'agent/reirei-lab-rainrail-111',
+      status: 'running',
+      logPath: 'var/log/rainrail-111.log',
+      resumeAttempts: [],
+    });
+    const app = createRainrailHttpApp({
+      room: new RainrailBridgeRoom(fakeState(), { publishToken: 'publish-token' }),
+      publishToken: 'publish-token',
+      operationalStore,
+      dashboardAuth: {
+        operatorToken: 'operator-token',
+      },
+    });
+
+    const response = await app.fetch(new Request('https://rainrail.local/api/v1/agent-tasks/agent_task_rainrail_111/actions/resume', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer operator-token',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({}),
+    }));
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({ error: 'command_handler_not_configured' });
+    expect(operationalStore.snapshot()).toMatchObject({ counts: { commandResults: 0, activityEvents: 0 } });
+    operationalStore.close();
+  });
+
+  it('enforces a size limit before parsing command action bodies', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:00:00.000Z'),
+    });
+    operationalStore.recordAgentTask({
+      id: 'agent_task_rainrail_111',
+      title: 'command API',
+      agentSessionId: 'agent:main:rainrail-111',
+      branchName: 'agent/reirei-lab-rainrail-111',
+      status: 'running',
+      logPath: 'var/log/rainrail-111.log',
+      resumeAttempts: [],
+    });
+    const app = createRainrailHttpApp({
+      room: new RainrailBridgeRoom(fakeState(), { publishToken: 'publish-token' }),
+      publishToken: 'publish-token',
+      dashboardCommandMaxBodyBytes: 4,
+      operationalStore,
+      dashboardAuth: {
+        operatorToken: 'operator-token',
+      },
+      commandHandler: vi.fn(),
+    });
+
+    const response = await app.fetch(new Request('https://rainrail.local/api/v1/agent-tasks/agent_task_rainrail_111/actions/resume', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer operator-token',
+        'content-type': 'application/json',
+      },
+      body: '{"too":"large"}',
+    }));
+
+    expect(response.status).toBe(413);
+    await expect(response.json()).resolves.toEqual({ error: 'request_body_too_large' });
+    operationalStore.close();
+  });
+
   it('limits settings updates to admin tokens', async () => {
     const operationalStore = new RainrailOperationalStore({
       databasePath: ':memory:',
       eventLimit: 10,
       now: () => new Date('2026-07-02T00:00:00.000Z'),
     });
-    const commandHandler = vi.fn(async (command) => ({ updated: command.inputs }));
+    const commandHandler = vi.fn(async (command) => ({
+      updated: command.inputs,
+      providerResponse: {
+        secretToken: 'handler-result-secret',
+        publicStatus: 'applied',
+      },
+    }));
     const app = createRainrailHttpApp({
       room: new RainrailBridgeRoom(fakeState(), { publishToken: 'publish-token' }),
       publishToken: 'publish-token',
@@ -668,7 +753,10 @@ describe('Rainrail dashboard API', () => {
         'content-type': 'application/json',
       },
       body: JSON.stringify({
-        settings: { autoAssign: false },
+        settings: {
+          autoAssign: false,
+          apiToken: 'admin-input-secret',
+        },
         confirmationToken: 'confirm:settings_update:settings:global',
       }),
     }));
@@ -677,9 +765,23 @@ describe('Rainrail dashboard API', () => {
       data: {
         action: 'settings_update',
         status: 'accepted',
-        result: { updated: { settings: { autoAssign: false } } },
+        result: {
+          updated: {
+            settings: {
+              autoAssign: false,
+              apiToken: '[redacted]',
+            },
+            confirmationToken: '[redacted]',
+          },
+          providerResponse: {
+            secretToken: '[redacted]',
+            publicStatus: 'applied',
+          },
+        },
       },
     });
+    expect(JSON.stringify(operationalStore.snapshot().commandResults)).not.toContain('admin-input-secret');
+    expect(JSON.stringify(operationalStore.snapshot().commandResults)).not.toContain('handler-result-secret');
     operationalStore.close();
   });
 });

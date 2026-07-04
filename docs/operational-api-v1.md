@@ -45,6 +45,8 @@ recording を保証する。
 
 Destructive action で confirmation が不足している場合は
 `409 { "error": "action_confirmation_required", "data": { "confirmationToken": "..." } }` を返す。
+`commandHandler` が未設定の構成では、dry-run preview 以外の command は dispatch 済みとして扱わず
+`503 { "error": "command_handler_not_configured" }` を返す。
 settings mutation や token/source 管理は `admin` のみとする。
 
 ## Compact rows and detail records
@@ -165,6 +167,8 @@ must include:
 `dryRun: true` records a `preview` command result and a skipped command activity without dispatching the
 injected command handler. Accepted actions record the handler result in `commandResults`; failed handler
 calls record a failed command result and failed command activity.
+Before the accepted handler result is returned or persisted, secret-like keys such as token, secret,
+password, key, session, code, authorization, and confirmation fields are recursively redacted.
 
 Audit metadata must not contain bearer tokens, webhook secrets, raw provider payloads, or full runtime logs.
 If an action calls an external provider, provider request ids may be stored as metadata only after redaction.
