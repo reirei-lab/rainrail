@@ -117,11 +117,12 @@ fallback 名と安定 hash へ縮約し、元の host/path は Core storage に�
 conversation/message 由来の delivery id 生成へ戻す。空文字または空白だけの `conversationId` /
 `message` は、HTTP intake と同じく `createManualInputEvent` でも event 作成前に拒否する。
 `attachments` は先頭 20 件だけを
-正規化する。token、secret、password、API key、Bearer credential 形式は `key=value`、
+正規化し、空白だけの attachment id から fallback id は作らない。
+token、secret、password、API key、Bearer credential 形式は `key=value`、
 JSON/YAML 風の `key: value`、quoted JSON field のいずれも source adapter 側で短く
 redaction する。redaction は credential key の大小文字差、structured object / array 値、
-standalone GitHub access token 形式、URL userinfo の credential、URL path 内の credential
-らしい segment も対象にする。`conversationUrl`、attachment URL、`replyTarget.url` も
+standalone GitHub access token 形式、非 HTTPS credential URL、URL userinfo の credential、
+URL path 内の credential らしい segment も対象にする。`conversationUrl`、attachment URL、`replyTarget.url` も
 query / fragment / userinfo を落とし、credential らしい path segment を redaction したうえで
 8KB 以内に縮約する。
 

@@ -353,11 +353,14 @@ function normalizedOptionalActor(actor: ManualInputActor | undefined): { actor?:
 function normalizedOptionalAttachments(attachments: ManualInputAttachment[] | undefined): { attachments?: ManualInputAttachment[] } {
   if (attachments === undefined || attachments.length === 0) return {};
   const normalized = attachments.slice(0, MAX_MANUAL_INPUT_ATTACHMENTS).flatMap((attachment) => {
+    const id = nonBlankString(attachment.id);
+    const name = nonBlankString(attachment.name);
+    const contentType = nonBlankString(attachment.contentType);
     const url = safeUrl(attachment.url);
     const safeAttachment = {
-      ...(attachment.id === undefined ? {} : { id: safeIdentifierSegment(attachment.id, 'attachment') }),
-      ...(attachment.name === undefined ? {} : { name: redactUserText(attachment.name) }),
-      ...(attachment.contentType === undefined ? {} : { contentType: safeContentType(attachment.contentType) }),
+      ...(id === undefined ? {} : { id: safeIdentifierSegment(id, 'attachment') }),
+      ...(name === undefined ? {} : { name: redactUserText(name) }),
+      ...(contentType === undefined ? {} : { contentType: safeContentType(contentType) }),
       ...(url === undefined ? {} : { url }),
     };
     return Object.keys(safeAttachment).length === 0 ? [] : [safeAttachment];

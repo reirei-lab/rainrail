@@ -778,7 +778,7 @@ function pickManualStringFields(record: Record<string, unknown>, keys: string[])
   const normalized: Record<string, string> = {};
   for (const key of keys) {
     const value = record[key];
-    if (typeof value === 'string' && value.length > 0) {
+    if (typeof value === 'string' && value.trim().length > 0) {
       normalized[key] = key === 'url'
         ? truncateManualPayloadString(sanitizePayloadUrl(value) ?? '')
         : truncateManualPayloadString(sanitizePayloadText(value));
@@ -905,6 +905,7 @@ function sanitizePayloadText(value: string): string {
 function sanitizePayloadCredentialUrl(value: string): string {
   try {
     const url = new URL(value);
+    if (url.protocol !== 'https:') return '[redacted-url]';
     url.username = '';
     url.password = '';
     url.pathname = sanitizePayloadPathname(url.pathname);

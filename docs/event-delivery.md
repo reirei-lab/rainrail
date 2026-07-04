@@ -196,10 +196,11 @@ manual/chat の `rawPayload.kind` は `inline-redacted` である必要があり
 は `source.type` と一致する必要があり、`message.text` がない manual/chat payload は保存しない。
 また `provider: "rainrail"`、`action: "message"`、`conversation.id` も必須として検証し、
 `subject.type` は `conversation`、`subject.id` は `payload.conversation.id` と一致する必要がある。
-`actor` の各 field と `replyTarget.id` は空白でない文字列である場合だけ保存し、
-`url` だけの壊れた reply target は落とす。
+`actor`、`attachments`、`replyTarget` などの任意 string field は trim 後に空でない場合だけ
+保存し、`url` だけの壊れた reply target は落とす。
 これらが欠けた direct publish / replay payload は manual/chat event として保存しない。
-各 string は standalone GitHub access token 形式を含む credential redaction 後に 8KB 以内へ縮約し、
+各 string は standalone GitHub access token 形式や非 HTTPS credential URL を含む
+credential redaction 後に 8KB 以内へ縮約し、
 `attachments` は先頭 20 件までに制限することで、
 巨大な user input や attachment name が durable replay や SSE に無制限に残らないようにする。
 

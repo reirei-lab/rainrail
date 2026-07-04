@@ -1457,6 +1457,85 @@ describe('Rainrail bridge room', () => {
     expect(storage.storedEvents()[0]?.payload).not.toHaveProperty('replyTarget');
   });
 
+  it('drops direct manual chat payload strings that are blank after trimming', async () => {
+    const storage = fakeState();
+    const room = createTestRoom(storage, { replayLimit: 10 });
+    const event = createEventEnvelope({
+      source: { type: 'chat', name: 'web-chat' },
+      name: 'rainrail.chat.message',
+      delivery: {
+        id: 'chat-blank-optional-strings',
+        receivedAt: '2026-06-29T18:18:21.000Z',
+      },
+      occurredAt: '2026-06-29T18:18:20.000Z',
+      subject: { type: 'conversation', id: 'chat-blank-optional-strings' },
+      payload: {
+        provider: 'rainrail',
+        channel: 'chat',
+        action: 'message',
+        conversation: { id: 'chat-blank-optional-strings' },
+        message: { text: 'hello' },
+        actor: { id: '   ', displayName: '   ', type: '   ' },
+        attachments: [{ id: '   ', name: '   ' }],
+        replyTarget: { id: '   ', url: '   ' },
+      },
+      rawPayload: {
+        kind: 'inline-redacted',
+        reference: 'chat://deliveries/chat-blank-optional-strings',
+      },
+    });
+
+    const publishResponse = await room.fetch(publishRequest(event));
+
+    expect(publishResponse.status).toBe(200);
+    expect(storage.storedEvents()[0]?.payload).toEqual({
+      provider: 'rainrail',
+      channel: 'chat',
+      action: 'message',
+      conversation: { id: 'chat-blank-optional-strings' },
+      message: { text: 'hello' },
+    });
+  });
+
+  it('redacts non-HTTPS credential URLs from direct manual chat payload text', async () => {
+    const storage = fakeState();
+    const room = createTestRoom(storage, { replayLimit: 10 });
+    const event = createEventEnvelope({
+      source: { type: 'chat', name: 'web-chat' },
+      name: 'rainrail.chat.message',
+      delivery: {
+        id: 'chat-direct-credential-url',
+        receivedAt: '2026-06-29T18:18:21.000Z',
+      },
+      occurredAt: '2026-06-29T18:18:20.000Z',
+      subject: { type: 'conversation', id: 'chat-direct-credential-url' },
+      payload: {
+        provider: 'rainrail',
+        channel: 'chat',
+        action: 'message',
+        conversation: { id: 'chat-direct-credential-url' },
+        message: { text: 'Please inspect DATABASE_URL=postgres://user:pass@db/prod before retrying' },
+      },
+      rawPayload: {
+        kind: 'inline-redacted',
+        reference: 'chat://deliveries/chat-direct-credential-url',
+      },
+    });
+
+    const publishResponse = await room.fetch(publishRequest(event));
+
+    expect(publishResponse.status).toBe(200);
+    expect(storage.storedEvents()[0]).toMatchObject({
+      payload: {
+        message: {
+          text: 'Please inspect DATABASE_URL=[redacted-url] before retrying',
+        },
+      },
+    });
+    expect(JSON.stringify(storage.storedEvents()[0])).not.toContain('postgres://db/prod');
+    expect(JSON.stringify(storage.storedEvents()[0])).not.toContain('pass');
+  });
+
   it('rejects direct manual chat raw payload references with mismatched schemes', async () => {
     const storage = fakeState();
     const room = createTestRoom(storage, { replayLimit: 10 });

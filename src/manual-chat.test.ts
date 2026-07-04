@@ -774,6 +774,26 @@ describe('manual and chat input source contract', () => {
     expect(event.payload).not.toHaveProperty('replyTarget');
   });
 
+  it('drops blank attachment ids before storage', async () => {
+    const event = await createManualInputEvent({
+      channel: 'chat',
+      receivedAt: new Date('2026-07-04T09:21:25.000Z'),
+      deliveryId: 'chat-blank-attachment',
+      conversationId: 'chat-blank-attachment-session',
+      message: 'hello',
+      attachments: [
+        {
+          id: '   ',
+          name: 'screenshot.png',
+        },
+      ],
+    });
+
+    expect(event.payload.attachments).toEqual([
+      { name: 'screenshot.png' },
+    ]);
+  });
+
   it('rejects unsafe manual and chat raw payload references in bridge storage', async () => {
     const storage = fakeState();
     const room = new RainrailBridgeRoom(storage, { publishToken: TEST_PUBLISH_TOKEN });
