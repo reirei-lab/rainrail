@@ -547,6 +547,10 @@ async function dashboardV1QueueResponse(url: URL, options: RainrailHttpAppOption
 
   const collection = parseCollectionRequest(url, ['filter[status]']);
   if (!collection.ok) return collection.response;
+  const sort = url.searchParams.get('sort');
+  if (sort === 'newest') {
+    return jsonResponse({ error: 'unsupported_sort', sort }, { status: 400 });
+  }
 
   const snapshot = store.snapshot();
   const tasks = store.listAgentTasks();
@@ -836,7 +840,7 @@ function formatSourceAuthStatus(status: NonNullable<RainrailIntakeAdapter['sourc
 
 function agentTaskToQueueRow(task: StoredAgentTask, staleWarning: StoredStaleProjectClaimWarning | undefined) {
   const claim = recordValue(task.claim);
-  const activeClaim = task.projectClaim?.status !== 'released' ? claim : undefined;
+  const activeClaim = taskHasActiveClaimLock(task, staleWarning) ? claim : undefined;
   const staleReason = staleWarning === undefined ? undefined : `stale project claim: ${staleWarning.status}`;
   return {
     id: task.id,
@@ -871,11 +875,9 @@ async function projectIssueQueueRows(
 
   const representedIssueKeys = new Set(tasks.flatMap(taskProjectIssueKeys));
   const issues = await taskQueue.listProjectIssues();
-  const nextIssue = getNextProjectIssueToStart(
-    issues.filter((issue) => !representedIssueKeys.has(projectIssueKey(issue))),
-    taskQueue.selection,
-  );
-  return nextIssue === undefined ? [] : [projectIssueToQueueRow(nextIssue)];
+  const nextIssue = getNextProjectIssueToStart(issues, taskQueue.selection);
+  if (nextIssue === undefined || representedIssueKeys.has(projectIssueKey(nextIssue))) return [];
+  return [projectIssueToQueueRow(nextIssue)];
 }
 
 function projectIssueToQueueRow(issue: ProjectIssue) {
@@ -903,7 +905,13 @@ function taskProjectIssueKeys(task: StoredAgentTask): string[] {
 
 function taskRepresentsProjectIssue(task: StoredAgentTask): boolean {
   if (task.status === 'queued' || task.status === 'pending' || task.status === 'running') return true;
-  return task.claim !== undefined && task.projectClaim?.status !== 'released';
+  return task.claim !== undefined && task.projectClaim?.status === 'release_failed';
+}
+
+function taskHasActiveClaimLock(task: StoredAgentTask, staleWarning: StoredStaleProjectClaimWarning | undefined): boolean {
+  if (task.claim === undefined) return false;
+  if (staleWarning !== undefined) return true;
+  return task.status === 'queued' || task.status === 'pending' || task.status === 'running';
 }
 
 function projectIssueKey(issue: ProjectIssue): string {

@@ -476,12 +476,12 @@ describe('Rainrail dashboard API', () => {
       eventsBearerToken: 'events-token',
       operationalStore,
       taskQueue: {
-        selection: { todoStatus: 'Todo', backlogStatus: 'Backlog', inProgressStatus: 'In Progress' },
+        selection: { todoStatus: 'Todo', backlogStatus: 'Backlog', inProgressStatus: 'In Progress', maxConcurrentAgentTasks: 2 },
         listProjectIssues: async () => [
           {
             id: 'PVTI_115',
             title: 'Already claimed issue',
-            status: 'Todo',
+            status: 'In Progress',
             state: 'OPEN',
             assigneeLogins: ['reirei-agent'],
             repository: 'reirei-lab/rainrail',
@@ -545,6 +545,72 @@ describe('Rainrail dashboard API', () => {
         inProgressCount: 1,
         claimedCount: 1,
       },
+    });
+
+    operationalStore.close();
+  });
+
+  it('keeps represented project issues in selection context before suppressing duplicate rows', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:12:00.000Z'),
+    });
+    operationalStore.recordAgentTask({
+      id: 'agent_task_child_running',
+      title: 'Running child issue',
+      agentSessionId: 'agent:main:child-running',
+      branchName: 'agent/child-running',
+      status: 'running',
+      issue: { repository: 'reirei-lab/rainrail', number: 201 },
+      claim: { projectItemId: 'PVTI_201', originalStatus: 'In Progress' },
+    });
+    const app = createTestApp({
+      eventsBearerToken: 'events-token',
+      operationalStore,
+      taskQueue: {
+        selection: { todoStatus: 'Todo', backlogStatus: 'Backlog', inProgressStatus: 'In Progress', maxConcurrentAgentTasks: 2 },
+        listProjectIssues: async () => [
+          {
+            id: 'PVTI_200',
+            title: 'Parent issue',
+            status: 'Todo',
+            state: 'OPEN',
+            assigneeLogins: ['reirei-agent'],
+            repository: 'reirei-lab/rainrail',
+            number: 200,
+          },
+          {
+            id: 'PVTI_201',
+            title: 'Running child issue',
+            status: 'In Progress',
+            state: 'OPEN',
+            assigneeLogins: ['reirei-agent'],
+            repository: 'reirei-lab/rainrail',
+            number: 201,
+            parent: { repository: 'reirei-lab/rainrail', number: 200 },
+          },
+          {
+            id: 'PVTI_202',
+            title: 'Sibling should wait',
+            status: 'Backlog',
+            state: 'OPEN',
+            assigneeLogins: ['reirei-agent'],
+            repository: 'reirei-lab/rainrail',
+            number: 202,
+            parent: { repository: 'reirei-lab/rainrail', number: 200 },
+          },
+        ],
+      },
+    });
+
+    const queue = await app.fetch(new Request('https://rainrail.local/api/v1/queue?filter[status]=upcoming', {
+      headers: { authorization: 'Bearer events-token' },
+    }));
+    expect(queue.status).toBe(200);
+    await expect(queue.json()).resolves.toMatchObject({
+      data: [],
+      summary: { upcomingIssues: 0, inProgressCount: 1 },
     });
 
     operationalStore.close();
@@ -705,6 +771,60 @@ describe('Rainrail dashboard API', () => {
     const releasedRow = body.data[0];
     expect(releasedRow).toBeDefined();
     expect(releasedRow?.claimLock).toBeUndefined();
+
+    operationalStore.close();
+  });
+
+  it('does not report completed task claim metadata as an active queue lock', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:12:00.000Z'),
+    });
+    operationalStore.recordAgentTask({
+      id: 'agent_task_succeeded',
+      title: 'Completed task claim metadata',
+      agentSessionId: 'agent:main:completed',
+      branchName: 'agent/completed',
+      status: 'succeeded',
+      issue: { repository: 'reirei-lab/rainrail', number: 121 },
+      claim: { projectItemId: 'PVTI_DONE', originalStatus: 'In Progress' },
+    });
+    const app = createTestApp({
+      eventsBearerToken: 'events-token',
+      operationalStore,
+    });
+
+    const queue = await app.fetch(new Request('https://rainrail.local/api/v1/queue', {
+      headers: { authorization: 'Bearer events-token' },
+    }));
+    expect(queue.status).toBe(200);
+    const body = await queue.json() as { data: Array<{ claimLock?: unknown; projectStatus?: string }>; summary: { claimedCount: number } };
+    expect(body).toMatchObject({
+      data: [{ id: 'agent_task_succeeded', status: 'succeeded', projectStatus: 'unknown' }],
+      summary: { claimedCount: 0 },
+    });
+    expect(body.data[0]?.claimLock).toBeUndefined();
+
+    operationalStore.close();
+  });
+
+  it('rejects newest sort for the status-prioritized queue', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:12:00.000Z'),
+    });
+    const app = createTestApp({
+      eventsBearerToken: 'events-token',
+      operationalStore,
+    });
+
+    const queue = await app.fetch(new Request('https://rainrail.local/api/v1/queue?sort=newest', {
+      headers: { authorization: 'Bearer events-token' },
+    }));
+    expect(queue.status).toBe(400);
+    await expect(queue.json()).resolves.toEqual({ error: 'unsupported_sort', sort: 'newest' });
 
     operationalStore.close();
   });
