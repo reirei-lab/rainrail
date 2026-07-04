@@ -1,4 +1,5 @@
 import http, { type IncomingMessage, type ServerResponse } from 'node:http';
+import { Readable } from 'node:stream';
 
 import { RainrailBridgeRoom, type RainrailBridgeRoomState } from './bridge-room.js';
 import { createRainrailEepBridgeIntakeAdapters } from './eep-bridge-bundle.js';
@@ -140,6 +141,9 @@ async function toFetchRequest(
       request,
       rainrailHttpRequestBodyLimit(url.pathname, method, appOptions) ?? options.maxBodyBytes,
     );
+  } else if (methodCanHaveBody(method) && isDashboardCommandRoute(url.pathname, method)) {
+    init.body = Readable.toWeb(request) as unknown as NonNullable<RequestInit['body']>;
+    (init as RequestInit & { duplex: 'half' }).duplex = 'half';
   }
 
   return new Request(url, init);
@@ -148,6 +152,13 @@ async function toFetchRequest(
 function methodCanHaveBody(method: string): boolean {
   const normalized = method.toUpperCase();
   return normalized !== 'GET' && normalized !== 'HEAD';
+}
+
+function isDashboardCommandRoute(pathname: string, method: string): boolean {
+  return method.toUpperCase() === 'POST'
+    && (/^\/api\/v1\/agent-tasks\/(?:[^/]+\/actions\/(?:resume|reset|terminate)|actions\/terminate-all)$/.test(pathname)
+      || pathname === '/api/v1/queue/actions/assign-next'
+      || pathname === '/api/v1/settings/actions/update');
 }
 
 function isStatusCodeError(error: unknown): error is { statusCode: number } {

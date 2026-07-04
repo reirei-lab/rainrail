@@ -152,8 +152,10 @@ configure `dashboardAuth.operatorToken` and, for settings mutations, `dashboardA
 
 ## Action audit
 
-Every mutation must append an activity event and a command result row before returning success. Audit data
-must include:
+Every mutation must reserve a command result row before dispatching the handler. Post-dispatch accepted /
+failed command result rows and command activity events should be persisted before responding when storage is
+available; if that write fails after dispatch, the response keeps the handler outcome and includes an
+`auditWarning` rather than reporting the already executed command as a transport failure. Audit data must include:
 
 - `actor`: stable principal id derived from the token, not a display-only label.
 - `client`: dashboard, mobile, CLI, or automation caller id when available.

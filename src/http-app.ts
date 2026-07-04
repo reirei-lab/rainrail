@@ -104,8 +104,7 @@ export function shouldReadRainrailHttpRequestBody(
   method: string,
   options: RainrailHttpAppOptions,
 ): boolean {
-  return isDashboardCommandRoute(pathname, method)
-    || createRainrailIntakeRegistry(options.intakeAdapters).routeNeedsBody(pathname, method);
+  return createRainrailIntakeRegistry(options.intakeAdapters).routeNeedsBody(pathname, method);
 }
 
 export function rainrailHttpRequestBodyLimit(
@@ -423,7 +422,9 @@ function dashboardV1OverviewResponse(options: RainrailHttpAppOptions): Response 
     data: {
       counts: snapshot.counts,
       warnings: snapshot.warnings,
-      recentActivity: store.listActivityEvents({ hideSkippedActivityEvents: true, limit: 5 }).map(activityToWorkflowRunRow),
+      recentActivity: store.listActivityEvents({ hideSkippedActivityEvents: true, limit: 5 })
+        .filter(isWorkflowRunActivity)
+        .map(activityToWorkflowRunRow),
       links: {
         events: '/api/v1/events',
         workflowRuns: '/api/v1/workflow-runs',
@@ -505,6 +506,7 @@ function dashboardV1WorkflowRunsResponse(url: URL, options: RainrailHttpAppOptio
   if (!collection.ok) return collection.response;
 
   const filtered = store.listActivityEvents({ hideSkippedActivityEvents: url.searchParams.get('hideSkippedActivity') === '1' })
+    .filter(isWorkflowRunActivity)
     .filter((activity) => matchesOptionalFilter(activity.outcome, url.searchParams.get('filter[status]')));
   const page = pageRows(filtered, collection.limit, collection.cursor, activityCursorValue);
   if (!page.ok) return page.response;
@@ -522,7 +524,7 @@ function dashboardV1WorkflowRunDetailResponse(workflowRunId: string, options: Ra
   }
 
   const activity = store.getActivityEvent(workflowRunId);
-  if (activity === undefined) {
+  if (activity === undefined || !isWorkflowRunActivity(activity)) {
     return jsonResponse({ error: 'workflow_run_not_found' }, { status: 404 });
   }
 
@@ -751,6 +753,10 @@ function activityToWorkflowRunRow(activity: StoredActivityEvent) {
   };
 }
 
+function isWorkflowRunActivity(activity: StoredActivityEvent): boolean {
+  return activity.category !== 'command';
+}
+
 function agentTaskToCompactRow(task: StoredAgentTask, staleTaskIds: Set<string>) {
   return {
     id: task.id,
@@ -890,26 +896,33 @@ async function handleDashboardCommandRequest(
   } catch (error) {
     const rawMessage = error instanceof Error ? error.message : String(error);
     const message = sanitizeCommandErrorMessage(rawMessage, sensitiveInputValues);
-    const result = options.operationalStore.recordCommandResult({
-      actionType: command.actionType,
-      targetType: command.targetType,
-      targetId: command.targetId,
-      status: 'failed',
-      actor: auth.principal.actor,
-      ...(client === undefined ? {} : { client }),
-      requestId,
-      dryRun: false,
-      error: message,
-    });
-    options.operationalStore.recordActivityEvent({
-      category: 'command',
-      targetType: command.targetType,
-      targetId: command.targetId,
-      actionType: command.actionType,
-      outcome: 'failed',
-      summary: `Failed ${command.actionType} for ${command.targetType} ${command.targetId}`,
-      metadata: auditMetadata(auth.principal.actor, client, requestId, false),
-    });
+    let auditId = dispatchAuditId;
+    let auditWarning: string | undefined;
+    try {
+      const result = options.operationalStore.recordCommandResult({
+        actionType: command.actionType,
+        targetType: command.targetType,
+        targetId: command.targetId,
+        status: 'failed',
+        actor: auth.principal.actor,
+        ...(client === undefined ? {} : { client }),
+        requestId,
+        dryRun: false,
+        error: message,
+      });
+      options.operationalStore.recordActivityEvent({
+        category: 'command',
+        targetType: command.targetType,
+        targetId: command.targetId,
+        actionType: command.actionType,
+        outcome: 'failed',
+        summary: `Failed ${command.actionType} for ${command.targetType} ${command.targetId}`,
+        metadata: auditMetadata(auth.principal.actor, client, requestId, false),
+      });
+      auditId = result.id;
+    } catch {
+      auditWarning = 'post_dispatch_audit_failed';
+    }
 
     return commandResponse({
       data: {
@@ -918,7 +931,8 @@ async function handleDashboardCommandRequest(
         targetId: command.targetId,
         status: 'failed',
         dryRun: false,
-        auditId: result.id,
+        auditId,
+        ...(auditWarning === undefined ? {} : { auditWarning }),
         error: message,
       },
     }, requestId, 502);

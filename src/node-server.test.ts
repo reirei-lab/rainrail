@@ -553,6 +553,63 @@ describe('Rainrail Node server', () => {
     }
   });
 
+  it('does not buffer oversized unauthorized Node command bodies before auth', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:00:00.000Z'),
+    });
+    operationalStore.recordAgentTask({
+      id: 'agent_task_rainrail_111',
+      title: 'command API',
+      agentSessionId: 'agent:main:rainrail-111',
+      branchName: 'agent/reirei-lab-rainrail-111',
+      status: 'stopped',
+      logPath: 'var/log/rainrail-111.log',
+      resumeAttempts: [],
+    });
+    const commandHandler = vi.fn();
+    const { server } = createRainrailNodeServer({
+      githubWebhookSecret: 'secret',
+      publishToken: 'test-publish-token',
+      eventsBearerToken: 'read-token',
+      operationalStore,
+      dashboardAuth: {
+        operatorToken: 'operator-token',
+      },
+      commandHandler,
+      maxBodyBytes: 4,
+    });
+
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const address = server.address();
+    if (address === null || typeof address === 'string') {
+      throw new Error('expected TCP server address');
+    }
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${address.port}/api/v1/agent-tasks/agent_task_rainrail_111/actions/resume`, {
+        method: 'POST',
+        headers: {
+          authorization: 'Bearer read-token',
+          'content-type': 'application/json',
+        },
+        body: '{"too":"large"}',
+      });
+
+      expect(response.status).toBe(403);
+      await expect(response.json()).resolves.toEqual({
+        error: 'insufficient_scope',
+        requiredScope: 'operator',
+      });
+      expect(commandHandler).not.toHaveBeenCalled();
+    } finally {
+      await closeServer(server);
+      operationalStore.close();
+    }
+  });
+
   it('uses maxBodyBytes as the effective Node command action app limit', async () => {
     const operationalStore = new RainrailOperationalStore({
       databasePath: ':memory:',

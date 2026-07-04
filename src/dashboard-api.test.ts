@@ -644,6 +644,20 @@ describe('Rainrail dashboard API', () => {
         dryRun: true,
       }],
     });
+
+    const workflowRuns = await app.fetch(new Request('https://rainrail.local/api/v1/workflow-runs', {
+      headers: { authorization: 'Bearer read-token' },
+    }));
+    await expect(workflowRuns.json()).resolves.toMatchObject({
+      data: [],
+      page: { limit: 50, nextCursor: null },
+    });
+
+    const workflowRunDetail = await app.fetch(new Request('https://rainrail.local/api/v1/workflow-runs/activity_000001', {
+      headers: { authorization: 'Bearer read-token' },
+    }));
+    expect(workflowRunDetail.status).toBe(404);
+    await expect(workflowRunDetail.json()).resolves.toEqual({ error: 'workflow_run_not_found' });
     operationalStore.close();
   });
 
@@ -1095,6 +1109,62 @@ describe('Rainrail dashboard API', () => {
         status: 'dispatching',
       }],
     });
+    operationalStore.close();
+  });
+
+  it('returns handler failure when failed command audit storage fails', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:00:00.000Z'),
+    });
+    const originalRecordCommandResult = operationalStore.recordCommandResult.bind(operationalStore);
+    vi.spyOn(operationalStore, 'recordCommandResult').mockImplementation((input) => {
+      if (input.status === 'failed') {
+        throw new Error('simulated failed audit write failure');
+      }
+
+      return originalRecordCommandResult(input);
+    });
+    const commandHandler = vi.fn(async () => {
+      throw new Error('provider rejected apiToken=admin-input-secret');
+    });
+    const app = createRainrailHttpApp({
+      room: new RainrailBridgeRoom(fakeState(), { publishToken: 'publish-token' }),
+      publishToken: 'publish-token',
+      operationalStore,
+      dashboardAuth: {
+        adminToken: 'admin-token',
+      },
+      commandHandler,
+    });
+
+    const response = await app.fetch(new Request('https://rainrail.local/api/v1/settings/actions/update', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer admin-token',
+        'content-type': 'application/json',
+        'x-request-id': 'request-failed-audit-failure',
+      },
+      body: JSON.stringify({
+        settings: {
+          apiToken: 'admin-input-secret',
+        },
+        confirmationToken: 'confirm:settings_update:settings:global',
+      }),
+    }));
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toMatchObject({
+      data: {
+        status: 'failed',
+        auditId: 'cmd_000001',
+        auditWarning: 'post_dispatch_audit_failed',
+        error: expect.stringContaining('[redacted]'),
+      },
+    });
+    expect(commandHandler).toHaveBeenCalledOnce();
+    expect(JSON.stringify(operationalStore.snapshot().commandResults)).not.toContain('admin-input-secret');
     operationalStore.close();
   });
 
