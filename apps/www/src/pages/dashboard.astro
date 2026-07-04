@@ -1,0 +1,83 @@
+---
+import DashboardLayout from '../layouts/DashboardLayout.astro';
+---
+
+<DashboardLayout
+  title="Rainrail Operations"
+  description="Operational dashboard shell for Rainrail event, workflow, and agent task state."
+>
+  <section class="dashboard-shell" data-dashboard-app data-state="auth-missing" data-live-strategy="polling">
+    <aside class="dashboard-sidebar" aria-label="Dashboard navigation">
+      <a class="dashboard-brand" href="/">Rainrail</a>
+      <nav>
+        <button type="button" data-dashboard-tab="events" aria-pressed="true">Events</button>
+        <button type="button" data-dashboard-tab="workflow-runs" aria-pressed="false">Workflow runs</button>
+        <button type="button" data-dashboard-tab="agent-tasks" aria-pressed="false">Agent tasks</button>
+      </nav>
+      <label class="dashboard-permission">
+        <input type="checkbox" data-permission-toggle />
+        Operator controls
+      </label>
+    </aside>
+
+    <div class="dashboard-workspace">
+      <header class="dashboard-topbar">
+        <div>
+          <p class="eyebrow">Operational API client</p>
+          <h1>Rainrail Operations</h1>
+        </div>
+        <div class="dashboard-auth">
+          <input data-token-input type="password" autocomplete="off" placeholder="Bearer token" aria-label="Operational API bearer token" />
+          <button type="button" class="button secondary" data-token-save>Connect</button>
+          <button type="button" class="button secondary" data-token-clear>Clear</button>
+        </div>
+      </header>
+
+      <div class="dashboard-health">
+        <div>
+          <span>Status</span>
+          <strong data-status-text>Bearer token required</strong>
+        </div>
+        <button type="button" class="button" data-refresh>Refresh</button>
+        <span class="dashboard-stale" data-stale-indicator hidden>Stale data</span>
+      </div>
+
+      <div class="dashboard-state" data-state="loading">Loading operational state</div>
+      <div class="dashboard-state" data-state="empty">No operational records yet</div>
+      <div class="dashboard-state" data-state="error">Operational API unavailable</div>
+      <div class="dashboard-state" data-state="auth-missing">Paste a bearer token to read the dashboard API.</div>
+
+      <section class="dashboard-stats" data-dashboard-stats aria-label="Operational totals">
+        <div class="dashboard-stat"><span>Events</span><strong>0</strong></div>
+        <div class="dashboard-stat"><span>Workflow runs</span><strong>0</strong></div>
+        <div class="dashboard-stat"><span>Agent tasks</span><strong>0</strong></div>
+        <div class="dashboard-stat"><span>Retries</span><strong>0</strong></div>
+      </section>
+
+      <section class="dashboard-two-pane" aria-label="Operational records">
+        <div class="dashboard-list" data-dashboard-list></div>
+        <article class="dashboard-detail" data-dashboard-detail>
+          <div class="dashboard-detail-heading">
+            <span>ready</span>
+            <strong>waiting</strong>
+          </div>
+          <h2>Select a stream after connecting.</h2>
+          <dl>
+            <div><dt>ID</dt><dd>n/a</dd></div>
+            <div><dt>Branch</dt><dd>n/a</dd></div>
+            <div><dt>Issue</dt><dd>n/a</dd></div>
+          </dl>
+        </article>
+      </section>
+
+      <section class="dashboard-actions" aria-label="Operator actions">
+        <button type="button" class="dashboard-action" data-action-permission="operator" disabled>Resume selected</button>
+        <button type="button" class="dashboard-action" data-action-permission="operator" disabled>Reset claim</button>
+      </section>
+    </div>
+  </section>
+
+  <script>
+    import '../lib/dashboard-app';
+  </script>
+</DashboardLayout>
