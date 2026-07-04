@@ -1,5 +1,6 @@
 import type { GitHubAuthConfig } from './github-auth.js';
 import type { RainrailEventSourceType } from './events.js';
+import { isCoreRoutePath } from './intake-adapter.js';
 
 export type SourceBundleType = 'eep-bridge';
 
@@ -64,6 +65,7 @@ const defaultOpenClawRuntimeProviderConfig: OpenClawRuntimeProviderConfig = {
   logDirectory: 'var/agent-task-logs',
 };
 const safeSourceNamePattern = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/u;
+const githubWebhookSourceNameMaxLength = 53;
 
 export async function loadConfig(path: string): Promise<RainrailConfig> {
   const { readFile } = await import('node:fs/promises');
@@ -158,6 +160,9 @@ function parseSourceBundleSource(value: unknown, path: string): SourceBundleSour
   }
   if (source.type === 'github-webhook' && source.sourceType !== 'github') {
     throw new Error(`${path}.sourceType must be "github" for github-webhook sources`);
+  }
+  if (source.type === 'github-webhook' && source.name.length > githubWebhookSourceNameMaxLength) {
+    throw new Error(`${path}.name must be ${githubWebhookSourceNameMaxLength} characters or fewer for github-webhook sources`);
   }
   if (source.type === 'github-webhook' && source.webhookSecret === undefined) {
     throw new Error(`${path}.webhookSecret must be a non-empty string for github-webhook sources`);
@@ -257,6 +262,9 @@ function parseOptionalEndpoint(value: unknown, path: string): `/${string}` | und
   }
   if (endpoint.includes('?') || endpoint.includes('#')) {
     throw new Error(`${path} must be a path without query or fragment`);
+  }
+  if (isCoreRoutePath(endpoint)) {
+    throw new Error(`${path} must not use a Rainrail core route`);
   }
   return endpoint as `/${string}`;
 }

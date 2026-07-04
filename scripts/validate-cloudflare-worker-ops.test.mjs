@@ -144,6 +144,28 @@ describe('Cloudflare Worker operations', () => {
       { name: 'RAINRAIL_PUBLISH_TOKEN', type: 'secret_text' },
     ]))).toEqual(new Set(['GITHUB_WEBHOOK_SECRET', 'RAINRAIL_PUBLISH_TOKEN']));
   });
+
+  it('rejects configured GitHub webhook sources with empty secret names before deploy', () => {
+    expect(() => parseRequiredSecrets(wranglerConfig, {
+      RAINRAIL_CONFIG_JSON: JSON.stringify({
+        sourceBundles: [
+          {
+            type: 'eep-bridge',
+            name: 'worker-ingress',
+            sources: [
+              {
+                type: 'github-webhook',
+                name: 'github-webhook',
+                sourceType: 'github',
+                provider: 'github',
+                webhookSecret: '${RAINRAIL_WEBHOOK_SECRET_NAME}',
+              },
+            ],
+          },
+        ],
+      }),
+    })).toThrow('config.sourceBundles[0].sources[0].webhookSecret must be a non-empty string for github-webhook sources');
+  });
 });
 
 /**

@@ -117,6 +117,6 @@ function normalizedMethods(methods: readonly string[]): string[] {
   return methods.map((method) => method.toUpperCase());
 }
 
-function isCoreRoutePath(pathname: string): boolean {
+export function isCoreRoutePath(pathname: string): boolean {
   return CORE_ROUTE_PATHS.has(pathname) || CORE_ROUTE_PREFIXES.some((prefix) => pathname.startsWith(prefix));
 }

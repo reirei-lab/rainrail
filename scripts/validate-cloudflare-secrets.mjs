@@ -79,14 +79,20 @@ function configRequiredSecretsFromEnv(env) {
     return [];
   }
 
-  return bundles.flatMap((bundle) => {
+  return bundles.flatMap((bundle, bundleIndex) => {
     const sources = isRecord(bundle) ? bundle.sources : undefined;
     if (!Array.isArray(sources)) return [];
 
     return sources
-      .filter((source) => isRecord(source) && source.type === 'github-webhook')
-      .map((source) => source.webhookSecret)
-      .filter((secretName) => typeof secretName === 'string' && secretName.length > 0);
+      .flatMap((source, sourceIndex) => {
+        if (!isRecord(source) || source.type !== 'github-webhook') {
+          return [];
+        }
+        if (typeof source.webhookSecret !== 'string' || source.webhookSecret.length === 0) {
+          throw new Error(`config.sourceBundles[${bundleIndex}].sources[${sourceIndex}].webhookSecret must be a non-empty string for github-webhook sources`);
+        }
+        return [source.webhookSecret];
+      });
   });
 }
 
