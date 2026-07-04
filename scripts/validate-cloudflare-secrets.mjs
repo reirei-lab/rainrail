@@ -4,7 +4,7 @@ import { pathToFileURL } from 'node:url';
 
 export function main() {
   const wranglerConfig = JSON.parse(stripJsonComments(readFileSync(new URL('../wrangler.jsonc', import.meta.url), 'utf8')));
-  const requiredSecrets = parseRequiredSecrets(wranglerConfig);
+  const requiredSecrets = parseRequiredSecrets(wranglerConfig, process.env);
 
   if (requiredSecrets.length === 0) {
     console.log('No required Cloudflare Worker secrets configured.');
@@ -47,12 +47,65 @@ function stripJsonComments(source) {
  * @param {unknown} config
  * @returns {string[]}
  */
-export function parseRequiredSecrets(config) {
+export function parseRequiredSecrets(config, env = process.env) {
+  const configWebhookSecrets = configRequiredSecretsFromEnv(env);
+  const shouldReplaceDefaultWebhookSecret = configWebhookSecrets.length > 0;
+  const requiredSecrets = [...configWebhookSecrets];
   if (!isRecord(config) || !isRecord(config.secrets) || !Array.isArray(config.secrets.required)) {
+    return [...new Set(requiredSecrets)];
+  }
+
+  requiredSecrets.push(...config.secrets.required.filter((item) =>
+    typeof item === 'string'
+    && (!shouldReplaceDefaultWebhookSecret || item !== 'GITHUB_WEBHOOK_SECRET')
+  ));
+
+  return [...new Set(requiredSecrets)];
+}
+
+/**
+ * @param {Record<string, string | undefined>} env
+ * @returns {string[]}
+ */
+function configRequiredSecretsFromEnv(env) {
+  const rawConfig = env.RAINRAIL_CONFIG_JSON;
+  if (rawConfig === undefined || rawConfig.length === 0) {
     return [];
   }
 
-  return config.secrets.required.filter((item) => typeof item === 'string');
+  const parsed = JSON.parse(expandEnv(rawConfig, env));
+  const bundles = isRecord(parsed) ? parsed.sourceBundles : undefined;
+  if (!Array.isArray(bundles)) {
+    return [];
+  }
+
+  return bundles.flatMap((bundle, bundleIndex) => {
+    const sources = isRecord(bundle) ? bundle.sources : undefined;
+    if (!Array.isArray(sources)) return [];
+
+    return sources
+      .flatMap((source, sourceIndex) => {
+        if (!isRecord(source) || source.type !== 'github-webhook') {
+          return [];
+        }
+        if (typeof source.webhookSecret !== 'string' || source.webhookSecret.length === 0) {
+          throw new Error(`config.sourceBundles[${bundleIndex}].sources[${sourceIndex}].webhookSecret must be a non-empty string for github-webhook sources`);
+        }
+        return [source.webhookSecret];
+      });
+  });
+}
+
+/**
+ * @param {string} raw
+ * @param {Record<string, string | undefined>} env
+ * @returns {string}
+ */
+function expandEnv(raw, env) {
+  return raw.replace(
+    /\$\{([A-Z0-9_]+)\}/gu,
+    (_match, name) => JSON.stringify(env[name] ?? '').slice(1, -1),
+  );
 }
 
 /**

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   createGitHubWebhookEvent,
+  createGitHubWebhookIntakeAdapter,
   createGitHubWebhookSourcePlugin,
   createGitHubWebhookSignature,
   handleGitHubWebhookRequest,
@@ -58,6 +59,15 @@ describe('GitHub webhook signature core', () => {
 });
 
 describe('GitHub webhook source handling', () => {
+  it('registers a configured webhook intake endpoint', () => {
+    const adapter = createGitHubWebhookIntakeAdapter({
+      secret: 'secret',
+      endpoint: '/github',
+    });
+
+    expect(adapter.routes?.map((route) => route.path)).toEqual(['/github']);
+  });
+
   it('exposes GitHub webhook normalization as a Rainrail source plugin', async () => {
     const plugin = createGitHubWebhookSourcePlugin();
 

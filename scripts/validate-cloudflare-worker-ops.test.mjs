@@ -2,12 +2,14 @@ import { readFileSync } from 'node:fs';
 import { access } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
 
+import { configuredGitHubWebhookEndpoint } from './smoke-cloudflare-worker.mjs';
 import { parseRequiredSecrets, parseSecretList } from './validate-cloudflare-secrets.mjs';
 
 const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 const wranglerConfig = JSON.parse(stripJsonComments(readFileSync(new URL('../wrangler.jsonc', import.meta.url), 'utf8')));
 const gitignore = readFileSync(new URL('../.gitignore', import.meta.url), 'utf8');
 const cloudflareDocs = readFileSync(new URL('../docs/cloudflare-worker.md', import.meta.url), 'utf8');
+const selfHostDeployTemplate = readFileSync(new URL('../docs/templates/cloudflare-self-host-deploy.yml', import.meta.url), 'utf8');
 
 describe('Cloudflare Worker operations', () => {
   it('deploys the Worker entrypoint with the Durable Object binding used by runtime code', () => {
@@ -48,17 +50,54 @@ describe('Cloudflare Worker operations', () => {
     await expect(access(new URL('./validate-cloudflare-secrets.mjs', import.meta.url))).resolves.toBeUndefined();
     await expect(access(new URL('./smoke-cloudflare-worker.mjs', import.meta.url))).resolves.toBeUndefined();
     expect(cloudflareDocs).toContain('pnpm cf:smoke');
+    expect(selfHostDeployTemplate).toContain('RAINRAIL_GITHUB_WEBHOOK_ENDPOINT: ${{ vars.RAINRAIL_GITHUB_WEBHOOK_ENDPOINT }}');
+    expect(cloudflareDocs).toContain('RAINRAIL_GITHUB_WEBHOOK_ENDPOINT');
   });
 
   it('smokes the webhook endpoint without publishing a GitHub issue event', () => {
     const smokeScript = readFileSync(new URL('./smoke-cloudflare-worker.mjs', import.meta.url), 'utf8');
 
+    expect(smokeScript).toContain('RAINRAIL_GITHUB_WEBHOOK_ENDPOINT');
+    expect(smokeScript).toContain('RAINRAIL_CONFIG_JSON');
+    expect(smokeScript).toContain('${workerUrl}${githubWebhookEndpoint}');
     expect(smokeScript).toContain("'x-github-event': 'ping'");
     expect(smokeScript).toContain('signature_mismatch');
     expect(smokeScript).not.toContain("'x-github-event': 'issues'");
     expect(smokeScript).not.toContain("action: 'opened'");
     expect(cloudflareDocs).toContain('署名不一致');
   });
+
+  it('selects the configured GitHub webhook endpoint for smoke checks', () => {
+    expect(configuredGitHubWebhookEndpoint({})).toBe('/webhooks/github');
+    expect(configuredGitHubWebhookEndpoint({
+      RAINRAIL_GITHUB_WEBHOOK_ENDPOINT: '/github',
+    })).toBe('/github');
+    expect(configuredGitHubWebhookEndpoint({
+      RAINRAIL_CONFIG_JSON: JSON.stringify({
+        sourceBundles: [
+          {
+            type: 'eep-bridge',
+            name: 'worker-ingress',
+            sources: [
+              {
+                type: 'github-webhook',
+                name: 'github-webhook',
+                sourceType: 'github',
+                provider: 'github',
+                webhookSecret: 'GITHUB_WEBHOOK_SECRET',
+                endpoint: '${RAINRAIL_SMOKE_ENDPOINT}',
+              },
+            ],
+          },
+        ],
+      }),
+      RAINRAIL_SMOKE_ENDPOINT: '/configured-github',
+    })).toBe('/configured-github');
+    expect(() => configuredGitHubWebhookEndpoint({
+      RAINRAIL_GITHUB_WEBHOOK_ENDPOINT: 'github',
+    })).toThrow('RAINRAIL_GITHUB_WEBHOOK_ENDPOINT must start with "/"');
+  });
+
 
   it('documents the minimum Cloudflare event path from GitHub webhook to downstream consumers', () => {
     expect(cloudflareDocs).toContain('## 最小経路');
@@ -76,10 +115,56 @@ describe('Cloudflare Worker operations', () => {
       'RAINRAIL_PUBLISH_TOKEN',
       'SSE_BEARER_TOKEN',
     ]);
+    expect(parseRequiredSecrets(wranglerConfig, {
+      RAINRAIL_CONFIG_JSON: JSON.stringify({
+        sourceBundles: [
+          {
+            type: 'eep-bridge',
+            name: 'worker-ingress',
+            sources: [
+              {
+                type: 'github-webhook',
+                name: 'github-webhook',
+                sourceType: 'github',
+                provider: 'github',
+                webhookSecret: '${RAINRAIL_WEBHOOK_SECRET_NAME}',
+              },
+            ],
+          },
+        ],
+      }),
+      RAINRAIL_WEBHOOK_SECRET_NAME: 'CUSTOM_GITHUB_WEBHOOK_SECRET',
+    })).toEqual([
+      'CUSTOM_GITHUB_WEBHOOK_SECRET',
+      'RAINRAIL_PUBLISH_TOKEN',
+      'SSE_BEARER_TOKEN',
+    ]);
     expect(parseSecretList(JSON.stringify([
       { name: 'GITHUB_WEBHOOK_SECRET', type: 'secret_text' },
       { name: 'RAINRAIL_PUBLISH_TOKEN', type: 'secret_text' },
     ]))).toEqual(new Set(['GITHUB_WEBHOOK_SECRET', 'RAINRAIL_PUBLISH_TOKEN']));
+  });
+
+  it('rejects configured GitHub webhook sources with empty secret names before deploy', () => {
+    expect(() => parseRequiredSecrets(wranglerConfig, {
+      RAINRAIL_CONFIG_JSON: JSON.stringify({
+        sourceBundles: [
+          {
+            type: 'eep-bridge',
+            name: 'worker-ingress',
+            sources: [
+              {
+                type: 'github-webhook',
+                name: 'github-webhook',
+                sourceType: 'github',
+                provider: 'github',
+                webhookSecret: '${RAINRAIL_WEBHOOK_SECRET_NAME}',
+              },
+            ],
+          },
+        ],
+      }),
+    })).toThrow('config.sourceBundles[0].sources[0].webhookSecret must be a non-empty string for github-webhook sources');
   });
 });
 
