@@ -15,16 +15,20 @@ request input.
 - Use `persist-credentials: false` on checkouts so workflow steps do not retain
   a push-capable token by default.
 - Never run fork PR code on a `self-hosted` runner. Self-hosted PR validation is
-  allowed only for trusted same-repository heads or trusted author associations;
-  fork PR validation must fall back to GitHub-hosted runners.
+  allowed only when the PR head is a trusted same-repository branch; trusted
+  author associations do not permit `self-hosted` for fork PRs. Fork PR
+  validation must fall back to GitHub-hosted runners.
 - Keep typecheck, `docs:check`, tests, build, and deployability checks as
   explicit labeled steps so review failures identify the broken contract.
 
 ## Runtime And Dependency Rules
 
-- Keep workflow `node-version` values aligned with the package's Node types and
-  supported toolchain. When `@types/node`, Wrangler, pnpm, or package scripts
-  change, review all workflows that install or run the project.
+- Keep workflow `node-version` values aligned with the runtime each validator
+  owns: PR CI and package-script validation use Node 26, while Cloudflare Pages
+  preview / production deploy workflows intentionally use Node 24 until
+  `scripts/validate-cloudflare-pages.test.mjs` and the Pages workflow move
+  together. When `@types/node`, Wrangler, pnpm, or package scripts change,
+  review all workflows that install or run the project.
 - Use pnpm with lockfile-based caching and `pnpm install --frozen-lockfile`.
   Workflow updates that change install behavior must update the matching
   validator tests.
@@ -41,5 +45,8 @@ request input.
   sensitive. Missing secrets should skip deploys with a notice rather than
   printing values.
 - Update `scripts/validate-pr-ci-workflow.test.mjs` and
-  `scripts/validate-cloudflare-deploy-ci.test.mjs` whenever CI runner, token,
-  runtime, artifact, or deploy semantics change.
+  `scripts/validate-cloudflare-deploy-ci.test.mjs` whenever PR CI runner, token,
+  runtime, or Worker deployability semantics change. Update
+  `scripts/validate-cloudflare-pages.test.mjs` whenever Cloudflare Pages
+  `workflow_run` artifact handoff, deploy conditions, Node 24 runtime, or Pages
+  deploy semantics change.

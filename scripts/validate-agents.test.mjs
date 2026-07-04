@@ -111,6 +111,7 @@ describe('docs, CI, and drift scoped agent rules', () => {
     expect(docsAgents).toContain('docs/repo-test-coverage-matrix.md');
     expect(docsAgents).toContain('publicExports');
     expect(docsAgents).toContain('publicExportKinds');
+    expect(docsAgents).toContain('module export');
     expect(docsAgents).toContain('code span');
     expect(docsAgents).toContain('src/index.ts');
     expect(docsAgents).toContain('commented-out export');
@@ -120,11 +121,15 @@ describe('docs, CI, and drift scoped agent rules', () => {
     expect(githubAgents).toContain('pull_request_target');
     expect(githubAgents).toContain('self-hosted');
     expect(githubAgents).toContain('fork PR');
+    expect(githubAgents).toContain('same-repository');
     expect(githubAgents).toContain('persist-credentials: false');
     expect(githubAgents).toContain('contents: read');
     expect(githubAgents).toContain('node-version');
+    expect(githubAgents).toContain('Node 26');
+    expect(githubAgents).toContain('Node 24');
     expect(githubAgents).toContain('workflow_run');
     expect(githubAgents).toContain('trusted deploy tooling');
+    expect(githubAgents).toContain('validate-cloudflare-pages.test.mjs');
   });
 
   it('keeps docs:check, workflow validator, and script drift rules scoped to scripts', () => {

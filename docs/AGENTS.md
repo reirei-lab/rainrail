@@ -11,9 +11,11 @@ when another agent, repository, or workflow depends on the documented shape.
   Each contract must list current source files, docs, focused tests,
   `publicExports`, and `publicExportKinds` when the contract has a public TypeScript
   API.
-- A manifest `publicExports` entry must be a real exported declaration from the
-  listed source files and must be re-exported from `src/index.ts` when it is part
-  of Rainrail's package surface.
+- Every manifest `sources` entry under `src/**/*.ts` must be re-exported from
+  `src/index.ts` as a module export. A manifest `publicExports` entry must also
+  be a real exported declaration from the listed source files and must be
+  re-exported by name from `src/index.ts` when it is part of Rainrail's package
+  surface.
 - Do not satisfy public export coverage with comment text, string literals, or a
   commented-out export. The docs check intentionally parses TypeScript syntax
   instead of searching source text.
