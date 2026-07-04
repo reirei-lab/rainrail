@@ -108,6 +108,14 @@ runtime provider の具体 payload に依存せず、operational store の正規
 operational store への記録が失敗しても、room publish が
 成功済みの外部 delivery は失敗応答に戻さない。
 
+`GET /api/v1/overview`、`GET /api/v1/events`、`GET /api/v1/workflow-runs`、
+`GET /api/v1/agent-tasks` は dashboard / mobile 向けの分割 read API として、compact row と
+pagination metadata を返す。detail は `GET /api/v1/events/:id`、
+`GET /api/v1/workflow-runs/:id`、`GET /api/v1/agent-tasks/:id` で取得する。
+v1 collection は `limit` と opaque `cursor` を受け取り、不正 cursor は `invalid_cursor`、
+未対応 filter は `unsupported_filter`、未対応 sort は `unsupported_sort` の 400 として扱う。
+legacy の `/api/state` は transitional snapshot API として残し、新しい UI は v1 resource を読む。
+
 `GET /healthz` と `GET /events` は storage 復元失敗を generic 500 応答に変換する。
 adapter/runtime の未処理例外として落とさず、呼び出し元に安定した失敗を返すため。
 `GET /events` は subscribe 直前に storage refresh を行い、room 内 replay buffer を
