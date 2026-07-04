@@ -21,7 +21,7 @@ import type {
   StoredOperationalEvent,
   StoredStaleProjectClaimWarning,
 } from './operational-store.js';
-import type { ProjectIssue } from './project-issues.js';
+import { getNextProjectIssueToStart, type ProjectIssue } from './project-issues.js';
 import type { TaskQueueProvider } from './task-queue.js';
 
 export interface RainrailBridgeRoomFetchTarget {
@@ -553,7 +553,7 @@ async function dashboardV1QueueResponse(url: URL, options: RainrailHttpAppOption
   const staleWarningsByTaskId = new Map(snapshot.warnings.staleProjectClaims.map((warning) => [warning.taskId, warning]));
   const taskRows = tasks.map((task) => agentTaskToQueueRow(task, staleWarningsByTaskId.get(task.id)));
   const projectIssueRows = await projectIssueQueueRows(options.taskQueue, tasks);
-  const allRows = [...taskRows, ...projectIssueRows];
+  const allRows = sortQueueRows([...taskRows, ...projectIssueRows]);
   const rows = allRows
     .filter((row) => matchesOptionalFilter(row.status, url.searchParams.get('filter[status]')));
   const page = pageRows(rows, collection.limit, collection.cursor, queueCursorValue);
@@ -871,17 +871,18 @@ async function projectIssueQueueRows(
 
   const representedIssueKeys = new Set(tasks.flatMap(taskProjectIssueKeys));
   const issues = await taskQueue.listProjectIssues();
-  return issues
-    .filter((issue) => !representedIssueKeys.has(projectIssueKey(issue)))
-    .filter((issue) => projectIssueQueueStatus(issue, taskQueue.selection) !== undefined)
-    .map((issue) => projectIssueToQueueRow(issue, taskQueue.selection));
+  const nextIssue = getNextProjectIssueToStart(
+    issues.filter((issue) => !representedIssueKeys.has(projectIssueKey(issue))),
+    taskQueue.selection,
+  );
+  return nextIssue === undefined ? [] : [projectIssueToQueueRow(nextIssue)];
 }
 
-function projectIssueToQueueRow(issue: ProjectIssue, selection: TaskQueueProvider['selection'] | undefined) {
+function projectIssueToQueueRow(issue: ProjectIssue) {
   return {
     id: `project:${issue.id}`,
     type: 'queue-item',
-    status: projectIssueQueueStatus(issue, selection) ?? 'upcoming',
+    status: 'upcoming',
     title: issue.title,
     issue: {
       ...(issue.repository === undefined ? {} : { repository: issue.repository }),
@@ -892,22 +893,17 @@ function projectIssueToQueueRow(issue: ProjectIssue, selection: TaskQueueProvide
   };
 }
 
-function projectIssueQueueStatus(issue: ProjectIssue, selection: TaskQueueProvider['selection'] | undefined): string | undefined {
-  if (normalizeQueueToken(issue.state) === 'closed') return undefined;
-  const status = normalizeQueueToken(issue.status);
-  if (status === normalizeQueueToken(selection?.inProgressStatus ?? 'in-progress')) return 'in-progress';
-  if (
-    status === normalizeQueueToken(selection?.todoStatus ?? 'todo')
-    || status === normalizeQueueToken(selection?.backlogStatus ?? 'backlog')
-  ) return 'upcoming';
-  return undefined;
-}
-
 function taskProjectIssueKeys(task: StoredAgentTask): string[] {
+  if (!taskRepresentsProjectIssue(task)) return [];
   return [
     projectIssueKeyFromUnknown(task.issue),
     stringField(recordValue(task.claim), 'projectItemId'),
   ].filter((value): value is string => value !== undefined);
+}
+
+function taskRepresentsProjectIssue(task: StoredAgentTask): boolean {
+  if (task.status === 'queued' || task.status === 'pending' || task.status === 'running') return true;
+  return task.claim !== undefined && task.projectClaim?.status !== 'released';
 }
 
 function projectIssueKey(issue: ProjectIssue): string {
@@ -925,10 +921,6 @@ function projectIssueKeyFromUnknown(issue: unknown): string | undefined {
   return `${repository}#${number}`;
 }
 
-function normalizeQueueToken(value: string | null | undefined): string {
-  return (value ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '');
-}
-
 function queueStatusFromTaskStatus(status: string): string {
   if (status === 'running') return 'in-progress';
   if (status === 'queued' || status === 'pending') return 'upcoming';
@@ -938,8 +930,25 @@ function queueStatusFromTaskStatus(status: string): string {
     || status === 'stopped'
     || status === 'timed_out'
     || status === 'compaction_failed'
+    || status === 'needs_human'
+    || status === 'split_recommended'
   ) return 'blocked';
   return status;
+}
+
+function sortQueueRows(rows: Array<ReturnType<typeof agentTaskToQueueRow> | ReturnType<typeof projectIssueToQueueRow>>) {
+  return [...rows].sort((left, right) =>
+    queueStatusRank(left.status) - queueStatusRank(right.status)
+    || queueCursorValue(right).localeCompare(queueCursorValue(left))
+    || left.id.localeCompare(right.id)
+  );
+}
+
+function queueStatusRank(status: string): number {
+  if (status === 'in-progress') return 0;
+  if (status === 'upcoming') return 1;
+  if (status === 'blocked') return 2;
+  return 3;
 }
 
 function queueSummary(
