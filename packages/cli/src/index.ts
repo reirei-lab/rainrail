@@ -1,5 +1,13 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { dirname, join, normalize, parse, resolve, sep } from 'node:path';
 import {
   OFFICIAL_PLUGIN_CATALOG,
@@ -79,6 +87,7 @@ export type CommandRunner = (
 
 export type RainrailCliFileSystem = {
   readonly existsSync: typeof existsSync;
+  readonly lstatSync: typeof lstatSync;
   readonly mkdirSync: typeof mkdirSync;
   readonly readFileSync: typeof readFileSync;
   readonly rmSync: typeof rmSync;
@@ -117,6 +126,14 @@ export type RainrailLockfile = {
   readonly plugins: readonly RainrailLockPlugin[];
 };
 
+type PluginManifestRollback = {
+  readonly pluginDirectoryPath: string;
+  readonly manifestPath: string;
+  readonly createdPluginDirectory: boolean;
+  readonly hadManifest: boolean;
+  readonly previousManifestContent?: string;
+};
+
 const DEFAULT_INSTALLER_URL =
   'https://raw.githubusercontent.com/reirei-lab/rainrail/main/install.sh';
 const rainrailConfigFileName = 'rainrail.config.json';
@@ -125,9 +142,10 @@ const rainrailDirectoryName = '.rainrail';
 const rainrailPluginDirectoryName = 'plugins';
 const safeProjectNamePattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 const semverVersionPattern =
-  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u;
+  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/u;
 const defaultRainrailCliFileSystem: RainrailCliFileSystem = {
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   rmSync,
@@ -314,15 +332,18 @@ export function formatHelp(): string {
   ].join('\n');
 }
 
-export function discoverRainrailProject(startPath: string): RainrailProject | undefined {
+export function discoverRainrailProject(
+  startPath: string,
+  fileSystem: RainrailCliFileSystem = defaultRainrailCliFileSystem,
+): RainrailProject | undefined {
   let current = resolve(startPath);
-  if (existsSync(current) && !statSync(current).isDirectory()) {
+  if (fileSystem.existsSync(current) && !fileSystem.statSync(current).isDirectory()) {
     current = dirname(current);
   }
 
   while (true) {
     const configPath = join(current, rainrailConfigFileName);
-    if (existsSync(configPath)) {
+    if (fileSystem.existsSync(configPath)) {
       return {
         root: current,
         configPath,
@@ -831,7 +852,7 @@ function resolveRainrailProject(
   fileSystem: RainrailCliFileSystem,
 ): RainrailProject | undefined {
   if (options.config === undefined) {
-    return discoverRainrailProject(cwd);
+    return discoverRainrailProject(cwd, fileSystem);
   }
 
   const configPath = resolve(cwd, options.config);
@@ -908,11 +929,11 @@ function addProjectPlugin(
     ...lockfile,
     plugins: sortLockPlugins([...lockfile.plugins, pluginEntry]),
   };
-  writeProjectPluginManifest(project, pluginEntry, fileSystem);
+  const manifestRollback = writeProjectPluginManifest(project, pluginEntry, fileSystem);
   try {
     fileSystem.writeFileSync(project.lockPath, formatJson(nextLockfile), { flag: 'w' });
   } catch (error) {
-    fileSystem.rmSync(join(project.pluginDirectory, name), { recursive: true, force: true });
+    rollbackProjectPluginManifest(manifestRollback, fileSystem);
     throw error;
   }
 
@@ -927,11 +948,63 @@ function writeProjectPluginManifest(
   project: RainrailProject,
   plugin: RainrailLockPlugin,
   fileSystem: RainrailCliFileSystem,
-): void {
-  fileSystem.mkdirSync(join(project.pluginDirectory, plugin.name), { recursive: true });
-  fileSystem.writeFileSync(join(project.pluginDirectory, plugin.name, 'plugin.json'), formatJson(plugin), {
+): PluginManifestRollback {
+  const pluginDirectoryPath = join(project.pluginDirectory, plugin.name);
+  const manifestPath = join(pluginDirectoryPath, 'plugin.json');
+  const createdPluginDirectory = !fileSystem.existsSync(pluginDirectoryPath);
+  if (!createdPluginDirectory) {
+    const pluginDirectoryStat = fileSystem.lstatSync(pluginDirectoryPath);
+    if (!pluginDirectoryStat.isDirectory() || pluginDirectoryStat.isSymbolicLink()) {
+      throw new Error(`Plugin manifest directory is not a regular directory: ${pluginDirectoryPath}`);
+    }
+  }
+
+  fileSystem.mkdirSync(pluginDirectoryPath, { recursive: true });
+  const createdDirectoryStat = fileSystem.lstatSync(pluginDirectoryPath);
+  if (!createdDirectoryStat.isDirectory() || createdDirectoryStat.isSymbolicLink()) {
+    throw new Error(`Plugin manifest directory is not a regular directory: ${pluginDirectoryPath}`);
+  }
+
+  const hadManifest = fileSystem.existsSync(manifestPath);
+  if (hadManifest) {
+    const manifestStat = fileSystem.lstatSync(manifestPath);
+    if (!manifestStat.isFile() || manifestStat.isSymbolicLink()) {
+      throw new Error(`Plugin manifest path is not a regular file: ${manifestPath}`);
+    }
+  }
+  const previousManifestContent = hadManifest ? fileSystem.readFileSync(manifestPath, 'utf8') : undefined;
+
+  fileSystem.writeFileSync(manifestPath, formatJson(plugin), {
     flag: 'w',
   });
+  const rollback: PluginManifestRollback = {
+    pluginDirectoryPath,
+    manifestPath,
+    createdPluginDirectory,
+    hadManifest,
+  };
+  if (previousManifestContent !== undefined) {
+    return {
+      ...rollback,
+      previousManifestContent,
+    };
+  }
+  return rollback;
+}
+
+function rollbackProjectPluginManifest(
+  rollback: PluginManifestRollback,
+  fileSystem: RainrailCliFileSystem,
+): void {
+  if (rollback.hadManifest) {
+    fileSystem.writeFileSync(rollback.manifestPath, rollback.previousManifestContent ?? '', { flag: 'w' });
+    return;
+  }
+
+  fileSystem.rmSync(rollback.manifestPath, { force: true });
+  if (rollback.createdPluginDirectory) {
+    fileSystem.rmSync(rollback.pluginDirectoryPath, { recursive: true, force: true });
+  }
 }
 
 function removeProjectPlugin(

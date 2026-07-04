@@ -28,7 +28,9 @@ Config discovery walks upward from the current path until it finds
 `rainrail.config.json`; that directory is the project root. The lockfile and
 plugin directory are resolved relative to that root. When `--config <path>` is
 provided, plugin management commands use that config file's parent directory as
-the project root instead of discovering from the current directory.
+the project root instead of discovering from the current directory. Embedded
+callers that pass `RainrailCliEnvironment.fileSystem` use that filesystem for
+both discovery and project-local state reads/writes.
 
 ## Project-local official plugins
 
@@ -40,7 +42,14 @@ the project root instead of discovering from the current directory.
 the official plugin catalog, writes the canonical lockfile entry, and creates
 the matching project-local manifest. Re-adding an installed plugin is
 idempotent. If lockfile update fails after creating a plugin manifest, the
-command removes that manifest before returning the filesystem error.
+command rolls back only the manifest content or plugin directory it created
+during that invocation before returning the filesystem error. Existing
+project-local plugin directories and unrelated files are preserved.
+
+Plugin manifest paths are treated as untrusted project input. The add command
+requires `.rainrail/plugins/<name>` to be a normal directory and
+`.rainrail/plugins/<name>/plugin.json` to be a normal file when it already
+exists; symlinked manifest directories or files are rejected before writing.
 
 `rainrail plugins remove <officialPluginName>` removes the canonical lockfile
 entry and deletes the matching project-local plugin directory. Removing a plugin
