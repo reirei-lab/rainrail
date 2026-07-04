@@ -6,7 +6,9 @@ const dispatcherAgents = readFileSync(new URL('../src/dispatcher/AGENTS.md', imp
 const dispatcherImplementation = readFileSync(new URL('../src/dispatcher/index.ts', import.meta.url), 'utf8');
 const pluginRuntimeContract = readFileSync(new URL('../docs/plugin-runtime-contract.md', import.meta.url), 'utf8');
 const githubWebhookAgents = readFileSync(new URL('../src/github-webhook/AGENTS.md', import.meta.url), 'utf8');
-const prLifecycleAgents = readFileSync(new URL('../src/pr-lifecycle/AGENTS.md', import.meta.url), 'utf8');
+const prLifecycleAgents = readFileSync(new URL('../src/AGENTS.md', import.meta.url), 'utf8');
+const agentRuntimeAgents = readFileSync(new URL('../src/agent-runtime/AGENTS.md', import.meta.url), 'utf8');
+const githubProviderAgents = readFileSync(new URL('../src/providers/github/AGENTS.md', import.meta.url), 'utf8');
 /** @type {{contracts: Array<{id: string, sources: string[]}>}} */
 const contractsManifest = JSON.parse(
   readFileSync(new URL('../docs/contracts.manifest.json', import.meta.url), 'utf8'),
@@ -121,9 +123,11 @@ describe('GitHub webhook scoped agent rules', () => {
 });
 
 describe('PR lifecycle scoped agent rules', () => {
-  it('documents the lifecycle boundary and staged module split decision', () => {
+  it('documents the current root-level lifecycle scope and staged module split decision', () => {
     expect(prLifecycleAgents).toContain('PR lifecycle');
     expect(prLifecycleAgents).toContain('src/pr-lifecycle.ts');
+    expect(prLifecycleAgents).toContain('src/autoMerge.test.ts');
+    expect(prLifecycleAgents).toContain('src/codexReview.test.ts');
     expect(prLifecycleAgents).toContain('compatibility shim');
     expect(prLifecycleAgents).toContain('src/pr-lifecycle/index.ts');
     expect(prLifecycleAgents).toContain('GitHubPullRequestProvider');
@@ -139,5 +143,51 @@ describe('PR lifecycle scoped agent rules', () => {
     expect(prLifecycleAgents).toContain('headSha');
     expect(prLifecycleAgents).toContain('auto-merge blockers');
     expect(prLifecycleAgents).toContain('context.actions.mergePullRequest');
+  });
+});
+
+describe('agent runtime scoped agent rules', () => {
+  it('documents runtime, timeline, resume lifecycle, and masking expectations', () => {
+    expect(agentRuntimeAgents).toContain('agent runtime');
+    expect(agentRuntimeAgents).toContain('timeline');
+    expect(agentRuntimeAgents).toContain('resume lifecycle');
+    expect(agentRuntimeAgents).toContain('secret masking');
+    expect(agentRuntimeAgents).toContain('tool call summary');
+    expect(agentRuntimeAgents).toContain('spawn');
+    expect(agentRuntimeAgents).toContain('completion error');
+    expect(agentRuntimeAgents).toContain('runtime state');
+  });
+
+  it('tracks runtime and timeline implementation files in the contracts manifest', () => {
+    const runtimeContract = contractById('plugin-runtime');
+
+    expect(runtimeContract.sources).toContain('src/agent-runtime.ts');
+    expect(runtimeContract.sources).toContain('src/agent-runtime/index.ts');
+    expect(runtimeContract.sources).toContain('src/agent-timeline.ts');
+    expect(runtimeContract.sources).toContain('src/agent-runtime/timeline.ts');
+    expect(pluginRuntimeContract).toContain('src/agent-runtime/AGENTS.md');
+    expect(pluginRuntimeContract).toContain('runtime compatibility shim');
+  });
+});
+
+describe('GitHub provider scoped agent rules', () => {
+  it('documents project task queue claim, status, draft, and assignee rules', () => {
+    expect(githubProviderAgents).toContain('GitHub Project task queue');
+    expect(githubProviderAgents).toContain('starting lock');
+    expect(githubProviderAgents).toContain('dispatch');
+    expect(githubProviderAgents).toContain('Status field');
+    expect(githubProviderAgents).toContain('In Progress');
+    expect(githubProviderAgents).toContain('draft issue');
+    expect(githubProviderAgents).toContain('child issue');
+    expect(githubProviderAgents).toContain('assignee');
+  });
+
+  it('documents GraphQL pagination, field lookup, and idempotency review checks', () => {
+    expect(githubProviderAgents).toContain('GraphQL pagination');
+    expect(githubProviderAgents).toContain('field lookup');
+    expect(githubProviderAgents).toContain('idempotency');
+    expect(githubProviderAgents).toContain('pageInfo.hasNextPage');
+    expect(githubProviderAgents).toContain('reuse');
+    expect(githubProviderAgents).toContain('releaseProjectIssue');
   });
 });

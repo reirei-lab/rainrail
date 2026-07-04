@@ -12,7 +12,7 @@ import {
   readRuntimeJsonl,
   readRuntimeTimeline,
   readRuntimeTimelineStatus,
-} from './agent-timeline.js';
+} from './timeline.js';
 
 describe('agent timeline', () => {
   it('extracts OpenClaw session ids from JSON logs', () => {

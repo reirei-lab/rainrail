@@ -1,7 +1,7 @@
 import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 
 import { RainrailBridgeRoom, type RainrailBridgeRoomState } from './bridge-room.js';
-import { createGitHubWebhookIntakeAdapter } from './github-webhook.js';
+import { createRainrailEepBridgeIntakeAdapters } from './eep-bridge-bundle.js';
 import {
   createRainrailHttpApp,
   rainrailHttpRequestBodyLimit,
@@ -30,6 +30,7 @@ export interface RainrailNodeServer {
 }
 
 export function createRainrailNodeServer(options: RainrailNodeServerOptions): RainrailNodeServer {
+  const hasCustomTailAdapter = options.intakeAdapters?.some((adapter) => adapter.tail !== undefined) ?? false;
   const room = new RainrailBridgeRoom(options.state ?? createInMemoryBridgeRoomState(), {
     publishToken: options.publishToken,
     ...(options.replayLimit === undefined ? {} : { replayLimit: options.replayLimit }),
@@ -42,11 +43,12 @@ export function createRainrailNodeServer(options: RainrailNodeServerOptions): Ra
     runtime: options.runtime ?? 'node',
     ...(options.operationalStore === undefined ? {} : { operationalStore: options.operationalStore }),
     intakeAdapters: [
-      createGitHubWebhookIntakeAdapter({
-        secret: options.githubWebhookSecret,
-        ...(options.githubSourceName === undefined ? {} : { sourceName: options.githubSourceName }),
+      ...createRainrailEepBridgeIntakeAdapters({
+        env: { GITHUB_WEBHOOK_SECRET: options.githubWebhookSecret },
+        ...(options.githubSourceName === undefined ? {} : { githubSourceName: options.githubSourceName }),
+        includeCloudflareTail: !hasCustomTailAdapter,
         ...(options.maxWebhookBodyBytes === undefined && options.maxBodyBytes === undefined ? {} : {
-          maxBodyBytes: options.maxWebhookBodyBytes ?? options.maxBodyBytes,
+          githubMaxBodyBytes: options.maxWebhookBodyBytes ?? options.maxBodyBytes,
         }),
       }),
       ...(options.intakeAdapters ?? []),

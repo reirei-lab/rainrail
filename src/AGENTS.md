@@ -1,24 +1,26 @@
-# AGENTS.md - PR lifecycle workflow
+# AGENTS.md - Source boundary rules
 
-This directory owns Rainrail's PR lifecycle workflows: review requests,
-change-request handoff, Codex review handoff, failed-check handoff, base-branch
-conflict checks, and auto-merge decisions. Keep GitHub API access behind
-`GitHubPullRequestProvider`; workflow decisions should use normalized
-`PullRequestReviewTarget`, `PullRequestCheck`, `PullRequestReview`, and
-`PullRequestReviewComment` state instead of raw GitHub payloads.
+This file applies to root-level `src/` implementation and tests. The PR
+lifecycle workflows currently live in `src/pr-lifecycle.ts`, with focused tests
+in `src/reviewRequest.test.ts`, `src/changeRequest.test.ts`,
+`src/codexReview.test.ts`, `src/checkFailure.test.ts`,
+`src/conflictCheck.test.ts`, and `src/autoMerge.test.ts`.
 
-## Module Split
+## PR Lifecycle Scope
 
+- The PR lifecycle boundary owns review requests, change-request handoff, Codex
+  review handoff, failed-check handoff, base-branch conflict checks, and
+  auto-merge decisions.
+- Keep GitHub API access behind `GitHubPullRequestProvider`; workflow decisions
+  should use normalized `PullRequestReviewTarget`, `PullRequestCheck`,
+  `PullRequestReview`, and `PullRequestReviewComment` state instead of raw
+  GitHub payloads.
 - The implementation currently lives in `src/pr-lifecycle.ts`. Move behavior
   into `src/pr-lifecycle/index.ts` only with a compatibility shim at
   `src/pr-lifecycle.ts` so existing imports keep working.
-- Split only when the destination modules are protected by focused tests. Keep
-  review request, change-request, Codex review, check failure, conflict check,
-  auto-merge, comment formatting, and shared freshness helpers in separate
-  modules when that reduces coupling.
-- Do not move provider HTTP, GraphQL pagination, or project-item mutation code
-  into this boundary. Provider adapters may fetch pages, but this workflow
-  boundary decides from normalized, complete snapshots.
+- If the implementation moves under `src/pr-lifecycle/`, move these PR lifecycle
+  rules with it and keep `scripts/validate-agents.test.mjs` checking the active
+  scope so AGENTS.md never sits beside, rather than above, the files it governs.
 
 ## Review Freshness
 
@@ -71,10 +73,7 @@ conflict checks, and auto-merge decisions. Keep GitHub API access behind
 
 ## Tests And Docs
 
-- Add or update focused tests in `src/reviewRequest.test.ts`,
-  `src/changeRequest.test.ts`, `src/codexReview.test.ts`,
-  `src/checkFailure.test.ts`, `src/conflictCheck.test.ts`, or
-  `src/autoMerge.test.ts` before changing lifecycle decisions.
+- Add or update focused PR lifecycle tests before changing lifecycle decisions.
 - Cover pagination-sensitive behavior at the provider boundary and assert that
   workflow code receives complete normalized snapshots.
 - Update `docs/plugin-runtime-contract.md`, `docs/repo-test-coverage-matrix.md`,
