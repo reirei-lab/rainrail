@@ -99,4 +99,22 @@ const docs = [
       }
     </div>
   </section>
+
+  <section class="section">
+    <h2>CLI quick start</h2>
+    <p>
+      Install the Rainrail CLI by downloading the installer first, inspecting
+      it locally, and then running the same script.
+    </p>
+    <pre><code>curl -fsSLO https://rainrail.dev/install.sh
+less install.sh
+bash install.sh
+~/.rainrail/bin/rainrail help</code></pre>
+    <p>
+      The installer places the CLI under <code>~/.rainrail/bin</code>. After
+      your shell can find that bin directory, use <code>rainrail help</code>
+      for built-in commands and official plugin aliases. Use
+      <code>{'rainrail <plugin> help'}</code> for each plugin's command details.
+    </p>
+  </section>
 </SiteLayout>
