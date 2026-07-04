@@ -17,6 +17,7 @@
     "pages:deploy:preview": "pnpm pages:build && wrangler pages deploy apps/www/dist --project-name rainrail-www --branch \"${RAINRAIL_PAGES_BRANCH:-preview}\"",
     "pages:deploy:production": "pnpm pages:build && wrangler pages deploy apps/www/dist --project-name rainrail-www --branch main",
     "pages:smoke": "node scripts/smoke-cloudflare-pages.mjs",
+    "release:cli": "node scripts/package-cli-release.mjs",
     "test": "vitest run scripts src packages",
     "typecheck": "tsc --noEmit && pnpm --filter @rainrail/cli typecheck"
   },

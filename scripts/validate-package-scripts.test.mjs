@@ -52,6 +52,9 @@ describe('package scripts used by pull request CI', () => {
 
   it('defines the Rainrail CLI workspace package and binary entrypoint', () => {
     expect(packageJson.scripts.test).toBe('vitest run scripts src packages');
+    expect(packageJson.scripts['release:cli']).toBe(
+      'node scripts/package-cli-release.mjs',
+    );
     expect(cliPackageJson.name).toBe('@rainrail/cli');
     expect(cliPackageJson.bin.rainrail).toBe('./dist/bin/rainrail.js');
     expect(cliPackageJson.scripts.build).toBe(
