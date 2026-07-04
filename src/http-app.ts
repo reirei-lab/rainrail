@@ -21,6 +21,8 @@ import type {
   StoredOperationalEvent,
   StoredStaleProjectClaimWarning,
 } from './operational-store.js';
+import type { ProjectIssue } from './project-issues.js';
+import type { TaskQueueProvider } from './task-queue.js';
 
 export interface RainrailBridgeRoomFetchTarget {
   fetch(request: Request): Response | Promise<Response>;
@@ -33,6 +35,7 @@ export interface RainrailHttpAppOptions {
   runtime?: string;
   intakeAdapters?: readonly RainrailIntakeAdapter[];
   operationalStore?: RainrailOperationalStore;
+  taskQueue?: Pick<TaskQueueProvider, 'listProjectIssues' | 'selection'>;
 }
 
 export interface RainrailHttpApp {
@@ -536,7 +539,7 @@ function dashboardV1SourcesResponse(url: URL, options: RainrailHttpAppOptions): 
   });
 }
 
-function dashboardV1QueueResponse(url: URL, options: RainrailHttpAppOptions): Response {
+async function dashboardV1QueueResponse(url: URL, options: RainrailHttpAppOptions): Promise<Response> {
   const store = options.operationalStore;
   if (store === undefined) {
     return jsonResponse({ error: 'operational_store_not_configured' }, { status: 503 });
@@ -548,15 +551,17 @@ function dashboardV1QueueResponse(url: URL, options: RainrailHttpAppOptions): Re
   const snapshot = store.snapshot();
   const tasks = store.listAgentTasks();
   const staleWarningsByTaskId = new Map(snapshot.warnings.staleProjectClaims.map((warning) => [warning.taskId, warning]));
-  const rows = tasks
-    .map((task) => agentTaskToQueueRow(task, staleWarningsByTaskId.get(task.id)))
+  const taskRows = tasks.map((task) => agentTaskToQueueRow(task, staleWarningsByTaskId.get(task.id)));
+  const projectIssueRows = await projectIssueQueueRows(options.taskQueue, tasks);
+  const allRows = [...taskRows, ...projectIssueRows];
+  const rows = allRows
     .filter((row) => matchesOptionalFilter(row.status, url.searchParams.get('filter[status]')));
-  const page = pageRows(rows, collection.limit, collection.cursor, (row) => row.updatedAt);
+  const page = pageRows(rows, collection.limit, collection.cursor, queueCursorValue);
   if (!page.ok) return page.response;
 
   return jsonResponse({
     data: page.rows,
-    summary: queueSummary(tasks, store.listEventHandlerRetries(), snapshot.warnings.staleProjectClaims),
+    summary: queueSummary(allRows, store.listEventHandlerRetries(), snapshot.warnings.staleProjectClaims),
     page: { limit: collection.limit, nextCursor: page.nextCursor },
   });
 }
@@ -858,6 +863,72 @@ function agentTaskToQueueRow(task: StoredAgentTask, staleWarning: StoredStalePro
   };
 }
 
+async function projectIssueQueueRows(
+  taskQueue: Pick<TaskQueueProvider, 'listProjectIssues' | 'selection'> | undefined,
+  tasks: StoredAgentTask[],
+) {
+  if (taskQueue === undefined) return [];
+
+  const representedIssueKeys = new Set(tasks.flatMap(taskProjectIssueKeys));
+  const issues = await taskQueue.listProjectIssues();
+  return issues
+    .filter((issue) => !representedIssueKeys.has(projectIssueKey(issue)))
+    .filter((issue) => projectIssueQueueStatus(issue, taskQueue.selection) !== undefined)
+    .map((issue) => projectIssueToQueueRow(issue, taskQueue.selection));
+}
+
+function projectIssueToQueueRow(issue: ProjectIssue, selection: TaskQueueProvider['selection'] | undefined) {
+  return {
+    id: `project:${issue.id}`,
+    type: 'queue-item',
+    status: projectIssueQueueStatus(issue, selection) ?? 'upcoming',
+    title: issue.title,
+    issue: {
+      ...(issue.repository === undefined ? {} : { repository: issue.repository }),
+      ...(issue.number === undefined ? {} : { number: issue.number }),
+      ...(issue.url === undefined ? {} : { url: issue.url }),
+    },
+    projectStatus: issue.status ?? 'unknown',
+  };
+}
+
+function projectIssueQueueStatus(issue: ProjectIssue, selection: TaskQueueProvider['selection'] | undefined): string | undefined {
+  if (normalizeQueueToken(issue.state) === 'closed') return undefined;
+  const status = normalizeQueueToken(issue.status);
+  if (status === normalizeQueueToken(selection?.inProgressStatus ?? 'in-progress')) return 'in-progress';
+  if (
+    status === normalizeQueueToken(selection?.todoStatus ?? 'todo')
+    || status === normalizeQueueToken(selection?.backlogStatus ?? 'backlog')
+  ) return 'upcoming';
+  return undefined;
+}
+
+function taskProjectIssueKeys(task: StoredAgentTask): string[] {
+  return [
+    projectIssueKeyFromUnknown(task.issue),
+    stringField(recordValue(task.claim), 'projectItemId'),
+  ].filter((value): value is string => value !== undefined);
+}
+
+function projectIssueKey(issue: ProjectIssue): string {
+  if (issue.repository !== undefined && issue.number !== undefined) {
+    return `${issue.repository}#${issue.number}`;
+  }
+  return issue.id;
+}
+
+function projectIssueKeyFromUnknown(issue: unknown): string | undefined {
+  const record = recordValue(issue);
+  const repository = stringField(record, 'repository');
+  const number = numberField(record, 'number');
+  if (repository === undefined || number === undefined) return undefined;
+  return `${repository}#${number}`;
+}
+
+function normalizeQueueToken(value: string | null | undefined): string {
+  return (value ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
 function queueStatusFromTaskStatus(status: string): string {
   if (status === 'running') return 'in-progress';
   if (status === 'queued' || status === 'pending') return 'upcoming';
@@ -872,27 +943,27 @@ function queueStatusFromTaskStatus(status: string): string {
 }
 
 function queueSummary(
-  tasks: StoredAgentTask[],
+  rows: Array<ReturnType<typeof agentTaskToQueueRow> | ReturnType<typeof projectIssueToQueueRow>>,
   retries: StoredEventHandlerRetry[],
   staleWarnings: StoredStaleProjectClaimWarning[],
 ) {
   const blockedReasons = [...new Set([
     ...staleWarnings.map((warning) => `stale project claim: ${warning.status}`),
-    ...tasks.map((task) => task.projectClaim?.reason).filter((reason): reason is string => reason !== undefined),
+    ...rows.map((row) => 'blockedReason' in row ? row.blockedReason : undefined).filter((reason): reason is string => reason !== undefined),
     ...retries.map((retry) => retry.lastError),
   ])];
-  const blockedCount = tasks.filter((task) =>
-    queueStatusFromTaskStatus(task.status) === 'blocked'
-    || staleWarnings.some((warning) => warning.taskId === task.id)
-  ).length;
   return {
-    upcomingIssues: tasks.filter((task) => queueStatusFromTaskStatus(task.status) === 'upcoming').length,
+    upcomingIssues: rows.filter((row) => row.status === 'upcoming').length,
     blockedReasons,
-    blockedCount,
+    blockedCount: rows.filter((row) => row.status === 'blocked').length,
     staleClaimCount: staleWarnings.length,
-    inProgressCount: tasks.filter((task) => queueStatusFromTaskStatus(task.status) === 'in-progress').length,
-    claimedCount: tasks.filter((task) => task.claim !== undefined && task.projectClaim?.status !== 'released').length,
+    inProgressCount: rows.filter((row) => row.status === 'in-progress').length,
+    claimedCount: rows.filter((row) => 'claimLock' in row && row.claimLock !== undefined).length,
   };
+}
+
+function queueCursorValue(row: ReturnType<typeof agentTaskToQueueRow> | ReturnType<typeof projectIssueToQueueRow>): string {
+  return 'updatedAt' in row ? row.updatedAt : row.id;
 }
 
 function settingRow(id: string, label: string, value: string) {
@@ -913,6 +984,11 @@ function stringField(record: Record<string, unknown> | undefined, field: string)
   const value = record?.[field];
   if (typeof value === 'string') return value;
   return value === null || value === undefined ? undefined : String(value);
+}
+
+function numberField(record: Record<string, unknown> | undefined, field: string): number | undefined {
+  const value = record?.[field];
+  return typeof value === 'number' ? value : undefined;
 }
 
 async function publishEvent(options: RainrailHttpAppOptions, event: RainrailEventEnvelope): Promise<Response> {

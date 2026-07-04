@@ -117,8 +117,8 @@ Dashboard / mobile / operator tooling 向けの public v1 operational API は次
   `limit`、`cursor` を受け付ける。
 - `GET /api/v1/events/{eventId}`: sanitized envelope、human summary、matched workflow、
   retry/audit context を含む event detail を返す。
-- `GET /api/v1/workflow-runs`: workflow/action audit rows を返す。`filter[outcome]`、
-  `filter[event]`、`limit`、`cursor` を受け付ける。
+- `GET /api/v1/workflow-runs`: workflow/action audit rows を返す。`filter[status]`、
+  `limit`、`cursor` を受け付ける。
 - `GET /api/v1/workflow-runs/{workflowRunId}`: workflow run detail と source event context
   を返す。
 - `GET /api/v1/agent-tasks`: agent task rows を返す。`filter[status]`、`limit`、`cursor`

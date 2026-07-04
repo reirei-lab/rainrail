@@ -457,6 +457,78 @@ describe('Rainrail dashboard API', () => {
     operationalStore.close();
   });
 
+  it('includes unclaimed project issues from the task queue provider', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:12:00.000Z'),
+    });
+    operationalStore.recordAgentTask({
+      id: 'agent_task_running',
+      title: 'Already claimed issue',
+      agentSessionId: 'agent:main:rainrail-115',
+      branchName: 'agent/reirei-lab-rainrail-115',
+      status: 'running',
+      issue: { repository: 'reirei-lab/rainrail', number: 115 },
+      claim: { projectItemId: 'PVTI_115', originalStatus: 'In Progress' },
+    });
+    const app = createTestApp({
+      eventsBearerToken: 'events-token',
+      operationalStore,
+      taskQueue: {
+        selection: { todoStatus: 'Todo', backlogStatus: 'Backlog', inProgressStatus: 'In Progress' },
+        listProjectIssues: async () => [
+          {
+            id: 'PVTI_115',
+            title: 'Already claimed issue',
+            status: 'Todo',
+            state: 'OPEN',
+            assigneeLogins: ['reirei-agent'],
+            repository: 'reirei-lab/rainrail',
+            number: 115,
+            url: 'https://github.com/reirei-lab/rainrail/issues/115',
+          },
+          {
+            id: 'PVTI_116',
+            title: 'Upcoming issue',
+            status: 'Todo',
+            state: 'OPEN',
+            assigneeLogins: ['reirei-agent'],
+            repository: 'reirei-lab/rainrail',
+            number: 116,
+            url: 'https://github.com/reirei-lab/rainrail/issues/116',
+          },
+        ],
+      },
+    });
+
+    const queue = await app.fetch(new Request('https://rainrail.local/api/v1/queue?filter[status]=upcoming', {
+      headers: { authorization: 'Bearer events-token' },
+    }));
+    expect(queue.status).toBe(200);
+    await expect(queue.json()).resolves.toMatchObject({
+      data: [{
+        id: 'project:PVTI_116',
+        type: 'queue-item',
+        status: 'upcoming',
+        title: 'Upcoming issue',
+        issue: {
+          repository: 'reirei-lab/rainrail',
+          number: 116,
+          url: 'https://github.com/reirei-lab/rainrail/issues/116',
+        },
+        projectStatus: 'Todo',
+      }],
+      summary: {
+        upcomingIssues: 1,
+        inProgressCount: 1,
+        claimedCount: 1,
+      },
+    });
+
+    operationalStore.close();
+  });
+
   it('does not report released project claims as active queue locks', async () => {
     const operationalStore = new RainrailOperationalStore({
       databasePath: ':memory:',
@@ -772,6 +844,7 @@ function createTestApp(options: {
   operationalStore?: RainrailOperationalStore;
   runtime?: string;
   intakeAdapters?: Parameters<typeof createRainrailHttpApp>[0]['intakeAdapters'];
+  taskQueue?: Parameters<typeof createRainrailHttpApp>[0]['taskQueue'];
 } = {}) {
   return createRainrailHttpApp({
     room: new RainrailBridgeRoom(fakeState(), { publishToken: 'publish-token' }),
@@ -779,6 +852,7 @@ function createTestApp(options: {
     ...(options.eventsBearerToken === undefined ? {} : { eventsBearerToken: options.eventsBearerToken }),
     ...(options.operationalStore === undefined ? {} : { operationalStore: options.operationalStore }),
     ...(options.runtime === undefined ? {} : { runtime: options.runtime }),
+    ...(options.taskQueue === undefined ? {} : { taskQueue: options.taskQueue }),
     intakeAdapters: options.intakeAdapters ?? [
       createGitHubWebhookIntakeAdapter({ secret: 'secret' }),
     ],

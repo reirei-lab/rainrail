@@ -621,8 +621,8 @@ function formatIssue(row: DashboardRow): string {
 
 function rowTitle(row: DashboardRow): string {
   if ('label' in row && typeof row.label === 'string') return row.label;
-  if ('name' in row && typeof row.name === 'string') return row.name;
   if ('summary' in row && typeof row.summary === 'string') return row.summary;
+  if (row.type !== 'event' && 'name' in row && typeof row.name === 'string') return row.name;
   if ('title' in row && typeof row.title === 'string') return row.title;
   return row.id;
 }

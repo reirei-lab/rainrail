@@ -72,6 +72,11 @@ describe('dashboard operational views', () => {
     expect(dashboardApp).not.toContain('|| data.settings.length > 0');
   });
 
+  it('uses event summaries before source names for row titles', () => {
+    expect(dashboardApp.indexOf("if ('summary' in row && typeof row.summary === 'string') return row.summary;"))
+      .toBeLessThan(dashboardApp.indexOf("if (row.type !== 'event' && 'name' in row && typeof row.name === 'string') return row.name;"));
+  });
+
   it('keeps the dashboard dense and responsive', () => {
     expect(globalStyles).toContain('.dashboard-overview-grid');
     expect(globalStyles).toContain('.dashboard-filterbar');
