@@ -41,12 +41,35 @@ describe('Rainrail CLI built-in commands', () => {
         profile: 'local',
         yes: true,
       },
+      errors: [],
     });
   });
 
   it('defaults to help when no command is provided', () => {
     expect(parseRainrailArguments([]).commandName).toBe('help');
     expect(getBuiltInCommand('help')?.name).toBe('help');
+  });
+
+  it('reports parse errors for shared options that require a value', () => {
+    expect(parseRainrailArguments(['--config'])).toEqual({
+      commandName: 'help',
+      commandArgs: [],
+      options: {
+        json: false,
+        yes: false,
+      },
+      errors: ['Missing value for --config.'],
+    });
+
+    expect(parseRainrailArguments(['doctor', '--profile'])).toEqual({
+      commandName: 'doctor',
+      commandArgs: [],
+      options: {
+        json: false,
+        yes: false,
+      },
+      errors: ['Missing value for --profile.'],
+    });
   });
 
   it('prints built-in commands from rainrail help', () => {
@@ -66,6 +89,17 @@ describe('Rainrail CLI built-in commands', () => {
     expect(result.exitCode).toBe(2);
     expect(result.stdout).toBe('');
     expect(result.stderr).toContain('rainrail doctor is not implemented yet.');
+  });
+
+  it('returns a parse error before running a command when required shared option values are missing', () => {
+    expect(runRainrailCli(['--config'])).toEqual({
+      exitCode: 1,
+      stdout: '',
+      stderr: 'Missing value for --config.\n',
+    });
+    expect(runRainrailCli(['doctor', '--profile']).stderr).toBe(
+      'Missing value for --profile.\n',
+    );
   });
 
   it('returns a clear error for unknown commands', () => {

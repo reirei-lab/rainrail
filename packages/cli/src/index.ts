@@ -25,6 +25,7 @@ export type ParsedRainrailArguments = {
   readonly commandName: string;
   readonly commandArgs: readonly string[];
   readonly options: SharedOptions;
+  readonly errors: readonly string[];
 };
 
 export type RainrailCliResult = {
@@ -84,6 +85,7 @@ export function getBuiltInCommand(name: string): BuiltInCommand | undefined {
 
 export function parseRainrailArguments(argv: readonly string[]): ParsedRainrailArguments {
   const commandArgs: string[] = [];
+  const errors: string[] = [];
   const parsedOptions: { config?: string; profile?: string; json: boolean; yes: boolean } = {
     json: false,
     yes: false,
@@ -115,7 +117,7 @@ export function parseRainrailArguments(argv: readonly string[]): ParsedRainrailA
     if (arg === '--config' || arg === '--profile') {
       const value = argv[index + 1];
       if (value === undefined || value.startsWith('--')) {
-        commandArgs.push(arg);
+        errors.push(`Missing value for ${arg}.`);
         continue;
       }
 
@@ -150,6 +152,7 @@ export function parseRainrailArguments(argv: readonly string[]): ParsedRainrailA
     commandName: commandName ?? 'help',
     commandArgs,
     options: parsedOptions,
+    errors,
   };
 }
 
@@ -176,6 +179,14 @@ export function formatHelp(): string {
 
 export function runRainrailCli(argv: readonly string[]): RainrailCliResult {
   const parsed = parseRainrailArguments(argv);
+  if (parsed.errors.length > 0) {
+    return {
+      exitCode: 1,
+      stdout: '',
+      stderr: `${parsed.errors.join('\n')}\n`,
+    };
+  }
+
   const command = getBuiltInCommand(parsed.commandName);
 
   if (command === undefined) {
