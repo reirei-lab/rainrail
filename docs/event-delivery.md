@@ -157,12 +157,14 @@ object payload も allowlist された shallow metadata（`action` / `status` /
 `conclusion`）のうち、短い token 文字列または `null` だけに縮約し、object でない payload は
 空 object にする。任意 URL や query を
 持ち込める `links` は保存しない。`subject.url` と `rawPayload.reference` は URL として
-parse でき、scheme が GitHub provider URL、`github://deliveries/...`、または
-`cloudflare://deliveries/...` の場合だけ、
+parse でき、scheme が GitHub provider URL、`github://deliveries/...`、
+`cloudflare://deliveries/...`、`manual://deliveries/...`、または
+`chat://deliveries/...` の場合だけ、
 userinfo / query / fragment を除去してから保存する。
 GitHub provider URL は `https://github.com/<owner>/<repo>`、issue / pull、
 check run の `runs/<id>`、Actions run の `actions/runs/<id>` だけを許可する。
-delivery scheme の path は短い安全な delivery id 1 セグメントだけを許可し、
+delivery scheme は provider raw payload 本文を保存しないための外部 delivery 参照であり、
+host は `deliveries`、path は短い安全な delivery id 1 セグメントだけを許可し、
 `/tokens/<secret>` や `token=...` のような値は拒否する。
 URL として parse できない optional `subject.url` は保存せず、必須の
 `rawPayload.reference` が parse できない、または allowlist 外 scheme の場合は publish を

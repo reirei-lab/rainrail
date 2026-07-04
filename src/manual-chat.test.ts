@@ -312,6 +312,68 @@ describe('manual and chat input source contract', () => {
     expect(new URL(event.rawPayload.reference).pathname).not.toContain(':');
   });
 
+  it('keeps delivery ids distinct when external ids differ only by unsafe separators', async () => {
+    const first = await createManualInputEvent({
+      channel: 'chat',
+      receivedAt: new Date('2026-07-04T09:21:23.000Z'),
+      deliveryId: 'chat:a:b',
+      conversationId: 'conversation-separator',
+      message: 'first',
+    });
+    const second = await createManualInputEvent({
+      channel: 'chat',
+      receivedAt: new Date('2026-07-04T09:21:24.000Z'),
+      deliveryId: 'chat/a/b',
+      conversationId: 'conversation-separator',
+      message: 'second',
+    });
+    const third = await createManualInputEvent({
+      channel: 'chat',
+      receivedAt: new Date('2026-07-04T09:21:25.000Z'),
+      conversationId: 'slack:C123',
+      messageId: 'message/456',
+      message: 'third',
+    });
+    const fourth = await createManualInputEvent({
+      channel: 'chat',
+      receivedAt: new Date('2026-07-04T09:21:26.000Z'),
+      conversationId: 'slack/C123',
+      messageId: 'message:456',
+      message: 'fourth',
+    });
+
+    expect(first.delivery.id).not.toBe(second.delivery.id);
+    expect(third.delivery.id).not.toBe(fourth.delivery.id);
+    for (const event of [first, second, third, fourth]) {
+      expect(event.delivery.id).toMatch(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/);
+      expect(event.rawPayload.reference).toBe(`chat://deliveries/${event.delivery.id}`);
+    }
+  });
+
+  it('keeps long conversation identifiers distinct after normalization', async () => {
+    const prefix = 'conversation-prefix-'.repeat(8);
+    const first = await createManualInputEvent({
+      channel: 'chat',
+      receivedAt: new Date('2026-07-04T09:21:23.000Z'),
+      conversationId: `${prefix}-one`,
+      messageId: 'message-one',
+      message: 'first',
+    });
+    const second = await createManualInputEvent({
+      channel: 'chat',
+      receivedAt: new Date('2026-07-04T09:21:24.000Z'),
+      conversationId: `${prefix}-two`,
+      messageId: 'message-two',
+      message: 'second',
+    });
+
+    expect(first.subject.id).not.toBe(second.subject.id);
+    expect(first.payload.conversation.id).toBe(first.subject.id);
+    expect(second.payload.conversation.id).toBe(second.subject.id);
+    expect(first.subject.id.length).toBeLessThanOrEqual(128);
+    expect(second.subject.id.length).toBeLessThanOrEqual(128);
+  });
+
   it('keeps non-GitHub conversation URLs out of the subject while preserving payload context', async () => {
     const storage = fakeState();
     const app = createRainrailHttpApp({
@@ -425,6 +487,14 @@ describe('manual and chat input source contract', () => {
   });
 
   it('redacts credential-looking user text before publishing chat payloads', async () => {
+    const directEvent = await createManualInputEvent({
+      channel: 'chat',
+      deliveryId: 'direct-redaction-delivery',
+      conversationId: 'direct-redaction-session',
+      message: 'access_token=gho_direct client_secret: direct-secret sessionToken=direct-session',
+    });
+    expect(directEvent.payload.message.text).toBe('access_token=[redacted] client_secret: [redacted] sessionToken=[redacted]');
+
     const storage = fakeState();
     const app = createRainrailHttpApp({
       room: new RainrailBridgeRoom(storage, { publishToken: TEST_PUBLISH_TOKEN }),
@@ -447,7 +517,7 @@ describe('manual and chat input source contract', () => {
       },
       body: JSON.stringify({
         conversationId: 'chat-session-1',
-        message: 'Please debug with token=super-secret, password: hunter2, {"apiKey":"abc123"}, and Bearer abc.def.ghi',
+        message: 'Please debug with token=super-secret, password: hunter2, {"apiKey":"abc123"}, access_token=gho_secret, github_token=ghp_secret, client_secret: oauth-secret, sessionToken=browser-secret, and Bearer abc.def.ghi',
         actor: { displayName: 'secret=actor-secret' },
       }),
     }));
@@ -457,7 +527,7 @@ describe('manual and chat input source contract', () => {
     expect(storedEvent).toMatchObject({
       payload: {
         message: {
-          text: 'Please debug with token=[redacted], password: [redacted], {"apiKey": "[redacted]"}, and Bearer [redacted]',
+          text: 'Please debug with token=[redacted], password: [redacted], {"apiKey":"[redacted]"}, access_token=[redacted], github_token=[redacted], client_secret: [redacted], sessionToken=[redacted], and Bearer [redacted]',
         },
         actor: {
           displayName: 'secret=[redacted]',
@@ -467,6 +537,10 @@ describe('manual and chat input source contract', () => {
     expect(JSON.stringify(storedEvent)).not.toContain('super-secret');
     expect(JSON.stringify(storedEvent)).not.toContain('hunter2');
     expect(JSON.stringify(storedEvent)).not.toContain('abc123');
+    expect(JSON.stringify(storedEvent)).not.toContain('gho_secret');
+    expect(JSON.stringify(storedEvent)).not.toContain('ghp_secret');
+    expect(JSON.stringify(storedEvent)).not.toContain('oauth-secret');
+    expect(JSON.stringify(storedEvent)).not.toContain('browser-secret');
     expect(JSON.stringify(storedEvent)).not.toContain('abc.def.ghi');
     expect(JSON.stringify(storedEvent)).not.toContain('actor-secret');
   });

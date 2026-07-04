@@ -380,35 +380,35 @@ function normalizeReplyTargetInput(value: unknown): ManualInputReplyTarget | und
 }
 
 function safeIdentifierSegment(value: string, fallback: string): string {
-  const normalized = value.trim().replace(/[^A-Za-z0-9_.:-]+/gu, '-').replace(/^-+|-+$/gu, '');
+  const trimmed = value.trim();
+  const normalized = trimmed.replace(/[^A-Za-z0-9_.:-]+/gu, '-').replace(/^-+|-+$/gu, '');
+  const changedBySanitization = normalized !== trimmed;
   if (normalized.length === 0) return fallback;
   const safe = /^[A-Za-z0-9]/u.test(normalized) ? normalized : `${fallback}-${normalized}`;
-  return safe.slice(0, 128);
+  return compactIdentifierWithHash(safe, value, 128, { includeHash: changedBySanitization });
 }
 
 function safeDeliveryReferenceSegment(value: string, fallback: string, maxLength = 128): string {
-  const normalized = value.trim().replace(/[^A-Za-z0-9_.-]+/gu, '-').replace(/^-+|-+$/gu, '');
+  const trimmed = value.trim();
+  const normalized = trimmed.replace(/[^A-Za-z0-9_.-]+/gu, '-').replace(/^-+|-+$/gu, '');
+  const changedBySanitization = normalized !== trimmed;
   const safe = normalized.length === 0
     ? fallback
     : /^[A-Za-z0-9]/u.test(normalized) ? normalized : `${fallback}-${normalized}`;
-  if (safe.length <= maxLength) return safe;
-
-  const hash = stableHash(value);
-  const suffix = `-${hash}`;
-  return `${safe.slice(0, Math.max(1, maxLength - suffix.length))}${suffix}`;
+  return compactIdentifierWithHash(safe, value, maxLength, { includeHash: changedBySanitization });
 }
 
 function safeDeliveryReferenceSuffix(value: string, fallback: string, maxLength: number): string {
-  const normalized = value.trim().replace(/[^A-Za-z0-9_.-]+/gu, '-').replace(/^-+|-+$/gu, '');
+  const trimmed = value.trim();
+  const normalized = trimmed.replace(/[^A-Za-z0-9_.-]+/gu, '-').replace(/^-+|-+$/gu, '');
+  const changedBySanitization = normalized !== trimmed;
   const safe = normalized.length === 0
     ? fallback
     : /^[A-Za-z0-9]/u.test(normalized) ? normalized : `${fallback}-${normalized}`;
-  if (safe.length <= maxLength) return safe;
-
-  const hash = stableHash(value);
-  const hashSuffix = `-${hash}`;
-  const tailLength = Math.max(1, maxLength - hashSuffix.length);
-  return `${safe.slice(Math.max(0, safe.length - tailLength))}${hashSuffix}`;
+  return compactIdentifierWithHash(safe, value, maxLength, {
+    includeHash: changedBySanitization,
+    keepTail: true,
+  });
 }
 
 function buildManualInputDeliveryId(channel: ManualInputChannel, conversationId: string, uniqueId: string): string {
@@ -448,6 +448,24 @@ function compactIdentifierSuffix(value: string, fallback: string, maxLength: num
   return `${safe.slice(Math.max(0, safe.length - tailLength))}${hashSuffix}`;
 }
 
+function compactIdentifierWithHash(
+  safe: string,
+  hashInput: string,
+  maxLength: number,
+  options: { includeHash?: boolean; keepTail?: boolean } = {},
+): string {
+  if (safe.length <= maxLength && options.includeHash !== true) return safe;
+
+  const hashSuffix = `-${stableHash(hashInput)}`;
+  if (safe.length + hashSuffix.length <= maxLength) return `${safe}${hashSuffix}`;
+
+  const keepLength = Math.max(1, maxLength - hashSuffix.length);
+  const kept = options.keepTail === true
+    ? safe.slice(Math.max(0, safe.length - keepLength))
+    : safe.slice(0, keepLength);
+  return `${kept}${hashSuffix}`;
+}
+
 function stableHash(value: string): string {
   let hash = 0x811c9dc5;
   for (let index = 0; index < value.length; index += 1) {
@@ -482,9 +500,11 @@ function safeUrl(value: string | undefined): string | undefined {
 
 function redactUserText(value: string): string {
   return value
-    .replace(/\b(token|secret|password|api[_-]?key)=([^\s"'<>`,;)]+)/giu, '$1=[redacted]')
-    .replace(/(["']?)(token|secret|password|api[_-]?key)\1\s*:\s*(["'])[^"'\r\n]+?\3/giu, '$1$2$1: $3[redacted]$3')
-    .replace(/\b(token|secret|password|api[_-]?key)\s*:\s*[^\s"'<>`,;)]+/giu, '$1: [redacted]')
+    .replace(/(^|[.?&{\s"'<>`,;\[(])(["']?)([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification|session)[A-Za-z0-9_.-]*)\2\s*=\s*(["'])(?:\\.|(?!\4)[^\\])*\4/giu, '$1$2$3$2=[redacted]')
+    .replace(/(^|[.?&{\s"'<>`,;\[(])(["']?)([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification|session)[A-Za-z0-9_.-]*)\2\s*=\s*([^&\s"'<>`,;)]+)/giu, '$1$2$3$2=[redacted]')
+    .replace(/(["'])([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification|session)[A-Za-z0-9_.-]*)\1(\s*:\s*)(["'])(?:\\.|(?!\4)[^\\])*\4/giu, '$1$2$1$3$4[redacted]$4')
+    .replace(/(^|[{\s"'<>`,;\[(])(["']?)([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification|session)[A-Za-z0-9_.-]*)\2(\s*:\s*)(["'])(?:\\.|(?!\5)[^\\])*\5/giu, '$1$2$3$2$4$5[redacted]$5')
+    .replace(/(^|[{\s"'<>`,;\[(])(["']?)([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification|session)[A-Za-z0-9_.-]*)\2(\s*:\s*)(?!["']|\[redacted\])([^,\s\r\n}\]]+)/giu, '$1$2$3$2$4[redacted]')
     .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gu, 'Bearer [redacted]')
     .trim()
     .slice(0, 8_000);
