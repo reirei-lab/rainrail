@@ -443,6 +443,13 @@
       }
     },
     {
+      "id": "cli-project-local-layout",
+      "title": "CLI project-local layout",
+      "sources": ["packages/cli/src/index.ts"],
+      "docs": ["docs/project-local-layout.md"],
+      "tests": ["packages/cli/src/commands.test.ts"]
+    },
+    {
       "id": "workflow-plugins",
       "title": "Packaged workflow plugins",
       "sources": ["src/mention-draft.ts", "src/cloudflare/issue-reporter.ts"],
