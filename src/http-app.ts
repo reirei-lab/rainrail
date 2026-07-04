@@ -23,7 +23,7 @@ import type {
   StoredOperationalEvent,
   StoredStaleProjectClaimWarning,
 } from './operational-store.js';
-import { getNextProjectIssueToStart, type ProjectIssue } from './project-issues.js';
+import { getInProgressProjectIssues, getNextProjectIssueToStart, type ProjectIssue } from './project-issues.js';
 import type { TaskQueueProvider } from './task-queue.js';
 
 const DEFAULT_MAX_CONCURRENT_AGENT_TASKS = 1;
@@ -635,11 +635,13 @@ function dashboardV1SourcesResponse(url: URL, options: RainrailHttpAppOptions): 
   const latestBySource = latestEventBySourceName(store.listEvents());
   const adapters = options.intakeAdapters ?? [];
   const duplicateSourceNames = duplicateValues(adapters.map((adapter) => adapter.name));
+  const reservedSourceRowIds = new Set(adapters.map((adapter) => adapter.name));
+  const assignedSourceRowIds = new Set<string>();
   const rows = adapters
     .map((adapter, index) => intakeAdapterToSourceRow(
       adapter,
       latestBySource.get(adapter.name),
-      duplicateSourceNames.has(adapter.name) ? `${adapter.name}:${index}` : adapter.name,
+      sourceRowId(adapter.name, index, duplicateSourceNames, reservedSourceRowIds, assignedSourceRowIds),
     ))
     .filter((row) => matchesOptionalFilter(row.sourceType, url.searchParams.get('filter[source]')));
   const page = pageRows(rows, collection.limit, collection.cursor, (row) => row.name);
@@ -690,6 +692,10 @@ function dashboardV1SettingsResponse(url: URL, options: RainrailHttpAppOptions):
 
   const collection = parseCollectionRequest(url, []);
   if (!collection.ok) return collection.response;
+  const sort = url.searchParams.get('sort');
+  if (sort === 'newest') {
+    return jsonResponse({ error: 'unsupported_sort', sort }, { status: 400 });
+  }
 
   const retryCount = store.listEventHandlerRetries().length;
   const rows = [
@@ -949,6 +955,23 @@ function intakeAdapterToSourceRow(adapter: RainrailIntakeAdapter, latestEvent: S
   };
 }
 
+function sourceRowId(
+  name: string,
+  index: number,
+  duplicateSourceNames: Set<string>,
+  reservedSourceRowIds: Set<string>,
+  assignedSourceRowIds: Set<string>,
+): string {
+  let candidate = duplicateSourceNames.has(name) ? `${name}:${index}` : name;
+  let suffix = 1;
+  while (assignedSourceRowIds.has(candidate) || (candidate !== name && reservedSourceRowIds.has(candidate))) {
+    candidate = `${name}:${index}:${suffix}`;
+    suffix += 1;
+  }
+  assignedSourceRowIds.add(candidate);
+  return candidate;
+}
+
 function formatSourceAuthStatus(status: NonNullable<RainrailIntakeAdapter['source']>['authStatus'] | undefined): string {
   if (status === 'not_required') return 'not required';
   return status ?? 'unknown';
@@ -989,9 +1012,6 @@ async function projectIssueQueueRows(
   staleWarningsByTaskId: Map<string, StoredStaleProjectClaimWarning>,
 ) {
   if (taskQueue === undefined) return [];
-  const effectiveMaxConcurrentAgentTasks = maxConcurrentAgentTasksForSelection(taskQueue.selection);
-  if (localActiveAgentTaskCount(tasks) >= effectiveMaxConcurrentAgentTasks) return [];
-
   const representedIssueKeys = new Set(tasks.flatMap((task) => taskProjectIssueKeys(task, staleWarningsByTaskId.get(task.id))));
   let issues: ProjectIssue[];
   try {
@@ -999,9 +1019,15 @@ async function projectIssueQueueRows(
   } catch {
     return [];
   }
+  const providerInProgressRows = getInProgressProjectIssues(issues, taskQueue.selection)
+    .filter((issue) => !isRepresentedProjectIssue(issue, representedIssueKeys))
+    .map((issue) => projectIssueToQueueRow(issue, 'in-progress'));
+  const effectiveMaxConcurrentAgentTasks = maxConcurrentAgentTasksForSelection(taskQueue.selection);
+  if (localActiveAgentTaskCount(tasks) >= effectiveMaxConcurrentAgentTasks) return providerInProgressRows;
+
   const nextIssue = nextUnrepresentedProjectIssueToStart(issues, taskQueue.selection, representedIssueKeys);
-  if (nextIssue === undefined) return [];
-  return [projectIssueToQueueRow(nextIssue)];
+  if (nextIssue === undefined) return providerInProgressRows;
+  return [...providerInProgressRows, projectIssueToQueueRow(nextIssue)];
 }
 
 function nextUnrepresentedProjectIssueToStart(
@@ -1019,11 +1045,11 @@ function nextUnrepresentedProjectIssueToStart(
   return undefined;
 }
 
-function projectIssueToQueueRow(issue: ProjectIssue) {
+function projectIssueToQueueRow(issue: ProjectIssue, status = 'upcoming') {
   return {
     id: `project:${issue.id}`,
     type: 'queue-item',
-    status: 'upcoming',
+    status,
     title: issue.title,
     issue: {
       ...(issue.repository === undefined ? {} : { repository: issue.repository }),
@@ -1043,8 +1069,18 @@ function taskProjectIssueKeys(task: StoredAgentTask, staleWarning: StoredStalePr
 }
 
 function taskRepresentsProjectIssue(task: StoredAgentTask, staleWarning: StoredStaleProjectClaimWarning | undefined): boolean {
+  if (taskHasActiveIssue(task)) return true;
   if (taskHasActiveClaimLock(task, staleWarning)) return true;
   return task.claim !== undefined && task.projectClaim?.status === 'release_failed';
+}
+
+function taskHasActiveIssue(task: StoredAgentTask): boolean {
+  return projectIssueKeyFromUnknown(task.issue) !== undefined
+    && (
+      task.status === 'queued'
+      || task.status === 'pending'
+      || task.status === 'running'
+    );
 }
 
 function taskHasActiveClaimLock(task: StoredAgentTask, staleWarning: StoredStaleProjectClaimWarning | undefined): boolean {

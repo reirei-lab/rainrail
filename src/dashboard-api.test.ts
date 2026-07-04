@@ -499,6 +499,34 @@ describe('Rainrail dashboard API', () => {
     operationalStore.close();
   });
 
+  it('avoids source row id collisions between duplicate suffixes and adapter names', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:12:00.000Z'),
+    });
+    const app = createTestApp({
+      eventsBearerToken: 'events-token',
+      operationalStore,
+      intakeAdapters: [
+        { name: 'foo', source: { type: 'manual', authStatus: 'not_required' } },
+        { name: 'foo', source: { type: 'manual', authStatus: 'not_required' } },
+        { name: 'foo:0', source: { type: 'manual', authStatus: 'not_required' } },
+      ],
+    });
+
+    const sources = await app.fetch(new Request('https://rainrail.local/api/v1/sources', {
+      headers: { authorization: 'Bearer events-token' },
+    }));
+    expect(sources.status).toBe(200);
+    const body = await sources.json() as { data: Array<{ id: string; name: string }> };
+    const ids = body.data.map((row) => row.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(body.data.find((row) => row.name === 'foo:0')).toMatchObject({ id: 'foo:0' });
+
+    operationalStore.close();
+  });
+
   it('marks stale project claims and abnormal terminal statuses as blocked queue rows', async () => {
     const operationalStore = new RainrailOperationalStore({
       databasePath: ':memory:',
@@ -774,6 +802,126 @@ describe('Rainrail dashboard API', () => {
       data: [],
       summary: {
         upcomingIssues: 0,
+        inProgressCount: 1,
+      },
+    });
+
+    operationalStore.close();
+  });
+
+  it('keeps provider in-progress project issues visible when they block new starts', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:12:00.000Z'),
+    });
+    const app = createTestApp({
+      eventsBearerToken: 'events-token',
+      operationalStore,
+      taskQueue: {
+        selection: { todoStatus: 'Todo', backlogStatus: 'Backlog', inProgressStatus: 'In Progress', maxConcurrentAgentTasks: 1 },
+        listProjectIssues: async () => [
+          {
+            id: 'PVTI_115',
+            title: 'Provider running issue',
+            status: 'In Progress',
+            state: 'OPEN',
+            assigneeLogins: ['reirei-agent'],
+            repository: 'reirei-lab/rainrail',
+            number: 115,
+            url: 'https://github.com/reirei-lab/rainrail/issues/115',
+          },
+          {
+            id: 'PVTI_118',
+            title: 'Next startable issue',
+            status: 'Todo',
+            state: 'OPEN',
+            assigneeLogins: ['reirei-agent'],
+            repository: 'reirei-lab/rainrail',
+            number: 118,
+            url: 'https://github.com/reirei-lab/rainrail/issues/118',
+          },
+        ],
+      },
+    });
+
+    const queue = await app.fetch(new Request('https://rainrail.local/api/v1/queue', {
+      headers: { authorization: 'Bearer events-token' },
+    }));
+    expect(queue.status).toBe(200);
+    await expect(queue.json()).resolves.toMatchObject({
+      data: [{
+        id: 'project:PVTI_115',
+        type: 'queue-item',
+        status: 'in-progress',
+        title: 'Provider running issue',
+        projectStatus: 'In Progress',
+      }],
+      summary: {
+        upcomingIssues: 0,
+        inProgressCount: 1,
+      },
+    });
+
+    operationalStore.close();
+  });
+
+  it('treats running issue-only tasks as represented project issues', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:12:00.000Z'),
+    });
+    operationalStore.recordAgentTask({
+      id: 'agent_task_running_without_claim',
+      title: 'Already running issue without claim metadata',
+      agentSessionId: 'agent:main:rainrail-115',
+      branchName: 'agent/reirei-lab-rainrail-115',
+      status: 'running',
+      issue: { repository: 'reirei-lab/rainrail', number: 115 },
+    });
+    const app = createTestApp({
+      eventsBearerToken: 'events-token',
+      operationalStore,
+      taskQueue: {
+        selection: { todoStatus: 'Todo', backlogStatus: 'Backlog', inProgressStatus: 'In Progress', maxConcurrentAgentTasks: 2 },
+        listProjectIssues: async () => [
+          {
+            id: 'PVTI_115',
+            title: 'Project status has not caught up',
+            status: 'Todo',
+            state: 'OPEN',
+            assigneeLogins: ['reirei-agent'],
+            repository: 'reirei-lab/rainrail',
+            number: 115,
+            url: 'https://github.com/reirei-lab/rainrail/issues/115',
+          },
+          {
+            id: 'PVTI_118',
+            title: 'Next startable issue',
+            status: 'Todo',
+            state: 'OPEN',
+            assigneeLogins: ['reirei-agent'],
+            repository: 'reirei-lab/rainrail',
+            number: 118,
+            url: 'https://github.com/reirei-lab/rainrail/issues/118',
+          },
+        ],
+      },
+    });
+
+    const queue = await app.fetch(new Request('https://rainrail.local/api/v1/queue?filter[status]=upcoming', {
+      headers: { authorization: 'Bearer events-token' },
+    }));
+    expect(queue.status).toBe(200);
+    await expect(queue.json()).resolves.toMatchObject({
+      data: [{
+        id: 'project:PVTI_118',
+        status: 'upcoming',
+        title: 'Next startable issue',
+      }],
+      summary: {
+        upcomingIssues: 1,
         inProgressCount: 1,
       },
     });
@@ -1146,6 +1294,26 @@ describe('Rainrail dashboard API', () => {
     }));
     expect(queue.status).toBe(400);
     await expect(queue.json()).resolves.toEqual({ error: 'unsupported_sort', sort: 'newest' });
+
+    operationalStore.close();
+  });
+
+  it('rejects newest sort for static settings rows', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:12:00.000Z'),
+    });
+    const app = createTestApp({
+      eventsBearerToken: 'events-token',
+      operationalStore,
+    });
+
+    const settings = await app.fetch(new Request('https://rainrail.local/api/v1/settings?sort=newest', {
+      headers: { authorization: 'Bearer events-token' },
+    }));
+    expect(settings.status).toBe(400);
+    await expect(settings.json()).resolves.toEqual({ error: 'unsupported_sort', sort: 'newest' });
 
     operationalStore.close();
   });
