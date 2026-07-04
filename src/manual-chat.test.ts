@@ -539,6 +539,30 @@ describe('manual and chat input source contract', () => {
     expect(serialized).not.toContain('user:');
   });
 
+  it('hashes URL-shaped identifiers before storage', async () => {
+    const event = await createManualInputEvent({
+      channel: 'chat',
+      sourceName: 'https://chat.example/sources/web-chat',
+      receivedAt: new Date('2026-07-04T09:21:23.000Z'),
+      deliveryId: 'https://chat.example/deliveries/private-delivery',
+      conversationId: 'https://chat.example/private/room-1',
+      messageId: 'https://chat.example/messages/private-message',
+      message: 'hello',
+    });
+
+    const serialized = JSON.stringify(event);
+    expect(event.source.name).toMatch(/^source-[A-Za-z0-9]+$/);
+    expect(event.subject.id).toMatch(/^conversation-[A-Za-z0-9]+$/);
+    expect(event.payload.conversation.id).toBe(event.subject.id);
+    expect(event.payload.message.id).toMatch(/^message-[A-Za-z0-9]+$/);
+    expect(event.delivery.id).toMatch(/^chat-delivery-[A-Za-z0-9]+$/);
+    expect(serialized).not.toContain('chat.example');
+    expect(serialized).not.toContain('private');
+    expect(serialized).not.toContain('room-1');
+    expect(serialized).not.toContain('private-delivery');
+    expect(serialized).not.toContain('private-message');
+  });
+
   it('drops blank actor fields before storage', async () => {
     const event = await createManualInputEvent({
       channel: 'chat',

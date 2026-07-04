@@ -512,6 +512,7 @@ function isAllowedGitHubUrl(url: URL): boolean {
 
 function isAllowedDeliveryReferenceUrl(url: URL): boolean {
   if (url.hostname !== 'deliveries') return false;
+  if (url.port.length > 0) return false;
 
   const parts = url.pathname.split('/').filter(Boolean);
   return parts.length === 1 && url.pathname === `/${parts[0]}` && SAFE_DELIVERY_REFERENCE_ID.test(parts[0] ?? '');
@@ -767,7 +768,7 @@ function normalizeManualAttachments(value: unknown): unknown {
 
 function normalizeManualReplyTarget(value: unknown): unknown {
   if (!isRecord(value)) return undefined;
-  if (typeof value.id !== 'string' || value.id.length === 0) return undefined;
+  if (typeof value.id !== 'string' || value.id.trim().length === 0) return undefined;
   const normalized = {
     ...pickManualStringFields(value, ['id', 'url']),
   };

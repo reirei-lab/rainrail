@@ -527,6 +527,33 @@ describe('Rainrail bridge room', () => {
     expect(nestedPathResponse.status).toBe(400);
     await expect(nestedPathResponse.text()).resolves.toContain('reference must be a valid URL');
     expect(nestedPathStorage.storedEvents()).toEqual([]);
+
+    const portStorage = fakeState();
+    const portRoom = createTestRoom(portStorage, { replayLimit: 10 });
+    const portEvent = createEventEnvelope({
+      source: { type: 'chat', name: 'web-chat' },
+      name: 'rainrail.chat.message',
+      delivery: {
+        id: 'chat-port-reference',
+        receivedAt: '2026-06-29T18:18:21.000Z',
+      },
+      occurredAt: '2026-06-29T18:18:20.000Z',
+      subject: { type: 'conversation', id: 'chat-port-reference' },
+      payload: {
+        provider: 'rainrail',
+        channel: 'chat',
+        action: 'message',
+        conversation: { id: 'chat-port-reference' },
+        message: { text: 'hello' },
+      },
+      rawPayload: { kind: 'inline-redacted', reference: 'chat://deliveries:123/chat-port-reference' },
+    });
+
+    const portResponse = await portRoom.fetch(publishRequest(portEvent));
+
+    expect(portResponse.status).toBe(400);
+    await expect(portResponse.text()).resolves.toContain('reference must be a valid URL');
+    expect(portStorage.storedEvents()).toEqual([]);
   });
 
   it('rejects unknown raw payload kinds before storage', async () => {
@@ -1495,6 +1522,38 @@ describe('Rainrail bridge room', () => {
       conversation: { id: 'chat-blank-optional-strings' },
       message: { text: 'hello' },
     });
+  });
+
+  it('drops direct manual chat reply targets with blank ids even when url is present', async () => {
+    const storage = fakeState();
+    const room = createTestRoom(storage, { replayLimit: 10 });
+    const event = createEventEnvelope({
+      source: { type: 'chat', name: 'web-chat' },
+      name: 'rainrail.chat.message',
+      delivery: {
+        id: 'chat-blank-reply-target-id',
+        receivedAt: '2026-06-29T18:18:21.000Z',
+      },
+      occurredAt: '2026-06-29T18:18:20.000Z',
+      subject: { type: 'conversation', id: 'chat-blank-reply-target-id' },
+      payload: {
+        provider: 'rainrail',
+        channel: 'chat',
+        action: 'message',
+        conversation: { id: 'chat-blank-reply-target-id' },
+        message: { text: 'hello' },
+        replyTarget: { id: '   ', url: 'https://github.com/reirei-lab/rainrail/issues/104' },
+      },
+      rawPayload: {
+        kind: 'inline-redacted',
+        reference: 'chat://deliveries/chat-blank-reply-target-id',
+      },
+    });
+
+    const publishResponse = await room.fetch(publishRequest(event));
+
+    expect(publishResponse.status).toBe(200);
+    expect(storage.storedEvents()[0]?.payload).not.toHaveProperty('replyTarget');
   });
 
   it('redacts non-HTTPS credential URLs from direct manual chat payload text', async () => {
