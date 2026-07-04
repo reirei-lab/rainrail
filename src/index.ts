@@ -12,6 +12,7 @@ export * from './events-auth.js';
 export * from './github-webhook/index.js';
 export * from './http-app.js';
 export * from './http-utils.js';
+export * from './intake-adapter.js';
 export * from './mention-draft.js';
 export * from './node-server.js';
 export * from './codex-activity.js';

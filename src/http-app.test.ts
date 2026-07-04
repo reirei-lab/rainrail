@@ -3,16 +3,137 @@ import { describe, expect, it } from 'vitest';
 import { getReaderOrThrow, readNext } from './test-helpers.js';
 
 import {
+  createEventEnvelope,
+  createCloudflareTailIntakeAdapter,
   RainrailBridgeRoom,
   createGitHubWebhookSignature,
+  createGitHubWebhookIntakeAdapter,
   createRainrailHttpApp,
+  stableIntakeFallbackDeliveryId,
   type CloudflareTailEvent,
+  type RainrailIntakeAdapter,
   type RainrailBridgeRoomState,
 } from './index.js';
 
 const TEST_PUBLISH_TOKEN = 'test-publish-token';
 
 describe('Rainrail HTTP app', () => {
+  it('registers provider-neutral HTTP intake adapters that publish envelopes through core', async () => {
+    const storage = fakeState();
+    const adapter: RainrailIntakeAdapter = {
+      name: 'manual-test',
+      routes: [{
+        path: '/intake/manual',
+        methods: ['POST'],
+        async handle(request, context) {
+          const body = await request.json() as { message: string };
+          const event = createEventEnvelope({
+            source: { type: 'manual', name: 'manual-test' },
+            name: 'manual.note',
+            delivery: {
+              id: 'manual-delivery-1',
+              receivedAt: '2026-07-04T00:00:00.000Z',
+            },
+            occurredAt: '2026-07-04T00:00:00.000Z',
+            subject: { type: 'note', id: 'manual-note-1' },
+            payload: body,
+            rawPayload: { kind: 'inline-redacted', reference: 'github://deliveries/manual-note-1' },
+          });
+          const publish = await context.publish(event);
+
+          return Response.json({ ok: publish.ok, id: event.id }, { status: publish.ok ? 202 : 502 });
+        },
+      }],
+    };
+    const app = createTestApp(storage, { intakeAdapters: [adapter] });
+
+    const response = await app.fetch(new Request('https://rainrail.local/intake/manual', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ message: 'hello' }),
+    }));
+
+    expect(response.status).toBe(202);
+    await expect(response.json()).resolves.toEqual({
+      ok: true,
+      id: 'manual-test:manual-delivery-1:manual.note',
+    });
+    expect(storage.storedEvents().map((event) => event.id)).toEqual([
+      'manual-test:manual-delivery-1:manual.note',
+    ]);
+  });
+
+  it('returns not found for unregistered intake routes and rejects route conflicts at registration', async () => {
+    const app = createTestApp(fakeState(), { intakeAdapters: [] });
+
+    const missing = await app.fetch(new Request('https://rainrail.local/webhooks/github', {
+      method: 'POST',
+    }));
+
+    expect(missing.status).toBe(404);
+    await expect(missing.text()).resolves.toBe('not found\n');
+
+    const adapter = (name: string): RainrailIntakeAdapter => ({
+      name,
+      routes: [{
+        path: '/intake/conflict',
+        methods: ['POST'],
+        async handle() {
+          return Response.json({ ok: true });
+        },
+      }],
+    });
+
+    expect(() => createTestApp(fakeState(), {
+      intakeAdapters: [adapter('first'), adapter('second')],
+    })).toThrow(/conflicting intake route/i);
+
+    expect(() => createTestApp(fakeState(), {
+      intakeAdapters: [{
+        name: 'core-conflict',
+        routes: [{
+          path: '/healthz',
+          methods: ['POST'],
+          async handle() {
+            return Response.json({ ok: true });
+          },
+        }],
+      }],
+    })).toThrow(/reserved by Rainrail core/i);
+  });
+
+  it('dispatches tail batches to a registered intake adapter', async () => {
+    const published = createEventEnvelope({
+      source: { type: 'manual', name: 'tail-test' },
+      name: 'manual.tail',
+      delivery: {
+        id: 'tail-delivery-1',
+        receivedAt: '2026-07-04T00:00:00.000Z',
+      },
+      occurredAt: '2026-07-04T00:00:00.000Z',
+      subject: { type: 'tail', id: 'tail-1' },
+      payload: { count: 2 },
+      rawPayload: { kind: 'inline-redacted', reference: 'github://deliveries/tail-1' },
+    });
+    const storage = fakeState();
+    const app = createTestApp(storage, {
+      intakeAdapters: [{
+        name: 'tail-test',
+        async tail(events, context) {
+          const response = await context.publish(published);
+          return [{ ok: response.ok, count: events.length }];
+        },
+      }],
+    });
+
+    await expect(app.tail?.([{ id: 1 }, { id: 2 }])).resolves.toEqual([
+      { ok: true, count: 2 },
+    ]);
+    expect(storage.storedEvents().map((event) => event.id)).toEqual([
+      'tail-test:tail-delivery-1:manual.tail',
+    ]);
+  });
+
   it('accepts a signed GitHub webhook and publishes it through the shared bridge room', async () => {
     const storage = fakeState();
     const app = createTestApp(storage);
@@ -126,8 +247,8 @@ describe('Rainrail HTTP app', () => {
       },
     };
 
-    const first = await app.tail?.([tailEvent]);
-    const second = await app.tail?.([tailEvent]);
+    const first = await app.tail?.([tailEvent]) as Array<{ id: string }> | undefined;
+    const second = await app.tail?.([tailEvent]) as Array<{ id: string }> | undefined;
 
     expect(second).toEqual(first);
     expect(storage.storedEvents().map((event) => event.id)).toEqual([
@@ -150,7 +271,6 @@ describe('Rainrail HTTP app', () => {
     await expect(wrongMethod.json()).resolves.toEqual({ error: 'method_not_allowed' });
 
     const failingApp = createRainrailHttpApp({
-      githubWebhookSecret: 'secret',
       publishToken: TEST_PUBLISH_TOKEN,
       runtime: 'test-runtime',
       room: {
@@ -167,7 +287,7 @@ describe('Rainrail HTTP app', () => {
 
 function createTestApp(
   storage: ReturnType<typeof fakeState>,
-  options: { eventsBearerToken?: string; maxWebhookBodyBytes?: number } = {},
+  options: { eventsBearerToken?: string; maxWebhookBodyBytes?: number; intakeAdapters?: RainrailIntakeAdapter[] } = {},
 ) {
   const room = new RainrailBridgeRoom(storage, {
     publishToken: TEST_PUBLISH_TOKEN,
@@ -176,10 +296,18 @@ function createTestApp(
 
   return createRainrailHttpApp({
     room,
-    githubWebhookSecret: 'secret',
     publishToken: TEST_PUBLISH_TOKEN,
     runtime: 'test-runtime',
-    ...options,
+    ...(options.eventsBearerToken === undefined ? {} : { eventsBearerToken: options.eventsBearerToken }),
+    intakeAdapters: options.intakeAdapters ?? [
+      createGitHubWebhookIntakeAdapter({
+        secret: 'secret',
+        ...(options.maxWebhookBodyBytes === undefined ? {} : { maxBodyBytes: options.maxWebhookBodyBytes }),
+      }),
+      createCloudflareTailIntakeAdapter({
+        fallbackDeliveryId: stableIntakeFallbackDeliveryId,
+      }),
+    ],
   });
 }
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   createEventEnvelope,
+  createGitHubWebhookIntakeAdapter,
   createGitHubWebhookSignature,
   createRainrailHttpApp,
   RainrailBridgeRoom,
@@ -213,10 +214,7 @@ describe('Rainrail dashboard API', () => {
       summary: 'plugin execution completed',
     });
 
-    const app = createRainrailHttpApp({
-      room: new RainrailBridgeRoom(fakeState(), { publishToken: 'publish-token' }),
-      githubWebhookSecret: 'secret',
-      publishToken: 'publish-token',
+    const app = createTestApp({
       eventsBearerToken: 'events-token',
       operationalStore,
     });
@@ -258,10 +256,7 @@ describe('Rainrail dashboard API', () => {
       payload: { action: 'opened' },
       rawPayload: { kind: 'external-reference', reference: 'github://deliveries/delivery-auth' },
     }));
-    const app = createRainrailHttpApp({
-      room: new RainrailBridgeRoom(fakeState(), { publishToken: 'publish-token' }),
-      githubWebhookSecret: 'secret',
-      publishToken: 'publish-token',
+    const app = createTestApp({
       eventsBearerToken: 'events-token',
       operationalStore,
     });
@@ -297,11 +292,7 @@ describe('Rainrail dashboard API', () => {
   });
 
   it('returns a stable unavailable response when the operational store is not configured', async () => {
-    const app = createRainrailHttpApp({
-      room: new RainrailBridgeRoom(fakeState(), { publishToken: 'publish-token' }),
-      githubWebhookSecret: 'secret',
-      publishToken: 'publish-token',
-    });
+    const app = createTestApp();
 
     const response = await app.fetch(new Request('https://rainrail.local/api/state'));
 
@@ -319,10 +310,7 @@ describe('Rainrail dashboard API', () => {
       eventLimit: 10,
       now: () => new Date('2026-07-02T00:00:00.000Z'),
     });
-    const app = createRainrailHttpApp({
-      room: new RainrailBridgeRoom(fakeState(), { publishToken: 'publish-token' }),
-      githubWebhookSecret: 'secret',
-      publishToken: 'publish-token',
+    const app = createTestApp({
       eventsBearerToken: 'events-token',
       operationalStore,
     });
@@ -367,10 +355,7 @@ describe('Rainrail dashboard API', () => {
       eventLimit: 10,
       now: () => new Date('2026-07-02T00:00:00.000Z'),
     });
-    const app = createRainrailHttpApp({
-      room: new RainrailBridgeRoom(fakeState(), { publishToken: 'publish-token' }),
-      githubWebhookSecret: 'secret',
-      publishToken: 'publish-token',
+    const app = createTestApp({
       eventsBearerToken: 'events-token',
       operationalStore,
     });
@@ -411,10 +396,7 @@ describe('Rainrail dashboard API', () => {
       eventLimit: 10,
       now: () => new Date('2026-07-02T00:00:00.000Z'),
     });
-    const app = createRainrailHttpApp({
-      room: new RainrailBridgeRoom(fakeState(), { publishToken: 'publish-token' }),
-      githubWebhookSecret: 'secret',
-      publishToken: 'publish-token',
+    const app = createTestApp({
       eventsBearerToken: 'events-token',
       operationalStore,
     });
@@ -455,10 +437,7 @@ describe('Rainrail dashboard API', () => {
       eventLimit: 10,
       now: () => new Date('2026-07-02T00:00:00.000Z'),
     });
-    const app = createRainrailHttpApp({
-      room: new RainrailBridgeRoom(fakeState(), { publishToken: 'publish-token' }),
-      githubWebhookSecret: 'secret',
-      publishToken: 'publish-token',
+    const app = createTestApp({
       eventsBearerToken: 'events-token',
       operationalStore,
     });
@@ -472,6 +451,21 @@ describe('Rainrail dashboard API', () => {
     operationalStore.close();
   });
 });
+
+function createTestApp(options: {
+  eventsBearerToken?: string;
+  operationalStore?: RainrailOperationalStore;
+} = {}) {
+  return createRainrailHttpApp({
+    room: new RainrailBridgeRoom(fakeState(), { publishToken: 'publish-token' }),
+    publishToken: 'publish-token',
+    ...(options.eventsBearerToken === undefined ? {} : { eventsBearerToken: options.eventsBearerToken }),
+    ...(options.operationalStore === undefined ? {} : { operationalStore: options.operationalStore }),
+    intakeAdapters: [
+      createGitHubWebhookIntakeAdapter({ secret: 'secret' }),
+    ],
+  });
+}
 
 function fakeState(): RainrailBridgeRoomState {
   const values = new Map<string, unknown>([['rainrail:recent-events', []]]);
