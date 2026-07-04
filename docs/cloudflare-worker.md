@@ -3,6 +3,12 @@
 Rainrail bridge は `src/worker.ts` を Cloudflare Worker entrypoint として deploy する。
 `wrangler.jsonc` は `BRIDGE_ROOM` Durable Object binding と production 用の非秘密値だけを持つ。
 
+Cloudflare tail source と Cloudflare error issue reporter の実装は
+`src/cloudflare/` に集約し、同 directory の `AGENTS.md` が delivery id、`sourceName`、
+error classification、event id length、issue fingerprinting の review rule を持つ。
+既存 import path のために `src/cloudflare-tail.ts` と
+`src/cloudflare-issue-reporter.ts` は compatibility shim として残す。
+
 ## Secrets
 
 secret 値は repository や `wrangler.jsonc` に含めない。production では Cloudflare
