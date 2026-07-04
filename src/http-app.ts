@@ -422,8 +422,9 @@ function dashboardV1OverviewResponse(options: RainrailHttpAppOptions): Response 
     data: {
       counts: snapshot.counts,
       warnings: snapshot.warnings,
-      recentActivity: store.listActivityEvents({ hideSkippedActivityEvents: true, limit: 5 })
+      recentActivity: store.listActivityEvents({ hideSkippedActivityEvents: true })
         .filter(isWorkflowRunActivity)
+        .slice(0, 5)
         .map(activityToWorkflowRunRow),
       links: {
         events: '/api/v1/events',
@@ -910,6 +911,7 @@ async function handleDashboardCommandRequest(
         dryRun: false,
         error: message,
       });
+      auditId = result.id;
       options.operationalStore.recordActivityEvent({
         category: 'command',
         targetType: command.targetType,
@@ -919,7 +921,6 @@ async function handleDashboardCommandRequest(
         summary: `Failed ${command.actionType} for ${command.targetType} ${command.targetId}`,
         metadata: auditMetadata(auth.principal.actor, client, requestId, false),
       });
-      auditId = result.id;
     } catch {
       auditWarning = 'post_dispatch_audit_failed';
     }
@@ -953,6 +954,7 @@ async function handleDashboardCommandRequest(
       dryRun: false,
       result: storedHandlerResult,
     });
+    auditId = result.id;
     options.operationalStore.recordActivityEvent({
       category: 'command',
       targetType: command.targetType,
@@ -962,7 +964,6 @@ async function handleDashboardCommandRequest(
       summary: `Accepted ${command.actionType} for ${command.targetType} ${command.targetId}`,
       metadata: auditMetadata(auth.principal.actor, client, requestId, false),
     });
-    auditId = result.id;
   } catch {
     auditWarning = 'post_dispatch_audit_failed';
   }

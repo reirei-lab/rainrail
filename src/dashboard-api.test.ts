@@ -46,6 +46,16 @@ describe('Rainrail dashboard API', () => {
       summary: 'review-request plugin completed',
       metadata: { pluginName: 'review-request' },
     });
+    for (let index = 0; index < 5; index += 1) {
+      operationalStore.recordActivityEvent({
+        category: 'command',
+        targetType: 'agent-task',
+        targetId: `agent_task_command_${index}`,
+        actionType: 'resume',
+        outcome: 'success',
+        summary: `Accepted resume command ${index}`,
+      });
+    }
     operationalStore.recordEventHandlerRetry({
       eventId: latest.id,
       handlerName: 'conflict-check',
@@ -74,7 +84,7 @@ describe('Rainrail dashboard API', () => {
     expect(overview.status).toBe(200);
     await expect(overview.json()).resolves.toMatchObject({
       data: {
-        counts: { events: 2, activityEvents: 1, agentTasks: 1, eventHandlerRetries: 1 },
+        counts: { events: 2, activityEvents: 6, agentTasks: 1, eventHandlerRetries: 1 },
         warnings: { staleProjectClaims: [] },
         recentActivity: [{ id: workflow.id, summary: 'review-request plugin completed' }],
       },
@@ -1106,6 +1116,65 @@ describe('Rainrail dashboard API', () => {
     expect(commandHandler).toHaveBeenCalledOnce();
     expect(operationalStore.snapshot()).toMatchObject({
       commandResults: [{
+        status: 'dispatching',
+      }],
+    });
+    operationalStore.close();
+  });
+
+  it('returns the accepted command audit id when only activity audit storage fails', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:00:00.000Z'),
+    });
+    const originalRecordActivityEvent = operationalStore.recordActivityEvent.bind(operationalStore);
+    vi.spyOn(operationalStore, 'recordActivityEvent').mockImplementation((input) => {
+      if (input.category === 'command' && input.outcome === 'success') {
+        throw new Error('simulated post-dispatch activity failure');
+      }
+
+      return originalRecordActivityEvent(input);
+    });
+    const commandHandler = vi.fn(async () => ({ applied: true }));
+    const app = createRainrailHttpApp({
+      room: new RainrailBridgeRoom(fakeState(), { publishToken: 'publish-token' }),
+      publishToken: 'publish-token',
+      operationalStore,
+      dashboardAuth: {
+        adminToken: 'admin-token',
+      },
+      commandHandler,
+    });
+
+    const response = await app.fetch(new Request('https://rainrail.local/api/v1/settings/actions/update', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer admin-token',
+        'content-type': 'application/json',
+        'x-request-id': 'request-post-dispatch-activity-failure',
+      },
+      body: JSON.stringify({
+        confirmationToken: 'confirm:settings_update:settings:global',
+      }),
+    }));
+
+    expect(response.status).toBe(202);
+    await expect(response.json()).resolves.toMatchObject({
+      data: {
+        status: 'accepted',
+        auditId: 'cmd_000002',
+        auditWarning: 'post_dispatch_audit_failed',
+        result: { applied: true },
+      },
+    });
+    expect(commandHandler).toHaveBeenCalledOnce();
+    expect(operationalStore.snapshot()).toMatchObject({
+      commandResults: [{
+        id: 'cmd_000002',
+        status: 'accepted',
+      }, {
+        id: 'cmd_000001',
         status: 'dispatching',
       }],
     });
