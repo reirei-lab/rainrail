@@ -305,6 +305,25 @@ describe('Rainrail dashboard API', () => {
     operationalStore.close();
   });
 
+  it('reports dashboard auth misconfiguration before missing credentials', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:00:00.000Z'),
+    });
+    const app = createRainrailHttpApp({
+      room: new RainrailBridgeRoom(fakeState(), { publishToken: 'publish-token' }),
+      publishToken: 'publish-token',
+      operationalStore,
+    });
+
+    const response = await app.fetch(new Request('https://rainrail.local/api/v1/overview'));
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({ error: 'events_auth_not_configured' });
+    operationalStore.close();
+  });
+
   it('accepts scoped dashboard tokens for read-only operational APIs', async () => {
     const operationalStore = new RainrailOperationalStore({
       databasePath: ':memory:',
@@ -830,6 +849,128 @@ describe('Rainrail dashboard API', () => {
     operationalStore.close();
   });
 
+  it('does not persist secrets exposed through command result toJSON hooks', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:00:00.000Z'),
+    });
+    const app = createRainrailHttpApp({
+      room: new RainrailBridgeRoom(fakeState(), { publishToken: 'publish-token' }),
+      publishToken: 'publish-token',
+      operationalStore,
+      dashboardAuth: {
+        adminToken: 'admin-token',
+      },
+      async commandHandler() {
+        return {
+          publicStatus: 'applied',
+          toJSON() {
+            return {
+              publicStatus: 'serialized',
+              secretToken: 'tojson-secret',
+            };
+          },
+        };
+      },
+    });
+
+    const response = await app.fetch(new Request('https://rainrail.local/api/v1/settings/actions/update', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer admin-token',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        confirmationToken: 'confirm:settings_update:settings:global',
+      }),
+    }));
+
+    expect(response.status).toBe(202);
+    const bodyText = await response.text();
+    expect(bodyText).not.toContain('tojson-secret');
+    expect(JSON.parse(bodyText)).toMatchObject({
+      data: {
+        status: 'accepted',
+        result: { publicStatus: 'applied' },
+      },
+    });
+    expect(JSON.stringify(operationalStore.snapshot().commandResults)).not.toContain('tojson-secret');
+    operationalStore.close();
+  });
+
+  it('records accepted commands when handler results need safe JSON normalization', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:00:00.000Z'),
+    });
+    const app = createRainrailHttpApp({
+      room: new RainrailBridgeRoom(fakeState(), { publishToken: 'publish-token' }),
+      publishToken: 'publish-token',
+      operationalStore,
+      dashboardAuth: {
+        operatorToken: 'operator-token',
+      },
+      async commandHandler() {
+        const result: Record<string, unknown> = {
+          publicStatus: 'resumed',
+          count: BigInt(1),
+          callback() {
+            return 'not serializable';
+          },
+        };
+        result.self = result;
+
+        return result;
+      },
+    });
+    operationalStore.recordAgentTask({
+      id: 'agent_task_rainrail_111',
+      title: 'command API',
+      agentSessionId: 'agent:main:rainrail-111',
+      branchName: 'agent/reirei-lab-rainrail-111',
+      status: 'stopped',
+      logPath: 'var/log/rainrail-111.log',
+      resumeAttempts: [],
+    });
+
+    const response = await app.fetch(new Request('https://rainrail.local/api/v1/agent-tasks/agent_task_rainrail_111/actions/resume', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer operator-token',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({}),
+    }));
+
+    expect(response.status).toBe(202);
+    await expect(response.json()).resolves.toMatchObject({
+      data: {
+        status: 'accepted',
+        result: {
+          publicStatus: 'resumed',
+          count: '[unserializable]',
+          self: '[circular]',
+        },
+      },
+    });
+    expect(operationalStore.snapshot()).toMatchObject({
+      commandResults: [{
+        status: 'accepted',
+        result: {
+          publicStatus: 'resumed',
+          count: '[unserializable]',
+          self: '[circular]',
+        },
+      }],
+      activityEvents: [{
+        outcome: 'success',
+      }],
+    });
+    operationalStore.close();
+  });
+
   it('redacts sensitive settings values from failed command errors', async () => {
     const operationalStore = new RainrailOperationalStore({
       databasePath: ':memory:',
@@ -871,6 +1012,46 @@ describe('Rainrail dashboard API', () => {
     const commandResults = JSON.stringify(operationalStore.snapshot().commandResults);
     expect(commandResults).not.toContain('admin-input-secret');
     expect(commandResults).not.toContain('handler-password');
+    operationalStore.close();
+  });
+
+  it('redacts multi-word sensitive headers from failed command errors', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:00:00.000Z'),
+    });
+    const app = createRainrailHttpApp({
+      room: new RainrailBridgeRoom(fakeState(), { publishToken: 'publish-token' }),
+      publishToken: 'publish-token',
+      operationalStore,
+      dashboardAuth: {
+        adminToken: 'admin-token',
+      },
+      async commandHandler() {
+        throw new Error('upstream rejected Authorization: Bearer ghp_handler_secret Cookie: sessionid=secret_cookie');
+      },
+    });
+
+    const response = await app.fetch(new Request('https://rainrail.local/api/v1/settings/actions/update', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer admin-token',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        confirmationToken: 'confirm:settings_update:settings:global',
+      }),
+    }));
+
+    expect(response.status).toBe(502);
+    const bodyText = await response.text();
+    expect(bodyText).toContain('[redacted]');
+    expect(bodyText).not.toContain('ghp_handler_secret');
+    expect(bodyText).not.toContain('secret_cookie');
+    const commandResults = JSON.stringify(operationalStore.snapshot().commandResults);
+    expect(commandResults).not.toContain('ghp_handler_secret');
+    expect(commandResults).not.toContain('secret_cookie');
     operationalStore.close();
   });
 });

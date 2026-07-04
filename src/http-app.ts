@@ -864,41 +864,9 @@ async function handleDashboardCommandRequest(
     inputs: body.value,
   };
 
+  let handlerResult: unknown;
   try {
-    const handlerResult = await options.commandHandler(commandRequest);
-    const storedHandlerResult = sanitizeCommandResult(handlerResult);
-    const result = options.operationalStore.recordCommandResult({
-      actionType: command.actionType,
-      targetType: command.targetType,
-      targetId: command.targetId,
-      status: 'accepted',
-      actor: auth.principal.actor,
-      ...(client === undefined ? {} : { client }),
-      requestId,
-      dryRun: false,
-      result: storedHandlerResult,
-    });
-    options.operationalStore.recordActivityEvent({
-      category: 'command',
-      targetType: command.targetType,
-      targetId: command.targetId,
-      actionType: command.actionType,
-      outcome: 'success',
-      summary: `Accepted ${command.actionType} for ${command.targetType} ${command.targetId}`,
-      metadata: auditMetadata(auth.principal.actor, client, requestId, false),
-    });
-
-    return commandResponse({
-      data: {
-        action: command.actionType,
-        targetType: command.targetType,
-        targetId: command.targetId,
-        status: 'accepted',
-        dryRun: false,
-        auditId: result.id,
-        result: storedHandlerResult,
-      },
-    }, requestId, 202);
+    handlerResult = await options.commandHandler(commandRequest);
   } catch (error) {
     const rawMessage = error instanceof Error ? error.message : String(error);
     const message = sanitizeCommandErrorMessage(rawMessage, body.value);
@@ -935,6 +903,40 @@ async function handleDashboardCommandRequest(
       },
     }, requestId, 502);
   }
+
+  const storedHandlerResult = sanitizeCommandResult(handlerResult);
+  const result = options.operationalStore.recordCommandResult({
+    actionType: command.actionType,
+    targetType: command.targetType,
+    targetId: command.targetId,
+    status: 'accepted',
+    actor: auth.principal.actor,
+    ...(client === undefined ? {} : { client }),
+    requestId,
+    dryRun: false,
+    result: storedHandlerResult,
+  });
+  options.operationalStore.recordActivityEvent({
+    category: 'command',
+    targetType: command.targetType,
+    targetId: command.targetId,
+    actionType: command.actionType,
+    outcome: 'success',
+    summary: `Accepted ${command.actionType} for ${command.targetType} ${command.targetId}`,
+    metadata: auditMetadata(auth.principal.actor, client, requestId, false),
+  });
+
+  return commandResponse({
+    data: {
+      action: command.actionType,
+      targetType: command.targetType,
+      targetId: command.targetId,
+      status: 'accepted',
+      dryRun: false,
+      auditId: result.id,
+      result: storedHandlerResult,
+    },
+  }, requestId, 202);
 }
 
 type DashboardScopedAuthResult =
@@ -946,6 +948,11 @@ function verifyDashboardScopedRequest(
   options: RainrailHttpAppOptions,
   requiredScope: RainrailDashboardScope,
 ): DashboardScopedAuthResult {
+  const hasConfiguredToken = dashboardTokens(options).some((configured) => configured !== undefined && configured.length > 0);
+  if (!hasConfiguredToken) {
+    return { ok: false, response: jsonResponse({ error: 'events_auth_not_configured' }, { status: 503 }) };
+  }
+
   const authorization = request.headers.get('authorization') ?? '';
   const prefix = 'Bearer ';
   if (!authorization.startsWith(prefix)) {
@@ -955,11 +962,6 @@ function verifyDashboardScopedRequest(
   const token = authorization.slice(prefix.length);
   const principal = principalForDashboardToken(token, options);
   if (principal === undefined) {
-    const hasConfiguredToken = dashboardTokens(options).some((configured) => configured !== undefined && configured.length > 0);
-    if (!hasConfiguredToken) {
-      return { ok: false, response: jsonResponse({ error: 'events_auth_not_configured' }, { status: 503 }) };
-    }
-
     return { ok: false, response: jsonResponse({ error: 'invalid_bearer_token' }, { status: 403 }) };
   }
 
@@ -1051,17 +1053,53 @@ async function readJsonObjectBody(request: Request, maxBytes: number): Promise<
   }
 }
 
-function sanitizeCommandResult(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map((item) => sanitizeCommandResult(item));
+function sanitizeCommandResult(value: unknown, seen = new WeakSet<object>()): unknown {
+  if (value === undefined || typeof value === 'function' || typeof value === 'symbol') {
+    return undefined;
+  }
+  if (typeof value === 'bigint') {
+    return '[unserializable]';
+  }
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : '[unserializable]';
   }
   if (typeof value !== 'object' || value === null) {
     return value;
   }
 
+  if (seen.has(value)) {
+    return '[circular]';
+  }
+
+  seen.add(value);
+  if (Array.isArray(value)) {
+    try {
+      return value.map((item) => {
+        const sanitized = sanitizeCommandResult(item, seen);
+        return sanitized === undefined ? null : sanitized;
+      });
+    } finally {
+      seen.delete(value);
+    }
+  }
+
   const sanitized: Record<string, unknown> = {};
-  for (const [key, nested] of Object.entries(value)) {
-    sanitized[key] = isSensitiveCommandResultKey(key) ? '[redacted]' : sanitizeCommandResult(nested);
+  try {
+    for (const [key, nested] of Object.entries(value)) {
+      if (isSensitiveCommandResultKey(key)) {
+        sanitized[key] = '[redacted]';
+        continue;
+      }
+
+      const sanitizedNested = sanitizeCommandResult(nested, seen);
+      if (sanitizedNested !== undefined) {
+        sanitized[key] = sanitizedNested;
+      }
+    }
+  } catch {
+    return '[unserializable]';
+  } finally {
+    seen.delete(value);
   }
 
   return sanitized;
@@ -1097,10 +1135,13 @@ function sensitiveStringValues(value: unknown, sensitiveContext = false): string
 }
 
 function redactSensitiveText(value: string): string {
-  return value.replace(
-    /(\b[\w.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification|session|confirmation)[\w.-]*\b\s*[:=]\s*)(["']?)([^\s"',}]+)/giu,
-    '$1$2[redacted]',
-  );
+  return value
+    .replace(/\b(authorization\s*:\s*)(?:bearer|token)\s+[^\s"',}]+/giu, '$1[redacted]')
+    .replace(/\b((?:set-)?cookie\s*:\s*)[^\r\n]+/giu, '$1[redacted]')
+    .replace(
+      /(\b[\w.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification|session|confirmation)[\w.-]*\b\s*[:=]\s*)(["']?)([^\s"',}]+)/giu,
+      '$1$2[redacted]',
+    );
 }
 
 function isSensitiveCommandResultKey(key: string): boolean {
