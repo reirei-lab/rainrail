@@ -89,8 +89,14 @@ describe('Rainrail dashboard API', () => {
       data: [{
         id: latest.id,
         type: 'event',
+        name: 'github.pull_request',
         status: 'received',
         summary: 'github.pull_request reirei-lab/rainrail#25',
+        deliveryId: 'delivery-latest',
+        rawPayloadReference: 'github://deliveries/delivery-latest',
+        workflowRunCount: 1,
+        handlerRetryCount: 1,
+        latestOutcome: 'success',
         links: { self: `/api/v1/events/${encodeURIComponent(latest.id)}` },
       }],
       page: { limit: 1 },
@@ -106,22 +112,36 @@ describe('Rainrail dashboard API', () => {
       page: { limit: 1, nextCursor: null },
     });
 
+    const nameFilteredEvents = await app.fetch(new Request('https://rainrail.local/api/v1/events?filter[name]=github.issue', {
+      headers: { authorization: 'Bearer events-token' },
+    }));
+    await expect(nameFilteredEvents.json()).resolves.toMatchObject({
+      data: [{ id: older.id, name: 'github.issue', deliveryId: 'delivery-older' }],
+      page: { limit: 50, nextCursor: null },
+    });
+
     const eventDetail = await app.fetch(new Request(`https://rainrail.local/api/v1/events/${encodeURIComponent(latest.id)}`, {
       headers: { authorization: 'Bearer events-token' },
     }));
     expect(eventDetail.status).toBe(200);
-    await expect(eventDetail.json()).resolves.toMatchObject({
+    const eventDetailBody = await eventDetail.json();
+    expect(eventDetailBody).toMatchObject({
       data: {
         id: latest.id,
         type: 'event',
         record: {
           name: latest.name,
-          envelope: { schemaVersion: 'rainrail.event.v1' },
+          humanSummary: 'github.pull_request reirei-lab/rainrail#25',
+          envelope: {
+            schemaVersion: 'rainrail.event.v1',
+            rawPayload: { kind: 'external-reference', reference: 'github://deliveries/delivery-latest' },
+          },
           activityEvents: [{ id: workflow.id }],
           handlerRetries: [{ handlerName: 'conflict-check' }],
         },
       },
     });
+    expect(JSON.stringify(eventDetailBody)).not.toContain('"payload"');
 
     const workflowRuns = await app.fetch(new Request('https://rainrail.local/api/v1/workflow-runs', {
       headers: { authorization: 'Bearer events-token' },

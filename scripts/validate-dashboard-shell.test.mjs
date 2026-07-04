@@ -43,7 +43,7 @@ describe('dashboard app shell', () => {
       expect(dashboardClient).toContain(method);
     }
 
-    expect(dashboardApp).toContain("type DashboardTab = 'events' | 'workflow-runs' | 'agent-tasks' | 'sources' | 'queue' | 'settings'");
+    expect(dashboardApp).toContain("type DashboardTab = 'overview' | 'events' | 'workflow-runs' | 'sources' | 'queue' | 'settings'");
     expect(dashboardApp).toContain('sources: (await activeClient.sources()).data');
     expect(dashboardApp).toContain('queue: (await activeClient.queue()).data');
     expect(dashboardApp).toContain('settings: (await activeClient.settings()).data');
@@ -110,7 +110,7 @@ describe('dashboard app shell', () => {
     expect(dashboardApp).toContain('isCurrentRefresh(activeClient, activeRefreshId)');
     expect(dashboardApp).toContain('if (client !== activeClient) return false;');
     expect(dashboardApp).toContain('overview: await activeClient.overview()');
-    expect(dashboardApp).toContain('events: (await activeClient.events()).data');
+    expect(dashboardApp).toContain('events: (await activeClient.events(currentEventFilters())).data');
   });
 
   it('models event repository under source like the v1 API compact row', () => {

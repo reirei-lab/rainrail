@@ -46,8 +46,14 @@ compact row は UI の table/list/card を描くための安定した最小情�
     {
       "id": "github-webhook:delivery-25:github.issue",
       "type": "event",
+      "name": "github.issue",
       "status": "received",
       "summary": "github.issue reirei-lab/rainrail#25",
+      "deliveryId": "delivery-25",
+      "rawPayloadReference": "github://deliveries/delivery-25",
+      "workflowRunCount": 1,
+      "handlerRetryCount": 0,
+      "latestOutcome": "success",
       "source": { "type": "github", "name": "github-webhook" },
       "subject": { "type": "issue", "id": "25", "url": "https://github.com/reirei-lab/rainrail/issues/25" },
       "occurredAt": "2026-07-02T00:00:00.000Z",
@@ -60,9 +66,10 @@ compact row は UI の table/list/card を描くための安定した最小情�
 ```
 
 Detail endpoint は compact row に加えて、resource-specific な `record` を返す。
-event detail record は `envelope` を含めてよいが、保存済み envelope は bridge validated /
-sanitized 済みであることを前提にする。raw provider payload、secret-like metadata、operator token、
-log の全文は v1 detail でも返さない。必要な場合は別の scoped download API を設計する。
+event detail record の `envelope` は dashboard-safe な sanitized projection とし、normalized
+`payload` 本体は含めない。raw provider payload は `rawPayload.reference` だけを表示用に返し、
+secret-like metadata、operator token、log の全文は v1 detail でも返さない。必要な場合は別の
+scoped download API を設計する。
 
 ```json
 {
@@ -72,10 +79,16 @@ log の全文は v1 detail でも返さない。必要な場合は別の scoped 
     "compact": { "summary": "github.issue reirei-lab/rainrail#25" },
     "record": {
       "name": "github.issue",
+      "humanSummary": "github.issue reirei-lab/rainrail#25",
       "source": { "type": "github", "name": "github-webhook", "repository": "reirei-lab/rainrail" },
       "delivery": { "id": "delivery-25", "receivedAt": "2026-07-02T00:00:00.000Z" },
       "subject": { "type": "issue", "id": "25", "url": "https://github.com/reirei-lab/rainrail/issues/25" },
-      "envelope": { "schemaVersion": "rainrail.event.v1" }
+      "envelope": {
+        "schemaVersion": "rainrail.event.v1",
+        "rawPayload": { "kind": "external-reference", "reference": "github://deliveries/delivery-25" }
+      },
+      "activityEvents": [],
+      "handlerRetries": []
     }
   }
 }
@@ -92,7 +105,7 @@ Collection endpoints accept the same query shape:
 - `limit`: integer from 1 to 100. Default is 50.
 - `cursor`: opaque cursor returned as `page.nextCursor` / `nextCursor`.
 - `sort`: one of the endpoint's documented sort keys. Default is newest first.
-- `filter[status]`, `filter[source]`, `filter[subjectType]`, `filter[repository]`, and resource-specific
+- `filter[status]`, `filter[source]`, `filter[name]`, `filter[subjectType]`, `filter[repository]`, and resource-specific
   filters may be added without changing the response envelope.
 
 Cursor values are opaque and must not encode public API promises beyond stable pagination.

@@ -31,8 +31,14 @@ export interface DashboardOverview {
 export interface DashboardEvent {
   id: string;
   type: 'event';
+  name?: string;
   status: string;
   summary: string;
+  deliveryId?: string;
+  rawPayloadReference?: string;
+  workflowRunCount?: number;
+  handlerRetryCount?: number;
+  latestOutcome?: string;
   occurredAt?: string;
   receivedAt?: string;
   source?: { type?: string; name?: string; repository?: string };
@@ -118,8 +124,11 @@ export class RainrailDashboardApiClient {
     return this.get('/api/v1/overview');
   }
 
-  events(): Promise<DashboardCollection<DashboardEvent>> {
-    return this.get('/api/v1/events?limit=25');
+  events(filters: { sourceType?: string; name?: string } = {}): Promise<DashboardCollection<DashboardEvent>> {
+    const params = new URLSearchParams({ limit: '25' });
+    if (filters.sourceType !== undefined && filters.sourceType !== '') params.set('filter[source]', filters.sourceType);
+    if (filters.name !== undefined && filters.name !== '') params.set('filter[name]', filters.name);
+    return this.get(`/api/v1/events?${params.toString()}`);
   }
 
   workflowRuns(): Promise<DashboardCollection<DashboardWorkflowRun>> {
