@@ -1,3 +1,5 @@
+import { jsonResponse } from './http-utils.js';
+
 export type RainrailEventsAuthFailureReason =
   | 'events_auth_not_configured'
   | 'missing_bearer_token'
@@ -30,7 +32,7 @@ export function verifyRainrailEventsBearerToken(
 }
 
 export function rainrailEventsAuthErrorResponse(result: Exclude<RainrailEventsAuthResult, { ok: true }>): Response {
-  return Response.json({ error: result.reason }, { status: result.status });
+  return jsonResponse({ error: result.reason }, { status: result.status });
 }
 
 function constantTimeStringEqual(left: string, right: string): boolean {
