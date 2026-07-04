@@ -792,8 +792,8 @@ async function handleDashboardCommandRequest(
   const targetError = command.validateTarget?.();
   if (targetError !== undefined) return targetError;
 
-  const requestId = request.headers.get('x-request-id') ?? generatedRequestId();
-  const client = request.headers.get('x-rainrail-client') ?? undefined;
+  const requestId = sanitizeAuditHeaderValue(request.headers.get('x-request-id')) ?? generatedRequestId();
+  const client = sanitizeAuditHeaderValue(request.headers.get('x-rainrail-client'));
   const body = await readJsonObjectBody(request, options.dashboardCommandMaxBodyBytes ?? DEFAULT_MAX_REQUEST_BODY_BYTES);
   if (!body.ok) return commandResponse({ error: body.error }, requestId, body.status);
 
@@ -856,8 +856,9 @@ async function handleDashboardCommandRequest(
 
   const sensitiveInputValues = sensitiveStringValues(body.value);
   const commandInputs = JSON.parse(JSON.stringify(body.value)) as Record<string, unknown>;
+  let dispatchAuditId: string;
   try {
-    options.operationalStore.recordCommandResult({
+    const dispatchResult = options.operationalStore.recordCommandResult({
       actionType: command.actionType,
       targetType: command.targetType,
       targetId: command.targetId,
@@ -867,6 +868,7 @@ async function handleDashboardCommandRequest(
       requestId,
       dryRun: false,
     });
+    dispatchAuditId = dispatchResult.id;
   } catch {
     return commandResponse({ error: 'operational_store_unavailable' }, requestId, 503);
   }
@@ -923,26 +925,33 @@ async function handleDashboardCommandRequest(
   }
 
   const storedHandlerResult = sanitizeCommandResult(handlerResult, sensitiveInputValues);
-  const result = options.operationalStore.recordCommandResult({
-    actionType: command.actionType,
-    targetType: command.targetType,
-    targetId: command.targetId,
-    status: 'accepted',
-    actor: auth.principal.actor,
-    ...(client === undefined ? {} : { client }),
-    requestId,
-    dryRun: false,
-    result: storedHandlerResult,
-  });
-  options.operationalStore.recordActivityEvent({
-    category: 'command',
-    targetType: command.targetType,
-    targetId: command.targetId,
-    actionType: command.actionType,
-    outcome: 'success',
-    summary: `Accepted ${command.actionType} for ${command.targetType} ${command.targetId}`,
-    metadata: auditMetadata(auth.principal.actor, client, requestId, false),
-  });
+  let auditId = dispatchAuditId;
+  let auditWarning: string | undefined;
+  try {
+    const result = options.operationalStore.recordCommandResult({
+      actionType: command.actionType,
+      targetType: command.targetType,
+      targetId: command.targetId,
+      status: 'accepted',
+      actor: auth.principal.actor,
+      ...(client === undefined ? {} : { client }),
+      requestId,
+      dryRun: false,
+      result: storedHandlerResult,
+    });
+    options.operationalStore.recordActivityEvent({
+      category: 'command',
+      targetType: command.targetType,
+      targetId: command.targetId,
+      actionType: command.actionType,
+      outcome: 'success',
+      summary: `Accepted ${command.actionType} for ${command.targetType} ${command.targetId}`,
+      metadata: auditMetadata(auth.principal.actor, client, requestId, false),
+    });
+    auditId = result.id;
+  } catch {
+    auditWarning = 'post_dispatch_audit_failed';
+  }
 
   return commandResponse({
     data: {
@@ -951,7 +960,8 @@ async function handleDashboardCommandRequest(
       targetId: command.targetId,
       status: 'accepted',
       dryRun: false,
-      auditId: result.id,
+      auditId,
+      ...(auditWarning === undefined ? {} : { auditWarning }),
       result: storedHandlerResult,
     },
   }, requestId, 202);
@@ -1171,6 +1181,18 @@ function redactKnownSensitiveValues(value: string, sensitiveValues: readonly str
   }
 
   return sanitized;
+}
+
+function sanitizeAuditHeaderValue(value: string | null): string | undefined {
+  if (value === null) return undefined;
+
+  const sanitized = redactSensitiveText(value)
+    .replace(/[\r\n]/gu, ' ')
+    .replace(/[^A-Za-z0-9 ._:@/+=\-[\]]/gu, '_')
+    .trim()
+    .slice(0, 128);
+
+  return sanitized.length === 0 ? undefined : sanitized;
 }
 
 function sensitiveStringValues(value: unknown, sensitiveContext = false): string[] {

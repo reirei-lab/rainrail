@@ -1043,6 +1043,100 @@ describe('Rainrail dashboard API', () => {
     expect(commandHandler).not.toHaveBeenCalled();
   });
 
+  it('returns handler success when post-dispatch audit storage fails', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:00:00.000Z'),
+    });
+    const originalRecordCommandResult = operationalStore.recordCommandResult.bind(operationalStore);
+    vi.spyOn(operationalStore, 'recordCommandResult').mockImplementation((input) => {
+      if (input.status === 'accepted') {
+        throw new Error('simulated post-dispatch audit failure');
+      }
+
+      return originalRecordCommandResult(input);
+    });
+    const commandHandler = vi.fn(async () => ({ applied: true }));
+    const app = createRainrailHttpApp({
+      room: new RainrailBridgeRoom(fakeState(), { publishToken: 'publish-token' }),
+      publishToken: 'publish-token',
+      operationalStore,
+      dashboardAuth: {
+        adminToken: 'admin-token',
+      },
+      commandHandler,
+    });
+
+    const response = await app.fetch(new Request('https://rainrail.local/api/v1/settings/actions/update', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer admin-token',
+        'content-type': 'application/json',
+        'x-request-id': 'request-post-dispatch-audit-failure',
+      },
+      body: JSON.stringify({
+        confirmationToken: 'confirm:settings_update:settings:global',
+      }),
+    }));
+
+    expect(response.status).toBe(202);
+    await expect(response.json()).resolves.toMatchObject({
+      data: {
+        status: 'accepted',
+        auditId: 'cmd_000001',
+        auditWarning: 'post_dispatch_audit_failed',
+        result: { applied: true },
+      },
+    });
+    expect(commandHandler).toHaveBeenCalledOnce();
+    expect(operationalStore.snapshot()).toMatchObject({
+      commandResults: [{
+        status: 'dispatching',
+      }],
+    });
+    operationalStore.close();
+  });
+
+  it('redacts secret-like audit headers before storing command audit rows', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:00:00.000Z'),
+    });
+    const commandHandler = vi.fn(async () => ({ applied: true }));
+    const app = createRainrailHttpApp({
+      room: new RainrailBridgeRoom(fakeState(), { publishToken: 'publish-token' }),
+      publishToken: 'publish-token',
+      operationalStore,
+      dashboardAuth: {
+        adminToken: 'admin-token',
+      },
+      commandHandler,
+    });
+
+    const response = await app.fetch(new Request('https://rainrail.local/api/v1/settings/actions/update', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer admin-token',
+        'content-type': 'application/json',
+        'x-request-id': 'request token=header-secret',
+        'x-rainrail-client': 'dashboard Authorization: Basic client-secret',
+      },
+      body: JSON.stringify({
+        confirmationToken: 'confirm:settings_update:settings:global',
+      }),
+    }));
+
+    expect(response.status).toBe(202);
+    expect(response.headers.get('x-request-id')).not.toContain('header-secret');
+    const snapshotText = JSON.stringify(operationalStore.snapshot());
+    expect(snapshotText).toContain('[redacted]');
+    expect(snapshotText).not.toContain('header-secret');
+    expect(snapshotText).not.toContain('client-secret');
+    operationalStore.close();
+  });
+
   it('does not persist secrets exposed through command result toJSON hooks', async () => {
     const operationalStore = new RainrailOperationalStore({
       databasePath: ':memory:',

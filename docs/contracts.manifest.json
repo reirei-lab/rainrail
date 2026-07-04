@@ -224,6 +224,12 @@
         "RainrailBridgeRoom",
         "formatRainrailSseEvent",
         "verifyRainrailEventsBearerToken",
+        "RainrailDashboardScope",
+        "RainrailDashboardAuthOptions",
+        "RainrailCommandRequest",
+        "RainrailCommandActionType",
+        "RainrailCommandTargetType",
+        "RainrailCommandHandler",
         "createRainrailHttpApp",
         "createRainrailNodeServer",
         "RainrailIntakeAdapter",
@@ -249,7 +255,13 @@
         "RainrailIntakeRegistry": "type",
         "RainrailIntakeRouteMatch": "type",
         "RainrailIntakeRouteMethodMismatch": "type",
-        "createRainrailIntakeRegistry": "value"
+        "createRainrailIntakeRegistry": "value",
+        "RainrailDashboardScope": "type",
+        "RainrailDashboardAuthOptions": "type",
+        "RainrailCommandRequest": "type",
+        "RainrailCommandActionType": "type",
+        "RainrailCommandTargetType": "type",
+        "RainrailCommandHandler": "type"
       }
     },
     {
