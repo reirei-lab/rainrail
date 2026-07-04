@@ -1,6 +1,7 @@
 import { rainrailEventsAuthErrorResponse, verifyRainrailEventsBearerToken } from './events-auth.js';
 import type { RainrailEventEnvelope } from './events.js';
 import {
+  DEFAULT_MAX_REQUEST_BODY_BYTES,
   corsPreflightResponse,
   jsonResponse,
   methodNotAllowedResponse,
@@ -21,6 +22,37 @@ import type {
   StoredOperationalEvent,
 } from './operational-store.js';
 
+export type RainrailDashboardScope = 'read-only' | 'operator' | 'admin';
+
+export interface RainrailDashboardAuthOptions {
+  readOnlyToken?: string;
+  operatorToken?: string;
+  adminToken?: string;
+}
+
+export interface RainrailCommandRequest {
+  actionType: RainrailCommandActionType;
+  targetType: RainrailCommandTargetType;
+  targetId: string;
+  actor: string;
+  client?: string;
+  requestId: string;
+  dryRun: boolean;
+  inputs: Record<string, unknown>;
+}
+
+export type RainrailCommandActionType =
+  | 'agent_task_resume'
+  | 'agent_task_reset'
+  | 'agent_task_terminate'
+  | 'agent_task_terminate_all'
+  | 'queue_assign_next'
+  | 'settings_update';
+
+export type RainrailCommandTargetType = 'agent_task' | 'agent_tasks' | 'queue' | 'settings';
+
+export type RainrailCommandHandler = (command: RainrailCommandRequest) => unknown | Promise<unknown>;
+
 export interface RainrailBridgeRoomFetchTarget {
   fetch(request: Request): Response | Promise<Response>;
 }
@@ -32,6 +64,8 @@ export interface RainrailHttpAppOptions {
   runtime?: string;
   intakeAdapters?: readonly RainrailIntakeAdapter[];
   operationalStore?: RainrailOperationalStore;
+  dashboardAuth?: RainrailDashboardAuthOptions;
+  commandHandler?: RainrailCommandHandler;
 }
 
 export interface RainrailHttpApp {
@@ -68,7 +102,8 @@ export function shouldReadRainrailHttpRequestBody(
   method: string,
   options: RainrailHttpAppOptions,
 ): boolean {
-  return createRainrailIntakeRegistry(options.intakeAdapters).routeNeedsBody(pathname, method);
+  return isDashboardCommandRoute(pathname, method)
+    || createRainrailIntakeRegistry(options.intakeAdapters).routeNeedsBody(pathname, method);
 }
 
 export function rainrailHttpRequestBodyLimit(
@@ -76,6 +111,7 @@ export function rainrailHttpRequestBodyLimit(
   method: string,
   options: RainrailHttpAppOptions,
 ): number | undefined {
+  if (isDashboardCommandRoute(pathname, method)) return DEFAULT_MAX_REQUEST_BODY_BYTES;
   return createRainrailIntakeRegistry(options.intakeAdapters).routeBodyLimit(pathname, method);
 }
 
@@ -207,6 +243,63 @@ async function routeRainrailHttpRequest(
     return dashboardV1AgentTaskDetailResponse(taskId, options);
   }
 
+  const agentTaskActionMatch = /^\/api\/v1\/agent-tasks\/([^/]+)\/actions\/(resume|reset|terminate)$/.exec(url.pathname);
+  if (agentTaskActionMatch !== null) {
+    if (request.method !== 'POST') return methodNotAllowedResponse(['POST', 'OPTIONS']);
+
+    const taskId = safeDecodeURIComponent(agentTaskActionMatch[1]!);
+    if (taskId === undefined) {
+      return jsonResponse({ error: 'invalid_agent_task_id' }, { status: 400 });
+    }
+
+    return handleDashboardCommandRequest(request, options, {
+      actionType: `agent_task_${agentTaskActionMatch[2]}` as RainrailCommandActionType,
+      targetType: 'agent_task',
+      targetId: taskId,
+      requiredScope: 'operator',
+      confirmationRequired: agentTaskActionMatch[2] !== 'resume',
+      validateTarget: () => options.operationalStore?.getAgentTask(taskId) === undefined
+        ? jsonResponse({ error: 'agent_task_not_found' }, { status: 404 })
+        : undefined,
+    });
+  }
+
+  if (url.pathname === '/api/v1/agent-tasks/actions/terminate-all') {
+    if (request.method !== 'POST') return methodNotAllowedResponse(['POST', 'OPTIONS']);
+
+    return handleDashboardCommandRequest(request, options, {
+      actionType: 'agent_task_terminate_all',
+      targetType: 'agent_tasks',
+      targetId: 'all',
+      requiredScope: 'operator',
+      confirmationRequired: true,
+    });
+  }
+
+  if (url.pathname === '/api/v1/queue/actions/assign-next') {
+    if (request.method !== 'POST') return methodNotAllowedResponse(['POST', 'OPTIONS']);
+
+    return handleDashboardCommandRequest(request, options, {
+      actionType: 'queue_assign_next',
+      targetType: 'queue',
+      targetId: 'next',
+      requiredScope: 'operator',
+      confirmationRequired: false,
+    });
+  }
+
+  if (url.pathname === '/api/v1/settings/actions/update') {
+    if (request.method !== 'POST') return methodNotAllowedResponse(['POST', 'OPTIONS']);
+
+    return handleDashboardCommandRequest(request, options, {
+      actionType: 'settings_update',
+      targetType: 'settings',
+      targetId: 'global',
+      requiredScope: 'admin',
+      confirmationRequired: true,
+    });
+  }
+
   const eventDetailMatch = /^\/api\/events\/([^/]+)$/.exec(url.pathname);
   if (eventDetailMatch !== null) {
     if (request.method !== 'GET') return methodNotAllowedResponse(['GET', 'OPTIONS']);
@@ -271,6 +364,13 @@ async function requestWithAppliedBodyLimit(request: Request, maxBodyBytes: numbe
 function methodCanHaveBody(method: string): boolean {
   const normalized = method.toUpperCase();
   return normalized !== 'GET' && normalized !== 'HEAD';
+}
+
+function isDashboardCommandRoute(pathname: string, method: string): boolean {
+  return method.toUpperCase() === 'POST'
+    && (/^\/api\/v1\/agent-tasks\/(?:[^/]+\/actions\/(?:resume|reset|terminate)|actions\/terminate-all)$/.test(pathname)
+      || pathname === '/api/v1/queue/actions/assign-next'
+      || pathname === '/api/v1/settings/actions/update');
 }
 
 function isStatusCodeError(error: unknown): error is { statusCode: number } {
@@ -668,7 +768,333 @@ function agentTaskToCompactRow(task: StoredAgentTask, staleTaskIds: Set<string>)
   };
 }
 
-async function publishEvent(options: RainrailHttpAppOptions, event: RainrailEventEnvelope): Promise<Response> {
+async function handleDashboardCommandRequest(
+  request: Request,
+  options: RainrailHttpAppOptions,
+  command: {
+    actionType: RainrailCommandActionType;
+    targetType: RainrailCommandTargetType;
+    targetId: string;
+    requiredScope: RainrailDashboardScope;
+    confirmationRequired: boolean;
+    validateTarget?: () => Response | undefined;
+  },
+): Promise<Response> {
+  if (options.operationalStore === undefined) {
+    return jsonResponse({ error: 'operational_store_not_configured' }, { status: 503 });
+  }
+
+  const auth = verifyDashboardScopedRequest(request, options, command.requiredScope);
+  if (!auth.ok) return auth.response;
+
+  const targetError = command.validateTarget?.();
+  if (targetError !== undefined) return targetError;
+
+  const requestId = request.headers.get('x-request-id') ?? generatedRequestId();
+  const client = request.headers.get('x-rainrail-client') ?? undefined;
+  const body = await readJsonObjectBody(request, DEFAULT_MAX_REQUEST_BODY_BYTES);
+  if (!body.ok) return body.response;
+
+  const dryRun = body.value.dryRun === true;
+  const confirmationToken = confirmationTokenFor(command.actionType, command.targetType, command.targetId);
+  const preview = {
+    action: command.actionType,
+    targetType: command.targetType,
+    targetId: command.targetId,
+    confirmationRequired: command.confirmationRequired,
+    ...(command.confirmationRequired ? { confirmationToken } : {}),
+  };
+
+  if (dryRun) {
+    const result = options.operationalStore.recordCommandResult({
+      actionType: command.actionType,
+      targetType: command.targetType,
+      targetId: command.targetId,
+      status: 'preview',
+      actor: auth.principal.actor,
+      ...(client === undefined ? {} : { client }),
+      requestId,
+      dryRun: true,
+      result: preview,
+    });
+    options.operationalStore.recordActivityEvent({
+      category: 'command',
+      targetType: command.targetType,
+      targetId: command.targetId,
+      actionType: command.actionType,
+      outcome: 'skipped',
+      summary: `Previewed ${command.actionType} for ${command.targetType} ${command.targetId}`,
+      metadata: auditMetadata(auth.principal.actor, client, requestId, true),
+    });
+
+    return commandResponse({
+      data: {
+        action: command.actionType,
+        targetType: command.targetType,
+        targetId: command.targetId,
+        status: 'preview',
+        dryRun: true,
+        confirmationRequired: command.confirmationRequired,
+        ...(command.confirmationRequired ? { confirmationToken } : {}),
+        auditId: result.id,
+      },
+    }, requestId, 200);
+  }
+
+  if (command.confirmationRequired && body.value.confirmationToken !== confirmationToken) {
+    return commandResponse({
+      error: 'action_confirmation_required',
+      data: preview,
+    }, requestId, 409);
+  }
+
+  if (options.commandHandler === undefined) {
+    return commandResponse({ error: 'command_handler_not_configured' }, requestId, 503);
+  }
+
+  const commandRequest: RainrailCommandRequest = {
+    actionType: command.actionType,
+    targetType: command.targetType,
+    targetId: command.targetId,
+    actor: auth.principal.actor,
+    ...(client === undefined ? {} : { client }),
+    requestId,
+    dryRun: false,
+    inputs: body.value,
+  };
+
+  try {
+    const handlerResult = await options.commandHandler(commandRequest);
+    const storedHandlerResult = sanitizeCommandResult(handlerResult);
+    const result = options.operationalStore.recordCommandResult({
+      actionType: command.actionType,
+      targetType: command.targetType,
+      targetId: command.targetId,
+      status: 'accepted',
+      actor: auth.principal.actor,
+      ...(client === undefined ? {} : { client }),
+      requestId,
+      dryRun: false,
+      result: storedHandlerResult,
+    });
+    options.operationalStore.recordActivityEvent({
+      category: 'command',
+      targetType: command.targetType,
+      targetId: command.targetId,
+      actionType: command.actionType,
+      outcome: 'success',
+      summary: `Accepted ${command.actionType} for ${command.targetType} ${command.targetId}`,
+      metadata: auditMetadata(auth.principal.actor, client, requestId, false),
+    });
+
+    return commandResponse({
+      data: {
+        action: command.actionType,
+        targetType: command.targetType,
+        targetId: command.targetId,
+        status: 'accepted',
+        dryRun: false,
+        auditId: result.id,
+        result: storedHandlerResult,
+      },
+    }, requestId, 202);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const result = options.operationalStore.recordCommandResult({
+      actionType: command.actionType,
+      targetType: command.targetType,
+      targetId: command.targetId,
+      status: 'failed',
+      actor: auth.principal.actor,
+      ...(client === undefined ? {} : { client }),
+      requestId,
+      dryRun: false,
+      error: message,
+    });
+    options.operationalStore.recordActivityEvent({
+      category: 'command',
+      targetType: command.targetType,
+      targetId: command.targetId,
+      actionType: command.actionType,
+      outcome: 'failed',
+      summary: `Failed ${command.actionType} for ${command.targetType} ${command.targetId}`,
+      metadata: auditMetadata(auth.principal.actor, client, requestId, false),
+    });
+
+    return commandResponse({
+      data: {
+        action: command.actionType,
+        targetType: command.targetType,
+        targetId: command.targetId,
+        status: 'failed',
+        dryRun: false,
+        auditId: result.id,
+        error: message,
+      },
+    }, requestId, 502);
+  }
+}
+
+type DashboardScopedAuthResult =
+  | { ok: true; principal: { actor: string; scope: RainrailDashboardScope } }
+  | { ok: false; response: Response };
+
+function verifyDashboardScopedRequest(
+  request: Request,
+  options: RainrailHttpAppOptions,
+  requiredScope: RainrailDashboardScope,
+): DashboardScopedAuthResult {
+  const authorization = request.headers.get('authorization') ?? '';
+  const prefix = 'Bearer ';
+  if (!authorization.startsWith(prefix)) {
+    return { ok: false, response: jsonResponse({ error: 'missing_bearer_token' }, { status: 401 }) };
+  }
+
+  const token = authorization.slice(prefix.length);
+  const principal = principalForDashboardToken(token, options);
+  if (principal === undefined) {
+    const hasConfiguredToken = dashboardTokens(options).some((configured) => configured !== undefined && configured.length > 0);
+    if (!hasConfiguredToken) {
+      return { ok: false, response: jsonResponse({ error: 'events_auth_not_configured' }, { status: 503 }) };
+    }
+
+    return { ok: false, response: jsonResponse({ error: 'invalid_bearer_token' }, { status: 403 }) };
+  }
+
+  if (!scopeIncludes(principal.scope, requiredScope)) {
+    return {
+      ok: false,
+      response: jsonResponse({ error: 'insufficient_scope', requiredScope }, { status: 403 }),
+    };
+  }
+
+  return { ok: true, principal };
+}
+
+function principalForDashboardToken(
+  token: string,
+  options: RainrailHttpAppOptions,
+): { actor: string; scope: RainrailDashboardScope } | undefined {
+  if (matchesToken(token, options.dashboardAuth?.adminToken)) {
+    return { actor: 'admin', scope: 'admin' };
+  }
+  if (matchesToken(token, options.dashboardAuth?.operatorToken)) {
+    return { actor: 'operator', scope: 'operator' };
+  }
+  if (matchesToken(token, options.dashboardAuth?.readOnlyToken ?? options.eventsBearerToken)) {
+    return { actor: 'read-only', scope: 'read-only' };
+  }
+
+  return undefined;
+}
+
+function matchesToken(token: string, expectedToken: string | undefined): boolean {
+  return expectedToken !== undefined && expectedToken.length > 0 && constantTimeStringEqual(token, expectedToken);
+}
+
+function dashboardTokens(options: RainrailHttpAppOptions): Array<string | undefined> {
+  return [
+    options.dashboardAuth?.adminToken,
+    options.dashboardAuth?.operatorToken,
+    options.dashboardAuth?.readOnlyToken,
+    options.eventsBearerToken,
+  ];
+}
+
+function scopeIncludes(actual: RainrailDashboardScope, required: RainrailDashboardScope): boolean {
+  const rank: Record<RainrailDashboardScope, number> = {
+    'read-only': 1,
+    operator: 2,
+    admin: 3,
+  };
+  return rank[actual] >= rank[required];
+}
+
+function confirmationTokenFor(actionType: RainrailCommandActionType, targetType: RainrailCommandTargetType, targetId: string): string {
+  return `confirm:${actionType}:${targetType}:${targetId}`;
+}
+
+function generatedRequestId(): string {
+  return `req_${globalThis.crypto.randomUUID()}`;
+}
+
+async function readJsonObjectBody(request: Request, maxBytes: number): Promise<
+  | { ok: true; value: Record<string, unknown> }
+  | { ok: false; response: Response }
+> {
+  if (request.body === null) return { ok: true, value: {} };
+
+  let rawBody: ArrayBuffer;
+  try {
+    rawBody = await readFetchRequestBody(request, maxBytes);
+  } catch (error) {
+    if (isStatusCodeError(error) && error.statusCode === 413) {
+      return { ok: false, response: jsonResponse({ error: 'request_body_too_large' }, { status: 413 }) };
+    }
+
+    throw error;
+  }
+
+  try {
+    const value = JSON.parse(new TextDecoder().decode(rawBody)) as unknown;
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+      return { ok: false, response: jsonResponse({ error: 'invalid_json_body' }, { status: 400 }) };
+    }
+
+    return { ok: true, value: value as Record<string, unknown> };
+  } catch {
+    return { ok: false, response: jsonResponse({ error: 'invalid_json_body' }, { status: 400 }) };
+  }
+}
+
+function sanitizeCommandResult(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeCommandResult(item));
+  }
+  if (typeof value !== 'object' || value === null) {
+    return value;
+  }
+
+  const sanitized: Record<string, unknown> = {};
+  for (const [key, nested] of Object.entries(value)) {
+    sanitized[key] = isSensitiveCommandResultKey(key) ? '[redacted]' : sanitizeCommandResult(nested);
+  }
+
+  return sanitized;
+}
+
+function isSensitiveCommandResultKey(key: string): boolean {
+  return /(?:authorization|cookie|token|secret|password|key|code|reset|verification|session|confirmation)/iu.test(key);
+}
+
+function auditMetadata(actor: string, client: string | undefined, requestId: string, dryRun: boolean): Record<string, unknown> {
+  return {
+    actor,
+    ...(client === undefined ? {} : { client }),
+    requestId,
+    dryRun,
+  };
+}
+
+function commandResponse(body: unknown, requestId: string, status: number): Response {
+  return jsonResponse(body, {
+    status,
+    headers: { 'X-Request-ID': requestId },
+  });
+}
+
+function constantTimeStringEqual(left: string, right: string): boolean {
+  let diff = left.length ^ right.length;
+  const maxLength = Math.max(left.length, right.length);
+
+  for (let index = 0; index < maxLength; index += 1) {
+    diff |= (left.charCodeAt(index) || 0) ^ (right.charCodeAt(index) || 0);
+  }
+
+  return diff === 0;
+}
+
+async function publishEvent(options: RainrailHttpAppOptions, event: unknown): Promise<Response> {
   const response = await options.room.fetch(new Request(`${INTERNAL_ROOM_ORIGIN}/publish`, {
     method: 'POST',
     headers: {

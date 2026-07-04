@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   createEventEnvelope,
@@ -462,6 +462,224 @@ describe('Rainrail dashboard API', () => {
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({ error: 'invalid_event_id' });
+    operationalStore.close();
+  });
+
+  it('gates agent task command actions to operator tokens and records dry-run audit', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:00:00.000Z'),
+    });
+    operationalStore.recordAgentTask({
+      id: 'agent_task_rainrail_111',
+      title: 'Resume / reset / terminate / settings の command API を権限付きで設計する',
+      agentSessionId: 'agent:main:rainrail-111',
+      branchName: 'agent/reirei-lab-rainrail-111',
+      status: 'stopped',
+      logPath: 'var/log/rainrail-111.log',
+      resumeAttempts: [],
+    });
+    const commandHandler = vi.fn();
+    const app = createRainrailHttpApp({
+      room: new RainrailBridgeRoom(fakeState(), { publishToken: 'publish-token' }),
+      publishToken: 'publish-token',
+      eventsBearerToken: 'read-token',
+      operationalStore,
+      dashboardAuth: {
+        operatorToken: 'operator-token',
+      },
+      commandHandler,
+    });
+
+    const readOnlyResponse = await app.fetch(new Request('https://rainrail.local/api/v1/agent-tasks/agent_task_rainrail_111/actions/resume', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer read-token',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ dryRun: true }),
+    }));
+    expect(readOnlyResponse.status).toBe(403);
+    await expect(readOnlyResponse.json()).resolves.toEqual({
+      error: 'insufficient_scope',
+      requiredScope: 'operator',
+    });
+
+    const dryRunResponse = await app.fetch(new Request('https://rainrail.local/api/v1/agent-tasks/agent_task_rainrail_111/actions/resume', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer operator-token',
+        'content-type': 'application/json',
+        'x-rainrail-client': 'dashboard',
+        'x-request-id': 'request-resume-preview',
+      },
+      body: JSON.stringify({ dryRun: true }),
+    }));
+
+    expect(dryRunResponse.status).toBe(200);
+    expect(dryRunResponse.headers.get('x-request-id')).toBe('request-resume-preview');
+    await expect(dryRunResponse.json()).resolves.toMatchObject({
+      data: {
+        action: 'agent_task_resume',
+        targetType: 'agent_task',
+        targetId: 'agent_task_rainrail_111',
+        status: 'preview',
+        dryRun: true,
+      },
+    });
+    expect(commandHandler).not.toHaveBeenCalled();
+    expect(operationalStore.snapshot()).toMatchObject({
+      counts: { activityEvents: 1, commandResults: 1 },
+      activityEvents: [{
+        category: 'command',
+        actionType: 'agent_task_resume',
+        outcome: 'skipped',
+        metadata: {
+          actor: 'operator',
+          client: 'dashboard',
+          requestId: 'request-resume-preview',
+          dryRun: true,
+        },
+      }],
+      commandResults: [{
+        actionType: 'agent_task_resume',
+        status: 'preview',
+        actor: 'operator',
+        client: 'dashboard',
+        requestId: 'request-resume-preview',
+        dryRun: true,
+      }],
+    });
+    operationalStore.close();
+  });
+
+  it('requires confirmation for destructive commands before dispatching them', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:00:00.000Z'),
+    });
+    operationalStore.recordAgentTask({
+      id: 'agent_task_rainrail_111',
+      title: 'command API',
+      agentSessionId: 'agent:main:rainrail-111',
+      branchName: 'agent/reirei-lab-rainrail-111',
+      status: 'running',
+      logPath: 'var/log/rainrail-111.log',
+      resumeAttempts: [],
+    });
+    const commandHandler = vi.fn(async () => ({ stopped: true }));
+    const app = createRainrailHttpApp({
+      room: new RainrailBridgeRoom(fakeState(), { publishToken: 'publish-token' }),
+      publishToken: 'publish-token',
+      operationalStore,
+      dashboardAuth: {
+        operatorToken: 'operator-token',
+      },
+      commandHandler,
+    });
+
+    const preview = await app.fetch(new Request('https://rainrail.local/api/v1/agent-tasks/agent_task_rainrail_111/actions/terminate', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer operator-token',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({}),
+    }));
+
+    expect(preview.status).toBe(409);
+    await expect(preview.json()).resolves.toMatchObject({
+      error: 'action_confirmation_required',
+      data: {
+        action: 'agent_task_terminate',
+        confirmationToken: 'confirm:agent_task_terminate:agent_task:agent_task_rainrail_111',
+      },
+    });
+    expect(commandHandler).not.toHaveBeenCalled();
+
+    const confirmed = await app.fetch(new Request('https://rainrail.local/api/v1/agent-tasks/agent_task_rainrail_111/actions/terminate', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer operator-token',
+        'content-type': 'application/json',
+        'x-request-id': 'request-terminate',
+      },
+      body: JSON.stringify({
+        confirmationToken: 'confirm:agent_task_terminate:agent_task:agent_task_rainrail_111',
+      }),
+    }));
+
+    expect(confirmed.status).toBe(202);
+    await expect(confirmed.json()).resolves.toMatchObject({
+      data: {
+        action: 'agent_task_terminate',
+        status: 'accepted',
+        result: { stopped: true },
+      },
+    });
+    expect(commandHandler).toHaveBeenCalledWith(expect.objectContaining({
+      actionType: 'agent_task_terminate',
+      targetType: 'agent_task',
+      targetId: 'agent_task_rainrail_111',
+      actor: 'operator',
+      requestId: 'request-terminate',
+    }));
+    operationalStore.close();
+  });
+
+  it('limits settings updates to admin tokens', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:00:00.000Z'),
+    });
+    const commandHandler = vi.fn(async (command) => ({ updated: command.inputs }));
+    const app = createRainrailHttpApp({
+      room: new RainrailBridgeRoom(fakeState(), { publishToken: 'publish-token' }),
+      publishToken: 'publish-token',
+      operationalStore,
+      dashboardAuth: {
+        operatorToken: 'operator-token',
+        adminToken: 'admin-token',
+      },
+      commandHandler,
+    });
+
+    const operatorResponse = await app.fetch(new Request('https://rainrail.local/api/v1/settings/actions/update', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer operator-token',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ settings: { autoAssign: false } }),
+    }));
+    expect(operatorResponse.status).toBe(403);
+    await expect(operatorResponse.json()).resolves.toEqual({
+      error: 'insufficient_scope',
+      requiredScope: 'admin',
+    });
+
+    const adminResponse = await app.fetch(new Request('https://rainrail.local/api/v1/settings/actions/update', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer admin-token',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        settings: { autoAssign: false },
+        confirmationToken: 'confirm:settings_update:settings:global',
+      }),
+    }));
+    expect(adminResponse.status).toBe(202);
+    await expect(adminResponse.json()).resolves.toMatchObject({
+      data: {
+        action: 'settings_update',
+        status: 'accepted',
+        result: { updated: { settings: { autoAssign: false } } },
+      },
+    });
     operationalStore.close();
   });
 });

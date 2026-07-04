@@ -42,6 +42,8 @@ export function createRainrailNodeServer(options: RainrailNodeServerOptions): Ra
     ...(options.eventsBearerToken === undefined ? {} : { eventsBearerToken: options.eventsBearerToken }),
     runtime: options.runtime ?? 'node',
     ...(options.operationalStore === undefined ? {} : { operationalStore: options.operationalStore }),
+    ...(options.dashboardAuth === undefined ? {} : { dashboardAuth: options.dashboardAuth }),
+    ...(options.commandHandler === undefined ? {} : { commandHandler: options.commandHandler }),
     intakeAdapters: [
       ...createRainrailEepBridgeIntakeAdapters({
         env: { GITHUB_WEBHOOK_SECRET: options.githubWebhookSecret },
