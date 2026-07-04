@@ -4,8 +4,10 @@ import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
 import {
   BUILT_IN_COMMANDS,
+  OFFICIAL_PLUGIN_CATALOG,
   discoverRainrailProject,
   getBuiltInCommand,
+  getOfficialPluginByAlias,
   parseRainrailArguments,
   runRainrailCli,
 } from './index.js';
@@ -101,6 +103,53 @@ describe('Rainrail CLI built-in commands', () => {
     for (const command of BUILT_IN_COMMANDS) {
       expect(result.stdout).toContain(`  ${command.name}`);
     }
+    expect(result.stdout).toContain('Official plugin aliases:');
+    expect(result.stdout).toContain('  github');
+    expect(result.stdout).toContain('  cloudflare');
+    expect(result.stdout).toContain('  openclaw');
+  });
+
+  it('ships static metadata for initial official plugin command discovery', () => {
+    expect(OFFICIAL_PLUGIN_CATALOG.map((plugin) => plugin.alias)).toEqual([
+      'github',
+      'cloudflare',
+      'openclaw',
+    ]);
+    expect(getOfficialPluginByAlias('gh')?.alias).toBe('github');
+    expect(getOfficialPluginByAlias('cf')?.alias).toBe('cloudflare');
+    expect(getOfficialPluginByAlias('oc')?.alias).toBe('openclaw');
+    expect(getOfficialPluginByAlias('__proto__')).toBeUndefined();
+  });
+
+  it('prints plugin help from static metadata without requiring a project config', async () => {
+    await withTempDirectory(async (directory) => {
+      const result = runRainrailCli(['github', 'help'], { cwd: directory });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+      expect(result.stdout).toContain('Usage: rainrail github <command>');
+      expect(result.stdout).toContain('GitHub official plugin');
+      expect(result.stdout).toContain('  setup');
+      expect(result.stdout).toContain('  doctor');
+      expect(result.stdout).toContain('  webhook add');
+    });
+  });
+
+  it('prints official plugin command help from static metadata', () => {
+    const result = runRainrailCli(['github', 'webhook', 'add', 'help']);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe('');
+    expect(result.stdout).toContain('Usage: rainrail github webhook add <owner/repo>');
+    expect(result.stdout).toContain('Register a GitHub webhook endpoint for a repository.');
+  });
+
+  it('resolves official plugin aliases before project-local plugin execution', () => {
+    const result = runRainrailCli(['gh', 'doctor']);
+
+    expect(result.exitCode).toBe(2);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('rainrail github doctor requires plugin execution');
   });
 
   it('prints help from the --help flag', () => {
