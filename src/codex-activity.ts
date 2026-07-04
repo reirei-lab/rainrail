@@ -1,4 +1,4 @@
-import { readRuntimeTimeline, type RuntimeTimelineResult } from './agent-timeline.js';
+import { readRuntimeTimeline, type RuntimeTimelineResult } from './agent-runtime/timeline.js';
 import type { RuntimeAgentResumeAttempt } from './runtime-provider.js';
 
 export interface CodexActivityTask {

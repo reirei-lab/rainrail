@@ -3,8 +3,8 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { dirname, join, relative, resolve } from 'node:path';
 
-import type { AgentAssignmentRuntime } from './agent-assignment.js';
-import type { RuntimeAgentTask, RuntimeProvider, RuntimeProviderContext, RuntimeRun, RuntimeRunRequest, RuntimeRunStatus } from './runtime-provider.js';
+import type { AgentAssignmentRuntime } from '../agent-assignment.js';
+import type { RuntimeAgentTask, RuntimeProvider, RuntimeProviderContext, RuntimeRun, RuntimeRunRequest, RuntimeRunStatus } from '../runtime-provider.js';
 
 interface AgentAssignmentRuntimeProviderOptions {
   runtime: RuntimeProvider;
