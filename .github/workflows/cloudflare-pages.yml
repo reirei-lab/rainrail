@@ -110,6 +110,8 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build Cloudflare Pages production
+        env:
+          PUBLIC_RAINRAIL_OPERATIONAL_API_URL: ${{ vars.RAINRAIL_OPERATIONAL_API_URL }}
         run: pnpm pages:build
 
       - name: Deploy Cloudflare Pages production

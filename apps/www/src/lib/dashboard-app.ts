@@ -235,7 +235,14 @@ if (root !== null) {
   function statItem(label: string, value: number): HTMLElement {
     const item = document.createElement('div');
     item.className = 'dashboard-stat';
-    item.innerHTML = `<span>${escapeHtml(label)}</span><strong>${value}</strong>`;
+
+    const labelElement = document.createElement('span');
+    labelElement.textContent = label;
+
+    const valueElement = document.createElement('strong');
+    valueElement.textContent = String(value);
+
+    item.append(labelElement, valueElement);
     return item;
   }
 

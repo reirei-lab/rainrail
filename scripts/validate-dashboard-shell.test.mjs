@@ -54,7 +54,10 @@ describe('dashboard app shell', () => {
     expect(dashboardApp).toContain('API_BASE_URL_STORAGE_KEY');
     expect(dashboardApp).toContain('apiBaseUrlInput');
     expect(dashboardApp).toContain('baseUrl: apiBaseUrl');
-    expect(cloudflarePagesDocs).toContain('PUBLIC_RAINRAIL_WORKER_URL');
+    expect(dashboardPage).toContain('PUBLIC_RAINRAIL_OPERATIONAL_API_URL');
+    expect(cloudflarePagesDocs).toContain('PUBLIC_RAINRAIL_OPERATIONAL_API_URL');
+    expect(cloudflarePagesDocs).toContain('operational store');
+    expect(cloudflarePagesDocs).not.toContain('operational API の Worker base URL');
   });
 
   it('documents polling as the MVP live update strategy in code and UI affordances', () => {
@@ -112,6 +115,11 @@ describe('dashboard app shell', () => {
     expect(dashboardApp).toContain('error.status === 401');
     expect(dashboardApp).toContain('error.status === 403');
     expect(dashboardApp).toContain("error.code === 'invalid_bearer_token'");
+  });
+
+  it('renders dashboard stat counts without trusting runtime API values as HTML', () => {
+    expect(dashboardApp).toContain('valueElement.textContent = String(value)');
+    expect(dashboardApp).not.toContain('item.innerHTML = `<span>${escapeHtml(label)}</span><strong>${value}</strong>`');
   });
 
   it('adds responsive two-pane dashboard layout styles', () => {

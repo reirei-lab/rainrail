@@ -1,7 +1,7 @@
 ---
 import DashboardLayout from '../layouts/DashboardLayout.astro';
 
-const apiBaseUrl = import.meta.env.PUBLIC_RAINRAIL_WORKER_URL ?? '';
+const apiBaseUrl = import.meta.env.PUBLIC_RAINRAIL_OPERATIONAL_API_URL ?? '';
 ---
 
 <DashboardLayout
@@ -35,7 +35,7 @@ const apiBaseUrl = import.meta.env.PUBLIC_RAINRAIL_WORKER_URL ?? '';
           <h1>Rainrail Operations</h1>
         </div>
         <div class="dashboard-auth">
-          <input data-api-base-url-input type="url" autocomplete="off" placeholder="Worker API URL" aria-label="Rainrail Worker API base URL" />
+          <input data-api-base-url-input type="url" autocomplete="off" placeholder="Operational API URL" aria-label="Rainrail Operational API base URL" />
           <input data-token-input type="password" autocomplete="off" placeholder="Bearer token" aria-label="Operational API bearer token" />
           <button type="button" class="button secondary" data-token-save>Connect</button>
           <button type="button" class="button secondary" data-token-clear>Clear</button>
