@@ -17,6 +17,7 @@ interface DashboardData {
 }
 
 const TOKEN_STORAGE_KEY = 'rainrail-dashboard-token';
+const API_BASE_URL_STORAGE_KEY = 'rainrail-dashboard-api-base-url';
 const OPERATOR_STORAGE_KEY = 'rainrail-dashboard-operator';
 const STALE_AFTER_MS = 45000;
 
@@ -25,6 +26,7 @@ const root = document.querySelector<HTMLElement>('[data-dashboard-app]');
 if (root !== null) {
   const appRoot = root;
   const tokenInput = root.querySelector<HTMLInputElement>('[data-token-input]');
+  const apiBaseUrlInput = root.querySelector<HTMLInputElement>('[data-api-base-url-input]');
   const saveTokenButton = root.querySelector<HTMLButtonElement>('[data-token-save]');
   const clearTokenButton = root.querySelector<HTMLButtonElement>('[data-token-clear]');
   const refreshButton = root.querySelector<HTMLButtonElement>('[data-refresh]');
@@ -45,15 +47,18 @@ if (root !== null) {
   let pollTimer: number | undefined;
 
   const storedToken = sessionStorage.getItem(TOKEN_STORAGE_KEY) ?? '';
+  const storedApiBaseUrl = sessionStorage.getItem(API_BASE_URL_STORAGE_KEY) ?? appRoot.dataset.apiBaseUrl ?? '';
   const operatorEnabled = localStorage.getItem(OPERATOR_STORAGE_KEY) === '1';
   if (tokenInput !== null) tokenInput.value = storedToken;
+  if (apiBaseUrlInput !== null) apiBaseUrlInput.value = storedApiBaseUrl;
   if (permissionToggle !== null) permissionToggle.checked = operatorEnabled;
   setOperatorActionsEnabled(operatorEnabled);
+  resetDashboardData();
 
   if (storedToken === '') {
     setState('auth-missing', 'Bearer token required');
   } else {
-    client = new RainrailDashboardApiClient({ token: storedToken });
+    client = createDashboardClient(storedToken);
     void refresh();
     startPolling(client);
   }
@@ -64,12 +69,20 @@ if (root !== null) {
       sessionStorage.removeItem(TOKEN_STORAGE_KEY);
       client = undefined;
       stopPolling();
+      resetDashboardData();
       setState('auth-missing', 'Bearer token required');
       return;
     }
 
+    const apiBaseUrl = normalizeApiBaseUrl(apiBaseUrlInput?.value ?? appRoot.dataset.apiBaseUrl ?? '');
     sessionStorage.setItem(TOKEN_STORAGE_KEY, token);
-    client = new RainrailDashboardApiClient({ token });
+    if (apiBaseUrl === '') {
+      sessionStorage.removeItem(API_BASE_URL_STORAGE_KEY);
+    } else {
+      sessionStorage.setItem(API_BASE_URL_STORAGE_KEY, apiBaseUrl);
+    }
+    if (apiBaseUrlInput !== null) apiBaseUrlInput.value = apiBaseUrl;
+    client = createDashboardClient(token, apiBaseUrl);
     void refresh();
     startPolling(client);
   });
@@ -79,6 +92,7 @@ if (root !== null) {
     client = undefined;
     stopPolling();
     if (tokenInput !== null) tokenInput.value = '';
+    resetDashboardData();
     setState('auth-missing', 'Bearer token required');
   });
 
@@ -107,23 +121,30 @@ if (root !== null) {
       setState('auth-missing', 'Bearer token required');
       return;
     }
+    const activeClient = client;
 
     if (!options.quiet) setState('loading', 'Loading operational state');
 
     try {
-      latestData = {
-        overview: await client.overview(),
-        events: (await client.events()).data,
-        workflowRuns: (await client.workflowRuns()).data,
-        agentTasks: (await client.agentTasks()).data,
+      const nextData = {
+        overview: await activeClient.overview(),
+        events: (await activeClient.events()).data,
+        workflowRuns: (await activeClient.workflowRuns()).data,
+        agentTasks: (await activeClient.agentTasks()).data,
       };
+      if (client !== activeClient) return;
+
+      latestData = nextData;
       lastUpdatedAt = Date.now();
       scheduleStaleCheck();
       renderStats(latestData.overview);
       renderCurrentList();
       setState(hasRows(latestData) ? 'ready' : 'empty', hasRows(latestData) ? 'Live operational state' : 'No operational records yet');
     } catch (error) {
-      const message = error instanceof RainrailDashboardApiError && error.status === 401
+      if (client !== activeClient) return;
+      const authError = isDashboardAuthError(error);
+      if (authError) resetDashboardData();
+      const message = authError
         ? 'Token rejected by operational API'
         : 'Operational API unavailable';
       setState('error', message);
@@ -189,6 +210,17 @@ if (root !== null) {
     ]);
   }
 
+  function renderEmptyStats(): void {
+    if (stats === null) return;
+
+    stats.replaceChildren(
+      statItem('Events', 0),
+      statItem('Workflow runs', 0),
+      statItem('Agent tasks', 0),
+      statItem('Retries', 0),
+    );
+  }
+
   function statItem(label: string, value: number): HTMLElement {
     const item = document.createElement('div');
     item.className = 'dashboard-stat';
@@ -216,6 +248,41 @@ if (root !== null) {
     if (staleIndicator !== null) staleIndicator.hidden = true;
   }
 
+  function resetDashboardData(): void {
+    latestData = undefined;
+    lastUpdatedAt = 0;
+    if (staleTimer !== undefined) {
+      window.clearTimeout(staleTimer);
+      staleTimer = undefined;
+    }
+    if (staleIndicator !== null) staleIndicator.hidden = true;
+    renderEmptyStats();
+    if (list !== null) list.replaceChildren();
+    renderPlaceholderDetail('Select a stream after connecting.');
+  }
+
+  function renderPlaceholderDetail(message: string): void {
+    if (detail === null) return;
+
+    detail.innerHTML = `
+      <div class="dashboard-detail-heading">
+        <span>ready</span>
+        <strong>waiting</strong>
+      </div>
+      <h2>${escapeHtml(message)}</h2>
+      <dl>
+        <div><dt>ID</dt><dd>n/a</dd></div>
+        <div><dt>Branch</dt><dd>n/a</dd></div>
+        <div><dt>Issue</dt><dd>n/a</dd></div>
+      </dl>
+    `;
+  }
+
+  function createDashboardClient(token: string, configuredApiBaseUrl?: string): RainrailDashboardApiClient {
+    const apiBaseUrl = normalizeApiBaseUrl(configuredApiBaseUrl ?? apiBaseUrlInput?.value ?? appRoot.dataset.apiBaseUrl ?? '');
+    return new RainrailDashboardApiClient({ token, baseUrl: apiBaseUrl });
+  }
+
   function startPolling(nextClient: RainrailDashboardApiClient): void {
     stopPolling();
     pollTimer = window.setInterval(() => {
@@ -233,6 +300,15 @@ if (root !== null) {
   function setOperatorActionsEnabled(enabled: boolean): void {
     for (const action of operatorActions) action.disabled = !enabled;
   }
+}
+
+function normalizeApiBaseUrl(value: string): string {
+  return value.trim().replace(/\/+$/, '');
+}
+
+function isDashboardAuthError(error: unknown): boolean {
+  return error instanceof RainrailDashboardApiError
+    && (error.status === 401 || error.status === 403 || error.code === 'invalid_bearer_token');
 }
 
 function hasRows(data: DashboardData): boolean {

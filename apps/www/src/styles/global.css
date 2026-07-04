@@ -632,7 +632,7 @@ h3 {
 
 .dashboard-auth {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(160px, 0.8fr) minmax(160px, 1fr) auto auto;
   gap: 8px;
 }
 

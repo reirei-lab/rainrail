@@ -1,12 +1,20 @@
 ---
 import DashboardLayout from '../layouts/DashboardLayout.astro';
+
+const apiBaseUrl = import.meta.env.PUBLIC_RAINRAIL_WORKER_URL ?? '';
 ---
 
 <DashboardLayout
   title="Rainrail Operations"
   description="Operational dashboard shell for Rainrail event, workflow, and agent task state."
 >
-  <section class="dashboard-shell" data-dashboard-app data-state="auth-missing" data-live-strategy="polling">
+  <section
+    class="dashboard-shell"
+    data-dashboard-app
+    data-api-base-url={apiBaseUrl}
+    data-state="auth-missing"
+    data-live-strategy="polling"
+  >
     <aside class="dashboard-sidebar" aria-label="Dashboard navigation">
       <a class="dashboard-brand" href="/">Rainrail</a>
       <nav>
@@ -27,6 +35,7 @@ import DashboardLayout from '../layouts/DashboardLayout.astro';
           <h1>Rainrail Operations</h1>
         </div>
         <div class="dashboard-auth">
+          <input data-api-base-url-input type="url" autocomplete="off" placeholder="Worker API URL" aria-label="Rainrail Worker API base URL" />
           <input data-token-input type="password" autocomplete="off" placeholder="Bearer token" aria-label="Operational API bearer token" />
           <button type="button" class="button secondary" data-token-save>Connect</button>
           <button type="button" class="button secondary" data-token-clear>Clear</button>

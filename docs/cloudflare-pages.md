@@ -11,6 +11,9 @@ GitHub Actions と手元の Wrangler deploy には Cloudflare API credential が
 
 - `CLOUDFLARE_ACCOUNT_ID`: `rainrail-www` を所有する Cloudflare account ID。
 - `CLOUDFLARE_API_TOKEN`: Cloudflare Pages deploy 権限を持つ API token。
+- Variable `PUBLIC_RAINRAIL_WORKER_URL`: `/dashboard` が読む operational API の Worker base URL。
+  例: `https://rainrail.<your-subdomain>.workers.dev`。未設定の場合、dashboard の入力欄から
+  Worker API URL を指定して同じ session 内で利用する。
 
 GitHub Actions は secrets が未設定の場合でも build または artifact download まで実行し、
 deploy だけを skip する。これにより preview / production の buildability は PR 上で確認できる。
