@@ -338,10 +338,13 @@ function constantTimeStringEqual(left: string, right: string): boolean {
 
 function normalizedOptionalActor(actor: ManualInputActor | undefined): { actor?: ManualInputActor } {
   if (actor === undefined) return {};
+  const id = nonBlankString(actor.id);
+  const displayName = nonBlankString(actor.displayName);
+  const type = nonBlankString(actor.type);
   const normalized = {
-    ...(actor.id === undefined ? {} : { id: safeIdentifierSegment(actor.id, 'actor') }),
-    ...(actor.displayName === undefined ? {} : { displayName: redactUserText(actor.displayName) }),
-    ...(actor.type === undefined ? {} : { type: safeIdentifierSegment(actor.type, 'user') }),
+    ...(id === undefined ? {} : { id: safeIdentifierSegment(id, 'actor') }),
+    ...(displayName === undefined ? {} : { displayName: redactUserText(displayName) }),
+    ...(type === undefined ? {} : { type: safeIdentifierSegment(type, 'user') }),
   };
 
   return Object.keys(normalized).length === 0 ? {} : { actor: normalized };
@@ -364,7 +367,7 @@ function normalizedOptionalAttachments(attachments: ManualInputAttachment[] | un
 }
 
 function normalizedOptionalReplyTarget(replyTarget: ManualInputReplyTarget | undefined): { replyTarget?: ManualInputReplyTarget } {
-  if (replyTarget === undefined) return {};
+  if (replyTarget === undefined || nonBlankString(replyTarget.id) === undefined) return {};
   const url = safeUrl(replyTarget.url);
   return {
     replyTarget: {
@@ -377,9 +380,9 @@ function normalizedOptionalReplyTarget(replyTarget: ManualInputReplyTarget | und
 function normalizeActorInput(value: unknown): ManualInputActor | undefined {
   if (!isRecord(value)) return undefined;
   return {
-    ...(typeof value.id === 'string' ? { id: value.id } : {}),
-    ...(typeof value.displayName === 'string' ? { displayName: value.displayName } : {}),
-    ...(typeof value.type === 'string' ? { type: value.type } : {}),
+    ...(nonBlankString(value.id) === undefined ? {} : { id: value.id as string }),
+    ...(nonBlankString(value.displayName) === undefined ? {} : { displayName: value.displayName as string }),
+    ...(nonBlankString(value.type) === undefined ? {} : { type: value.type as string }),
   };
 }
 
@@ -397,11 +400,15 @@ function normalizeAttachmentsInput(value: unknown): ManualInputAttachment[] | un
 }
 
 function normalizeReplyTargetInput(value: unknown): ManualInputReplyTarget | undefined {
-  if (!isRecord(value) || typeof value.id !== 'string' || value.id.trim().length === 0) return undefined;
+  if (!isRecord(value) || nonBlankString(value.id) === undefined) return undefined;
   return {
-    id: value.id,
+    id: value.id as string,
     ...(typeof value.url === 'string' ? { url: value.url } : {}),
   };
+}
+
+function nonBlankString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
 }
 
 function safeIdentifierSegment(value: string, fallback: string): string {

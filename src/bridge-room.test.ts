@@ -87,6 +87,32 @@ describe('Rainrail bridge room', () => {
     expect(storage.storedEvents()).toEqual([]);
   });
 
+  it('rejects manual and chat sources with non-manual event names', async () => {
+    const storage = fakeState();
+    const room = createTestRoom(storage, { replayLimit: 10 });
+    const event = createEventEnvelope({
+      source: { type: 'chat', name: 'web-chat' },
+      name: 'github.issue',
+      delivery: {
+        id: 'delivery-18',
+        receivedAt: '2026-07-04T09:20:01.000Z',
+      },
+      occurredAt: '2026-07-04T09:20:01.000Z',
+      subject: { type: 'issue', id: '104' },
+      payload: { action: 'opened' },
+      rawPayload: {
+        kind: 'inline-redacted',
+        reference: 'chat://deliveries/delivery-18',
+      },
+    });
+
+    const response = await room.fetch(publishRequest(event));
+
+    expect(response.status).toBe(400);
+    await expect(response.text()).resolves.toContain('manual/chat source.type must use the matching event name');
+    expect(storage.storedEvents()).toEqual([]);
+  });
+
   it('reports health for current subscribers and replay buffer', async () => {
     const room = createTestRoom(fakeState(), { replayLimit: 10 });
     const response = await room.fetch(new Request('https://rainrail.local/healthz'));

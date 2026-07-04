@@ -131,7 +131,8 @@ HTTP intake の既定 route は `/intake/manual` と `/intake/chat` で、adapte
 object の場合は `message.text` を本文、`message.id` を top-level `messageId` がない場合の
 message id として扱い、retry 時に同じ delivery id を再生成できるようにする。`replyTarget`
 を保存する場合は `id` を必須とし、`url` だけの reply target は contract payload として
-扱わない。
+扱わない。`actor` の各 field と `replyTarget.id` は trim 後に空でない文字列だけを
+保存し、空白だけの入力から fallback id や user type を作らない。
 `createManualInputIntakeAdapter` は `ManualInputIntakeAdapterOptions.bearerToken` を必須とし、
 body を読む前に `Authorization: Bearer <token>` を検証する。manual/chat input は
 `runtime:start` へ接続され得るため、Core の generic intake route ではなく adapter 境界で

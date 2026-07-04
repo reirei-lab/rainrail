@@ -508,6 +508,22 @@ describe('manual and chat input source contract', () => {
     expect(serialized).not.toContain('user:');
   });
 
+  it('drops blank actor fields before storage', async () => {
+    const event = await createManualInputEvent({
+      channel: 'chat',
+      receivedAt: new Date('2026-07-04T09:21:23.000Z'),
+      conversationId: 'conversation-blank-actor',
+      message: 'hello',
+      actor: {
+        id: '   ',
+        displayName: '   ',
+        type: '   ',
+      },
+    });
+
+    expect(event.payload).not.toHaveProperty('actor');
+  });
+
   it('keeps delivery ids distinct for long conversations that share message ids', async () => {
     const prefix = 'conversation-delivery-prefix-'.repeat(7);
     const first = await createManualInputEvent({
@@ -740,6 +756,22 @@ describe('manual and chat input source contract', () => {
       },
     });
     expect(JSON.stringify(storage.storedEvents()[0])).not.toContain('replyTarget');
+  });
+
+  it('drops blank reply target ids before direct event storage', async () => {
+    const event = await createManualInputEvent({
+      channel: 'chat',
+      receivedAt: new Date('2026-07-04T09:21:25.000Z'),
+      deliveryId: 'chat-direct-blank-reply',
+      conversationId: 'chat-direct-blank-reply-session',
+      message: 'hello',
+      replyTarget: {
+        id: '   ',
+        url: 'https://chat.example/messages/1',
+      },
+    });
+
+    expect(event.payload).not.toHaveProperty('replyTarget');
   });
 
   it('rejects unsafe manual and chat raw payload references in bridge storage', async () => {

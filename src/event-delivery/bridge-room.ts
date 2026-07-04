@@ -698,6 +698,12 @@ function assertManualInputEventSourceMatches(sourceType: string, name: string): 
   ) {
     throw new TypeError('manual/chat event name must match source.type');
   }
+  if (
+    (sourceType === 'manual' && name !== 'rainrail.manual.message')
+    || (sourceType === 'chat' && name !== 'rainrail.chat.message')
+  ) {
+    throw new TypeError('manual/chat source.type must use the matching event name');
+  }
 }
 
 function assertManualInputRawPayloadMatches(sourceType: string, name: string, kind: string, reference: string): void {
