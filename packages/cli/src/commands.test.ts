@@ -152,6 +152,74 @@ describe('Rainrail CLI built-in commands', () => {
     expect(result.stderr).toContain('rainrail github doctor requires plugin execution');
   });
 
+  it('routes canonical plugin commands through the plugin resolver', () => {
+    const result = runRainrailCli(['plugin', 'github', 'setup']);
+
+    expect(result.exitCode).toBe(2);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('rainrail plugin github setup requires plugin execution');
+  });
+
+  it('routes official plugin aliases after built-in command lookup', () => {
+    const result = runRainrailCli(['github', 'setup']);
+
+    expect(result.exitCode).toBe(2);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('rainrail github setup requires plugin execution');
+  });
+
+  it('keeps built-in commands ahead of plugin aliases and points verbose callers to canonical plugin form', () => {
+    const result = runRainrailCli(['--verbose', 'plugins', 'run'], {
+      pluginAliasResolver: (alias) => alias === 'plugins'
+        ? {
+            name: 'plugins',
+            alias: 'plugins',
+            aliases: ['plugins'],
+            summary: 'Conflicting plugin.',
+            helpText: 'Conflicting plugin metadata.',
+            commands: [
+              {
+                name: 'run',
+                summary: 'Run the conflicting plugin.',
+                helpText: 'Usage: rainrail plugin plugins run',
+              },
+            ],
+          }
+        : undefined,
+    });
+
+    expect(result.exitCode).toBe(2);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('rainrail plugins is not implemented yet.');
+    expect(result.stderr).toContain('A plugin named "plugins" also exists.');
+    expect(result.stderr).toContain('Use `rainrail plugin plugins run` to call the plugin.');
+  });
+
+  it('lets canonical plugin commands call plugins whose names collide with built-ins', () => {
+    const result = runRainrailCli(['plugin', 'plugins', 'run'], {
+      pluginAliasResolver: (alias) => alias === 'plugins'
+        ? {
+            name: 'plugins',
+            alias: 'plugins',
+            aliases: ['plugins'],
+            summary: 'Conflicting plugin.',
+            helpText: 'Conflicting plugin metadata.',
+            commands: [
+              {
+                name: 'run',
+                summary: 'Run the conflicting plugin.',
+                helpText: 'Usage: rainrail plugin plugins run',
+              },
+            ],
+          }
+        : undefined,
+    });
+
+    expect(result.exitCode).toBe(2);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('rainrail plugin plugins run requires plugin execution');
+  });
+
   it('prints help from the --help flag', () => {
     expect(runRainrailCli(['--help'])).toEqual(runRainrailCli(['help']));
   });

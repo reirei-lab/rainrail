@@ -30,6 +30,19 @@ used by tests and future embedding code:
 
 - Types: `BuiltInCommandName`, `BuiltInCommand`, `SharedOptions`,
   `ParsedRainrailArguments`, `RainrailCliResult`, `RainrailCliEnvironment`,
-  and `RainrailProject`.
+  `PluginAliasResolver`, and `RainrailProject`.
 - Values: `BUILT_IN_COMMANDS`, `getBuiltInCommand`, `parseRainrailArguments`,
   `formatHelp`, `discoverRainrailProject`, and `runRainrailCli`.
+
+## Plugin command resolution
+
+Rainrail resolves command names in this order:
+
+1. Built-in command table.
+2. Plugin alias resolver.
+
+`rainrail plugin <pluginName> <command...>` is the canonical plugin form and
+uses the plugin alias resolver after the built-in `plugin` command has been
+selected. `rainrail <pluginName> <command...>` is the short alias form. If a
+plugin name collides with a built-in command, the built-in command wins; callers
+can use `rainrail plugin <pluginName> <command...>` to reach the plugin.

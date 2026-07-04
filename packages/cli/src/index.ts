@@ -9,6 +9,7 @@ import {
   getOfficialPluginCommand,
   isOfficialPluginCommandHelpRequest,
   isOfficialPluginHelpRequest,
+  type OfficialPluginMetadata,
 } from './official-plugin-catalog.js';
 
 export {
@@ -44,6 +45,7 @@ export type SharedOptions = {
   readonly profile?: string;
   readonly json: boolean;
   readonly yes: boolean;
+  readonly verbose?: boolean;
 };
 
 export type ParsedRainrailArguments = {
@@ -75,10 +77,13 @@ export type CommandRunner = (
   options: CommandRunnerOptions,
 ) => CommandRunnerResult;
 
+export type PluginAliasResolver = (alias: string) => OfficialPluginMetadata | undefined;
+
 export type RainrailCliEnvironment = {
   readonly cwd?: string;
   readonly commandRunner?: CommandRunner;
   readonly currentBinPath?: string;
+  readonly pluginAliasResolver?: PluginAliasResolver;
 };
 
 export type RainrailProject = {
@@ -148,7 +153,13 @@ export function getBuiltInCommand(name: string): BuiltInCommand | undefined {
 export function parseRainrailArguments(argv: readonly string[]): ParsedRainrailArguments {
   const commandArgs: string[] = [];
   const errors: string[] = [];
-  const parsedOptions: { config?: string; profile?: string; json: boolean; yes: boolean } = {
+  const parsedOptions: {
+    config?: string;
+    profile?: string;
+    json: boolean;
+    yes: boolean;
+    verbose?: boolean;
+  } = {
     json: false,
     yes: false,
   };
@@ -173,6 +184,11 @@ export function parseRainrailArguments(argv: readonly string[]): ParsedRainrailA
 
     if (arg === '--yes') {
       parsedOptions.yes = true;
+      continue;
+    }
+
+    if (arg === '--verbose') {
+      parsedOptions.verbose = true;
       continue;
     }
 
@@ -455,6 +471,52 @@ function inferRainrailInstallPrefix(currentBinPath: string | undefined): string 
   return undefined;
 }
 
+function defaultPluginAliasResolver(alias: string): OfficialPluginMetadata | undefined {
+  return getOfficialPluginByAlias(alias);
+}
+
+function runPluginCommand(
+  plugin: OfficialPluginMetadata,
+  args: readonly string[],
+  invocation: readonly string[],
+): RainrailCliResult {
+  if (isOfficialPluginHelpRequest(args)) {
+    return {
+      exitCode: 0,
+      stdout: formatOfficialPluginHelp(plugin),
+      stderr: '',
+    };
+  }
+
+  const pluginCommand = getOfficialPluginCommand(plugin, args);
+  if (pluginCommand === undefined) {
+    return {
+      exitCode: 1,
+      stdout: '',
+      stderr: `Unknown rainrail ${invocation.join(' ')} command: ${args.join(' ')}\n\n${formatOfficialPluginHelp(plugin)}`,
+    };
+  }
+
+  if (isOfficialPluginCommandHelpRequest(pluginCommand, args)) {
+    return {
+      exitCode: 0,
+      stdout: formatOfficialPluginCommandHelp(plugin, pluginCommand),
+      stderr: '',
+    };
+  }
+
+  return {
+    exitCode: 2,
+    stdout: '',
+    stderr: `rainrail ${[...invocation, pluginCommand.name].join(' ')} requires plugin execution, which is not implemented yet.\n`,
+  };
+}
+
+function formatPluginCollisionHint(commandName: string, commandArgs: readonly string[]): string {
+  const canonicalCommand = ['rainrail', 'plugin', commandName, ...commandArgs].join(' ');
+  return `A plugin named "${commandName}" also exists. Use \`${canonicalCommand}\` to call the plugin.\n`;
+}
+
 export function runRainrailCli(
   argv: readonly string[],
   environment: RainrailCliEnvironment = {},
@@ -469,40 +531,12 @@ export function runRainrailCli(
   }
 
   const command = getBuiltInCommand(parsed.commandName);
-  const officialPlugin = getOfficialPluginByAlias(parsed.commandName);
+  const pluginAliasResolver = environment.pluginAliasResolver ?? defaultPluginAliasResolver;
 
   if (command === undefined) {
+    const officialPlugin = pluginAliasResolver(parsed.commandName);
     if (officialPlugin !== undefined) {
-      if (isOfficialPluginHelpRequest(parsed.commandArgs)) {
-        return {
-          exitCode: 0,
-          stdout: formatOfficialPluginHelp(officialPlugin),
-          stderr: '',
-        };
-      }
-
-      const pluginCommand = getOfficialPluginCommand(officialPlugin, parsed.commandArgs);
-      if (pluginCommand === undefined) {
-        return {
-          exitCode: 1,
-          stdout: '',
-          stderr: `Unknown rainrail ${officialPlugin.alias} command: ${parsed.commandArgs.join(' ')}\n\n${formatOfficialPluginHelp(officialPlugin)}`,
-        };
-      }
-
-      if (isOfficialPluginCommandHelpRequest(pluginCommand, parsed.commandArgs)) {
-        return {
-          exitCode: 0,
-          stdout: formatOfficialPluginCommandHelp(officialPlugin, pluginCommand),
-          stderr: '',
-        };
-      }
-
-      return {
-        exitCode: 2,
-        stdout: '',
-        stderr: `rainrail ${officialPlugin.alias} ${pluginCommand.name} requires plugin execution, which is not implemented yet.\n`,
-      };
+      return runPluginCommand(officialPlugin, parsed.commandArgs, [officialPlugin.alias]);
     }
 
     return {
@@ -510,6 +544,28 @@ export function runRainrailCli(
       stdout: '',
       stderr: `Unknown rainrail command: ${parsed.commandName}\n\n${formatHelp()}`,
     };
+  }
+
+  if (command.name === 'plugin') {
+    const pluginName = parsed.commandArgs[0];
+    if (pluginName === undefined) {
+      return {
+        exitCode: 1,
+        stdout: '',
+        stderr: 'Usage: rainrail plugin <pluginName> <command>\n',
+      };
+    }
+
+    const plugin = pluginAliasResolver(pluginName);
+    if (plugin === undefined) {
+      return {
+        exitCode: 1,
+        stdout: '',
+        stderr: `Unknown rainrail plugin: ${pluginName}\n`,
+      };
+    }
+
+    return runPluginCommand(plugin, parsed.commandArgs.slice(1), ['plugin', pluginName]);
   }
 
   if (command.name === 'help') {
@@ -541,7 +597,12 @@ export function runRainrailCli(
   return {
     exitCode: 2,
     stdout: '',
-    stderr: `rainrail ${command.name} is not implemented yet.\n`,
+    stderr: [
+      `rainrail ${command.name} is not implemented yet.\n`,
+      parsed.options.verbose && pluginAliasResolver(command.name) !== undefined
+        ? formatPluginCollisionHint(command.name, parsed.commandArgs)
+        : '',
+    ].join(''),
   };
 }
 
