@@ -179,9 +179,12 @@ parameter は保持しない。
 
 `rainrail.manual.message` / `rainrail.chat.message` payload は、manual/chat source adapter
 を通らず直接 `/publish` へ渡された場合も、conversation / message / actor / attachment /
-reply target の allowlist された string field だけを保存する。各 string は credential
-redaction 後に 8KB 以内へ縮約し、巨大な user input や attachment name が durable replay
-や SSE に無制限に残らないようにする。
+reply target の allowlist された string field だけを保存する。この manual/chat 専用の
+正規化は `source.type` と event name が manual/chat contract に一致する envelope だけに
+適用し、他 source の payload を manual/chat と誤判定しない。`action` は `message` だけを
+保存し、direct publish で別 action が来ても replay payload には残さない。各 string は
+credential redaction 後に 8KB 以内へ縮約し、`attachments` は先頭 20 件までに制限することで、
+巨大な user input や attachment name が durable replay や SSE に無制限に残らないようにする。
 
 `POST /publish` は request body の読み込み開始直後に publish queue の枠を確保する。
 これにより、大きい body や streaming body の parse 完了順に左右されず、`fetch`

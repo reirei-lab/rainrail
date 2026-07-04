@@ -486,6 +486,28 @@ describe('manual and chat input source contract', () => {
     expect(first.id).not.toBe(second.id);
   });
 
+  it('falls back to random delivery ids when message ids are empty strings', async () => {
+    const first = await createManualInputEvent({
+      channel: 'chat',
+      receivedAt: new Date('2026-07-04T09:21:24.000Z'),
+      conversationId: 'conversation-empty-message',
+      messageId: '',
+      message: 'first',
+    });
+    const second = await createManualInputEvent({
+      channel: 'chat',
+      receivedAt: new Date('2026-07-04T09:21:25.000Z'),
+      conversationId: 'conversation-empty-message',
+      messageId: '   ',
+      message: 'second',
+    });
+
+    expect(first.delivery.id).not.toBe(second.delivery.id);
+    expect(first.id).not.toBe(second.id);
+    expect(first.payload.message).not.toHaveProperty('id');
+    expect(second.payload.message).not.toHaveProperty('id');
+  });
+
   it('normalizes leading punctuation in conversation and message identifiers', async () => {
     const event = await createManualInputEvent({
       channel: 'chat',
@@ -537,9 +559,9 @@ describe('manual and chat input source contract', () => {
       channel: 'chat',
       deliveryId: 'direct-redaction-delivery',
       conversationId: 'direct-redaction-session',
-      message: 'access_token=gho_direct client_secret: direct-secret sessionToken=direct-session github_pat_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ghp_abcdefghijklmnopqrstuvwxyz0123456789',
+      message: 'access_token=gho_direct client_secret: direct-secret sessionToken=direct-session github_pat_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ghp_abcdefghijklmnopqrstuvwxyz0123456789 bearer abc.def.ghi DATABASE_URL=postgres://user:db-pass@db/prod https://user:web-pass@example.com/path',
     });
-    expect(directEvent.payload.message.text).toBe('access_token=[redacted] client_secret: [redacted] sessionToken=[redacted] [redacted-token] [redacted-token]');
+    expect(directEvent.payload.message.text).toBe('access_token=[redacted] client_secret: [redacted] sessionToken=[redacted] [redacted-token] [redacted-token] bearer [redacted] DATABASE_URL=[redacted-url] [redacted-url]');
 
     const storage = fakeState();
     const app = createRainrailHttpApp({
@@ -589,6 +611,22 @@ describe('manual and chat input source contract', () => {
     expect(JSON.stringify(storedEvent)).not.toContain('browser-secret');
     expect(JSON.stringify(storedEvent)).not.toContain('abc.def.ghi');
     expect(JSON.stringify(storedEvent)).not.toContain('actor-secret');
+  });
+
+  it('limits manual and chat attachments before publishing payloads', async () => {
+    const event = await createManualInputEvent({
+      channel: 'chat',
+      deliveryId: 'attachment-limit-delivery',
+      conversationId: 'attachment-limit-session',
+      message: 'hello',
+      attachments: Array.from({ length: 40 }, (_, index) => ({
+        id: `attachment-${index}`,
+        name: `attachment-${index}.txt`,
+      })),
+    });
+
+    expect(event.payload.attachments).toHaveLength(20);
+    expect(event.payload.attachments?.at(-1)?.id).toBe('attachment-19');
   });
 
   it('lets workflow plugins accept chat input and start runtime work', async () => {

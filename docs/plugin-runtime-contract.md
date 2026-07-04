@@ -104,9 +104,12 @@ digest だけを保持する。manual/chat の raw payload reference は既存 p
 `:` など reference に使えない文字は `-` へ正規化する。長い conversation id や message id は
 末尾の一意要素と短い hash を残し、Bridge room の 128 文字 id 制限を超える場合は top-level
 event id も短い明示 id にする。任意 host/path は Core storage に残さない。
-token、secret、password、API key、Bearer credential 形式は
-`key=value`、JSON/YAML 風の `key: value`、quoted JSON field のいずれも source adapter 側で
-短く redaction する。
+空文字または空白だけの `messageId` は未指定として扱い、UUID fallback で delivery id の
+一意性を保つ。`attachments` は先頭 20 件だけを正規化する。token、secret、password、
+API key、Bearer credential 形式は `key=value`、JSON/YAML 風の `key: value`、
+quoted JSON field のいずれも source adapter 側で短く redaction する。redaction は
+credential key の大小文字差、standalone GitHub access token 形式、URL userinfo の
+credential も対象にする。
 
 HTTP intake の既定 route は `/intake/manual` と `/intake/chat` で、adapter は JSON body から
 `conversationId`、`message`、任意の `messageId`、`actor`、`attachments`、`replyTarget`

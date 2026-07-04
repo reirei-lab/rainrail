@@ -49,6 +49,7 @@ const MAX_CLOUDFLARE_EXCEPTION_NAME_LENGTH = 200;
 const MAX_CLOUDFLARE_EXCEPTION_STACK_LENGTH = 1_200;
 const MAX_CLOUDFLARE_EXCEPTION_STACK_LINES = 8;
 const MAX_MANUAL_INPUT_TEXT_LENGTH = 8_000;
+const MAX_MANUAL_INPUT_ATTACHMENTS = 20;
 const claimedStorages = new WeakSet<RainrailBridgeRoomStorage>();
 
 type PublishEventResult =
@@ -539,8 +540,16 @@ function normalizePayload(value: unknown, context: { sourceType: string; name: s
   }
 
   const payload: Record<string, unknown> = {};
+  const manualPayload = isManualInputPayload(context);
   for (const [key, nestedValue] of Object.entries(value)) {
-    if (ALLOWED_PAYLOAD_KEYS.has(key) && isSafePayloadMetadata(nestedValue)) {
+    if (manualPayload) {
+      if (MANUAL_INPUT_PAYLOAD_KEYS.has(key)) {
+        const normalized = normalizeManualInputPayloadField(key, nestedValue);
+        if (normalized !== undefined) {
+          payload[key] = normalized;
+        }
+      }
+    } else if (ALLOWED_PAYLOAD_KEYS.has(key) && isSafePayloadMetadata(nestedValue)) {
       payload[key] = nestedValue;
     } else if (isCloudflareErrorPayload(value, context) && CLOUDFLARE_ERROR_PAYLOAD_KEYS.has(key)) {
       const normalized = normalizeCloudflareErrorPayloadField(key, nestedValue);
@@ -549,11 +558,6 @@ function normalizePayload(value: unknown, context: { sourceType: string; name: s
       }
     } else if (isGitHubMentionPayload(value) && GITHUB_MENTION_PAYLOAD_KEYS.has(key)) {
       const normalized = normalizeGitHubMentionPayloadField(key, nestedValue);
-      if (normalized !== undefined) {
-        payload[key] = normalized;
-      }
-    } else if (isManualInputPayload(value, context) && MANUAL_INPUT_PAYLOAD_KEYS.has(key)) {
-      const normalized = normalizeManualInputPayloadField(key, nestedValue);
       if (normalized !== undefined) {
         payload[key] = normalized;
       }
@@ -651,13 +655,9 @@ function normalizeGitHubMentionPayloadField(key: string, value: unknown): unknow
   return undefined;
 }
 
-function isManualInputPayload(
-  value: Record<string, unknown>,
-  context: { sourceType: string; name: string },
-): boolean {
+function isManualInputPayload(context: { sourceType: string; name: string }): boolean {
   return (context.sourceType === 'manual' && context.name === 'rainrail.manual.message')
-    || (context.sourceType === 'chat' && context.name === 'rainrail.chat.message')
-    || (value.provider === 'rainrail' && (value.channel === 'manual' || value.channel === 'chat'));
+    || (context.sourceType === 'chat' && context.name === 'rainrail.chat.message');
 }
 
 function normalizeManualInputPayloadField(key: string, value: unknown): unknown {
@@ -698,7 +698,7 @@ function normalizeManualActor(value: unknown): unknown {
 
 function normalizeManualAttachments(value: unknown): unknown {
   if (!Array.isArray(value)) return undefined;
-  const attachments = value.flatMap((attachment) => {
+  const attachments = value.slice(0, MAX_MANUAL_INPUT_ATTACHMENTS).flatMap((attachment) => {
     if (!isRecord(attachment)) return [];
     const normalized = {
       ...pickManualStringFields(attachment, ['id', 'name', 'contentType', 'url']),

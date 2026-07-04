@@ -1141,7 +1141,10 @@ describe('Rainrail bridge room', () => {
         conversation: { id: 'chat-direct' },
         message: { id: 'message-direct', text: longMessage },
         actor: { displayName: longDisplayName },
-        attachments: [{ id: 'attachment-direct', name: longAttachmentName }],
+        attachments: Array.from({ length: 40 }, (_, index) => ({
+          id: `attachment-${index}`,
+          name: `${longAttachmentName}-${index}`,
+        })),
       },
       rawPayload: {
         kind: 'inline-redacted',
@@ -1155,14 +1158,86 @@ describe('Rainrail bridge room', () => {
     const storedPayload = storage.storedEvents()[0]?.payload as {
       message?: { text?: string };
       actor?: { displayName?: string };
-      attachments?: Array<{ name?: string }>;
+      attachments?: Array<{ id?: string; name?: string }>;
     };
     expect(storedPayload.message?.text?.length).toBeLessThanOrEqual(8_000);
     expect(storedPayload.actor?.displayName?.length).toBeLessThanOrEqual(8_000);
+    expect(storedPayload.attachments).toHaveLength(20);
+    expect(storedPayload.attachments?.at(-1)?.id).toBe('attachment-19');
     expect(storedPayload.attachments?.[0]?.name?.length).toBeLessThanOrEqual(8_000);
     expect(JSON.stringify(storedPayload)).not.toContain('message-tail');
     expect(JSON.stringify(storedPayload)).not.toContain('actor-tail');
     expect(JSON.stringify(storedPayload)).not.toContain('attachment-tail');
+  });
+
+  it('normalizes direct manual chat payloads to message action only', async () => {
+    const storage = fakeState();
+    const room = createTestRoom(storage, { replayLimit: 10 });
+    const event = createEventEnvelope({
+      source: { type: 'chat', name: 'web-chat' },
+      name: 'rainrail.chat.message',
+      delivery: {
+        id: 'chat-action-direct',
+        receivedAt: '2026-06-29T18:18:21.000Z',
+      },
+      occurredAt: '2026-06-29T18:18:20.000Z',
+      subject: { type: 'conversation', id: 'chat-action-direct' },
+      payload: {
+        provider: 'rainrail',
+        channel: 'chat',
+        action: 'delete',
+        conversation: { id: 'chat-action-direct' },
+        message: { text: 'hello' },
+      },
+      rawPayload: {
+        kind: 'inline-redacted',
+        reference: 'chat://deliveries/chat-action-direct',
+      },
+    });
+
+    const publishResponse = await room.fetch(publishRequest(event));
+
+    expect(publishResponse.status).toBe(200);
+    expect(storage.storedEvents()[0]?.payload).toMatchObject({
+      provider: 'rainrail',
+      channel: 'chat',
+      conversation: { id: 'chat-action-direct' },
+      message: { text: 'hello' },
+    });
+    expect(storage.storedEvents()[0]?.payload).not.toHaveProperty('action');
+  });
+
+  it('does not apply manual payload allowlists to non-manual events', async () => {
+    const storage = fakeState();
+    const room = createTestRoom(storage, { replayLimit: 10 });
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook' },
+      name: 'github.issue',
+      delivery: {
+        id: 'github-rainrail-shaped-payload',
+        receivedAt: '2026-06-29T18:18:21.000Z',
+      },
+      occurredAt: '2026-06-29T18:18:20.000Z',
+      subject: { type: 'issue', id: 'github-rainrail-shaped-payload' },
+      payload: {
+        provider: 'rainrail',
+        channel: 'chat',
+        action: 'opened',
+        message: { text: 'provider body should not be stored' },
+        actor: { displayName: 'provider actor should not be stored' },
+      },
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'github://deliveries/github-rainrail-shaped-payload',
+      },
+    });
+
+    const publishResponse = await room.fetch(publishRequest(event));
+
+    expect(publishResponse.status).toBe(200);
+    expect(storage.storedEvents()[0]?.payload).toEqual({ action: 'opened' });
+    expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('provider body should not be stored');
+    expect(JSON.stringify(storage.storedEvents()[0]?.payload)).not.toContain('provider actor should not be stored');
   });
 
   it('truncates Cloudflare exception details before storing replay events', async () => {
