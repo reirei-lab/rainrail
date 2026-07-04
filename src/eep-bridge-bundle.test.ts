@@ -39,4 +39,14 @@ describe('Rainrail EEP Bridge bundle', () => {
 
     expect(adapters[0]?.routes?.[0]?.maxBodyBytes).toBe(DEFAULT_MAX_REQUEST_BODY_BYTES);
   });
+
+  it('can omit the bundled Cloudflare tail ingress for callers with their own tail adapter', () => {
+    const adapters = createRainrailEepBridgeIntakeAdapters({
+      env: { GITHUB_WEBHOOK_SECRET: 'secret' },
+      includeCloudflareTail: false,
+    });
+
+    expect(adapters.map((adapter) => adapter.name)).toEqual(['github-webhook']);
+    expect(adapters[0]?.routes?.map((route) => route.path)).toEqual(['/webhooks/github']);
+  });
 });

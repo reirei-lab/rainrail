@@ -30,6 +30,7 @@ export interface RainrailNodeServer {
 }
 
 export function createRainrailNodeServer(options: RainrailNodeServerOptions): RainrailNodeServer {
+  const hasCustomTailAdapter = options.intakeAdapters?.some((adapter) => adapter.tail !== undefined) ?? false;
   const room = new RainrailBridgeRoom(options.state ?? createInMemoryBridgeRoomState(), {
     publishToken: options.publishToken,
     ...(options.replayLimit === undefined ? {} : { replayLimit: options.replayLimit }),
@@ -45,6 +46,7 @@ export function createRainrailNodeServer(options: RainrailNodeServerOptions): Ra
       ...createRainrailEepBridgeIntakeAdapters({
         env: { GITHUB_WEBHOOK_SECRET: options.githubWebhookSecret },
         ...(options.githubSourceName === undefined ? {} : { githubSourceName: options.githubSourceName }),
+        includeCloudflareTail: !hasCustomTailAdapter,
         ...(options.maxWebhookBodyBytes === undefined && options.maxBodyBytes === undefined ? {} : {
           githubMaxBodyBytes: options.maxWebhookBodyBytes ?? options.maxBodyBytes,
         }),

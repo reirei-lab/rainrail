@@ -132,6 +132,25 @@ describe('Rainrail Node server', () => {
     expect(chunk).toContain('event: cloudflare.tail\n');
   });
 
+  it('preserves custom Node tail adapters instead of registering the bundled Cloudflare tail twice', async () => {
+    const customTail: RainrailIntakeAdapter = {
+      name: 'custom-tail',
+      async tail(events) {
+        return [{ ok: true, count: events.length }];
+      },
+    };
+    const { app } = createRainrailNodeServer({
+      githubWebhookSecret: 'secret',
+      publishToken: 'test-publish-token',
+      eventsBearerToken: 'events-token',
+      intakeAdapters: [customTail],
+    });
+
+    await expect(app.tail?.([{ id: 1 }, { id: 2 }])).resolves.toEqual([
+      { ok: true, count: 2 },
+    ]);
+  });
+
   it('aborts the Fetch request when an SSE client disconnects', async () => {
     const { server, room } = createRainrailNodeServer({
       githubWebhookSecret: 'secret',

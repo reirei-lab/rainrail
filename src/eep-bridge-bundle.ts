@@ -11,6 +11,7 @@ export interface RainrailEepBridgeIntakeAdaptersOptions {
   env: RainrailEepBridgeBundleEnv;
   githubSourceName?: string;
   githubMaxBodyBytes?: number;
+  includeCloudflareTail?: boolean;
   fallbackDeliveryId?: (events: unknown[]) => string | Promise<string>;
 }
 
@@ -24,18 +25,24 @@ export function createRainrailEepBridgeIntakeAdapters({
   env,
   githubSourceName,
   githubMaxBodyBytes,
+  includeCloudflareTail = true,
   fallbackDeliveryId = stableIntakeFallbackDeliveryId,
 }: RainrailEepBridgeIntakeAdaptersOptions): readonly RainrailIntakeAdapter[] {
-  return [
+  const adapters: RainrailIntakeAdapter[] = [
     createGitHubWebhookIntakeAdapter({
       secret: gitHubWebhookSecretFromEnv(env),
       ...(githubSourceName === undefined ? {} : { sourceName: githubSourceName }),
       ...(githubMaxBodyBytes === undefined ? {} : { maxBodyBytes: githubMaxBodyBytes }),
     }),
-    createCloudflareTailIntakeAdapter({
-      fallbackDeliveryId,
-    }),
   ];
+
+  if (includeCloudflareTail) {
+    adapters.push(createCloudflareTailIntakeAdapter({
+      fallbackDeliveryId,
+    }));
+  }
+
+  return adapters;
 }
 
 function gitHubWebhookSecretFromEnv(env: RainrailEepBridgeBundleEnv): string {
