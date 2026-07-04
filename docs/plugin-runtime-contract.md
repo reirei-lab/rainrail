@@ -78,6 +78,9 @@ GitHub と Forgejo の issue 操作を同じ workflow から使えるように�
 Workflow plugin は GitHub webhook payload ではなく、中立 event の
 `source` と `subject` から `TaskIssueRef` を作る。これにより、issue、
 project、comment、status、proposal の操作は provider 実装に閉じ込められる。
+GitHub の実 API adapter は core contract ではなく `src/providers/github/*` に置く。
+root の `src/github-provider.ts`、`src/github-project.ts`、`src/github-auth.ts`、
+`src/github-rate-limit.ts` は既存 import 互換の re-export shim として扱う。
 
 ## Runtime provider
 
@@ -241,6 +244,9 @@ packaged workflow factory は `createReviewRequestWorkflow`、
 `handleReviewRequestEvent`、`handleChangeRequestEvent`、
 `handleCodexReviewEvent`、`handleCheckFailureEvent`、
 `handleConflictCheckEvent`、`handleAutoMergeEvent` を直接呼べる。
+workflow test は mock `TaskProvider` / `PullRequestProvider` を使う。
+GitHub provider 実装の HTTP adapter behavior は `github-provider.test.ts`、`githubPullRequest.test.ts`、
+`github-project.test.ts` で検証する。
 check rollup 判定は `allChecksPassed` に集約し、`success` に加えて
 `neutral` / `skipped` の完了も成功扱いにする。
 
@@ -378,8 +384,10 @@ GitHub CLI と同じく `GH_TOKEN`、`GITHUB_TOKEN` の順で最初の非空値�
 fallback は Rainrail の GitHub API URL に合わせて `github.com` host だけから
 取得する。`GitHubTaskProvider` は `auth.getAuthToken()` を注入できるため、
 workflow test や別 runtime では実 GitHub App/PAT 実装を差し替えられる。
-実装の入口は issue/task 操作用の `createGitHubTaskProvider` と、
-PR lifecycle workflow 用の `createGitHubPullRequestProvider`。
+実装の入口は `src/providers/github/index.ts` から公開する issue/task 操作用の
+`createGitHubTaskProvider`、Project queue 用の
+`createGitHubProjectTaskQueueProvider`、PR lifecycle workflow 用の
+`createGitHubPullRequestProvider`。
 デフォルト provider は GitHub App token 発行が GitHub API 側の auth/rate-limit
 エラーで失敗したとき、設定済み env/gh fallback token があればそれを使う。
 

@@ -16,9 +16,12 @@
         "src/agent-timeline.ts",
         "src/task-provider.ts",
         "src/config.ts",
-        "src/github-auth.ts",
-        "src/github-provider.ts",
-        "src/github-rate-limit.ts"
+        "src/providers/github/auth.ts",
+        "src/providers/github/index.ts",
+        "src/providers/github/project-task-queue.ts",
+        "src/providers/github/pull-request-provider.ts",
+        "src/providers/github/rate-limit.ts",
+        "src/providers/github/task-provider.ts"
       ],
       "docs": ["docs/plugin-runtime-contract.md"],
       "tests": [
@@ -35,6 +38,7 @@
         "src/agent-timeline.test.ts",
         "src/config.test.ts",
         "src/github-auth.test.ts",
+        "src/github-provider-boundary.test.ts",
         "src/github-provider.test.ts",
         "src/githubPullRequest.test.ts",
         "src/github-rate-limit.test.ts"
@@ -318,13 +322,17 @@
         "src/project-issues.ts",
         "src/task-queue.ts",
         "src/agent-assignment.ts",
-        "src/github-project.ts"
+        "src/providers/github/project-task-queue.ts"
       ],
-      "docs": ["docs/task-queue-project-issues.md"],
+      "docs": [
+        "docs/task-queue-project-issues.md",
+        "docs/plugin-runtime-contract.md"
+      ],
       "tests": [
         "src/project-issues.test.ts",
         "src/agent-assignment.test.ts",
-        "src/github-project.test.ts"
+        "src/github-project.test.ts",
+        "src/github-provider-boundary.test.ts"
       ],
       "publicExports": [
         "ProjectIssue",
