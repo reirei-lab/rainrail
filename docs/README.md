@@ -23,6 +23,8 @@ you are implementing or reviewing Rainrail behavior.
   behavior across event sources and runtimes.
 - [Operational state](operational-state.md): persistent state used by
   workflows and runtime coordination.
+- [Operational API v1](operational-api-v1.md): dashboard/mobile API resource,
+  schema, pagination, auth scope, audit, and migration policy.
 - [Contracts manifest](contracts.manifest.json): machine-checked links between
   public exports, implementation files, docs, and tests.
 
