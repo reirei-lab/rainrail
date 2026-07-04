@@ -6,6 +6,7 @@ const dispatcherAgents = readFileSync(new URL('../src/dispatcher/AGENTS.md', imp
 const dispatcherImplementation = readFileSync(new URL('../src/dispatcher/index.ts', import.meta.url), 'utf8');
 const pluginRuntimeContract = readFileSync(new URL('../docs/plugin-runtime-contract.md', import.meta.url), 'utf8');
 const githubWebhookAgents = readFileSync(new URL('../src/github-webhook/AGENTS.md', import.meta.url), 'utf8');
+const prLifecycleAgents = readFileSync(new URL('../src/AGENTS.md', import.meta.url), 'utf8');
 const agentRuntimeAgents = readFileSync(new URL('../src/agent-runtime/AGENTS.md', import.meta.url), 'utf8');
 const githubProviderAgents = readFileSync(new URL('../src/providers/github/AGENTS.md', import.meta.url), 'utf8');
 /** @type {{contracts: Array<{id: string, sources: string[]}>}} */
@@ -118,6 +119,30 @@ describe('GitHub webhook scoped agent rules', () => {
     expect(webhookContract.sources).toEqual(['src/github-webhook/index.ts']);
     expect(boundaryContract.sources).toContain('src/github-webhook/index.ts');
     expect(boundaryContract.sources).not.toContain('src/github-webhook.ts');
+  });
+});
+
+describe('PR lifecycle scoped agent rules', () => {
+  it('documents the current root-level lifecycle scope and staged module split decision', () => {
+    expect(prLifecycleAgents).toContain('PR lifecycle');
+    expect(prLifecycleAgents).toContain('src/pr-lifecycle.ts');
+    expect(prLifecycleAgents).toContain('src/autoMerge.test.ts');
+    expect(prLifecycleAgents).toContain('src/codexReview.test.ts');
+    expect(prLifecycleAgents).toContain('compatibility shim');
+    expect(prLifecycleAgents).toContain('src/pr-lifecycle/index.ts');
+    expect(prLifecycleAgents).toContain('GitHubPullRequestProvider');
+    expect(prLifecycleAgents).toContain('normalized');
+  });
+
+  it('keeps review, check, and merge freshness rules near the workflow code', () => {
+    expect(prLifecycleAgents).toContain('Codex review');
+    expect(prLifecycleAgents).toContain('latest actionable review');
+    expect(prLifecycleAgents).toContain('review comments pagination');
+    expect(prLifecycleAgents).toContain('unresolved review thread');
+    expect(prLifecycleAgents).toContain('stale checks');
+    expect(prLifecycleAgents).toContain('headSha');
+    expect(prLifecycleAgents).toContain('auto-merge blockers');
+    expect(prLifecycleAgents).toContain('context.actions.mergePullRequest');
   });
 });
 
