@@ -30,9 +30,23 @@ v1 resource は operational workflow を観察・操作する単位に合わせ�
 | Queue | `GET /api/v1/queue` | assignable Project issues、claimed item、stale claim warning。 | `read-only` |
 | Settings | `GET /api/v1/settings` | operator-visible runtime/source settings metadata。secret value は返さない。 | `read-only` |
 
-Future action endpoints は resource ごとの subresource として追加する。例:
-`POST /api/v1/agent-tasks/{taskId}/resume`、`POST /api/v1/queue/{itemId}/release`、
-`POST /api/v1/workflow-runs/{runId}/retry`。これらは `operator` 以上を要求する。
+Action endpoints は resource ごとの `actions` subresource として追加する。初期 command API は
+handler 注入で実操作に接続し、HTTP layer は endpoint、scope check、confirmation、audit/result
+recording を保証する。
+
+| Action | Endpoint | Minimum scope | Confirmation |
+| --- | --- | --- | --- |
+| Resume task | `POST /api/v1/agent-tasks/{taskId}/actions/resume` | `operator` | 不要。`dryRun: true` で preview 可能。 |
+| Reset task | `POST /api/v1/agent-tasks/{taskId}/actions/reset` | `operator` | 必須。 |
+| Terminate task | `POST /api/v1/agent-tasks/{taskId}/actions/terminate` | `operator` | 必須。 |
+| Terminate all tasks | `POST /api/v1/agent-tasks/actions/terminate-all` | `operator` | 必須。 |
+| Assign next queue item | `POST /api/v1/queue/actions/assign-next` | `operator` | 不要。 |
+| Update settings | `POST /api/v1/settings/actions/update` | `admin` | 必須。 |
+
+Destructive action で confirmation が不足している場合は
+`409 { "error": "action_confirmation_required", "data": { "confirmationToken": "..." } }` を返す。
+`commandHandler` が未設定の構成では、dry-run preview 以外の command は dispatch 済みとして扱わず
+`503 { "error": "command_handler_not_configured" }` を返す。
 settings mutation や token/source 管理は `admin` のみとする。
 
 ## Compact rows and detail records
@@ -133,11 +147,15 @@ The existing `Authorization: Bearer <token>` transport remains valid, but the im
 from `eventsBearerToken` equality to a scoped verifier before adding mutation endpoints. Missing/invalid
 credentials continue to use stable JSON errors such as `missing_bearer_token` and `invalid_bearer_token`.
 Insufficient scope returns `403 { "error": "insufficient_scope", "requiredScope": "operator" }`.
+The compatibility `eventsBearerToken` remains a `read-only` dashboard token. New command API callers should
+configure `dashboardAuth.operatorToken` and, for settings mutations, `dashboardAuth.adminToken`.
 
 ## Action audit
 
-Every mutation must append an activity event or dedicated audit row before returning success. Audit data
-must include:
+Every mutation must reserve a command result row before dispatching the handler. Post-dispatch accepted /
+failed command result rows and command activity events should be persisted before responding when storage is
+available; if that write fails after dispatch, the response keeps the handler outcome and includes an
+`auditWarning` rather than reporting the already executed command as a transport failure. Audit data must include:
 
 - `actor`: stable principal id derived from the token, not a display-only label.
 - `client`: dashboard, mobile, CLI, or automation caller id when available.
@@ -147,6 +165,12 @@ must include:
 - `targetType` and `targetId`: resource being changed.
 - `outcome`: `success`, `failed`, or `skipped`.
 - `summary`: human-readable dashboard text.
+
+`dryRun: true` records a `preview` command result and a skipped command activity without dispatching the
+injected command handler. Accepted actions record the handler result in `commandResults`; failed handler
+calls record a failed command result and failed command activity.
+Before the accepted handler result is returned or persisted, secret-like keys such as token, secret,
+password, key, session, code, authorization, and confirmation fields are recursively redacted.
 
 Audit metadata must not contain bearer tokens, webhook secrets, raw provider payloads, or full runtime logs.
 If an action calls an external provider, provider request ids may be stored as metadata only after redaction.
