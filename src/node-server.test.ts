@@ -392,7 +392,66 @@ describe('Rainrail Node server', () => {
     }
   });
 
-  it('applies maxWebhookBodyBytes to Node command action requests', async () => {
+  it('treats empty Node command action bodies as empty objects', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:00:00.000Z'),
+    });
+    operationalStore.recordAgentTask({
+      id: 'agent_task_rainrail_111',
+      title: 'command API',
+      agentSessionId: 'agent:main:rainrail-111',
+      branchName: 'agent/reirei-lab-rainrail-111',
+      status: 'stopped',
+      logPath: 'var/log/rainrail-111.log',
+      resumeAttempts: [],
+    });
+    const commandHandler = vi.fn(async (command) => ({ received: command.inputs }));
+    const { server } = createRainrailNodeServer({
+      githubWebhookSecret: 'secret',
+      publishToken: 'test-publish-token',
+      operationalStore,
+      dashboardAuth: {
+        operatorToken: 'operator-token',
+      },
+      commandHandler,
+    });
+
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const address = server.address();
+    if (address === null || typeof address === 'string') {
+      throw new Error('expected TCP server address');
+    }
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${address.port}/api/v1/agent-tasks/agent_task_rainrail_111/actions/resume`, {
+        method: 'POST',
+        headers: {
+          authorization: 'Bearer operator-token',
+          'x-request-id': 'request-node-empty-command',
+        },
+      });
+
+      expect(response.status).toBe(202);
+      await expect(response.json()).resolves.toMatchObject({
+        data: {
+          action: 'agent_task_resume',
+          status: 'accepted',
+          result: { received: {} },
+        },
+      });
+      expect(commandHandler).toHaveBeenCalledWith(expect.objectContaining({
+        inputs: {},
+      }));
+    } finally {
+      await closeServer(server);
+      operationalStore.close();
+    }
+  });
+
+  it('applies dashboardCommandMaxBodyBytes to Node command action requests', async () => {
     const operationalStore = new RainrailOperationalStore({
       databasePath: ':memory:',
       eventLimit: 10,
@@ -416,6 +475,57 @@ describe('Rainrail Node server', () => {
       },
       commandHandler: vi.fn(),
       dashboardCommandMaxBodyBytes: 4,
+    });
+
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const address = server.address();
+    if (address === null || typeof address === 'string') {
+      throw new Error('expected TCP server address');
+    }
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${address.port}/api/v1/agent-tasks/agent_task_rainrail_111/actions/resume`, {
+        method: 'POST',
+        headers: {
+          authorization: 'Bearer operator-token',
+          'content-type': 'application/json',
+        },
+        body: '{"too":"large"}',
+      });
+
+      expect(response.status).toBe(413);
+      await expect(response.json()).resolves.toEqual({ error: 'request_body_too_large' });
+    } finally {
+      await closeServer(server);
+      operationalStore.close();
+    }
+  });
+
+  it('falls back to maxBodyBytes for Node command action request limits', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:00:00.000Z'),
+    });
+    operationalStore.recordAgentTask({
+      id: 'agent_task_rainrail_111',
+      title: 'command API',
+      agentSessionId: 'agent:main:rainrail-111',
+      branchName: 'agent/reirei-lab-rainrail-111',
+      status: 'running',
+      logPath: 'var/log/rainrail-111.log',
+      resumeAttempts: [],
+    });
+    const { server } = createRainrailNodeServer({
+      githubWebhookSecret: 'secret',
+      publishToken: 'test-publish-token',
+      operationalStore,
+      dashboardAuth: {
+        operatorToken: 'operator-token',
+      },
+      commandHandler: vi.fn(),
+      maxBodyBytes: 4,
     });
 
     server.listen(0, '127.0.0.1');

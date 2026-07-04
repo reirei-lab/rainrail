@@ -112,7 +112,7 @@ export function rainrailHttpRequestBodyLimit(
   method: string,
   options: RainrailHttpAppOptions,
 ): number | undefined {
-  if (isDashboardCommandRoute(pathname, method)) return options.dashboardCommandMaxBodyBytes ?? DEFAULT_MAX_REQUEST_BODY_BYTES;
+  if (isDashboardCommandRoute(pathname, method)) return options.dashboardCommandMaxBodyBytes;
   return createRainrailIntakeRegistry(options.intakeAdapters).routeBodyLimit(pathname, method);
 }
 
@@ -384,8 +384,8 @@ function isStatusCodeError(error: unknown): error is { statusCode: number } {
 function verifyDashboardReadRequest(request: Request, options: RainrailHttpAppOptions): Response | undefined {
   if (options.operationalStore === undefined) return undefined;
 
-  const auth = verifyRainrailEventsBearerToken(request, options.eventsBearerToken);
-  return auth.ok ? undefined : rainrailEventsAuthErrorResponse(auth);
+  const auth = verifyDashboardScopedRequest(request, options, 'read-only');
+  return auth.ok ? undefined : auth.response;
 }
 
 function dashboardStateResponse(url: URL, options: RainrailHttpAppOptions): Response {
@@ -900,7 +900,8 @@ async function handleDashboardCommandRequest(
       },
     }, requestId, 202);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const rawMessage = error instanceof Error ? error.message : String(error);
+    const message = sanitizeCommandErrorMessage(rawMessage, body.value);
     const result = options.operationalStore.recordCommandResult({
       actionType: command.actionType,
       targetType: command.targetType,
@@ -982,7 +983,7 @@ function principalForDashboardToken(
   if (matchesToken(token, options.dashboardAuth?.operatorToken)) {
     return { actor: 'operator', scope: 'operator' };
   }
-  if (matchesToken(token, options.dashboardAuth?.readOnlyToken ?? options.eventsBearerToken)) {
+  if (matchesToken(token, options.dashboardAuth?.readOnlyToken) || matchesToken(token, options.eventsBearerToken)) {
     return { actor: 'read-only', scope: 'read-only' };
   }
 
@@ -1036,6 +1037,8 @@ async function readJsonObjectBody(request: Request, maxBytes: number): Promise<
     throw error;
   }
 
+  if (rawBody.byteLength === 0) return { ok: true, value: {} };
+
   try {
     const value = JSON.parse(new TextDecoder().decode(rawBody)) as unknown;
     if (typeof value !== 'object' || value === null || Array.isArray(value)) {
@@ -1062,6 +1065,42 @@ function sanitizeCommandResult(value: unknown): unknown {
   }
 
   return sanitized;
+}
+
+function sanitizeCommandErrorMessage(message: string, inputs: Record<string, unknown>): string {
+  let sanitized = redactSensitiveText(message);
+  const sensitiveValues = sensitiveStringValues(inputs)
+    .filter((value) => value.length > 0)
+    .sort((left, right) => right.length - left.length);
+
+  for (const value of sensitiveValues) {
+    sanitized = sanitized.split(value).join('[redacted]');
+  }
+
+  return sanitized;
+}
+
+function sensitiveStringValues(value: unknown, sensitiveContext = false): string[] {
+  if (typeof value === 'string') {
+    return sensitiveContext ? [value] : [];
+  }
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => sensitiveStringValues(item, sensitiveContext));
+  }
+  if (typeof value !== 'object' || value === null) {
+    return [];
+  }
+
+  return Object.entries(value).flatMap(([key, nested]) => (
+    sensitiveStringValues(nested, sensitiveContext || isSensitiveCommandResultKey(key))
+  ));
+}
+
+function redactSensitiveText(value: string): string {
+  return value.replace(
+    /(\b[\w.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification|session|confirmation)[\w.-]*\b\s*[:=]\s*)(["']?)([^\s"',}]+)/giu,
+    '$1$2[redacted]',
+  );
 }
 
 function isSensitiveCommandResultKey(key: string): boolean {
