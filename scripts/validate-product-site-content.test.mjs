@@ -30,6 +30,7 @@ describe('product site concepts, guides, and examples', () => {
     for (const term of [
       'RainrailEventEnvelope',
       'Source plugin',
+      'Source bundle',
       'Workflow plugin',
       'Runtime provider',
       'Bridge room',
@@ -46,6 +47,7 @@ describe('product site concepts, guides, and examples', () => {
 
     for (const guide of [
       'GitHub issue automation',
+      'Manual and chat intake',
       'PR review loop',
       'Cloudflare event reporting',
     ]) {
@@ -61,6 +63,7 @@ describe('product site concepts, guides, and examples', () => {
 
     for (const step of [
       'GitHub issue',
+      'Manual or chat message',
       'Project queue',
       'agent run',
       'pull request',

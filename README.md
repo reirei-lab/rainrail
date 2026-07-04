@@ -30,6 +30,18 @@ durable contracts and operational decisions that implementation work depends on.
 - `.github/workflows/`: pull request CI, issue intake automation, and trusted
   Cloudflare Pages deployment workflows.
 
+## Core and source boundaries
+
+Core keeps provider-neutral event delivery, replay, dispatch, runtime gates, and operational state.
+It accepts already-normalized `RainrailEventEnvelope` values and keeps raw
+provider payloads out of durable replay.
+
+Source bundles compose ingress adapters such as EEP Bridge, GitHub webhook, Cloudflare tail, manual input, and web chat.
+The EEP Bridge bundle is the current multi-source bundle for GitHub webhook and
+Cloudflare tail ingress. Manual input and web chat are source adapters outside
+that legacy EEP Bridge path, but they publish through the same Core intake and
+delivery contracts.
+
 ## Plugin runtime contract
 
 Rainrail's first runtime boundary is documented in

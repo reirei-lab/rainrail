@@ -25,6 +25,27 @@ they are present in `src/` or `scripts/`.
   responsibility, and the matrix records the replacement verification.
 - `Not ported`: the original behavior does not exist as a Rainrail feature.
 
+## Core/source boundary mapping
+
+The old EEP Bridge projects mixed ingress, normalization, event delivery, and
+runtime-facing behavior in one repository boundary. Rainrail now maps those
+viewpoints across Core and source bundle layers:
+
+- Core owns provider-neutral envelope validation, Bridge room storage/replay,
+  SSE formatting, dispatcher execution, runtime gates, and operational snapshots.
+- The EEP Bridge source bundle owns GitHub webhook and Cloudflare tail ingress
+  composition, signature/delivery metadata handling, and publish-to-core wiring.
+- Source adapters own provider/input normalization into `RainrailEventEnvelope`;
+  GitHub webhook, Cloudflare tail, manual input, and web chat all enter Core as
+  normalized source events.
+- Transport adapters own Node, Fetch, and Worker request/response plumbing
+  without adding provider semantics to Core.
+
+Manual/chat input is covered outside the legacy EEP Bridge inventories. It was
+not a source-repository test family in `github-eep-bridge` or
+`eep-bridge-worker`, so its new source adapter coverage is recorded in the
+Rainrail test column where it expands Bridge room and intake behavior.
+
 ## EEP bridge inventory
 
 | Original test | Original viewpoint | Rainrail package/module | Rainrail test coverage | Status and notes |
@@ -84,6 +105,11 @@ they are present in `src/` or `scripts/`.
 - EEP Bridge bundle composition is covered by `src/eep-bridge-bundle.test.ts`,
   `src/node-server.test.ts`, and `src/worker.test.ts`; Core tests only assert
   provider-neutral intake registration and envelope publish behavior.
+- Manual/chat source adapter behavior is covered by `src/manual-chat.test.ts`
+  and by Bridge room replay tests that verify manual/chat delivery reference,
+  payload, and source/name consistency. It is intentionally not represented as
+  EEP Bridge bundle coverage because manual/chat input is a first-party source
+  adapter, not GitHub/Cloudflare bridge ingress.
 - Service-specific SSE endpoints from `eep-bridge-worker` are not kept as a
   Rainrail public API. The alternate check is authenticated multiplex streaming
   through `/events`, covered by `src/http-app.test.ts` and `src/events-auth.test.ts`.

@@ -8,6 +8,11 @@ const steps = [
       'A newly selected issue becomes a provider event that Rainrail can normalize instead of handing raw GitHub payloads to workflow code.',
   },
   {
+    title: '1b. Manual or chat message',
+    body:
+      'An operator prompt or web chat message can enter through its own source adapter, publish the same neutral envelope shape, and skip EEP Bridge-specific ingress entirely.',
+  },
+  {
     title: '2. Project queue',
     body:
       'The queue provider selects the next eligible issue, takes a starting lock, and keeps closed issues or already running work out of the dispatch path.',
@@ -51,7 +56,7 @@ const steps = [
     </div>
     <div class="panel example-summary" aria-label="End-to-end example summary">
       <strong>GitHub -> Project -> agent -> PR -> review -> merge</strong>
-      <span>One traceable workflow across source, queue, runtime, and review events.</span>
+      <span>One traceable workflow across source bundles, queue, runtime, and review events.</span>
     </div>
   </section>
 

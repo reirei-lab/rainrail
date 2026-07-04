@@ -331,9 +331,14 @@
       ],
       "docs": [
         "src/cloudflare/AGENTS.md",
+        "README.md",
         "docs/core-eep-bridge-source-adapter-boundary.md",
         "docs/plugin-runtime-contract.md",
-        "docs/event-delivery.md"
+        "docs/event-delivery.md",
+        "docs/repo-test-coverage-matrix.md",
+        "apps/www/src/pages/concepts.astro",
+        "apps/www/src/pages/guides.astro",
+        "apps/www/src/pages/examples.astro"
       ],
       "tests": [
         "scripts/validate-doc-boundaries.test.mjs",

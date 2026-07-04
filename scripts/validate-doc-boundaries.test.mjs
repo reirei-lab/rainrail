@@ -11,6 +11,18 @@ const contractsManifest = readFileSync(
   new URL('../docs/contracts.manifest.json', import.meta.url),
   'utf8',
 );
+const pluginRuntimeContract = readFileSync(
+  new URL('../docs/plugin-runtime-contract.md', import.meta.url),
+  'utf8',
+);
+const eventDeliveryContract = readFileSync(
+  new URL('../docs/event-delivery.md', import.meta.url),
+  'utf8',
+);
+const coverageMatrix = readFileSync(
+  new URL('../docs/repo-test-coverage-matrix.md', import.meta.url),
+  'utf8',
+);
 const coreBridgeBoundary = readFileSync(
   new URL('../docs/core-eep-bridge-source-adapter-boundary.md', import.meta.url),
   'utf8',
@@ -45,6 +57,8 @@ describe('product site information architecture', () => {
       'apps/www',
       'src/',
       'scripts/',
+      'Core keeps provider-neutral event delivery, replay, dispatch, runtime gates, and operational state',
+      'Source bundles compose ingress adapters such as EEP Bridge, GitHub webhook, Cloudflare tail, manual input, and web chat',
     ]) {
       expect(readme).toContain(entry);
     }
@@ -73,6 +87,7 @@ describe('product site information architecture', () => {
       'Current Core also keeps narrow provider-aware durable replay sanitization',
       'Source adapter output is not limited to the durable replay allowlist',
       'The public `createRainrailHttpApp` surface does not expose a generic `POST /publish` route',
+      'Manual input and web chat are source adapters, not EEP Bridge responsibilities',
     ]) {
       expect(coreBridgeBoundary).toContain(entry);
     }
@@ -86,9 +101,26 @@ describe('product site information architecture', () => {
           id: 'core-eep-bridge-source-adapter-boundary',
           docs: expect.arrayContaining([
             'docs/core-eep-bridge-source-adapter-boundary.md',
+            'README.md',
+            'docs/repo-test-coverage-matrix.md',
+            'apps/www/src/pages/concepts.astro',
+            'apps/www/src/pages/guides.astro',
+            'apps/www/src/pages/examples.astro',
           ]),
         }),
       ]),
     );
+  });
+
+  it('keeps source bundle boundaries consistent across runtime, delivery, and coverage docs', () => {
+    for (const text of [pluginRuntimeContract, eventDeliveryContract, coverageMatrix]) {
+      expect(text).toContain('source bundle');
+      expect(text).toContain('manual/chat');
+    }
+
+    expect(pluginRuntimeContract).toContain('EEP Bridge bundle is one source bundle');
+    expect(eventDeliveryContract).toContain('Core-owned routes stay provider-neutral');
+    expect(coverageMatrix).toContain('Core/source boundary mapping');
+    expect(coverageMatrix).toContain('Manual/chat input is covered outside the legacy EEP Bridge inventories');
   });
 });

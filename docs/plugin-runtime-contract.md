@@ -8,6 +8,12 @@ Core、EEP Bridge bundle、Source adapter、transport の package/module 境界�
 [Core / EEP Bridge / Source adapter boundary](core-eep-bridge-source-adapter-boundary.md)
 を正とする。
 
+この contract で扱う source bundle は、Source plugin / Source adapter と HTTP、tail、
+manual/chat などの ingress を Core intake に接続する composition 単位である。
+EEP Bridge bundle is one source bundle: 現行実装では GitHub webhook と Cloudflare tail を
+同じ publish-to-core 経路へ束ねる。manual/chat source は EEP Bridge 由来ではないが、
+同じ `RainrailEventEnvelope`、`RainrailIntakeAdapter`、Workflow plugin contract を使う。
+
 ## Event envelope
 
 `RainrailEventEnvelope` は `schemaVersion: "rainrail.event.v1"` を持つ。
