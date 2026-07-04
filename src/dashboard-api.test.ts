@@ -5,6 +5,7 @@ import {
   createEventEnvelope,
   createGitHubWebhookIntakeAdapter,
   createGitHubWebhookSignature,
+  createManualInputIntakeAdapter,
   createRainrailHttpApp,
   RainrailBridgeRoom,
   RainrailOperationalStore,
@@ -418,6 +419,43 @@ describe('Rainrail dashboard API', () => {
         id: 'prod-webhook',
         sourceType: 'github',
         auth: { status: 'missing' },
+      }],
+      page: { limit: 50, nextCursor: null },
+    });
+
+    operationalStore.close();
+  });
+
+  it('lists manual chat intake adapters with configured source metadata before first delivery', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:12:00.000Z'),
+    });
+    const app = createTestApp({
+      eventsBearerToken: 'events-token',
+      operationalStore,
+      intakeAdapters: [
+        createManualInputIntakeAdapter({
+          channel: 'chat',
+          bearerToken: 'chat-token',
+          sourceName: 'web-chat',
+        }),
+      ],
+    });
+
+    const response = await app.fetch(new Request('https://rainrail.local/api/v1/sources?filter[source]=chat', {
+      headers: { authorization: 'Bearer events-token' },
+    }));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      data: [{
+        id: 'web-chat',
+        sourceType: 'chat',
+        name: 'web-chat',
+        endpoint: '/intake/chat',
+        auth: { status: 'configured' },
       }],
       page: { limit: 50, nextCursor: null },
     });

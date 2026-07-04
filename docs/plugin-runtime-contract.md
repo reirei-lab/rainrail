@@ -66,6 +66,87 @@ fallback delivery id に batch index を混ぜ、同一 ms の Cron/Queue tail �
 実装の入口は `createCloudflareTailSourcePlugin` で、入力 payload は
 `CloudflareTailEvent` として扱う。
 
+## Manual / Web chat source
+
+Manual trigger や Web chat UI からの user input は EEP Bridge 固有の webhook ではなく、
+Rainrail が直接持つ非 webhook source として扱う。最小 contract は
+`createManualInputEvent` と `createManualInputIntakeAdapter` で提供する。
+型は `ManualInputChannel`、`ManualInputPayload`、`ManualInputActor`、
+`ManualInputAttachment`、`ManualInputReplyTarget`、`ManualInputHttpBody`、
+`ManualInputRainrailEvent`、`ManualInputIntakeAdapterOptions`、
+`CreateManualInputEventInput` を公開 API とする。
+
+event name は channel ごとに固定する。
+
+- manual trigger: `rainrail.manual.message`
+- Web chat message: `rainrail.chat.message`
+
+`source.type` は `manual` または `chat`、`source.name` は既定で
+`manual-input` または `web-chat` とする。`subject` はどちらも
+`type: "conversation"` とし、`subject.id` には conversation id を置く。
+`conversationUrl` は provider URL の allowlist が Core subject URL と一致しない場合があるため、
+`subject.url` ではなく `payload.conversation.url` にだけ保持する。
+payload は provider 固有 raw body ではなく、次の正規化済み shape にする。
+
+- `provider: "rainrail"`
+- `channel: "manual" | "chat"`
+- `action: "message"`
+- `conversation.id`
+- `message.id` と `message.text`
+- 任意の `actor`、`attachments`、`replyTarget`
+
+`message.text` は workflow が runtime start prompt などに使う正規化済み user content
+として envelope に載せる。一方で HTTP request body や Web chat provider の extra field は
+Core storage / durable replay に残さない。`rawPayload` は `inline-redacted` とし、
+`manual://deliveries/<delivery-id>` または `chat://deliveries/<delivery-id>` の参照と
+digest だけを保持する。manual/chat の raw payload reference は既存 provider と同じく
+port なしの `deliveries` host と安全な 1 path segment の delivery id だけを許可し、delivery id
+生成時に `:` など reference に使えない文字は `-` へ正規化する。長い conversation id や message id は
+末尾の一意要素と短い hash を残し、Bridge room の 128 文字 id 制限を超える場合は top-level
+event id も短い明示 id にする。`sourceName` は `source.name` と event id に使う前に
+安全な identifier へ正規化する。credential-looking な conversation id / message id /
+delivery id / source name は元値も元値由来の安定 hash も永続化せず、fallback 名だけを残す。対象は
+standalone GitHub token 形式だけでなく、`token=...` や `session: ...` などの
+credential key/value 形式も含む。先頭記号へ fallback prefix を足す場合も、元から
+prefix 付きだった identifier と衝突しないよう短い hash を残す。
+URL 形式の identifier は fallback 名と安定 hash へ縮約し、任意の host/path は Core storage に
+残さない。ただし URL userinfo や credential らしい path segment を含む URL は
+credential-looking identifier と同じく fallback 名だけを残す。
+空文字または空白だけの `messageId` は未指定として扱い、UUID fallback で delivery id の
+一意性を保つ。明示された `deliveryId` が空文字または空白だけの場合も未指定として扱い、
+conversation/message 由来の delivery id 生成へ戻す。空文字または空白だけの `conversationId` /
+`message` は、HTTP intake と同じく `createManualInputEvent` でも event 作成前に拒否する。
+`attachments` は先頭 20 件だけを
+正規化し、空白だけの attachment id から fallback id は作らない。
+token、secret、password、API key、Bearer credential 形式は `key=value`、
+JSON/YAML 風の `key: value`、quoted JSON field のいずれも source adapter 側で短く
+redaction する。redaction は credential key の大小文字差、structured object / array 値、
+standalone GitHub access token 形式、非 HTTPS credential URL、URL userinfo の credential、
+URL path 内の credential らしい segment も対象にする。`conversationUrl`、attachment URL、`replyTarget.url` も
+query / fragment / userinfo を落とし、credential らしい path segment を redaction したうえで
+8KB 以内に縮約する。
+
+HTTP intake の既定 route は `/intake/manual` と `/intake/chat` で、adapter は JSON body から
+`conversationId`、`message`、任意の `messageId`、`actor`、`attachments`、`replyTarget`
+を読み、正規化済み envelope を `RainrailIntakeAdapterContext.publish()` へ渡す。`message` が
+object の場合は `message.text` を本文、`message.id` を top-level `messageId` がない場合の
+message id として扱い、retry 時に同じ delivery id を再生成できるようにする。`replyTarget`
+を保存する場合は `id` を必須とし、`url` だけの reply target は contract payload として
+扱わない。`actor` の各 field と `replyTarget.id` は trim 後に空でない文字列だけを
+保存し、空白だけの入力から fallback id や user type を作らない。
+adapter は `/api/v1/sources` で初回 delivery 前から `manual` / `chat` source として見えるよう、
+`source.type` と `authStatus: "configured"` を宣言する。HTTP `Content-Type` header は
+raw payload へ入れる前に media type だけへ正規化し、parameter は保存しない。
+`createManualInputIntakeAdapter` は `ManualInputIntakeAdapterOptions.bearerToken` を必須とし、
+body を読む前に `Authorization: Bearer <token>` を検証する。manual/chat input は
+`runtime:start` へ接続され得るため、Core の generic intake route ではなく adapter 境界で
+source-specific auth を持つ。Node server や Fetch app が adapter の前で request body を
+buffer 化しないよう、manual/chat route は handle 前 body read を無効にし、認証後に adapter 内で
+`maxBodyBytes` を適用する。
+Workflow plugin は通常の event と同じく `rainrail.chat.message` や
+`rainrail.manual.message` に `accepts` / local handler を設定し、
+`runtime:start` capability を宣言したうえで `context.actions.startRuntime()` を呼べる。
+
 ## Task provider
 
 Task provider は forge/task system の操作面を表す。初期 contract は

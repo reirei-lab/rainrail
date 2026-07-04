@@ -7,6 +7,7 @@ import { getReaderOrThrow, readUntil, waitForValue } from './test-helpers.js';
 import {
   DEFAULT_MAX_REQUEST_BODY_BYTES,
   RainrailOperationalStore,
+  createManualInputIntakeAdapter,
   createGitHubWebhookSignature,
   createRainrailNodeServer,
   type RainrailIntakeAdapter,
@@ -292,6 +293,54 @@ describe('Rainrail Node server', () => {
 
       expect(response.status).toBe(413);
       await expect(response.json()).resolves.toEqual({ error: 'request_body_too_large' });
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it('streams manual intake bodies so adapter auth runs before body limits', async () => {
+    const { server } = createRainrailNodeServer({
+      githubWebhookSecret: 'secret',
+      publishToken: 'test-publish-token',
+      eventsBearerToken: 'events-token',
+      maxBodyBytes: 4,
+      intakeAdapters: [
+        createManualInputIntakeAdapter({
+          channel: 'chat',
+          bearerToken: 'chat-intake-token',
+          maxBodyBytes: 4,
+        }),
+      ],
+    });
+
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const address = server.address();
+    if (address === null || typeof address === 'string') {
+      throw new Error('expected TCP server address');
+    }
+
+    try {
+      const unauthorized = await fetch(`http://127.0.0.1:${address.port}/intake/chat`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{"too":"large"}',
+      });
+
+      expect(unauthorized.status).toBe(401);
+      await expect(unauthorized.json()).resolves.toEqual({ error: 'missing_bearer_token' });
+
+      const authorizedTooLarge = await fetch(`http://127.0.0.1:${address.port}/intake/chat`, {
+        method: 'POST',
+        headers: {
+          authorization: 'Bearer chat-intake-token',
+          'content-type': 'application/json',
+        },
+        body: '{"too":"large"}',
+      });
+
+      expect(authorizedTooLarge.status).toBe(413);
+      await expect(authorizedTooLarge.json()).resolves.toEqual({ error: 'request_body_too_large' });
     } finally {
       await closeServer(server);
     }

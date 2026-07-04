@@ -71,6 +71,12 @@ Cloudflare Workers Secrets に登録しておく。
           "name": "manual-chat",
           "sourceType": "manual",
           "runtime": "openclaw"
+        },
+        {
+          "type": "manual-chat",
+          "name": "web-chat",
+          "sourceType": "chat",
+          "runtime": "openclaw"
         }
       ]
     }

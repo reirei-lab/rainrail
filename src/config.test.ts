@@ -46,6 +46,12 @@ describe('parseConfig', () => {
               sourceType: 'manual',
               runtime: 'openclaw',
             },
+            {
+              type: 'manual-chat',
+              name: 'web-chat',
+              sourceType: 'chat',
+              runtime: 'openclaw',
+            },
           ],
         },
       ],
@@ -98,6 +104,12 @@ describe('parseConfig', () => {
             type: 'manual-chat',
             name: 'manual-chat',
             sourceType: 'manual',
+            runtime: 'openclaw',
+          },
+          {
+            type: 'manual-chat',
+            name: 'web-chat',
+            sourceType: 'chat',
             runtime: 'openclaw',
           },
         ],
@@ -169,7 +181,7 @@ describe('parseConfig', () => {
     [{ type: 'github-webhook', name: 'github webhook', sourceType: 'github', provider: 'github', webhookSecret: 'secret' }, 'config.sourceBundles[0].sources[0].name must be a safe identifier'],
     [{ type: 'github-webhook', name: 'a'.repeat(129), sourceType: 'github', provider: 'github', webhookSecret: 'secret' }, 'config.sourceBundles[0].sources[0].name must be a safe identifier'],
     [{ type: 'github-webhook', name: 'a'.repeat(54), sourceType: 'github', provider: 'github', webhookSecret: 'secret' }, 'config.sourceBundles[0].sources[0].name must be 53 characters or fewer for github-webhook sources'],
-    [{ type: 'github-webhook', name: 'github-webhook', sourceType: 'slack', provider: 'github', webhookSecret: 'secret' }, 'config.sourceBundles[0].sources[0].sourceType must be one of: github, cloudflare, manual, system'],
+    [{ type: 'github-webhook', name: 'github-webhook', sourceType: 'slack', provider: 'github', webhookSecret: 'secret' }, 'config.sourceBundles[0].sources[0].sourceType must be one of: github, cloudflare, manual, chat, system'],
     [{ type: 'github-webhook', name: 'github-webhook', sourceType: 'cloudflare', provider: 'github', webhookSecret: 'secret' }, 'config.sourceBundles[0].sources[0].sourceType must be "github" for github-webhook sources'],
     [{ type: 'github-webhook', name: 'github-webhook', sourceType: 'github', provider: 'gitlab', webhookSecret: 'secret' }, 'config.sourceBundles[0].sources[0].provider must reference a configured task provider'],
     [{ type: 'manual-chat', name: 'manual-chat', sourceType: 'manual', runtime: 'lambda' }, 'config.sourceBundles[0].sources[0].runtime must reference a configured runtime provider'],
@@ -181,7 +193,7 @@ describe('parseConfig', () => {
     [{ type: 'github-webhook', name: 'github-webhook', sourceType: 'github', provider: 'github', webhookSecret: 'secret', endpoint: '/api/v1/events/evt_1' }, 'config.sourceBundles[0].sources[0].endpoint must not use a Rainrail core route'],
     [{ type: 'github-webhook', name: 'github-webhook', sourceType: 'github', provider: 'github', webhookSecret: 'secret', maxBodyBytes: -1 }, 'config.sourceBundles[0].sources[0].maxBodyBytes must be a finite non-negative number'],
     [{ type: 'cloudflare-tail', name: 'cloudflare-tail', sourceType: 'github' }, 'config.sourceBundles[0].sources[0].sourceType must be "cloudflare" for cloudflare-tail sources'],
-    [{ type: 'manual-chat', name: 'manual-chat', sourceType: 'github' }, 'config.sourceBundles[0].sources[0].sourceType must be "manual" for manual-chat sources'],
+    [{ type: 'manual-chat', name: 'manual-chat', sourceType: 'github' }, 'config.sourceBundles[0].sources[0].sourceType must be "manual" or "chat" for manual-chat sources'],
   ])('rejects invalid source bundle source entry %# with a config path', (source, message) => {
     expectConfigError({
       sourceBundles: [
