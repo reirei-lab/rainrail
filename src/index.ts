@@ -10,6 +10,7 @@ export * from './dispatcher/index.js';
 export * from './event-bus.js';
 export * from './events.js';
 export * from './events-auth.js';
+export * from './eep-bridge-bundle.js';
 export * from './github-webhook/index.js';
 export * from './http-app.js';
 export * from './http-utils.js';

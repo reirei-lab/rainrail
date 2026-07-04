@@ -2,7 +2,11 @@ import { describe, expect, it } from 'vitest';
 
 import { getReaderOrThrow, readUntil } from './test-helpers.js';
 
-import rainrailWorker, { RainrailBridgeRoom, createGitHubWebhookSignature } from './index.js';
+import rainrailWorker, {
+  createGitHubWebhookSignature,
+  createRainrailEepBridgeIntakeAdaptersFromEnv,
+  RainrailBridgeRoom,
+} from './index.js';
 
 describe('Rainrail Cloudflare Worker entrypoint', () => {
   it('routes fetch and tail events through the same bridge room core', async () => {
@@ -66,6 +70,37 @@ describe('Rainrail Cloudflare Worker entrypoint', () => {
 
     expect(chunk).toContain('event: github.issue\n');
     expect(chunk).toContain('event: cloudflare.tail\n');
+  });
+
+  it('keeps GitHub webhook env parsing inside the EEP Bridge bundle', async () => {
+    const { GITHUB_WEBHOOK_SECRET: _secret, ...env } = fakeEnv();
+
+    const response = await rainrailWorker.fetch(new Request('https://worker.local/webhooks/github', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-github-event': 'ping',
+        'x-github-delivery': 'delivery-missing-secret',
+        'x-hub-signature-256': 'sha256=invalid',
+      },
+      body: JSON.stringify({ zen: 'missing secret stays provider-specific' }),
+    }), env);
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toEqual({ error: 'missing_secret' });
+  });
+
+  it('creates the Worker intake adapters through the EEP Bridge bundle', () => {
+    const adapters = createRainrailEepBridgeIntakeAdaptersFromEnv({
+      GITHUB_WEBHOOK_SECRET: 'secret',
+    });
+
+    expect(adapters.map((adapter) => adapter.name)).toEqual([
+      'github-webhook',
+      'cloudflare-tail',
+    ]);
+    expect(adapters[0]?.routes?.map((route) => route.path)).toEqual(['/webhooks/github']);
+    expect(adapters[1]?.tail).toEqual(expect.any(Function));
   });
 });
 
