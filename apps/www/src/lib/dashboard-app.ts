@@ -11,7 +11,7 @@ import {
   type DashboardWorkflowRun,
 } from './dashboard-client';
 
-type DashboardTab = 'overview' | 'events' | 'workflow-runs' | 'sources' | 'queue' | 'settings';
+type DashboardTab = 'overview' | 'events' | 'workflow-runs' | 'agent-tasks' | 'sources' | 'queue' | 'settings';
 type DashboardRow = DashboardEvent | DashboardWorkflowRun | DashboardAgentTask | DashboardSource | DashboardQueueItem | DashboardSetting;
 
 interface DashboardData {
@@ -53,6 +53,8 @@ if (root !== null) {
   const filterApplyButton = root.querySelector<HTMLButtonElement>('[data-filter-apply]');
   const permissionToggle = root.querySelector<HTMLInputElement>('[data-permission-toggle]');
   const operatorActions = Array.from(root.querySelectorAll<HTMLButtonElement>('[data-action-permission="operator"]'));
+  const agentActionButtons = Array.from(root.querySelectorAll<HTMLButtonElement>('[data-agent-action]'));
+  const commandStatus = root.querySelector<HTMLElement>('[data-command-status]');
   const tabButtons = Array.from(root.querySelectorAll<HTMLButtonElement>('[data-dashboard-tab]'));
 
   let client: RainrailDashboardApiClient | undefined;
@@ -65,6 +67,7 @@ if (root !== null) {
   let refreshSequence = 0;
   let detailRequestSequence = 0;
   let selectedDetailRowId: string | undefined;
+  let selectedAgentTaskId: string | undefined;
 
   const storedToken = sessionStore.get(TOKEN_STORAGE_KEY) ?? '';
   const storedApiBaseUrl = sessionStore.get(API_BASE_URL_STORAGE_KEY) ?? appRoot.dataset.apiBaseUrl ?? '';
@@ -138,6 +141,15 @@ if (root !== null) {
       if (isDashboardTab(tab)) {
         selectedTab = tab;
         renderCurrentList();
+      }
+    });
+  }
+
+  for (const button of agentActionButtons) {
+    button.addEventListener('click', () => {
+      const action = button.dataset.agentAction;
+      if (action === 'resume' || action === 'reset' || action === 'terminate' || action === 'terminate-all') {
+        void runAgentAction(action);
       }
     });
   }
@@ -309,6 +321,7 @@ if (root !== null) {
 
   function selectedRows(data: DashboardData): DashboardRow[] {
     if (selectedTab === 'workflow-runs') return data.workflowRuns;
+    if (selectedTab === 'agent-tasks') return data.agentTasks;
     if (selectedTab === 'sources') return data.sources;
     if (selectedTab === 'queue') return data.queue;
     if (selectedTab === 'settings') return data.settings;
@@ -382,7 +395,11 @@ if (root !== null) {
   }
 
   function setOperatorActionsEnabled(enabled: boolean): void {
-    for (const action of operatorActions) action.disabled = !enabled;
+    for (const action of operatorActions) {
+      const agentAction = action.dataset.agentAction;
+      const needsSelectedTask = agentAction !== 'terminate-all';
+      action.disabled = !enabled || (needsSelectedTask && selectedAgentTaskId === undefined);
+    }
   }
 
   function isCurrentRefresh(activeClient: RainrailDashboardApiClient, activeRefreshId: number): boolean {
@@ -404,6 +421,8 @@ if (root !== null) {
 
   function clearSelectedDetail(): void {
     selectedDetailRowId = undefined;
+    selectedAgentTaskId = undefined;
+    setOperatorActionsEnabled(localStore.get(OPERATOR_STORAGE_KEY) === '1');
     detailRequestSequence += 1;
   }
 
@@ -423,6 +442,8 @@ if (root !== null) {
 
   function renderBasicDetail(row: DashboardRow, label: string): void {
     if (detail === null) return;
+    selectedAgentTaskId = row.type === 'agent-task' ? row.id : undefined;
+    setOperatorActionsEnabled(localStore.get(OPERATOR_STORAGE_KEY) === '1');
 
     detail.innerHTML = `
       <div class="dashboard-detail-heading">
@@ -496,25 +517,108 @@ if (root !== null) {
   function renderAgentTaskDetail(row: DashboardAgentTask, loaded: DashboardDetail): void {
     if (detail === null) return;
 
+    selectedAgentTaskId = row.id;
+    setOperatorActionsEnabled(localStore.get(OPERATOR_STORAGE_KEY) === '1');
     const record = objectRecord(loaded.data.record);
     const runtime = objectRecord(record.runtime);
+    const resumeAttempts = arrayRecord(record.resumeAttempts);
+    const latestResumeAttempt = resumeAttempts.at(-1);
+    const claim = objectRecord(record.claim);
+    const projectClaim = objectRecord(record.projectClaim);
+
     detail.innerHTML = `
       <div class="dashboard-detail-heading">
         <span>agent-task</span>
-        <strong>${escapeHtml(row.status)}</strong>
+        <strong>${escapeHtml(stringRecordValue(record.status) ?? row.status)}</strong>
       </div>
-      <h2>${escapeHtml(rowTitle(row))}</h2>
+      <h2>${escapeHtml(stringRecordValue(record.title) ?? rowTitle(row))}</h2>
+      <div class="dashboard-detail-tabs" role="tablist" aria-label="Agent task detail tabs">
+        <span>Summary</span>
+        <span>Timeline</span>
+        <span>Codex activity</span>
+        <span>stdout log</span>
+        <span>stderr log</span>
+        <span>JSONL/raw detail</span>
+      </div>
       <dl>
-        <div><dt>Branch</dt><dd>${escapeHtml(row.branchName ?? 'n/a')}</dd></div>
+        <div><dt>ID</dt><dd>${escapeHtml(row.id)}</dd></div>
         <div><dt>Issue</dt><dd>${escapeHtml(formatIssue(row))}</dd></div>
-        <div><dt>Runtime</dt><dd>${escapeHtml(stringRecordValue(runtime.status) ?? row.status)}</dd></div>
-        <div><dt>Action audit</dt><dd>${escapeHtml(stringRecordValue(record.logPath) ?? 'Agent task summary')}</dd></div>
+        <div><dt>Branch</dt><dd>${escapeHtml(stringRecordValue(record.branchName) ?? row.branchName ?? 'n/a')}</dd></div>
+        <div><dt>Agent session</dt><dd>${escapeHtml(stringRecordValue(record.agentSessionId) ?? row.agentSessionId ?? 'n/a')}</dd></div>
+        <div><dt>Runtime pid</dt><dd>${escapeHtml(formatNumberRecordValue(runtime.pid) ?? formatNumberRecordValue(record.pid) ?? 'n/a')}</dd></div>
+        <div><dt>Resume count</dt><dd>${escapeHtml(String(resumeAttempts.length))}</dd></div>
+        <div><dt>Project claim</dt><dd>${escapeHtml(formatProjectClaim(claim, projectClaim, row.warnings?.staleProjectClaim))}</dd></div>
+        <div><dt>Latest resume attempt</dt><dd>${escapeHtml(formatLatestResumeAttempt(latestResumeAttempt))}</dd></div>
       </dl>
-      <section class="dashboard-audit-list" aria-label="Agent task record">
-        <h3>Action audit</h3>
+      <section class="dashboard-audit-list" aria-label="Timeline">
+        <h3>Timeline</h3>
+        <pre>${escapeHtml(formatAgentTimeline(record, resumeAttempts))}</pre>
+      </section>
+      <section class="dashboard-audit-list" aria-label="Codex activity">
+        <h3>Codex activity</h3>
+        <pre>${escapeHtml(formatCodexActivity(record, latestResumeAttempt))}</pre>
+      </section>
+      <section class="dashboard-audit-list" aria-label="stdout log">
+        <h3>stdout log</h3>
+        <pre>${escapeHtml(formatAgentLogReference(record, latestResumeAttempt, 'stdout'))}</pre>
+      </section>
+      <section class="dashboard-audit-list" aria-label="stderr log">
+        <h3>stderr log</h3>
+        <pre>${escapeHtml(formatAgentLogReference(record, latestResumeAttempt, 'stderr'))}</pre>
+      </section>
+      <section class="dashboard-audit-list" aria-label="JSONL/raw detail">
+        <h3>JSONL/raw detail</h3>
         <pre>${escapeHtml(JSON.stringify(record, null, 2))}</pre>
       </section>
     `;
+  }
+
+  async function runAgentAction(action: 'resume' | 'reset' | 'terminate' | 'terminate-all'): Promise<void> {
+    if (client === undefined) {
+      setCommandStatus('Connect with an operator token before running commands.');
+      return;
+    }
+    if (action !== 'terminate-all' && selectedAgentTaskId === undefined) {
+      setCommandStatus('Select an agent task first.');
+      return;
+    }
+
+    const targetId = action === 'terminate-all' ? 'all running tasks' : selectedAgentTaskId!;
+    setCommandStatus(`Sending ${action} for ${targetId}`);
+    try {
+      const response = await sendAgentAction(action);
+      setCommandStatus(formatCommandResponse(response.data.status, response.data.auditId, response.data.auditWarning));
+      void refresh({ quiet: true });
+    } catch (error) {
+      if (error instanceof RainrailDashboardApiError && error.code === 'action_confirmation_required') {
+        const confirmationToken = confirmationTokenFromError(error);
+        if (confirmationToken !== undefined && window.confirm(`Confirm ${action} for ${targetId}?`)) {
+          try {
+            const confirmed = await sendAgentAction(action, confirmationToken);
+            setCommandStatus(formatCommandResponse(confirmed.data.status, confirmed.data.auditId, confirmed.data.auditWarning));
+            void refresh({ quiet: true });
+          } catch (confirmedError) {
+            setCommandStatus(confirmedError instanceof RainrailDashboardApiError ? `Command failed: ${confirmedError.code}` : 'Command failed');
+          }
+          return;
+        }
+      }
+      setCommandStatus(error instanceof RainrailDashboardApiError ? `Command failed: ${error.code}` : 'Command failed');
+    }
+  }
+
+  function sendAgentAction(action: 'resume' | 'reset' | 'terminate' | 'terminate-all', confirmationToken?: string) {
+    if (client === undefined) throw new Error('client missing');
+    if (action === 'terminate-all') return client.terminateAllAgentTasks(confirmationToken);
+    const taskId = selectedAgentTaskId;
+    if (taskId === undefined) throw new Error('agent task missing');
+    if (action === 'resume') return client.resumeAgentTask(taskId);
+    if (action === 'reset') return client.resetAgentTask(taskId, confirmationToken);
+    return client.terminateAgentTask(taskId, confirmationToken);
+  }
+
+  function setCommandStatus(message: string): void {
+    if (commandStatus !== null) commandStatus.textContent = message;
   }
 }
 
@@ -590,6 +694,7 @@ function isDashboardTab(value: string | undefined): value is DashboardTab {
   return value === 'overview'
     || value === 'events'
     || value === 'workflow-runs'
+    || value === 'agent-tasks'
     || value === 'sources'
     || value === 'queue'
     || value === 'settings';
@@ -639,6 +744,14 @@ function rowMeta(row: DashboardRow): string {
   if (row.type === 'workflow-run') {
     return row.sourceEventId === undefined ? row.id : `Source event ${row.sourceEventId}`;
   }
+  if (row.type === 'agent-task') {
+    return [
+      row.issue?.repository !== undefined && row.issue.number !== undefined ? `${row.issue.repository}#${row.issue.number}` : undefined,
+      row.branchName,
+      row.agentSessionId,
+      row.warnings?.staleProjectClaim ? 'stale project claim' : undefined,
+    ].filter((value): value is string => value !== undefined && value !== '').join(' | ') || row.id;
+  }
   if (row.type === 'source') {
     return [
       row.sourceType,
@@ -656,7 +769,7 @@ function rowMeta(row: DashboardRow): string {
   if (row.type === 'setting') {
     return row.value;
   }
-  return row.id;
+  return 'unknown';
 }
 
 function renderMetadata(row: DashboardRow): string {
@@ -722,6 +835,10 @@ function stringRecordValue(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined;
 }
 
+function formatNumberRecordValue(value: unknown): string | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? String(value) : undefined;
+}
+
 function formatActivityList(activityEvents: Array<Record<string, unknown>>): string {
   if (activityEvents.length === 0) return 'n/a';
   return activityEvents
@@ -741,6 +858,79 @@ function formatRetryList(handlerRetries: Array<Record<string, unknown>>): string
       stringRecordValue(retry.lastError) ?? 'retry pending',
     ].join(' / '))
     .join('; ');
+}
+
+function formatProjectClaim(
+  claim: Record<string, unknown>,
+  projectClaim: Record<string, unknown>,
+  staleProjectClaim: boolean | undefined,
+): string {
+  const projectItemId = stringRecordValue(claim.projectItemId) ?? stringRecordValue(claim.id) ?? 'n/a';
+  const state = stringRecordValue(projectClaim.status) ?? (staleProjectClaim ? 'stale' : 'current');
+  const reason = stringRecordValue(projectClaim.reason);
+  return [projectItemId, state, reason].filter((value): value is string => value !== undefined && value !== '').join(' / ');
+}
+
+function formatLatestResumeAttempt(attempt: Record<string, unknown> | undefined): string {
+  if (attempt === undefined) return 'n/a';
+  return [
+    stringRecordValue(attempt.id) ?? 'resume',
+    stringRecordValue(attempt.status) ?? 'unknown',
+    stringRecordValue(attempt.logPath),
+  ].filter((value): value is string => value !== undefined && value !== '').join(' / ');
+}
+
+function formatAgentTimeline(record: Record<string, unknown>, resumeAttempts: Array<Record<string, unknown>>): string {
+  const runtime = objectRecord(record.runtime);
+  const lines = [
+    `started: ${stringRecordValue(record.startedAt) ?? stringRecordValue(runtime.startedAt) ?? 'n/a'}`,
+    `updated: ${stringRecordValue(record.updatedAt) ?? 'n/a'}`,
+    `completed: ${stringRecordValue(record.completedAt) ?? stringRecordValue(runtime.completedAt) ?? 'n/a'}`,
+    `runtime: ${stringRecordValue(runtime.status) ?? stringRecordValue(record.status) ?? 'n/a'}`,
+  ];
+  for (const attempt of resumeAttempts) {
+    lines.push(`resume: ${formatLatestResumeAttempt(attempt)}`);
+  }
+  return lines.join('\n');
+}
+
+function formatCodexActivity(record: Record<string, unknown>, latestResumeAttempt: Record<string, unknown> | undefined): string {
+  const session = stringRecordValue(record.agentSessionId) ?? 'n/a';
+  const trajectoryHint = stringRecordValue(latestResumeAttempt?.logPath) ?? stringRecordValue(record.logPath) ?? 'n/a';
+  return [
+    `session: ${session}`,
+    `latest trajectory source: ${trajectoryHint}`,
+    'events: n/a',
+  ].join('\n');
+}
+
+function formatAgentLogReference(
+  record: Record<string, unknown>,
+  latestResumeAttempt: Record<string, unknown> | undefined,
+  stream: 'stdout' | 'stderr',
+): string {
+  if (stream === 'stderr') {
+    return stringRecordValue(latestResumeAttempt?.stderrLogPath)
+      ?? stringRecordValue(record.stderrLogPath)
+      ?? 'n/a';
+  }
+  return stringRecordValue(latestResumeAttempt?.logPath)
+    ?? stringRecordValue(record.logPath)
+    ?? 'n/a';
+}
+
+function confirmationTokenFromError(error: RainrailDashboardApiError): string | undefined {
+  const payload = objectRecord(error.payload);
+  const data = objectRecord(payload.data);
+  return stringRecordValue(data.confirmationToken);
+}
+
+function formatCommandResponse(status: string, auditId: string | undefined, auditWarning: string | undefined): string {
+  return [
+    `Command ${status}`,
+    auditId === undefined ? undefined : `audit ${auditId}`,
+    auditWarning,
+  ].filter((value): value is string => value !== undefined && value !== '').join(' / ');
 }
 
 function escapeHtml(value: string): string {

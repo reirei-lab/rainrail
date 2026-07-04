@@ -43,7 +43,7 @@ describe('dashboard app shell', () => {
       expect(dashboardClient).toContain(method);
     }
 
-    expect(dashboardApp).toContain("type DashboardTab = 'overview' | 'events' | 'workflow-runs' | 'sources' | 'queue' | 'settings'");
+    expect(dashboardApp).toContain("type DashboardTab = 'overview' | 'events' | 'workflow-runs' | 'agent-tasks' | 'sources' | 'queue' | 'settings'");
     expect(dashboardApp).toContain('sources: (await activeClient.sources()).data');
     expect(dashboardApp).toContain('queue: (await activeClient.queue()).data');
     expect(dashboardApp).toContain('settings: (await activeClient.settings()).data');
