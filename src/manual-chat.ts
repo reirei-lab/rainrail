@@ -7,6 +7,7 @@ import {
 import type { RainrailIntakeAdapter } from './intake-adapter.js';
 
 const encoder = new TextEncoder();
+const MAX_MANUAL_INPUT_TEXT_LENGTH = 8_000;
 const MAX_MANUAL_INPUT_ATTACHMENTS = 20;
 
 export type ManualInputChannel = 'manual' | 'chat';
@@ -496,9 +497,10 @@ function safeUrl(value: string | undefined): string | undefined {
     if (url.protocol !== 'https:') return undefined;
     url.username = '';
     url.password = '';
+    url.pathname = sanitizeManualUrlPathname(url.pathname);
     url.search = '';
     url.hash = '';
-    return url.toString();
+    return truncateManualInputText(url.toString());
   } catch {
     return undefined;
   }
@@ -507,6 +509,7 @@ function safeUrl(value: string | undefined): string | undefined {
 function redactUserText(value: string): string {
   return value
     .replace(/\b[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s"'<>`/@]*@[^\s"'<>`,;)]+/giu, () => '[redacted-url]')
+    .replace(/\bhttps:\/\/[^\s"'<>`,;)]+/giu, (url) => sanitizeManualTextUrl(url))
     .replace(/(^|[.?&{\s"'<>`,;\[(])(["']?)([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification|session)[A-Za-z0-9_.-]*)\2\s*=\s*(["'])(?:\\.|(?!\4)[^\\])*\4/giu, '$1$2$3$2=[redacted]')
     .replace(/(^|[.?&{\s"'<>`,;\[(])(["']?)([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification|session)[A-Za-z0-9_.-]*)\2\s*=\s*([^&\s"'<>`,;)]+)/giu, '$1$2$3$2=[redacted]')
     .replace(/(["'])([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification|session)[A-Za-z0-9_.-]*)\1(\s*:\s*)(["'])(?:\\.|(?!\4)[^\\])*\4/giu, '$1$2$1$3$4[redacted]$4')
@@ -515,7 +518,43 @@ function redactUserText(value: string): string {
     .replace(/\b(Bearer)\s+[A-Za-z0-9._~+/=-]+/giu, '$1 [redacted]')
     .replace(/\b(?:github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9_]{20,})\b/gu, '[redacted-token]')
     .trim()
-    .slice(0, 8_000);
+    .slice(0, MAX_MANUAL_INPUT_TEXT_LENGTH);
+}
+
+function sanitizeManualTextUrl(value: string): string {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'https:') return '[redacted-url]';
+    url.username = '';
+    url.password = '';
+    url.pathname = sanitizeManualUrlPathname(url.pathname);
+    url.search = '';
+    url.hash = '';
+    return truncateManualInputText(url.toString());
+  } catch {
+    return '[redacted-url]';
+  }
+}
+
+function sanitizeManualUrlPathname(pathname: string): string {
+  const segments = pathname.split('/');
+  return segments.map((segment, index) => {
+    if (segment.length === 0) return segment;
+    const previous = segments[index - 1]?.toLowerCase() ?? '';
+    if (/^(token|secret|password|code|reset|magic-link|invite|session|auth|verify|verification)$/iu.test(previous)) {
+      return '[redacted]';
+    }
+    if (/^(token|secret|password|code|reset)$/iu.test(segment)) {
+      return '[redacted]';
+    }
+    return /^[A-Za-z0-9_-]{16,}$/u.test(segment) && /[A-Za-z]/u.test(segment) && /\d/u.test(segment)
+      ? '[redacted]'
+      : segment;
+  }).join('/') || '/';
+}
+
+function truncateManualInputText(value: string): string {
+  return value.slice(0, MAX_MANUAL_INPUT_TEXT_LENGTH);
 }
 
 async function sha256Hex(value: string | ArrayBuffer | ArrayBufferView): Promise<string> {

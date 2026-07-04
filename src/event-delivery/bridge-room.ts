@@ -544,7 +544,7 @@ function normalizePayload(value: unknown, context: { sourceType: string; name: s
   for (const [key, nestedValue] of Object.entries(value)) {
     if (manualPayload) {
       if (MANUAL_INPUT_PAYLOAD_KEYS.has(key)) {
-        const normalized = normalizeManualInputPayloadField(key, nestedValue);
+        const normalized = normalizeManualInputPayloadField(key, nestedValue, context);
         if (normalized !== undefined) {
           payload[key] = normalized;
         }
@@ -561,6 +561,15 @@ function normalizePayload(value: unknown, context: { sourceType: string; name: s
       if (normalized !== undefined) {
         payload[key] = normalized;
       }
+    }
+  }
+
+  if (manualPayload) {
+    if (payload.channel !== context.sourceType) {
+      throw new TypeError('payload.channel must match source.type');
+    }
+    if (!isRecord(payload.message) || typeof payload.message.text !== 'string' || payload.message.text.length === 0) {
+      throw new TypeError('payload.message.text is required');
     }
   }
 
@@ -660,9 +669,9 @@ function isManualInputPayload(context: { sourceType: string; name: string }): bo
     || (context.sourceType === 'chat' && context.name === 'rainrail.chat.message');
 }
 
-function normalizeManualInputPayloadField(key: string, value: unknown): unknown {
+function normalizeManualInputPayloadField(key: string, value: unknown, context: { sourceType: string; name: string }): unknown {
   if (key === 'provider') return value === 'rainrail' ? value : undefined;
-  if (key === 'channel') return value === 'manual' || value === 'chat' ? value : undefined;
+  if (key === 'channel') return value === context.sourceType ? value : undefined;
   if (key === 'action') return value === 'message' ? value : undefined;
   if (key === 'conversation') return normalizeManualConversation(value);
   if (key === 'message') return normalizeManualMessage(value);

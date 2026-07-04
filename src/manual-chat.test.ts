@@ -559,9 +559,9 @@ describe('manual and chat input source contract', () => {
       channel: 'chat',
       deliveryId: 'direct-redaction-delivery',
       conversationId: 'direct-redaction-session',
-      message: 'access_token=gho_direct client_secret: direct-secret sessionToken=direct-session github_pat_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ghp_abcdefghijklmnopqrstuvwxyz0123456789 bearer abc.def.ghi DATABASE_URL=postgres://user:db-pass@db/prod https://user:web-pass@example.com/path',
+      message: 'access_token=gho_direct client_secret: direct-secret sessionToken=direct-session github_pat_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ghp_abcdefghijklmnopqrstuvwxyz0123456789 bearer abc.def.ghi DATABASE_URL=postgres://user:db-pass@db/prod https://user:web-pass@example.com/path https://example.com/reset/sensitive-reset-token-12345',
     });
-    expect(directEvent.payload.message.text).toBe('access_token=[redacted] client_secret: [redacted] sessionToken=[redacted] [redacted-token] [redacted-token] bearer [redacted] DATABASE_URL=[redacted-url] [redacted-url]');
+    expect(directEvent.payload.message.text).toBe('access_token=[redacted] client_secret: [redacted] sessionToken=[redacted] [redacted-token] [redacted-token] bearer [redacted] DATABASE_URL=[redacted-url] [redacted-url] https://example.com/[redacted]/[redacted]');
 
     const storage = fakeState();
     const app = createRainrailHttpApp({
@@ -611,6 +611,33 @@ describe('manual and chat input source contract', () => {
     expect(JSON.stringify(storedEvent)).not.toContain('browser-secret');
     expect(JSON.stringify(storedEvent)).not.toContain('abc.def.ghi');
     expect(JSON.stringify(storedEvent)).not.toContain('actor-secret');
+  });
+
+  it('bounds and sanitizes manual and chat URL payload strings', async () => {
+    const longPath = 'a'.repeat(9_000);
+    const event = await createManualInputEvent({
+      channel: 'chat',
+      deliveryId: 'url-bound-delivery',
+      conversationId: 'url-bound-session',
+      conversationUrl: `https://chat.example/reset/sensitive-reset-token-12345/${longPath}?token=secret#fragment`,
+      message: 'hello',
+      attachments: [{
+        id: 'attachment-url',
+        url: `https://files.example/download/${longPath}?downloadToken=secret`,
+      }],
+      replyTarget: {
+        id: 'reply-url',
+        url: `https://chat.example/session/${longPath}?sessionToken=secret`,
+      },
+    });
+
+    expect(event.payload.conversation.url?.length).toBeLessThanOrEqual(8_000);
+    expect(event.payload.conversation.url).toContain('/[redacted]/[redacted]/');
+    expect(event.payload.conversation.url).not.toContain('sensitive-reset-token-12345');
+    expect(event.payload.conversation.url).not.toContain('token=secret');
+    expect(event.payload.conversation.url).not.toContain('#fragment');
+    expect(event.payload.attachments?.[0]?.url?.length).toBeLessThanOrEqual(8_000);
+    expect(event.payload.replyTarget?.url?.length).toBeLessThanOrEqual(8_000);
   });
 
   it('limits manual and chat attachments before publishing payloads', async () => {

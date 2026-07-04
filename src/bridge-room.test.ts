@@ -1207,6 +1207,70 @@ describe('Rainrail bridge room', () => {
     expect(storage.storedEvents()[0]?.payload).not.toHaveProperty('action');
   });
 
+  it('rejects direct manual chat payloads without message text', async () => {
+    const storage = fakeState();
+    const room = createTestRoom(storage, { replayLimit: 10 });
+    const event = createEventEnvelope({
+      source: { type: 'chat', name: 'web-chat' },
+      name: 'rainrail.chat.message',
+      delivery: {
+        id: 'chat-missing-message-text',
+        receivedAt: '2026-06-29T18:18:21.000Z',
+      },
+      occurredAt: '2026-06-29T18:18:20.000Z',
+      subject: { type: 'conversation', id: 'chat-missing-message-text' },
+      payload: {
+        provider: 'rainrail',
+        channel: 'chat',
+        action: 'message',
+        conversation: { id: 'chat-missing-message-text' },
+        message: { id: 'message-without-text' },
+      },
+      rawPayload: {
+        kind: 'inline-redacted',
+        reference: 'chat://deliveries/chat-missing-message-text',
+      },
+    });
+
+    const publishResponse = await room.fetch(publishRequest(event));
+
+    expect(publishResponse.status).toBe(400);
+    await expect(publishResponse.text()).resolves.toContain('payload.message.text is required');
+    expect(storage.storedEvents()).toEqual([]);
+  });
+
+  it('rejects direct manual chat payloads with mismatched channels', async () => {
+    const storage = fakeState();
+    const room = createTestRoom(storage, { replayLimit: 10 });
+    const event = createEventEnvelope({
+      source: { type: 'chat', name: 'web-chat' },
+      name: 'rainrail.chat.message',
+      delivery: {
+        id: 'chat-mismatched-channel',
+        receivedAt: '2026-06-29T18:18:21.000Z',
+      },
+      occurredAt: '2026-06-29T18:18:20.000Z',
+      subject: { type: 'conversation', id: 'chat-mismatched-channel' },
+      payload: {
+        provider: 'rainrail',
+        channel: 'manual',
+        action: 'message',
+        conversation: { id: 'chat-mismatched-channel' },
+        message: { text: 'hello' },
+      },
+      rawPayload: {
+        kind: 'inline-redacted',
+        reference: 'chat://deliveries/chat-mismatched-channel',
+      },
+    });
+
+    const publishResponse = await room.fetch(publishRequest(event));
+
+    expect(publishResponse.status).toBe(400);
+    await expect(publishResponse.text()).resolves.toContain('payload.channel must match source.type');
+    expect(storage.storedEvents()).toEqual([]);
+  });
+
   it('does not apply manual payload allowlists to non-manual events', async () => {
     const storage = fakeState();
     const room = createTestRoom(storage, { replayLimit: 10 });

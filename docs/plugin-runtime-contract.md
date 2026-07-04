@@ -109,7 +109,9 @@ event id も短い明示 id にする。任意 host/path は Core storage に残
 API key、Bearer credential 形式は `key=value`、JSON/YAML 風の `key: value`、
 quoted JSON field のいずれも source adapter 側で短く redaction する。redaction は
 credential key の大小文字差、standalone GitHub access token 形式、URL userinfo の
-credential も対象にする。
+credential、URL path 内の credential らしい segment も対象にする。`conversationUrl`、
+attachment URL、`replyTarget.url` も query / fragment / userinfo を落とし、credential らしい
+path segment を redaction したうえで 8KB 以内に縮約する。
 
 HTTP intake の既定 route は `/intake/manual` と `/intake/chat` で、adapter は JSON body から
 `conversationId`、`message`、任意の `messageId`、`actor`、`attachments`、`replyTarget`
