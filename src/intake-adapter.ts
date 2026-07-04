@@ -46,12 +46,16 @@ const CORE_ROUTE_PATHS = new Set([
   '/api/v1/events',
   '/api/v1/workflow-runs',
   '/api/v1/agent-tasks',
+  '/api/v1/queue',
+  '/api/v1/settings',
 ]);
 const CORE_ROUTE_PREFIXES = [
   '/api/events/',
   '/api/v1/events/',
   '/api/v1/workflow-runs/',
   '/api/v1/agent-tasks/',
+  '/api/v1/queue/',
+  '/api/v1/settings/',
 ] as const;
 
 export function createRainrailIntakeRegistry(adapters: readonly RainrailIntakeAdapter[] = []): RainrailIntakeRegistry {

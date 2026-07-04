@@ -19,12 +19,12 @@ const globalStyles = readFileSync(
 );
 
 describe('dashboard operational views', () => {
-  it('names the Overview, Event Inbox, and Workflow Runs work surfaces', () => {
-    for (const label of ['Overview', 'Event Inbox', 'Workflow Runs']) {
+  it('names the Overview, Event Inbox, Workflow Runs, and Agent Tasks work surfaces', () => {
+    for (const label of ['Overview', 'Event Inbox', 'Workflow Runs', 'Agent Tasks']) {
       expect(dashboardPage).toContain(label);
     }
 
-    expect(dashboardPage).not.toContain('Agent tasks</button>');
+    expect(dashboardPage).toContain('data-dashboard-tab="agent-tasks"');
   });
 
   it('renders event inbox filters and delivery/result columns', () => {
@@ -48,6 +48,7 @@ describe('dashboard operational views', () => {
   it('loads detail records for human summaries, sanitized envelopes, matched workflows, and audit', () => {
     expect(dashboardApp).toContain('eventDetail(row.id)');
     expect(dashboardApp).toContain('workflowRunDetail(row.id)');
+    expect(dashboardApp).toContain('agentTaskDetail(row.id)');
     expect(dashboardApp).toContain('detailRequestSequence');
     expect(dashboardApp).toContain('selectedDetailRowId');
     expect(dashboardApp).toContain('isCurrentDetailRequest(activeClient, detailRequestId, row.id)');
@@ -64,6 +65,57 @@ describe('dashboard operational views', () => {
     }
 
     expect(dashboardApp).not.toContain('JSON.stringify(record.envelope.payload');
+  });
+
+  it('renders agent task tabs, runtime metadata, logs, Codex activity, and raw detail', () => {
+    for (const label of [
+      'Summary',
+      'Timeline',
+      'Codex activity',
+      'stdout log',
+      'stderr log',
+      'JSONL/raw detail',
+      'Runtime pid',
+      'Resume count',
+      'Project claim',
+    ]) {
+      expect(dashboardApp).toContain(label);
+    }
+
+    expect(dashboardApp).toContain('renderAgentTaskDetail');
+    expect(dashboardApp).toContain('resumeAttempts');
+    expect(dashboardApp).toContain('latestResumeAttempt');
+    expect(dashboardApp).toContain('formatAgentTimeline');
+    expect(dashboardApp).toContain('formatAgentLogReference');
+    expect(dashboardApp).toContain('JSON.stringify(record, null, 2)');
+  });
+
+  it('wires agent task command buttons through the dashboard client and operator confirmation UI', () => {
+    for (const marker of [
+      'data-agent-action="resume"',
+      'data-agent-action="reset"',
+      'data-agent-action="terminate"',
+      'data-agent-action="terminate-all"',
+      'data-command-status',
+    ]) {
+      expect(dashboardPage).toContain(marker);
+    }
+
+    for (const method of [
+      'resumeAgentTask',
+      'resetAgentTask',
+      'terminateAgentTask',
+      'terminateAllAgentTasks',
+    ]) {
+      expect(dashboardClient).toContain(method);
+      expect(dashboardApp).toContain(method);
+    }
+    expect(dashboardClient).toContain('postCommand');
+
+    expect(dashboardApp).toContain('action_confirmation_required');
+    expect(dashboardApp).toContain('confirmationToken');
+    expect(dashboardApp).toContain('window.confirm');
+    expect(dashboardApp).toContain('setCommandStatus');
   });
 
   it('does not mark the whole dashboard empty just because Event Inbox filters hide rows', () => {

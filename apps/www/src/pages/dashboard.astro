@@ -21,6 +21,7 @@ const apiBaseUrl = import.meta.env.PUBLIC_RAINRAIL_OPERATIONAL_API_URL ?? '';
         <button type="button" data-dashboard-tab="overview" aria-pressed="true">Overview</button>
         <button type="button" data-dashboard-tab="events" aria-pressed="false">Event Inbox</button>
         <button type="button" data-dashboard-tab="workflow-runs" aria-pressed="false">Workflow Runs</button>
+        <button type="button" data-dashboard-tab="agent-tasks" aria-pressed="false">Agent Tasks</button>
       </nav>
       <label class="dashboard-permission">
         <input type="checkbox" data-permission-toggle />
@@ -101,8 +102,11 @@ const apiBaseUrl = import.meta.env.PUBLIC_RAINRAIL_OPERATIONAL_API_URL ?? '';
       </section>
 
       <section class="dashboard-actions" aria-label="Operator actions">
-        <button type="button" class="dashboard-action" data-action-permission="operator" disabled>Resume selected</button>
-        <button type="button" class="dashboard-action" data-action-permission="operator" disabled>Reset claim</button>
+        <button type="button" class="dashboard-action" data-agent-action="resume" data-action-permission="operator" disabled>Resume selected</button>
+        <button type="button" class="dashboard-action" data-agent-action="reset" data-action-permission="operator" disabled>Reset claim</button>
+        <button type="button" class="dashboard-action" data-agent-action="terminate" data-action-permission="operator" disabled>Terminate selected</button>
+        <button type="button" class="dashboard-action danger" data-agent-action="terminate-all" data-action-permission="operator" disabled>Terminate all</button>
+        <span class="dashboard-command-status" data-command-status aria-live="polite"></span>
       </section>
     </div>
   </section>

@@ -885,9 +885,27 @@ h3 {
   overflow-wrap: anywhere;
 }
 
+.dashboard-detail-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 14px;
+}
+
+.dashboard-detail-tabs span {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 6px 9px;
+  background: #f8faf6;
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 720;
+}
+
 .dashboard-actions {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 10px;
   margin-top: 14px;
 }
@@ -907,6 +925,19 @@ h3 {
   color: var(--muted);
   cursor: not-allowed;
   opacity: 0.55;
+}
+
+.dashboard-action.danger {
+  border-color: rgb(143 61 55 / 45%);
+  color: var(--danger);
+}
+
+.dashboard-command-status {
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  color: var(--muted);
+  font-size: 0.86rem;
 }
 
 .site-footer {
@@ -956,7 +987,7 @@ h3 {
   }
 
   .dashboard-sidebar nav {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 
   .dashboard-topbar {
