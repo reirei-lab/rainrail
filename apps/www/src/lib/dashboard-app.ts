@@ -2,12 +2,13 @@ import {
   RainrailDashboardApiClient,
   RainrailDashboardApiError,
   type DashboardAgentTask,
+  type DashboardDetail,
   type DashboardEvent,
   type DashboardOverview,
   type DashboardWorkflowRun,
 } from './dashboard-client';
 
-type DashboardTab = 'events' | 'workflow-runs' | 'agent-tasks';
+type DashboardTab = 'overview' | 'events' | 'workflow-runs';
 
 interface DashboardData {
   overview: DashboardOverview;
@@ -37,12 +38,15 @@ if (root !== null) {
   const list = root.querySelector<HTMLElement>('[data-dashboard-list]');
   const detail = root.querySelector<HTMLElement>('[data-dashboard-detail]');
   const stats = root.querySelector<HTMLElement>('[data-dashboard-stats]');
+  const eventSourceFilter = root.querySelector<HTMLSelectElement>('[data-event-source-filter]');
+  const eventNameFilter = root.querySelector<HTMLInputElement>('[data-event-name-filter]');
+  const filterApplyButton = root.querySelector<HTMLButtonElement>('[data-filter-apply]');
   const permissionToggle = root.querySelector<HTMLInputElement>('[data-permission-toggle]');
   const operatorActions = Array.from(root.querySelectorAll<HTMLButtonElement>('[data-action-permission="operator"]'));
   const tabButtons = Array.from(root.querySelectorAll<HTMLButtonElement>('[data-dashboard-tab]'));
 
   let client: RainrailDashboardApiClient | undefined;
-  let selectedTab: DashboardTab = 'events';
+  let selectedTab: DashboardTab = 'overview';
   let latestData: DashboardData | undefined;
   let lastUpdatedAt = 0;
   let staleTimer: number | undefined;
@@ -105,6 +109,11 @@ if (root !== null) {
     void refresh();
   });
 
+  filterApplyButton?.addEventListener('click', () => {
+    selectedTab = 'events';
+    void refresh();
+  });
+
   permissionToggle?.addEventListener('change', () => {
     const enabled = permissionToggle.checked;
     localStore.set(OPERATOR_STORAGE_KEY, enabled ? '1' : '0');
@@ -114,7 +123,7 @@ if (root !== null) {
   for (const button of tabButtons) {
     button.addEventListener('click', () => {
       const tab = button.dataset.dashboardTab;
-      if (tab === 'events' || tab === 'workflow-runs' || tab === 'agent-tasks') {
+      if (tab === 'overview' || tab === 'events' || tab === 'workflow-runs') {
         selectedTab = tab;
         renderCurrentList();
       }
@@ -137,7 +146,7 @@ if (root !== null) {
     try {
       const nextData = {
         overview: await activeClient.overview(),
-        events: (await activeClient.events()).data,
+        events: (await activeClient.events(currentEventFilters())).data,
         workflowRuns: (await activeClient.workflowRuns()).data,
         agentTasks: (await activeClient.agentTasks()).data,
       };
@@ -176,7 +185,7 @@ if (root !== null) {
       return;
     }
 
-    renderDetail(rows[0]!);
+    void renderDetail(rows[0]!);
   }
 
   function rowButton(row: DashboardEvent | DashboardWorkflowRun | DashboardAgentTask): HTMLButtonElement {
@@ -184,29 +193,43 @@ if (root !== null) {
     button.type = 'button';
     button.className = 'dashboard-row';
     button.innerHTML = `
-      <span>${escapeHtml(row.status)}</span>
+      <span>${escapeHtml(row.status)}${'latestOutcome' in row && row.latestOutcome !== undefined ? ` / ${escapeHtml(row.latestOutcome)}` : ''}</span>
       <strong>${escapeHtml(rowTitle(row))}</strong>
-      <small>${escapeHtml(row.id)}</small>
+      <small>${escapeHtml(rowMeta(row))}</small>
     `;
-    button.addEventListener('click', () => renderDetail(row));
+    button.addEventListener('click', () => {
+      void renderDetail(row);
+    });
     return button;
   }
 
-  function renderDetail(row: DashboardEvent | DashboardWorkflowRun | DashboardAgentTask): void {
+  async function renderDetail(row: DashboardEvent | DashboardWorkflowRun | DashboardAgentTask): Promise<void> {
     if (detail === null) return;
 
-    detail.innerHTML = `
-      <div class="dashboard-detail-heading">
-        <span>${escapeHtml(row.type)}</span>
-        <strong>${escapeHtml(row.status)}</strong>
-      </div>
-      <h2>${escapeHtml(rowTitle(row))}</h2>
-      <dl>
-        <div><dt>ID</dt><dd>${escapeHtml(row.id)}</dd></div>
-        <div><dt>Branch</dt><dd>${escapeHtml('branchName' in row ? row.branchName ?? 'n/a' : 'n/a')}</dd></div>
-        <div><dt>Issue</dt><dd>${escapeHtml(formatIssue(row))}</dd></div>
-      </dl>
-    `;
+    renderBasicDetail(row, 'Loading detail');
+    const activeClient = client;
+    if (activeClient === undefined) {
+      renderBasicDetail(row, 'Detail unavailable');
+      return;
+    }
+
+    try {
+      if (row.type === 'event') {
+        const loaded = await activeClient.eventDetail(row.id);
+        if (client !== activeClient) return;
+        renderEventDetail(row, loaded);
+        return;
+      }
+      if (row.type === 'workflow-run') {
+        const loaded = await activeClient.workflowRunDetail(row.id);
+        if (client !== activeClient) return;
+        renderWorkflowRunDetail(row, loaded);
+        return;
+      }
+      renderBasicDetail(row, 'Agent task summary');
+    } catch {
+      renderBasicDetail(row, 'Detail request failed');
+    }
   }
 
   function renderStats(overview: DashboardOverview): void {
@@ -214,10 +237,12 @@ if (root !== null) {
 
     const counts = overview.data.counts;
     stats.replaceChildren(...[
+      statItem('Health', 1),
       statItem('Events', counts.events ?? 0),
-      statItem('Workflow runs', counts.activityEvents ?? 0),
+      statItem('Active runs', counts.activityEvents ?? 0),
+      statItem('Retrying handlers', counts.eventHandlerRetries ?? 0),
+      statItem('Provider status', providerCount(latestData?.events ?? [])),
       statItem('Agent tasks', counts.agentTasks ?? 0),
-      statItem('Retries', counts.eventHandlerRetries ?? 0),
     ]);
   }
 
@@ -225,10 +250,12 @@ if (root !== null) {
     if (stats === null) return;
 
     stats.replaceChildren(
+      statItem('Health', 0),
       statItem('Events', 0),
-      statItem('Workflow runs', 0),
+      statItem('Active runs', 0),
+      statItem('Retrying handlers', 0),
+      statItem('Provider status', 0),
       statItem('Agent tasks', 0),
-      statItem('Retries', 0),
     );
   }
 
@@ -248,7 +275,7 @@ if (root !== null) {
 
   function selectedRows(data: DashboardData): Array<DashboardEvent | DashboardWorkflowRun | DashboardAgentTask> {
     if (selectedTab === 'workflow-runs') return data.workflowRuns;
-    if (selectedTab === 'agent-tasks') return data.agentTasks;
+    if (selectedTab === 'overview') return [...data.overview.data.recentActivity, ...data.agentTasks];
     return data.events;
   }
 
@@ -329,6 +356,84 @@ if (root !== null) {
     if (refreshInFlightClient === activeClient && refreshSequence === activeRefreshId) {
       refreshInFlightClient = undefined;
     }
+  }
+
+  function currentEventFilters(): { sourceType?: string; name?: string } {
+    return {
+      sourceType: eventSourceFilter?.value.trim() ?? '',
+      name: eventNameFilter?.value.trim() ?? '',
+    };
+  }
+
+  function renderBasicDetail(row: DashboardEvent | DashboardWorkflowRun | DashboardAgentTask, label: string): void {
+    if (detail === null) return;
+
+    detail.innerHTML = `
+      <div class="dashboard-detail-heading">
+        <span>${escapeHtml(row.type)}</span>
+        <strong>${escapeHtml(row.status)}</strong>
+      </div>
+      <h2>${escapeHtml(rowTitle(row))}</h2>
+      <dl>
+        <div><dt>ID</dt><dd>${escapeHtml(row.id)}</dd></div>
+        <div><dt>Branch</dt><dd>${escapeHtml('branchName' in row ? row.branchName ?? 'n/a' : 'n/a')}</dd></div>
+        <div><dt>Issue</dt><dd>${escapeHtml(formatIssue(row))}</dd></div>
+        <div><dt>Action audit</dt><dd>${escapeHtml(label)}</dd></div>
+      </dl>
+    `;
+  }
+
+  function renderEventDetail(row: DashboardEvent, loaded: DashboardDetail): void {
+    if (detail === null) return;
+
+    const record = objectRecord(loaded.data.record);
+    const envelope = objectRecord(record.envelope);
+    const rawPayload = objectRecord(envelope.rawPayload);
+    const activityEvents = arrayRecord(record.activityEvents);
+    const handlerRetries = arrayRecord(record.handlerRetries);
+
+    detail.innerHTML = `
+      <div class="dashboard-detail-heading">
+        <span>event</span>
+        <strong>${escapeHtml(row.status)}</strong>
+      </div>
+      <h2>${escapeHtml(stringRecordValue(record.humanSummary) ?? rowTitle(row))}</h2>
+      <dl>
+        <div><dt>Human summary</dt><dd>${escapeHtml(stringRecordValue(record.humanSummary) ?? rowTitle(row))}</dd></div>
+        <div><dt>Delivery</dt><dd>${escapeHtml(row.deliveryId ?? stringRecordValue(objectRecord(record.delivery).id) ?? 'n/a')}</dd></div>
+        <div><dt>Raw payload reference</dt><dd>${escapeHtml(stringRecordValue(rawPayload.reference) ?? row.rawPayloadReference ?? 'n/a')}</dd></div>
+        <div><dt>Matched workflows</dt><dd>${escapeHtml(formatActivityList(activityEvents))}</dd></div>
+        <div><dt>Retry schedule</dt><dd>${escapeHtml(formatRetryList(handlerRetries))}</dd></div>
+        <div><dt>Action audit</dt><dd>${escapeHtml(formatActivityList(activityEvents))}</dd></div>
+      </dl>
+      <section class="dashboard-audit-list" aria-label="Sanitized envelope">
+        <h3>Sanitized envelope</h3>
+        <pre>${escapeHtml(JSON.stringify(envelope, null, 2))}</pre>
+      </section>
+    `;
+  }
+
+  function renderWorkflowRunDetail(row: DashboardWorkflowRun, loaded: DashboardDetail): void {
+    if (detail === null) return;
+
+    const record = objectRecord(loaded.data.record);
+    detail.innerHTML = `
+      <div class="dashboard-detail-heading">
+        <span>workflow-run</span>
+        <strong>${escapeHtml(row.status)}</strong>
+      </div>
+      <h2>${escapeHtml(rowTitle(row))}</h2>
+      <dl>
+        <div><dt>Human summary</dt><dd>${escapeHtml(stringRecordValue(record.summary) ?? rowTitle(row))}</dd></div>
+        <div><dt>Source event</dt><dd>${escapeHtml(stringRecordValue(record.sourceEventId) ?? row.sourceEventId ?? 'n/a')}</dd></div>
+        <div><dt>Action audit</dt><dd>${escapeHtml(`${stringRecordValue(record.actionType) ?? 'n/a'} / ${stringRecordValue(record.outcome) ?? row.status}`)}</dd></div>
+        <div><dt>Retry schedule</dt><dd>${escapeHtml(row.status === 'failed' ? 'Check handler retry rows for this source event.' : 'n/a')}</dd></div>
+      </dl>
+      <section class="dashboard-audit-list" aria-label="Workflow run record">
+        <h3>Action audit</h3>
+        <pre>${escapeHtml(JSON.stringify(record, null, 2))}</pre>
+      </section>
+    `;
   }
 }
 
@@ -421,6 +526,58 @@ function rowTitle(row: DashboardEvent | DashboardWorkflowRun | DashboardAgentTas
   if ('summary' in row && typeof row.summary === 'string') return row.summary;
   if ('title' in row && typeof row.title === 'string') return row.title;
   return row.id;
+}
+
+function rowMeta(row: DashboardEvent | DashboardWorkflowRun | DashboardAgentTask): string {
+  if (row.type === 'event') {
+    return [
+      row.deliveryId === undefined ? undefined : `Delivery ${row.deliveryId}`,
+      row.latestOutcome === undefined ? undefined : `Publish result ${row.latestOutcome}`,
+      row.workflowRunCount === undefined ? undefined : `Workflow matches ${row.workflowRunCount}`,
+      row.handlerRetryCount === undefined ? undefined : `Retries ${row.handlerRetryCount}`,
+    ].filter((value): value is string => value !== undefined).join(' | ') || row.id;
+  }
+  if (row.type === 'workflow-run') {
+    return row.sourceEventId === undefined ? row.id : `Source event ${row.sourceEventId}`;
+  }
+  return row.id;
+}
+
+function providerCount(events: DashboardEvent[]): number {
+  return new Set(events.map((event) => event.source?.type).filter((value): value is string => value !== undefined)).size;
+}
+
+function objectRecord(value: unknown): Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function arrayRecord(value: unknown): Array<Record<string, unknown>> {
+  return Array.isArray(value) ? value.map(objectRecord) : [];
+}
+
+function stringRecordValue(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined;
+}
+
+function formatActivityList(activityEvents: Array<Record<string, unknown>>): string {
+  if (activityEvents.length === 0) return 'n/a';
+  return activityEvents
+    .map((activity) => [
+      stringRecordValue(activity.summary) ?? stringRecordValue(activity.actionType) ?? 'workflow',
+      stringRecordValue(activity.outcome) ?? 'unknown',
+    ].join(' / '))
+    .join('; ');
+}
+
+function formatRetryList(handlerRetries: Array<Record<string, unknown>>): string {
+  if (handlerRetries.length === 0) return 'n/a';
+  return handlerRetries
+    .map((retry) => [
+      stringRecordValue(retry.handlerName) ?? 'handler',
+      stringRecordValue(retry.nextRetryAt) ?? 'unscheduled',
+      stringRecordValue(retry.lastError) ?? 'retry pending',
+    ].join(' / '))
+    .join('; ');
 }
 
 function escapeHtml(value: string): string {

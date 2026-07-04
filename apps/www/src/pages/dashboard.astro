@@ -18,9 +18,9 @@ const apiBaseUrl = import.meta.env.PUBLIC_RAINRAIL_OPERATIONAL_API_URL ?? '';
     <aside class="dashboard-sidebar" aria-label="Dashboard navigation">
       <a class="dashboard-brand" href="/">Rainrail</a>
       <nav>
-        <button type="button" data-dashboard-tab="events" aria-pressed="true">Events</button>
-        <button type="button" data-dashboard-tab="workflow-runs" aria-pressed="false">Workflow runs</button>
-        <button type="button" data-dashboard-tab="agent-tasks" aria-pressed="false">Agent tasks</button>
+        <button type="button" data-dashboard-tab="overview" aria-pressed="true">Overview</button>
+        <button type="button" data-dashboard-tab="events" aria-pressed="false">Event Inbox</button>
+        <button type="button" data-dashboard-tab="workflow-runs" aria-pressed="false">Workflow Runs</button>
       </nav>
       <label class="dashboard-permission">
         <input type="checkbox" data-permission-toggle />
@@ -56,11 +56,32 @@ const apiBaseUrl = import.meta.env.PUBLIC_RAINRAIL_OPERATIONAL_API_URL ?? '';
       <div class="dashboard-state" data-state="error">Operational API unavailable</div>
       <div class="dashboard-state" data-state="auth-missing">Paste a bearer token to read the dashboard API.</div>
 
-      <section class="dashboard-stats" data-dashboard-stats aria-label="Operational totals">
+      <section class="dashboard-stats dashboard-overview-grid" data-dashboard-stats aria-label="Operational totals">
         <div class="dashboard-stat"><span>Events</span><strong>0</strong></div>
         <div class="dashboard-stat"><span>Workflow runs</span><strong>0</strong></div>
         <div class="dashboard-stat"><span>Agent tasks</span><strong>0</strong></div>
         <div class="dashboard-stat"><span>Retries</span><strong>0</strong></div>
+      </section>
+
+      <section class="dashboard-filterbar" aria-label="Event inbox filters">
+        <label>
+          Source
+          <select data-event-source-filter>
+            <option value="">All sources</option>
+            <option value="github">GitHub</option>
+            <option value="cloudflare">Cloudflare</option>
+            <option value="manual">Manual</option>
+            <option value="system">System</option>
+          </select>
+        </label>
+        <label>
+          Event name
+          <input data-event-name-filter type="text" autocomplete="off" placeholder="github.issue" />
+        </label>
+        <button type="button" class="button secondary" data-filter-apply>Apply</button>
+        <span>Delivery</span>
+        <span>Publish result</span>
+        <span>Workflow matches</span>
       </section>
 
       <section class="dashboard-two-pane" aria-label="Operational records">
