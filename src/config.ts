@@ -403,7 +403,7 @@ function expandEnv(raw: string, env?: Record<string, string | undefined>): strin
 }
 
 function envValue(name: string, env: Record<string, string | undefined> | undefined): string {
-  if (env !== undefined) {
+  if (env !== undefined && Object.prototype.hasOwnProperty.call(env, name)) {
     return env[name] ?? '';
   }
   return typeof process === 'undefined' ? '' : process.env[name] ?? '';

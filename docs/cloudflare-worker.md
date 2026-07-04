@@ -35,6 +35,9 @@ config 経由で composition を明示する場合も、secret 値は config に
 `RAINRAIL_CONFIG_JSON` 内の `${NAME}` は Worker env / vars / secrets から展開される。
 `github-webhook.endpoint` は実際の intake route に反映されるため、GitHub 側の delivery URL も
 同じ path に合わせる。
+deploy 前 secret 検証は `RAINRAIL_CONFIG_JSON` の `webhookSecret` が参照する secret 名も
+確認する。既定の `GITHUB_WEBHOOK_SECRET` 以外を使う場合は、その secret 名を
+Cloudflare Workers Secrets に登録しておく。
 
 ```json
 {
@@ -176,3 +179,6 @@ RAINRAIL_WORKER_URL=https://<worker-host> pnpm cf:smoke
 smoke script は `GET /healthz` が successful response を返すことを確認する。
 `POST /webhooks/github` は `ping` event と意図的な署名不一致で `401 signature_mismatch`
 になることだけを確認し、production の Durable Object / SSE replay stream には publish しない。
+config で GitHub webhook endpoint を変更している場合、smoke は `RAINRAIL_CONFIG_JSON` の
+`github-webhook.endpoint` を読む。明示的に上書きする場合は
+`RAINRAIL_GITHUB_WEBHOOK_ENDPOINT=/custom-path pnpm cf:smoke` を使う。

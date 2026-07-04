@@ -52,7 +52,12 @@ export function createRainrailEepBridgeIntakeAdaptersFromConfig({
   }
 
   const githubSource = githubSources[0]!;
-  const cloudflareTailSource = bundle.sources.find((source) => source.type === 'cloudflare-tail');
+  const cloudflareTailSources = bundle.sources.filter((source) => source.type === 'cloudflare-tail');
+  if (cloudflareTailSources.length > 1) {
+    throw new Error(`config.sourceBundles.${bundle.name} must include at most one cloudflare-tail source`);
+  }
+
+  const cloudflareTailSource = cloudflareTailSources[0];
   return createRainrailEepBridgeIntakeAdapters({
     env: {
       GITHUB_WEBHOOK_SECRET: secretValueFromEnv(env, githubSource.webhookSecret),

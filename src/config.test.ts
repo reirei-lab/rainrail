@@ -409,20 +409,24 @@ describe('parseConfig', () => {
 
   it('expands environment variables from an explicit env map before falling back to process env', () => {
     vi.stubEnv('RAINRAIL_CONFIG_BUNDLE_NAME', 'process-bundle');
+    vi.stubEnv('RAINRAIL_CONFIG_SOURCE_NAME', 'process-source');
 
-    expect(parseConfigJson(JSON.stringify({
+    const config = parseConfigJson(JSON.stringify({
       sourceBundles: [
         {
           type: 'eep-bridge',
           name: '${RAINRAIL_CONFIG_BUNDLE_NAME}',
           sources: [
-            { type: 'manual-chat', name: 'manual-chat', sourceType: 'manual' },
+            { type: 'manual-chat', name: '${RAINRAIL_CONFIG_SOURCE_NAME}', sourceType: 'manual' },
           ],
         },
       ],
     }), {
       RAINRAIL_CONFIG_BUNDLE_NAME: 'worker-bundle',
-    }).sourceBundles[0]?.name).toBe('worker-bundle');
+    });
+
+    expect(config.sourceBundles[0]?.name).toBe('worker-bundle');
+    expect(config.sourceBundles[0]?.sources[0]?.name).toBe('process-source');
   });
 
   it('rejects incomplete GitHub App auth config', () => {

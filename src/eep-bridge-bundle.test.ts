@@ -200,4 +200,39 @@ describe('Rainrail EEP Bridge bundle', () => {
       env: {},
     })).toThrow('config.sourceBundles.tail-only must include exactly one github-webhook source');
   });
+
+  it('rejects config bundles with more than one Cloudflare tail source', () => {
+    const config = parseConfig({
+      sourceBundles: [
+        {
+          type: 'eep-bridge',
+          name: 'worker-ingress',
+          sources: [
+            {
+              type: 'github-webhook',
+              name: 'github-webhook',
+              sourceType: 'github',
+              provider: 'github',
+              webhookSecret: 'GITHUB_WEBHOOK_SECRET',
+            },
+            {
+              type: 'cloudflare-tail',
+              name: 'prod-tail',
+              sourceType: 'cloudflare',
+            },
+            {
+              type: 'cloudflare-tail',
+              name: 'staging-tail',
+              sourceType: 'cloudflare',
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(() => createRainrailEepBridgeIntakeAdaptersFromConfig({
+      config,
+      env: { GITHUB_WEBHOOK_SECRET: 'secret-value' },
+    })).toThrow('config.sourceBundles.worker-ingress must include at most one cloudflare-tail source');
+  });
 });
