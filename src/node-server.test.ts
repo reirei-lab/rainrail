@@ -9,6 +9,7 @@ import {
   RainrailOperationalStore,
   createGitHubWebhookSignature,
   createRainrailNodeServer,
+  type RainrailIntakeAdapter,
 } from './index.js';
 
 describe('Rainrail Node server', () => {
@@ -137,6 +138,75 @@ describe('Rainrail Node server', () => {
 
       expect(response.status).toBe(413);
       await expect(response.json()).resolves.toEqual({ error: 'request_body_too_large' });
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it('falls back to maxBodyBytes for Node GitHub webhook request limits', async () => {
+    const { server } = createRainrailNodeServer({
+      githubWebhookSecret: 'secret',
+      publishToken: 'test-publish-token',
+      eventsBearerToken: 'events-token',
+      maxBodyBytes: 4,
+    });
+
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const address = server.address();
+    if (address === null || typeof address === 'string') {
+      throw new Error('expected TCP server address');
+    }
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${address.port}/webhooks/github`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-github-event': 'issues',
+          'x-github-delivery': 'oversized-node-webhook-fallback',
+          'x-hub-signature-256': 'sha256=invalid',
+        },
+        body: '{"too":"large"}',
+      });
+
+      expect(response.status).toBe(413);
+      await expect(response.json()).resolves.toEqual({ error: 'request_body_too_large' });
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it('does not attach empty bodies to Node GET intake adapter routes', async () => {
+    const intakeAdapters: RainrailIntakeAdapter[] = [{
+      name: 'readiness',
+      routes: [{
+        path: '/intake/readiness',
+        methods: ['GET'],
+        async handle() {
+          return Response.json({ ok: true });
+        },
+      }],
+    }];
+    const { server } = createRainrailNodeServer({
+      githubWebhookSecret: 'secret',
+      publishToken: 'test-publish-token',
+      eventsBearerToken: 'events-token',
+      intakeAdapters,
+    });
+
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const address = server.address();
+    if (address === null || typeof address === 'string') {
+      throw new Error('expected TCP server address');
+    }
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${address.port}/intake/readiness`);
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual({ ok: true });
     } finally {
       await closeServer(server);
     }

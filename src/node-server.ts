@@ -45,7 +45,9 @@ export function createRainrailNodeServer(options: RainrailNodeServerOptions): Ra
       createGitHubWebhookIntakeAdapter({
         secret: options.githubWebhookSecret,
         ...(options.githubSourceName === undefined ? {} : { sourceName: options.githubSourceName }),
-        ...(options.maxWebhookBodyBytes === undefined ? {} : { maxBodyBytes: options.maxWebhookBodyBytes }),
+        ...(options.maxWebhookBodyBytes === undefined && options.maxBodyBytes === undefined ? {} : {
+          maxBodyBytes: options.maxWebhookBodyBytes ?? options.maxBodyBytes,
+        }),
       }),
       ...(options.intakeAdapters ?? []),
     ],
@@ -125,14 +127,20 @@ async function toFetchRequest(
     signal,
   };
 
-  if (shouldReadRainrailHttpRequestBody(url.pathname, request.method ?? 'GET', appOptions)) {
+  const method = request.method ?? 'GET';
+  if (methodCanHaveBody(method) && shouldReadRainrailHttpRequestBody(url.pathname, method, appOptions)) {
     init.body = await readRequestBody(
       request,
-      rainrailHttpRequestBodyLimit(url.pathname, request.method ?? 'GET', appOptions) ?? options.maxBodyBytes,
+      rainrailHttpRequestBodyLimit(url.pathname, method, appOptions) ?? options.maxBodyBytes,
     );
   }
 
   return new Request(url, init);
+}
+
+function methodCanHaveBody(method: string): boolean {
+  const normalized = method.toUpperCase();
+  return normalized !== 'GET' && normalized !== 'HEAD';
 }
 
 function isStatusCodeError(error: unknown): error is { statusCode: number } {

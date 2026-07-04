@@ -32,6 +32,7 @@ export interface RainrailIntakeRouteMethodMismatch {
 
 export interface RainrailIntakeRegistry {
   routeFor(request: Request): RainrailIntakeRouteMatch | RainrailIntakeRouteMethodMismatch | undefined;
+  allowedMethodsForPath(pathname: string): readonly string[] | undefined;
   routeNeedsBody(pathname: string, method: string): boolean;
   routeBodyLimit(pathname: string, method: string): number | undefined;
   tail?: RainrailIntakeAdapter['tail'];
@@ -87,6 +88,10 @@ export function createRainrailIntakeRegistry(adapters: readonly RainrailIntakeAd
       if (allowedMethods === undefined) return undefined;
 
       return { allowedMethods: [...allowedMethods].sort() };
+    },
+    allowedMethodsForPath(pathname) {
+      const allowedMethods = routesByPath.get(pathname);
+      return allowedMethods === undefined ? undefined : [...allowedMethods].sort();
     },
     routeNeedsBody(pathname, method) {
       return routeHandlers.has(`${method.toUpperCase()} ${pathname}`);

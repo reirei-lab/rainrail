@@ -63,10 +63,7 @@ describe('Rainrail dashboard API', () => {
       logPath: 'var/log/rainrail-110.log',
       pid: 2468,
     });
-    const app = createRainrailHttpApp({
-      room: new RainrailBridgeRoom(fakeState(), { publishToken: 'publish-token' }),
-      githubWebhookSecret: 'secret',
-      publishToken: 'publish-token',
+    const app = createTestApp({
       eventsBearerToken: 'events-token',
       operationalStore,
     });
@@ -168,10 +165,7 @@ describe('Rainrail dashboard API', () => {
       eventLimit: 10,
       now: () => new Date('2026-07-02T00:00:00.000Z'),
     });
-    const app = createRainrailHttpApp({
-      room: new RainrailBridgeRoom(fakeState(), { publishToken: 'publish-token' }),
-      githubWebhookSecret: 'secret',
-      publishToken: 'publish-token',
+    const app = createTestApp({
       eventsBearerToken: 'events-token',
       operationalStore,
     });

@@ -273,6 +273,13 @@ function methodCanHaveBody(method: string): boolean {
   return normalized !== 'GET' && normalized !== 'HEAD';
 }
 
+function isStatusCodeError(error: unknown): error is { statusCode: number } {
+  return typeof error === 'object'
+    && error !== null
+    && 'statusCode' in error
+    && typeof error.statusCode === 'number';
+}
+
 function verifyDashboardReadRequest(request: Request, options: RainrailHttpAppOptions): Response | undefined {
   if (options.operationalStore === undefined) return undefined;
 

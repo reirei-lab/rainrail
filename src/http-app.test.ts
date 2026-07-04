@@ -63,6 +63,33 @@ describe('Rainrail HTTP app', () => {
     ]);
   });
 
+  it('applies intake route body limits before Fetch adapter handlers read the body', async () => {
+    let handlerReached = false;
+    const app = createTestApp(fakeState(), {
+      intakeAdapters: [{
+        name: 'limited-manual',
+        routes: [{
+          path: '/intake/limited',
+          methods: ['POST'],
+          maxBodyBytes: 4,
+          async handle(request) {
+            handlerReached = true;
+            return Response.json({ body: await request.text() });
+          },
+        }],
+      }],
+    });
+
+    const response = await app.fetch(new Request('https://rainrail.local/intake/limited', {
+      method: 'POST',
+      body: '{"too":"large"}',
+    }));
+
+    expect(response.status).toBe(413);
+    await expect(response.json()).resolves.toEqual({ error: 'request_body_too_large' });
+    expect(handlerReached).toBe(false);
+  });
+
   it('returns not found for unregistered intake routes and rejects route conflicts at registration', async () => {
     const app = createTestApp(fakeState(), { intakeAdapters: [] });
 
@@ -282,6 +309,28 @@ describe('Rainrail HTTP app', () => {
     const error = await failingApp.fetch(new Request('https://rainrail.local/healthz'));
     expect(error.status).toBe(500);
     await expect(error.json()).resolves.toEqual({ error: 'internal_server_error' });
+  });
+
+  it('reflects custom intake route methods in CORS preflight responses', async () => {
+    const app = createTestApp(fakeState(), {
+      intakeAdapters: [{
+        name: 'manual-update',
+        routes: [{
+          path: '/intake/manual',
+          methods: ['PUT'],
+          async handle() {
+            return Response.json({ ok: true });
+          },
+        }],
+      }],
+    });
+
+    const preflight = await app.fetch(new Request('https://rainrail.local/intake/manual', {
+      method: 'OPTIONS',
+    }));
+
+    expect(preflight.status).toBe(204);
+    expect(preflight.headers.get('Access-Control-Allow-Methods')).toContain('PUT');
   });
 });
 
