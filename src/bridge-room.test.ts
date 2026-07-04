@@ -1170,7 +1170,7 @@ describe('Rainrail bridge room', () => {
     expect(JSON.stringify(storedPayload)).not.toContain('attachment-tail');
   });
 
-  it('normalizes direct manual chat payloads to message action only', async () => {
+  it('rejects direct manual chat payloads with non-message actions', async () => {
     const storage = fakeState();
     const room = createTestRoom(storage, { replayLimit: 10 });
     const event = createEventEnvelope({
@@ -1197,14 +1197,9 @@ describe('Rainrail bridge room', () => {
 
     const publishResponse = await room.fetch(publishRequest(event));
 
-    expect(publishResponse.status).toBe(200);
-    expect(storage.storedEvents()[0]?.payload).toMatchObject({
-      provider: 'rainrail',
-      channel: 'chat',
-      conversation: { id: 'chat-action-direct' },
-      message: { text: 'hello' },
-    });
-    expect(storage.storedEvents()[0]?.payload).not.toHaveProperty('action');
+    expect(publishResponse.status).toBe(400);
+    await expect(publishResponse.text()).resolves.toContain('manual/chat payload is missing required fields');
+    expect(storage.storedEvents()).toEqual([]);
   });
 
   it('rejects direct manual chat payloads without message text', async () => {
@@ -1268,6 +1263,35 @@ describe('Rainrail bridge room', () => {
 
     expect(publishResponse.status).toBe(400);
     await expect(publishResponse.text()).resolves.toContain('payload.channel must match source.type');
+    expect(storage.storedEvents()).toEqual([]);
+  });
+
+  it('rejects direct manual chat payloads without required contract fields', async () => {
+    const storage = fakeState();
+    const room = createTestRoom(storage, { replayLimit: 10 });
+    const event = createEventEnvelope({
+      source: { type: 'chat', name: 'web-chat' },
+      name: 'rainrail.chat.message',
+      delivery: {
+        id: 'chat-missing-contract-fields',
+        receivedAt: '2026-06-29T18:18:21.000Z',
+      },
+      occurredAt: '2026-06-29T18:18:20.000Z',
+      subject: { type: 'conversation', id: 'chat-missing-contract-fields' },
+      payload: {
+        channel: 'chat',
+        message: { text: 'hello' },
+      },
+      rawPayload: {
+        kind: 'inline-redacted',
+        reference: 'chat://deliveries/chat-missing-contract-fields',
+      },
+    });
+
+    const publishResponse = await room.fetch(publishRequest(event));
+
+    expect(publishResponse.status).toBe(400);
+    await expect(publishResponse.text()).resolves.toContain('manual/chat payload is missing required fields');
     expect(storage.storedEvents()).toEqual([]);
   });
 

@@ -184,6 +184,8 @@ reply target の allowlist された string field だけを保存する。この
 適用し、他 source の payload を manual/chat と誤判定しない。`action` は `message` だけを
 保存し、direct publish で別 action が来ても replay payload には残さない。`payload.channel`
 は `source.type` と一致する必要があり、`message.text` がない manual/chat payload は保存しない。
+また `provider: "rainrail"`、`action: "message"`、`conversation.id` も必須として検証し、
+これらが欠けた direct publish / replay payload は manual/chat event として保存しない。
 各 string は credential redaction 後に 8KB 以内へ縮約し、`attachments` は先頭 20 件までに制限することで、
 巨大な user input や attachment name が durable replay や SSE に無制限に残らないようにする。
 

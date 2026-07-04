@@ -568,6 +568,15 @@ function normalizePayload(value: unknown, context: { sourceType: string; name: s
     if (payload.channel !== context.sourceType) {
       throw new TypeError('payload.channel must match source.type');
     }
+    if (
+      payload.provider !== 'rainrail'
+      || payload.action !== 'message'
+      || !isRecord(payload.conversation)
+      || typeof payload.conversation.id !== 'string'
+      || payload.conversation.id.length === 0
+    ) {
+      throw new TypeError('manual/chat payload is missing required fields');
+    }
     if (!isRecord(payload.message) || typeof payload.message.text !== 'string' || payload.message.text.length === 0) {
       throw new TypeError('payload.message.text is required');
     }

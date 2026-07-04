@@ -99,6 +99,20 @@ describe('manual and chat input source contract', () => {
     expect(event.payload).not.toHaveProperty('extraProviderField');
   });
 
+  it('rejects blank conversation ids and messages before creating events', async () => {
+    await expect(createManualInputEvent({
+      channel: 'chat',
+      conversationId: '   ',
+      message: 'hello',
+    })).rejects.toThrow('conversationId is required');
+
+    await expect(createManualInputEvent({
+      channel: 'chat',
+      conversationId: 'conversation-blank-message',
+      message: '   ',
+    })).rejects.toThrow('message is required');
+  });
+
   it('publishes manual HTTP input without retaining provider-specific raw request fields', async () => {
     const storage = fakeState();
     const app = createRainrailHttpApp({
@@ -559,9 +573,11 @@ describe('manual and chat input source contract', () => {
       channel: 'chat',
       deliveryId: 'direct-redaction-delivery',
       conversationId: 'direct-redaction-session',
-      message: 'access_token=gho_direct client_secret: direct-secret sessionToken=direct-session github_pat_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ghp_abcdefghijklmnopqrstuvwxyz0123456789 bearer abc.def.ghi DATABASE_URL=postgres://user:db-pass@db/prod https://user:web-pass@example.com/path https://example.com/reset/sensitive-reset-token-12345',
+      message: 'access_token=gho_direct client_secret: direct-secret sessionToken=direct-session token={"access":"abc"} secret: ["abc","def"] github_pat_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ghp_abcdefghijklmnopqrstuvwxyz0123456789 bearer abc.def.ghi DATABASE_URL=postgres://user:db-pass@db/prod https://user:web-pass@example.com/path https://example.com/reset/sensitive-reset-token-12345',
     });
-    expect(directEvent.payload.message.text).toBe('access_token=[redacted] client_secret: [redacted] sessionToken=[redacted] [redacted-token] [redacted-token] bearer [redacted] DATABASE_URL=[redacted-url] [redacted-url] https://example.com/[redacted]/[redacted]');
+    expect(directEvent.payload.message.text).toBe('access_token=[redacted] client_secret: [redacted] sessionToken=[redacted] token=[redacted] secret: [redacted] [redacted-token] [redacted-token] bearer [redacted] DATABASE_URL=[redacted-url] [redacted-url] https://example.com/[redacted]/[redacted]');
+    expect(directEvent.payload.message.text).not.toContain('"access":"abc"');
+    expect(directEvent.payload.message.text).not.toContain('"def"');
 
     const storage = fakeState();
     const app = createRainrailHttpApp({
@@ -654,6 +670,49 @@ describe('manual and chat input source contract', () => {
 
     expect(event.payload.attachments).toHaveLength(20);
     expect(event.payload.attachments?.at(-1)?.id).toBe('attachment-19');
+  });
+
+  it('uses nested HTTP message ids for deterministic deliveries', async () => {
+    const storage = fakeState();
+    const app = createRainrailHttpApp({
+      room: new RainrailBridgeRoom(storage, { publishToken: TEST_PUBLISH_TOKEN }),
+      publishToken: TEST_PUBLISH_TOKEN,
+      intakeAdapters: [
+        createManualInputIntakeAdapter({
+          channel: 'chat',
+          bearerToken: 'chat-intake-token',
+          receivedAt: () => new Date('2026-07-04T09:21:31.000Z'),
+        }),
+      ],
+    });
+
+    const response = await app.fetch(new Request('https://rainrail.local/intake/chat', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer chat-intake-token',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        conversationId: 'chat-session-nested-message',
+        message: {
+          id: 'nested-message-id',
+          text: 'retry-safe hello',
+        },
+      }),
+    }));
+
+    expect(response.status).toBe(202);
+    expect(storage.storedEvents()[0]).toMatchObject({
+      delivery: {
+        id: 'chat-chat-session-nested-message-nested-message-id',
+      },
+      payload: {
+        message: {
+          id: 'nested-message-id',
+          text: 'retry-safe hello',
+        },
+      },
+    });
   });
 
   it('lets workflow plugins accept chat input and start runtime work', async () => {

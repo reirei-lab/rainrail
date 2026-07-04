@@ -104,6 +104,14 @@ export async function createManualInputEvent({
   rawBody = message,
   contentType,
 }: CreateManualInputEventInput): Promise<ManualInputRainrailEvent> {
+  if (conversationId.trim().length === 0) {
+    throw new TypeError('conversationId is required');
+  }
+  const redactedMessage = redactUserText(message);
+  if (redactedMessage.length === 0) {
+    throw new TypeError('message is required');
+  }
+
   const normalizedConversationId = safeIdentifierSegment(conversationId, 'conversation');
   const normalizedMessageId = messageId === undefined || messageId.trim().length === 0 ? undefined : messageId;
   const normalizedDeliveryId = deliveryId === undefined
@@ -122,7 +130,7 @@ export async function createManualInputEvent({
     },
     message: {
       ...(normalizedMessageId === undefined ? {} : { id: safeIdentifierSegment(normalizedMessageId, 'message') }),
-      text: redactUserText(message),
+      text: redactedMessage,
     },
     ...normalizedOptionalActor(actor),
     ...normalizedOptionalAttachments(attachments),
@@ -251,7 +259,7 @@ function parseManualInputHttpBody(body: ManualInputHttpBody):
     input: {
       conversationId,
       message,
-      ...(typeof body.messageId === 'string' && body.messageId.trim().length > 0 ? { messageId: body.messageId } : {}),
+      ...normalizedOptionalMessageId(body),
       ...(typeof body.conversationUrl === 'string' ? { conversationUrl: body.conversationUrl } : {}),
       ...normalizedOptionalActor(normalizeActorInput(body.actor)),
       ...normalizedOptionalAttachments(normalizeAttachmentsInput(body.attachments)),
@@ -264,6 +272,16 @@ function messageTextFromBody(value: unknown): string | undefined {
   if (typeof value === 'string' && value.trim().length > 0) return value;
   if (isRecord(value) && typeof value.text === 'string' && value.text.trim().length > 0) return value.text;
   return undefined;
+}
+
+function normalizedOptionalMessageId(body: ManualInputHttpBody): { messageId?: string } {
+  if (typeof body.messageId === 'string' && body.messageId.trim().length > 0) {
+    return { messageId: body.messageId };
+  }
+  if (isRecord(body.message) && typeof body.message.id === 'string' && body.message.id.trim().length > 0) {
+    return { messageId: body.message.id };
+  }
+  return {};
 }
 
 function requiredString(value: unknown): string | undefined {
@@ -507,7 +525,7 @@ function safeUrl(value: string | undefined): string | undefined {
 }
 
 function redactUserText(value: string): string {
-  return value
+  return redactManualSecretStructuredValues(value)
     .replace(/\b[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s"'<>`/@]*@[^\s"'<>`,;)]+/giu, () => '[redacted-url]')
     .replace(/\bhttps:\/\/[^\s"'<>`,;)]+/giu, (url) => sanitizeManualTextUrl(url))
     .replace(/(^|[.?&{\s"'<>`,;\[(])(["']?)([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification|session)[A-Za-z0-9_.-]*)\2\s*=\s*(["'])(?:\\.|(?!\4)[^\\])*\4/giu, '$1$2$3$2=[redacted]')
@@ -519,6 +537,63 @@ function redactUserText(value: string): string {
     .replace(/\b(?:github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9_]{20,})\b/gu, '[redacted-token]')
     .trim()
     .slice(0, MAX_MANUAL_INPUT_TEXT_LENGTH);
+}
+
+function redactManualSecretStructuredValues(value: string): string {
+  const keyPattern = /(^|[{\s"'<>`,;\[(])(["']?)([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification|session)[A-Za-z0-9_.-]*)\2(\s*[:=]\s*)([\[{])/giu;
+  let redacted = '';
+  let cursor = 0;
+  for (const match of value.matchAll(keyPattern)) {
+    const matchText = match[0];
+    const matchIndex = match.index;
+    if (matchIndex < cursor) continue;
+    const valueStart = matchIndex + matchText.length - 1;
+    const valueEnd = findManualBalancedStructuredValueEnd(value, valueStart);
+    redacted += value.slice(cursor, matchIndex);
+    redacted += `${match[1] ?? ''}${match[2] ?? ''}${match[3] ?? ''}${match[2] ?? ''}${match[4] ?? ''}[redacted]`;
+    if (valueEnd === undefined) {
+      const newlineIndex = value.indexOf('\n', valueStart);
+      cursor = newlineIndex === -1 ? value.length : newlineIndex;
+    } else {
+      cursor = valueEnd + 1;
+    }
+  }
+  return redacted + value.slice(cursor);
+}
+
+function findManualBalancedStructuredValueEnd(value: string, valueStart: number): number | undefined {
+  const stack: string[] = [];
+  let quote: string | undefined;
+  let escaped = false;
+  for (let index = valueStart; index < value.length; index += 1) {
+    const char = value[index];
+    if (quote !== undefined) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === '\\') {
+        escaped = true;
+      } else if (char === quote) {
+        quote = undefined;
+      }
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+    } else if (char === '[') {
+      stack.push(']');
+    } else if (char === '{') {
+      stack.push('}');
+    } else if (char === ']') {
+      if (stack.at(-1) !== ']') return undefined;
+      stack.pop();
+      if (stack.length === 0) return index;
+    } else if (char === '}') {
+      if (stack.at(-1) !== '}') return undefined;
+      stack.pop();
+      if (stack.length === 0) return index;
+    }
+  }
+  return undefined;
 }
 
 function sanitizeManualTextUrl(value: string): string {

@@ -105,17 +105,21 @@ digest だけを保持する。manual/chat の raw payload reference は既存 p
 末尾の一意要素と短い hash を残し、Bridge room の 128 文字 id 制限を超える場合は top-level
 event id も短い明示 id にする。任意 host/path は Core storage に残さない。
 空文字または空白だけの `messageId` は未指定として扱い、UUID fallback で delivery id の
-一意性を保つ。`attachments` は先頭 20 件だけを正規化する。token、secret、password、
-API key、Bearer credential 形式は `key=value`、JSON/YAML 風の `key: value`、
-quoted JSON field のいずれも source adapter 側で短く redaction する。redaction は
-credential key の大小文字差、standalone GitHub access token 形式、URL userinfo の
-credential、URL path 内の credential らしい segment も対象にする。`conversationUrl`、
-attachment URL、`replyTarget.url` も query / fragment / userinfo を落とし、credential らしい
-path segment を redaction したうえで 8KB 以内に縮約する。
+一意性を保つ。空文字または空白だけの `conversationId` / `message` は、HTTP intake と同じく
+`createManualInputEvent` でも event 作成前に拒否する。`attachments` は先頭 20 件だけを
+正規化する。token、secret、password、API key、Bearer credential 形式は `key=value`、
+JSON/YAML 風の `key: value`、quoted JSON field のいずれも source adapter 側で短く
+redaction する。redaction は credential key の大小文字差、structured object / array 値、
+standalone GitHub access token 形式、URL userinfo の credential、URL path 内の credential
+らしい segment も対象にする。`conversationUrl`、attachment URL、`replyTarget.url` も
+query / fragment / userinfo を落とし、credential らしい path segment を redaction したうえで
+8KB 以内に縮約する。
 
 HTTP intake の既定 route は `/intake/manual` と `/intake/chat` で、adapter は JSON body から
 `conversationId`、`message`、任意の `messageId`、`actor`、`attachments`、`replyTarget`
-を読み、正規化済み envelope を `RainrailIntakeAdapterContext.publish()` へ渡す。
+を読み、正規化済み envelope を `RainrailIntakeAdapterContext.publish()` へ渡す。`message` が
+object の場合は `message.text` を本文、`message.id` を top-level `messageId` がない場合の
+message id として扱い、retry 時に同じ delivery id を再生成できるようにする。
 `createManualInputIntakeAdapter` は `ManualInputIntakeAdapterOptions.bearerToken` を必須とし、
 body を読む前に `Authorization: Bearer <token>` を検証する。manual/chat input は
 `runtime:start` へ接続され得るため、Core の generic intake route ではなく adapter 境界で
