@@ -30,7 +30,7 @@ const OPERATOR_STORAGE_KEY = 'rainrail-dashboard-operator';
 const STALE_AFTER_MS = 45000;
 const sourceBundleLabels = ['EEP Bridge', 'GitHub webhook', 'Cloudflare tail', 'manual/chat'];
 const queueLabels = ['upcoming issue', 'blocked reason', 'in-progress count', 'claim lock', 'Project status'];
-const settingsLabels = ['max concurrency', 'auto-start', 'retry policy', 'replay retention', 'dashboard auth'];
+const settingsLabels = ['max concurrency', 'auto-start', 'retry policy', 'operational snapshot limit', 'dashboard auth'];
 
 const root = document.querySelector<HTMLElement>('[data-dashboard-app]');
 const sessionStore = createSafeStorage(() => window.sessionStorage);
@@ -603,8 +603,7 @@ function hasOperationalRecords(overview: DashboardOverview): boolean {
 function hasDashboardRecords(data: DashboardData): boolean {
   return hasOperationalRecords(data.overview)
     || data.sources.length > 0
-    || data.queue.length > 0
-    || data.settings.length > 0;
+    || data.queue.length > 0;
 }
 
 function formatIssue(row: DashboardRow): string {

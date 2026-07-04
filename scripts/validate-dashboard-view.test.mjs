@@ -69,6 +69,7 @@ describe('dashboard operational views', () => {
   it('does not mark the whole dashboard empty just because Event Inbox filters hide rows', () => {
     expect(dashboardApp).toContain('hasDashboardRecords(latestData)');
     expect(dashboardApp).not.toContain("setState(hasRows(latestData) ? 'ready' : 'empty'");
+    expect(dashboardApp).not.toContain('|| data.settings.length > 0');
   });
 
   it('keeps the dashboard dense and responsive', () => {

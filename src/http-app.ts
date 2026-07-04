@@ -518,8 +518,14 @@ function dashboardV1SourcesResponse(url: URL, options: RainrailHttpAppOptions): 
   if (!collection.ok) return collection.response;
 
   const latestBySource = latestEventBySourceName(store.listEvents());
-  const rows = (options.intakeAdapters ?? [])
-    .map((adapter) => intakeAdapterToSourceRow(adapter, latestBySource.get(adapter.name)))
+  const adapters = options.intakeAdapters ?? [];
+  const duplicateSourceNames = duplicateValues(adapters.map((adapter) => adapter.name));
+  const rows = adapters
+    .map((adapter, index) => intakeAdapterToSourceRow(
+      adapter,
+      latestBySource.get(adapter.name),
+      duplicateSourceNames.has(adapter.name) ? `${adapter.name}:${index}` : adapter.name,
+    ))
     .filter((row) => matchesOptionalFilter(row.sourceType, url.searchParams.get('filter[source]')));
   const page = pageRows(rows, collection.limit, collection.cursor, (row) => row.name);
   if (!page.ok) return page.response;
@@ -569,7 +575,7 @@ function dashboardV1SettingsResponse(url: URL, options: RainrailHttpAppOptions):
     settingRow('max-concurrency', 'Max concurrency', 'not configured'),
     settingRow('auto-start', 'Auto-start', 'not configured'),
     settingRow('retry-policy', 'Retry policy', retryCount === 1 ? '1 retry pending' : `${retryCount} retries pending`),
-    settingRow('replay-retention', 'Replay retention', `${store.eventLimit()} events`),
+    settingRow('operational-snapshot-limit', 'Operational snapshot limit', `${store.eventLimit()} events`),
     settingRow('dashboard-auth', 'Dashboard auth', options.eventsBearerToken === undefined ? 'bearer token not configured' : 'bearer token configured'),
     settingRow('runtime', 'Runtime', options.runtime ?? 'fetch'),
   ];
@@ -680,6 +686,19 @@ function matchesOptionalFilter(value: string | undefined, filter: string | null)
   return filter === null || value === filter;
 }
 
+function duplicateValues(values: readonly string[]): Set<string> {
+  const seen = new Set<string>();
+  const duplicates = new Set<string>();
+  for (const value of values) {
+    if (seen.has(value)) {
+      duplicates.add(value);
+    } else {
+      seen.add(value);
+    }
+  }
+  return duplicates;
+}
+
 interface EventCompactContext {
   activityEvents?: StoredActivityEvent[];
   handlerRetries?: StoredEventHandlerRetry[];
@@ -782,12 +801,12 @@ function latestEventBySourceName(events: StoredOperationalEvent[]): Map<string, 
   return latest;
 }
 
-function intakeAdapterToSourceRow(adapter: RainrailIntakeAdapter, latestEvent: StoredOperationalEvent | undefined) {
+function intakeAdapterToSourceRow(adapter: RainrailIntakeAdapter, latestEvent: StoredOperationalEvent | undefined, id = adapter.name) {
   const route = adapter.routes?.[0];
   const sourceType = adapter.source?.type ?? latestEvent?.source.type ?? 'system';
   const authStatus = adapter.source?.authStatus ?? (route === undefined ? 'not_required' : 'configured');
   return {
-    id: adapter.name,
+    id,
     type: 'source',
     status: 'configured',
     sourceType,
@@ -812,6 +831,7 @@ function formatSourceAuthStatus(status: NonNullable<RainrailIntakeAdapter['sourc
 
 function agentTaskToQueueRow(task: StoredAgentTask, staleWarning: StoredStaleProjectClaimWarning | undefined) {
   const claim = recordValue(task.claim);
+  const activeClaim = task.projectClaim?.status !== 'released' ? claim : undefined;
   const staleReason = staleWarning === undefined ? undefined : `stale project claim: ${staleWarning.status}`;
   return {
     id: task.id,
@@ -821,10 +841,10 @@ function agentTaskToQueueRow(task: StoredAgentTask, staleWarning: StoredStalePro
     updatedAt: task.updatedAt,
     ...(task.issue === undefined ? {} : { issue: task.issue }),
     ...(task.branchName === undefined ? {} : { branchName: task.branchName }),
-    projectStatus: stringField(claim, 'originalStatus') ?? 'unknown',
-    ...(claim === undefined ? {} : {
+    projectStatus: stringField(activeClaim, 'originalStatus') ?? 'unknown',
+    ...(activeClaim === undefined ? {} : {
       claimLock: {
-        ...(stringField(claim, 'projectItemId') === undefined ? {} : { projectItemId: stringField(claim, 'projectItemId') }),
+        ...(stringField(activeClaim, 'projectItemId') === undefined ? {} : { projectItemId: stringField(activeClaim, 'projectItemId') }),
         ...(task.agentSessionId === undefined ? {} : { heldBy: task.agentSessionId }),
       },
     }),
@@ -871,7 +891,7 @@ function queueSummary(
     blockedCount,
     staleClaimCount: staleWarnings.length,
     inProgressCount: tasks.filter((task) => queueStatusFromTaskStatus(task.status) === 'in-progress').length,
-    claimedCount: tasks.filter((task) => task.claim !== undefined).length,
+    claimedCount: tasks.filter((task) => task.claim !== undefined && task.projectClaim?.status !== 'released').length,
   };
 }
 

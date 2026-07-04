@@ -297,7 +297,7 @@ describe('Rainrail dashboard API', () => {
         { id: 'max-concurrency', type: 'setting', status: 'read-only', value: 'not configured' },
         { id: 'auto-start', type: 'setting', status: 'read-only', value: 'not configured' },
         { id: 'retry-policy', type: 'setting', status: 'read-only', value: '1 retry pending' },
-        { id: 'replay-retention', type: 'setting', status: 'read-only', value: '10 events' },
+        { id: 'operational-snapshot-limit', label: 'Operational snapshot limit', type: 'setting', status: 'read-only', value: '10 events' },
         { id: 'dashboard-auth', type: 'setting', status: 'read-only', value: 'bearer token configured' },
         { id: 'runtime', type: 'setting', status: 'read-only', value: 'node' },
       ],
@@ -348,6 +348,45 @@ describe('Rainrail dashboard API', () => {
         auth: { status: 'missing' },
       }],
       page: { limit: 50, nextCursor: null },
+    });
+
+    operationalStore.close();
+  });
+
+  it('uses unique source row ids so duplicate adapter names can paginate', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:12:00.000Z'),
+    });
+    const app = createTestApp({
+      eventsBearerToken: 'events-token',
+      operationalStore,
+      intakeAdapters: [
+        { name: 'shared-source', source: { type: 'manual', authStatus: 'not_required' } },
+        { name: 'shared-source', source: { type: 'manual', authStatus: 'not_required' } },
+      ],
+    });
+
+    const first = await app.fetch(new Request('https://rainrail.local/api/v1/sources?limit=1', {
+      headers: { authorization: 'Bearer events-token' },
+    }));
+    expect(first.status).toBe(200);
+    const firstBody = await first.json() as { data: Array<{ id: string; name: string }>; page: { nextCursor: string | null } };
+    expect(firstBody).toMatchObject({
+      data: [{ id: 'shared-source:0', name: 'shared-source' }],
+    });
+    expect(firstBody.page.nextCursor).toEqual(expect.any(String));
+    const nextCursor = firstBody.page.nextCursor;
+    expect(nextCursor).not.toBeNull();
+
+    const second = await app.fetch(new Request(`https://rainrail.local/api/v1/sources?limit=1&cursor=${encodeURIComponent(nextCursor ?? '')}`, {
+      headers: { authorization: 'Bearer events-token' },
+    }));
+    expect(second.status).toBe(200);
+    await expect(second.json()).resolves.toMatchObject({
+      data: [{ id: 'shared-source:1', name: 'shared-source' }],
+      page: { limit: 1, nextCursor: null },
     });
 
     operationalStore.close();
@@ -414,6 +453,55 @@ describe('Rainrail dashboard API', () => {
       },
       page: { limit: 50, nextCursor: null },
     });
+
+    operationalStore.close();
+  });
+
+  it('does not report released project claims as active queue locks', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:12:00.000Z'),
+    });
+    operationalStore.recordAgentTask({
+      id: 'agent_task_released',
+      title: 'Released stale claim',
+      agentSessionId: 'agent:main:rainrail-released',
+      branchName: 'agent/released-task',
+      status: 'failed',
+      issue: { repository: 'reirei-lab/rainrail', number: 117 },
+      claim: { projectItemId: 'PVTI_RELEASED', originalStatus: 'In Progress' },
+      projectClaim: {
+        status: 'released',
+        updatedAt: '2026-07-02T00:10:00.000Z',
+        reason: 'stale project claim: failed',
+      },
+    });
+    const app = createTestApp({
+      eventsBearerToken: 'events-token',
+      operationalStore,
+    });
+
+    const queue = await app.fetch(new Request('https://rainrail.local/api/v1/queue?filter[status]=blocked', {
+      headers: { authorization: 'Bearer events-token' },
+    }));
+    expect(queue.status).toBe(200);
+    const body = await queue.json() as { data: Array<{ claimLock?: unknown }> };
+    expect(body).toMatchObject({
+      data: [{
+        id: 'agent_task_released',
+        status: 'blocked',
+        projectStatus: 'unknown',
+        releaseStatus: 'released',
+      }],
+      summary: {
+        blockedCount: 1,
+        claimedCount: 0,
+      },
+    });
+    const releasedRow = body.data[0];
+    expect(releasedRow).toBeDefined();
+    expect(releasedRow?.claimLock).toBeUndefined();
 
     operationalStore.close();
   });
