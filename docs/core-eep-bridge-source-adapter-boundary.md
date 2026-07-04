@@ -54,8 +54,8 @@ bundle は複数 provider の adapter を同梱してよいが、Core API へ渡
 - `X-Hub-Signature-256` など provider 固有の signature validation、delivery id 取得、
   retry header の扱いを行う。
 - provider payload を Source adapter に渡し、provider-specific normalization を実行する。
-- `RainrailBridgeRoom` の `/publish` へ envelope を渡すか、`createRainrailHttpApp` の
-  既存 provider helper route / `tail()` helper 経由で publish する。
+- `RainrailBridgeRoom` の `/publish` へ envelope を渡すか、`createRainrailHttpApp` に
+  `RainrailIntakeAdapter` を登録して route / `tail()` handler 経由で publish する。
 - publish 成功後に必要な operational store 記録を行う場合も、room が返した検証済み envelope を使う。
 
 EEP Bridge bundle は Source adapter と transport/core adapter を composition する単位であり、
@@ -90,10 +90,18 @@ Transport は HTTP/Fetch/Node/Worker の入出力を Core API へ接続する薄
 - `GET /events`、`GET /healthz`、dashboard API の request/response 形式を扱う。
 - `POST /publish` は `RainrailBridgeRoom.fetch()` の room-internal endpoint として扱う。
   The public `createRainrailHttpApp` surface does not expose a generic `POST /publish` route.
-  public app から provider event を受ける場合は `/webhooks/github` や `tail()` のような
-  既存 helper を通すか、room の `/publish` を明示的に呼ぶ transport を別途 composition する。
+  public app から provider event を受ける場合は `/webhooks/github` や Worker `tail()` を
+  provider bundle 側で `RainrailIntakeAdapter` として登録するか、room の `/publish` を
+  明示的に呼ぶ transport を別途 composition する。
 - HTTP/1.1、Fetch `ReadableStream`、Worker binding、Node `ServerResponse` の差を吸収する。
-- provider ingress を持つ場合は、provider 固有処理を EEP Bridge bundle または Source adapter に委譲してから Core に渡す。
+- provider ingress を持つ場合は、provider 固有処理を EEP Bridge bundle または Source adapter に委譲し、
+  `IntakeAdapter` として登録してから Core に渡す。
+
+`createRainrailHttpApp` は provider 固有 route 名を知らない。外部入力は
+`RainrailIntakeAdapter` の `routes` または `tail` handler として登録し、handler は
+正規化済み `RainrailEventEnvelope` を adapter context の `publish()` に渡す。Core route
+（`/healthz`、`/events`、dashboard API）との衝突、または adapter 同士の同一 method/path
+衝突は app 作成時に拒否する。未登録 route は `404 not found` とする。
 
 Transport は Core の外側から Core API を呼ぶが、provider semantics を Core に追加する理由にはならない。
 GitHub webhook と Cloudflare tail は、Core から見るとどちらも正規化済み envelope の publish 元である。

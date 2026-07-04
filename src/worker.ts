@@ -1,6 +1,7 @@
 import { RainrailBridgeRoom as CoreRainrailBridgeRoom, type RainrailBridgeRoomState } from './bridge-room.js';
-import type { CloudflareTailEvent } from './cloudflare-tail.js';
-import { createRainrailHttpApp } from './http-app.js';
+import { createCloudflareTailIntakeAdapter, type CloudflareTailEvent } from './cloudflare-tail.js';
+import { createGitHubWebhookIntakeAdapter } from './github-webhook.js';
+import { createRainrailHttpApp, stableIntakeFallbackDeliveryId } from './http-app.js';
 
 export interface RainrailWorkerEnv {
   BRIDGE_ROOM: {
@@ -52,10 +53,15 @@ export default {
 function workerApp(env: RainrailWorkerEnv) {
   return createRainrailHttpApp({
     room: bridgeRoom(env),
-    githubWebhookSecret: env.GITHUB_WEBHOOK_SECRET,
     publishToken: env.RAINRAIL_PUBLISH_TOKEN,
     ...(env.SSE_BEARER_TOKEN === undefined ? {} : { eventsBearerToken: env.SSE_BEARER_TOKEN }),
     runtime: 'cloudflare-workers',
+    intakeAdapters: [
+      createGitHubWebhookIntakeAdapter({ secret: env.GITHUB_WEBHOOK_SECRET }),
+      createCloudflareTailIntakeAdapter({
+        fallbackDeliveryId: stableIntakeFallbackDeliveryId,
+      }),
+    ],
   });
 }
 
