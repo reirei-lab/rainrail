@@ -9,6 +9,7 @@ const githubWebhookAgents = readFileSync(new URL('../src/github-webhook/AGENTS.m
 const prLifecycleAgents = readFileSync(new URL('../src/AGENTS.md', import.meta.url), 'utf8');
 const agentRuntimeAgents = readFileSync(new URL('../src/agent-runtime/AGENTS.md', import.meta.url), 'utf8');
 const githubProviderAgents = readFileSync(new URL('../src/providers/github/AGENTS.md', import.meta.url), 'utf8');
+const eventDeliveryAgents = readFileSync(new URL('../src/event-delivery/AGENTS.md', import.meta.url), 'utf8');
 /** @type {{contracts: Array<{id: string, sources: string[]}>}} */
 const contractsManifest = JSON.parse(
   readFileSync(new URL('../docs/contracts.manifest.json', import.meta.url), 'utf8'),
@@ -189,5 +190,40 @@ describe('GitHub provider scoped agent rules', () => {
     expect(githubProviderAgents).toContain('pageInfo.hasNextPage');
     expect(githubProviderAgents).toContain('reuse');
     expect(githubProviderAgents).toContain('releaseProjectIssue');
+  });
+});
+
+describe('event delivery scoped agent rules', () => {
+  it('documents storage, publish, replay, and SSE framing invariants', () => {
+    expect(eventDeliveryAgents).toContain('event delivery');
+    expect(eventDeliveryAgents).toContain('storage');
+    expect(eventDeliveryAgents).toContain('publish');
+    expect(eventDeliveryAgents).toContain('replay');
+    expect(eventDeliveryAgents).toContain('SSE framing');
+    expect(eventDeliveryAgents).toContain('Last-Event-ID');
+    expect(eventDeliveryAgents).toContain('replayLimit=0');
+  });
+
+  it('documents lifecycle edge cases for aborts, cleanup, duplicates, and serialization failures', () => {
+    expect(eventDeliveryAgents).toContain('abort');
+    expect(eventDeliveryAgents).toContain('cleanup');
+    expect(eventDeliveryAgents).toContain('duplicate id');
+    expect(eventDeliveryAgents).toContain('serialization failure');
+    expect(eventDeliveryAgents).toContain('single writer');
+    expect(eventDeliveryAgents).toContain('persist before broadcast');
+  });
+
+  it('tracks event delivery implementation files under the scoped directory', () => {
+    const eventDelivery = contractById('event-delivery');
+    const boundaryContract = contractById('core-eep-bridge-source-adapter-boundary');
+
+    expect(eventDelivery.sources).toContain('src/event-delivery/bridge-room.ts');
+    expect(eventDelivery.sources).toContain('src/event-delivery/event-bus.ts');
+    expect(eventDelivery.sources).toContain('src/event-delivery/sse.ts');
+    expect(eventDelivery.sources).not.toContain('src/bridge-room.ts');
+    expect(eventDelivery.sources).not.toContain('src/event-bus.ts');
+    expect(eventDelivery.sources).not.toContain('src/sse.ts');
+    expect(boundaryContract.sources).toContain('src/event-delivery/bridge-room.ts');
+    expect(boundaryContract.sources).toContain('src/event-delivery/event-bus.ts');
   });
 });
