@@ -21,6 +21,9 @@ export interface DashboardOverview {
       events: string;
       workflowRuns: string;
       agentTasks: string;
+      sources: string;
+      queue: string;
+      settings: string;
     };
   };
 }
@@ -57,6 +60,41 @@ export interface DashboardAgentTask {
   links?: { self?: string };
 }
 
+export interface DashboardSource {
+  id: string;
+  type: 'source';
+  status: string;
+  sourceType: string;
+  name: string;
+  endpoint?: string;
+  transport?: string;
+  auth?: { status?: string };
+  lastDelivery?: { id?: string; receivedAt?: string; subject?: { type?: string; id?: string; url?: string } };
+  links?: { self?: string };
+}
+
+export interface DashboardQueueItem {
+  id: string;
+  type: 'queue-item';
+  status: string;
+  title: string;
+  branchName?: string;
+  projectStatus?: string;
+  blockedReason?: string;
+  issue?: { repository?: string; number?: number };
+  claimLock?: { projectItemId?: string; heldBy?: string };
+  links?: { self?: string };
+}
+
+export interface DashboardSetting {
+  id: string;
+  type: 'setting';
+  status: string;
+  label: string;
+  value: string;
+  links?: { self?: string };
+}
+
 export interface DashboardDetail<TRecord = unknown> {
   data: {
     id: string;
@@ -90,6 +128,18 @@ export class RainrailDashboardApiClient {
 
   agentTasks(): Promise<DashboardCollection<DashboardAgentTask>> {
     return this.get('/api/v1/agent-tasks?limit=25');
+  }
+
+  sources(): Promise<DashboardCollection<DashboardSource>> {
+    return this.get('/api/v1/sources?limit=25');
+  }
+
+  queue(): Promise<DashboardCollection<DashboardQueueItem>> {
+    return this.get('/api/v1/queue?limit=25');
+  }
+
+  settings(): Promise<DashboardCollection<DashboardSetting>> {
+    return this.get('/api/v1/settings?limit=25');
   }
 
   eventDetail(id: string): Promise<DashboardDetail> {

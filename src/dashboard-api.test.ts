@@ -185,6 +185,108 @@ describe('Rainrail dashboard API', () => {
     operationalStore.close();
   });
 
+  it('serves source, queue, and settings dashboard views without exposing secrets', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:12:00.000Z'),
+    });
+    operationalStore.recordEvent(createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook', repository: 'reirei-lab/rainrail' },
+      name: 'github.issue',
+      delivery: { id: 'delivery-source', receivedAt: '2026-07-02T00:02:00.000Z' },
+      occurredAt: '2026-07-02T00:02:00.000Z',
+      subject: { type: 'issue', id: '115', url: 'https://github.com/reirei-lab/rainrail/issues/115' },
+      payload: { action: 'opened', webhookSecret: 'should-not-appear' },
+      rawPayload: { kind: 'external-reference', reference: 'github://deliveries/delivery-source' },
+    }));
+    operationalStore.recordAgentTask({
+      id: 'agent_task_running',
+      title: 'Sources / Queue / Settings view を追加する',
+      agentSessionId: 'agent:main:rainrail-115',
+      branchName: 'agent/reirei-lab-rainrail-115-sources-queue-settings-view',
+      status: 'running',
+      issue: { repository: 'reirei-lab/rainrail', number: 115 },
+      claim: { projectItemId: 'PVTI_115', originalStatus: 'Todo' },
+      pid: 1150,
+    });
+    operationalStore.recordEventHandlerRetry({
+      eventId: 'github-webhook:delivery-source:github.issue',
+      handlerName: 'queue-dispatch',
+      nextRetryAt: '2026-07-02T00:20:00.000Z',
+      lastError: 'Project item is blocked',
+    });
+    const app = createTestApp({
+      eventsBearerToken: 'events-token',
+      operationalStore,
+      runtime: 'node',
+      intakeAdapters: [
+        createGitHubWebhookIntakeAdapter({ secret: 'should-not-appear', sourceName: 'github-webhook', endpoint: '/webhooks/github' }),
+      ],
+    });
+
+    const sources = await app.fetch(new Request('https://rainrail.local/api/v1/sources', {
+      headers: { authorization: 'Bearer events-token' },
+    }));
+    expect(sources.status).toBe(200);
+    const sourcesBody = await sources.json();
+    expect(sourcesBody).toMatchObject({
+      data: [{
+        id: 'github-webhook',
+        type: 'source',
+        status: 'configured',
+        sourceType: 'github',
+        name: 'github-webhook',
+        endpoint: '/webhooks/github',
+        auth: { status: 'configured' },
+        lastDelivery: { id: 'delivery-source', receivedAt: '2026-07-02T00:02:00.000Z' },
+      }],
+      page: { limit: 50, nextCursor: null },
+    });
+    expect(JSON.stringify(sourcesBody)).not.toContain('should-not-appear');
+
+    const queue = await app.fetch(new Request('https://rainrail.local/api/v1/queue', {
+      headers: { authorization: 'Bearer events-token' },
+    }));
+    expect(queue.status).toBe(200);
+    await expect(queue.json()).resolves.toMatchObject({
+      data: [{
+        id: 'agent_task_running',
+        type: 'queue-item',
+        status: 'in-progress',
+        title: 'Sources / Queue / Settings view を追加する',
+        projectStatus: 'Todo',
+        claimLock: { projectItemId: 'PVTI_115', heldBy: 'agent:main:rainrail-115' },
+      }],
+      summary: {
+        upcomingIssues: 0,
+        blockedReasons: ['Project item is blocked'],
+        inProgressCount: 1,
+        claimedCount: 1,
+      },
+      page: { limit: 50, nextCursor: null },
+    });
+
+    const settings = await app.fetch(new Request('https://rainrail.local/api/v1/settings', {
+      headers: { authorization: 'Bearer events-token' },
+    }));
+    expect(settings.status).toBe(200);
+    await expect(settings.json()).resolves.toMatchObject({
+      data: [
+        { id: 'max-concurrency', type: 'setting', status: 'read-only', value: 'not configured' },
+        { id: 'auto-start', type: 'setting', status: 'read-only', value: 'not configured' },
+        { id: 'retry-policy', type: 'setting', status: 'read-only', value: '1 retry pending' },
+        { id: 'replay-retention', type: 'setting', status: 'read-only', value: '10 events' },
+        { id: 'dashboard-auth', type: 'setting', status: 'read-only', value: 'bearer token configured' },
+        { id: 'runtime', type: 'setting', status: 'read-only', value: 'node' },
+      ],
+      updatePolicy: { requiredScope: 'admin', audit: 'required' },
+      page: { limit: 50, nextCursor: null },
+    });
+
+    operationalStore.close();
+  });
+
   it('serves provider-neutral operational state through the HTTP app', async () => {
     const operationalStore = new RainrailOperationalStore({
       databasePath: ':memory:',
@@ -449,13 +551,16 @@ describe('Rainrail dashboard API', () => {
 function createTestApp(options: {
   eventsBearerToken?: string;
   operationalStore?: RainrailOperationalStore;
+  runtime?: string;
+  intakeAdapters?: Parameters<typeof createRainrailHttpApp>[0]['intakeAdapters'];
 } = {}) {
   return createRainrailHttpApp({
     room: new RainrailBridgeRoom(fakeState(), { publishToken: 'publish-token' }),
     publishToken: 'publish-token',
     ...(options.eventsBearerToken === undefined ? {} : { eventsBearerToken: options.eventsBearerToken }),
     ...(options.operationalStore === undefined ? {} : { operationalStore: options.operationalStore }),
-    intakeAdapters: [
+    ...(options.runtime === undefined ? {} : { runtime: options.runtime }),
+    intakeAdapters: options.intakeAdapters ?? [
       createGitHubWebhookIntakeAdapter({ secret: 'secret' }),
     ],
   });

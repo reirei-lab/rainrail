@@ -183,6 +183,11 @@ export class RainrailOperationalStore {
     return event === undefined ? undefined : jsonClone(event);
   }
 
+  eventLimit(): number {
+    this.#assertOpen();
+    return this.#eventLimit;
+  }
+
   listEvents(options: ListOperationalStoreEventsOptions = {}): StoredOperationalEvent[] {
     this.#assertOpen();
     return limitRows(Object.values(this.#data.events)

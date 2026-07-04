@@ -21,6 +21,9 @@ const apiBaseUrl = import.meta.env.PUBLIC_RAINRAIL_OPERATIONAL_API_URL ?? '';
         <button type="button" data-dashboard-tab="events" aria-pressed="true">Events</button>
         <button type="button" data-dashboard-tab="workflow-runs" aria-pressed="false">Workflow runs</button>
         <button type="button" data-dashboard-tab="agent-tasks" aria-pressed="false">Agent tasks</button>
+        <button type="button" data-dashboard-tab="sources" aria-pressed="false">Sources</button>
+        <button type="button" data-dashboard-tab="queue" aria-pressed="false">Queue</button>
+        <button type="button" data-dashboard-tab="settings" aria-pressed="false">Settings</button>
       </nav>
       <label class="dashboard-permission">
         <input type="checkbox" data-permission-toggle />
@@ -61,6 +64,8 @@ const apiBaseUrl = import.meta.env.PUBLIC_RAINRAIL_OPERATIONAL_API_URL ?? '';
         <div class="dashboard-stat"><span>Workflow runs</span><strong>0</strong></div>
         <div class="dashboard-stat"><span>Agent tasks</span><strong>0</strong></div>
         <div class="dashboard-stat"><span>Retries</span><strong>0</strong></div>
+        <div class="dashboard-stat"><span>Sources</span><strong>0</strong></div>
+        <div class="dashboard-stat"><span>Queue</span><strong>0</strong></div>
       </section>
 
       <section class="dashboard-two-pane" aria-label="Operational records">

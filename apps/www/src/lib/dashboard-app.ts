@@ -4,22 +4,32 @@ import {
   type DashboardAgentTask,
   type DashboardEvent,
   type DashboardOverview,
+  type DashboardQueueItem,
+  type DashboardSetting,
+  type DashboardSource,
   type DashboardWorkflowRun,
 } from './dashboard-client';
 
-type DashboardTab = 'events' | 'workflow-runs' | 'agent-tasks';
+type DashboardTab = 'events' | 'workflow-runs' | 'agent-tasks' | 'sources' | 'queue' | 'settings';
+type DashboardRow = DashboardEvent | DashboardWorkflowRun | DashboardAgentTask | DashboardSource | DashboardQueueItem | DashboardSetting;
 
 interface DashboardData {
   overview: DashboardOverview;
   events: DashboardEvent[];
   workflowRuns: DashboardWorkflowRun[];
   agentTasks: DashboardAgentTask[];
+  sources: DashboardSource[];
+  queue: DashboardQueueItem[];
+  settings: DashboardSetting[];
 }
 
 const TOKEN_STORAGE_KEY = 'rainrail-dashboard-token';
 const API_BASE_URL_STORAGE_KEY = 'rainrail-dashboard-api-base-url';
 const OPERATOR_STORAGE_KEY = 'rainrail-dashboard-operator';
 const STALE_AFTER_MS = 45000;
+const sourceBundleLabels = ['EEP Bridge', 'GitHub webhook', 'Cloudflare tail', 'manual/chat'];
+const queueLabels = ['upcoming issue', 'blocked reason', 'in-progress count', 'claim lock', 'Project status'];
+const settingsLabels = ['max concurrency', 'auto-start', 'retry policy', 'replay retention', 'dashboard auth'];
 
 const root = document.querySelector<HTMLElement>('[data-dashboard-app]');
 const sessionStore = createSafeStorage(() => window.sessionStorage);
@@ -114,7 +124,7 @@ if (root !== null) {
   for (const button of tabButtons) {
     button.addEventListener('click', () => {
       const tab = button.dataset.dashboardTab;
-      if (tab === 'events' || tab === 'workflow-runs' || tab === 'agent-tasks') {
+      if (isDashboardTab(tab)) {
         selectedTab = tab;
         renderCurrentList();
       }
@@ -140,6 +150,9 @@ if (root !== null) {
         events: (await activeClient.events()).data,
         workflowRuns: (await activeClient.workflowRuns()).data,
         agentTasks: (await activeClient.agentTasks()).data,
+        sources: (await activeClient.sources()).data,
+        queue: (await activeClient.queue()).data,
+        settings: (await activeClient.settings()).data,
       };
       if (!isCurrentRefresh(activeClient, activeRefreshId)) return;
 
@@ -179,7 +192,7 @@ if (root !== null) {
     renderDetail(rows[0]!);
   }
 
-  function rowButton(row: DashboardEvent | DashboardWorkflowRun | DashboardAgentTask): HTMLButtonElement {
+  function rowButton(row: DashboardRow): HTMLButtonElement {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'dashboard-row';
@@ -192,7 +205,7 @@ if (root !== null) {
     return button;
   }
 
-  function renderDetail(row: DashboardEvent | DashboardWorkflowRun | DashboardAgentTask): void {
+  function renderDetail(row: DashboardRow): void {
     if (detail === null) return;
 
     detail.innerHTML = `
@@ -206,6 +219,7 @@ if (root !== null) {
         <div><dt>Branch</dt><dd>${escapeHtml('branchName' in row ? row.branchName ?? 'n/a' : 'n/a')}</dd></div>
         <div><dt>Issue</dt><dd>${escapeHtml(formatIssue(row))}</dd></div>
       </dl>
+      ${renderMetadata(row)}
     `;
   }
 
@@ -218,6 +232,8 @@ if (root !== null) {
       statItem('Workflow runs', counts.activityEvents ?? 0),
       statItem('Agent tasks', counts.agentTasks ?? 0),
       statItem('Retries', counts.eventHandlerRetries ?? 0),
+      statItem('Sources', latestData?.sources.length ?? 0),
+      statItem('Queue', latestData?.queue.length ?? 0),
     ]);
   }
 
@@ -229,6 +245,8 @@ if (root !== null) {
       statItem('Workflow runs', 0),
       statItem('Agent tasks', 0),
       statItem('Retries', 0),
+      statItem('Sources', 0),
+      statItem('Queue', 0),
     );
   }
 
@@ -246,9 +264,12 @@ if (root !== null) {
     return item;
   }
 
-  function selectedRows(data: DashboardData): Array<DashboardEvent | DashboardWorkflowRun | DashboardAgentTask> {
+  function selectedRows(data: DashboardData): DashboardRow[] {
     if (selectedTab === 'workflow-runs') return data.workflowRuns;
     if (selectedTab === 'agent-tasks') return data.agentTasks;
+    if (selectedTab === 'sources') return data.sources;
+    if (selectedTab === 'queue') return data.queue;
+    if (selectedTab === 'settings') return data.settings;
     return data.events;
   }
 
@@ -401,10 +422,24 @@ function isDashboardAuthError(error: unknown): boolean {
 }
 
 function hasRows(data: DashboardData): boolean {
-  return data.events.length + data.workflowRuns.length + data.agentTasks.length > 0;
+  return data.events.length
+    + data.workflowRuns.length
+    + data.agentTasks.length
+    + data.sources.length
+    + data.queue.length
+    + data.settings.length > 0;
 }
 
-function formatIssue(row: DashboardEvent | DashboardWorkflowRun | DashboardAgentTask): string {
+function isDashboardTab(value: string | undefined): value is DashboardTab {
+  return value === 'events'
+    || value === 'workflow-runs'
+    || value === 'agent-tasks'
+    || value === 'sources'
+    || value === 'queue'
+    || value === 'settings';
+}
+
+function formatIssue(row: DashboardRow): string {
   if ('issue' in row && row.issue?.repository !== undefined && row.issue.number !== undefined) {
     return `${row.issue.repository}#${row.issue.number}`;
   }
@@ -417,10 +452,59 @@ function formatIssue(row: DashboardEvent | DashboardWorkflowRun | DashboardAgent
   return 'n/a';
 }
 
-function rowTitle(row: DashboardEvent | DashboardWorkflowRun | DashboardAgentTask): string {
+function rowTitle(row: DashboardRow): string {
   if ('summary' in row && typeof row.summary === 'string') return row.summary;
   if ('title' in row && typeof row.title === 'string') return row.title;
+  if ('label' in row && typeof row.label === 'string') return row.label;
+  if ('name' in row && typeof row.name === 'string') return row.name;
   return row.id;
+}
+
+function renderMetadata(row: DashboardRow): string {
+  const items: Array<[string, string]> = [];
+
+  if (row.type === 'source') {
+    items.push(
+      ['Source type', row.sourceType],
+      ['Endpoint', row.endpoint ?? 'n/a'],
+      ['Transport', row.transport ?? 'n/a'],
+      ['Auth', row.auth?.status ?? 'unknown'],
+      ['Last delivery', row.lastDelivery?.receivedAt ?? 'none'],
+      ['Bundle model', sourceBundleLabels.join(', ')],
+    );
+  }
+
+  if (row.type === 'queue-item') {
+    items.push(
+      ['Project status', row.projectStatus ?? 'unknown'],
+      ['Claim lock', row.claimLock?.projectItemId ?? 'none'],
+      ['Held by', row.claimLock?.heldBy ?? 'n/a'],
+      ['Blocked reason', row.blockedReason ?? 'none'],
+      ['Queue signals', queueLabels.join(', ')],
+    );
+  }
+
+  if (row.type === 'setting') {
+    items.push(
+      ['Value', row.value],
+      ['Update scope', 'admin'],
+      ['Audit', 'required'],
+      ['Settings model', settingsLabels.join(', ')],
+    );
+  }
+
+  if (items.length === 0) return '';
+
+  return `
+    <div class="dashboard-meta-grid">
+      ${items.map(([label, value]) => `
+        <div class="dashboard-meta-item">
+          <span>${escapeHtml(label)}</span>
+          <strong>${escapeHtml(value)}</strong>
+        </div>
+      `).join('')}
+    </div>
+  `;
 }
 
 function escapeHtml(value: string): string {

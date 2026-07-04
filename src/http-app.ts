@@ -192,6 +192,33 @@ async function routeRainrailHttpRequest(
     return dashboardV1AgentTasksResponse(url, options);
   }
 
+  if (url.pathname === '/api/v1/sources') {
+    if (request.method !== 'GET') return methodNotAllowedResponse(['GET', 'OPTIONS']);
+
+    const auth = verifyDashboardReadRequest(request, options);
+    if (auth !== undefined) return auth;
+
+    return dashboardV1SourcesResponse(url, options);
+  }
+
+  if (url.pathname === '/api/v1/queue') {
+    if (request.method !== 'GET') return methodNotAllowedResponse(['GET', 'OPTIONS']);
+
+    const auth = verifyDashboardReadRequest(request, options);
+    if (auth !== undefined) return auth;
+
+    return dashboardV1QueueResponse(url, options);
+  }
+
+  if (url.pathname === '/api/v1/settings') {
+    if (request.method !== 'GET') return methodNotAllowedResponse(['GET', 'OPTIONS']);
+
+    const auth = verifyDashboardReadRequest(request, options);
+    if (auth !== undefined) return auth;
+
+    return dashboardV1SettingsResponse(url, options);
+  }
+
   const v1AgentTaskDetailMatch = /^\/api\/v1\/agent-tasks\/([^/]+)$/.exec(url.pathname);
   if (v1AgentTaskDetailMatch !== null) {
     if (request.method !== 'GET') return methodNotAllowedResponse(['GET', 'OPTIONS']);
@@ -326,6 +353,9 @@ function dashboardV1OverviewResponse(options: RainrailHttpAppOptions): Response 
         events: '/api/v1/events',
         workflowRuns: '/api/v1/workflow-runs',
         agentTasks: '/api/v1/agent-tasks',
+        sources: '/api/v1/sources',
+        queue: '/api/v1/queue',
+        settings: '/api/v1/settings',
       },
     },
   });
@@ -465,6 +495,79 @@ function dashboardV1AgentTaskDetailResponse(taskId: string, options: RainrailHtt
       compact: agentTaskToCompactRow(task, staleTaskIds),
       record: task,
     },
+  });
+}
+
+function dashboardV1SourcesResponse(url: URL, options: RainrailHttpAppOptions): Response {
+  const store = options.operationalStore;
+  if (store === undefined) {
+    return jsonResponse({ error: 'operational_store_not_configured' }, { status: 503 });
+  }
+
+  const collection = parseCollectionRequest(url, ['filter[source]']);
+  if (!collection.ok) return collection.response;
+
+  const latestBySource = latestEventBySourceName(store.listEvents());
+  const rows = (options.intakeAdapters ?? [])
+    .map((adapter) => intakeAdapterToSourceRow(adapter, latestBySource.get(adapter.name)))
+    .filter((row) => matchesOptionalFilter(row.sourceType, url.searchParams.get('filter[source]')));
+  const page = pageRows(rows, collection.limit, collection.cursor, (row) => row.name);
+  if (!page.ok) return page.response;
+
+  return jsonResponse({
+    data: page.rows,
+    page: { limit: collection.limit, nextCursor: page.nextCursor },
+  });
+}
+
+function dashboardV1QueueResponse(url: URL, options: RainrailHttpAppOptions): Response {
+  const store = options.operationalStore;
+  if (store === undefined) {
+    return jsonResponse({ error: 'operational_store_not_configured' }, { status: 503 });
+  }
+
+  const collection = parseCollectionRequest(url, ['filter[status]']);
+  if (!collection.ok) return collection.response;
+
+  const tasks = store.listAgentTasks();
+  const rows = tasks
+    .map(agentTaskToQueueRow)
+    .filter((row) => matchesOptionalFilter(row.status, url.searchParams.get('filter[status]')));
+  const page = pageRows(rows, collection.limit, collection.cursor, (row) => row.updatedAt);
+  if (!page.ok) return page.response;
+
+  return jsonResponse({
+    data: page.rows,
+    summary: queueSummary(tasks, store.listEventHandlerRetries()),
+    page: { limit: collection.limit, nextCursor: page.nextCursor },
+  });
+}
+
+function dashboardV1SettingsResponse(url: URL, options: RainrailHttpAppOptions): Response {
+  const store = options.operationalStore;
+  if (store === undefined) {
+    return jsonResponse({ error: 'operational_store_not_configured' }, { status: 503 });
+  }
+
+  const collection = parseCollectionRequest(url, []);
+  if (!collection.ok) return collection.response;
+
+  const retryCount = store.listEventHandlerRetries().length;
+  const rows = [
+    settingRow('max-concurrency', 'Max concurrency', 'not configured'),
+    settingRow('auto-start', 'Auto-start', 'not configured'),
+    settingRow('retry-policy', 'Retry policy', retryCount === 1 ? '1 retry pending' : `${retryCount} retries pending`),
+    settingRow('replay-retention', 'Replay retention', `${store.eventLimit()} events`),
+    settingRow('dashboard-auth', 'Dashboard auth', options.eventsBearerToken === undefined ? 'bearer token not configured' : 'bearer token configured'),
+    settingRow('runtime', 'Runtime', options.runtime ?? 'fetch'),
+  ];
+  const page = pageRows(rows, collection.limit, collection.cursor, (row) => row.id);
+  if (!page.ok) return page.response;
+
+  return jsonResponse({
+    data: page.rows,
+    updatePolicy: { requiredScope: 'admin', audit: 'required' },
+    page: { limit: collection.limit, nextCursor: page.nextCursor },
   });
 }
 
@@ -628,6 +731,106 @@ function agentTaskToCompactRow(task: StoredAgentTask, staleTaskIds: Set<string>)
     },
     links: { self: `/api/v1/agent-tasks/${encodeURIComponent(task.id)}` },
   };
+}
+
+function latestEventBySourceName(events: StoredOperationalEvent[]): Map<string, StoredOperationalEvent> {
+  const latest = new Map<string, StoredOperationalEvent>();
+  for (const event of events) {
+    if (!latest.has(event.source.name)) latest.set(event.source.name, event);
+  }
+  return latest;
+}
+
+function intakeAdapterToSourceRow(adapter: RainrailIntakeAdapter, latestEvent: StoredOperationalEvent | undefined) {
+  const route = adapter.routes?.[0];
+  const sourceType = sourceTypeFromAdapterName(adapter.name);
+  return {
+    id: adapter.name,
+    type: 'source',
+    status: 'configured',
+    sourceType,
+    name: adapter.name,
+    ...(route === undefined ? {} : { endpoint: route.path }),
+    transport: adapter.tail === undefined ? 'http' : 'tail',
+    auth: { status: route === undefined ? 'not required' : 'configured' },
+    ...(latestEvent === undefined ? {} : {
+      lastDelivery: {
+        id: latestEvent.delivery.id,
+        receivedAt: latestEvent.receivedAt,
+        subject: latestEvent.subject,
+      },
+    }),
+  };
+}
+
+function sourceTypeFromAdapterName(name: string): string {
+  if (name.includes('github')) return 'github';
+  if (name.includes('cloudflare')) return 'cloudflare';
+  if (name.includes('manual') || name.includes('chat')) return 'manual';
+  return 'system';
+}
+
+function agentTaskToQueueRow(task: StoredAgentTask) {
+  const claim = recordValue(task.claim);
+  return {
+    id: task.id,
+    type: 'queue-item',
+    status: queueStatusFromTaskStatus(task.status),
+    title: task.title,
+    updatedAt: task.updatedAt,
+    ...(task.issue === undefined ? {} : { issue: task.issue }),
+    ...(task.branchName === undefined ? {} : { branchName: task.branchName }),
+    projectStatus: stringField(claim, 'originalStatus') ?? 'unknown',
+    ...(claim === undefined ? {} : {
+      claimLock: {
+        ...(stringField(claim, 'projectItemId') === undefined ? {} : { projectItemId: stringField(claim, 'projectItemId') }),
+        ...(task.agentSessionId === undefined ? {} : { heldBy: task.agentSessionId }),
+      },
+    }),
+    ...(task.projectClaim === undefined ? {} : {
+      blockedReason: task.projectClaim.reason,
+      releaseStatus: task.projectClaim.status,
+    }),
+  };
+}
+
+function queueStatusFromTaskStatus(status: string): string {
+  if (status === 'running') return 'in-progress';
+  if (status === 'queued' || status === 'pending') return 'upcoming';
+  if (status === 'failed' || status === 'canceled' || status === 'timed_out') return 'blocked';
+  return status;
+}
+
+function queueSummary(tasks: StoredAgentTask[], retries: StoredEventHandlerRetry[]) {
+  return {
+    upcomingIssues: tasks.filter((task) => queueStatusFromTaskStatus(task.status) === 'upcoming').length,
+    blockedReasons: [...new Set([
+      ...tasks.map((task) => task.projectClaim?.reason).filter((reason): reason is string => reason !== undefined),
+      ...retries.map((retry) => retry.lastError),
+    ])],
+    inProgressCount: tasks.filter((task) => queueStatusFromTaskStatus(task.status) === 'in-progress').length,
+    claimedCount: tasks.filter((task) => task.claim !== undefined).length,
+  };
+}
+
+function settingRow(id: string, label: string, value: string) {
+  return {
+    id,
+    type: 'setting',
+    status: 'read-only',
+    label,
+    value,
+  };
+}
+
+function recordValue(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === 'object' && value !== null ? value as Record<string, unknown> : undefined;
+}
+
+function stringField(record: Record<string, unknown> | undefined, field: string): string | undefined {
+  const value = record?.[field];
+  if (typeof value === 'string') return value;
+  return value === null || value === undefined ? undefined : String(value);
 }
 
 async function publishEvent(options: RainrailHttpAppOptions, event: RainrailEventEnvelope): Promise<Response> {
