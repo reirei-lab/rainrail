@@ -36,8 +36,9 @@ pnpm cf:dev
 
 `wrangler dev --local` は `wrangler.jsonc` と `.dev.vars` を使って local Worker を起動する。
 GitHub webhook の URL は `/webhooks/github`、health check は `/healthz`。
-Worker entrypoint は `createGitHubWebhookIntakeAdapter` と `createCloudflareTailIntakeAdapter`
-を `createRainrailHttpApp` に登録し、Core は provider 固有 route / tail payload を直接持たない。
+Worker entrypoint は Core app と EEP Bridge bundle を composition する。bundle は
+`createGitHubWebhookIntakeAdapter` と `createCloudflareTailIntakeAdapter` を
+`createRainrailHttpApp` に登録し、Core は provider 固有 route / tail payload を直接持たない。
 
 ## Production Deploy
 

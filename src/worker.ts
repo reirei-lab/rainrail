@@ -1,15 +1,16 @@
 import { RainrailBridgeRoom as CoreRainrailBridgeRoom, type RainrailBridgeRoomState } from './bridge-room.js';
-import { createCloudflareTailIntakeAdapter, type CloudflareTailEvent } from './cloudflare-tail.js';
-import { createGitHubWebhookIntakeAdapter } from './github-webhook.js';
-import { createRainrailHttpApp, stableIntakeFallbackDeliveryId } from './http-app.js';
+import {
+  createRainrailEepBridgeIntakeAdaptersFromEnv,
+  type RainrailEepBridgeBundleEnv,
+} from './eep-bridge-bundle.js';
+import { createRainrailHttpApp } from './http-app.js';
 
-export interface RainrailWorkerEnv {
+export interface RainrailWorkerEnv extends RainrailEepBridgeBundleEnv {
   BRIDGE_ROOM: {
     idFromName(name: string): unknown;
     get(id: unknown): RainrailWorkerBridgeRoom;
   };
   BRIDGE_ID?: string;
-  GITHUB_WEBHOOK_SECRET: string;
   RAINRAIL_PUBLISH_TOKEN: string;
   RAINRAIL_REPLAY_LIMIT?: string;
   RAINRAIL_KEEP_ALIVE_INTERVAL_MS?: string;
@@ -45,7 +46,7 @@ export default {
     return workerApp(env).fetch(request);
   },
 
-  tail(events: CloudflareTailEvent[], env: RainrailWorkerEnv, ctx: RainrailWorkerExecutionContext): void {
+  tail(events: unknown[], env: RainrailWorkerEnv, ctx: RainrailWorkerExecutionContext): void {
     ctx.waitUntil(workerApp(env).tail?.(events) ?? Promise.resolve([]));
   },
 };
@@ -56,12 +57,7 @@ function workerApp(env: RainrailWorkerEnv) {
     publishToken: env.RAINRAIL_PUBLISH_TOKEN,
     ...(env.SSE_BEARER_TOKEN === undefined ? {} : { eventsBearerToken: env.SSE_BEARER_TOKEN }),
     runtime: 'cloudflare-workers',
-    intakeAdapters: [
-      createGitHubWebhookIntakeAdapter({ secret: env.GITHUB_WEBHOOK_SECRET }),
-      createCloudflareTailIntakeAdapter({
-        fallbackDeliveryId: stableIntakeFallbackDeliveryId,
-      }),
-    ],
+    intakeAdapters: createRainrailEepBridgeIntakeAdaptersFromEnv(env),
   });
 }
 
