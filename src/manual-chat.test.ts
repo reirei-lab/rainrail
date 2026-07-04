@@ -465,6 +465,30 @@ describe('manual and chat input source contract', () => {
     expect(serialized).not.toContain(tokenLikeMessageId);
   });
 
+  it('hashes key-value credential-looking identifiers before storage', async () => {
+    const event = await createManualInputEvent({
+      channel: 'chat',
+      sourceName: 'token: source-secret',
+      receivedAt: new Date('2026-07-04T09:21:23.000Z'),
+      deliveryId: 'session=delivery-secret',
+      conversationId: 'session=conversation-secret',
+      messageId: 'token: message-secret',
+      message: 'hello',
+    });
+
+    const serialized = JSON.stringify(event);
+    expect(event.source.name).toMatch(/^source-[A-Za-z0-9]+$/);
+    expect(event.subject.id).toMatch(/^conversation-[A-Za-z0-9]+$/);
+    expect(event.payload.message.id).toMatch(/^message-[A-Za-z0-9]+$/);
+    expect(event.delivery.id).toMatch(/^chat-delivery-[A-Za-z0-9]+$/);
+    expect(serialized).not.toContain('source-secret');
+    expect(serialized).not.toContain('delivery-secret');
+    expect(serialized).not.toContain('conversation-secret');
+    expect(serialized).not.toContain('message-secret');
+    expect(serialized).not.toContain('session=');
+    expect(serialized).not.toContain('token:');
+  });
+
   it('keeps delivery ids distinct for long conversations that share message ids', async () => {
     const prefix = 'conversation-delivery-prefix-'.repeat(7);
     const first = await createManualInputEvent({
@@ -634,7 +658,7 @@ describe('manual and chat input source contract', () => {
   });
 
   it('normalizes leading punctuation in conversation and message identifiers', async () => {
-    const event = await createManualInputEvent({
+    const first = await createManualInputEvent({
       channel: 'chat',
       receivedAt: new Date('2026-07-04T09:21:25.000Z'),
       deliveryId: '_delivery',
@@ -642,10 +666,21 @@ describe('manual and chat input source contract', () => {
       messageId: '.thread',
       message: 'hello',
     });
+    const second = await createManualInputEvent({
+      channel: 'chat',
+      receivedAt: new Date('2026-07-04T09:21:25.000Z'),
+      deliveryId: 'chat-delivery-_delivery',
+      conversationId: 'conversation-_session',
+      messageId: 'message-.thread',
+      message: 'hello',
+    });
 
-    expect(event.delivery.id).toBe('chat-delivery-_delivery');
-    expect(event.subject.id).toBe('conversation-_session');
-    expect(event.payload.message.id).toBe('message-.thread');
+    expect(first.delivery.id).toMatch(/^chat-delivery-_delivery-[A-Za-z0-9]+$/);
+    expect(first.subject.id).toMatch(/^conversation-_session-[A-Za-z0-9]+$/);
+    expect(first.payload.message.id).toMatch(/^message-.thread-[A-Za-z0-9]+$/);
+    expect(first.delivery.id).not.toBe(second.delivery.id);
+    expect(first.subject.id).not.toBe(second.subject.id);
+    expect(first.payload.message.id).not.toBe(second.payload.message.id);
   });
 
   it('rejects unsafe manual and chat raw payload references in bridge storage', async () => {

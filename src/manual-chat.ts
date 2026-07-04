@@ -9,7 +9,7 @@ import type { RainrailIntakeAdapter } from './intake-adapter.js';
 const encoder = new TextEncoder();
 const MAX_MANUAL_INPUT_TEXT_LENGTH = 8_000;
 const MAX_MANUAL_INPUT_ATTACHMENTS = 20;
-const CREDENTIAL_LIKE_IDENTIFIER_PATTERN = /\b(?:github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9_]{20,})\b/u;
+const CREDENTIAL_LIKE_IDENTIFIER_PATTERN = /\b(?:github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9_]{20,})\b|(?:^|[\s"'<>`,;{[(?&])["']?[A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification|session)[A-Za-z0-9_.-]*["']?\s*[:=]\s*\S+/iu;
 
 export type ManualInputChannel = 'manual' | 'chat';
 
@@ -413,8 +413,9 @@ function safeIdentifierSegment(value: string, fallback: string): string {
   if (normalized.length === 0) {
     return compactIdentifierWithHash(fallback, value, 128, { includeHash: trimmed.length > 0 });
   }
-  const safe = /^[A-Za-z0-9]/u.test(normalized) ? normalized : `${fallback}-${normalized}`;
-  return compactIdentifierWithHash(safe, value, 128, { includeHash: changedBySanitization });
+  const startsWithSafeCharacter = /^[A-Za-z0-9]/u.test(normalized);
+  const safe = startsWithSafeCharacter ? normalized : `${fallback}-${normalized}`;
+  return compactIdentifierWithHash(safe, value, 128, { includeHash: changedBySanitization || !startsWithSafeCharacter });
 }
 
 function safeDeliveryReferenceSegment(value: string, fallback: string, maxLength = 128): string {
@@ -427,8 +428,9 @@ function safeDeliveryReferenceSegment(value: string, fallback: string, maxLength
   const safe = normalized.length === 0
     ? fallback
     : /^[A-Za-z0-9]/u.test(normalized) ? normalized : `${fallback}-${normalized}`;
+  const startsWithSafeCharacter = normalized.length === 0 || /^[A-Za-z0-9]/u.test(normalized);
   return compactIdentifierWithHash(safe, value, maxLength, {
-    includeHash: changedBySanitization || (normalized.length === 0 && trimmed.length > 0),
+    includeHash: changedBySanitization || !startsWithSafeCharacter || (normalized.length === 0 && trimmed.length > 0),
   });
 }
 
@@ -442,8 +444,9 @@ function safeDeliveryReferenceSuffix(value: string, fallback: string, maxLength:
   const safe = normalized.length === 0
     ? fallback
     : /^[A-Za-z0-9]/u.test(normalized) ? normalized : `${fallback}-${normalized}`;
+  const startsWithSafeCharacter = normalized.length === 0 || /^[A-Za-z0-9]/u.test(normalized);
   return compactIdentifierWithHash(safe, value, maxLength, {
-    includeHash: changedBySanitization || (normalized.length === 0 && trimmed.length > 0),
+    includeHash: changedBySanitization || !startsWithSafeCharacter || (normalized.length === 0 && trimmed.length > 0),
     keepTail: true,
   });
 }

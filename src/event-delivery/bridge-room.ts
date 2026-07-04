@@ -303,6 +303,9 @@ function validatePublishEnvelope(value: unknown): RainrailEventEnvelope {
     throw new TypeError('payload is required');
   }
 
+  const sanitizedRawPayloadReference = expectSanitizedUrl(rawPayloadReference, 'reference');
+  assertManualInputRawPayloadReferenceMatches(sourceType, name, sanitizedRawPayloadReference);
+
   const event: RainrailEventEnvelope = {
     id,
     schemaVersion,
@@ -327,7 +330,7 @@ function validatePublishEnvelope(value: unknown): RainrailEventEnvelope {
     payload: normalizePayload(value.payload, { sourceType, name, subjectType, subjectId }),
     rawPayload: {
       kind: rawPayloadKind,
-      reference: expectSanitizedUrl(rawPayloadReference, 'reference'),
+      reference: sanitizedRawPayloadReference,
       ...optionalContentType(rawPayload),
       ...optionalSha256(rawPayload),
     },
@@ -697,6 +700,14 @@ function assertManualInputEventSourceMatches(sourceType: string, name: string): 
   }
 }
 
+function assertManualInputRawPayloadReferenceMatches(sourceType: string, name: string, reference: string): void {
+  if (!isManualInputPayload({ sourceType, name })) return;
+  const protocol = new URL(reference).protocol;
+  if (protocol !== `${sourceType}:`) {
+    throw new TypeError('manual/chat raw payload reference must match source.type');
+  }
+}
+
 function normalizeManualInputPayloadField(key: string, value: unknown, context: { sourceType: string; name: string }): unknown {
   if (key === 'provider') return value === 'rainrail' ? value : undefined;
   if (key === 'channel') return value === context.sourceType ? value : undefined;
@@ -747,6 +758,7 @@ function normalizeManualAttachments(value: unknown): unknown {
 
 function normalizeManualReplyTarget(value: unknown): unknown {
   if (!isRecord(value)) return undefined;
+  if (typeof value.id !== 'string' || value.id.length === 0) return undefined;
   const normalized = {
     ...pickManualStringFields(value, ['id', 'url']),
   };

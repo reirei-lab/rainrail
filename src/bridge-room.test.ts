@@ -1367,6 +1367,70 @@ describe('Rainrail bridge room', () => {
     expect(storage.storedEvents()).toEqual([]);
   });
 
+  it('drops direct manual chat reply targets without string ids', async () => {
+    const storage = fakeState();
+    const room = createTestRoom(storage, { replayLimit: 10 });
+    const event = createEventEnvelope({
+      source: { type: 'chat', name: 'web-chat' },
+      name: 'rainrail.chat.message',
+      delivery: {
+        id: 'chat-reply-target-without-id',
+        receivedAt: '2026-06-29T18:18:21.000Z',
+      },
+      occurredAt: '2026-06-29T18:18:20.000Z',
+      subject: { type: 'conversation', id: 'chat-reply-target-without-id' },
+      payload: {
+        provider: 'rainrail',
+        channel: 'chat',
+        action: 'message',
+        conversation: { id: 'chat-reply-target-without-id' },
+        message: { text: 'hello' },
+        replyTarget: { url: 'https://github.com/reirei-lab/rainrail/issues/104' },
+      },
+      rawPayload: {
+        kind: 'inline-redacted',
+        reference: 'chat://deliveries/chat-reply-target-without-id',
+      },
+    });
+
+    const publishResponse = await room.fetch(publishRequest(event));
+
+    expect(publishResponse.status).toBe(200);
+    expect(storage.storedEvents()[0]?.payload).not.toHaveProperty('replyTarget');
+  });
+
+  it('rejects direct manual chat raw payload references with mismatched schemes', async () => {
+    const storage = fakeState();
+    const room = createTestRoom(storage, { replayLimit: 10 });
+    const event = createEventEnvelope({
+      source: { type: 'chat', name: 'web-chat' },
+      name: 'rainrail.chat.message',
+      delivery: {
+        id: 'chat-raw-scheme-mismatch',
+        receivedAt: '2026-06-29T18:18:21.000Z',
+      },
+      occurredAt: '2026-06-29T18:18:20.000Z',
+      subject: { type: 'conversation', id: 'chat-raw-scheme-mismatch' },
+      payload: {
+        provider: 'rainrail',
+        channel: 'chat',
+        action: 'message',
+        conversation: { id: 'chat-raw-scheme-mismatch' },
+        message: { text: 'hello' },
+      },
+      rawPayload: {
+        kind: 'inline-redacted',
+        reference: 'github://deliveries/chat-raw-scheme-mismatch',
+      },
+    });
+
+    const publishResponse = await room.fetch(publishRequest(event));
+
+    expect(publishResponse.status).toBe(400);
+    await expect(publishResponse.text()).resolves.toContain('manual/chat raw payload reference must match source.type');
+    expect(storage.storedEvents()).toEqual([]);
+  });
+
   it('rejects direct manual chat payloads with mismatched channels', async () => {
     const storage = fakeState();
     const room = createTestRoom(storage, { replayLimit: 10 });

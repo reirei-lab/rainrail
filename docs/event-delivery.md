@@ -186,11 +186,14 @@ parameter は保持しない。
 reply target の allowlist された string field だけを保存する。この manual/chat 専用の
 正規化は `source.type` と event name が manual/chat contract に一致する envelope だけに
 適用し、manual/chat event name と `source.type` が不一致の envelope は保存しない。
+manual/chat の `rawPayload.reference` は `source.type` と同じ scheme（`manual://` または
+`chat://`）である必要があり、別 provider の delivery reference は保存しない。
 他 source の payload を manual/chat と誤判定しない。`action` は `message` だけを
 保存し、direct publish で別 action が来ても replay payload には残さない。`payload.channel`
 は `source.type` と一致する必要があり、`message.text` がない manual/chat payload は保存しない。
 また `provider: "rainrail"`、`action: "message"`、`conversation.id` も必須として検証し、
 `subject.type` は `conversation`、`subject.id` は `payload.conversation.id` と一致する必要がある。
+`replyTarget` は `id` が文字列である場合だけ保存し、`url` だけの壊れた reply target は落とす。
 これらが欠けた direct publish / replay payload は manual/chat event として保存しない。
 各 string は standalone GitHub access token 形式を含む credential redaction 後に 8KB 以内へ縮約し、
 `attachments` は先頭 20 件までに制限することで、

@@ -105,7 +105,10 @@ digest だけを保持する。manual/chat の raw payload reference は既存 p
 末尾の一意要素と短い hash を残し、Bridge room の 128 文字 id 制限を超える場合は top-level
 event id も短い明示 id にする。`sourceName` は `source.name` と event id に使う前に
 安全な identifier へ正規化する。credential-looking な conversation id / message id /
-delivery id / source name は元値を永続化せず、fallback 名と安定 hash だけを残す。
+delivery id / source name は元値を永続化せず、fallback 名と安定 hash だけを残す。対象は
+standalone GitHub token 形式だけでなく、`token=...` や `session: ...` などの
+credential key/value 形式も含む。先頭記号へ fallback prefix を足す場合も、元から
+prefix 付きだった identifier と衝突しないよう短い hash を残す。
 任意 host/path は Core storage に残さない。
 空文字または空白だけの `messageId` は未指定として扱い、UUID fallback で delivery id の
 一意性を保つ。明示された `deliveryId` が空文字または空白だけの場合も未指定として扱い、
@@ -124,7 +127,9 @@ HTTP intake の既定 route は `/intake/manual` と `/intake/chat` で、adapte
 `conversationId`、`message`、任意の `messageId`、`actor`、`attachments`、`replyTarget`
 を読み、正規化済み envelope を `RainrailIntakeAdapterContext.publish()` へ渡す。`message` が
 object の場合は `message.text` を本文、`message.id` を top-level `messageId` がない場合の
-message id として扱い、retry 時に同じ delivery id を再生成できるようにする。
+message id として扱い、retry 時に同じ delivery id を再生成できるようにする。`replyTarget`
+を保存する場合は `id` を必須とし、`url` だけの reply target は contract payload として
+扱わない。
 `createManualInputIntakeAdapter` は `ManualInputIntakeAdapterOptions.bearerToken` を必須とし、
 body を読む前に `Authorization: Bearer <token>` を検証する。manual/chat input は
 `runtime:start` へ接続され得るため、Core の generic intake route ではなく adapter 境界で
