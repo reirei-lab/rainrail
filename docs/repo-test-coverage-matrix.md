@@ -25,12 +25,33 @@ they are present in `src/` or `scripts/`.
   responsibility, and the matrix records the replacement verification.
 - `Not ported`: the original behavior does not exist as a Rainrail feature.
 
+## Core/source boundary mapping
+
+The old EEP Bridge projects mixed ingress, normalization, event delivery, and
+runtime-facing behavior in one repository boundary. Rainrail now maps those
+viewpoints across Core and source bundle layers:
+
+- Core owns provider-neutral envelope validation, Bridge room storage/replay,
+  SSE formatting, dispatcher execution, runtime gates, and operational snapshots.
+- The EEP Bridge source bundle owns GitHub webhook and Cloudflare tail ingress
+  composition, signature/delivery metadata handling, and publish-to-core wiring.
+- Source adapters own provider/input normalization into `RainrailEventEnvelope`;
+  GitHub webhook, Cloudflare tail, manual input, and web chat all enter Core as
+  normalized source events.
+- Transport adapters own Node, Fetch, and Worker request/response plumbing
+  without adding provider semantics to Core.
+
+Manual/chat input is covered outside the legacy EEP Bridge inventories. It was
+not a source-repository test family in `github-eep-bridge` or
+`eep-bridge-worker`, so its new source adapter coverage is recorded in the
+Rainrail test column where it expands Bridge room and intake behavior.
+
 ## EEP bridge inventory
 
 | Original test | Original viewpoint | Rainrail package/module | Rainrail test coverage | Status and notes |
 | --- | --- | --- | --- | --- |
 | `github-eep-bridge/test/server.test.js` | Signed GitHub webhook acceptance and unsigned rejection through the Node server. | `src/eep-bridge-bundle.ts`, `src/http-app.ts`, `src/node-server.ts`, `src/github-webhook/index.ts` | `src/eep-bridge-bundle.test.ts`, `src/http-app.test.ts`, `src/node-server.test.ts`, `src/github-webhook.test.ts` | Ported. Rainrail separates shared Fetch app, Node transport, EEP Bridge bundle ingress composition, and GitHub webhook normalization/signature checks. |
-| `github-eep-bridge/test/bridge-room.test.js` | BridgeRoom stores published events and replays them to SSE subscribers. | `src/event-delivery/bridge-room.ts`, `src/event-delivery/event-bus.ts` | `src/bridge-room.test.ts`, `src/event-bus.test.ts` | Ported and expanded. Rainrail also covers duplicate ids, storage ordering, abort cleanup, replay limits, and serialization failure handling. |
+| `github-eep-bridge/test/bridge-room.test.js` | BridgeRoom stores published events and replays them to SSE subscribers. | `src/event-delivery/bridge-room.ts`, `src/event-delivery/event-bus.ts` | `src/bridge-room.test.ts`, `src/event-bus.test.ts`, `src/manual-chat.test.ts` | Ported and expanded. Rainrail also covers duplicate ids, storage ordering, abort cleanup, replay limits, serialization failure handling, sanitized GitHub/Cloudflare/manual/chat delivery reference allowlists, context-scoped manual/chat replay payload normalization, required manual/chat message text, source/name/subject/channel consistency, and bounded manual/chat strings, URLs, and attachments. |
 | `github-eep-bridge/test/github-normalize.test.js` | Pull request and repository webhook payloads normalize into EEP events. | `src/github-webhook/index.ts`, `src/events.ts` | `src/github-webhook.test.ts`, `src/plugin-runtime.test.ts` | Ported as Rainrail neutral event envelopes. Repository fallback is represented through source metadata and normalized resource fields instead of EEP event shape. |
 | `github-eep-bridge/test/github-signature-worker.test.js` | Worker-compatible GitHub webhook HMAC verification. | `src/github-webhook/index.ts`, `src/worker.ts` | `src/github-webhook.test.ts`, `src/worker.test.ts` | Ported. The HMAC core is Web Crypto compatible and exercised through the Worker entrypoint. |
 | `github-eep-bridge/test/github-signature.test.js` | Valid, invalid, missing secret, and missing signature cases for GitHub webhook HMAC. | `src/github-webhook/index.ts` | `src/github-webhook.test.ts` | Ported. Rainrail also rejects unsupported signature schemes. |
@@ -39,7 +60,7 @@ they are present in `src/` or `scripts/`.
 
 | Original test | Original viewpoint | Rainrail package/module | Rainrail test coverage | Status and notes |
 | --- | --- | --- | --- | --- |
-| `eep-bridge-worker/test/bridge-room.test.js` | Worker bridge room streams only post-subscription events, sends keep-alive comments, and expires long-lived sessions. | `src/event-delivery/bridge-room.ts`, `src/event-delivery/event-bus.ts` | `src/bridge-room.test.ts`, `src/event-bus.test.ts` | Ported and expanded. Rainrail uses replay-aware bridge storage plus explicit stream abort cleanup rather than session expiration as the only cleanup path. |
+| `eep-bridge-worker/test/bridge-room.test.js` | Worker bridge room streams only post-subscription events, sends keep-alive comments, and expires long-lived sessions. | `src/event-delivery/bridge-room.ts`, `src/event-delivery/event-bus.ts` | `src/bridge-room.test.ts`, `src/event-bus.test.ts`, `src/manual-chat.test.ts` | Ported and expanded. Rainrail uses replay-aware bridge storage plus explicit stream abort cleanup rather than session expiration as the only cleanup path, accepts only sanitized delivery reference URLs for GitHub, Cloudflare, manual, and chat sources, and bounds context-scoped manual/chat replay strings, URLs, and attachments while requiring message text and source/name/subject/channel consistency. |
 | `eep-bridge-worker/test/cloudflare-tail.test.js` | Cloudflare tail events publish to the multiplex stream, ok outcomes are handled, service-specific streams stay disabled, and health lists Cloudflare. | `src/eep-bridge-bundle.ts`, `src/cloudflare/tail.ts`, `src/http-app.ts`, `src/node-server.ts`, `src/worker.ts` | `src/eep-bridge-bundle.test.ts`, `src/cloudflare-tail.test.ts`, `src/http-app.test.ts`, `src/node-server.test.ts`, `src/worker.test.ts` | Ported. Rainrail normalizes `cloudflare.tail` and `cloudflare.error` envelopes through the EEP Bridge bundle and publishes them through the same bridge room as GitHub webhooks. |
 | `eep-bridge-worker/test/events-auth.test.js` | Events endpoint requires and validates bearer tokens; service-specific endpoint points to the multiplex stream. | `src/events-auth.ts`, `src/http-app.ts` | `src/events-auth.test.ts`, `src/http-app.test.ts` | Ported. Service-specific streams are not a Rainrail public contract; clients use `/events`. |
 | `eep-bridge-worker/test/github-normalize.test.js` | GitHub issue webhook normalization. | `src/github-webhook/index.ts`, `src/events.ts` | `src/github-webhook.test.ts`, `src/plugin-runtime.test.ts` | Ported as `github.issue` neutral envelope coverage. |
@@ -84,6 +105,11 @@ they are present in `src/` or `scripts/`.
 - EEP Bridge bundle composition is covered by `src/eep-bridge-bundle.test.ts`,
   `src/node-server.test.ts`, and `src/worker.test.ts`; Core tests only assert
   provider-neutral intake registration and envelope publish behavior.
+- Manual/chat source adapter behavior is covered by `src/manual-chat.test.ts`
+  and by Bridge room replay tests that verify manual/chat delivery reference,
+  payload, and source/name consistency. It is intentionally not represented as
+  EEP Bridge bundle coverage because manual/chat input is a first-party source
+  adapter, not GitHub/Cloudflare bridge ingress.
 - Service-specific SSE endpoints from `eep-bridge-worker` are not kept as a
   Rainrail public API. The alternate check is authenticated multiplex streaming
   through `/events`, covered by `src/http-app.test.ts` and `src/events-auth.test.ts`.

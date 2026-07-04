@@ -170,8 +170,8 @@ function parseSourceBundleSource(value: unknown, path: string): SourceBundleSour
   if (source.type === 'cloudflare-tail' && source.sourceType !== 'cloudflare') {
     throw new Error(`${path}.sourceType must be "cloudflare" for cloudflare-tail sources`);
   }
-  if (source.type === 'manual-chat' && source.sourceType !== 'manual') {
-    throw new Error(`${path}.sourceType must be "manual" for manual-chat sources`);
+  if (source.type === 'manual-chat' && source.sourceType !== 'manual' && source.sourceType !== 'chat') {
+    throw new Error(`${path}.sourceType must be "manual" or "chat" for manual-chat sources`);
   }
 
   return source;
@@ -224,8 +224,8 @@ function parseConfiguredSourceType(value: unknown, path: string): ConfiguredSour
 
 function parseSourceEventType(value: unknown, path: string): RainrailEventSourceType {
   const type = parseRequiredString(value, path);
-  if (type !== 'github' && type !== 'cloudflare' && type !== 'manual' && type !== 'system') {
-    throw new Error(`${path} must be one of: github, cloudflare, manual, system`);
+  if (type !== 'github' && type !== 'cloudflare' && type !== 'manual' && type !== 'chat' && type !== 'system') {
+    throw new Error(`${path} must be one of: github, cloudflare, manual, chat, system`);
   }
   return type;
 }

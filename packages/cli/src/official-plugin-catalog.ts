@@ -96,7 +96,10 @@ export function getOfficialPluginByAlias(alias: string): OfficialPluginMetadata 
   return OFFICIAL_PLUGIN_CATALOG.find((plugin) => plugin.aliases.includes(alias));
 }
 
-export function formatOfficialPluginHelp(plugin: OfficialPluginMetadata): string {
+export function formatOfficialPluginHelp(
+  plugin: OfficialPluginMetadata,
+  invocation: readonly string[] = [plugin.alias],
+): string {
   const commandRows = plugin.commands.map((command) => {
     const paddedName = command.name.padEnd(12, ' ');
     return `  ${paddedName} ${command.summary}`;
@@ -104,7 +107,7 @@ export function formatOfficialPluginHelp(plugin: OfficialPluginMetadata): string
   const aliasText = plugin.aliases.join(', ');
 
   return [
-    `Usage: rainrail ${plugin.alias} <command> [options]`,
+    `Usage: rainrail ${invocation.join(' ')} <command> [options]`,
     '',
     `${plugin.name} official plugin`,
     plugin.helpText,
@@ -120,9 +123,16 @@ export function formatOfficialPluginHelp(plugin: OfficialPluginMetadata): string
 export function formatOfficialPluginCommandHelp(
   plugin: OfficialPluginMetadata,
   command: OfficialPluginCommandMetadata,
+  invocation: readonly string[] = [plugin.alias],
 ): string {
+  const defaultUsagePrefix = `Usage: rainrail ${plugin.alias} ${command.name}`;
+  const invocationUsagePrefix = `Usage: rainrail ${[...invocation, command.name].join(' ')}`;
+  const helpText = command.helpText.startsWith(defaultUsagePrefix)
+    ? `${invocationUsagePrefix}${command.helpText.slice(defaultUsagePrefix.length)}`
+    : command.helpText;
+
   return [
-    command.helpText,
+    helpText,
     '',
     `${plugin.name} official plugin`,
     command.summary,

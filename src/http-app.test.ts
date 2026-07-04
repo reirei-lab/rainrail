@@ -29,7 +29,7 @@ describe('Rainrail HTTP app', () => {
         async handle(request, context) {
           const body = await request.json() as { message: string };
           const event = createEventEnvelope({
-            source: { type: 'manual', name: 'manual-test' },
+            source: { type: 'system', name: 'manual-test' },
             name: 'manual.note',
             delivery: {
               id: 'manual-delivery-1',
@@ -191,7 +191,7 @@ describe('Rainrail HTTP app', () => {
 
   it('dispatches tail batches to a registered intake adapter', async () => {
     const published = createEventEnvelope({
-      source: { type: 'manual', name: 'tail-test' },
+      source: { type: 'system', name: 'tail-test' },
       name: 'manual.tail',
       delivery: {
         id: 'tail-delivery-1',

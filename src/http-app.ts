@@ -123,6 +123,14 @@ export function rainrailHttpRequestBodyLimit(
   return createRainrailIntakeRegistry(options.intakeAdapters).routeBodyLimit(pathname, method);
 }
 
+export function shouldStreamRainrailHttpRequestBody(
+  pathname: string,
+  method: string,
+  options: RainrailHttpAppOptions,
+): boolean {
+  return createRainrailIntakeRegistry(options.intakeAdapters).routeStreamsBody(pathname, method);
+}
+
 async function routeRainrailHttpRequest(
   request: Request,
   options: RainrailHttpAppOptions,
@@ -356,7 +364,10 @@ async function routeRainrailHttpRequest(
       return methodNotAllowedResponse([...intakeRoute.allowedMethods, 'OPTIONS']);
     }
 
-    const limitedRequest = await requestWithAppliedBodyLimit(request, intakeRoute.route.maxBodyBytes);
+    const limitedRequest = await requestWithAppliedBodyLimit(
+      request,
+      intakeRoute.route.readBodyBeforeHandle === false ? undefined : intakeRoute.route.maxBodyBytes,
+    );
     if (limitedRequest instanceof Response) return limitedRequest;
 
     return intakeRoute.route.handle(limitedRequest, {

@@ -1,6 +1,8 @@
 import {
+  createManualInputEvent,
   createEventEnvelope,
   defineWorkflowPlugin,
+  type ManualInputRainrailEvent,
   type RainrailEventEnvelope,
 } from '../../src/index.js';
 
@@ -42,5 +44,35 @@ export const issueSummaryWorkflow = defineWorkflowPlugin({
   handle: (candidate, context) => ({
     eventId: candidate.id,
     runId: context.runId,
+  }),
+});
+
+export const chatMessageEvent: Promise<ManualInputRainrailEvent> = createManualInputEvent({
+  channel: 'chat',
+  deliveryId: 'chat-delivery-123',
+  receivedAt: new Date('2026-07-04T09:20:00.000Z'),
+  conversationId: 'conversation-123',
+  messageId: 'message-123',
+  message: 'Please inspect the latest deployment failure.',
+  actor: {
+    id: 'user-123',
+    displayName: 'hiragram',
+    type: 'user',
+  },
+  rawBody: JSON.stringify({
+    conversationId: 'conversation-123',
+    message: 'Please inspect the latest deployment failure.',
+  }),
+  contentType: 'application/json',
+});
+
+export const chatRuntimeStartWorkflow = defineWorkflowPlugin<ManualInputRainrailEvent>({
+  name: 'docs.chat-runtime-start',
+  capabilities: ['runtime:start'],
+  accepts: (candidate) => candidate.name === 'rainrail.chat.message',
+  handle: (candidate, context) => context.actions.startRuntime({
+    runtimeId: 'codex-chat',
+    conversationId: candidate.subject.id,
+    prompt: candidate.payload.message.text,
   }),
 });

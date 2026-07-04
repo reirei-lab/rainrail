@@ -13,6 +13,10 @@
 | Source adapter | provider 入力を `RainrailEventEnvelope` へ正規化する adapter | SSE/HTTP transport、Bridge room storage、workflow dispatch policy |
 | Transport / Core adapter | HTTP/Fetch/Node/Worker の request/response と Core API の接続 | GitHub/Cloudflare など provider semantics の分岐 |
 
+この文書でいう source bundle は、1 個以上の Source adapter と ingress transport を
+Core intake に接続する composition unit である。EEP Bridge bundle は GitHub webhook と
+Cloudflare tail を同梱する source bundle の一つであり、source bundle 一般の同義語ではない。
+
 Core does not own provider ingress, signature validation, or raw provider payload
 normalization. Current Core also keeps narrow provider-aware durable replay sanitization
 so that storage and replay stay safe while preserving the normalized fields existing
@@ -65,6 +69,12 @@ bundle は複数 provider の adapter を同梱してよいが、Core API へ渡
 
 EEP Bridge bundle は Source adapter と transport/core adapter を composition する単位であり、
 workflow plugin の routing policy や runtime provider の実行詳細を直接持たない。
+
+Manual input and web chat are source adapters, not EEP Bridge responsibilities。
+それらは provider webhook や tail ingress ではなく、Rainrail 自身の manual/chat intake として
+Core の `RainrailIntakeAdapter` 境界へ登録する。manual/chat が agent 起動へつながる場合も、
+EEP Bridge bundle を経由せず、正規化済み `rainrail.manual.message` /
+`rainrail.chat.message` envelope を Core に publish する。
 
 既存の top-level `src/index.ts` 互換 export は移行期間だけ残す。新規の GitHub webhook /
 Cloudflare tail ingress composition は source-specific helper を直接 import せず、

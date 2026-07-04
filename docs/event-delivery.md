@@ -7,6 +7,13 @@ Core、EEP Bridge bundle、Source adapter、transport の責務境界は
 [Core / EEP Bridge / Source adapter boundary](core-eep-bridge-source-adapter-boundary.md)
 で固定する。
 
+source bundle は provider webhook、Worker tail、manual/chat input などを
+Core intake へ接続する外側の composition であり、Core event delivery そのものではない。
+Core-owned routes stay provider-neutral: `/events`、`/healthz`、dashboard/API route は
+正規化済み envelope、sanitized replay、operational projection だけを扱い、GitHub webhook
+body、Cloudflare tail log、manual/chat request body の raw provider/input payload を
+route 固有の durable state として持たない。
+
 Bridge room、event bus、SSE framing の実装本体は `src/event-delivery/` に置く。
 この directory の `AGENTS.md` は storage / publish / replay / SSE framing の
 review rule を持つ scoped rules である。既存 import path のために
@@ -185,12 +192,14 @@ object payload も allowlist された shallow metadata（`action` / `status` /
 `conclusion`）のうち、短い token 文字列または `null` だけに縮約し、object でない payload は
 空 object にする。任意 URL や query を
 持ち込める `links` は保存しない。`subject.url` と `rawPayload.reference` は URL として
-parse でき、scheme が GitHub provider URL、`github://deliveries/...`、または
-`cloudflare://deliveries/...` の場合だけ、
+parse でき、scheme が GitHub provider URL、`github://deliveries/...`、
+`cloudflare://deliveries/...`、`manual://deliveries/...`、または
+`chat://deliveries/...` の場合だけ、
 userinfo / query / fragment を除去してから保存する。
 GitHub provider URL は `https://github.com/<owner>/<repo>`、issue / pull、
 check run の `runs/<id>`、Actions run の `actions/runs/<id>` だけを許可する。
-delivery scheme の path は短い安全な delivery id 1 セグメントだけを許可し、
+delivery scheme は provider raw payload 本文を保存しないための外部 delivery 参照であり、
+host は `deliveries`、path は短い安全な delivery id 1 セグメントだけを許可し、
 `/tokens/<secret>` や `token=...` のような値は拒否する。
 URL として parse できない optional `subject.url` は保存せず、必須の
 `rawPayload.reference` が parse できない、または allowlist 外 scheme の場合は publish を
@@ -202,6 +211,29 @@ parameter は保持しない。
 生 webhook payload、issue/comment body のような provider object 本文は core 側では
 保持しない。storage から復元する replay 要素も `RainrailEventEnvelope` と SSE field
 として検証し、壊れた要素や古い schema の要素は replay buffer に入れない。
+
+`rainrail.manual.message` / `rainrail.chat.message` payload は、manual/chat source adapter
+を通らず直接 `/publish` へ渡された場合も、conversation / message / actor / attachment /
+reply target の allowlist された string field だけを保存する。この manual/chat 専用の
+正規化は `source.type` と event name が manual/chat contract に一致する envelope だけに
+適用し、manual/chat event name と `source.type` が不一致の envelope は保存しない。
+また `source.type` が `manual` / `chat` の場合も、それぞれ `rainrail.manual.message` /
+`rainrail.chat.message` 以外の event name は保存しない。
+manual/chat の `rawPayload.kind` は `inline-redacted` である必要があり、外部参照としては
+保存しない。`rawPayload.reference` は `source.type` と同じ scheme（`manual://` または
+`chat://`）である必要があり、別 provider の delivery reference は保存しない。
+他 source の payload を manual/chat と誤判定しない。`action` は `message` だけを
+保存し、direct publish で別 action が来ても replay payload には残さない。`payload.channel`
+は `source.type` と一致する必要があり、`message.text` がない manual/chat payload は保存しない。
+また `provider: "rainrail"`、`action: "message"`、`conversation.id` も必須として検証し、
+`subject.type` は `conversation`、`subject.id` は `payload.conversation.id` と一致する必要がある。
+`actor`、`attachments`、`replyTarget` などの任意 string field は trim 後に空でない場合だけ
+保存し、`url` だけの壊れた reply target は落とす。
+これらが欠けた direct publish / replay payload は manual/chat event として保存しない。
+各 string は standalone GitHub access token 形式や非 HTTPS credential URL を含む
+credential redaction 後に 8KB 以内へ縮約し、
+`attachments` は先頭 20 件までに制限することで、
+巨大な user input や attachment name が durable replay や SSE に無制限に残らないようにする。
 
 `POST /publish` は request body の読み込み開始直後に publish queue の枠を確保する。
 これにより、大きい body や streaming body の parse 完了順に左右されず、`fetch`
