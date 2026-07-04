@@ -129,6 +129,15 @@ interface SnapshotOptions {
   hideSkippedActivityEvents?: boolean;
 }
 
+export interface ListOperationalStoreEventsOptions {
+  limit?: number;
+}
+
+export interface ListOperationalStoreActivityEventsOptions {
+  hideSkippedActivityEvents?: boolean;
+  limit?: number;
+}
+
 interface OperationalStoreData {
   events: Record<string, StoredOperationalEvent>;
   activityEvents: Record<string, StoredActivityEvent>;
@@ -174,6 +183,13 @@ export class RainrailOperationalStore {
     return event === undefined ? undefined : jsonClone(event);
   }
 
+  listEvents(options: ListOperationalStoreEventsOptions = {}): StoredOperationalEvent[] {
+    this.#assertOpen();
+    return limitRows(Object.values(this.#data.events)
+      .sort((left, right) => compareDesc(left.receivedAt, right.receivedAt) || compareDesc(left.id, right.id))
+      .map((event) => jsonClone(event)), options.limit);
+  }
+
   recordActivityEvent(input: RecordActivityEventInput): StoredActivityEvent {
     this.#assertOpen();
     const id = input.id ?? nextId(this.#data, 'activity', 'act');
@@ -195,6 +211,20 @@ export class RainrailOperationalStore {
     this.#persist();
 
     return jsonClone(activity);
+  }
+
+  getActivityEvent(id: string): StoredActivityEvent | undefined {
+    this.#assertOpen();
+    const activity = this.#data.activityEvents[id];
+    return activity === undefined ? undefined : jsonClone(activity);
+  }
+
+  listActivityEvents(options: ListOperationalStoreActivityEventsOptions = {}): StoredActivityEvent[] {
+    this.#assertOpen();
+    return limitRows(Object.values(this.#data.activityEvents)
+      .filter((activity) => !(options.hideSkippedActivityEvents === true && activity.outcome === 'skipped'))
+      .sort((left, right) => compareDesc(left.createdAt, right.createdAt) || compareDesc(left.id, right.id))
+      .map((activity) => jsonClone(activity)), options.limit);
   }
 
   recordAgentTask(input: RecordAgentTaskInput): StoredAgentTask {
@@ -376,6 +406,13 @@ export class RainrailOperationalStore {
     return limit === undefined ? retries : retries.slice(0, limit);
   }
 
+  listEventHandlerRetries(): StoredEventHandlerRetry[] {
+    this.#assertOpen();
+    return Object.values(this.#data.eventHandlerRetries)
+      .sort((left, right) => left.nextRetryAt.localeCompare(right.nextRetryAt) || left.handlerName.localeCompare(right.handlerName))
+      .map((retry) => jsonClone(retry));
+  }
+
   clearEventHandlerRetry(eventId: string, handlerName: string): void {
     this.#assertOpen();
     delete this.#data.eventHandlerRetries[retryKey(eventId, handlerName)];
@@ -417,23 +454,17 @@ export class RainrailOperationalStore {
 
   snapshot(options: SnapshotOptions = {}): OperationalStoreSnapshot {
     this.#assertOpen();
-    const activityEvents = Object.values(this.#data.activityEvents)
-      .filter((activity) => !(options.hideSkippedActivityEvents === true && activity.outcome === 'skipped'))
-      .sort((left, right) => compareDesc(left.createdAt, right.createdAt) || compareDesc(left.id, right.id))
-      .slice(0, this.#eventLimit)
-      .map((activity) => jsonClone(activity));
-    const events = Object.values(this.#data.events)
-      .sort((left, right) => compareDesc(left.receivedAt, right.receivedAt) || compareDesc(left.id, right.id))
-      .slice(0, this.#eventLimit)
-      .map((event) => jsonClone(event));
+    const activityEvents = this.listActivityEvents({
+      ...(options.hideSkippedActivityEvents === undefined ? {} : { hideSkippedActivityEvents: options.hideSkippedActivityEvents }),
+      limit: this.#eventLimit,
+    });
+    const events = this.listEvents({ limit: this.#eventLimit });
 
     return {
       events,
       activityEvents,
       agentTasks: this.listAgentTasks(),
-      eventHandlerRetries: Object.values(this.#data.eventHandlerRetries)
-        .sort((left, right) => left.nextRetryAt.localeCompare(right.nextRetryAt) || left.handlerName.localeCompare(right.handlerName))
-        .map((retry) => jsonClone(retry)),
+      eventHandlerRetries: this.listEventHandlerRetries(),
       warnings: {
         staleProjectClaims: staleProjectClaimWarnings(this.listAgentTasks()),
       },
@@ -599,6 +630,10 @@ function nextId(data: OperationalStoreData, name: string, prefix: string): strin
 
 function compareDesc(left: string, right: string): number {
   return right.localeCompare(left);
+}
+
+function limitRows<T>(rows: T[], limit: number | undefined): T[] {
+  return limit === undefined ? rows : rows.slice(0, limit);
 }
 
 function jsonClone<T>(value: T): T {

@@ -10,6 +10,186 @@ import {
 } from './index.js';
 
 describe('Rainrail dashboard API', () => {
+  it('serves split v1 overview, events, workflow runs, and agent tasks without requiring the snapshot shape', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 1,
+      now: () => new Date('2026-07-02T00:05:00.000Z'),
+    });
+    const older = operationalStore.recordEvent(createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook', repository: 'reirei-lab/rainrail' },
+      name: 'github.issue',
+      delivery: { id: 'delivery-older', receivedAt: '2026-07-02T00:00:00.000Z' },
+      occurredAt: '2026-07-02T00:00:00.000Z',
+      subject: { type: 'issue', id: '24', url: 'https://github.com/reirei-lab/rainrail/issues/24' },
+      payload: { action: 'opened', token: 'should-not-appear-in-list' },
+      rawPayload: { kind: 'external-reference', reference: 'github://deliveries/delivery-older' },
+    }));
+    const latest = operationalStore.recordEvent(createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook', repository: 'reirei-lab/rainrail' },
+      name: 'github.pull_request',
+      delivery: { id: 'delivery-latest', receivedAt: '2026-07-02T00:01:00.000Z' },
+      occurredAt: '2026-07-02T00:01:00.000Z',
+      subject: { type: 'pull_request', id: '25', url: 'https://github.com/reirei-lab/rainrail/pull/25' },
+      payload: { action: 'opened' },
+      rawPayload: { kind: 'external-reference', reference: 'github://deliveries/delivery-latest' },
+    }));
+    const workflow = operationalStore.recordActivityEvent({
+      sourceEventId: latest.id,
+      sourceEventName: latest.name,
+      category: 'plugin',
+      targetType: 'event',
+      targetId: latest.id,
+      actionType: 'plugin_executed',
+      outcome: 'success',
+      summary: 'review-request plugin completed',
+      metadata: { pluginName: 'review-request' },
+    });
+    operationalStore.recordEventHandlerRetry({
+      eventId: latest.id,
+      handlerName: 'conflict-check',
+      nextRetryAt: '2026-07-02T00:10:00.000Z',
+      lastError: 'GitHub mergeability is pending',
+    });
+    const task = operationalStore.recordAgentTask({
+      id: 'agent_task_rainrail_110',
+      title: 'Dashboard query API を分割する',
+      agentSessionId: 'agent:main:rainrail-110',
+      branchName: 'agent/reirei-lab-rainrail-110-dashboard-query-api',
+      status: 'running',
+      issue: { repository: 'reirei-lab/rainrail', number: 110 },
+      claim: { projectItemId: 'PVTI_110' },
+      logPath: 'var/log/rainrail-110.log',
+      pid: 2468,
+    });
+    const app = createRainrailHttpApp({
+      room: new RainrailBridgeRoom(fakeState(), { publishToken: 'publish-token' }),
+      githubWebhookSecret: 'secret',
+      publishToken: 'publish-token',
+      eventsBearerToken: 'events-token',
+      operationalStore,
+    });
+
+    const overview = await app.fetch(new Request('https://rainrail.local/api/v1/overview', {
+      headers: { authorization: 'Bearer events-token' },
+    }));
+    expect(overview.status).toBe(200);
+    await expect(overview.json()).resolves.toMatchObject({
+      data: {
+        counts: { events: 2, activityEvents: 1, agentTasks: 1, eventHandlerRetries: 1 },
+        warnings: { staleProjectClaims: [] },
+        recentActivity: [{ id: workflow.id, summary: 'review-request plugin completed' }],
+      },
+    });
+
+    const events = await app.fetch(new Request('https://rainrail.local/api/v1/events?limit=1', {
+      headers: { authorization: 'Bearer events-token' },
+    }));
+    expect(events.status).toBe(200);
+    const eventsBody = await events.json() as { data: Array<{ id: string }>; page: { nextCursor: string | null } };
+    expect(eventsBody).toMatchObject({
+      data: [{
+        id: latest.id,
+        type: 'event',
+        status: 'received',
+        summary: 'github.pull_request reirei-lab/rainrail#25',
+        links: { self: `/api/v1/events/${encodeURIComponent(latest.id)}` },
+      }],
+      page: { limit: 1 },
+    });
+    expect(JSON.stringify(eventsBody)).not.toContain('should-not-appear-in-list');
+    expect(eventsBody.page.nextCursor).toEqual(expect.any(String));
+
+    const nextEvents = await app.fetch(new Request(`https://rainrail.local/api/v1/events?limit=1&cursor=${encodeURIComponent(eventsBody.page.nextCursor!)}`, {
+      headers: { authorization: 'Bearer events-token' },
+    }));
+    await expect(nextEvents.json()).resolves.toMatchObject({
+      data: [{ id: older.id }],
+      page: { limit: 1, nextCursor: null },
+    });
+
+    const eventDetail = await app.fetch(new Request(`https://rainrail.local/api/v1/events/${encodeURIComponent(latest.id)}`, {
+      headers: { authorization: 'Bearer events-token' },
+    }));
+    expect(eventDetail.status).toBe(200);
+    await expect(eventDetail.json()).resolves.toMatchObject({
+      data: {
+        id: latest.id,
+        type: 'event',
+        record: {
+          name: latest.name,
+          envelope: { schemaVersion: 'rainrail.event.v1' },
+          activityEvents: [{ id: workflow.id }],
+          handlerRetries: [{ handlerName: 'conflict-check' }],
+        },
+      },
+    });
+
+    const workflowRuns = await app.fetch(new Request('https://rainrail.local/api/v1/workflow-runs', {
+      headers: { authorization: 'Bearer events-token' },
+    }));
+    await expect(workflowRuns.json()).resolves.toMatchObject({
+      data: [{ id: workflow.id, type: 'workflow-run', status: 'success', sourceEventId: latest.id }],
+      page: { limit: 50, nextCursor: null },
+    });
+
+    const agentTasks = await app.fetch(new Request('https://rainrail.local/api/v1/agent-tasks', {
+      headers: { authorization: 'Bearer events-token' },
+    }));
+    await expect(agentTasks.json()).resolves.toMatchObject({
+      data: [{
+        id: task.id,
+        type: 'agent-task',
+        status: 'running',
+        branchName: 'agent/reirei-lab-rainrail-110-dashboard-query-api',
+        links: { self: `/api/v1/agent-tasks/${encodeURIComponent(task.id)}` },
+      }],
+      page: { limit: 50, nextCursor: null },
+    });
+
+    const taskDetail = await app.fetch(new Request(`https://rainrail.local/api/v1/agent-tasks/${task.id}`, {
+      headers: { authorization: 'Bearer events-token' },
+    }));
+    await expect(taskDetail.json()).resolves.toMatchObject({
+      data: {
+        id: task.id,
+        type: 'agent-task',
+        record: { runtime: { status: 'running', pid: 2468 }, logPath: 'var/log/rainrail-110.log' },
+      },
+    });
+
+    operationalStore.close();
+  });
+
+  it('rejects invalid v1 pagination and unsupported event list filters', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:00:00.000Z'),
+    });
+    const app = createRainrailHttpApp({
+      room: new RainrailBridgeRoom(fakeState(), { publishToken: 'publish-token' }),
+      githubWebhookSecret: 'secret',
+      publishToken: 'publish-token',
+      eventsBearerToken: 'events-token',
+      operationalStore,
+    });
+
+    const badCursor = await app.fetch(new Request('https://rainrail.local/api/v1/events?cursor=not-a-cursor', {
+      headers: { authorization: 'Bearer events-token' },
+    }));
+    expect(badCursor.status).toBe(400);
+    await expect(badCursor.json()).resolves.toEqual({ error: 'invalid_cursor' });
+
+    const badFilter = await app.fetch(new Request('https://rainrail.local/api/v1/events?filter[unknown]=value', {
+      headers: { authorization: 'Bearer events-token' },
+    }));
+    expect(badFilter.status).toBe(400);
+    await expect(badFilter.json()).resolves.toEqual({ error: 'unsupported_filter', filter: 'filter[unknown]' });
+
+    operationalStore.close();
+  });
+
   it('serves provider-neutral operational state through the HTTP app', async () => {
     const operationalStore = new RainrailOperationalStore({
       databasePath: ':memory:',
@@ -94,6 +274,10 @@ describe('Rainrail dashboard API', () => {
     expect(missingDetailAuth.status).toBe(401);
     await expect(missingDetailAuth.json()).resolves.toEqual({ error: 'missing_bearer_token' });
 
+    const missingV1Auth = await app.fetch(new Request('https://rainrail.local/api/v1/overview'));
+    expect(missingV1Auth.status).toBe(401);
+    await expect(missingV1Auth.json()).resolves.toEqual({ error: 'missing_bearer_token' });
+
     const state = await app.fetch(new Request('https://rainrail.local/api/state', {
       headers: { authorization: 'Bearer events-token' },
     }));
@@ -103,6 +287,11 @@ describe('Rainrail dashboard API', () => {
       headers: { authorization: 'Bearer events-token' },
     }));
     expect(detail.status).toBe(200);
+
+    const overview = await app.fetch(new Request('https://rainrail.local/api/v1/overview', {
+      headers: { authorization: 'Bearer events-token' },
+    }));
+    expect(overview.status).toBe(200);
 
     operationalStore.close();
   });
@@ -118,6 +307,10 @@ describe('Rainrail dashboard API', () => {
 
     expect(response.status).toBe(503);
     await expect(response.json()).resolves.toEqual({ error: 'operational_store_not_configured' });
+
+    const v1Response = await app.fetch(new Request('https://rainrail.local/api/v1/events'));
+    expect(v1Response.status).toBe(503);
+    await expect(v1Response.json()).resolves.toEqual({ error: 'operational_store_not_configured' });
   });
 
   it('records HTTP-ingressed events in the operational store after publish succeeds', async () => {
