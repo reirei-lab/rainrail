@@ -103,13 +103,18 @@ describe('Rainrail CLI built-in commands', () => {
   });
 
   it('runs the shared installer for rainrail update', () => {
-    const calls: Array<{ command: string; args: readonly string[] }> = [];
+    const calls: Array<{
+      command: string;
+      args: readonly string[];
+      options: unknown;
+    }> = [];
 
     const result = runRainrailCli(
       ['--yes', 'update', '--version', '1.2.3', '--installer', '/tmp/install.sh'],
       {
-        commandRunner: (command, args) => {
-          calls.push({ command, args });
+        currentBinPath: '/opt/rainrail/bin/rainrail',
+        commandRunner: (command, args, options) => {
+          calls.push({ command, args, options });
           return { status: 0, stdout: 'installed\n', stderr: '' };
         },
       },
@@ -123,9 +128,98 @@ describe('Rainrail CLI built-in commands', () => {
     expect(calls).toEqual([
       {
         command: 'bash',
-        args: ['/tmp/install.sh', '--version', '1.2.3', '--yes'],
+        args: [
+          '/tmp/install.sh',
+          '--version',
+          '1.2.3',
+          '--prefix',
+          '/opt/rainrail',
+          '--yes',
+        ],
+        options: { stdio: 'pipe' },
       },
     ]);
+  });
+
+  it('keeps an explicitly provided update prefix', () => {
+    const calls: Array<{ args: readonly string[] }> = [];
+
+    const result = runRainrailCli(
+      [
+        'update',
+        '--installer',
+        '/tmp/install.sh',
+        '--prefix',
+        '/custom/rainrail',
+        '--version=1.2.3',
+      ],
+      {
+        currentBinPath: '/opt/rainrail/bin/rainrail',
+        commandRunner: (_command, args) => {
+          calls.push({ args });
+          return { status: 0, stdout: '', stderr: '' };
+        },
+      },
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(calls[0]?.args).toEqual([
+      '/tmp/install.sh',
+      '--prefix',
+      '/custom/rainrail',
+      '--version',
+      '1.2.3',
+    ]);
+  });
+
+  it('infers the update prefix from an installed package bin path', () => {
+    const calls: Array<{ args: readonly string[] }> = [];
+
+    const result = runRainrailCli(['update', '--installer', '/tmp/install.sh'], {
+      currentBinPath: '/opt/rainrail/lib/rainrail/1.2.3/dist/bin/rainrail.js',
+      commandRunner: (_command, args) => {
+        calls.push({ args });
+        return { status: 0, stdout: '', stderr: '' };
+      },
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(calls[0]?.args).toEqual([
+      '/tmp/install.sh',
+      '--prefix',
+      '/opt/rainrail',
+    ]);
+  });
+
+  it('rejects rainrail update when no prefix can be inferred or provided', () => {
+    const result = runRainrailCli(['update', '--installer', '/tmp/install.sh'], {
+      currentBinPath: '/workspace/rainrail/packages/cli/dist/bin/rainrail.js',
+      commandRunner: () => ({ status: 0, stdout: '', stderr: '' }),
+    });
+
+    expect(result).toEqual({
+      exitCode: 1,
+      stdout: '',
+      stderr:
+        'Unable to infer the current Rainrail install prefix. Re-run rainrail update with --prefix <path>.\n',
+    });
+  });
+
+  it('inherits stdio when rainrail update may prompt through the installer', () => {
+    const calls: Array<{ options: unknown }> = [];
+
+    const result = runRainrailCli(
+      ['update', '--installer', '/tmp/install.sh', '--prefix', '/opt/rainrail', '--add-to-shell'],
+      {
+        commandRunner: (_command, _args, options) => {
+          calls.push({ options });
+          return { status: 0 };
+        },
+      },
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(calls).toEqual([{ options: { stdio: 'inherit' } }]);
   });
 
   it('rejects the unsupported rainrail self-update command name', () => {

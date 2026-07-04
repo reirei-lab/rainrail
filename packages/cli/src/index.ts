@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { dirname, normalize, sep } from 'node:path';
 
 export type BuiltInCommandName =
   | 'new'
@@ -42,13 +43,19 @@ export type CommandRunnerResult = {
   readonly stderr?: string | Buffer;
 };
 
+export type CommandRunnerOptions = {
+  readonly stdio: 'inherit' | 'pipe';
+};
+
 export type CommandRunner = (
   command: string,
   args: readonly string[],
+  options: CommandRunnerOptions,
 ) => CommandRunnerResult;
 
 export type RainrailCliDependencies = {
   readonly commandRunner?: CommandRunner;
+  readonly currentBinPath?: string;
 };
 
 const DEFAULT_INSTALLER_URL =
@@ -217,11 +224,13 @@ export function formatHelp(): string {
 function parseUpdateArguments(args: readonly string[]): {
   readonly installer: string;
   readonly installerArgs: readonly string[];
+  readonly hasExplicitPrefix: boolean;
   readonly errors: readonly string[];
 } {
   const installerArgs: string[] = [];
   const errors: string[] = [];
   let installer = DEFAULT_INSTALLER_URL;
+  let hasExplicitPrefix = false;
 
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
@@ -246,6 +255,19 @@ function parseUpdateArguments(args: readonly string[]): {
       continue;
     }
 
+    if (arg === '--prefix') {
+      const value = args[index + 1];
+      if (value === undefined || value.startsWith('--')) {
+        errors.push('Missing value for --prefix.');
+        continue;
+      }
+
+      installerArgs.push(arg, value);
+      hasExplicitPrefix = true;
+      index += 1;
+      continue;
+    }
+
     if (arg.startsWith('--version=')) {
       const value = arg.slice('--version='.length);
       if (value.length === 0) {
@@ -266,10 +288,21 @@ function parseUpdateArguments(args: readonly string[]): {
       continue;
     }
 
+    if (arg.startsWith('--prefix=')) {
+      const value = arg.slice('--prefix='.length);
+      if (value.length === 0) {
+        errors.push('Missing value for --prefix.');
+        continue;
+      }
+      installerArgs.push('--prefix', value);
+      hasExplicitPrefix = true;
+      continue;
+    }
+
     installerArgs.push(arg);
   }
 
-  return { installer, installerArgs, errors };
+  return { installer, installerArgs, hasExplicitPrefix, errors };
 }
 
 function toOutput(value: string | Buffer | undefined): string {
@@ -283,6 +316,7 @@ function runUpdateCommand(
   args: readonly string[],
   options: SharedOptions,
   commandRunner: CommandRunner,
+  currentBinPath: string | undefined,
 ): RainrailCliResult {
   const parsed = parseUpdateArguments(args);
   if (parsed.errors.length > 0) {
@@ -294,9 +328,26 @@ function runUpdateCommand(
   }
 
   const installerArgs = [...parsed.installerArgs];
+  if (!parsed.hasExplicitPrefix) {
+    const inferredPrefix = inferRainrailInstallPrefix(currentBinPath);
+    if (inferredPrefix === undefined) {
+      return {
+        exitCode: 1,
+        stdout: '',
+        stderr:
+          'Unable to infer the current Rainrail install prefix. Re-run rainrail update with --prefix <path>.\n',
+      };
+    }
+    installerArgs.push('--prefix', inferredPrefix);
+  }
+
   if (options.yes) {
     installerArgs.push('--yes');
   }
+  const stdio = installerArgs.includes('--add-to-shell') &&
+    !installerArgs.includes('--yes')
+    ? 'inherit'
+    : 'pipe';
 
   const result = parsed.installer.startsWith('http://') ||
     parsed.installer.startsWith('https://')
@@ -306,14 +357,34 @@ function runUpdateCommand(
         'rainrail-update',
         parsed.installer,
         ...installerArgs,
-      ])
-    : commandRunner('bash', [parsed.installer, ...installerArgs]);
+      ], { stdio })
+    : commandRunner('bash', [parsed.installer, ...installerArgs], { stdio });
 
   return {
     exitCode: result.status ?? 1,
     stdout: toOutput(result.stdout),
     stderr: toOutput(result.stderr),
   };
+}
+
+function inferRainrailInstallPrefix(currentBinPath: string | undefined): string | undefined {
+  if (currentBinPath === undefined || currentBinPath.length === 0) {
+    return undefined;
+  }
+
+  const normalized = normalize(currentBinPath);
+  if (normalized.endsWith(`${sep}bin${sep}rainrail`)) {
+    return dirname(dirname(normalized));
+  }
+
+  const packageBinSuffix = `${sep}dist${sep}bin${sep}rainrail.js`;
+  const packageMarker = `${sep}lib${sep}rainrail${sep}`;
+  const packageMarkerIndex = normalized.indexOf(packageMarker);
+  if (packageMarkerIndex > 0 && normalized.endsWith(packageBinSuffix)) {
+    return normalized.slice(0, packageMarkerIndex);
+  }
+
+  return undefined;
 }
 
 export function runRainrailCli(
@@ -352,7 +423,12 @@ export function runRainrailCli(
       parsed.commandArgs,
       parsed.options,
       dependencies.commandRunner ??
-        ((commandName, args) => spawnSync(commandName, args, { encoding: 'utf8' })),
+        ((commandName, args, commandOptions) =>
+          spawnSync(commandName, args, {
+            encoding: 'utf8',
+            stdio: commandOptions.stdio,
+          })),
+      dependencies.currentBinPath ?? process.argv[1],
     );
   }
 

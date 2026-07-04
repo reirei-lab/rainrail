@@ -38,6 +38,16 @@ jobs:
           asset_path="$(pnpm --silent release:cli)"
           echo "asset_path=${asset_path}" >> "${GITHUB_OUTPUT}"
 
+      - name: Verify release tag matches CLI version
+        if: github.event_name == 'release'
+        run: |
+          cli_version="$(node -p "require('./packages/cli/package.json').version")"
+          release_tag="${{ github.event.release.tag_name }}"
+          if [ "${release_tag}" != "v${cli_version}" ]; then
+            echo "Release tag ${release_tag} does not match CLI package version ${cli_version}." >&2
+            exit 1
+          fi
+
       - name: Upload release asset
         if: github.event_name == 'release'
         env:
