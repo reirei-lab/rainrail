@@ -13,6 +13,7 @@ export interface RainrailIntakeRoute {
   path: `/${string}`;
   methods: readonly string[];
   maxBodyBytes?: number;
+  readBodyBeforeHandle?: boolean;
   handle(request: Request, context: RainrailIntakeAdapterContext): Response | Promise<Response>;
 }
 
@@ -34,6 +35,7 @@ export interface RainrailIntakeRegistry {
   routeFor(request: Request): RainrailIntakeRouteMatch | RainrailIntakeRouteMethodMismatch | undefined;
   allowedMethodsForPath(pathname: string): readonly string[] | undefined;
   routeNeedsBody(pathname: string, method: string): boolean;
+  routeStreamsBody(pathname: string, method: string): boolean;
   routeBodyLimit(pathname: string, method: string): number | undefined;
   tail?: RainrailIntakeAdapter['tail'];
 }
@@ -104,10 +106,16 @@ export function createRainrailIntakeRegistry(adapters: readonly RainrailIntakeAd
       return allowedMethods === undefined ? undefined : [...allowedMethods].sort();
     },
     routeNeedsBody(pathname, method) {
-      return routeHandlers.has(`${method.toUpperCase()} ${pathname}`);
+      const route = routeHandlers.get(`${method.toUpperCase()} ${pathname}`);
+      return route !== undefined && route.readBodyBeforeHandle !== false;
+    },
+    routeStreamsBody(pathname, method) {
+      const route = routeHandlers.get(`${method.toUpperCase()} ${pathname}`);
+      return route !== undefined && route.readBodyBeforeHandle === false;
     },
     routeBodyLimit(pathname, method) {
-      return routeHandlers.get(`${method.toUpperCase()} ${pathname}`)?.maxBodyBytes;
+      const route = routeHandlers.get(`${method.toUpperCase()} ${pathname}`);
+      return route?.readBodyBeforeHandle === false ? undefined : route?.maxBodyBytes;
     },
     ...(tail === undefined ? {} : { tail }),
   };

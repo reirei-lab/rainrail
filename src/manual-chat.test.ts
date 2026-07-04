@@ -6,6 +6,8 @@ import {
   createPluginLoader,
   createRainrailHttpApp,
   RainrailBridgeRoom,
+  rainrailHttpRequestBodyLimit,
+  shouldReadRainrailHttpRequestBody,
   type ManualInputRainrailEvent,
   type PluginRuntimeContext,
   type RainrailBridgeRoomState,
@@ -209,6 +211,32 @@ describe('manual and chat input source contract', () => {
     expect(storage.storedEvents()).toEqual([]);
   });
 
+  it('does not ask the HTTP app to pre-read manual input bodies before adapter auth', async () => {
+    const options = {
+      room: new RainrailBridgeRoom(fakeState(), { publishToken: TEST_PUBLISH_TOKEN }),
+      publishToken: TEST_PUBLISH_TOKEN,
+      intakeAdapters: [
+        createManualInputIntakeAdapter({
+          channel: 'chat',
+          bearerToken: 'chat-intake-token',
+          maxBodyBytes: 4,
+        }),
+      ],
+    };
+
+    expect(shouldReadRainrailHttpRequestBody('/intake/chat', 'POST', options)).toBe(false);
+    expect(rainrailHttpRequestBodyLimit('/intake/chat', 'POST', options)).toBeUndefined();
+
+    const app = createRainrailHttpApp(options);
+    const response = await app.fetch(new Request('https://rainrail.local/intake/chat', {
+      method: 'POST',
+      body: '{"too":"large"}',
+    }));
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toEqual({ error: 'missing_bearer_token' });
+  });
+
   it('keeps generated delivery ids unique for long conversation ids', async () => {
     const longConversationId = `conversation-${'a'.repeat(180)}`;
     const first = await createManualInputEvent({
@@ -232,6 +260,122 @@ describe('manual and chat input source contract', () => {
     expect(second.delivery.id).toContain('message-two');
     expect(first.delivery.id.length).toBeLessThanOrEqual(128);
     expect(second.delivery.id.length).toBeLessThanOrEqual(128);
+  });
+
+  it('publishes long conversation ids through HTTP intake with a short event id', async () => {
+    const storage = fakeState();
+    const app = createRainrailHttpApp({
+      room: new RainrailBridgeRoom(storage, { publishToken: TEST_PUBLISH_TOKEN }),
+      publishToken: TEST_PUBLISH_TOKEN,
+      intakeAdapters: [
+        createManualInputIntakeAdapter({
+          channel: 'chat',
+          bearerToken: 'chat-intake-token',
+          receivedAt: () => new Date('2026-07-04T09:21:22.000Z'),
+        }),
+      ],
+    });
+    const response = await app.fetch(new Request('https://rainrail.local/intake/chat', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer chat-intake-token',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        conversationId: `conversation-${'b'.repeat(180)}`,
+        messageId: 'message-long-conversation',
+        message: 'hello',
+      }),
+    }));
+
+    expect(response.status).toBe(202);
+    const body = await response.json() as { id: string };
+    expect(body.id.length).toBeLessThanOrEqual(128);
+    expect(storage.storedEvents()[0]).toMatchObject({
+      id: body.id,
+      delivery: {
+        id: expect.stringContaining('message-long-conversation'),
+      },
+    });
+  });
+
+  it('uses delivery-reference-safe ids for colon-bearing external ids', async () => {
+    const event = await createManualInputEvent({
+      channel: 'chat',
+      receivedAt: new Date('2026-07-04T09:21:23.000Z'),
+      conversationId: 'slack:C123',
+      messageId: 'slack:message:456',
+      message: 'hello',
+    });
+
+    expect(event.delivery.id).not.toContain(':');
+    expect(new URL(event.rawPayload.reference).pathname).not.toContain(':');
+  });
+
+  it('keeps non-GitHub conversation URLs out of the subject while preserving payload context', async () => {
+    const storage = fakeState();
+    const app = createRainrailHttpApp({
+      room: new RainrailBridgeRoom(storage, { publishToken: TEST_PUBLISH_TOKEN }),
+      publishToken: TEST_PUBLISH_TOKEN,
+      intakeAdapters: [
+        createManualInputIntakeAdapter({
+          channel: 'chat',
+          bearerToken: 'chat-intake-token',
+          receivedAt: () => new Date('2026-07-04T09:21:24.000Z'),
+          deliveryId: () => 'chat-conversation-url',
+        }),
+      ],
+    });
+
+    const response = await app.fetch(new Request('https://rainrail.local/intake/chat', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer chat-intake-token',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        conversationId: 'chat-url-session',
+        conversationUrl: 'https://chat.example/conversations/123?token=secret',
+        message: 'hello',
+      }),
+    }));
+
+    expect(response.status).toBe(202);
+    const storedEvent = storage.storedEvents()[0] as { subject?: unknown } | undefined;
+    expect(storedEvent).toMatchObject({
+      subject: {
+        type: 'conversation',
+        id: 'chat-url-session',
+      },
+      payload: {
+        conversation: {
+          id: 'chat-url-session',
+          url: 'https://chat.example/conversations/123',
+        },
+      },
+    });
+    expect(storedEvent?.subject).not.toHaveProperty('url');
+  });
+
+  it('keeps generated delivery ids unique for long message ids with the same prefix', async () => {
+    const prefix = 'message-prefix-'.repeat(12);
+    const first = await createManualInputEvent({
+      channel: 'chat',
+      receivedAt: new Date('2026-07-04T09:21:24.000Z'),
+      conversationId: 'conversation-long-message',
+      messageId: `${prefix}-one`,
+      message: 'first',
+    });
+    const second = await createManualInputEvent({
+      channel: 'chat',
+      receivedAt: new Date('2026-07-04T09:21:25.000Z'),
+      conversationId: 'conversation-long-message',
+      messageId: `${prefix}-two`,
+      message: 'second',
+    });
+
+    expect(first.delivery.id).not.toBe(second.delivery.id);
+    expect(first.id).not.toBe(second.id);
   });
 
   it('normalizes leading punctuation in conversation and message identifiers', async () => {

@@ -1,4 +1,5 @@
 import http, { type IncomingMessage, type ServerResponse } from 'node:http';
+import { Readable } from 'node:stream';
 
 import { RainrailBridgeRoom, type RainrailBridgeRoomState } from './bridge-room.js';
 import { createRainrailEepBridgeIntakeAdapters } from './eep-bridge-bundle.js';
@@ -6,6 +7,7 @@ import {
   createRainrailHttpApp,
   rainrailHttpRequestBodyLimit,
   shouldReadRainrailHttpRequestBody,
+  shouldStreamRainrailHttpRequestBody,
   type RainrailHttpApp,
   type RainrailHttpAppOptions,
 } from './http-app.js';
@@ -130,11 +132,16 @@ async function toFetchRequest(
   };
 
   const method = request.method ?? 'GET';
-  if (methodCanHaveBody(method) && shouldReadRainrailHttpRequestBody(url.pathname, method, appOptions)) {
-    init.body = await readRequestBody(
-      request,
-      rainrailHttpRequestBodyLimit(url.pathname, method, appOptions) ?? options.maxBodyBytes,
-    );
+  if (methodCanHaveBody(method)) {
+    if (shouldReadRainrailHttpRequestBody(url.pathname, method, appOptions)) {
+      init.body = await readRequestBody(
+        request,
+        rainrailHttpRequestBodyLimit(url.pathname, method, appOptions) ?? options.maxBodyBytes,
+      );
+    } else if (shouldStreamRainrailHttpRequestBody(url.pathname, method, appOptions)) {
+      init.body = Readable.toWeb(request) as ReadableStream;
+      Object.assign(init, { duplex: 'half' });
+    }
   }
 
   return new Request(url, init);

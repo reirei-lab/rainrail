@@ -84,6 +84,8 @@ event name は channel ごとに固定する。
 `source.type` は `manual` または `chat`、`source.name` は既定で
 `manual-input` または `web-chat` とする。`subject` はどちらも
 `type: "conversation"` とし、`subject.id` には conversation id を置く。
+`conversationUrl` は provider URL の allowlist が Core subject URL と一致しない場合があるため、
+`subject.url` ではなく `payload.conversation.url` にだけ保持する。
 payload は provider 固有 raw body ではなく、次の正規化済み shape にする。
 
 - `provider: "rainrail"`
@@ -98,8 +100,11 @@ payload は provider 固有 raw body ではなく、次の正規化済み shape 
 Core storage / durable replay に残さない。`rawPayload` は `inline-redacted` とし、
 `manual://deliveries/<delivery-id>` または `chat://deliveries/<delivery-id>` の参照と
 digest だけを保持する。manual/chat の raw payload reference は既存 provider と同じく
-`deliveries` host と安全な 1 path segment の delivery id だけを許可し、任意 host/path は
-Core storage に残さない。token、secret、password、API key、Bearer credential 形式は
+`deliveries` host と安全な 1 path segment の delivery id だけを許可し、delivery id 生成時に
+`:` など reference に使えない文字は `-` へ正規化する。長い conversation id や message id は
+末尾の一意要素と短い hash を残し、Bridge room の 128 文字 id 制限を超える場合は top-level
+event id も短い明示 id にする。任意 host/path は Core storage に残さない。
+token、secret、password、API key、Bearer credential 形式は
 `key=value`、JSON/YAML 風の `key: value`、quoted JSON field のいずれも source adapter 側で
 短く redaction する。
 
@@ -109,7 +114,9 @@ HTTP intake の既定 route は `/intake/manual` と `/intake/chat` で、adapte
 `createManualInputIntakeAdapter` は `ManualInputIntakeAdapterOptions.bearerToken` を必須とし、
 body を読む前に `Authorization: Bearer <token>` を検証する。manual/chat input は
 `runtime:start` へ接続され得るため、Core の generic intake route ではなく adapter 境界で
-source-specific auth を持つ。
+source-specific auth を持つ。Node server や Fetch app が adapter の前で request body を
+buffer 化しないよう、manual/chat route は handle 前 body read を無効にし、認証後に adapter 内で
+`maxBodyBytes` を適用する。
 Workflow plugin は通常の event と同じく `rainrail.chat.message` や
 `rainrail.manual.message` に `accepts` / local handler を設定し、
 `runtime:start` capability を宣言したうえで `context.actions.startRuntime()` を呼べる。

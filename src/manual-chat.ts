@@ -104,10 +104,11 @@ export async function createManualInputEvent({
 }: CreateManualInputEventInput): Promise<ManualInputRainrailEvent> {
   const normalizedConversationId = safeIdentifierSegment(conversationId, 'conversation');
   const normalizedDeliveryId = deliveryId === undefined
-    ? buildManualInputDeliveryId(channel, normalizedConversationId, messageId ?? crypto.randomUUID())
-    : safeIdentifierSegment(deliveryId, `${channel}-delivery`);
+    ? buildManualInputDeliveryId(channel, conversationId, messageId ?? crypto.randomUUID())
+    : safeDeliveryReferenceSegment(deliveryId, `${channel}-delivery`);
   const occurredAt = receivedAt.toISOString();
   const safeConversationUrl = safeUrl(conversationUrl);
+  const name = channel === 'chat' ? 'rainrail.chat.message' : 'rainrail.manual.message';
   const payload: ManualInputPayload = {
     provider: 'rainrail',
     channel,
@@ -126,11 +127,12 @@ export async function createManualInputEvent({
   };
 
   return createEventEnvelope({
+    ...buildOptionalManualInputEventId(sourceName, normalizedDeliveryId, name),
     source: {
       type: channel,
       name: sourceName,
     },
-    name: channel === 'chat' ? 'rainrail.chat.message' : 'rainrail.manual.message',
+    name,
     delivery: {
       id: normalizedDeliveryId,
       receivedAt: occurredAt,
@@ -139,7 +141,6 @@ export async function createManualInputEvent({
     subject: {
       type: 'conversation',
       id: normalizedConversationId,
-      ...(payload.conversation.url === undefined ? {} : { url: payload.conversation.url }),
     },
     payload,
     rawPayload: {
@@ -162,6 +163,7 @@ export function createManualInputIntakeAdapter(options: ManualInputIntakeAdapter
       path: options.routePath ?? defaultManualInputRoutePath(options.channel),
       methods: ['POST'],
       maxBodyBytes,
+      readBodyBeforeHandle: false,
       async handle(request, context) {
         const auth = verifyBearerToken(request, bearerToken);
         if (!auth.ok) {
@@ -384,15 +386,75 @@ function safeIdentifierSegment(value: string, fallback: string): string {
   return safe.slice(0, 128);
 }
 
+function safeDeliveryReferenceSegment(value: string, fallback: string, maxLength = 128): string {
+  const normalized = value.trim().replace(/[^A-Za-z0-9_.-]+/gu, '-').replace(/^-+|-+$/gu, '');
+  const safe = normalized.length === 0
+    ? fallback
+    : /^[A-Za-z0-9]/u.test(normalized) ? normalized : `${fallback}-${normalized}`;
+  if (safe.length <= maxLength) return safe;
+
+  const hash = stableHash(value);
+  const suffix = `-${hash}`;
+  return `${safe.slice(0, Math.max(1, maxLength - suffix.length))}${suffix}`;
+}
+
+function safeDeliveryReferenceSuffix(value: string, fallback: string, maxLength: number): string {
+  const normalized = value.trim().replace(/[^A-Za-z0-9_.-]+/gu, '-').replace(/^-+|-+$/gu, '');
+  const safe = normalized.length === 0
+    ? fallback
+    : /^[A-Za-z0-9]/u.test(normalized) ? normalized : `${fallback}-${normalized}`;
+  if (safe.length <= maxLength) return safe;
+
+  const hash = stableHash(value);
+  const hashSuffix = `-${hash}`;
+  const tailLength = Math.max(1, maxLength - hashSuffix.length);
+  return `${safe.slice(Math.max(0, safe.length - tailLength))}${hashSuffix}`;
+}
+
 function buildManualInputDeliveryId(channel: ManualInputChannel, conversationId: string, uniqueId: string): string {
-  const uniqueSegment = safeIdentifierSegment(uniqueId, 'message');
-  const prefix = safeIdentifierSegment(`${channel}-${conversationId}`, `${channel}-delivery`);
+  const uniqueSegment = safeDeliveryReferenceSuffix(uniqueId, 'message', 64);
+  const prefix = safeDeliveryReferenceSegment(`${channel}-${conversationId}`, `${channel}-delivery`);
   const separator = '-';
   const maxLength = 128;
   const suffixLength = Math.min(uniqueSegment.length, Math.max(1, maxLength - `${channel}${separator}`.length));
   const suffix = uniqueSegment.slice(Math.max(0, uniqueSegment.length - suffixLength));
   const prefixMaxLength = Math.max(1, maxLength - separator.length - suffix.length);
   return `${prefix.slice(0, prefixMaxLength)}${separator}${suffix}`;
+}
+
+function buildOptionalManualInputEventId(
+  sourceName: string,
+  deliveryId: string,
+  name: ManualInputRainrailEvent['name'],
+): { id?: string } {
+  const defaultId = `${sourceName}:${deliveryId}:${name}`;
+  if (defaultId.length <= 128) return {};
+
+  const source = safeIdentifierSegment(sourceName, 'source').slice(0, 24);
+  const hash = stableHash(defaultId);
+  const fixedLength = 'manual'.length + source.length + name.length + hash.length + 4;
+  const deliveryLength = Math.max(1, 128 - fixedLength);
+  const delivery = compactIdentifierSuffix(deliveryId, 'delivery', deliveryLength);
+  return { id: `manual:${source}:${delivery}:${name}:${hash}` };
+}
+
+function compactIdentifierSuffix(value: string, fallback: string, maxLength: number): string {
+  const safe = safeIdentifierSegment(value, fallback);
+  if (safe.length <= maxLength) return safe;
+
+  const hash = stableHash(value);
+  const hashSuffix = `-${hash}`;
+  const tailLength = Math.max(1, maxLength - hashSuffix.length);
+  return `${safe.slice(Math.max(0, safe.length - tailLength))}${hashSuffix}`;
+}
+
+function stableHash(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(36);
 }
 
 function safeContentType(value: string): string {
