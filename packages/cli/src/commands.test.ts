@@ -220,6 +220,32 @@ describe('Rainrail CLI built-in commands', () => {
     expect(result.stderr).toContain('rainrail plugin plugins run requires plugin execution');
   });
 
+  it('prints canonical plugin help when a plugin name collides with a built-in command', () => {
+    const result = runRainrailCli(['plugin', 'plugins', 'help'], {
+      pluginAliasResolver: (alias) => alias === 'plugins'
+        ? {
+            name: 'plugins',
+            alias: 'plugins',
+            aliases: ['plugins'],
+            summary: 'Conflicting plugin.',
+            helpText: 'Conflicting plugin metadata.',
+            commands: [
+              {
+                name: 'run',
+                summary: 'Run the conflicting plugin.',
+                helpText: 'Usage: rainrail plugin plugins run',
+              },
+            ],
+          }
+        : undefined,
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe('');
+    expect(result.stdout).toContain('Usage: rainrail plugin plugins <command>');
+    expect(result.stdout).not.toContain('Usage: rainrail plugins <command>');
+  });
+
   it('prints help from the --help flag', () => {
     expect(runRainrailCli(['--help'])).toEqual(runRainrailCli(['help']));
   });

@@ -92,7 +92,10 @@ export function getOfficialPluginByAlias(alias: string): OfficialPluginMetadata 
   return OFFICIAL_PLUGIN_CATALOG.find((plugin) => plugin.aliases.includes(alias));
 }
 
-export function formatOfficialPluginHelp(plugin: OfficialPluginMetadata): string {
+export function formatOfficialPluginHelp(
+  plugin: OfficialPluginMetadata,
+  invocation: readonly string[] = [plugin.alias],
+): string {
   const commandRows = plugin.commands.map((command) => {
     const paddedName = command.name.padEnd(12, ' ');
     return `  ${paddedName} ${command.summary}`;
@@ -100,7 +103,7 @@ export function formatOfficialPluginHelp(plugin: OfficialPluginMetadata): string
   const aliasText = plugin.aliases.join(', ');
 
   return [
-    `Usage: rainrail ${plugin.alias} <command> [options]`,
+    `Usage: rainrail ${invocation.join(' ')} <command> [options]`,
     '',
     `${plugin.name} official plugin`,
     plugin.helpText,

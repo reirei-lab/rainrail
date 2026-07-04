@@ -483,7 +483,7 @@ function runPluginCommand(
   if (isOfficialPluginHelpRequest(args)) {
     return {
       exitCode: 0,
-      stdout: formatOfficialPluginHelp(plugin),
+      stdout: formatOfficialPluginHelp(plugin, invocation),
       stderr: '',
     };
   }
@@ -493,7 +493,7 @@ function runPluginCommand(
     return {
       exitCode: 1,
       stdout: '',
-      stderr: `Unknown rainrail ${invocation.join(' ')} command: ${args.join(' ')}\n\n${formatOfficialPluginHelp(plugin)}`,
+      stderr: `Unknown rainrail ${invocation.join(' ')} command: ${args.join(' ')}\n\n${formatOfficialPluginHelp(plugin, invocation)}`,
     };
   }
 
