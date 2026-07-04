@@ -7,6 +7,11 @@ Core、EEP Bridge bundle、Source adapter、transport の責務境界は
 [Core / EEP Bridge / Source adapter boundary](core-eep-bridge-source-adapter-boundary.md)
 で固定する。
 
+Bridge room、event bus、SSE framing の実装本体は `src/event-delivery/` に置く。
+この directory の `AGENTS.md` は storage / publish / replay / SSE framing の
+review rule を持つ scoped rules である。既存 import path のために
+`src/bridge-room.ts`、`src/event-bus.ts`、`src/sse.ts` は compatibility shim として残す。
+
 ## Event bus
 
 `createRainrailEventBus` は in-memory の subscriber 集合と replay buffer を持つ。
