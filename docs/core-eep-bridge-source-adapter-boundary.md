@@ -56,10 +56,21 @@ bundle は複数 provider の adapter を同梱してよいが、Core API へ渡
 - provider payload を Source adapter に渡し、provider-specific normalization を実行する。
 - `RainrailBridgeRoom` の `/publish` へ envelope を渡すか、`createRainrailHttpApp` に
   `RainrailIntakeAdapter` を登録して route / `tail()` handler 経由で publish する。
+- `createRainrailEepBridgeIntakeAdapters` / `createRainrailEepBridgeIntakeAdaptersFromEnv`
+  を provider ingress composition の公開入口にし、Node server と Worker entrypoint の
+  GitHub webhook / Cloudflare tail 登録を同じ bundle contract に揃える。
+- 既存の custom tail intake adapter を持つ transport は `includeCloudflareTail: false`
+  で bundled tail を外し、同一 app に複数 tail handler を登録しない。
 - publish 成功後に必要な operational store 記録を行う場合も、room が返した検証済み envelope を使う。
 
 EEP Bridge bundle は Source adapter と transport/core adapter を composition する単位であり、
 workflow plugin の routing policy や runtime provider の実行詳細を直接持たない。
+
+既存の top-level `src/index.ts` 互換 export は移行期間だけ残す。新規の GitHub webhook /
+Cloudflare tail ingress composition は source-specific helper を直接 import せず、
+`createRainrailEepBridgeIntakeAdapters` を使う。後続の package split では Core package
+から provider ingress helper を外し、source adapter package または eep-bridge package の
+明示 export に移す。
 
 ## Source adapter responsibilities
 
