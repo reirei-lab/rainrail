@@ -5,8 +5,26 @@ const agents = readFileSync(new URL('../AGENTS.md', import.meta.url), 'utf8');
 const dispatcherAgents = readFileSync(new URL('../src/dispatcher/AGENTS.md', import.meta.url), 'utf8');
 const dispatcherImplementation = readFileSync(new URL('../src/dispatcher/index.ts', import.meta.url), 'utf8');
 const pluginRuntimeContract = readFileSync(new URL('../docs/plugin-runtime-contract.md', import.meta.url), 'utf8');
-/** @type {{contracts: Array<{id?: string, sources?: string[]}>}} */
-const contractsManifest = JSON.parse(readFileSync(new URL('../docs/contracts.manifest.json', import.meta.url), 'utf8'));
+const githubWebhookAgents = readFileSync(new URL('../src/github-webhook/AGENTS.md', import.meta.url), 'utf8');
+/** @type {{contracts: Array<{id: string, sources: string[]}>}} */
+const contractsManifest = JSON.parse(
+  readFileSync(new URL('../docs/contracts.manifest.json', import.meta.url), 'utf8'),
+);
+
+/**
+ * @param {string} id
+ * @returns {{ sources: string[] }}
+ */
+const contractById = (id) => {
+  const contract = contractsManifest.contracts.find(
+    /** @param {{ id: string }} contract */
+    (contract) => contract.id === id,
+  );
+  if (contract === undefined) {
+    throw new Error(`Missing contract ${id}`);
+  }
+  return contract;
+};
 
 describe('AGENTS.md development rules', () => {
   it('documents Rainrail as a TypeScript monorepo for event orchestration work', () => {
@@ -73,8 +91,30 @@ describe('AGENTS.md development rules', () => {
   });
 
   it('tracks the dispatcher implementation as a plugin runtime contract source', () => {
-    const pluginRuntime = contractsManifest.contracts.find((contract) => contract.id === 'plugin-runtime');
+    const pluginRuntime = contractById('plugin-runtime');
     expect(pluginRuntime?.sources).toContain('src/dispatcher.ts');
     expect(pluginRuntime?.sources).toContain('src/dispatcher/index.ts');
+  });
+});
+
+describe('GitHub webhook scoped agent rules', () => {
+  it('keeps normalization ownership scoped to src/github-webhook', () => {
+    expect(githubWebhookAgents).toContain('GitHub webhook normalization');
+    expect(githubWebhookAgents).toContain('review payload');
+    expect(githubWebhookAgents).toContain('issue_comment');
+    expect(githubWebhookAgents).toContain('workflow_run');
+    expect(githubWebhookAgents).toContain('check_suite');
+    expect(githubWebhookAgents).toContain('installation');
+    expect(githubWebhookAgents).toContain('organization');
+    expect(githubWebhookAgents).toContain('projects_v2_item');
+  });
+
+  it('tracks the moved GitHub webhook implementation in the contracts manifest', () => {
+    const webhookContract = contractById('github-webhook-normalization');
+    const boundaryContract = contractById('core-eep-bridge-source-adapter-boundary');
+
+    expect(webhookContract.sources).toEqual(['src/github-webhook/index.ts']);
+    expect(boundaryContract.sources).toContain('src/github-webhook/index.ts');
+    expect(boundaryContract.sources).not.toContain('src/github-webhook.ts');
   });
 });

@@ -239,7 +239,7 @@
       "sources": [
         "src/events.ts",
         "src/source-plugin.ts",
-        "src/github-webhook.ts",
+        "src/github-webhook/index.ts",
         "src/cloudflare-tail.ts",
         "src/event-bus.ts",
         "src/bridge-room.ts",
@@ -274,7 +274,7 @@
     {
       "id": "github-webhook-normalization",
       "title": "GitHub webhook normalization",
-      "sources": ["src/github-webhook.ts"],
+      "sources": ["src/github-webhook/index.ts"],
       "docs": ["docs/github-webhook-normalization.md"],
       "tests": ["src/github-webhook.test.ts"],
       "publicExports": [
