@@ -4,7 +4,7 @@ set -euo pipefail
 repo="reirei-lab/rainrail"
 version=""
 asset_url=""
-prefix="${RAINRAIL_PREFIX:-${HOME}/.rainrail}"
+prefix="${RAINRAIL_PREFIX:-}"
 add_to_shell="false"
 assume_yes="false"
 
@@ -77,6 +77,14 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
+if [ -z "${prefix}" ]; then
+  if [ -z "${HOME:-}" ]; then
+    echo "HOME is not set. Pass --prefix <path> or set RAINRAIL_PREFIX." >&2
+    exit 1
+  fi
+  prefix="${HOME}/.rainrail"
+fi
+
 require_command() {
   if ! command -v "$1" >/dev/null 2>&1; then
     echo "Rainrail requires $1, but it was not found on PATH." >&2
@@ -128,6 +136,10 @@ download() {
   esac
 }
 
+shell_escape() {
+  printf '%q' "$1"
+}
+
 resolve_latest_version() {
   require_command curl
   local effective_url
@@ -173,6 +185,7 @@ fi
 
 target_dir="${prefix}/lib/rainrail/${installed_version}"
 bin_dir="${prefix}/bin"
+path_line="export PATH=$(shell_escape "${bin_dir}"):\$PATH"
 mkdir -p "${target_dir}" "${bin_dir}"
 rm -rf "${target_dir}"
 mkdir -p "$(dirname "${target_dir}")"
@@ -187,7 +200,7 @@ case ":${PATH}:" in
   *)
     echo "${bin_dir} is not on PATH."
     echo "Add this line to your shell rc file:"
-    echo "  export PATH=\"${bin_dir}:\$PATH\""
+    echo "  ${path_line}"
     ;;
 esac
 
@@ -210,10 +223,9 @@ if [ "${add_to_shell}" = "true" ]; then
   fi
 
   if [ "${should_edit}" = "true" ]; then
-    line="export PATH=\"${bin_dir}:\$PATH\""
     touch "${rc_file}"
-    if ! grep -F "${line}" "${rc_file}" >/dev/null 2>&1; then
-      printf '\n%s\n' "${line}" >> "${rc_file}"
+    if ! grep -F "${path_line}" "${rc_file}" >/dev/null 2>&1; then
+      printf '\n%s\n' "${path_line}" >> "${rc_file}"
       echo "Updated ${rc_file}"
     fi
   fi

@@ -78,6 +78,58 @@ describe('install.sh', () => {
     expect(existsSync(join(home, '.zshrc'))).toBe(false);
   });
 
+  it('uses an explicit prefix without requiring HOME to be set', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rainrail-install-no-home-'));
+    const tarball = createReleaseTarball(root, '9.8.7');
+    const prefix = join(root, 'prefix');
+    const { HOME: _home, ...envWithoutHome } = process.env;
+
+    const result = spawnSync(
+      'bash',
+      [installScript.pathname, '--asset-url', `file://${tarball}`, '--prefix', prefix],
+      {
+        encoding: 'utf8',
+        env: envWithoutHome,
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(readlinkSync(join(prefix, 'bin', 'rainrail'))).toBe(
+      '../lib/rainrail/9.8.7/dist/bin/rainrail.js',
+    );
+  });
+
+  it('shell-quotes the PATH line written to a shell rc file', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rainrail-install-rc-'));
+    const tarball = createReleaseTarball(root, '9.8.7');
+    const home = join(root, 'home');
+    mkdirSync(home);
+    const prefix = join(root, 'prefix $(touch should-not-run)"');
+
+    const result = spawnSync(
+      'bash',
+      [
+        installScript.pathname,
+        '--asset-url',
+        `file://${tarball}`,
+        '--prefix',
+        prefix,
+        '--add-to-shell',
+        '--yes',
+      ],
+      {
+        encoding: 'utf8',
+        env: { ...process.env, HOME: home, SHELL: '/bin/zsh' },
+      },
+    );
+
+    expect(result.status).toBe(0);
+    const rcContent = readFileSync(join(home, '.zshrc'), 'utf8');
+    expect(rcContent).toContain('\\$\\(touch\\ should-not-run\\)');
+    expect(rcContent).toContain('\\"/bin:$PATH');
+    expect(existsSync(join(root, 'should-not-run'))).toBe(false);
+  });
+
   it('rejects release tarballs with a path-like package version before installing', async () => {
     const root = await mkdtemp(join(tmpdir(), 'rainrail-install-version-'));
     const tarball = createReleaseTarball(root, '../../../outside');

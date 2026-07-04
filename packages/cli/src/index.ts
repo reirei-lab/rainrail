@@ -39,8 +39,8 @@ export type RainrailCliResult = {
 
 export type CommandRunnerResult = {
   readonly status: number | null;
-  readonly stdout?: string | Buffer;
-  readonly stderr?: string | Buffer;
+  readonly stdout?: string | Buffer | null;
+  readonly stderr?: string | Buffer | null;
 };
 
 export type CommandRunnerOptions = {
@@ -305,8 +305,8 @@ function parseUpdateArguments(args: readonly string[]): {
   return { installer, installerArgs, hasExplicitPrefix, errors };
 }
 
-function toOutput(value: string | Buffer | undefined): string {
-  if (value === undefined) {
+function toOutput(value: string | Buffer | null | undefined): string {
+  if (value === undefined || value === null) {
     return '';
   }
   return typeof value === 'string' ? value : value.toString('utf8');
@@ -379,7 +379,7 @@ function inferRainrailInstallPrefix(currentBinPath: string | undefined): string 
 
   const packageBinSuffix = `${sep}dist${sep}bin${sep}rainrail.js`;
   const packageMarker = `${sep}lib${sep}rainrail${sep}`;
-  const packageMarkerIndex = normalized.indexOf(packageMarker);
+  const packageMarkerIndex = normalized.lastIndexOf(packageMarker);
   if (packageMarkerIndex > 0 && normalized.endsWith(packageBinSuffix)) {
     return normalized.slice(0, packageMarkerIndex);
   }

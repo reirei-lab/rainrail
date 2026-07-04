@@ -222,6 +222,41 @@ describe('Rainrail CLI built-in commands', () => {
     expect(calls).toEqual([{ options: { stdio: 'inherit' } }]);
   });
 
+  it('treats inherited installer output as empty when spawnSync returns null streams', () => {
+    const result = runRainrailCli(
+      ['update', '--installer', '/tmp/install.sh', '--prefix', '/opt/rainrail', '--add-to-shell'],
+      {
+        commandRunner: () => ({ status: 0, stdout: null, stderr: null }),
+      },
+    );
+
+    expect(result).toEqual({
+      exitCode: 0,
+      stdout: '',
+      stderr: '',
+    });
+  });
+
+  it('infers the update prefix from the last installed package marker', () => {
+    const calls: Array<{ args: readonly string[] }> = [];
+
+    const result = runRainrailCli(['update', '--installer', '/tmp/install.sh'], {
+      currentBinPath:
+        '/opt/lib/rainrail/tools/lib/rainrail/1.2.3/dist/bin/rainrail.js',
+      commandRunner: (_command, args) => {
+        calls.push({ args });
+        return { status: 0, stdout: '', stderr: '' };
+      },
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(calls[0]?.args).toEqual([
+      '/tmp/install.sh',
+      '--prefix',
+      '/opt/lib/rainrail/tools',
+    ]);
+  });
+
   it('rejects the unsupported rainrail self-update command name', () => {
     const result = runRainrailCli(['self-update']);
 

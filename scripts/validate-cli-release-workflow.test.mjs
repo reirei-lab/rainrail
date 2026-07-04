@@ -7,6 +7,27 @@ const workflow = readFileSync(
 );
 
 describe('CLI release workflow', () => {
+  it('keeps release uploads on trusted triggers with scoped write permissions', () => {
+    expect(workflow).toMatch(/^on:\n {2}release:\n {4}types:\n {6}- published\n {2}workflow_dispatch:$/m);
+    expect(workflow).not.toContain('pull_request_target');
+    expect(workflow).not.toContain('pull_request:');
+    expect(workflow).toMatch(/^permissions:\n {2}contents: write$/m);
+    expect(workflow).not.toContain('issues: write');
+    expect(workflow).not.toContain('pull-requests: write');
+    expect(workflow).toMatch(/^ {4}runs-on: ubuntu-latest$/m);
+  });
+
+  it('checks out code without persisted credentials and installs from the lockfile on Node 26', () => {
+    expect(workflow).toContain('uses: actions/checkout@v7');
+    expect(workflow).toContain('persist-credentials: false');
+    expect(workflow).toContain('uses: pnpm/action-setup@v6');
+    expect(workflow).toContain('uses: actions/setup-node@v6');
+    expect(workflow).toContain('node-version: 26');
+    expect(workflow).toContain('cache: pnpm');
+    expect(workflow).toContain('cache-dependency-path: pnpm-lock.yaml');
+    expect(workflow).toContain('pnpm install --frozen-lockfile');
+  });
+
   it('fails release uploads when the release tag does not match the CLI package version', () => {
     expect(workflow).toContain('Verify release tag matches CLI version');
     expect(workflow).toContain("cli_version=\"$(node -p \"require('./packages/cli/package.json').version\")\"");
