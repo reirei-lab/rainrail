@@ -437,10 +437,14 @@ dispatcher の結果返却も止めない。audit sink が未設定の場合、d
 
 Rainrail の config は provider 境界ごとに分ける。`sources` は GitHub webhook
 などの event input、`taskProviders.github` は GitHub API 用の auth、
-`runtimeProviders.openclaw` は agent runtime 起動設定を持つ。環境変数は
-`${NAME}` 形式で JSON parse 前に展開し、値は JSON string content として
+`runtimeProviders.openclaw` は agent runtime 起動設定を持つ。`sourceBundles` は
+EEP Bridge bundle、GitHub webhook、Cloudflare tail、manual/chat source などの
+組み立てを明示する。bundle source は `provider` と `runtime` に既知 provider 名を
+参照として持ち、Core app / Worker は config からどの intake adapter を登録するか追える。
+環境変数は `${NAME}` 形式で JSON parse 前に展開し、値は JSON string content として
 エスケープする。secret 値そのものではなく、運用では環境変数や secret 名を
-config に渡す。
+config に渡す。Worker の `RAINRAIL_CONFIG_JSON` では `webhookSecret` に secret 名を
+書き、EEP Bridge bundle が同名 env / Workers Secret から実値を読む。
 
 GitHub auth は `token`、GitHub App installation token、環境変数 PAT、
 `gh auth` fallback を同じ `GitHubAuthToken` として扱う。環境変数 fallback は
