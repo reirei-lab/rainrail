@@ -2,6 +2,9 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 const agents = readFileSync(new URL('../AGENTS.md', import.meta.url), 'utf8');
+const docsAgents = readFileSync(new URL('../docs/AGENTS.md', import.meta.url), 'utf8');
+const githubAgents = readFileSync(new URL('../.github/AGENTS.md', import.meta.url), 'utf8');
+const scriptsAgents = readFileSync(new URL('../scripts/AGENTS.md', import.meta.url), 'utf8');
 const dispatcherAgents = readFileSync(new URL('../src/dispatcher/AGENTS.md', import.meta.url), 'utf8');
 const dispatcherImplementation = readFileSync(new URL('../src/dispatcher/index.ts', import.meta.url), 'utf8');
 const pluginRuntimeContract = readFileSync(new URL('../docs/plugin-runtime-contract.md', import.meta.url), 'utf8');
@@ -98,6 +101,41 @@ describe('AGENTS.md development rules', () => {
     const pluginRuntime = contractById('plugin-runtime');
     expect(pluginRuntime?.sources).toContain('src/dispatcher.ts');
     expect(pluginRuntime?.sources).toContain('src/dispatcher/index.ts');
+  });
+});
+
+describe('docs, CI, and drift scoped agent rules', () => {
+  it('keeps docs manifest, coverage matrix, and public export drift rules scoped to docs', () => {
+    expect(docsAgents).toContain('docs manifest');
+    expect(docsAgents).toContain('docs/contracts.manifest.json');
+    expect(docsAgents).toContain('docs/repo-test-coverage-matrix.md');
+    expect(docsAgents).toContain('publicExports');
+    expect(docsAgents).toContain('publicExportKinds');
+    expect(docsAgents).toContain('code span');
+    expect(docsAgents).toContain('src/index.ts');
+    expect(docsAgents).toContain('commented-out export');
+  });
+
+  it('keeps CI runner, token, runtime, and deploy workflow review rules scoped to .github', () => {
+    expect(githubAgents).toContain('pull_request_target');
+    expect(githubAgents).toContain('self-hosted');
+    expect(githubAgents).toContain('fork PR');
+    expect(githubAgents).toContain('persist-credentials: false');
+    expect(githubAgents).toContain('contents: read');
+    expect(githubAgents).toContain('node-version');
+    expect(githubAgents).toContain('workflow_run');
+    expect(githubAgents).toContain('trusted deploy tooling');
+  });
+
+  it('keeps docs:check, workflow validator, and script drift rules scoped to scripts', () => {
+    expect(scriptsAgents).toContain('docs:check');
+    expect(scriptsAgents).toContain('check-docs-drift.mjs');
+    expect(scriptsAgents).toContain('validate-pr-ci-workflow.test.mjs');
+    expect(scriptsAgents).toContain('validate-cloudflare-deploy-ci.test.mjs');
+    expect(scriptsAgents).toContain('TypeScript parser');
+    expect(scriptsAgents).toContain('comment text');
+    expect(scriptsAgents).toContain('Node runtime');
+    expect(scriptsAgents).toContain('package scripts');
   });
 });
 
