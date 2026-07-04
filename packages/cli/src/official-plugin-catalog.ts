@@ -119,9 +119,16 @@ export function formatOfficialPluginHelp(
 export function formatOfficialPluginCommandHelp(
   plugin: OfficialPluginMetadata,
   command: OfficialPluginCommandMetadata,
+  invocation: readonly string[] = [plugin.alias],
 ): string {
+  const defaultUsagePrefix = `Usage: rainrail ${plugin.alias} ${command.name}`;
+  const invocationUsagePrefix = `Usage: rainrail ${[...invocation, command.name].join(' ')}`;
+  const helpText = command.helpText.startsWith(defaultUsagePrefix)
+    ? `${invocationUsagePrefix}${command.helpText.slice(defaultUsagePrefix.length)}`
+    : command.helpText;
+
   return [
-    command.helpText,
+    helpText,
     '',
     `${plugin.name} official plugin`,
     command.summary,

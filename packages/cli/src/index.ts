@@ -130,7 +130,7 @@ export const BUILT_IN_COMMANDS: readonly BuiltInCommand[] = [
     name: 'plugin',
     kind: 'built-in',
     summary: 'Manage one Rainrail plugin.',
-    implemented: false,
+    implemented: true,
   },
   {
     name: 'update',
@@ -500,7 +500,7 @@ function runPluginCommand(
   if (isOfficialPluginCommandHelpRequest(pluginCommand, args)) {
     return {
       exitCode: 0,
-      stdout: formatOfficialPluginCommandHelp(plugin, pluginCommand),
+      stdout: formatOfficialPluginCommandHelp(plugin, pluginCommand, invocation),
       stderr: '',
     };
   }
@@ -515,6 +515,19 @@ function runPluginCommand(
 function formatPluginCollisionHint(commandName: string, commandArgs: readonly string[]): string {
   const canonicalCommand = ['rainrail', 'plugin', commandName, ...commandArgs].join(' ');
   return `A plugin named "${commandName}" also exists. Use \`${canonicalCommand}\` to call the plugin.\n`;
+}
+
+function getPluginCollisionHint(
+  commandName: string,
+  commandArgs: readonly string[],
+  options: SharedOptions,
+  pluginAliasResolver: PluginAliasResolver,
+): string | undefined {
+  if (!options.verbose || pluginAliasResolver(commandName) === undefined) {
+    return undefined;
+  }
+
+  return formatPluginCollisionHint(commandName, commandArgs);
 }
 
 export function runRainrailCli(
@@ -568,6 +581,20 @@ export function runRainrailCli(
     return runPluginCommand(plugin, parsed.commandArgs.slice(1), ['plugin', pluginName]);
   }
 
+  const pluginCollisionHint = getPluginCollisionHint(
+    command.name,
+    parsed.commandArgs,
+    parsed.options,
+    pluginAliasResolver,
+  );
+  if (command.implemented && pluginCollisionHint !== undefined) {
+    return {
+      exitCode: 2,
+      stdout: '',
+      stderr: `rainrail ${command.name} is a built-in command.\n${pluginCollisionHint}`,
+    };
+  }
+
   if (command.name === 'help') {
     return {
       exitCode: 0,
@@ -599,9 +626,7 @@ export function runRainrailCli(
     stdout: '',
     stderr: [
       `rainrail ${command.name} is not implemented yet.\n`,
-      parsed.options.verbose && pluginAliasResolver(command.name) !== undefined
-        ? formatPluginCollisionHint(command.name, parsed.commandArgs)
-        : '',
+      pluginCollisionHint ?? '',
     ].join(''),
   };
 }

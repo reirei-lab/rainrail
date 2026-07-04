@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
@@ -34,6 +34,7 @@ describe('Rainrail CLI built-in commands', () => {
     ]);
 
     expect(BUILT_IN_COMMANDS.every((command) => command.kind === 'built-in')).toBe(true);
+    expect(getBuiltInCommand('plugin')?.implemented).toBe(true);
   });
 
   it('parses shared options before and after the command name', () => {
@@ -144,6 +145,15 @@ describe('Rainrail CLI built-in commands', () => {
     expect(result.stdout).toContain('Register a GitHub webhook endpoint for a repository.');
   });
 
+  it('prints canonical plugin command help from canonical plugin routing', () => {
+    const result = runRainrailCli(['plugin', 'github', 'setup', 'help']);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe('');
+    expect(result.stdout).toContain('Usage: rainrail plugin github setup [options]');
+    expect(result.stdout).not.toContain('Usage: rainrail github setup [options]');
+  });
+
   it('resolves official plugin aliases before project-local plugin execution', () => {
     const result = runRainrailCli(['gh', 'doctor']);
 
@@ -193,6 +203,36 @@ describe('Rainrail CLI built-in commands', () => {
     expect(result.stderr).toContain('rainrail plugins is not implemented yet.');
     expect(result.stderr).toContain('A plugin named "plugins" also exists.');
     expect(result.stderr).toContain('Use `rainrail plugin plugins run` to call the plugin.');
+  });
+
+  it('prints collision guidance before running implemented built-ins in verbose mode', async () => {
+    await withTempDirectory(async (directory) => {
+      const result = runRainrailCli(['--verbose', 'new', 'run'], {
+        cwd: directory,
+        pluginAliasResolver: (alias) => alias === 'new'
+          ? {
+              name: 'new',
+              alias: 'new',
+              aliases: ['new'],
+              summary: 'Conflicting implemented built-in plugin.',
+              helpText: 'Conflicting implemented built-in plugin metadata.',
+              commands: [
+                {
+                  name: 'run',
+                  summary: 'Run the conflicting plugin.',
+                  helpText: 'Usage: rainrail plugin new run',
+                },
+              ],
+            }
+          : undefined,
+      });
+
+      expect(result.exitCode).toBe(2);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toContain('rainrail new is a built-in command.');
+      expect(result.stderr).toContain('Use `rainrail plugin new run` to call the plugin.');
+      await expect(stat(join(directory, 'run'))).rejects.toThrow();
+    });
   });
 
   it('lets canonical plugin commands call plugins whose names collide with built-ins', () => {
