@@ -290,6 +290,27 @@
       }
     },
     {
+      "id": "operational-api-v1",
+      "title": "Operational API v1 dashboard and mobile contract",
+      "sources": [
+        "src/http-app.ts",
+        "src/operational-store.ts",
+        "src/events-auth.ts",
+        "src/event-delivery/sse.ts",
+        "apps/www/src/lib/dashboard-client.ts"
+      ],
+      "docs": ["docs/operational-api-v1.md"],
+      "tests": [
+        "scripts/validate-operational-api-v1.test.mjs",
+        "scripts/validate-dashboard-shell.test.mjs",
+        "src/dashboard-api.test.ts",
+        "src/sse.test.ts",
+        "src/events-auth.test.ts"
+      ],
+      "publicExports": [],
+      "publicExportKinds": {}
+    },
+    {
       "id": "core-eep-bridge-source-adapter-boundary",
       "title": "Core, EEP Bridge bundle, Source adapter, and transport boundary",
       "sources": [
