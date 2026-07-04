@@ -240,6 +240,7 @@
         "src/events-auth.test.ts",
         "src/dashboard-api.test.ts",
         "src/http-app.test.ts",
+        "src/manual-chat.test.ts",
         "src/http-utils.test.ts",
         "src/node-server.test.ts"
       ],
