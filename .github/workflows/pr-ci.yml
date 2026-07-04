@@ -49,6 +49,8 @@ jobs:
         run: pnpm test
 
       - name: Run build
+        env:
+          PUBLIC_RAINRAIL_OPERATIONAL_API_URL: ${{ vars.RAINRAIL_OPERATIONAL_API_URL }}
         run: pnpm build
 
       - name: Upload Cloudflare Pages preview artifact

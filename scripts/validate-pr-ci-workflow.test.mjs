@@ -35,7 +35,7 @@ describe('pull request CI workflow', () => {
   it('runs typecheck, test, and build as separate labeled steps', () => {
     expect(workflow).toMatch(/^ {6}- name: Run typecheck\n {8}run: pnpm typecheck$/m);
     expect(workflow).toMatch(/^ {6}- name: Run tests\n {8}run: pnpm test$/m);
-    expect(workflow).toMatch(/^ {6}- name: Run build\n {8}run: pnpm build$/m);
+    expect(workflow).toMatch(/^ {6}- name: Run build\n {8}env:\n {10}PUBLIC_RAINRAIL_OPERATIONAL_API_URL: \$\{\{ vars\.RAINRAIL_OPERATIONAL_API_URL \}\}\n {8}run: pnpm build$/m);
   });
 
   it('uploads the product site build artifact for trusted preview deploys without secrets', () => {
