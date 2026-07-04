@@ -260,7 +260,7 @@
         "src/source-plugin.ts",
         "src/eep-bridge-bundle.ts",
         "src/github-webhook/index.ts",
-        "src/cloudflare-tail.ts",
+        "src/cloudflare/tail.ts",
         "src/event-delivery/event-bus.ts",
         "src/event-delivery/bridge-room.ts",
         "src/dispatcher.ts",
@@ -271,6 +271,7 @@
         "src/operational-store.ts"
       ],
       "docs": [
+        "src/cloudflare/AGENTS.md",
         "docs/core-eep-bridge-source-adapter-boundary.md",
         "docs/plugin-runtime-contract.md",
         "docs/event-delivery.md"
@@ -313,7 +314,7 @@
       "id": "cloudflare-tail-source",
       "title": "Cloudflare tail source",
       "sources": [
-        "src/cloudflare-tail.ts",
+        "src/cloudflare/tail.ts",
         "src/worker.ts",
         "wrangler.jsonc",
         "package.json",
@@ -321,6 +322,7 @@
         "scripts/smoke-cloudflare-worker.mjs"
       ],
       "docs": [
+        "src/cloudflare/AGENTS.md",
         "docs/plugin-runtime-contract.md",
         "docs/cloudflare-worker.md",
         "docs/cloudflare-pages.md"
@@ -442,8 +444,8 @@
     {
       "id": "workflow-plugins",
       "title": "Packaged workflow plugins",
-      "sources": ["src/mention-draft.ts", "src/cloudflare-issue-reporter.ts"],
-      "docs": ["README.md"],
+      "sources": ["src/mention-draft.ts", "src/cloudflare/issue-reporter.ts"],
+      "docs": ["README.md", "src/cloudflare/AGENTS.md"],
       "tests": ["src/mention-draft.test.ts", "src/cloudflare-issue-reporter.test.ts"],
       "publicExports": [
         "createMentionDraftWorkflow",

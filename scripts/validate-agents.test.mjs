@@ -13,14 +13,15 @@ const prLifecycleAgents = readFileSync(new URL('../src/AGENTS.md', import.meta.u
 const agentRuntimeAgents = readFileSync(new URL('../src/agent-runtime/AGENTS.md', import.meta.url), 'utf8');
 const githubProviderAgents = readFileSync(new URL('../src/providers/github/AGENTS.md', import.meta.url), 'utf8');
 const eventDeliveryAgents = readFileSync(new URL('../src/event-delivery/AGENTS.md', import.meta.url), 'utf8');
-/** @type {{contracts: Array<{id: string, sources: string[]}>}} */
+const cloudflareAgents = readFileSync(new URL('../src/cloudflare/AGENTS.md', import.meta.url), 'utf8');
+/** @type {{contracts: Array<{id: string, sources: string[], docs: string[]}>}} */
 const contractsManifest = JSON.parse(
   readFileSync(new URL('../docs/contracts.manifest.json', import.meta.url), 'utf8'),
 );
 
 /**
  * @param {string} id
- * @returns {{ sources: string[] }}
+ * @returns {{ sources: string[], docs: string[] }}
  */
 const contractById = (id) => {
   const contract = contractsManifest.contracts.find(
@@ -268,5 +269,41 @@ describe('event delivery scoped agent rules', () => {
     expect(eventDelivery.sources).not.toContain('src/sse.ts');
     expect(boundaryContract.sources).toContain('src/event-delivery/bridge-room.ts');
     expect(boundaryContract.sources).toContain('src/event-delivery/event-bus.ts');
+  });
+});
+
+describe('Cloudflare scoped agent rules', () => {
+  it('documents Cloudflare tail delivery id, sourceName, id length, and classification rules', () => {
+    expect(cloudflareAgents).toContain('Cloudflare tail ingestion');
+    expect(cloudflareAgents).toContain('sourceName');
+    expect(cloudflareAgents).toContain('fallback delivery id');
+    expect(cloudflareAgents).toContain('cf-ray');
+    expect(cloudflareAgents).toContain('event ids at or below');
+    expect(cloudflareAgents).toContain('case-sensitive');
+    expect(cloudflareAgents).toContain('outcome=exception');
+    expect(cloudflareAgents).toContain('cloudflare.error');
+  });
+
+  it('documents issue reporter fingerprinting, deduplication, and sanitized issue output', () => {
+    expect(cloudflareAgents).toContain('stable fingerprint');
+    expect(cloudflareAgents).toContain('Deduplicate');
+    expect(cloudflareAgents).toContain('fingerprint lock');
+    expect(cloudflareAgents).toContain('Issue titles and bodies');
+    expect(cloudflareAgents).toContain('raw Cloudflare payloads');
+  });
+
+  it('tracks Cloudflare implementation files under the scoped directory', () => {
+    const sourceContract = contractById('cloudflare-tail-source');
+    const workflowContract = contractById('workflow-plugins');
+    const boundaryContract = contractById('core-eep-bridge-source-adapter-boundary');
+
+    expect(sourceContract.sources).toContain('src/cloudflare/tail.ts');
+    expect(sourceContract.docs).toContain('src/cloudflare/AGENTS.md');
+    expect(sourceContract.sources).not.toContain('src/cloudflare-tail.ts');
+    expect(workflowContract.sources).toContain('src/cloudflare/issue-reporter.ts');
+    expect(workflowContract.docs).toContain('src/cloudflare/AGENTS.md');
+    expect(workflowContract.sources).not.toContain('src/cloudflare-issue-reporter.ts');
+    expect(boundaryContract.sources).toContain('src/cloudflare/tail.ts');
+    expect(boundaryContract.docs).toContain('src/cloudflare/AGENTS.md');
   });
 });
