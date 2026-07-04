@@ -14,6 +14,9 @@ you are implementing or reviewing Rainrail behavior.
 
 - [Plugin runtime contract](plugin-runtime-contract.md): source plugin,
   workflow plugin, runtime provider, and dispatcher boundaries.
+- [Core / EEP Bridge / Source adapter boundary](core-eep-bridge-source-adapter-boundary.md):
+  package/module responsibilities between Core, provider ingress bundles,
+  source adapters, and transport adapters.
 - [GitHub webhook normalization](github-webhook-normalization.md): how GitHub
   webhook payloads become neutral Rainrail event envelopes.
 - [Event delivery](event-delivery.md): delivery, retry, and bridge room

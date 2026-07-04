@@ -3,6 +3,9 @@
 Rainrail core のイベント配信は Source plugin が作った `RainrailEventEnvelope`
 をそのまま downstream consumer へ流す。provider 固有 payload は envelope の
 `payload` に閉じ、SSE の `event:` 名には中立イベント名である `event.name` を使う。
+Core、EEP Bridge bundle、Source adapter、transport の責務境界は
+[Core / EEP Bridge / Source adapter boundary](core-eep-bridge-source-adapter-boundary.md)
+で固定する。
 
 ## Event bus
 
