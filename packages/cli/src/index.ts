@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, normalize, parse, resolve, sep } from 'node:path';
 import {
   OFFICIAL_PLUGIN_CATALOG,
@@ -88,6 +88,20 @@ export type RainrailProject = {
   readonly pluginDirectory: string;
 };
 
+export type RainrailLockPlugin = {
+  readonly name: string;
+  readonly version: string;
+  readonly resolvedSource: string;
+};
+
+export type RainrailLockfile = {
+  readonly lockfileVersion: 1;
+  readonly project: {
+    readonly name: string;
+  };
+  readonly plugins: readonly RainrailLockPlugin[];
+};
+
 const DEFAULT_INSTALLER_URL =
   'https://raw.githubusercontent.com/reirei-lab/rainrail/main/install.sh';
 const rainrailConfigFileName = 'rainrail.config.json';
@@ -119,7 +133,7 @@ export const BUILT_IN_COMMANDS: readonly BuiltInCommand[] = [
     name: 'plugins',
     kind: 'built-in',
     summary: 'List and inspect installed Rainrail plugins.',
-    implemented: false,
+    implemented: true,
   },
   {
     name: 'plugin',
@@ -538,6 +552,10 @@ export function runRainrailCli(
     return runNewCommand(parsed.commandArgs, environment);
   }
 
+  if (command.name === 'plugins') {
+    return runPluginsCommand(parsed.commandArgs, environment);
+  }
+
   return {
     exitCode: 2,
     stdout: '',
@@ -604,6 +622,210 @@ function createRainrailProject(projectRoot: string, projectName: string): void {
   );
 }
 
+function runPluginsCommand(args: readonly string[], environment: RainrailCliEnvironment): RainrailCliResult {
+  const subcommand = args[0];
+  if (subcommand === undefined || !['list', 'add', 'remove'].includes(subcommand)) {
+    return {
+      exitCode: 1,
+      stdout: '',
+      stderr: 'Usage: rainrail plugins <list|add|remove> [officialPluginName]\n',
+    };
+  }
+
+  const cwd = environment.cwd === undefined ? process.cwd() : environment.cwd;
+  const project = discoverRainrailProject(cwd);
+  if (project === undefined) {
+    return {
+      exitCode: 1,
+      stdout: '',
+      stderr:
+        'rainrail plugins requires a Rainrail project. Run it inside a directory with rainrail.config.json.\n',
+    };
+  }
+
+  let lockfile: RainrailLockfile;
+  try {
+    lockfile = readRainrailLockfile(project.lockPath);
+  } catch (error) {
+    return {
+      exitCode: 1,
+      stdout: '',
+      stderr: `${error instanceof Error ? error.message : String(error)}\n`,
+    };
+  }
+
+  if (subcommand === 'list') {
+    return listProjectPlugins(project, lockfile);
+  }
+
+  const pluginName = args[1];
+  if (pluginName === undefined || args.length !== 2) {
+    return {
+      exitCode: 1,
+      stdout: '',
+      stderr: `Usage: rainrail plugins ${subcommand} <officialPluginName>\n`,
+    };
+  }
+
+  const plugin = getOfficialPluginByAlias(pluginName);
+  if (plugin === undefined) {
+    return {
+      exitCode: 1,
+      stdout: '',
+      stderr:
+        `Unknown official plugin: ${pluginName}. Third-party and Git URL plugins are not supported yet.\n`,
+    };
+  }
+
+  if (subcommand === 'add') {
+    return addProjectPlugin(project, lockfile, plugin.alias, plugin.version);
+  }
+
+  return removeProjectPlugin(project, lockfile, plugin.alias);
+}
+
+function listProjectPlugins(project: RainrailProject, lockfile: RainrailLockfile): RainrailCliResult {
+  for (const plugin of lockfile.plugins) {
+    const manifestPath = join(project.pluginDirectory, plugin.name, 'plugin.json');
+    if (!existsSync(manifestPath)) {
+      return {
+        exitCode: 1,
+        stdout: '',
+        stderr:
+          `Plugin lockfile entry ${plugin.name} is missing ${manifestPath}. Re-run rainrail plugins add ${plugin.name}.\n`,
+      };
+    }
+    const expectedManifest = formatJson(plugin);
+    if (readFileSync(manifestPath, 'utf8') !== expectedManifest) {
+      return {
+        exitCode: 1,
+        stdout: '',
+        stderr:
+          `Plugin manifest ${manifestPath} does not match rainrail.lock. Re-run rainrail plugins add ${plugin.name}.\n`,
+      };
+    }
+  }
+
+  return {
+    exitCode: 0,
+    stdout: lockfile.plugins.map((plugin) =>
+      `${plugin.name}@${plugin.version} ${plugin.resolvedSource}`
+    ).join('\n') + (lockfile.plugins.length === 0 ? '' : '\n'),
+    stderr: '',
+  };
+}
+
+function addProjectPlugin(
+  project: RainrailProject,
+  lockfile: RainrailLockfile,
+  name: string,
+  version: string,
+): RainrailCliResult {
+  const installedPlugin = lockfile.plugins.find((plugin) => plugin.name === name);
+  if (installedPlugin !== undefined) {
+    writeProjectPluginManifest(project, installedPlugin);
+    return {
+      exitCode: 0,
+      stdout: `Official plugin ${name} is already installed.\n`,
+      stderr: '',
+    };
+  }
+
+  const pluginEntry = createLockPlugin(name, version);
+  const nextLockfile = {
+    ...lockfile,
+    plugins: sortLockPlugins([...lockfile.plugins, pluginEntry]),
+  };
+  writeProjectPluginManifest(project, pluginEntry);
+  writeFileSync(project.lockPath, formatJson(nextLockfile), { flag: 'w' });
+
+  return {
+    exitCode: 0,
+    stdout: `Added official plugin ${name}@${version}\n`,
+    stderr: '',
+  };
+}
+
+function writeProjectPluginManifest(project: RainrailProject, plugin: RainrailLockPlugin): void {
+  mkdirSync(join(project.pluginDirectory, plugin.name), { recursive: true });
+  writeFileSync(join(project.pluginDirectory, plugin.name, 'plugin.json'), formatJson(plugin), {
+    flag: 'w',
+  });
+}
+
+function removeProjectPlugin(
+  project: RainrailProject,
+  lockfile: RainrailLockfile,
+  name: string,
+): RainrailCliResult {
+  if (!lockfile.plugins.some((plugin) => plugin.name === name)) {
+    return {
+      exitCode: 0,
+      stdout: `Official plugin ${name} is not installed.\n`,
+      stderr: '',
+    };
+  }
+
+  const nextLockfile = {
+    ...lockfile,
+    plugins: lockfile.plugins.filter((plugin) => plugin.name !== name),
+  };
+  rmSync(join(project.pluginDirectory, name), { recursive: true, force: true });
+  writeFileSync(project.lockPath, formatJson(nextLockfile), { flag: 'w' });
+
+  return {
+    exitCode: 0,
+    stdout: `Removed official plugin ${name}\n`,
+    stderr: '',
+  };
+}
+
+function createLockPlugin(name: string, version: string): RainrailLockPlugin {
+  return {
+    name,
+    version,
+    resolvedSource: `official:${name}@${version}`,
+  };
+}
+
+function readRainrailLockfile(path: string): RainrailLockfile {
+  if (!existsSync(path)) {
+    throw new Error(`Rainrail lockfile not found: ${path}`);
+  }
+
+  const parsed = JSON.parse(readFileSync(path, 'utf8')) as Partial<RainrailLockfile>;
+  if (parsed.lockfileVersion !== 1 || !Array.isArray(parsed.plugins)) {
+    throw new Error(`Unsupported Rainrail lockfile format: ${path}`);
+  }
+
+  const plugins = parsed.plugins.map((plugin) => {
+    if (!isLockPlugin(plugin)) {
+      throw new Error(`Unsupported Rainrail lockfile plugin entry in ${path}`);
+    }
+    return plugin;
+  });
+
+  return {
+    lockfileVersion: 1,
+    project: {
+      name: typeof parsed.project?.name === 'string' ? parsed.project.name : '',
+    },
+    plugins: sortLockPlugins(plugins),
+  };
+}
+
+function isLockPlugin(value: unknown): value is RainrailLockPlugin {
+  return typeof value === 'object' &&
+    value !== null &&
+    typeof (value as { name?: unknown }).name === 'string' &&
+    typeof (value as { version?: unknown }).version === 'string' &&
+    typeof (value as { resolvedSource?: unknown }).resolvedSource === 'string';
+}
+
+function sortLockPlugins(plugins: readonly RainrailLockPlugin[]): readonly RainrailLockPlugin[] {
+  return [...plugins].sort((left, right) => left.name.localeCompare(right.name));
+}
+
 function writeGeneratedFile(path: string, content: string): void {
   if (existsSync(path)) {
     const existing = readFileSync(path, 'utf8');
@@ -627,9 +849,13 @@ function formatRainrailConfig(projectName: string): string {
 }
 
 function formatRainrailLock(projectName: string): string {
-  return `${JSON.stringify({
+  return formatJson({
     lockfileVersion: 1,
     project: { name: projectName },
     plugins: [],
-  }, null, 2)}\n`;
+  });
+}
+
+function formatJson(value: unknown): string {
+  return `${JSON.stringify(value, null, 2)}\n`;
 }

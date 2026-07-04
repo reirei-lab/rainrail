@@ -8,6 +8,7 @@ export type OfficialPluginMetadata = {
   readonly name: string;
   readonly alias: string;
   readonly aliases: readonly string[];
+  readonly version: string;
   readonly summary: string;
   readonly helpText: string;
   readonly commands: readonly OfficialPluginCommandMetadata[];
@@ -18,6 +19,7 @@ export const OFFICIAL_PLUGIN_CATALOG: readonly OfficialPluginMetadata[] = [
     name: 'GitHub',
     alias: 'github',
     aliases: ['github', 'gh'],
+    version: '0.1.0',
     summary: 'Manage GitHub webhooks, repository checks, and provider setup.',
     helpText: 'GitHub official plugin metadata for repository event intake and task provider operations.',
     commands: [
@@ -42,6 +44,7 @@ export const OFFICIAL_PLUGIN_CATALOG: readonly OfficialPluginMetadata[] = [
     name: 'Cloudflare',
     alias: 'cloudflare',
     aliases: ['cloudflare', 'cf'],
+    version: '0.1.0',
     summary: 'Manage Cloudflare Worker deployment, secrets, and tail event intake.',
     helpText: 'Cloudflare official plugin metadata for Worker operations and tail event sources.',
     commands: [
@@ -66,6 +69,7 @@ export const OFFICIAL_PLUGIN_CATALOG: readonly OfficialPluginMetadata[] = [
     name: 'OpenClaw',
     alias: 'openclaw',
     aliases: ['openclaw', 'oc'],
+    version: '0.1.0',
     summary: 'Manage OpenClaw runtime provider checks and agent dispatch wiring.',
     helpText: 'OpenClaw official plugin metadata for runtime provider and agent session operations.',
     commands: [

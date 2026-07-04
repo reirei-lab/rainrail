@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
@@ -383,6 +383,105 @@ describe('Rainrail CLI built-in commands', () => {
         configPath: join(directory, 'my-agent-ops', 'rainrail.config.json'),
         lockPath: join(directory, 'my-agent-ops', 'rainrail.lock'),
         pluginDirectory: join(directory, 'my-agent-ops', '.rainrail', 'plugins'),
+      });
+    });
+  });
+
+  it('adds, lists, and removes official plugins from project-local state', async () => {
+    await withTempDirectory(async (directory) => {
+      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
+      const projectRoot = join(directory, 'my-agent-ops');
+
+      expect(runRainrailCli(['plugins', 'add', 'github'], { cwd: projectRoot })).toEqual({
+        exitCode: 0,
+        stdout: 'Added official plugin github@0.1.0\n',
+        stderr: '',
+      });
+
+      await expect(readFile(join(projectRoot, 'rainrail.lock'), 'utf8')).resolves.toBe(
+        `${JSON.stringify({
+          lockfileVersion: 1,
+          project: { name: 'my-agent-ops' },
+          plugins: [
+            {
+              name: 'github',
+              version: '0.1.0',
+              resolvedSource: 'official:github@0.1.0',
+            },
+          ],
+        }, null, 2)}\n`,
+      );
+      await expect(
+        readFile(join(projectRoot, '.rainrail', 'plugins', 'github', 'plugin.json'), 'utf8'),
+      ).resolves.toBe(
+        `${JSON.stringify({
+          name: 'github',
+          version: '0.1.0',
+          resolvedSource: 'official:github@0.1.0',
+        }, null, 2)}\n`,
+      );
+
+      expect(runRainrailCli(['plugins', 'list'], { cwd: join(projectRoot, '.rainrail') })).toEqual({
+        exitCode: 0,
+        stdout: 'github@0.1.0 official:github@0.1.0\n',
+        stderr: '',
+      });
+
+      expect(runRainrailCli(['plugins', 'remove', 'github'], { cwd: projectRoot })).toEqual({
+        exitCode: 0,
+        stdout: 'Removed official plugin github\n',
+        stderr: '',
+      });
+      await expect(readFile(join(projectRoot, 'rainrail.lock'), 'utf8')).resolves.toContain(
+        '"plugins": []',
+      );
+      await expect(stat(join(projectRoot, '.rainrail', 'plugins', 'github'))).rejects.toThrow();
+    });
+  });
+
+  it('keeps plugin management idempotent and resolves official aliases', async () => {
+    await withTempDirectory(async (directory) => {
+      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
+      const projectRoot = join(directory, 'my-agent-ops');
+
+      expect(runRainrailCli(['plugins', 'add', 'gh'], { cwd: projectRoot }).stdout).toBe(
+        'Added official plugin github@0.1.0\n',
+      );
+      expect(runRainrailCli(['plugins', 'add', 'github'], { cwd: projectRoot }).stdout).toBe(
+        'Official plugin github is already installed.\n',
+      );
+      await rm(join(projectRoot, '.rainrail', 'plugins', 'github'), { recursive: true });
+      expect(runRainrailCli(['plugins', 'add', 'github'], { cwd: projectRoot }).stdout).toBe(
+        'Official plugin github is already installed.\n',
+      );
+      await expect(
+        readFile(join(projectRoot, '.rainrail', 'plugins', 'github', 'plugin.json'), 'utf8'),
+      ).resolves.toContain('"resolvedSource": "official:github@0.1.0"');
+      expect(runRainrailCli(['plugins', 'remove', 'gh'], { cwd: projectRoot }).stdout).toBe(
+        'Removed official plugin github\n',
+      );
+      expect(runRainrailCli(['plugins', 'remove', 'github'], { cwd: projectRoot }).stdout).toBe(
+        'Official plugin github is not installed.\n',
+      );
+    });
+  });
+
+  it('reports clear plugin management errors outside projects and for unknown plugins', async () => {
+    await withTempDirectory(async (directory) => {
+      expect(runRainrailCli(['plugins', 'list'], { cwd: directory })).toEqual({
+        exitCode: 1,
+        stdout: '',
+        stderr: 'rainrail plugins requires a Rainrail project. Run it inside a directory with rainrail.config.json.\n',
+      });
+
+      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
+      expect(runRainrailCli(['plugins', 'add', 'https://example.com/plugin.git'], {
+        cwd: join(directory, 'my-agent-ops'),
+      })).toEqual({
+        exitCode: 1,
+        stdout: '',
+        stderr:
+          'Unknown official plugin: https://example.com/plugin.git. Third-party and Git URL plugins are not supported yet.\n',
       });
     });
   });
