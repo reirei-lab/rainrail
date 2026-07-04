@@ -70,7 +70,9 @@ describe('product site information architecture', () => {
       'EEP Bridge bundle responsibilities',
       'Source adapter responsibilities',
       'Transport and Core boundary',
-      'Core does not import, branch on, or validate provider-specific GitHub webhook payloads or Cloudflare tail payloads',
+      'Current Core also keeps narrow provider-aware durable replay sanitization',
+      'Source adapter output is not limited to the durable replay allowlist',
+      'The public `createRainrailHttpApp` surface does not expose a generic `POST /publish` route',
     ]) {
       expect(coreBridgeBoundary).toContain(entry);
     }

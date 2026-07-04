@@ -257,8 +257,10 @@
         "src/cloudflare-tail.test.ts",
         "src/event-bus.test.ts",
         "src/bridge-room.test.ts",
+        "src/events-auth.test.ts",
         "src/http-app.test.ts",
         "src/node-server.test.ts",
+        "src/worker.test.ts",
         "src/operational-store.test.ts"
       ],
       "publicExports": [],
