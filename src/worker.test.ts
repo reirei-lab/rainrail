@@ -102,6 +102,84 @@ describe('Rainrail Cloudflare Worker entrypoint', () => {
     expect(adapters[0]?.routes?.map((route) => route.path)).toEqual(['/webhooks/github']);
     expect(adapters[1]?.tail).toEqual(expect.any(Function));
   });
+
+  it('uses Rainrail config JSON to compose Worker intake adapters when provided', async () => {
+    const env = {
+      ...fakeEnv(),
+      RAINRAIL_CONFIG_JSON: JSON.stringify({
+        sourceBundles: [
+          {
+            type: 'eep-bridge',
+            name: 'worker-ingress',
+            sources: [
+              {
+                type: 'github-webhook',
+                name: 'github-configured-webhook',
+                sourceType: 'github',
+                provider: 'github',
+                runtime: 'openclaw',
+                webhookSecret: 'GITHUB_WEBHOOK_SECRET',
+                endpoint: '/webhooks/github',
+              },
+            ],
+          },
+        ],
+      }),
+    };
+    const payload = JSON.stringify({
+      action: 'opened',
+      repository: { full_name: 'reirei-lab/rainrail' },
+      issue: {
+        number: 105,
+        html_url: 'https://github.com/reirei-lab/rainrail/issues/105',
+      },
+    });
+
+    const webhook = await rainrailWorker.fetch(new Request('https://worker.local/webhooks/github', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-github-event': 'issues',
+        'x-github-delivery': 'delivery-worker-config',
+        'x-hub-signature-256': await createGitHubWebhookSignature('secret', payload),
+      },
+      body: payload,
+    }), env);
+    expect(webhook.status).toBe(202);
+
+    const waitUntilPromises: Promise<unknown>[] = [];
+    rainrailWorker.tail?.([{
+      eventTimestamp: '2026-06-30T12:00:00.000Z',
+      outcome: 'ok',
+      scriptName: 'rainrail-worker',
+      event: {
+        request: {
+          method: 'GET',
+          url: 'https://rainrail.example/healthz',
+          headers: { 'cf-ray': 'ray-worker-config' },
+        },
+        response: { status: 200 },
+      },
+    }], env, {
+      waitUntil(promise) {
+        waitUntilPromises.push(promise);
+      },
+    });
+
+    expect(waitUntilPromises).toHaveLength(1);
+    await expect(waitUntilPromises[0]).resolves.toEqual([]);
+
+    const events = await rainrailWorker.fetch(new Request('https://worker.local/events', {
+      headers: { authorization: 'Bearer events-token' },
+    }), env);
+    expect(events.status).toBe(200);
+
+    const reader = getReaderOrThrow(events);
+    const chunk = await readUntil(reader, 'github.issue');
+    await reader.cancel();
+
+    expect(chunk).toContain('id: github-configured-webhook:delivery-worker-config:github.issue\n');
+  });
 });
 
 function fakeEnv() {

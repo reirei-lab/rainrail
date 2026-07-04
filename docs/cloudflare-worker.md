@@ -17,6 +17,9 @@ pnpm exec wrangler secret put SSE_BEARER_TOKEN
 - `GITHUB_WEBHOOK_SECRET`: GitHub webhook の HMAC 検証に使う secret。
 - `RAINRAIL_PUBLISH_TOKEN`: Worker と `RainrailBridgeRoomDurableObject` の内部 publish 認可 token。
 - `SSE_BEARER_TOKEN`: `GET /events` の購読用 bearer token。未設定の場合は event stream を公開せず `503` を返す。
+- 任意の `RAINRAIL_CONFIG_JSON`: Worker が source bundle / provider / runtime composition を
+  config から読むための JSON。未設定の場合は従来通り `GITHUB_WEBHOOK_SECRET` から
+  EEP Bridge bundle を組み立て、GitHub webhook と Cloudflare tail を両方登録する。
 
 local dev では `.dev.vars` に同じ名前を置く。`.dev.vars` は gitignore 済みなので値は commit しない。
 環境別の `.dev.vars.<environment>` と `.env*` も secret ファイルとして扱い、同じく commit しない。
@@ -26,6 +29,55 @@ GITHUB_WEBHOOK_SECRET=replace-with-local-secret
 RAINRAIL_PUBLISH_TOKEN=replace-with-local-publish-token
 SSE_BEARER_TOKEN=replace-with-local-events-token
 ```
+
+config 経由で composition を明示する場合も、secret 値は config に直書きしない。
+`webhookSecret` には env / Workers Secret の名前を置き、bundle が同名 env から値を解決する。
+
+```json
+{
+  "sourceBundles": [
+    {
+      "type": "eep-bridge",
+      "name": "worker-ingress",
+      "sources": [
+        {
+          "type": "github-webhook",
+          "name": "github-production-webhook",
+          "sourceType": "github",
+          "provider": "github",
+          "runtime": "openclaw",
+          "webhookSecret": "GITHUB_WEBHOOK_SECRET",
+          "endpoint": "/webhooks/github"
+        },
+        {
+          "type": "cloudflare-tail",
+          "name": "cloudflare-tail",
+          "sourceType": "cloudflare"
+        },
+        {
+          "type": "manual-chat",
+          "name": "manual-chat",
+          "sourceType": "manual",
+          "runtime": "openclaw"
+        }
+      ]
+    }
+  ],
+  "taskProviders": {
+    "github": {}
+  },
+  "runtimeProviders": {
+    "openclaw": {
+      "enabled": true
+    }
+  }
+}
+```
+
+`manual-chat` は同じ config model で source/runtime の対応を表現するための entry として
+置ける。現時点の Worker EEP Bridge bundle は GitHub webhook と Cloudflare tail の
+intake adapter を生成し、manual/chat の実 ingress adapter は別 source adapter が入った時点で
+同じ bundle model に接続する。
 
 ## Local Dev
 
@@ -39,6 +91,10 @@ GitHub webhook の URL は `/webhooks/github`、health check は `/healthz`。
 Worker entrypoint は Core app と EEP Bridge bundle を composition する。bundle は
 `createGitHubWebhookIntakeAdapter` と `createCloudflareTailIntakeAdapter` を
 `createRainrailHttpApp` に登録し、Core は provider 固有 route / tail payload を直接持たない。
+`RAINRAIL_CONFIG_JSON` がある場合、Worker は config の `sourceBundles` から選んだ
+`eep-bridge` bundle で intake adapter を作る。未設定の場合は既存 Cloudflare deploy の
+互換経路として env-only の EEP Bridge bundle を使うため、既存の Secrets / webhook URL は
+そのまま動く。
 Node server も同じ `createRainrailEepBridgeIntakeAdapters` API で GitHub webhook と
 Cloudflare tail ingress を構成するため、local Node / Worker の差は transport だけに閉じる。
 ただし Node server で独自 `tail` intake adapter を渡した場合は、既存の custom tail 経路を

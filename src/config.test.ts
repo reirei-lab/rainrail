@@ -20,6 +20,35 @@ describe('parseConfig', () => {
 
   it('parses source, task, and runtime provider config with GitHub App auth', () => {
     const config = parseConfig({
+      sourceBundles: [
+        {
+          type: 'eep-bridge',
+          name: 'production-ingress',
+          sources: [
+            {
+              type: 'github-webhook',
+              name: 'github-production-webhook',
+              sourceType: 'github',
+              provider: 'github',
+              runtime: 'openclaw',
+              webhookSecret: 'GITHUB_WEBHOOK_SECRET',
+              endpoint: '/webhooks/github',
+              maxBodyBytes: 1024,
+            },
+            {
+              type: 'cloudflare-tail',
+              name: 'cloudflare-tail',
+              sourceType: 'cloudflare',
+            },
+            {
+              type: 'manual-chat',
+              name: 'manual-chat',
+              sourceType: 'manual',
+              runtime: 'openclaw',
+            },
+          ],
+        },
+      ],
       sources: [
         { type: 'github', name: 'github-webhook', webhookSecret: 'secret-name' },
       ],
@@ -45,6 +74,35 @@ describe('parseConfig', () => {
       },
     });
 
+    expect(config.sourceBundles).toEqual([
+      {
+        type: 'eep-bridge',
+        name: 'production-ingress',
+        sources: [
+          {
+            type: 'github-webhook',
+            name: 'github-production-webhook',
+            sourceType: 'github',
+            provider: 'github',
+            runtime: 'openclaw',
+            webhookSecret: 'GITHUB_WEBHOOK_SECRET',
+            endpoint: '/webhooks/github',
+            maxBodyBytes: 1024,
+          },
+          {
+            type: 'cloudflare-tail',
+            name: 'cloudflare-tail',
+            sourceType: 'cloudflare',
+          },
+          {
+            type: 'manual-chat',
+            name: 'manual-chat',
+            sourceType: 'manual',
+            runtime: 'openclaw',
+          },
+        ],
+      },
+    ]);
     expect(config.sources).toEqual([
       { type: 'github', name: 'github-webhook', webhookSecret: 'secret-name' },
     ]);
@@ -68,6 +126,7 @@ describe('parseConfig', () => {
 
   it('merges default task and runtime providers when provider sections are omitted', () => {
     expect(parseConfig({})).toEqual({
+      sourceBundles: [],
       sources: [],
       taskProviders: {
         github: {},
@@ -83,6 +142,63 @@ describe('parseConfig', () => {
         },
       },
     });
+  });
+
+  it.each([
+    ['string', 'config.sourceBundles must be an array'],
+    [{}, 'config.sourceBundles must be an array'],
+  ])('rejects sourceBundles when it is %s', (sourceBundles, message) => {
+    expectConfigError({ sourceBundles }, message);
+  });
+
+  it.each([
+    [undefined, 'config.sourceBundles[0] must be an object'],
+    [null, 'config.sourceBundles[0] must be an object'],
+    ['eep-bridge', 'config.sourceBundles[0] must be an object'],
+    [{ type: 'unknown', name: 'ingress', sources: [] }, 'config.sourceBundles[0].type must be one of: eep-bridge'],
+    [{ type: 'eep-bridge', name: '', sources: [] }, 'config.sourceBundles[0].name must be a non-empty string'],
+    [{ type: 'eep-bridge', name: 'ingress' }, 'config.sourceBundles[0].sources must be an array'],
+  ])('rejects invalid source bundle entry %# with a config path', (sourceBundle, message) => {
+    expectConfigError({ sourceBundles: [sourceBundle] }, message);
+  });
+
+  it.each([
+    [undefined, 'config.sourceBundles[0].sources[0] must be an object'],
+    [{ type: 'rss-feed', name: 'rss', sourceType: 'system' }, 'config.sourceBundles[0].sources[0].type must be one of: github-webhook, cloudflare-tail, manual-chat'],
+    [{ type: 'github-webhook', name: '', sourceType: 'github', provider: 'github', webhookSecret: 'secret' }, 'config.sourceBundles[0].sources[0].name must be a non-empty string'],
+    [{ type: 'github-webhook', name: 'github-webhook', sourceType: 'slack', provider: 'github', webhookSecret: 'secret' }, 'config.sourceBundles[0].sources[0].sourceType must be one of: github, cloudflare, manual, system'],
+    [{ type: 'github-webhook', name: 'github-webhook', sourceType: 'github', provider: 'gitlab', webhookSecret: 'secret' }, 'config.sourceBundles[0].sources[0].provider must reference a configured task provider'],
+    [{ type: 'manual-chat', name: 'manual-chat', sourceType: 'manual', runtime: 'lambda' }, 'config.sourceBundles[0].sources[0].runtime must reference a configured runtime provider'],
+    [{ type: 'github-webhook', name: 'github-webhook', sourceType: 'github', provider: 'github' }, 'config.sourceBundles[0].sources[0].webhookSecret must be a non-empty string for github-webhook sources'],
+    [{ type: 'github-webhook', name: 'github-webhook', sourceType: 'github', provider: 'github', webhookSecret: 'secret', endpoint: 'webhooks/github' }, 'config.sourceBundles[0].sources[0].endpoint must start with "/"'],
+    [{ type: 'github-webhook', name: 'github-webhook', sourceType: 'github', provider: 'github', webhookSecret: 'secret', maxBodyBytes: -1 }, 'config.sourceBundles[0].sources[0].maxBodyBytes must be a finite non-negative number'],
+    [{ type: 'cloudflare-tail', name: 'cloudflare-tail', sourceType: 'github' }, 'config.sourceBundles[0].sources[0].sourceType must be "cloudflare" for cloudflare-tail sources'],
+    [{ type: 'manual-chat', name: 'manual-chat', sourceType: 'github' }, 'config.sourceBundles[0].sources[0].sourceType must be "manual" for manual-chat sources'],
+  ])('rejects invalid source bundle source entry %# with a config path', (source, message) => {
+    expectConfigError({
+      sourceBundles: [
+        {
+          type: 'eep-bridge',
+          name: 'ingress',
+          sources: [source],
+        },
+      ],
+    }, message);
+  });
+
+  it('rejects duplicate source names inside one source bundle', () => {
+    expectConfigError({
+      sourceBundles: [
+        {
+          type: 'eep-bridge',
+          name: 'ingress',
+          sources: [
+            { type: 'manual-chat', name: 'manual-chat', sourceType: 'manual' },
+            { type: 'manual-chat', name: 'manual-chat', sourceType: 'manual' },
+          ],
+        },
+      ],
+    }, 'config.sourceBundles[0].sources must not contain duplicate source name "manual-chat"');
   });
 
   it.each([

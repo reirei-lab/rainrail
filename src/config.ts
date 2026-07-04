@@ -3,6 +3,27 @@ import { readFile } from 'node:fs/promises';
 import type { GitHubAuthConfig } from './github-auth.js';
 import type { RainrailEventSourceType } from './events.js';
 
+export type SourceBundleType = 'eep-bridge';
+
+export type ConfiguredSourceType = 'github-webhook' | 'cloudflare-tail' | 'manual-chat';
+
+export interface SourceBundleSourceConfig {
+  type: ConfiguredSourceType;
+  name: string;
+  sourceType: RainrailEventSourceType;
+  provider?: keyof TaskProviderConfig;
+  runtime?: keyof RuntimeProviderConfig;
+  webhookSecret?: string;
+  endpoint?: `/${string}`;
+  maxBodyBytes?: number;
+}
+
+export interface SourceBundleConfig {
+  type: SourceBundleType;
+  name: string;
+  sources: SourceBundleSourceConfig[];
+}
+
 export interface SourceProviderConfig {
   type: RainrailEventSourceType;
   name: string;
@@ -28,6 +49,7 @@ export interface RuntimeProviderConfig {
 }
 
 export interface RainrailConfig {
+  sourceBundles: SourceBundleConfig[];
   sources: SourceProviderConfig[];
   taskProviders: TaskProviderConfig;
   runtimeProviders: RuntimeProviderConfig;
@@ -46,6 +68,10 @@ const defaultOpenClawRuntimeProviderConfig: OpenClawRuntimeProviderConfig = {
 
 export async function loadConfig(path: string): Promise<RainrailConfig> {
   const raw = await readFile(path, 'utf8');
+  return parseConfigJson(raw);
+}
+
+export function parseConfigJson(raw: string): RainrailConfig {
   return parseConfig(JSON.parse(expandEnv(raw)) as unknown);
 }
 
@@ -55,10 +81,90 @@ export function parseConfig(value: unknown): RainrailConfig {
   }
 
   return {
+    sourceBundles: parseSourceBundles(value.sourceBundles),
     sources: parseSources(value.sources),
     taskProviders: parseTaskProviders(value.taskProviders),
     runtimeProviders: parseRuntimeProviders(value.runtimeProviders),
   };
+}
+
+function parseSourceBundles(value: unknown): SourceBundleConfig[] {
+  if (value === undefined) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    throw new Error('config.sourceBundles must be an array');
+  }
+  return value.map((bundle, index) => parseSourceBundle(bundle, `config.sourceBundles[${index}]`));
+}
+
+function parseSourceBundle(value: unknown, path: string): SourceBundleConfig {
+  if (!isRecord(value)) {
+    throw new Error(`${path} must be an object`);
+  }
+
+  const bundle: SourceBundleConfig = {
+    type: parseSourceBundleType(value.type, `${path}.type`),
+    name: parseRequiredString(value.name, `${path}.name`),
+    sources: parseSourceBundleSources(value.sources, `${path}.sources`),
+  };
+
+  assertUniqueNames(bundle.sources, `${path}.sources`);
+  return bundle;
+}
+
+function parseSourceBundleSources(value: unknown, path: string): SourceBundleSourceConfig[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`${path} must be an array`);
+  }
+  return value.map((source, index) => parseSourceBundleSource(source, `${path}[${index}]`));
+}
+
+function parseSourceBundleSource(value: unknown, path: string): SourceBundleSourceConfig {
+  if (!isRecord(value)) {
+    throw new Error(`${path} must be an object`);
+  }
+
+  const source: SourceBundleSourceConfig = {
+    type: parseConfiguredSourceType(value.type, `${path}.type`),
+    name: parseRequiredString(value.name, `${path}.name`),
+    sourceType: parseSourceEventType(value.sourceType, `${path}.sourceType`),
+  };
+  const provider = parseOptionalProviderName(value.provider, `${path}.provider`);
+  const runtime = parseOptionalRuntimeName(value.runtime, `${path}.runtime`);
+  const webhookSecret = parseOptionalString(value.webhookSecret, `${path}.webhookSecret`);
+  const endpoint = parseOptionalEndpoint(value.endpoint, `${path}.endpoint`);
+  const maxBodyBytes = parseOptionalNonNegativeNumber(value.maxBodyBytes, `${path}.maxBodyBytes`);
+  if (provider !== undefined) {
+    source.provider = provider;
+  }
+  if (runtime !== undefined) {
+    source.runtime = runtime;
+  }
+  if (webhookSecret !== undefined) {
+    source.webhookSecret = webhookSecret;
+  }
+  if (endpoint !== undefined) {
+    source.endpoint = endpoint;
+  }
+  if (maxBodyBytes !== undefined) {
+    source.maxBodyBytes = maxBodyBytes;
+  }
+
+  if (source.type === 'github-webhook' && source.provider !== 'github') {
+    throw new Error(`${path}.provider must be "github" for github-webhook sources`);
+  }
+  if (source.type === 'github-webhook' && source.webhookSecret === undefined) {
+    throw new Error(`${path}.webhookSecret must be a non-empty string for github-webhook sources`);
+  }
+  if (source.type === 'cloudflare-tail' && source.sourceType !== 'cloudflare') {
+    throw new Error(`${path}.sourceType must be "cloudflare" for cloudflare-tail sources`);
+  }
+  if (source.type === 'manual-chat' && source.sourceType !== 'manual') {
+    throw new Error(`${path}.sourceType must be "manual" for manual-chat sources`);
+  }
+
+  return source;
 }
 
 function parseSources(value: unknown): SourceProviderConfig[] {
@@ -88,6 +194,73 @@ function parseSource(value: unknown, path: string): SourceProviderConfig {
     source.endpoint = endpoint;
   }
   return source;
+}
+
+function parseSourceBundleType(value: unknown, path: string): SourceBundleType {
+  const type = parseRequiredString(value, path);
+  if (type !== 'eep-bridge') {
+    throw new Error(`${path} must be one of: eep-bridge`);
+  }
+  return type;
+}
+
+function parseConfiguredSourceType(value: unknown, path: string): ConfiguredSourceType {
+  const type = parseRequiredString(value, path);
+  if (type !== 'github-webhook' && type !== 'cloudflare-tail' && type !== 'manual-chat') {
+    throw new Error(`${path} must be one of: github-webhook, cloudflare-tail, manual-chat`);
+  }
+  return type;
+}
+
+function parseSourceEventType(value: unknown, path: string): RainrailEventSourceType {
+  const type = parseRequiredString(value, path);
+  if (type !== 'github' && type !== 'cloudflare' && type !== 'manual' && type !== 'system') {
+    throw new Error(`${path} must be one of: github, cloudflare, manual, system`);
+  }
+  return type;
+}
+
+function parseOptionalProviderName(value: unknown, path: string): keyof TaskProviderConfig | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const provider = parseRequiredString(value, path);
+  if (provider !== 'github') {
+    throw new Error(`${path} must reference a configured task provider`);
+  }
+  return provider;
+}
+
+function parseOptionalRuntimeName(value: unknown, path: string): keyof RuntimeProviderConfig | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const runtime = parseRequiredString(value, path);
+  if (runtime !== 'openclaw') {
+    throw new Error(`${path} must reference a configured runtime provider`);
+  }
+  return runtime;
+}
+
+function parseOptionalEndpoint(value: unknown, path: string): `/${string}` | undefined {
+  const endpoint = parseOptionalString(value, path);
+  if (endpoint === undefined) {
+    return undefined;
+  }
+  if (!endpoint.startsWith('/')) {
+    throw new Error(`${path} must start with "/"`);
+  }
+  return endpoint as `/${string}`;
+}
+
+function assertUniqueNames(sources: readonly SourceBundleSourceConfig[], path: string): void {
+  const seen = new Set<string>();
+  for (const source of sources) {
+    if (seen.has(source.name)) {
+      throw new Error(`${path} must not contain duplicate source name "${source.name}"`);
+    }
+    seen.add(source.name);
+  }
 }
 
 function parseTaskProviders(value: unknown): TaskProviderConfig {
