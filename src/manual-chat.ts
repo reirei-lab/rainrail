@@ -63,6 +63,7 @@ export interface CreateManualInputEventInput {
 
 export interface ManualInputIntakeAdapterOptions {
   channel: ManualInputChannel;
+  bearerToken: string;
   routePath?: `/${string}`;
   sourceName?: string;
   maxBodyBytes?: number;
@@ -102,10 +103,9 @@ export async function createManualInputEvent({
   contentType,
 }: CreateManualInputEventInput): Promise<ManualInputRainrailEvent> {
   const normalizedConversationId = safeIdentifierSegment(conversationId, 'conversation');
-  const normalizedDeliveryId = safeIdentifierSegment(
-    deliveryId ?? `${channel}-${normalizedConversationId}-${messageId ?? crypto.randomUUID()}`,
-    `${channel}-delivery`,
-  );
+  const normalizedDeliveryId = deliveryId === undefined
+    ? buildManualInputDeliveryId(channel, normalizedConversationId, messageId ?? crypto.randomUUID())
+    : safeIdentifierSegment(deliveryId, `${channel}-delivery`);
   const occurredAt = receivedAt.toISOString();
   const safeConversationUrl = safeUrl(conversationUrl);
   const payload: ManualInputPayload = {
@@ -154,6 +154,7 @@ export async function createManualInputEvent({
 export function createManualInputIntakeAdapter(options: ManualInputIntakeAdapterOptions): RainrailIntakeAdapter {
   const maxBodyBytes = options.maxBodyBytes ?? DEFAULT_MAX_REQUEST_BODY_BYTES;
   const sourceName = options.sourceName ?? defaultManualInputSourceName(options.channel);
+  const bearerToken = requiredBearerToken(options.bearerToken);
 
   return {
     name: sourceName,
@@ -162,6 +163,11 @@ export function createManualInputIntakeAdapter(options: ManualInputIntakeAdapter
       methods: ['POST'],
       maxBodyBytes,
       async handle(request, context) {
+        const auth = verifyBearerToken(request, bearerToken);
+        if (!auth.ok) {
+          return jsonResponse({ error: auth.reason }, { status: 401 });
+        }
+
         let rawBody: ArrayBuffer;
         try {
           rawBody = await readFetchRequestBody(request, maxBodyBytes);
@@ -267,6 +273,42 @@ function defaultManualInputRoutePath(channel: ManualInputChannel): `/${string}` 
   return channel === 'chat' ? '/intake/chat' : '/intake/manual';
 }
 
+function requiredBearerToken(value: string): string {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new Error('manual input bearer token is required');
+  }
+  return value;
+}
+
+function verifyBearerToken(request: Request, bearerToken: string):
+  | { ok: true }
+  | { ok: false; reason: 'missing_bearer_token' | 'invalid_bearer_token' } {
+  const authorization = request.headers.get('authorization');
+  if (authorization === null) {
+    return { ok: false, reason: 'missing_bearer_token' };
+  }
+
+  const match = /^Bearer\s+(.+)$/iu.exec(authorization);
+  if (match === null) {
+    return { ok: false, reason: 'missing_bearer_token' };
+  }
+
+  return constantTimeStringEqual(match[1] ?? '', bearerToken)
+    ? { ok: true }
+    : { ok: false, reason: 'invalid_bearer_token' };
+}
+
+function constantTimeStringEqual(left: string, right: string): boolean {
+  const maxLength = Math.max(left.length, right.length);
+  let diff = left.length ^ right.length;
+
+  for (let index = 0; index < maxLength; index += 1) {
+    diff |= (left.charCodeAt(index) || 0) ^ (right.charCodeAt(index) || 0);
+  }
+
+  return diff === 0;
+}
+
 function normalizedOptionalActor(actor: ManualInputActor | undefined): { actor?: ManualInputActor } {
   if (actor === undefined) return {};
   const normalized = {
@@ -337,7 +379,20 @@ function normalizeReplyTargetInput(value: unknown): ManualInputReplyTarget | und
 
 function safeIdentifierSegment(value: string, fallback: string): string {
   const normalized = value.trim().replace(/[^A-Za-z0-9_.:-]+/gu, '-').replace(/^-+|-+$/gu, '');
-  return normalized.length === 0 ? fallback : normalized.slice(0, 128);
+  if (normalized.length === 0) return fallback;
+  const safe = /^[A-Za-z0-9]/u.test(normalized) ? normalized : `${fallback}-${normalized}`;
+  return safe.slice(0, 128);
+}
+
+function buildManualInputDeliveryId(channel: ManualInputChannel, conversationId: string, uniqueId: string): string {
+  const uniqueSegment = safeIdentifierSegment(uniqueId, 'message');
+  const prefix = safeIdentifierSegment(`${channel}-${conversationId}`, `${channel}-delivery`);
+  const separator = '-';
+  const maxLength = 128;
+  const suffixLength = Math.min(uniqueSegment.length, Math.max(1, maxLength - `${channel}${separator}`.length));
+  const suffix = uniqueSegment.slice(Math.max(0, uniqueSegment.length - suffixLength));
+  const prefixMaxLength = Math.max(1, maxLength - separator.length - suffix.length);
+  return `${prefix.slice(0, prefixMaxLength)}${separator}${suffix}`;
 }
 
 function safeContentType(value: string): string {
@@ -366,6 +421,8 @@ function safeUrl(value: string | undefined): string | undefined {
 function redactUserText(value: string): string {
   return value
     .replace(/\b(token|secret|password|api[_-]?key)=([^\s"'<>`,;)]+)/giu, '$1=[redacted]')
+    .replace(/(["']?)(token|secret|password|api[_-]?key)\1\s*:\s*(["'])[^"'\r\n]+?\3/giu, '$1$2$1: $3[redacted]$3')
+    .replace(/\b(token|secret|password|api[_-]?key)\s*:\s*[^\s"'<>`,;)]+/giu, '$1: [redacted]')
     .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gu, 'Bearer [redacted]')
     .trim()
     .slice(0, 8_000);

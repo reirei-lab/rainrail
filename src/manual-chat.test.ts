@@ -105,6 +105,7 @@ describe('manual and chat input source contract', () => {
       intakeAdapters: [
         createManualInputIntakeAdapter({
           channel: 'manual',
+          bearerToken: 'manual-intake-token',
           routePath: '/intake/manual',
           receivedAt: () => new Date('2026-07-04T09:21:00.000Z'),
           deliveryId: () => 'manual-delivery-1',
@@ -114,7 +115,10 @@ describe('manual and chat input source contract', () => {
 
     const response = await app.fetch(new Request('https://rainrail.local/intake/manual', {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: {
+        authorization: 'Bearer manual-intake-token',
+        'content-type': 'application/json',
+      },
       body: JSON.stringify({
         conversationId: 'manual-session-1',
         messageId: 'manual-message-1',
@@ -158,6 +162,124 @@ describe('manual and chat input source contract', () => {
     expect(JSON.stringify(storedEvent)).not.toContain('do-not-store');
   });
 
+  it('requires a bearer token before accepting manual or chat HTTP input', async () => {
+    expect(() => createManualInputIntakeAdapter({
+      channel: 'chat',
+      bearerToken: '',
+    })).toThrow(/bearer token/i);
+
+    const storage = fakeState();
+    const app = createRainrailHttpApp({
+      room: new RainrailBridgeRoom(storage, { publishToken: TEST_PUBLISH_TOKEN }),
+      publishToken: TEST_PUBLISH_TOKEN,
+      intakeAdapters: [
+        createManualInputIntakeAdapter({
+          channel: 'chat',
+          bearerToken: 'chat-intake-token',
+          receivedAt: () => new Date('2026-07-04T09:21:10.000Z'),
+          deliveryId: () => 'chat-auth-delivery',
+        }),
+      ],
+    });
+
+    const missing = await app.fetch(new Request('https://rainrail.local/intake/chat', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        conversationId: 'chat-session-auth',
+        message: 'hello',
+      }),
+    }));
+    expect(missing.status).toBe(401);
+    await expect(missing.json()).resolves.toEqual({ error: 'missing_bearer_token' });
+
+    const wrong = await app.fetch(new Request('https://rainrail.local/intake/chat', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer wrong-token',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        conversationId: 'chat-session-auth',
+        message: 'hello',
+      }),
+    }));
+    expect(wrong.status).toBe(401);
+    await expect(wrong.json()).resolves.toEqual({ error: 'invalid_bearer_token' });
+    expect(storage.storedEvents()).toEqual([]);
+  });
+
+  it('keeps generated delivery ids unique for long conversation ids', async () => {
+    const longConversationId = `conversation-${'a'.repeat(180)}`;
+    const first = await createManualInputEvent({
+      channel: 'chat',
+      receivedAt: new Date('2026-07-04T09:21:20.000Z'),
+      conversationId: longConversationId,
+      messageId: 'message-one',
+      message: 'first',
+    });
+    const second = await createManualInputEvent({
+      channel: 'chat',
+      receivedAt: new Date('2026-07-04T09:21:21.000Z'),
+      conversationId: longConversationId,
+      messageId: 'message-two',
+      message: 'second',
+    });
+
+    expect(first.delivery.id).not.toBe(second.delivery.id);
+    expect(first.id).not.toBe(second.id);
+    expect(first.delivery.id).toContain('message-one');
+    expect(second.delivery.id).toContain('message-two');
+    expect(first.delivery.id.length).toBeLessThanOrEqual(128);
+    expect(second.delivery.id.length).toBeLessThanOrEqual(128);
+  });
+
+  it('normalizes leading punctuation in conversation and message identifiers', async () => {
+    const event = await createManualInputEvent({
+      channel: 'chat',
+      receivedAt: new Date('2026-07-04T09:21:25.000Z'),
+      deliveryId: '_delivery',
+      conversationId: '_session',
+      messageId: '.thread',
+      message: 'hello',
+    });
+
+    expect(event.delivery.id).toBe('chat-delivery-_delivery');
+    expect(event.subject.id).toBe('conversation-_session');
+    expect(event.payload.message.id).toBe('message-.thread');
+  });
+
+  it('rejects unsafe manual and chat raw payload references in bridge storage', async () => {
+    const storage = fakeState();
+    const room = new RainrailBridgeRoom(storage, { publishToken: TEST_PUBLISH_TOKEN });
+    const event = await createManualInputEvent({
+      channel: 'chat',
+      receivedAt: new Date('2026-07-04T09:21:26.000Z'),
+      deliveryId: 'safe-delivery',
+      conversationId: 'safe-conversation',
+      message: 'hello',
+    });
+
+    const response = await room.fetch(new Request('https://rainrail-room.local/publish', {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${TEST_PUBLISH_TOKEN}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        ...event,
+        rawPayload: {
+          ...event.rawPayload,
+          reference: 'chat://tokens/secret-value',
+        },
+      }),
+    }));
+
+    expect(response.status).toBe(400);
+    await expect(response.text()).resolves.toContain('reference must be a valid URL');
+    expect(storage.storedEvents()).toEqual([]);
+  });
+
   it('redacts credential-looking user text before publishing chat payloads', async () => {
     const storage = fakeState();
     const app = createRainrailHttpApp({
@@ -166,6 +288,7 @@ describe('manual and chat input source contract', () => {
       intakeAdapters: [
         createManualInputIntakeAdapter({
           channel: 'chat',
+          bearerToken: 'chat-intake-token',
           receivedAt: () => new Date('2026-07-04T09:21:30.000Z'),
           deliveryId: () => 'chat-redaction-delivery',
         }),
@@ -174,10 +297,13 @@ describe('manual and chat input source contract', () => {
 
     const response = await app.fetch(new Request('https://rainrail.local/intake/chat', {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: {
+        authorization: 'Bearer chat-intake-token',
+        'content-type': 'application/json',
+      },
       body: JSON.stringify({
         conversationId: 'chat-session-1',
-        message: 'Please debug with token=super-secret and Bearer abc.def.ghi',
+        message: 'Please debug with token=super-secret, password: hunter2, {"apiKey":"abc123"}, and Bearer abc.def.ghi',
         actor: { displayName: 'secret=actor-secret' },
       }),
     }));
@@ -187,7 +313,7 @@ describe('manual and chat input source contract', () => {
     expect(storedEvent).toMatchObject({
       payload: {
         message: {
-          text: 'Please debug with token=[redacted] and Bearer [redacted]',
+          text: 'Please debug with token=[redacted], password: [redacted], {"apiKey": "[redacted]"}, and Bearer [redacted]',
         },
         actor: {
           displayName: 'secret=[redacted]',
@@ -195,6 +321,8 @@ describe('manual and chat input source contract', () => {
       },
     });
     expect(JSON.stringify(storedEvent)).not.toContain('super-secret');
+    expect(JSON.stringify(storedEvent)).not.toContain('hunter2');
+    expect(JSON.stringify(storedEvent)).not.toContain('abc123');
     expect(JSON.stringify(storedEvent)).not.toContain('abc.def.ghi');
     expect(JSON.stringify(storedEvent)).not.toContain('actor-secret');
   });

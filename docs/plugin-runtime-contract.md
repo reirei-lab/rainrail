@@ -97,12 +97,19 @@ payload は provider 固有 raw body ではなく、次の正規化済み shape 
 として envelope に載せる。一方で HTTP request body や Web chat provider の extra field は
 Core storage / durable replay に残さない。`rawPayload` は `inline-redacted` とし、
 `manual://deliveries/<delivery-id>` または `chat://deliveries/<delivery-id>` の参照と
-digest だけを保持する。token、secret、password、API key、Bearer credential 形式は
-source adapter 側で短く redaction する。
+digest だけを保持する。manual/chat の raw payload reference は既存 provider と同じく
+`deliveries` host と安全な 1 path segment の delivery id だけを許可し、任意 host/path は
+Core storage に残さない。token、secret、password、API key、Bearer credential 形式は
+`key=value`、JSON/YAML 風の `key: value`、quoted JSON field のいずれも source adapter 側で
+短く redaction する。
 
 HTTP intake の既定 route は `/intake/manual` と `/intake/chat` で、adapter は JSON body から
 `conversationId`、`message`、任意の `messageId`、`actor`、`attachments`、`replyTarget`
 を読み、正規化済み envelope を `RainrailIntakeAdapterContext.publish()` へ渡す。
+`createManualInputIntakeAdapter` は `ManualInputIntakeAdapterOptions.bearerToken` を必須とし、
+body を読む前に `Authorization: Bearer <token>` を検証する。manual/chat input は
+`runtime:start` へ接続され得るため、Core の generic intake route ではなく adapter 境界で
+source-specific auth を持つ。
 Workflow plugin は通常の event と同じく `rainrail.chat.message` や
 `rainrail.manual.message` に `accepts` / local handler を設定し、
 `runtime:start` capability を宣言したうえで `context.actions.startRuntime()` を呼べる。

@@ -473,7 +473,12 @@ function isAllowedUrl(url: URL): boolean {
     return isAllowedGitHubUrl(url);
   }
 
-  if (url.protocol === 'github:' || url.protocol === 'cloudflare:') {
+  if (
+    url.protocol === 'github:'
+    || url.protocol === 'cloudflare:'
+    || url.protocol === 'manual:'
+    || url.protocol === 'chat:'
+  ) {
     return isAllowedDeliveryReferenceUrl(url);
   }
 
@@ -822,7 +827,7 @@ function sanitizePayloadText(value: string): string {
     .replace(/(^|[{\s"'<>`,;\[(])(["']?)([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification|session)[A-Za-z0-9_.-]*)\2(\s*:\s*)(["'])(?:\\.|(?!\5)[^\\])*\5/giu, '$1$2$3$2$4$5[redacted]$5')
     .replace(/(["'])([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification|session)[A-Za-z0-9_.-]*)\1(\s*:\s*)(["'])(?:\\.|(?!\4)[^\\\r\n])*(?=\r?\n|$)/giu, '$1$2$1$3$4[redacted]$4')
     .replace(/(^|[{\s"'<>`,;\[(])(["']?)([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification|session)[A-Za-z0-9_.-]*)\2(\s*:\s*)(["'])(?:\\.|(?!\5)[^\\\r\n])*(?=\r?\n|$)/giu, '$1$2$3$2$4$5[redacted]$5')
-    .replace(/(^|[{\s"'<>`,;\[(])(["']?)([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification|session)[A-Za-z0-9_.-]*)\2(\s*:\s*)(?!["'])([^,\s\r\n}\]]+)/giu, '$1$2$3$2$4[redacted]')
+    .replace(/(^|[{\s"'<>`,;\[(])(["']?)([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification|session)[A-Za-z0-9_.-]*)\2(\s*:\s*)(?!["']|\[redacted\])([^,\s\r\n}\]]+)/giu, '$1$2$3$2$4[redacted]')
     .replace(/(^|[.?&{\s"'<>`,;\[(])(["']?)([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification|session)[A-Za-z0-9_.-]*)\2\s*=\s*(["'])(?:\\.|(?!\4)[^\\])*\4/giu, '$1$2$3$2=[redacted]')
     .replace(/(^|[.?&{\s"'<>`,;\[(])(["']?)([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification|session)[A-Za-z0-9_.-]*)\2\s*=\s*(["'])(?:\\.|(?!\4)[^\\\r\n])*(?=\r?\n|$)/giu, '$1$2$3$2=[redacted]')
     .replace(/(^|[.?&{\s"'<>`,;\[(])([A-Za-z0-9_.-]*authorization[A-Za-z0-9_.-]*)\s*=\s*([^\r\n"'<>`,;]*?)(?=(?:\s+[A-Za-z0-9_.-]*(?:authorization|cookie|set-cookie|token|secret|password|key|code|reset|verification|session)[A-Za-z0-9_.-]*\s*=)|[&\r\n"'<>`,;]|$)/giu, '$1$2=[redacted]')
