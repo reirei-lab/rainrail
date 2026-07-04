@@ -48,6 +48,9 @@ describe('dashboard operational views', () => {
   it('loads detail records for human summaries, sanitized envelopes, matched workflows, and audit', () => {
     expect(dashboardApp).toContain('eventDetail(row.id)');
     expect(dashboardApp).toContain('workflowRunDetail(row.id)');
+    expect(dashboardApp).toContain('detailRequestSequence');
+    expect(dashboardApp).toContain('selectedDetailRowId');
+    expect(dashboardApp).toContain('isCurrentDetailRequest(activeClient, detailRequestId, row.id)');
 
     for (const label of [
       'Human summary',
@@ -61,6 +64,11 @@ describe('dashboard operational views', () => {
     }
 
     expect(dashboardApp).not.toContain('JSON.stringify(record.envelope.payload');
+  });
+
+  it('does not mark the whole dashboard empty just because Event Inbox filters hide rows', () => {
+    expect(dashboardApp).toContain('hasOperationalRecords(latestData.overview)');
+    expect(dashboardApp).not.toContain("setState(hasRows(latestData) ? 'ready' : 'empty'");
   });
 
   it('keeps the dashboard dense and responsive', () => {

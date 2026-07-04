@@ -53,6 +53,8 @@ if (root !== null) {
   let pollTimer: number | undefined;
   let refreshInFlightClient: RainrailDashboardApiClient | undefined;
   let refreshSequence = 0;
+  let detailRequestSequence = 0;
+  let selectedDetailRowId: string | undefined;
 
   const storedToken = sessionStore.get(TOKEN_STORAGE_KEY) ?? '';
   const storedApiBaseUrl = sessionStore.get(API_BASE_URL_STORAGE_KEY) ?? appRoot.dataset.apiBaseUrl ?? '';
@@ -157,7 +159,8 @@ if (root !== null) {
       scheduleStaleCheck();
       renderStats(latestData.overview);
       renderCurrentList();
-      setState(hasRows(latestData) ? 'ready' : 'empty', hasRows(latestData) ? 'Live operational state' : 'No operational records yet');
+      const hasOperationalData = hasOperationalRecords(latestData.overview);
+      setState(hasOperationalData ? 'ready' : 'empty', hasOperationalData ? 'Live operational state' : 'No operational records yet');
     } catch (error) {
       if (!isCurrentRefresh(activeClient, activeRefreshId)) return;
       const authError = isDashboardAuthError(error);
@@ -181,6 +184,7 @@ if (root !== null) {
     const rows = selectedRows(latestData);
     list.replaceChildren(...rows.map((row) => rowButton(row)));
     if (rows.length === 0) {
+      clearSelectedDetail();
       detail.textContent = 'Select another stream or wait for the next poll.';
       return;
     }
@@ -206,29 +210,36 @@ if (root !== null) {
   async function renderDetail(row: DashboardEvent | DashboardWorkflowRun | DashboardAgentTask): Promise<void> {
     if (detail === null) return;
 
+    const detailRequestId = ++detailRequestSequence;
+    selectedDetailRowId = row.id;
     renderBasicDetail(row, 'Loading detail');
     const activeClient = client;
     if (activeClient === undefined) {
-      renderBasicDetail(row, 'Detail unavailable');
+      if (isCurrentDetailRequest(activeClient, detailRequestId, row.id)) {
+        renderBasicDetail(row, 'Detail unavailable');
+      }
       return;
     }
 
     try {
       if (row.type === 'event') {
         const loaded = await activeClient.eventDetail(row.id);
-        if (client !== activeClient) return;
+        if (!isCurrentDetailRequest(activeClient, detailRequestId, row.id)) return;
         renderEventDetail(row, loaded);
         return;
       }
       if (row.type === 'workflow-run') {
         const loaded = await activeClient.workflowRunDetail(row.id);
-        if (client !== activeClient) return;
+        if (!isCurrentDetailRequest(activeClient, detailRequestId, row.id)) return;
         renderWorkflowRunDetail(row, loaded);
         return;
       }
+      if (!isCurrentDetailRequest(activeClient, detailRequestId, row.id)) return;
       renderBasicDetail(row, 'Agent task summary');
     } catch {
-      renderBasicDetail(row, 'Detail request failed');
+      if (isCurrentDetailRequest(activeClient, detailRequestId, row.id)) {
+        renderBasicDetail(row, 'Detail request failed');
+      }
     }
   }
 
@@ -301,6 +312,7 @@ if (root !== null) {
       staleTimer = undefined;
     }
     refreshInFlightClient = undefined;
+    clearSelectedDetail();
     if (staleIndicator !== null) staleIndicator.hidden = true;
     renderEmptyStats();
     if (list !== null) list.replaceChildren();
@@ -356,6 +368,17 @@ if (root !== null) {
     if (refreshInFlightClient === activeClient && refreshSequence === activeRefreshId) {
       refreshInFlightClient = undefined;
     }
+  }
+
+  function isCurrentDetailRequest(activeClient: RainrailDashboardApiClient | undefined, detailRequestId: number, rowId: string): boolean {
+    return client === activeClient
+      && detailRequestSequence === detailRequestId
+      && selectedDetailRowId === rowId;
+  }
+
+  function clearSelectedDetail(): void {
+    selectedDetailRowId = undefined;
+    detailRequestSequence += 1;
   }
 
   function currentEventFilters(): { sourceType?: string; name?: string } {
@@ -505,8 +528,9 @@ function isDashboardAuthError(error: unknown): boolean {
     && (error.status === 401 || error.status === 403 || error.code === 'invalid_bearer_token');
 }
 
-function hasRows(data: DashboardData): boolean {
-  return data.events.length + data.workflowRuns.length + data.agentTasks.length > 0;
+function hasOperationalRecords(overview: DashboardOverview): boolean {
+  const counts = overview.data.counts;
+  return Object.values(counts).some((value) => value > 0);
 }
 
 function formatIssue(row: DashboardEvent | DashboardWorkflowRun | DashboardAgentTask): string {
