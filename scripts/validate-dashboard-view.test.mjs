@@ -119,8 +119,14 @@ describe('dashboard operational views', () => {
   });
 
   it('does not mark the whole dashboard empty just because Event Inbox filters hide rows', () => {
-    expect(dashboardApp).toContain('hasOperationalRecords(latestData.overview)');
+    expect(dashboardApp).toContain('hasDashboardRecords(latestData)');
     expect(dashboardApp).not.toContain("setState(hasRows(latestData) ? 'ready' : 'empty'");
+    expect(dashboardApp).not.toContain('|| data.settings.length > 0');
+  });
+
+  it('uses event summaries before source names for row titles', () => {
+    expect(dashboardApp.indexOf("if ('summary' in row && typeof row.summary === 'string') return row.summary;"))
+      .toBeLessThan(dashboardApp.indexOf("if (row.type !== 'event' && 'name' in row && typeof row.name === 'string') return row.name;"));
   });
 
   it('keeps the dashboard dense and responsive', () => {

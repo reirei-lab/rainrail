@@ -99,6 +99,10 @@ export function createCloudflareTailIntakeAdapter(
 ): RainrailIntakeAdapter {
   return {
     name: options.sourceName ?? 'cloudflare-tail',
+    source: {
+      type: 'cloudflare',
+      authStatus: 'not_required',
+    },
     async tail(events, context) {
       return publishCloudflareTailEvents(events as CloudflareTailEvent[], {
         ...(options.receivedAt === undefined ? {} : { receivedAt: options.receivedAt }),

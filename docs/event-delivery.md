@@ -112,6 +112,30 @@ intake 登録 API の public contract は `RainrailIntakeAdapter`、`RainrailInt
 configuration error とする。現行の `createRainrailNodeServer` と Cloudflare Worker entrypoint
 は互換性のため GitHub webhook adapter を `/webhooks/github` に登録する。
 
+Dashboard / mobile / operator tooling 向けの public v1 operational API は次の read endpoint
+を提供する。いずれも event bearer token で保護し、provider secret や raw payload 本文は
+返さない。
+
+- `GET /api/v1/overview`: store counts、warnings、recent activity、latest events/tasks を返す。
+- `GET /api/v1/events`: sanitized event rows を返す。`filter[source]`、`filter[name]`、
+  `limit`、`cursor` を受け付ける。
+- `GET /api/v1/events/{eventId}`: sanitized envelope、human summary、matched workflow、
+  retry/audit context を含む event detail を返す。
+- `GET /api/v1/workflow-runs`: workflow/action audit rows を返す。`filter[status]`、
+  `limit`、`cursor` を受け付ける。
+- `GET /api/v1/workflow-runs/{workflowRunId}`: workflow run detail と source event context
+  を返す。
+- `GET /api/v1/agent-tasks`: agent task rows を返す。`filter[status]`、`limit`、`cursor`
+  を受け付ける。
+- `GET /api/v1/agent-tasks/{taskId}`: agent task detail と stale project claim warning を返す。
+- `GET /api/v1/sources`: configured source adapter rows、source type、endpoint、auth metadata、
+  last delivery を返す。`filter[source]`、`limit`、`cursor` を受け付ける。
+- `GET /api/v1/queue`: queue/project rows と blocked/upcoming/in-progress/claim summary を返す。
+  `filter[status]`、`limit`、`cursor` を受け付ける。
+- `GET /api/v1/settings`: read-only settings metadata と update policy を返す。現時点では
+  max concurrency、auto-start、retry policy、operational snapshot limit、dashboard auth、
+  runtime を表示する。
+
 HTTP app は任意で operational store を受け取り、dashboard/API 用の provider-neutral
 state も同じ Fetch app から返せる。operational store が設定された場合、dashboard API は
 `/events` と同じ `Authorization: Bearer <token>` を要求する。`GET /api/state` は

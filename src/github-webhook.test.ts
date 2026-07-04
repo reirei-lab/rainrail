@@ -66,6 +66,22 @@ describe('GitHub webhook source handling', () => {
     });
 
     expect(adapter.routes?.map((route) => route.path)).toEqual(['/github']);
+    expect(adapter.source).toEqual({
+      type: 'github',
+      authStatus: 'configured',
+    });
+  });
+
+  it('marks webhook intake auth as missing when the secret is empty', () => {
+    const adapter = createGitHubWebhookIntakeAdapter({
+      secret: '',
+      sourceName: 'prod-webhook',
+    });
+
+    expect(adapter.source).toEqual({
+      type: 'github',
+      authStatus: 'missing',
+    });
   });
 
   it('exposes GitHub webhook normalization as a Rainrail source plugin', async () => {
