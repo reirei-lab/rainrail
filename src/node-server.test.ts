@@ -68,6 +68,70 @@ describe('Rainrail Node server', () => {
     }
   });
 
+  it('builds Node ingress through the EEP Bridge bundle', async () => {
+    const { app } = createRainrailNodeServer({
+      githubWebhookSecret: 'secret',
+      githubSourceName: 'github-production-webhook',
+      publishToken: 'test-publish-token',
+      eventsBearerToken: 'events-token',
+      runtime: 'node-test',
+      replayLimit: 10,
+    });
+
+    const payload = JSON.stringify({
+      action: 'opened',
+      repository: { full_name: 'reirei-lab/rainrail' },
+      issue: {
+        number: 102,
+        html_url: 'https://github.com/reirei-lab/rainrail/issues/102',
+      },
+    });
+
+    const webhook = await app.fetch(new Request('https://rainrail.local/webhooks/github', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-github-event': 'issues',
+        'x-github-delivery': 'delivery-node-bundle',
+        'x-hub-signature-256': await createGitHubWebhookSignature('secret', payload),
+      },
+      body: payload,
+    }));
+    expect(webhook.status).toBe(202);
+    await expect(webhook.json()).resolves.toMatchObject({
+      id: 'github-production-webhook:delivery-node-bundle:github.issue',
+    });
+
+    await expect(app.tail?.([{
+      eventTimestamp: '2026-07-04T12:00:00.000Z',
+      outcome: 'ok',
+      scriptName: 'rainrail-worker',
+      event: {
+        request: {
+          method: 'GET',
+          url: 'https://rainrail.example/healthz',
+          headers: { 'cf-ray': 'ray-node-bundle' },
+        },
+        response: { status: 200 },
+      },
+    }])).resolves.toEqual([
+      {
+        ok: true,
+        id: 'cloudflare-tail:tail-rainrail-worker-20260704T120000000Z-ray-node-bundle:cloudflare.tail',
+      },
+    ]);
+
+    const events = await app.fetch(new Request('https://rainrail.local/events', {
+      headers: { authorization: 'Bearer events-token' },
+    }));
+    const reader = getReaderOrThrow(events);
+    const chunk = await readUntil(reader, 'cloudflare.tail');
+    await reader.cancel();
+
+    expect(chunk).toContain('event: github.issue\n');
+    expect(chunk).toContain('event: cloudflare.tail\n');
+  });
+
   it('aborts the Fetch request when an SSE client disconnects', async () => {
     const { server, room } = createRainrailNodeServer({
       githubWebhookSecret: 'secret',

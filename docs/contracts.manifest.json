@@ -258,6 +258,7 @@
       "sources": [
         "src/events.ts",
         "src/source-plugin.ts",
+        "src/eep-bridge-bundle.ts",
         "src/github-webhook/index.ts",
         "src/cloudflare-tail.ts",
         "src/event-bus.ts",
@@ -276,6 +277,7 @@
       ],
       "tests": [
         "scripts/validate-doc-boundaries.test.mjs",
+        "src/eep-bridge-bundle.test.ts",
         "src/plugin-runtime.test.ts",
         "src/github-webhook.test.ts",
         "src/cloudflare-tail.test.ts",

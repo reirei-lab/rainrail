@@ -9,6 +9,8 @@ export interface RainrailEepBridgeBundleEnv {
 
 export interface RainrailEepBridgeIntakeAdaptersOptions {
   env: RainrailEepBridgeBundleEnv;
+  githubSourceName?: string;
+  githubMaxBodyBytes?: number;
   fallbackDeliveryId?: (events: unknown[]) => string | Promise<string>;
 }
 
@@ -20,11 +22,15 @@ export function createRainrailEepBridgeIntakeAdaptersFromEnv(
 
 export function createRainrailEepBridgeIntakeAdapters({
   env,
+  githubSourceName,
+  githubMaxBodyBytes,
   fallbackDeliveryId = stableIntakeFallbackDeliveryId,
 }: RainrailEepBridgeIntakeAdaptersOptions): readonly RainrailIntakeAdapter[] {
   return [
     createGitHubWebhookIntakeAdapter({
       secret: gitHubWebhookSecretFromEnv(env),
+      ...(githubSourceName === undefined ? {} : { sourceName: githubSourceName }),
+      ...(githubMaxBodyBytes === undefined ? {} : { maxBodyBytes: githubMaxBodyBytes }),
     }),
     createCloudflareTailIntakeAdapter({
       fallbackDeliveryId,

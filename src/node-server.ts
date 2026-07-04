@@ -1,7 +1,7 @@
 import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 
 import { RainrailBridgeRoom, type RainrailBridgeRoomState } from './bridge-room.js';
-import { createGitHubWebhookIntakeAdapter } from './github-webhook.js';
+import { createRainrailEepBridgeIntakeAdapters } from './eep-bridge-bundle.js';
 import {
   createRainrailHttpApp,
   rainrailHttpRequestBodyLimit,
@@ -42,11 +42,11 @@ export function createRainrailNodeServer(options: RainrailNodeServerOptions): Ra
     runtime: options.runtime ?? 'node',
     ...(options.operationalStore === undefined ? {} : { operationalStore: options.operationalStore }),
     intakeAdapters: [
-      createGitHubWebhookIntakeAdapter({
-        secret: options.githubWebhookSecret,
-        ...(options.githubSourceName === undefined ? {} : { sourceName: options.githubSourceName }),
+      ...createRainrailEepBridgeIntakeAdapters({
+        env: { GITHUB_WEBHOOK_SECRET: options.githubWebhookSecret },
+        ...(options.githubSourceName === undefined ? {} : { githubSourceName: options.githubSourceName }),
         ...(options.maxWebhookBodyBytes === undefined && options.maxBodyBytes === undefined ? {} : {
-          maxBodyBytes: options.maxWebhookBodyBytes ?? options.maxBodyBytes,
+          githubMaxBodyBytes: options.maxWebhookBodyBytes ?? options.maxBodyBytes,
         }),
       }),
       ...(options.intakeAdapters ?? []),

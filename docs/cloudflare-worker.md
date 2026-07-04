@@ -39,6 +39,8 @@ GitHub webhook の URL は `/webhooks/github`、health check は `/healthz`。
 Worker entrypoint は Core app と EEP Bridge bundle を composition する。bundle は
 `createGitHubWebhookIntakeAdapter` と `createCloudflareTailIntakeAdapter` を
 `createRainrailHttpApp` に登録し、Core は provider 固有 route / tail payload を直接持たない。
+Node server も同じ `createRainrailEepBridgeIntakeAdapters` API で GitHub webhook と
+Cloudflare tail ingress を構成するため、local Node / Worker の差は transport だけに閉じる。
 
 ## Production Deploy
 
