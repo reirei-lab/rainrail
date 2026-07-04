@@ -80,10 +80,20 @@ describe('dashboard app shell', () => {
   it('keeps pending refreshes tied to the client that started them', () => {
     expect(dashboardApp).toContain('const activeClient = client');
     expect(dashboardApp).toContain('const activeRefreshId = ++refreshSequence;');
+    expect(dashboardApp).toContain('refreshInFlightClient');
+    expect(dashboardApp).toContain('if (options.quiet && refreshInFlightClient === client) return;');
+    expect(dashboardApp).toContain('clearRefreshInFlight(activeClient, activeRefreshId)');
     expect(dashboardApp).toContain('isCurrentRefresh(activeClient, activeRefreshId)');
     expect(dashboardApp).toContain('if (client !== activeClient) return false;');
     expect(dashboardApp).toContain('overview: await activeClient.overview()');
     expect(dashboardApp).toContain('events: (await activeClient.events()).data');
+  });
+
+  it('models event repository under source like the v1 API compact row', () => {
+    expect(dashboardClient).toContain('source?: { type?: string; name?: string; repository?: string }');
+    expect(dashboardClient).not.toContain('source?: string');
+    expect(dashboardApp).toContain('row.source?.repository');
+    expect(dashboardApp).toContain('`${row.source.repository}#${row.subject.id}`');
   });
 
   it('keeps dashboard initialization usable when browser storage is blocked', () => {

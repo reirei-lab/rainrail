@@ -47,6 +47,7 @@ if (root !== null) {
   let lastUpdatedAt = 0;
   let staleTimer: number | undefined;
   let pollTimer: number | undefined;
+  let refreshInFlightClient: RainrailDashboardApiClient | undefined;
   let refreshSequence = 0;
 
   const storedToken = sessionStore.get(TOKEN_STORAGE_KEY) ?? '';
@@ -125,8 +126,11 @@ if (root !== null) {
       setState('auth-missing', 'Bearer token required');
       return;
     }
+    if (options.quiet && refreshInFlightClient === client) return;
+
     const activeClient = client;
     const activeRefreshId = ++refreshSequence;
+    refreshInFlightClient = activeClient;
 
     if (!options.quiet) setState('loading', 'Loading operational state');
 
@@ -153,6 +157,8 @@ if (root !== null) {
         ? 'Token rejected by operational API'
         : 'Operational API unavailable';
       setState('error', message);
+    } finally {
+      clearRefreshInFlight(activeClient, activeRefreshId);
     }
   }
 
@@ -260,6 +266,7 @@ if (root !== null) {
       window.clearTimeout(staleTimer);
       staleTimer = undefined;
     }
+    refreshInFlightClient = undefined;
     if (staleIndicator !== null) staleIndicator.hidden = true;
     renderEmptyStats();
     if (list !== null) list.replaceChildren();
@@ -309,6 +316,12 @@ if (root !== null) {
   function isCurrentRefresh(activeClient: RainrailDashboardApiClient, activeRefreshId: number): boolean {
     if (client !== activeClient) return false;
     return refreshSequence === activeRefreshId;
+  }
+
+  function clearRefreshInFlight(activeClient: RainrailDashboardApiClient, activeRefreshId: number): void {
+    if (refreshInFlightClient === activeClient && refreshSequence === activeRefreshId) {
+      refreshInFlightClient = undefined;
+    }
   }
 }
 
@@ -387,6 +400,9 @@ function hasRows(data: DashboardData): boolean {
 function formatIssue(row: DashboardEvent | DashboardWorkflowRun | DashboardAgentTask): string {
   if ('issue' in row && row.issue?.repository !== undefined && row.issue.number !== undefined) {
     return `${row.issue.repository}#${row.issue.number}`;
+  }
+  if ('source' in row && row.source?.repository !== undefined && 'subject' in row && row.subject?.id !== undefined) {
+    return `${row.source.repository}#${row.subject.id}`;
   }
   if ('subject' in row && row.subject?.type !== undefined && row.subject.id !== undefined) {
     return `${row.subject.type}#${row.subject.id}`;

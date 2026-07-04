@@ -32,8 +32,7 @@ export interface DashboardEvent {
   summary: string;
   occurredAt?: string;
   receivedAt?: string;
-  source?: string;
-  repository?: string;
+  source?: { type?: string; name?: string; repository?: string };
   subject?: { type?: string; id?: string; url?: string };
   links?: { self?: string };
 }
