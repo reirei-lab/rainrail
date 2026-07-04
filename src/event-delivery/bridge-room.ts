@@ -24,8 +24,18 @@ const GITHUB_MENTION_PAYLOAD_KEYS = new Set([
   'comment',
   'review',
 ]);
+const MANUAL_INPUT_PAYLOAD_KEYS = new Set([
+  'provider',
+  'channel',
+  'action',
+  'conversation',
+  'message',
+  'actor',
+  'attachments',
+  'replyTarget',
+]);
 const ALLOWED_RAW_PAYLOAD_KINDS = new Set(['external-reference', 'inline-redacted']);
-const ALLOWED_URL_PROTOCOLS = new Set(['https:', 'github:', 'cloudflare:']);
+const ALLOWED_URL_PROTOCOLS = new Set(['https:', 'github:', 'cloudflare:', 'manual:', 'chat:']);
 const SAFE_DELIVERY_REFERENCE_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 const SAFE_IDENTIFIER_TOKEN = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/;
 const SAFE_METADATA_TOKEN = /^[a-z0-9][a-z0-9._:-]{0,63}$/i;
@@ -38,6 +48,8 @@ const MAX_CLOUDFLARE_EXCEPTION_MESSAGE_LENGTH = 512;
 const MAX_CLOUDFLARE_EXCEPTION_NAME_LENGTH = 200;
 const MAX_CLOUDFLARE_EXCEPTION_STACK_LENGTH = 1_200;
 const MAX_CLOUDFLARE_EXCEPTION_STACK_LINES = 8;
+const MAX_MANUAL_INPUT_TEXT_LENGTH = 8_000;
+const MAX_MANUAL_INPUT_ATTACHMENTS = 20;
 const claimedStorages = new WeakSet<RainrailBridgeRoomStorage>();
 
 type PublishEventResult =
@@ -285,10 +297,14 @@ function validatePublishEnvelope(value: unknown): RainrailEventEnvelope {
   const subjectId = expectSubjectIdentifier(subject);
   const rawPayloadKind = expectRawPayloadKind(rawPayload);
   const rawPayloadReference = expectString(rawPayload, 'reference');
+  assertManualInputEventSourceMatches(sourceType, name);
 
   if (!('payload' in value)) {
     throw new TypeError('payload is required');
   }
+
+  const sanitizedRawPayloadReference = expectSanitizedUrl(rawPayloadReference, 'reference');
+  assertManualInputRawPayloadMatches(sourceType, name, rawPayloadKind, sanitizedRawPayloadReference);
 
   const event: RainrailEventEnvelope = {
     id,
@@ -311,10 +327,10 @@ function validatePublishEnvelope(value: unknown): RainrailEventEnvelope {
       id: subjectId,
       ...optionalUrl(subject, 'url'),
     },
-    payload: normalizePayload(value.payload, { sourceType, name }),
+    payload: normalizePayload(value.payload, { sourceType, name, subjectType, subjectId }),
     rawPayload: {
       kind: rawPayloadKind,
-      reference: expectSanitizedUrl(rawPayloadReference, 'reference'),
+      reference: sanitizedRawPayloadReference,
       ...optionalContentType(rawPayload),
       ...optionalSha256(rawPayload),
     },
@@ -463,7 +479,12 @@ function isAllowedUrl(url: URL): boolean {
     return isAllowedGitHubUrl(url);
   }
 
-  if (url.protocol === 'github:' || url.protocol === 'cloudflare:') {
+  if (
+    url.protocol === 'github:'
+    || url.protocol === 'cloudflare:'
+    || url.protocol === 'manual:'
+    || url.protocol === 'chat:'
+  ) {
     return isAllowedDeliveryReferenceUrl(url);
   }
 
@@ -491,6 +512,7 @@ function isAllowedGitHubUrl(url: URL): boolean {
 
 function isAllowedDeliveryReferenceUrl(url: URL): boolean {
   if (url.hostname !== 'deliveries') return false;
+  if (url.port.length > 0) return false;
 
   const parts = url.pathname.split('/').filter(Boolean);
   return parts.length === 1 && url.pathname === `/${parts[0]}` && SAFE_DELIVERY_REFERENCE_ID.test(parts[0] ?? '');
@@ -517,14 +539,28 @@ function optionalSha256(record: Record<string, unknown>): Record<string, string>
   return { sha256: record.sha256.toLowerCase() };
 }
 
-function normalizePayload(value: unknown, context: { sourceType: string; name: string }): unknown {
+function normalizePayload(
+  value: unknown,
+  context: { sourceType: string; name: string; subjectType: string; subjectId: string },
+): unknown {
+  const manualPayload = isManualInputPayload(context);
   if (!isRecord(value)) {
+    if (manualPayload) {
+      throw new TypeError('manual/chat payload must be an object');
+    }
     return {};
   }
 
   const payload: Record<string, unknown> = {};
   for (const [key, nestedValue] of Object.entries(value)) {
-    if (ALLOWED_PAYLOAD_KEYS.has(key) && isSafePayloadMetadata(nestedValue)) {
+    if (manualPayload) {
+      if (MANUAL_INPUT_PAYLOAD_KEYS.has(key)) {
+        const normalized = normalizeManualInputPayloadField(key, nestedValue, context);
+        if (normalized !== undefined) {
+          payload[key] = normalized;
+        }
+      }
+    } else if (ALLOWED_PAYLOAD_KEYS.has(key) && isSafePayloadMetadata(nestedValue)) {
       payload[key] = nestedValue;
     } else if (isCloudflareErrorPayload(value, context) && CLOUDFLARE_ERROR_PAYLOAD_KEYS.has(key)) {
       const normalized = normalizeCloudflareErrorPayloadField(key, nestedValue);
@@ -536,6 +572,27 @@ function normalizePayload(value: unknown, context: { sourceType: string; name: s
       if (normalized !== undefined) {
         payload[key] = normalized;
       }
+    }
+  }
+
+  if (manualPayload) {
+    if (payload.channel !== context.sourceType) {
+      throw new TypeError('payload.channel must match source.type');
+    }
+    if (
+      payload.provider !== 'rainrail'
+      || payload.action !== 'message'
+      || !isRecord(payload.conversation)
+      || typeof payload.conversation.id !== 'string'
+      || payload.conversation.id.length === 0
+    ) {
+      throw new TypeError('manual/chat payload is missing required fields');
+    }
+    if (context.subjectType !== 'conversation' || payload.conversation.id !== context.subjectId) {
+      throw new TypeError('manual/chat subject must match payload conversation');
+    }
+    if (!isRecord(payload.message) || typeof payload.message.text !== 'string' || payload.message.text.trim().length === 0) {
+      throw new TypeError('payload.message.text is required');
     }
   }
 
@@ -628,6 +685,111 @@ function normalizeGitHubMentionPayloadField(key: string, value: unknown): unknow
   if (key === 'resource' || key === 'pullRequest') return normalizeGitHubResource(value);
   if (key === 'comment' || key === 'review') return normalizeGitHubComment(value);
   return undefined;
+}
+
+function isManualInputPayload(context: { sourceType: string; name: string }): boolean {
+  return (context.sourceType === 'manual' && context.name === 'rainrail.manual.message')
+    || (context.sourceType === 'chat' && context.name === 'rainrail.chat.message');
+}
+
+function assertManualInputEventSourceMatches(sourceType: string, name: string): void {
+  if (
+    (name === 'rainrail.manual.message' && sourceType !== 'manual')
+    || (name === 'rainrail.chat.message' && sourceType !== 'chat')
+  ) {
+    throw new TypeError('manual/chat event name must match source.type');
+  }
+  if (
+    (sourceType === 'manual' && name !== 'rainrail.manual.message')
+    || (sourceType === 'chat' && name !== 'rainrail.chat.message')
+  ) {
+    throw new TypeError('manual/chat source.type must use the matching event name');
+  }
+}
+
+function assertManualInputRawPayloadMatches(sourceType: string, name: string, kind: string, reference: string): void {
+  if (!isManualInputPayload({ sourceType, name })) return;
+  if (kind !== 'inline-redacted') {
+    throw new TypeError('manual/chat raw payload kind must be inline-redacted');
+  }
+  const protocol = new URL(reference).protocol;
+  if (protocol !== `${sourceType}:`) {
+    throw new TypeError('manual/chat raw payload reference must match source.type');
+  }
+}
+
+function normalizeManualInputPayloadField(key: string, value: unknown, context: { sourceType: string; name: string }): unknown {
+  if (key === 'provider') return value === 'rainrail' ? value : undefined;
+  if (key === 'channel') return value === context.sourceType ? value : undefined;
+  if (key === 'action') return value === 'message' ? value : undefined;
+  if (key === 'conversation') return normalizeManualConversation(value);
+  if (key === 'message') return normalizeManualMessage(value);
+  if (key === 'actor') return normalizeManualActor(value);
+  if (key === 'attachments') return normalizeManualAttachments(value);
+  if (key === 'replyTarget') return normalizeManualReplyTarget(value);
+  return undefined;
+}
+
+function normalizeManualConversation(value: unknown): unknown {
+  if (!isRecord(value)) return undefined;
+  const normalized = {
+    ...pickManualStringFields(value, ['id', 'url']),
+  };
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function normalizeManualMessage(value: unknown): unknown {
+  if (!isRecord(value)) return undefined;
+  const normalized = {
+    ...pickManualStringFields(value, ['id', 'text']),
+  };
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function normalizeManualActor(value: unknown): unknown {
+  if (!isRecord(value)) return undefined;
+  const normalized = {
+    ...pickManualStringFields(value, ['id', 'displayName', 'type']),
+  };
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function normalizeManualAttachments(value: unknown): unknown {
+  if (!Array.isArray(value)) return undefined;
+  const attachments = value.slice(0, MAX_MANUAL_INPUT_ATTACHMENTS).flatMap((attachment) => {
+    if (!isRecord(attachment)) return [];
+    const normalized = {
+      ...pickManualStringFields(attachment, ['id', 'name', 'contentType', 'url']),
+    };
+    return Object.keys(normalized).length > 0 ? [normalized] : [];
+  });
+  return attachments.length > 0 ? attachments : undefined;
+}
+
+function normalizeManualReplyTarget(value: unknown): unknown {
+  if (!isRecord(value)) return undefined;
+  if (typeof value.id !== 'string' || value.id.trim().length === 0) return undefined;
+  const normalized = {
+    ...pickManualStringFields(value, ['id', 'url']),
+  };
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function pickManualStringFields(record: Record<string, unknown>, keys: string[]): Record<string, string> {
+  const normalized: Record<string, string> = {};
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'string' && value.trim().length > 0) {
+      normalized[key] = key === 'url'
+        ? truncateManualPayloadString(sanitizePayloadUrl(value) ?? '')
+        : truncateManualPayloadString(sanitizePayloadText(value));
+    }
+  }
+  return Object.fromEntries(Object.entries(normalized).filter(([, value]) => value.length > 0));
+}
+
+function truncateManualPayloadString(value: string): string {
+  return value.slice(0, MAX_MANUAL_INPUT_TEXT_LENGTH);
 }
 
 function normalizeGitHubRepository(value: unknown): unknown {
@@ -731,18 +893,20 @@ function sanitizePayloadText(value: string): string {
     .replace(/(^|[{\s"'<>`,;\[(])(["']?)([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification|session)[A-Za-z0-9_.-]*)\2(\s*:\s*)(["'])(?:\\.|(?!\5)[^\\])*\5/giu, '$1$2$3$2$4$5[redacted]$5')
     .replace(/(["'])([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification|session)[A-Za-z0-9_.-]*)\1(\s*:\s*)(["'])(?:\\.|(?!\4)[^\\\r\n])*(?=\r?\n|$)/giu, '$1$2$1$3$4[redacted]$4')
     .replace(/(^|[{\s"'<>`,;\[(])(["']?)([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification|session)[A-Za-z0-9_.-]*)\2(\s*:\s*)(["'])(?:\\.|(?!\5)[^\\\r\n])*(?=\r?\n|$)/giu, '$1$2$3$2$4$5[redacted]$5')
-    .replace(/(^|[{\s"'<>`,;\[(])(["']?)([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification|session)[A-Za-z0-9_.-]*)\2(\s*:\s*)(?!["'])([^,\s\r\n}\]]+)/giu, '$1$2$3$2$4[redacted]')
+    .replace(/(^|[{\s"'<>`,;\[(])(["']?)([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification|session)[A-Za-z0-9_.-]*)\2(\s*:\s*)(?!["']|\[redacted\])([^,\s\r\n}\]]+)/giu, '$1$2$3$2$4[redacted]')
     .replace(/(^|[.?&{\s"'<>`,;\[(])(["']?)([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification|session)[A-Za-z0-9_.-]*)\2\s*=\s*(["'])(?:\\.|(?!\4)[^\\])*\4/giu, '$1$2$3$2=[redacted]')
     .replace(/(^|[.?&{\s"'<>`,;\[(])(["']?)([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification|session)[A-Za-z0-9_.-]*)\2\s*=\s*(["'])(?:\\.|(?!\4)[^\\\r\n])*(?=\r?\n|$)/giu, '$1$2$3$2=[redacted]')
     .replace(/(^|[.?&{\s"'<>`,;\[(])([A-Za-z0-9_.-]*authorization[A-Za-z0-9_.-]*)\s*=\s*([^\r\n"'<>`,;]*?)(?=(?:\s+[A-Za-z0-9_.-]*(?:authorization|cookie|set-cookie|token|secret|password|key|code|reset|verification|session)[A-Za-z0-9_.-]*\s*=)|[&\r\n"'<>`,;]|$)/giu, '$1$2=[redacted]')
     .replace(/(^|[.?&{\s"'<>`,;\[(])([A-Za-z0-9_.-]*(?:cookie|set-cookie)[A-Za-z0-9_.-]*)\s*=\s*([^;\s\r\n"'<>`,]*(?:;\s*[^=;\s\r\n"'<>`,]+=[^;\s\r\n"'<>`,]*)*)/giu, '$1$2=[redacted]')
     .replace(/(^|[.?&{\s"'<>`,;\[(])([A-Za-z0-9_.-]*(?:token|secret|password|key|code|reset|verification|session)[A-Za-z0-9_.-]*)\s*=\s*([^&\s"'<>`,;]+)/giu, '$1$2=[redacted]')
-    .replace(/\bBearer\s+[A-Za-z0-9._~+/-]+=*/giu, 'Bearer [redacted]');
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/-]+=*/giu, 'Bearer [redacted]')
+    .replace(/\b(?:github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9_]{20,})\b/gu, '[redacted-token]');
 }
 
 function sanitizePayloadCredentialUrl(value: string): string {
   try {
     const url = new URL(value);
+    if (url.protocol !== 'https:') return '[redacted-url]';
     url.username = '';
     url.password = '';
     url.pathname = sanitizePayloadPathname(url.pathname);

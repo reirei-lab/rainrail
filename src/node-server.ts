@@ -7,6 +7,7 @@ import {
   createRainrailHttpApp,
   rainrailHttpRequestBodyLimit,
   shouldReadRainrailHttpRequestBody,
+  shouldStreamRainrailHttpRequestBody,
   type RainrailHttpApp,
   type RainrailHttpAppOptions,
 } from './http-app.js';
@@ -137,14 +138,19 @@ async function toFetchRequest(
   };
 
   const method = request.method ?? 'GET';
-  if (methodCanHaveBody(method) && shouldReadRainrailHttpRequestBody(url.pathname, method, appOptions)) {
-    init.body = await readRequestBody(
-      request,
-      rainrailHttpRequestBodyLimit(url.pathname, method, appOptions) ?? options.maxBodyBytes,
-    );
-  } else if (methodCanHaveBody(method) && isDashboardCommandRoute(url.pathname, method)) {
-    init.body = Readable.toWeb(request) as unknown as NonNullable<RequestInit['body']>;
-    (init as RequestInit & { duplex: 'half' }).duplex = 'half';
+  if (methodCanHaveBody(method)) {
+    if (shouldReadRainrailHttpRequestBody(url.pathname, method, appOptions)) {
+      init.body = await readRequestBody(
+        request,
+        rainrailHttpRequestBodyLimit(url.pathname, method, appOptions) ?? options.maxBodyBytes,
+      );
+    } else if (
+      shouldStreamRainrailHttpRequestBody(url.pathname, method, appOptions)
+      || isDashboardCommandRoute(url.pathname, method)
+    ) {
+      init.body = Readable.toWeb(request) as ReadableStream;
+      Object.assign(init, { duplex: 'half' });
+    }
   }
 
   return new Request(url, init);
