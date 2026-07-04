@@ -9,6 +9,7 @@ const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.me
 const wranglerConfig = JSON.parse(stripJsonComments(readFileSync(new URL('../wrangler.jsonc', import.meta.url), 'utf8')));
 const gitignore = readFileSync(new URL('../.gitignore', import.meta.url), 'utf8');
 const cloudflareDocs = readFileSync(new URL('../docs/cloudflare-worker.md', import.meta.url), 'utf8');
+const selfHostDeployTemplate = readFileSync(new URL('../docs/templates/cloudflare-self-host-deploy.yml', import.meta.url), 'utf8');
 
 describe('Cloudflare Worker operations', () => {
   it('deploys the Worker entrypoint with the Durable Object binding used by runtime code', () => {
@@ -49,6 +50,8 @@ describe('Cloudflare Worker operations', () => {
     await expect(access(new URL('./validate-cloudflare-secrets.mjs', import.meta.url))).resolves.toBeUndefined();
     await expect(access(new URL('./smoke-cloudflare-worker.mjs', import.meta.url))).resolves.toBeUndefined();
     expect(cloudflareDocs).toContain('pnpm cf:smoke');
+    expect(selfHostDeployTemplate).toContain('RAINRAIL_GITHUB_WEBHOOK_ENDPOINT: ${{ vars.RAINRAIL_GITHUB_WEBHOOK_ENDPOINT }}');
+    expect(cloudflareDocs).toContain('RAINRAIL_GITHUB_WEBHOOK_ENDPOINT');
   });
 
   it('smokes the webhook endpoint without publishing a GitHub issue event', () => {
@@ -132,10 +135,9 @@ describe('Cloudflare Worker operations', () => {
       }),
       RAINRAIL_WEBHOOK_SECRET_NAME: 'CUSTOM_GITHUB_WEBHOOK_SECRET',
     })).toEqual([
-      'GITHUB_WEBHOOK_SECRET',
+      'CUSTOM_GITHUB_WEBHOOK_SECRET',
       'RAINRAIL_PUBLISH_TOKEN',
       'SSE_BEARER_TOKEN',
-      'CUSTOM_GITHUB_WEBHOOK_SECRET',
     ]);
     expect(parseSecretList(JSON.stringify([
       { name: 'GITHUB_WEBHOOK_SECRET', type: 'secret_text' },

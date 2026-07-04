@@ -153,6 +153,10 @@ GitHub 側に次の Secrets / Vars を登録する。
 - Secret `CLOUDFLARE_ACCOUNT_ID`: deploy 対象の Cloudflare account id。
 - Variable `RAINRAIL_WORKER_URL`: deploy 後の Worker URL。例:
   `https://rainrail.<your-subdomain>.workers.dev`。
+- Optional variable `RAINRAIL_GITHUB_WEBHOOK_ENDPOINT`: `RAINRAIL_CONFIG_JSON` で
+  GitHub webhook endpoint を `/webhooks/github` 以外に変える場合の smoke 用 path。
+  未設定の場合は smoke が `RAINRAIL_CONFIG_JSON` から endpoint を読むか、既定
+  `/webhooks/github` を使う。
 
 Cloudflare Workers Secrets には、この文書の Secrets 節にある
 `GITHUB_WEBHOOK_SECRET`、`RAINRAIL_PUBLISH_TOKEN`、`SSE_BEARER_TOKEN` を事前登録する。

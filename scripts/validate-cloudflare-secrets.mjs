@@ -48,13 +48,17 @@ function stripJsonComments(source) {
  * @returns {string[]}
  */
 export function parseRequiredSecrets(config, env = process.env) {
-  const requiredSecrets = [];
+  const configWebhookSecrets = configRequiredSecretsFromEnv(env);
+  const shouldReplaceDefaultWebhookSecret = configWebhookSecrets.length > 0;
+  const requiredSecrets = [...configWebhookSecrets];
   if (!isRecord(config) || !isRecord(config.secrets) || !Array.isArray(config.secrets.required)) {
-    return configRequiredSecretsFromEnv(env);
+    return [...new Set(requiredSecrets)];
   }
 
-  requiredSecrets.push(...config.secrets.required.filter((item) => typeof item === 'string'));
-  requiredSecrets.push(...configRequiredSecretsFromEnv(env));
+  requiredSecrets.push(...config.secrets.required.filter((item) =>
+    typeof item === 'string'
+    && (!shouldReplaceDefaultWebhookSecret || item !== 'GITHUB_WEBHOOK_SECRET')
+  ));
 
   return [...new Set(requiredSecrets)];
 }

@@ -63,6 +63,7 @@ const defaultOpenClawRuntimeProviderConfig: OpenClawRuntimeProviderConfig = {
   timeoutSeconds: 600,
   logDirectory: 'var/agent-task-logs',
 };
+const safeSourceNamePattern = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/u;
 
 export async function loadConfig(path: string): Promise<RainrailConfig> {
   const { readFile } = await import('node:fs/promises');
@@ -128,7 +129,7 @@ function parseSourceBundleSource(value: unknown, path: string): SourceBundleSour
 
   const source: SourceBundleSourceConfig = {
     type: parseConfiguredSourceType(value.type, `${path}.type`),
-    name: parseRequiredString(value.name, `${path}.name`),
+    name: parseSafeSourceName(value.name, `${path}.name`),
     sourceType: parseSourceEventType(value.sourceType, `${path}.sourceType`),
   };
   const provider = parseOptionalProviderName(value.provider, `${path}.provider`);
@@ -254,7 +255,18 @@ function parseOptionalEndpoint(value: unknown, path: string): `/${string}` | und
   if (!endpoint.startsWith('/')) {
     throw new Error(`${path} must start with "/"`);
   }
+  if (endpoint.includes('?') || endpoint.includes('#')) {
+    throw new Error(`${path} must be a path without query or fragment`);
+  }
   return endpoint as `/${string}`;
+}
+
+function parseSafeSourceName(value: unknown, path: string): string {
+  const name = parseRequiredString(value, path);
+  if (!safeSourceNamePattern.test(name)) {
+    throw new Error(`${path} must be a safe identifier`);
+  }
+  return name;
 }
 
 function assertUniqueNames(sources: readonly SourceBundleSourceConfig[], path: string): void {

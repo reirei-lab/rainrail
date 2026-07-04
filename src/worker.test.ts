@@ -90,6 +90,34 @@ describe('Rainrail Cloudflare Worker entrypoint', () => {
     await expect(response.json()).resolves.toEqual({ error: 'missing_secret' });
   });
 
+  it('falls back to env-only composition when Rainrail config JSON is empty', async () => {
+    const env = {
+      ...fakeEnv(),
+      RAINRAIL_CONFIG_JSON: '',
+    };
+    const payload = JSON.stringify({
+      action: 'opened',
+      repository: { full_name: 'reirei-lab/rainrail' },
+      issue: {
+        number: 105,
+        html_url: 'https://github.com/reirei-lab/rainrail/issues/105',
+      },
+    });
+
+    const webhook = await rainrailWorker.fetch(new Request('https://worker.local/webhooks/github', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-github-event': 'issues',
+        'x-github-delivery': 'delivery-empty-config',
+        'x-hub-signature-256': await createGitHubWebhookSignature('secret', payload),
+      },
+      body: payload,
+    }), env);
+
+    expect(webhook.status).toBe(202);
+  });
+
   it('creates the Worker intake adapters through the EEP Bridge bundle', () => {
     const adapters = createRainrailEepBridgeIntakeAdaptersFromEnv({
       GITHUB_WEBHOOK_SECRET: 'secret',
