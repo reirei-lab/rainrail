@@ -613,9 +613,12 @@ export const validateContractsManifest = (root = repoRoot) => {
       if (
         indexExportingSources.length > 0 &&
         !indexExportingSources.some(
-          (source) =>
-            source.exportKind !== undefined &&
-            indexReExportsPublicName(indexSource, source.exportPath, publicExport, source.exportKind),
+          (source) => {
+            const exportPath = source.exportPath;
+            return exportPath !== undefined &&
+              source.exportKind !== undefined &&
+              indexReExportsPublicName(indexSource, exportPath, publicExport, source.exportKind);
+          },
         )
       ) {
         errors.push(`${id} public export ${publicExport} is not re-exported from src/index.ts`);
