@@ -90,6 +90,34 @@ describe('Rainrail Cloudflare Worker entrypoint', () => {
     await expect(response.json()).resolves.toEqual({ error: 'missing_secret' });
   });
 
+  it('falls back to env-only composition when Rainrail config JSON is empty', async () => {
+    const env = {
+      ...fakeEnv(),
+      RAINRAIL_CONFIG_JSON: '',
+    };
+    const payload = JSON.stringify({
+      action: 'opened',
+      repository: { full_name: 'reirei-lab/rainrail' },
+      issue: {
+        number: 105,
+        html_url: 'https://github.com/reirei-lab/rainrail/issues/105',
+      },
+    });
+
+    const webhook = await rainrailWorker.fetch(new Request('https://worker.local/webhooks/github', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-github-event': 'issues',
+        'x-github-delivery': 'delivery-empty-config',
+        'x-hub-signature-256': await createGitHubWebhookSignature('secret', payload),
+      },
+      body: payload,
+    }), env);
+
+    expect(webhook.status).toBe(202);
+  });
+
   it('creates the Worker intake adapters through the EEP Bridge bundle', () => {
     const adapters = createRainrailEepBridgeIntakeAdaptersFromEnv({
       GITHUB_WEBHOOK_SECRET: 'secret',
@@ -101,6 +129,87 @@ describe('Rainrail Cloudflare Worker entrypoint', () => {
     ]);
     expect(adapters[0]?.routes?.map((route) => route.path)).toEqual(['/webhooks/github']);
     expect(adapters[1]?.tail).toEqual(expect.any(Function));
+  });
+
+  it('uses Rainrail config JSON to compose Worker intake adapters when provided', async () => {
+    const env = {
+      ...fakeEnv(),
+      RAINRAIL_CONFIG_JSON: JSON.stringify({
+        sourceBundles: [
+          {
+            type: 'eep-bridge',
+            name: '${RAINRAIL_BUNDLE_NAME}',
+            sources: [
+              {
+                type: 'github-webhook',
+                name: '${RAINRAIL_GITHUB_SOURCE_NAME}',
+                sourceType: 'github',
+                provider: 'github',
+                runtime: 'openclaw',
+                webhookSecret: '${RAINRAIL_WEBHOOK_SECRET_NAME}',
+                endpoint: '/github',
+              },
+            ],
+          },
+        ],
+      }),
+      RAINRAIL_BUNDLE_NAME: 'worker-ingress',
+      RAINRAIL_GITHUB_SOURCE_NAME: 'github-configured-webhook',
+      RAINRAIL_WEBHOOK_SECRET_NAME: 'GITHUB_WEBHOOK_SECRET',
+    };
+    const payload = JSON.stringify({
+      action: 'opened',
+      repository: { full_name: 'reirei-lab/rainrail' },
+      issue: {
+        number: 105,
+        html_url: 'https://github.com/reirei-lab/rainrail/issues/105',
+      },
+    });
+
+    const webhook = await rainrailWorker.fetch(new Request('https://worker.local/github', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-github-event': 'issues',
+        'x-github-delivery': 'delivery-worker-config',
+        'x-hub-signature-256': await createGitHubWebhookSignature('secret', payload),
+      },
+      body: payload,
+    }), env);
+    expect(webhook.status).toBe(202);
+
+    const waitUntilPromises: Promise<unknown>[] = [];
+    rainrailWorker.tail?.([{
+      eventTimestamp: '2026-06-30T12:00:00.000Z',
+      outcome: 'ok',
+      scriptName: 'rainrail-worker',
+      event: {
+        request: {
+          method: 'GET',
+          url: 'https://rainrail.example/healthz',
+          headers: { 'cf-ray': 'ray-worker-config' },
+        },
+        response: { status: 200 },
+      },
+    }], env, {
+      waitUntil(promise) {
+        waitUntilPromises.push(promise);
+      },
+    });
+
+    expect(waitUntilPromises).toHaveLength(1);
+    await expect(waitUntilPromises[0]).resolves.toEqual([]);
+
+    const events = await rainrailWorker.fetch(new Request('https://worker.local/events', {
+      headers: { authorization: 'Bearer events-token' },
+    }), env);
+    expect(events.status).toBe(200);
+
+    const reader = getReaderOrThrow(events);
+    const chunk = await readUntil(reader, 'github.issue');
+    await reader.cancel();
+
+    expect(chunk).toContain('id: github-configured-webhook:delivery-worker-config:github.issue\n');
   });
 });
 

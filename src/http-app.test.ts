@@ -7,9 +7,10 @@ import {
   createCloudflareTailIntakeAdapter,
   RainrailBridgeRoom,
   createGitHubWebhookSignature,
-  createGitHubWebhookIntakeAdapter,
-  createRainrailHttpApp,
-  stableIntakeFallbackDeliveryId,
+	  createGitHubWebhookIntakeAdapter,
+	  createRainrailHttpApp,
+	  isCoreRoutePath,
+	  stableIntakeFallbackDeliveryId,
   type CloudflareTailEvent,
   type RainrailIntakeAdapter,
   type RainrailBridgeRoomState,
@@ -115,8 +116,8 @@ describe('Rainrail HTTP app', () => {
       intakeAdapters: [adapter('first'), adapter('second')],
     })).toThrow(/conflicting intake route/i);
 
-    expect(() => createTestApp(fakeState(), {
-      intakeAdapters: [{
+	    expect(() => createTestApp(fakeState(), {
+	      intakeAdapters: [{
         name: 'core-health-conflict',
         routes: [{
           path: '/healthz',
@@ -138,9 +139,12 @@ describe('Rainrail HTTP app', () => {
             return Response.json({ ok: true });
           },
         }],
-      }],
-    })).toThrow(/reserved by Rainrail core/i);
-  });
+	      }],
+	    })).toThrow(/reserved by Rainrail core/i);
+	    expect(isCoreRoutePath('/healthz')).toBe(true);
+	    expect(isCoreRoutePath('/api/v1/events/evt_1')).toBe(true);
+	    expect(isCoreRoutePath('/intake/manual')).toBe(false);
+	  });
 
   it('dispatches tail batches to a registered intake adapter', async () => {
     const published = createEventEnvelope({

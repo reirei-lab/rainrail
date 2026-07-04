@@ -1,7 +1,27 @@
-import { readFile } from 'node:fs/promises';
-
 import type { GitHubAuthConfig } from './github-auth.js';
 import type { RainrailEventSourceType } from './events.js';
+import { isCoreRoutePath } from './intake-adapter.js';
+
+export type SourceBundleType = 'eep-bridge';
+
+export type ConfiguredSourceType = 'github-webhook' | 'cloudflare-tail' | 'manual-chat';
+
+export interface SourceBundleSourceConfig {
+  type: ConfiguredSourceType;
+  name: string;
+  sourceType: RainrailEventSourceType;
+  provider?: keyof TaskProviderConfig;
+  runtime?: keyof RuntimeProviderConfig;
+  webhookSecret?: string;
+  endpoint?: `/${string}`;
+  maxBodyBytes?: number;
+}
+
+export interface SourceBundleConfig {
+  type: SourceBundleType;
+  name: string;
+  sources: SourceBundleSourceConfig[];
+}
 
 export interface SourceProviderConfig {
   type: RainrailEventSourceType;
@@ -28,6 +48,7 @@ export interface RuntimeProviderConfig {
 }
 
 export interface RainrailConfig {
+  sourceBundles: SourceBundleConfig[];
   sources: SourceProviderConfig[];
   taskProviders: TaskProviderConfig;
   runtimeProviders: RuntimeProviderConfig;
@@ -43,10 +64,17 @@ const defaultOpenClawRuntimeProviderConfig: OpenClawRuntimeProviderConfig = {
   timeoutSeconds: 600,
   logDirectory: 'var/agent-task-logs',
 };
+const safeSourceNamePattern = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/u;
+const githubWebhookSourceNameMaxLength = 53;
 
 export async function loadConfig(path: string): Promise<RainrailConfig> {
+  const { readFile } = await import('node:fs/promises');
   const raw = await readFile(path, 'utf8');
-  return parseConfig(JSON.parse(expandEnv(raw)) as unknown);
+  return parseConfigJson(raw);
+}
+
+export function parseConfigJson(raw: string, env?: Record<string, string | undefined>): RainrailConfig {
+  return parseConfig(JSON.parse(expandEnv(raw, env)) as unknown);
 }
 
 export function parseConfig(value: unknown): RainrailConfig {
@@ -55,10 +83,98 @@ export function parseConfig(value: unknown): RainrailConfig {
   }
 
   return {
+    sourceBundles: parseSourceBundles(value.sourceBundles),
     sources: parseSources(value.sources),
     taskProviders: parseTaskProviders(value.taskProviders),
     runtimeProviders: parseRuntimeProviders(value.runtimeProviders),
   };
+}
+
+function parseSourceBundles(value: unknown): SourceBundleConfig[] {
+  if (value === undefined) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    throw new Error('config.sourceBundles must be an array');
+  }
+  const bundles = value.map((bundle, index) => parseSourceBundle(bundle, `config.sourceBundles[${index}]`));
+  assertUniqueBundleNames(bundles, 'config.sourceBundles');
+  return bundles;
+}
+
+function parseSourceBundle(value: unknown, path: string): SourceBundleConfig {
+  if (!isRecord(value)) {
+    throw new Error(`${path} must be an object`);
+  }
+
+  const bundle: SourceBundleConfig = {
+    type: parseSourceBundleType(value.type, `${path}.type`),
+    name: parseRequiredString(value.name, `${path}.name`),
+    sources: parseSourceBundleSources(value.sources, `${path}.sources`),
+  };
+
+  assertUniqueNames(bundle.sources, `${path}.sources`);
+  return bundle;
+}
+
+function parseSourceBundleSources(value: unknown, path: string): SourceBundleSourceConfig[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`${path} must be an array`);
+  }
+  return value.map((source, index) => parseSourceBundleSource(source, `${path}[${index}]`));
+}
+
+function parseSourceBundleSource(value: unknown, path: string): SourceBundleSourceConfig {
+  if (!isRecord(value)) {
+    throw new Error(`${path} must be an object`);
+  }
+
+  const source: SourceBundleSourceConfig = {
+    type: parseConfiguredSourceType(value.type, `${path}.type`),
+    name: parseSafeSourceName(value.name, `${path}.name`),
+    sourceType: parseSourceEventType(value.sourceType, `${path}.sourceType`),
+  };
+  const provider = parseOptionalProviderName(value.provider, `${path}.provider`);
+  const runtime = parseOptionalRuntimeName(value.runtime, `${path}.runtime`);
+  const webhookSecret = parseOptionalString(value.webhookSecret, `${path}.webhookSecret`);
+  const endpoint = parseOptionalEndpoint(value.endpoint, `${path}.endpoint`);
+  const maxBodyBytes = parseOptionalNonNegativeNumber(value.maxBodyBytes, `${path}.maxBodyBytes`);
+  if (provider !== undefined) {
+    source.provider = provider;
+  }
+  if (runtime !== undefined) {
+    source.runtime = runtime;
+  }
+  if (webhookSecret !== undefined) {
+    source.webhookSecret = webhookSecret;
+  }
+  if (endpoint !== undefined) {
+    source.endpoint = endpoint;
+  }
+  if (maxBodyBytes !== undefined) {
+    source.maxBodyBytes = maxBodyBytes;
+  }
+
+  if (source.type === 'github-webhook' && source.provider !== 'github') {
+    throw new Error(`${path}.provider must be "github" for github-webhook sources`);
+  }
+  if (source.type === 'github-webhook' && source.sourceType !== 'github') {
+    throw new Error(`${path}.sourceType must be "github" for github-webhook sources`);
+  }
+  if (source.type === 'github-webhook' && source.name.length > githubWebhookSourceNameMaxLength) {
+    throw new Error(`${path}.name must be ${githubWebhookSourceNameMaxLength} characters or fewer for github-webhook sources`);
+  }
+  if (source.type === 'github-webhook' && source.webhookSecret === undefined) {
+    throw new Error(`${path}.webhookSecret must be a non-empty string for github-webhook sources`);
+  }
+  if (source.type === 'cloudflare-tail' && source.sourceType !== 'cloudflare') {
+    throw new Error(`${path}.sourceType must be "cloudflare" for cloudflare-tail sources`);
+  }
+  if (source.type === 'manual-chat' && source.sourceType !== 'manual') {
+    throw new Error(`${path}.sourceType must be "manual" for manual-chat sources`);
+  }
+
+  return source;
 }
 
 function parseSources(value: unknown): SourceProviderConfig[] {
@@ -88,6 +204,97 @@ function parseSource(value: unknown, path: string): SourceProviderConfig {
     source.endpoint = endpoint;
   }
   return source;
+}
+
+function parseSourceBundleType(value: unknown, path: string): SourceBundleType {
+  const type = parseRequiredString(value, path);
+  if (type !== 'eep-bridge') {
+    throw new Error(`${path} must be one of: eep-bridge`);
+  }
+  return type;
+}
+
+function parseConfiguredSourceType(value: unknown, path: string): ConfiguredSourceType {
+  const type = parseRequiredString(value, path);
+  if (type !== 'github-webhook' && type !== 'cloudflare-tail' && type !== 'manual-chat') {
+    throw new Error(`${path} must be one of: github-webhook, cloudflare-tail, manual-chat`);
+  }
+  return type;
+}
+
+function parseSourceEventType(value: unknown, path: string): RainrailEventSourceType {
+  const type = parseRequiredString(value, path);
+  if (type !== 'github' && type !== 'cloudflare' && type !== 'manual' && type !== 'system') {
+    throw new Error(`${path} must be one of: github, cloudflare, manual, system`);
+  }
+  return type;
+}
+
+function parseOptionalProviderName(value: unknown, path: string): keyof TaskProviderConfig | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const provider = parseRequiredString(value, path);
+  if (provider !== 'github') {
+    throw new Error(`${path} must reference a configured task provider`);
+  }
+  return provider;
+}
+
+function parseOptionalRuntimeName(value: unknown, path: string): keyof RuntimeProviderConfig | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const runtime = parseRequiredString(value, path);
+  if (runtime !== 'openclaw') {
+    throw new Error(`${path} must reference a configured runtime provider`);
+  }
+  return runtime;
+}
+
+function parseOptionalEndpoint(value: unknown, path: string): `/${string}` | undefined {
+  const endpoint = parseOptionalString(value, path);
+  if (endpoint === undefined) {
+    return undefined;
+  }
+  if (!endpoint.startsWith('/')) {
+    throw new Error(`${path} must start with "/"`);
+  }
+  if (endpoint.includes('?') || endpoint.includes('#')) {
+    throw new Error(`${path} must be a path without query or fragment`);
+  }
+  if (isCoreRoutePath(endpoint)) {
+    throw new Error(`${path} must not use a Rainrail core route`);
+  }
+  return endpoint as `/${string}`;
+}
+
+function parseSafeSourceName(value: unknown, path: string): string {
+  const name = parseRequiredString(value, path);
+  if (!safeSourceNamePattern.test(name)) {
+    throw new Error(`${path} must be a safe identifier`);
+  }
+  return name;
+}
+
+function assertUniqueNames(sources: readonly SourceBundleSourceConfig[], path: string): void {
+  const seen = new Set<string>();
+  for (const source of sources) {
+    if (seen.has(source.name)) {
+      throw new Error(`${path} must not contain duplicate source name "${source.name}"`);
+    }
+    seen.add(source.name);
+  }
+}
+
+function assertUniqueBundleNames(bundles: readonly SourceBundleConfig[], path: string): void {
+  const seen = new Set<string>();
+  for (const bundle of bundles) {
+    if (seen.has(bundle.name)) {
+      throw new Error(`${path} must not contain duplicate bundle name "${bundle.name}"`);
+    }
+    seen.add(bundle.name);
+  }
 }
 
 function parseTaskProviders(value: unknown): TaskProviderConfig {
@@ -208,11 +415,18 @@ function parseOptionalBoolean(value: unknown, path: string): boolean | undefined
   return value;
 }
 
-function expandEnv(raw: string): string {
+function expandEnv(raw: string, env?: Record<string, string | undefined>): string {
   return raw.replace(
     /\$\{([A-Z0-9_]+)\}/gu,
-    (_match, name: string) => escapeJsonStringContent(process.env[name] ?? ''),
+    (_match, name: string) => escapeJsonStringContent(envValue(name, env)),
   );
+}
+
+function envValue(name: string, env: Record<string, string | undefined> | undefined): string {
+  if (env !== undefined && Object.prototype.hasOwnProperty.call(env, name)) {
+    return env[name] ?? '';
+  }
+  return typeof process === 'undefined' ? '' : process.env[name] ?? '';
 }
 
 function escapeJsonStringContent(value: string): string {
