@@ -236,6 +236,7 @@ describe('Rainrail HTTP app', () => {
 
     expect(response.status).toBe(202);
     expect(response.headers.get('Access-Control-Allow-Origin')).toBe('*');
+    expect(response.headers.get('Access-Control-Expose-Headers')).toContain('X-Request-ID');
     await expect(response.json()).resolves.toEqual({
       ok: true,
       id: 'github-webhook:delivery-19:github.issue',

@@ -553,6 +553,60 @@ describe('Rainrail Node server', () => {
     }
   });
 
+  it('uses maxBodyBytes as the effective Node command action app limit', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:00:00.000Z'),
+    });
+    const commandHandler = vi.fn(async (command) => ({ noteLength: String(command.inputs.note).length }));
+    const { server } = createRainrailNodeServer({
+      githubWebhookSecret: 'secret',
+      publishToken: 'test-publish-token',
+      operationalStore,
+      dashboardAuth: {
+        adminToken: 'admin-token',
+      },
+      commandHandler,
+      maxBodyBytes: DEFAULT_MAX_REQUEST_BODY_BYTES + 4096,
+    });
+
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const address = server.address();
+    if (address === null || typeof address === 'string') {
+      throw new Error('expected TCP server address');
+    }
+
+    try {
+      const note = 'x'.repeat(DEFAULT_MAX_REQUEST_BODY_BYTES);
+      const response = await fetch(`http://127.0.0.1:${address.port}/api/v1/settings/actions/update`, {
+        method: 'POST',
+        headers: {
+          authorization: 'Bearer admin-token',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          note,
+          confirmationToken: 'confirm:settings_update:settings:global',
+        }),
+      });
+
+      expect(response.status).toBe(202);
+      await expect(response.json()).resolves.toMatchObject({
+        data: {
+          action: 'settings_update',
+          status: 'accepted',
+          result: { noteLength: note.length },
+        },
+      });
+      expect(String(commandHandler.mock.calls[0]?.[0].inputs.note).length).toBe(note.length);
+    } finally {
+      await closeServer(server);
+      operationalStore.close();
+    }
+  });
+
   it('does not read bodies for non-webhook routes before method handling', async () => {
     const { server } = createRainrailNodeServer({
       githubWebhookSecret: 'secret',

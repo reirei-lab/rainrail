@@ -794,7 +794,7 @@ async function handleDashboardCommandRequest(
   const requestId = request.headers.get('x-request-id') ?? generatedRequestId();
   const client = request.headers.get('x-rainrail-client') ?? undefined;
   const body = await readJsonObjectBody(request, options.dashboardCommandMaxBodyBytes ?? DEFAULT_MAX_REQUEST_BODY_BYTES);
-  if (!body.ok) return body.response;
+  if (!body.ok) return commandResponse({ error: body.error }, requestId, body.status);
 
   const dryRun = body.value.dryRun === true;
   const confirmationToken = confirmationTokenFor(command.actionType, command.targetType, command.targetId);
@@ -1024,7 +1024,7 @@ function generatedRequestId(): string {
 
 async function readJsonObjectBody(request: Request, maxBytes: number): Promise<
   | { ok: true; value: Record<string, unknown> }
-  | { ok: false; response: Response }
+  | { ok: false; error: string; status: number }
 > {
   if (request.body === null) return { ok: true, value: {} };
 
@@ -1033,7 +1033,7 @@ async function readJsonObjectBody(request: Request, maxBytes: number): Promise<
     rawBody = await readFetchRequestBody(request, maxBytes);
   } catch (error) {
     if (isStatusCodeError(error) && error.statusCode === 413) {
-      return { ok: false, response: jsonResponse({ error: 'request_body_too_large' }, { status: 413 }) };
+      return { ok: false, error: 'request_body_too_large', status: 413 };
     }
 
     throw error;
@@ -1044,12 +1044,12 @@ async function readJsonObjectBody(request: Request, maxBytes: number): Promise<
   try {
     const value = JSON.parse(new TextDecoder().decode(rawBody)) as unknown;
     if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-      return { ok: false, response: jsonResponse({ error: 'invalid_json_body' }, { status: 400 }) };
+      return { ok: false, error: 'invalid_json_body', status: 400 };
     }
 
     return { ok: true, value: value as Record<string, unknown> };
   } catch {
-    return { ok: false, response: jsonResponse({ error: 'invalid_json_body' }, { status: 400 }) };
+    return { ok: false, error: 'invalid_json_body', status: 400 };
   }
 }
 
@@ -1138,6 +1138,10 @@ function redactSensitiveText(value: string): string {
   return value
     .replace(/\b(authorization\s*:\s*)(?:bearer|token)\s+[^\s"',}]+/giu, '$1[redacted]')
     .replace(/\b((?:set-)?cookie\s*:\s*)[^\r\n]+/giu, '$1[redacted]')
+    .replace(
+      /((["'])[\w.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification|session|confirmation)[\w.-]*\2\s*:\s*)(["'])(?:\\.|(?!\3).)*\3/giu,
+      '$1$3[redacted]$3',
+    )
     .replace(
       /(\b[\w.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification|session|confirmation)[\w.-]*\b\s*[:=]\s*)(["']?)([^\s"',}]+)/giu,
       '$1$2[redacted]',

@@ -768,7 +768,49 @@ describe('Rainrail dashboard API', () => {
     }));
 
     expect(response.status).toBe(413);
+    expect(response.headers.get('x-request-id')).toEqual(expect.any(String));
     await expect(response.json()).resolves.toEqual({ error: 'request_body_too_large' });
+    operationalStore.close();
+  });
+
+  it('returns request ids on invalid command action bodies', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:00:00.000Z'),
+    });
+    operationalStore.recordAgentTask({
+      id: 'agent_task_rainrail_111',
+      title: 'command API',
+      agentSessionId: 'agent:main:rainrail-111',
+      branchName: 'agent/reirei-lab-rainrail-111',
+      status: 'running',
+      logPath: 'var/log/rainrail-111.log',
+      resumeAttempts: [],
+    });
+    const app = createRainrailHttpApp({
+      room: new RainrailBridgeRoom(fakeState(), { publishToken: 'publish-token' }),
+      publishToken: 'publish-token',
+      operationalStore,
+      dashboardAuth: {
+        operatorToken: 'operator-token',
+      },
+      commandHandler: vi.fn(),
+    });
+
+    const response = await app.fetch(new Request('https://rainrail.local/api/v1/agent-tasks/agent_task_rainrail_111/actions/resume', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer operator-token',
+        'content-type': 'application/json',
+        'x-request-id': 'request-invalid-json',
+      },
+      body: '{',
+    }));
+
+    expect(response.status).toBe(400);
+    expect(response.headers.get('x-request-id')).toBe('request-invalid-json');
+    await expect(response.json()).resolves.toEqual({ error: 'invalid_json_body' });
     operationalStore.close();
   });
 
@@ -1052,6 +1094,46 @@ describe('Rainrail dashboard API', () => {
     const commandResults = JSON.stringify(operationalStore.snapshot().commandResults);
     expect(commandResults).not.toContain('ghp_handler_secret');
     expect(commandResults).not.toContain('secret_cookie');
+    operationalStore.close();
+  });
+
+  it('redacts JSON-formatted sensitive command errors', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:00:00.000Z'),
+    });
+    const app = createRainrailHttpApp({
+      room: new RainrailBridgeRoom(fakeState(), { publishToken: 'publish-token' }),
+      publishToken: 'publish-token',
+      operationalStore,
+      dashboardAuth: {
+        adminToken: 'admin-token',
+      },
+      async commandHandler() {
+        throw new Error('provider rejected {"accessToken":"ghp_json_secret","password":"json-password"}');
+      },
+    });
+
+    const response = await app.fetch(new Request('https://rainrail.local/api/v1/settings/actions/update', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer admin-token',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        confirmationToken: 'confirm:settings_update:settings:global',
+      }),
+    }));
+
+    expect(response.status).toBe(502);
+    const bodyText = await response.text();
+    expect(bodyText).toContain('[redacted]');
+    expect(bodyText).not.toContain('ghp_json_secret');
+    expect(bodyText).not.toContain('json-password');
+    const commandResults = JSON.stringify(operationalStore.snapshot().commandResults);
+    expect(commandResults).not.toContain('ghp_json_secret');
+    expect(commandResults).not.toContain('json-password');
     operationalStore.close();
   });
 });

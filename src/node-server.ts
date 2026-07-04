@@ -42,7 +42,9 @@ export function createRainrailNodeServer(options: RainrailNodeServerOptions): Ra
     ...(options.eventsBearerToken === undefined ? {} : { eventsBearerToken: options.eventsBearerToken }),
     runtime: options.runtime ?? 'node',
     ...(options.operationalStore === undefined ? {} : { operationalStore: options.operationalStore }),
-    ...(options.dashboardCommandMaxBodyBytes === undefined ? {} : { dashboardCommandMaxBodyBytes: options.dashboardCommandMaxBodyBytes }),
+    ...(options.dashboardCommandMaxBodyBytes === undefined && options.maxBodyBytes === undefined ? {} : {
+      dashboardCommandMaxBodyBytes: options.dashboardCommandMaxBodyBytes ?? options.maxBodyBytes,
+    }),
     ...(options.dashboardAuth === undefined ? {} : { dashboardAuth: options.dashboardAuth }),
     ...(options.commandHandler === undefined ? {} : { commandHandler: options.commandHandler }),
     intakeAdapters: [
