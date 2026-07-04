@@ -58,8 +58,13 @@ export interface DashboardAgentTask {
   type: 'agent-task';
   status: string;
   title?: string;
+  agentSessionId?: string;
   branchName?: string;
   issue?: { repository?: string; number?: number };
+  startedAt?: string;
+  updatedAt?: string;
+  completedAt?: string;
+  warnings?: { staleProjectClaim?: boolean };
   links?: { self?: string };
 }
 
@@ -68,6 +73,22 @@ export interface DashboardDetail<TRecord = unknown> {
     id: string;
     type: string;
     record: TRecord;
+  };
+}
+
+export interface DashboardCommandResponse {
+  data: {
+    action: string;
+    targetType: string;
+    targetId: string;
+    status: string;
+    dryRun: boolean;
+    confirmationRequired?: boolean;
+    confirmationToken?: string;
+    auditId?: string;
+    auditWarning?: string;
+    result?: unknown;
+    error?: string;
   };
 }
 
@@ -113,6 +134,22 @@ export class RainrailDashboardApiClient {
     return this.get(`/api/v1/agent-tasks/${encodeURIComponent(id)}`);
   }
 
+  resumeAgentTask(id: string): Promise<DashboardCommandResponse> {
+    return this.postCommand(`/api/v1/agent-tasks/${encodeURIComponent(id)}/actions/resume`, {});
+  }
+
+  resetAgentTask(id: string, confirmationToken?: string): Promise<DashboardCommandResponse> {
+    return this.postCommand(`/api/v1/agent-tasks/${encodeURIComponent(id)}/actions/reset`, confirmationToken === undefined ? {} : { confirmationToken });
+  }
+
+  terminateAgentTask(id: string, confirmationToken?: string): Promise<DashboardCommandResponse> {
+    return this.postCommand(`/api/v1/agent-tasks/${encodeURIComponent(id)}/actions/terminate`, confirmationToken === undefined ? {} : { confirmationToken });
+  }
+
+  terminateAllAgentTasks(confirmationToken?: string): Promise<DashboardCommandResponse> {
+    return this.postCommand('/api/v1/agent-tasks/actions/terminate-all', confirmationToken === undefined ? {} : { confirmationToken });
+  }
+
   private async get<T>(path: string): Promise<T> {
     const response = await fetch(`${this.baseUrl}${path}`, {
       headers: {
@@ -127,10 +164,30 @@ export class RainrailDashboardApiClient {
 
     return response.json() as Promise<T>;
   }
+
+  private async postCommand(path: string, body: Record<string, unknown>): Promise<DashboardCommandResponse> {
+    const response = await fetch(`${this.baseUrl}${path}`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${this.token}`,
+        accept: 'application/json',
+        'content-type': 'application/json',
+        'x-rainrail-client': 'dashboard',
+      },
+      body: JSON.stringify(body),
+    });
+
+    const payload = await readJsonPayload(response);
+    if (!response.ok) {
+      throw new RainrailDashboardApiError(response.status, errorCodeFromPayload(payload, response.status), payload);
+    }
+
+    return payload as DashboardCommandResponse;
+  }
 }
 
 export class RainrailDashboardApiError extends Error {
-  constructor(readonly status: number, readonly code: string) {
+  constructor(readonly status: number, readonly code: string, readonly payload?: unknown) {
     super(code);
     this.name = 'RainrailDashboardApiError';
   }
@@ -143,4 +200,20 @@ async function readErrorCode(response: Response): Promise<string> {
   } catch {
     return `http_${response.status}`;
   }
+}
+
+async function readJsonPayload(response: Response): Promise<unknown> {
+  try {
+    return await response.clone().json();
+  } catch {
+    return { error: `http_${response.status}` };
+  }
+}
+
+function errorCodeFromPayload(payload: unknown, status: number): string {
+  if (typeof payload === 'object' && payload !== null && 'error' in payload) {
+    const error = (payload as { error?: unknown }).error;
+    if (typeof error === 'string') return error;
+  }
+  return `http_${status}`;
 }
