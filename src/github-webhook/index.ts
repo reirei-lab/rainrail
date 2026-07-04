@@ -78,6 +78,7 @@ export interface GitHubWebhookRequestOptions {
 export interface GitHubWebhookIntakeAdapterOptions {
   secret: string;
   sourceName?: string;
+  endpoint?: `/${string}`;
   maxBodyBytes?: number;
 }
 
@@ -134,7 +135,7 @@ export function createGitHubWebhookIntakeAdapter(options: GitHubWebhookIntakeAda
   return {
     name: options.sourceName ?? 'github-webhook',
     routes: [{
-      path: '/webhooks/github',
+      path: options.endpoint ?? '/webhooks/github',
       methods: ['POST'],
       maxBodyBytes: options.maxBodyBytes ?? DEFAULT_MAX_REQUEST_BODY_BYTES,
       async handle(request, context) {

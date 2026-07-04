@@ -11,8 +11,10 @@ export interface RainrailEepBridgeBundleEnv {
 export interface RainrailEepBridgeIntakeAdaptersOptions {
   env: RainrailEepBridgeBundleEnv;
   githubSourceName?: string;
+  githubEndpoint?: `/${string}`;
   githubMaxBodyBytes?: number;
   includeCloudflareTail?: boolean;
+  cloudflareTailSourceName?: string;
   fallbackDeliveryId?: (events: unknown[]) => string | Promise<string>;
 }
 
@@ -50,13 +52,16 @@ export function createRainrailEepBridgeIntakeAdaptersFromConfig({
   }
 
   const githubSource = githubSources[0]!;
+  const cloudflareTailSource = bundle.sources.find((source) => source.type === 'cloudflare-tail');
   return createRainrailEepBridgeIntakeAdapters({
     env: {
       GITHUB_WEBHOOK_SECRET: secretValueFromEnv(env, githubSource.webhookSecret),
     },
     githubSourceName: githubSource.name,
+    ...(githubSource.endpoint === undefined ? {} : { githubEndpoint: githubSource.endpoint }),
     ...(githubSource.maxBodyBytes === undefined ? {} : { githubMaxBodyBytes: githubSource.maxBodyBytes }),
-    includeCloudflareTail: bundle.sources.some((source) => source.type === 'cloudflare-tail'),
+    includeCloudflareTail: cloudflareTailSource !== undefined,
+    ...(cloudflareTailSource === undefined ? {} : { cloudflareTailSourceName: cloudflareTailSource.name }),
     ...(fallbackDeliveryId === undefined ? {} : { fallbackDeliveryId }),
   });
 }
@@ -64,20 +69,24 @@ export function createRainrailEepBridgeIntakeAdaptersFromConfig({
 export function createRainrailEepBridgeIntakeAdapters({
   env,
   githubSourceName,
+  githubEndpoint,
   githubMaxBodyBytes,
   includeCloudflareTail = true,
+  cloudflareTailSourceName,
   fallbackDeliveryId = stableIntakeFallbackDeliveryId,
 }: RainrailEepBridgeIntakeAdaptersOptions): readonly RainrailIntakeAdapter[] {
   const adapters: RainrailIntakeAdapter[] = [
     createGitHubWebhookIntakeAdapter({
       secret: gitHubWebhookSecretFromEnv(env),
       ...(githubSourceName === undefined ? {} : { sourceName: githubSourceName }),
+      ...(githubEndpoint === undefined ? {} : { endpoint: githubEndpoint }),
       ...(githubMaxBodyBytes === undefined ? {} : { maxBodyBytes: githubMaxBodyBytes }),
     }),
   ];
 
   if (includeCloudflareTail) {
     adapters.push(createCloudflareTailIntakeAdapter({
+      ...(cloudflareTailSourceName === undefined ? {} : { sourceName: cloudflareTailSourceName }),
       fallbackDeliveryId,
     }));
   }

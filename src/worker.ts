@@ -70,9 +70,15 @@ function workerIntakeAdapters(env: RainrailWorkerEnv) {
   }
 
   return createRainrailEepBridgeIntakeAdaptersFromConfig({
-    config: parseConfigJson(env.RAINRAIL_CONFIG_JSON),
+    config: parseConfigJson(env.RAINRAIL_CONFIG_JSON, stringEnv(env)),
     env,
   });
+}
+
+function stringEnv(env: RainrailWorkerEnv): Record<string, string | undefined> {
+  return Object.fromEntries(
+    Object.entries(env).filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
+  );
 }
 
 function bridgeRoom(env: RainrailWorkerEnv): RainrailWorkerBridgeRoom {

@@ -65,12 +65,12 @@ describe('Rainrail EEP Bridge bundle', () => {
               sourceType: 'github',
               provider: 'github',
               webhookSecret: 'GITHUB_WEBHOOK_SECRET',
-              endpoint: '/webhooks/github',
+              endpoint: '/github',
               maxBodyBytes: 2048,
             },
             {
               type: 'cloudflare-tail',
-              name: 'cloudflare-tail',
+              name: 'prod-tail',
               sourceType: 'cloudflare',
             },
           ],
@@ -86,11 +86,69 @@ describe('Rainrail EEP Bridge bundle', () => {
 
     expect(adapters.map((adapter) => adapter.name)).toEqual([
       'github-production-webhook',
-      'cloudflare-tail',
+      'prod-tail',
     ]);
-    expect(adapters[0]?.routes?.[0]?.path).toBe('/webhooks/github');
+    expect(adapters[0]?.routes?.[0]?.path).toBe('/github');
     expect(adapters[0]?.routes?.[0]?.maxBodyBytes).toBe(2048);
     expect(adapters[1]?.tail).toEqual(expect.any(Function));
+  });
+
+  it('uses the configured Cloudflare tail source name for published events', async () => {
+    const config = parseConfig({
+      sourceBundles: [
+        {
+          type: 'eep-bridge',
+          name: 'worker-ingress',
+          sources: [
+            {
+              type: 'github-webhook',
+              name: 'github-webhook',
+              sourceType: 'github',
+              provider: 'github',
+              webhookSecret: 'GITHUB_WEBHOOK_SECRET',
+            },
+            {
+              type: 'cloudflare-tail',
+              name: 'prod-tail',
+              sourceType: 'cloudflare',
+            },
+          ],
+        },
+      ],
+    });
+    const adapters = createRainrailEepBridgeIntakeAdaptersFromConfig({
+      config,
+      env: { GITHUB_WEBHOOK_SECRET: 'secret-value' },
+    });
+    const published: unknown[] = [];
+
+    await adapters[1]?.tail?.([{
+      eventTimestamp: '2026-06-30T12:00:00.000Z',
+      outcome: 'ok',
+      scriptName: 'rainrail-worker',
+      event: {
+        request: {
+          method: 'GET',
+          url: 'https://rainrail.example/healthz',
+          headers: { 'cf-ray': 'ray-prod-tail' },
+        },
+        response: { status: 200 },
+      },
+    }], {
+      async publish(event) {
+        published.push(event);
+        return { ok: true, status: 202 };
+      },
+    });
+
+    expect(published).toHaveLength(1);
+    expect(published[0]).toMatchObject({
+      id: 'prod-tail:tail-rainrail-worker-20260630T120000000Z-ray-prod-tail:cloudflare.tail',
+      source: {
+        type: 'cloudflare',
+        name: 'prod-tail',
+      },
+    });
   });
 
   it('omits Cloudflare tail when the selected config bundle does not include that source', () => {

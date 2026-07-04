@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { loadConfig, parseConfig } from './config.js';
+import { loadConfig, parseConfig, parseConfigJson } from './config.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -167,6 +167,7 @@ describe('parseConfig', () => {
     [{ type: 'rss-feed', name: 'rss', sourceType: 'system' }, 'config.sourceBundles[0].sources[0].type must be one of: github-webhook, cloudflare-tail, manual-chat'],
     [{ type: 'github-webhook', name: '', sourceType: 'github', provider: 'github', webhookSecret: 'secret' }, 'config.sourceBundles[0].sources[0].name must be a non-empty string'],
     [{ type: 'github-webhook', name: 'github-webhook', sourceType: 'slack', provider: 'github', webhookSecret: 'secret' }, 'config.sourceBundles[0].sources[0].sourceType must be one of: github, cloudflare, manual, system'],
+    [{ type: 'github-webhook', name: 'github-webhook', sourceType: 'cloudflare', provider: 'github', webhookSecret: 'secret' }, 'config.sourceBundles[0].sources[0].sourceType must be "github" for github-webhook sources'],
     [{ type: 'github-webhook', name: 'github-webhook', sourceType: 'github', provider: 'gitlab', webhookSecret: 'secret' }, 'config.sourceBundles[0].sources[0].provider must reference a configured task provider'],
     [{ type: 'manual-chat', name: 'manual-chat', sourceType: 'manual', runtime: 'lambda' }, 'config.sourceBundles[0].sources[0].runtime must reference a configured runtime provider'],
     [{ type: 'github-webhook', name: 'github-webhook', sourceType: 'github', provider: 'github' }, 'config.sourceBundles[0].sources[0].webhookSecret must be a non-empty string for github-webhook sources'],
@@ -199,6 +200,27 @@ describe('parseConfig', () => {
         },
       ],
     }, 'config.sourceBundles[0].sources must not contain duplicate source name "manual-chat"');
+  });
+
+  it('rejects duplicate source bundle names', () => {
+    expectConfigError({
+      sourceBundles: [
+        {
+          type: 'eep-bridge',
+          name: 'ingress',
+          sources: [
+            { type: 'manual-chat', name: 'manual-chat', sourceType: 'manual' },
+          ],
+        },
+        {
+          type: 'eep-bridge',
+          name: 'ingress',
+          sources: [
+            { type: 'manual-chat', name: 'ops-chat', sourceType: 'manual' },
+          ],
+        },
+      ],
+    }, 'config.sourceBundles must not contain duplicate bundle name "ingress"');
   });
 
   it.each([
@@ -383,6 +405,24 @@ describe('parseConfig', () => {
         { type: 'github', name: 'github--webhook' },
       ],
     });
+  });
+
+  it('expands environment variables from an explicit env map before falling back to process env', () => {
+    vi.stubEnv('RAINRAIL_CONFIG_BUNDLE_NAME', 'process-bundle');
+
+    expect(parseConfigJson(JSON.stringify({
+      sourceBundles: [
+        {
+          type: 'eep-bridge',
+          name: '${RAINRAIL_CONFIG_BUNDLE_NAME}',
+          sources: [
+            { type: 'manual-chat', name: 'manual-chat', sourceType: 'manual' },
+          ],
+        },
+      ],
+    }), {
+      RAINRAIL_CONFIG_BUNDLE_NAME: 'worker-bundle',
+    }).sourceBundles[0]?.name).toBe('worker-bundle');
   });
 
   it('rejects incomplete GitHub App auth config', () => {

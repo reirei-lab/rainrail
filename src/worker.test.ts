@@ -110,21 +110,24 @@ describe('Rainrail Cloudflare Worker entrypoint', () => {
         sourceBundles: [
           {
             type: 'eep-bridge',
-            name: 'worker-ingress',
+            name: '${RAINRAIL_BUNDLE_NAME}',
             sources: [
               {
                 type: 'github-webhook',
-                name: 'github-configured-webhook',
+                name: '${RAINRAIL_GITHUB_SOURCE_NAME}',
                 sourceType: 'github',
                 provider: 'github',
                 runtime: 'openclaw',
-                webhookSecret: 'GITHUB_WEBHOOK_SECRET',
-                endpoint: '/webhooks/github',
+                webhookSecret: '${RAINRAIL_WEBHOOK_SECRET_NAME}',
+                endpoint: '/github',
               },
             ],
           },
         ],
       }),
+      RAINRAIL_BUNDLE_NAME: 'worker-ingress',
+      RAINRAIL_GITHUB_SOURCE_NAME: 'github-configured-webhook',
+      RAINRAIL_WEBHOOK_SECRET_NAME: 'GITHUB_WEBHOOK_SECRET',
     };
     const payload = JSON.stringify({
       action: 'opened',
@@ -135,7 +138,7 @@ describe('Rainrail Cloudflare Worker entrypoint', () => {
       },
     });
 
-    const webhook = await rainrailWorker.fetch(new Request('https://worker.local/webhooks/github', {
+    const webhook = await rainrailWorker.fetch(new Request('https://worker.local/github', {
       method: 'POST',
       headers: {
         'content-type': 'application/json',

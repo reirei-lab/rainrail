@@ -32,6 +32,9 @@ SSE_BEARER_TOKEN=replace-with-local-events-token
 
 config 経由で composition を明示する場合も、secret 値は config に直書きしない。
 `webhookSecret` には env / Workers Secret の名前を置き、bundle が同名 env から値を解決する。
+`RAINRAIL_CONFIG_JSON` 内の `${NAME}` は Worker env / vars / secrets から展開される。
+`github-webhook.endpoint` は実際の intake route に反映されるため、GitHub 側の delivery URL も
+同じ path に合わせる。
 
 ```json
 {

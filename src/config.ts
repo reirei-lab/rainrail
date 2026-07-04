@@ -1,5 +1,3 @@
-import { readFile } from 'node:fs/promises';
-
 import type { GitHubAuthConfig } from './github-auth.js';
 import type { RainrailEventSourceType } from './events.js';
 
@@ -67,12 +65,13 @@ const defaultOpenClawRuntimeProviderConfig: OpenClawRuntimeProviderConfig = {
 };
 
 export async function loadConfig(path: string): Promise<RainrailConfig> {
+  const { readFile } = await import('node:fs/promises');
   const raw = await readFile(path, 'utf8');
   return parseConfigJson(raw);
 }
 
-export function parseConfigJson(raw: string): RainrailConfig {
-  return parseConfig(JSON.parse(expandEnv(raw)) as unknown);
+export function parseConfigJson(raw: string, env?: Record<string, string | undefined>): RainrailConfig {
+  return parseConfig(JSON.parse(expandEnv(raw, env)) as unknown);
 }
 
 export function parseConfig(value: unknown): RainrailConfig {
@@ -95,7 +94,9 @@ function parseSourceBundles(value: unknown): SourceBundleConfig[] {
   if (!Array.isArray(value)) {
     throw new Error('config.sourceBundles must be an array');
   }
-  return value.map((bundle, index) => parseSourceBundle(bundle, `config.sourceBundles[${index}]`));
+  const bundles = value.map((bundle, index) => parseSourceBundle(bundle, `config.sourceBundles[${index}]`));
+  assertUniqueBundleNames(bundles, 'config.sourceBundles');
+  return bundles;
 }
 
 function parseSourceBundle(value: unknown, path: string): SourceBundleConfig {
@@ -153,6 +154,9 @@ function parseSourceBundleSource(value: unknown, path: string): SourceBundleSour
 
   if (source.type === 'github-webhook' && source.provider !== 'github') {
     throw new Error(`${path}.provider must be "github" for github-webhook sources`);
+  }
+  if (source.type === 'github-webhook' && source.sourceType !== 'github') {
+    throw new Error(`${path}.sourceType must be "github" for github-webhook sources`);
   }
   if (source.type === 'github-webhook' && source.webhookSecret === undefined) {
     throw new Error(`${path}.webhookSecret must be a non-empty string for github-webhook sources`);
@@ -260,6 +264,16 @@ function assertUniqueNames(sources: readonly SourceBundleSourceConfig[], path: s
       throw new Error(`${path} must not contain duplicate source name "${source.name}"`);
     }
     seen.add(source.name);
+  }
+}
+
+function assertUniqueBundleNames(bundles: readonly SourceBundleConfig[], path: string): void {
+  const seen = new Set<string>();
+  for (const bundle of bundles) {
+    if (seen.has(bundle.name)) {
+      throw new Error(`${path} must not contain duplicate bundle name "${bundle.name}"`);
+    }
+    seen.add(bundle.name);
   }
 }
 
@@ -381,11 +395,18 @@ function parseOptionalBoolean(value: unknown, path: string): boolean | undefined
   return value;
 }
 
-function expandEnv(raw: string): string {
+function expandEnv(raw: string, env?: Record<string, string | undefined>): string {
   return raw.replace(
     /\$\{([A-Z0-9_]+)\}/gu,
-    (_match, name: string) => escapeJsonStringContent(process.env[name] ?? ''),
+    (_match, name: string) => escapeJsonStringContent(envValue(name, env)),
   );
+}
+
+function envValue(name: string, env: Record<string, string | undefined> | undefined): string {
+  if (env !== undefined) {
+    return env[name] ?? '';
+  }
+  return typeof process === 'undefined' ? '' : process.env[name] ?? '';
 }
 
 function escapeJsonStringContent(value: string): string {
