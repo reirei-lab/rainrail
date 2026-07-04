@@ -439,6 +439,34 @@ describe('Rainrail CLI built-in commands', () => {
     });
   });
 
+  it('uses --config to choose the project-local plugin state', async () => {
+    await withTempDirectory(async (directory) => {
+      expect(runRainrailCli(['new', 'current-project'], { cwd: directory }).exitCode).toBe(0);
+      expect(runRainrailCli(['new', 'target-project'], { cwd: directory }).exitCode).toBe(0);
+      const currentProject = join(directory, 'current-project');
+      const targetProject = join(directory, 'target-project');
+
+      expect(runRainrailCli([
+        '--config',
+        join(targetProject, 'rainrail.config.json'),
+        'plugins',
+        'add',
+        'github',
+      ], { cwd: currentProject })).toEqual({
+        exitCode: 0,
+        stdout: 'Added official plugin github@0.1.0\n',
+        stderr: '',
+      });
+
+      await expect(readFile(join(targetProject, 'rainrail.lock'), 'utf8')).resolves.toContain(
+        '"name": "github"',
+      );
+      await expect(readFile(join(currentProject, 'rainrail.lock'), 'utf8')).resolves.toContain(
+        '"plugins": []',
+      );
+    });
+  });
+
   it('keeps plugin management idempotent and resolves official aliases', async () => {
     await withTempDirectory(async (directory) => {
       expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
@@ -483,6 +511,36 @@ describe('Rainrail CLI built-in commands', () => {
         stderr:
           'Unknown official plugin: https://example.com/plugin.git. Third-party and Git URL plugins are not supported yet.\n',
       });
+    });
+  });
+
+  it('rejects extra arguments for rainrail plugins list', async () => {
+    await withTempDirectory(async (directory) => {
+      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
+
+      expect(runRainrailCli(['plugins', 'list', 'github'], {
+        cwd: join(directory, 'my-agent-ops'),
+      })).toEqual({
+        exitCode: 1,
+        stdout: '',
+        stderr: 'Usage: rainrail plugins list\n',
+      });
+    });
+  });
+
+  it('returns plugin filesystem failures as CLI results', async () => {
+    await withTempDirectory(async (directory) => {
+      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
+      const projectRoot = join(directory, 'my-agent-ops');
+      await rm(join(projectRoot, '.rainrail', 'plugins'), { recursive: true });
+      await writeFile(join(projectRoot, '.rainrail', 'plugins'), 'not a directory\n');
+
+      const result = runRainrailCli(['plugins', 'add', 'github'], { cwd: projectRoot });
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toContain('ENOTDIR');
+      expect(result.stderr).not.toContain('Error:');
     });
   });
 

@@ -23,7 +23,9 @@ stops instead of overwriting it.
 
 Config discovery walks upward from the current path until it finds
 `rainrail.config.json`; that directory is the project root. The lockfile and
-plugin directory are resolved relative to that root.
+plugin directory are resolved relative to that root. When `--config <path>` is
+provided, plugin management commands use that config file's parent directory as
+the project root instead of discovering from the current directory.
 
 ## Project-local official plugins
 

@@ -553,7 +553,7 @@ export function runRainrailCli(
   }
 
   if (command.name === 'plugins') {
-    return runPluginsCommand(parsed.commandArgs, environment);
+    return runPluginsCommand(parsed.commandArgs, parsed.options, environment);
   }
 
   return {
@@ -622,7 +622,11 @@ function createRainrailProject(projectRoot: string, projectName: string): void {
   );
 }
 
-function runPluginsCommand(args: readonly string[], environment: RainrailCliEnvironment): RainrailCliResult {
+function runPluginsCommand(
+  args: readonly string[],
+  options: SharedOptions,
+  environment: RainrailCliEnvironment,
+): RainrailCliResult {
   const subcommand = args[0];
   if (subcommand === undefined || !['list', 'add', 'remove'].includes(subcommand)) {
     return {
@@ -632,8 +636,33 @@ function runPluginsCommand(args: readonly string[], environment: RainrailCliEnvi
     };
   }
 
+  if (subcommand === 'list' && args.length !== 1) {
+    return {
+      exitCode: 1,
+      stdout: '',
+      stderr: 'Usage: rainrail plugins list\n',
+    };
+  }
+
+  if ((subcommand === 'add' || subcommand === 'remove') && args.length !== 2) {
+    return {
+      exitCode: 1,
+      stdout: '',
+      stderr: `Usage: rainrail plugins ${subcommand} <officialPluginName>\n`,
+    };
+  }
+
   const cwd = environment.cwd === undefined ? process.cwd() : environment.cwd;
-  const project = discoverRainrailProject(cwd);
+  let project: RainrailProject | undefined;
+  try {
+    project = resolveRainrailProject(cwd, options);
+  } catch (error) {
+    return {
+      exitCode: 1,
+      stdout: '',
+      stderr: `${error instanceof Error ? error.message : String(error)}\n`,
+    };
+  }
   if (project === undefined) {
     return {
       exitCode: 1,
@@ -643,9 +672,36 @@ function runPluginsCommand(args: readonly string[], environment: RainrailCliEnvi
     };
   }
 
-  let lockfile: RainrailLockfile;
   try {
-    lockfile = readRainrailLockfile(project.lockPath);
+    const lockfile = readRainrailLockfile(project.lockPath);
+    if (subcommand === 'list') {
+      return listProjectPlugins(project, lockfile);
+    }
+
+    const pluginName = args[1];
+    if (pluginName === undefined) {
+      return {
+        exitCode: 1,
+        stdout: '',
+        stderr: `Usage: rainrail plugins ${subcommand} <officialPluginName>\n`,
+      };
+    }
+
+    const plugin = getOfficialPluginByAlias(pluginName);
+    if (plugin === undefined) {
+      return {
+        exitCode: 1,
+        stdout: '',
+        stderr:
+          `Unknown official plugin: ${pluginName}. Third-party and Git URL plugins are not supported yet.\n`,
+      };
+    }
+
+    if (subcommand === 'add') {
+      return addProjectPlugin(project, lockfile, plugin.alias, plugin.version);
+    }
+
+    return removeProjectPlugin(project, lockfile, plugin.alias);
   } catch (error) {
     return {
       exitCode: 1,
@@ -653,35 +709,28 @@ function runPluginsCommand(args: readonly string[], environment: RainrailCliEnvi
       stderr: `${error instanceof Error ? error.message : String(error)}\n`,
     };
   }
+}
 
-  if (subcommand === 'list') {
-    return listProjectPlugins(project, lockfile);
+function resolveRainrailProject(cwd: string, options: SharedOptions): RainrailProject | undefined {
+  if (options.config === undefined) {
+    return discoverRainrailProject(cwd);
   }
 
-  const pluginName = args[1];
-  if (pluginName === undefined || args.length !== 2) {
-    return {
-      exitCode: 1,
-      stdout: '',
-      stderr: `Usage: rainrail plugins ${subcommand} <officialPluginName>\n`,
-    };
+  const configPath = resolve(cwd, options.config);
+  if (!existsSync(configPath)) {
+    throw new Error(`Rainrail config file not found: ${configPath}`);
+  }
+  if (!statSync(configPath).isFile()) {
+    throw new Error(`Rainrail config path is not a file: ${configPath}`);
   }
 
-  const plugin = getOfficialPluginByAlias(pluginName);
-  if (plugin === undefined) {
-    return {
-      exitCode: 1,
-      stdout: '',
-      stderr:
-        `Unknown official plugin: ${pluginName}. Third-party and Git URL plugins are not supported yet.\n`,
-    };
-  }
-
-  if (subcommand === 'add') {
-    return addProjectPlugin(project, lockfile, plugin.alias, plugin.version);
-  }
-
-  return removeProjectPlugin(project, lockfile, plugin.alias);
+  const root = dirname(configPath);
+  return {
+    root,
+    configPath,
+    lockPath: join(root, rainrailLockFileName),
+    pluginDirectory: join(root, rainrailDirectoryName, rainrailPluginDirectoryName),
+  };
 }
 
 function listProjectPlugins(project: RainrailProject, lockfile: RainrailLockfile): RainrailCliResult {
