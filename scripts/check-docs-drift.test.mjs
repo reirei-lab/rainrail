@@ -144,6 +144,40 @@ describe('docs drift checks', () => {
     );
   });
 
+  it('does not require package entrypoint public exports to be re-exported from src/index.ts', () => {
+    const root = makeRepo();
+    mkdirSync(join(root, 'packages/cli/src'), { recursive: true });
+    writeFileSync(join(root, 'docs/contract.md'), '`PublicCliThing`\n');
+    writeFileSync(
+      join(root, 'packages/cli/src/index.ts'),
+      'export type PublicCliThing = { readonly name: string };\n',
+    );
+    writeFileSync(
+      join(root, 'docs/contracts.manifest.json'),
+      JSON.stringify(
+        {
+          contracts: [
+            {
+              id: 'cli-contract',
+              title: 'CLI Contract',
+              sources: ['packages/cli/src/index.ts'],
+              docs: ['docs/contract.md'],
+              tests: ['tests/contract.test.ts'],
+              publicExports: ['PublicCliThing'],
+              publicExportKinds: {
+                PublicCliThing: 'type',
+              },
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+    );
+
+    expect(validateContractsManifest(root)).toEqual([]);
+  });
+
   it('does not count type-only re-exports for value public exports', () => {
     const root = makeRepo();
     writeFileSync(

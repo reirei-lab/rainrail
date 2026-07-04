@@ -1,10 +1,23 @@
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
 import {
   BUILT_IN_COMMANDS,
+  discoverRainrailProject,
   getBuiltInCommand,
   parseRainrailArguments,
   runRainrailCli,
 } from './index.js';
+
+async function withTempDirectory(test: (directory: string) => Promise<void>): Promise<void> {
+  const directory = await mkdtemp(join(tmpdir(), 'rainrail-cli-'));
+  try {
+    await test(directory);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
 
 describe('Rainrail CLI built-in commands', () => {
   it('defines the command table without provider or runtime specific handlers', () => {
@@ -100,6 +113,85 @@ describe('Rainrail CLI built-in commands', () => {
     expect(result.exitCode).toBe(2);
     expect(result.stdout).toBe('');
     expect(result.stderr).toContain('rainrail doctor is not implemented yet.');
+  });
+
+  it('scaffolds a project-local config, lockfile, and plugin directory', async () => {
+    await withTempDirectory(async (directory) => {
+      const result = runRainrailCli(['new', 'my-agent-ops'], { cwd: directory });
+      const projectRoot = join(directory, 'my-agent-ops');
+
+      expect(result).toEqual({
+        exitCode: 0,
+        stdout: `Created Rainrail project at ${projectRoot}\n`,
+        stderr: '',
+      });
+      const config = await readFile(join(projectRoot, 'rainrail.config.json'), 'utf8');
+      expect(JSON.parse(config) as unknown).toEqual({
+        project: { name: 'my-agent-ops' },
+        sourceBundles: [],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      });
+      await expect(readFile(join(projectRoot, 'rainrail.lock'), 'utf8')).resolves.toBe(
+        `${JSON.stringify({
+          lockfileVersion: 1,
+          project: { name: 'my-agent-ops' },
+          plugins: [],
+        }, null, 2)}\n`,
+      );
+      await expect(readFile(join(projectRoot, '.rainrail', 'plugins', '.gitkeep'), 'utf8')).resolves.toBe('');
+    });
+  });
+
+  it('treats repeated scaffolding as safe when generated files are unchanged', async () => {
+    await withTempDirectory(async (directory) => {
+      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
+      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory })).toEqual({
+        exitCode: 0,
+        stdout: `Rainrail project already exists at ${join(directory, 'my-agent-ops')}\n`,
+        stderr: '',
+      });
+    });
+  });
+
+  it('refuses to overwrite changed project-local files during scaffolding', async () => {
+    await withTempDirectory(async (directory) => {
+      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
+      await writeFile(join(directory, 'my-agent-ops', 'rainrail.lock'), '{"plugins":["custom"]}\n');
+
+      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory })).toEqual({
+        exitCode: 1,
+        stdout: '',
+        stderr: `Refusing to overwrite existing file with different content: ${join(directory, 'my-agent-ops', 'rainrail.lock')}\n`,
+      });
+    });
+  });
+
+  it('discovers the Rainrail project root from a nested directory', async () => {
+    await withTempDirectory(async (directory) => {
+      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
+      const nested = join(directory, 'my-agent-ops', 'workflows', 'github');
+      await mkdir(nested, { recursive: true });
+
+      expect(discoverRainrailProject(nested)).toEqual({
+        root: join(directory, 'my-agent-ops'),
+        configPath: join(directory, 'my-agent-ops', 'rainrail.config.json'),
+        lockPath: join(directory, 'my-agent-ops', 'rainrail.lock'),
+        pluginDirectory: join(directory, 'my-agent-ops', '.rainrail', 'plugins'),
+      });
+    });
+  });
+
+  it('validates the project name for rainrail new', async () => {
+    await withTempDirectory(async (directory) => {
+      expect(runRainrailCli(['new'], { cwd: directory }).stderr).toBe(
+        'Usage: rainrail new <projectName>\n',
+      );
+      expect(runRainrailCli(['new', '../ops'], { cwd: directory }).stderr).toBe(
+        'Project name must be a safe directory name.\n',
+      );
+    });
   });
 
   it('returns a parse error before running a command when required shared option values are missing', () => {
