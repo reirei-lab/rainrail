@@ -108,11 +108,13 @@ const docs = [
     </p>
     <pre><code>curl -fsSLO https://rainrail.dev/install.sh
 less install.sh
-sh install.sh</code></pre>
+bash install.sh
+~/.rainrail/bin/rainrail help</code></pre>
     <p>
-      After installation, use <code>rainrail help</code> for built-in commands
-      and official plugin aliases. Use <code>{'rainrail <plugin> help'}</code>
-      for each plugin's command details.
+      The installer places the CLI under <code>~/.rainrail/bin</code>. After
+      your shell can find that bin directory, use <code>rainrail help</code>
+      for built-in commands and official plugin aliases. Use
+      <code>{'rainrail <plugin> help'}</code> for each plugin's command details.
     </p>
   </section>
 </SiteLayout>

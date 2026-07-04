@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 /**
@@ -15,6 +15,8 @@ const layout = readFileSync(
   'utf8',
 );
 const docsPage = page('docs');
+const rootInstallScript = new URL('../install.sh', import.meta.url);
+const publicInstallScript = new URL('../apps/www/public/install.sh', import.meta.url);
 
 describe('product site concepts, guides, and examples', () => {
   it('exposes Concepts, Guides, and Examples from the primary navigation and docs gateway', () => {
@@ -64,8 +66,8 @@ describe('product site concepts, guides, and examples', () => {
     for (const command of [
       'curl -fsSLO https://rainrail.dev/install.sh',
       'less install.sh',
-      'sh install.sh',
-      'rainrail help',
+      'bash install.sh',
+      '~/.rainrail/bin/rainrail help',
       'rainrail <plugin> help',
     ]) {
       expect(docsPage).toContain(command);
@@ -76,6 +78,11 @@ describe('product site concepts, guides, and examples', () => {
     expect(docsPage).not.toContain('Usage: rainrail openclaw');
     expect(docsPage).not.toContain('webhook add');
     expect(docsPage).not.toContain('session test');
+  });
+
+  it('publishes the root installer through the product site public assets', () => {
+    expect(existsSync(publicInstallScript)).toBe(true);
+    expect(realpathSync(publicInstallScript)).toBe(realpathSync(rootInstallScript));
   });
 
   it('publishes an end-to-end example from GitHub issue to merge', () => {
