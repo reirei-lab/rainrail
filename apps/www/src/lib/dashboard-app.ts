@@ -22,6 +22,8 @@ const OPERATOR_STORAGE_KEY = 'rainrail-dashboard-operator';
 const STALE_AFTER_MS = 45000;
 
 const root = document.querySelector<HTMLElement>('[data-dashboard-app]');
+const sessionStore = createSafeStorage(() => window.sessionStorage);
+const localStore = createSafeStorage(() => window.localStorage);
 
 if (root !== null) {
   const appRoot = root;
@@ -45,10 +47,11 @@ if (root !== null) {
   let lastUpdatedAt = 0;
   let staleTimer: number | undefined;
   let pollTimer: number | undefined;
+  let refreshSequence = 0;
 
-  const storedToken = sessionStorage.getItem(TOKEN_STORAGE_KEY) ?? '';
-  const storedApiBaseUrl = sessionStorage.getItem(API_BASE_URL_STORAGE_KEY) ?? appRoot.dataset.apiBaseUrl ?? '';
-  const operatorEnabled = localStorage.getItem(OPERATOR_STORAGE_KEY) === '1';
+  const storedToken = sessionStore.get(TOKEN_STORAGE_KEY) ?? '';
+  const storedApiBaseUrl = sessionStore.get(API_BASE_URL_STORAGE_KEY) ?? appRoot.dataset.apiBaseUrl ?? '';
+  const operatorEnabled = localStore.get(OPERATOR_STORAGE_KEY) === '1';
   if (tokenInput !== null) tokenInput.value = storedToken;
   if (apiBaseUrlInput !== null) apiBaseUrlInput.value = storedApiBaseUrl;
   if (permissionToggle !== null) permissionToggle.checked = operatorEnabled;
@@ -66,7 +69,7 @@ if (root !== null) {
   saveTokenButton?.addEventListener('click', () => {
     const token = tokenInput?.value.trim() ?? '';
     if (token === '') {
-      sessionStorage.removeItem(TOKEN_STORAGE_KEY);
+      sessionStore.remove(TOKEN_STORAGE_KEY);
       client = undefined;
       stopPolling();
       resetDashboardData();
@@ -75,20 +78,21 @@ if (root !== null) {
     }
 
     const apiBaseUrl = normalizeApiBaseUrl(apiBaseUrlInput?.value ?? appRoot.dataset.apiBaseUrl ?? '');
-    sessionStorage.setItem(TOKEN_STORAGE_KEY, token);
+    sessionStore.set(TOKEN_STORAGE_KEY, token);
     if (apiBaseUrl === '') {
-      sessionStorage.removeItem(API_BASE_URL_STORAGE_KEY);
+      sessionStore.remove(API_BASE_URL_STORAGE_KEY);
     } else {
-      sessionStorage.setItem(API_BASE_URL_STORAGE_KEY, apiBaseUrl);
+      sessionStore.set(API_BASE_URL_STORAGE_KEY, apiBaseUrl);
     }
     if (apiBaseUrlInput !== null) apiBaseUrlInput.value = apiBaseUrl;
     client = createDashboardClient(token, apiBaseUrl);
+    resetDashboardData();
     void refresh();
     startPolling(client);
   });
 
   clearTokenButton?.addEventListener('click', () => {
-    sessionStorage.removeItem(TOKEN_STORAGE_KEY);
+    sessionStore.remove(TOKEN_STORAGE_KEY);
     client = undefined;
     stopPolling();
     if (tokenInput !== null) tokenInput.value = '';
@@ -102,7 +106,7 @@ if (root !== null) {
 
   permissionToggle?.addEventListener('change', () => {
     const enabled = permissionToggle.checked;
-    localStorage.setItem(OPERATOR_STORAGE_KEY, enabled ? '1' : '0');
+    localStore.set(OPERATOR_STORAGE_KEY, enabled ? '1' : '0');
     setOperatorActionsEnabled(enabled);
   });
 
@@ -122,6 +126,7 @@ if (root !== null) {
       return;
     }
     const activeClient = client;
+    const activeRefreshId = ++refreshSequence;
 
     if (!options.quiet) setState('loading', 'Loading operational state');
 
@@ -132,7 +137,7 @@ if (root !== null) {
         workflowRuns: (await activeClient.workflowRuns()).data,
         agentTasks: (await activeClient.agentTasks()).data,
       };
-      if (client !== activeClient) return;
+      if (!isCurrentRefresh(activeClient, activeRefreshId)) return;
 
       latestData = nextData;
       lastUpdatedAt = Date.now();
@@ -141,7 +146,7 @@ if (root !== null) {
       renderCurrentList();
       setState(hasRows(latestData) ? 'ready' : 'empty', hasRows(latestData) ? 'Live operational state' : 'No operational records yet');
     } catch (error) {
-      if (client !== activeClient) return;
+      if (!isCurrentRefresh(activeClient, activeRefreshId)) return;
       const authError = isDashboardAuthError(error);
       if (authError) resetDashboardData();
       const message = authError
@@ -300,6 +305,70 @@ if (root !== null) {
   function setOperatorActionsEnabled(enabled: boolean): void {
     for (const action of operatorActions) action.disabled = !enabled;
   }
+
+  function isCurrentRefresh(activeClient: RainrailDashboardApiClient, activeRefreshId: number): boolean {
+    if (client !== activeClient) return false;
+    return refreshSequence === activeRefreshId;
+  }
+}
+
+interface SafeStorage {
+  get(key: string): string | undefined;
+  set(key: string, value: string): void;
+  remove(key: string): void;
+}
+
+function createSafeStorage(getStorage: () => Storage): SafeStorage {
+  const memoryStorage = new Map<string, string>();
+
+  function storage(): Storage | undefined {
+    try {
+      const candidate = getStorage();
+      const probeKey = 'rainrail-dashboard-storage-probe';
+      candidate.setItem(probeKey, '1');
+      candidate.removeItem(probeKey);
+      return candidate;
+    } catch {
+      return undefined;
+    }
+  }
+
+  return {
+    get(key) {
+      const target = storage();
+      if (target === undefined) return memoryStorage.get(key);
+
+      try {
+        return target.getItem(key) ?? undefined;
+      } catch {
+        return memoryStorage.get(key);
+      }
+    },
+    set(key, value) {
+      const target = storage();
+      if (target === undefined) {
+        memoryStorage.set(key, value);
+        return;
+      }
+
+      try {
+        target.setItem(key, value);
+      } catch {
+        memoryStorage.set(key, value);
+      }
+    },
+    remove(key) {
+      memoryStorage.delete(key);
+      const target = storage();
+      if (target === undefined) return;
+
+      try {
+        target.removeItem(key);
+      } catch {
+        // The fallback is already cleared.
+      }
+    },
+  };
 }
 
 function normalizeApiBaseUrl(value: string): string {

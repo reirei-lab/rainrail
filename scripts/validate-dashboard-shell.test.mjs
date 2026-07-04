@@ -72,11 +72,29 @@ describe('dashboard app shell', () => {
     expect(dashboardApp).toContain('list.replaceChildren()');
   });
 
+  it('clears rendered operational data before switching connection targets', () => {
+    expect(dashboardApp).toContain('resetDashboardData();');
+    expect(dashboardApp).toMatch(/client = createDashboardClient\(token, apiBaseUrl\);[\s\S]*?resetDashboardData\(\);[\s\S]*?void refresh\(\);/);
+  });
+
   it('keeps pending refreshes tied to the client that started them', () => {
     expect(dashboardApp).toContain('const activeClient = client');
-    expect(dashboardApp).toContain('if (client !== activeClient) return;');
+    expect(dashboardApp).toContain('const activeRefreshId = ++refreshSequence;');
+    expect(dashboardApp).toContain('isCurrentRefresh(activeClient, activeRefreshId)');
+    expect(dashboardApp).toContain('if (client !== activeClient) return false;');
     expect(dashboardApp).toContain('overview: await activeClient.overview()');
     expect(dashboardApp).toContain('events: (await activeClient.events()).data');
+  });
+
+  it('keeps dashboard initialization usable when browser storage is blocked', () => {
+    expect(dashboardApp).toContain('createSafeStorage');
+    expect(dashboardApp).toContain('memoryStorage');
+    expect(dashboardApp).toContain('try {');
+    expect(dashboardApp).toContain('catch {');
+    expect(dashboardApp).toContain('const sessionStore = createSafeStorage');
+    expect(dashboardApp).toContain('const localStore = createSafeStorage');
+    expect(dashboardApp).not.toContain('sessionStorage.getItem');
+    expect(dashboardApp).not.toContain('localStorage.getItem');
   });
 
   it('treats missing and invalid bearer tokens as auth errors', () => {
