@@ -374,6 +374,52 @@ describe('manual and chat input source contract', () => {
     expect(second.subject.id.length).toBeLessThanOrEqual(128);
   });
 
+  it('keeps conversation identifiers distinct when normalization would otherwise be empty', async () => {
+    const first = await createManualInputEvent({
+      channel: 'chat',
+      receivedAt: new Date('2026-07-04T09:21:23.000Z'),
+      conversationId: '会話一',
+      messageId: 'message-one',
+      message: 'first',
+    });
+    const second = await createManualInputEvent({
+      channel: 'chat',
+      receivedAt: new Date('2026-07-04T09:21:24.000Z'),
+      conversationId: '会話二',
+      messageId: 'message-two',
+      message: 'second',
+    });
+
+    expect(first.subject.id).not.toBe(second.subject.id);
+    expect(first.subject.id).toMatch(/^conversation-[A-Za-z0-9]+$/);
+    expect(second.subject.id).toMatch(/^conversation-[A-Za-z0-9]+$/);
+  });
+
+  it('keeps delivery ids distinct for long conversations that share message ids', async () => {
+    const prefix = 'conversation-delivery-prefix-'.repeat(7);
+    const first = await createManualInputEvent({
+      channel: 'chat',
+      receivedAt: new Date('2026-07-04T09:21:23.000Z'),
+      conversationId: `${prefix}-one`,
+      messageId: 'message-reused',
+      message: 'first',
+    });
+    const second = await createManualInputEvent({
+      channel: 'chat',
+      receivedAt: new Date('2026-07-04T09:21:24.000Z'),
+      conversationId: `${prefix}-two`,
+      messageId: 'message-reused',
+      message: 'second',
+    });
+
+    expect(first.delivery.id).not.toBe(second.delivery.id);
+    expect(first.id).not.toBe(second.id);
+    expect(first.delivery.id).toContain('message-reused');
+    expect(second.delivery.id).toContain('message-reused');
+    expect(first.delivery.id.length).toBeLessThanOrEqual(128);
+    expect(second.delivery.id.length).toBeLessThanOrEqual(128);
+  });
+
   it('keeps non-GitHub conversation URLs out of the subject while preserving payload context', async () => {
     const storage = fakeState();
     const app = createRainrailHttpApp({
@@ -491,9 +537,9 @@ describe('manual and chat input source contract', () => {
       channel: 'chat',
       deliveryId: 'direct-redaction-delivery',
       conversationId: 'direct-redaction-session',
-      message: 'access_token=gho_direct client_secret: direct-secret sessionToken=direct-session',
+      message: 'access_token=gho_direct client_secret: direct-secret sessionToken=direct-session github_pat_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ghp_abcdefghijklmnopqrstuvwxyz0123456789',
     });
-    expect(directEvent.payload.message.text).toBe('access_token=[redacted] client_secret: [redacted] sessionToken=[redacted]');
+    expect(directEvent.payload.message.text).toBe('access_token=[redacted] client_secret: [redacted] sessionToken=[redacted] [redacted-token] [redacted-token]');
 
     const storage = fakeState();
     const app = createRainrailHttpApp({

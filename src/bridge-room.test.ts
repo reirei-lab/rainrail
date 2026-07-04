@@ -1119,6 +1119,52 @@ describe('Rainrail bridge room', () => {
     expect(chunk).toContain('"mentionedLogins":["reirei-agent"]');
   });
 
+  it('bounds manual chat payload strings before storing replay events', async () => {
+    const storage = fakeState();
+    const room = createTestRoom(storage, { replayLimit: 10 });
+    const longMessage = `${'m'.repeat(9_000)}message-tail`;
+    const longDisplayName = `${'a'.repeat(9_000)}actor-tail`;
+    const longAttachmentName = `${'n'.repeat(9_000)}attachment-tail`;
+    const event = createEventEnvelope({
+      source: { type: 'chat', name: 'web-chat' },
+      name: 'rainrail.chat.message',
+      delivery: {
+        id: 'chat-direct-publish',
+        receivedAt: '2026-06-29T18:18:21.000Z',
+      },
+      occurredAt: '2026-06-29T18:18:20.000Z',
+      subject: { type: 'conversation', id: 'chat-direct' },
+      payload: {
+        provider: 'rainrail',
+        channel: 'chat',
+        action: 'message',
+        conversation: { id: 'chat-direct' },
+        message: { id: 'message-direct', text: longMessage },
+        actor: { displayName: longDisplayName },
+        attachments: [{ id: 'attachment-direct', name: longAttachmentName }],
+      },
+      rawPayload: {
+        kind: 'inline-redacted',
+        reference: 'chat://deliveries/chat-direct-publish',
+      },
+    });
+
+    const publishResponse = await room.fetch(publishRequest(event));
+
+    expect(publishResponse.status).toBe(200);
+    const storedPayload = storage.storedEvents()[0]?.payload as {
+      message?: { text?: string };
+      actor?: { displayName?: string };
+      attachments?: Array<{ name?: string }>;
+    };
+    expect(storedPayload.message?.text?.length).toBeLessThanOrEqual(8_000);
+    expect(storedPayload.actor?.displayName?.length).toBeLessThanOrEqual(8_000);
+    expect(storedPayload.attachments?.[0]?.name?.length).toBeLessThanOrEqual(8_000);
+    expect(JSON.stringify(storedPayload)).not.toContain('message-tail');
+    expect(JSON.stringify(storedPayload)).not.toContain('actor-tail');
+    expect(JSON.stringify(storedPayload)).not.toContain('attachment-tail');
+  });
+
   it('truncates Cloudflare exception details before storing replay events', async () => {
     const storage = fakeState();
     const room = createTestRoom(storage, { replayLimit: 10 });

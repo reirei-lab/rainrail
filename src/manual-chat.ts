@@ -383,7 +383,9 @@ function safeIdentifierSegment(value: string, fallback: string): string {
   const trimmed = value.trim();
   const normalized = trimmed.replace(/[^A-Za-z0-9_.:-]+/gu, '-').replace(/^-+|-+$/gu, '');
   const changedBySanitization = normalized !== trimmed;
-  if (normalized.length === 0) return fallback;
+  if (normalized.length === 0) {
+    return compactIdentifierWithHash(fallback, value, 128, { includeHash: trimmed.length > 0 });
+  }
   const safe = /^[A-Za-z0-9]/u.test(normalized) ? normalized : `${fallback}-${normalized}`;
   return compactIdentifierWithHash(safe, value, 128, { includeHash: changedBySanitization });
 }
@@ -395,7 +397,9 @@ function safeDeliveryReferenceSegment(value: string, fallback: string, maxLength
   const safe = normalized.length === 0
     ? fallback
     : /^[A-Za-z0-9]/u.test(normalized) ? normalized : `${fallback}-${normalized}`;
-  return compactIdentifierWithHash(safe, value, maxLength, { includeHash: changedBySanitization });
+  return compactIdentifierWithHash(safe, value, maxLength, {
+    includeHash: changedBySanitization || (normalized.length === 0 && trimmed.length > 0),
+  });
 }
 
 function safeDeliveryReferenceSuffix(value: string, fallback: string, maxLength: number): string {
@@ -406,20 +410,20 @@ function safeDeliveryReferenceSuffix(value: string, fallback: string, maxLength:
     ? fallback
     : /^[A-Za-z0-9]/u.test(normalized) ? normalized : `${fallback}-${normalized}`;
   return compactIdentifierWithHash(safe, value, maxLength, {
-    includeHash: changedBySanitization,
+    includeHash: changedBySanitization || (normalized.length === 0 && trimmed.length > 0),
     keepTail: true,
   });
 }
 
 function buildManualInputDeliveryId(channel: ManualInputChannel, conversationId: string, uniqueId: string): string {
   const uniqueSegment = safeDeliveryReferenceSuffix(uniqueId, 'message', 64);
-  const prefix = safeDeliveryReferenceSegment(`${channel}-${conversationId}`, `${channel}-delivery`);
   const separator = '-';
   const maxLength = 128;
   const suffixLength = Math.min(uniqueSegment.length, Math.max(1, maxLength - `${channel}${separator}`.length));
   const suffix = uniqueSegment.slice(Math.max(0, uniqueSegment.length - suffixLength));
   const prefixMaxLength = Math.max(1, maxLength - separator.length - suffix.length);
-  return `${prefix.slice(0, prefixMaxLength)}${separator}${suffix}`;
+  const prefix = safeDeliveryReferenceSegment(`${channel}-${conversationId}`, `${channel}-delivery`, prefixMaxLength);
+  return `${prefix}${separator}${suffix}`;
 }
 
 function buildOptionalManualInputEventId(
@@ -506,6 +510,7 @@ function redactUserText(value: string): string {
     .replace(/(^|[{\s"'<>`,;\[(])(["']?)([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification|session)[A-Za-z0-9_.-]*)\2(\s*:\s*)(["'])(?:\\.|(?!\5)[^\\])*\5/giu, '$1$2$3$2$4$5[redacted]$5')
     .replace(/(^|[{\s"'<>`,;\[(])(["']?)([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification|session)[A-Za-z0-9_.-]*)\2(\s*:\s*)(?!["']|\[redacted\])([^,\s\r\n}\]]+)/giu, '$1$2$3$2$4[redacted]')
     .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gu, 'Bearer [redacted]')
+    .replace(/\b(?:github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9_]{20,})\b/gu, '[redacted-token]')
     .trim()
     .slice(0, 8_000);
 }

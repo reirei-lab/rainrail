@@ -48,6 +48,7 @@ const MAX_CLOUDFLARE_EXCEPTION_MESSAGE_LENGTH = 512;
 const MAX_CLOUDFLARE_EXCEPTION_NAME_LENGTH = 200;
 const MAX_CLOUDFLARE_EXCEPTION_STACK_LENGTH = 1_200;
 const MAX_CLOUDFLARE_EXCEPTION_STACK_LINES = 8;
+const MAX_MANUAL_INPUT_TEXT_LENGTH = 8_000;
 const claimedStorages = new WeakSet<RainrailBridgeRoomStorage>();
 
 type PublishEventResult =
@@ -720,10 +721,16 @@ function pickManualStringFields(record: Record<string, unknown>, keys: string[])
   for (const key of keys) {
     const value = record[key];
     if (typeof value === 'string' && value.length > 0) {
-      normalized[key] = key === 'url' ? sanitizePayloadUrl(value) ?? '' : sanitizePayloadText(value);
+      normalized[key] = key === 'url'
+        ? truncateManualPayloadString(sanitizePayloadUrl(value) ?? '')
+        : truncateManualPayloadString(sanitizePayloadText(value));
     }
   }
   return Object.fromEntries(Object.entries(normalized).filter(([, value]) => value.length > 0));
+}
+
+function truncateManualPayloadString(value: string): string {
+  return value.slice(0, MAX_MANUAL_INPUT_TEXT_LENGTH);
 }
 
 function normalizeGitHubRepository(value: unknown): unknown {

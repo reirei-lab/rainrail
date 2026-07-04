@@ -177,6 +177,12 @@ parameter は保持しない。
 保持しない。storage から復元する replay 要素も `RainrailEventEnvelope` と SSE field
 として検証し、壊れた要素や古い schema の要素は replay buffer に入れない。
 
+`rainrail.manual.message` / `rainrail.chat.message` payload は、manual/chat source adapter
+を通らず直接 `/publish` へ渡された場合も、conversation / message / actor / attachment /
+reply target の allowlist された string field だけを保存する。各 string は credential
+redaction 後に 8KB 以内へ縮約し、巨大な user input や attachment name が durable replay
+や SSE に無制限に残らないようにする。
+
 `POST /publish` は request body の読み込み開始直後に publish queue の枠を確保する。
 これにより、大きい body や streaming body の parse 完了順に左右されず、`fetch`
 呼び出し順に storage / replay / broadcast を処理する。body parse や envelope 検証の
