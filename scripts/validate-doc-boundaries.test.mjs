@@ -7,6 +7,14 @@ const contentPlan = readFileSync(
 );
 const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
 const docsIndex = readFileSync(new URL('../docs/README.md', import.meta.url), 'utf8');
+const contractsManifest = readFileSync(
+  new URL('../docs/contracts.manifest.json', import.meta.url),
+  'utf8',
+);
+const coreBridgeBoundary = readFileSync(
+  new URL('../docs/core-eep-bridge-source-adapter-boundary.md', import.meta.url),
+  'utf8',
+);
 
 describe('product site information architecture', () => {
   it('keeps the product sitemap, docs boundary, and content priorities in one plan', () => {
@@ -54,5 +62,33 @@ describe('product site information architecture', () => {
     ]) {
       expect(docsIndex).toContain(entry);
     }
+  });
+
+  it('documents the Core, EEP Bridge bundle, Source adapter, and transport boundary', () => {
+    for (const entry of [
+      'Core responsibilities',
+      'EEP Bridge bundle responsibilities',
+      'Source adapter responsibilities',
+      'Transport and Core boundary',
+      'Current Core also keeps narrow provider-aware durable replay sanitization',
+      'Source adapter output is not limited to the durable replay allowlist',
+      'The public `createRainrailHttpApp` surface does not expose a generic `POST /publish` route',
+    ]) {
+      expect(coreBridgeBoundary).toContain(entry);
+    }
+
+    expect(docsIndex).toContain('core-eep-bridge-source-adapter-boundary.md');
+
+    const manifest = JSON.parse(contractsManifest);
+    expect(manifest.contracts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'core-eep-bridge-source-adapter-boundary',
+          docs: expect.arrayContaining([
+            'docs/core-eep-bridge-source-adapter-boundary.md',
+          ]),
+        }),
+      ]),
+    );
   });
 });

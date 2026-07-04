@@ -4,6 +4,9 @@ Rainrail は Source plugin が外部イベントを中立 envelope に正規化�
 Workflow plugin が provider/runtime capability を使って処理する境界を持つ。
 GitHub webhook や Cloudflare tail の payload は Source plugin の入力であり、
 Workflow plugin の routing API には直接漏らさない。
+Core、EEP Bridge bundle、Source adapter、transport の package/module 境界は
+[Core / EEP Bridge / Source adapter boundary](core-eep-bridge-source-adapter-boundary.md)
+を正とする。
 
 ## Event envelope
 

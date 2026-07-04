@@ -229,6 +229,44 @@
       }
     },
     {
+      "id": "core-eep-bridge-source-adapter-boundary",
+      "title": "Core, EEP Bridge bundle, Source adapter, and transport boundary",
+      "sources": [
+        "src/events.ts",
+        "src/source-plugin.ts",
+        "src/github-webhook.ts",
+        "src/cloudflare-tail.ts",
+        "src/event-bus.ts",
+        "src/bridge-room.ts",
+        "src/dispatcher.ts",
+        "src/events-auth.ts",
+        "src/http-app.ts",
+        "src/node-server.ts",
+        "src/worker.ts",
+        "src/operational-store.ts"
+      ],
+      "docs": [
+        "docs/core-eep-bridge-source-adapter-boundary.md",
+        "docs/plugin-runtime-contract.md",
+        "docs/event-delivery.md"
+      ],
+      "tests": [
+        "scripts/validate-doc-boundaries.test.mjs",
+        "src/plugin-runtime.test.ts",
+        "src/github-webhook.test.ts",
+        "src/cloudflare-tail.test.ts",
+        "src/event-bus.test.ts",
+        "src/bridge-room.test.ts",
+        "src/events-auth.test.ts",
+        "src/http-app.test.ts",
+        "src/node-server.test.ts",
+        "src/worker.test.ts",
+        "src/operational-store.test.ts"
+      ],
+      "publicExports": [],
+      "publicExportKinds": {}
+    },
+    {
       "id": "github-webhook-normalization",
       "title": "GitHub webhook normalization",
       "sources": ["src/github-webhook.ts"],
