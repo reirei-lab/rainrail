@@ -58,6 +58,26 @@ describe('product site concepts, guides, and examples', () => {
     expect(guides).toContain('docs/cloudflare-worker.md');
   });
 
+  it('keeps CLI setup docs minimal and points command details at rainrail help', () => {
+    expect(docsPage).toContain('CLI quick start');
+
+    for (const command of [
+      'curl -fsSLO https://rainrail.dev/install.sh',
+      'less install.sh',
+      'sh install.sh',
+      'rainrail help',
+      'rainrail <plugin> help',
+    ]) {
+      expect(docsPage).toContain(command);
+    }
+
+    expect(docsPage).not.toContain('Usage: rainrail github');
+    expect(docsPage).not.toContain('Usage: rainrail cloudflare');
+    expect(docsPage).not.toContain('Usage: rainrail openclaw');
+    expect(docsPage).not.toContain('webhook add');
+    expect(docsPage).not.toContain('session test');
+  });
+
   it('publishes an end-to-end example from GitHub issue to merge', () => {
     const examples = page('examples');
 
