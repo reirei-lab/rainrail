@@ -114,6 +114,11 @@ export function parseRainrailArguments(argv: readonly string[]): ParsedRainrailA
       continue;
     }
 
+    if (arg === '--help' && commandName === undefined) {
+      commandName = 'help';
+      continue;
+    }
+
     if (arg === '--config' || arg === '--profile') {
       const value = argv[index + 1];
       if (value === undefined || value.startsWith('--')) {
@@ -131,12 +136,24 @@ export function parseRainrailArguments(argv: readonly string[]): ParsedRainrailA
     }
 
     if (arg.startsWith('--config=')) {
-      parsedOptions.config = arg.slice('--config='.length);
+      const value = arg.slice('--config='.length);
+      if (value.length === 0) {
+        errors.push('Missing value for --config.');
+        continue;
+      }
+
+      parsedOptions.config = value;
       continue;
     }
 
     if (arg.startsWith('--profile=')) {
-      parsedOptions.profile = arg.slice('--profile='.length);
+      const value = arg.slice('--profile='.length);
+      if (value.length === 0) {
+        errors.push('Missing value for --profile.');
+        continue;
+      }
+
+      parsedOptions.profile = value;
       continue;
     }
 

@@ -17,6 +17,12 @@ const sitePackageJson = JSON.parse(
 const cliPackageJson = JSON.parse(
   readFileSync(new URL('../packages/cli/package.json', import.meta.url), 'utf8'),
 );
+const cliTsconfig = JSON.parse(
+  readFileSync(new URL('../packages/cli/tsconfig.json', import.meta.url), 'utf8'),
+);
+const cliBuildTsconfig = JSON.parse(
+  readFileSync(new URL('../packages/cli/tsconfig.build.json', import.meta.url), 'utf8'),
+);
 
 describe('package scripts used by pull request CI', () => {
   it('builds repository scripts, the CLI package, and the product site from the root command', () => {
@@ -49,10 +55,17 @@ describe('package scripts used by pull request CI', () => {
     expect(cliPackageJson.name).toBe('@rainrail/cli');
     expect(cliPackageJson.bin.rainrail).toBe('./dist/bin/rainrail.js');
     expect(cliPackageJson.scripts.build).toBe(
-      'tsc -p tsconfig.json && chmod +x dist/bin/rainrail.js',
+      'tsc -p tsconfig.build.json && chmod +x dist/bin/rainrail.js',
     );
     expect(cliPackageJson.scripts.test).toBe('vitest run src');
     expect(cliPackageJson.scripts.typecheck).toBe('tsc -p tsconfig.json --noEmit');
+  });
+
+  it('typechecks CLI tests without emitting test files in the build', () => {
+    expect(cliTsconfig.include).toContain('src/**/*.test.ts');
+    expect(cliTsconfig.exclude ?? []).not.toContain('src/**/*.test.ts');
+    expect(cliBuildTsconfig.extends).toBe('./tsconfig.json');
+    expect(cliBuildTsconfig.exclude).toContain('src/**/*.test.ts');
   });
 
   it('defines focused validation scripts for the Astro product site', () => {

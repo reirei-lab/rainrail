@@ -70,6 +70,13 @@ describe('Rainrail CLI built-in commands', () => {
       },
       errors: ['Missing value for --profile.'],
     });
+
+    expect(parseRainrailArguments(['--config=', 'doctor']).errors).toEqual([
+      'Missing value for --config.',
+    ]);
+    expect(parseRainrailArguments(['doctor', '--profile=']).errors).toEqual([
+      'Missing value for --profile.',
+    ]);
   });
 
   it('prints built-in commands from rainrail help', () => {
@@ -81,6 +88,10 @@ describe('Rainrail CLI built-in commands', () => {
     for (const command of BUILT_IN_COMMANDS) {
       expect(result.stdout).toContain(`  ${command.name}`);
     }
+  });
+
+  it('prints help from the --help flag', () => {
+    expect(runRainrailCli(['--help'])).toEqual(runRainrailCli(['help']));
   });
 
   it('returns a clear placeholder error for commands that are not implemented yet', () => {
@@ -98,6 +109,9 @@ describe('Rainrail CLI built-in commands', () => {
       stderr: 'Missing value for --config.\n',
     });
     expect(runRainrailCli(['doctor', '--profile']).stderr).toBe(
+      'Missing value for --profile.\n',
+    );
+    expect(runRainrailCli(['doctor', '--profile=']).stderr).toBe(
       'Missing value for --profile.\n',
     );
   });
