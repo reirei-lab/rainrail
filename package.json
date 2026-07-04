@@ -6,7 +6,7 @@
   "type": "module",
   "packageManager": "pnpm@10.12.1",
   "scripts": {
-    "build": "pnpm run build:scripts && pnpm --filter www build",
+    "build": "pnpm run build:scripts && pnpm --filter @rainrail/cli build && pnpm --filter www build",
     "build:scripts": "node scripts/check-scripts.mjs",
     "cf:deploy": "node scripts/validate-cloudflare-secrets.mjs && wrangler deploy",
     "cf:deploy:check": "node scripts/check-cloudflare-deployability.mjs",
@@ -17,8 +17,8 @@
     "pages:deploy:preview": "pnpm pages:build && wrangler pages deploy apps/www/dist --project-name rainrail-www --branch \"${RAINRAIL_PAGES_BRANCH:-preview}\"",
     "pages:deploy:production": "pnpm pages:build && wrangler pages deploy apps/www/dist --project-name rainrail-www --branch main",
     "pages:smoke": "node scripts/smoke-cloudflare-pages.mjs",
-    "test": "vitest run scripts src",
-    "typecheck": "tsc --noEmit"
+    "test": "vitest run scripts src packages",
+    "typecheck": "tsc --noEmit && pnpm --filter @rainrail/cli typecheck"
   },
   "devDependencies": {
     "@types/node": "^26.1.0",

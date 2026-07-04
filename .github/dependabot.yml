@@ -9,6 +9,7 @@ updates:
     directories:
       - "/"
       - "/apps/*"
+      - "/packages/*"
     schedule:
       interval: "weekly"
 

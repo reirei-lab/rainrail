@@ -321,6 +321,28 @@ describe('docs drift checks', () => {
     ).toEqual(['package.json']);
   });
 
+  it('keeps newly added package manifests without requiring base text', () => {
+    const root = makeRepo();
+    mkdirSync(join(root, 'packages', 'cli'), { recursive: true });
+    writeFileSync(
+      join(root, 'packages/cli/package.json'),
+      JSON.stringify(
+        {
+          name: '@rainrail/cli',
+          scripts: { build: 'tsc -p tsconfig.json' },
+        },
+        null,
+        2,
+      ),
+    );
+
+    expect(
+      filterDependencyOnlyPackageJsonChanges(root, ['packages/cli/package.json'], () => {
+        throw new Error('path does not exist at base ref');
+      }),
+    ).toEqual(['packages/cli/package.json']);
+  });
+
   it('requires docs or tests when a base contract source is removed from the manifest', () => {
     const root = makeRepo();
     const baseContracts = [
