@@ -13,7 +13,8 @@ you are implementing or reviewing Rainrail behavior.
 ## Contracts and event delivery
 
 - [Plugin runtime contract](plugin-runtime-contract.md): source plugin,
-  workflow plugin, runtime provider, and dispatcher boundaries.
+  manual/chat input source, workflow plugin, runtime provider, and dispatcher
+  boundaries.
 - [Core / EEP Bridge / Source adapter boundary](core-eep-bridge-source-adapter-boundary.md):
   package/module responsibilities between Core, provider ingress bundles,
   source adapters, and transport adapters.

@@ -1,4 +1,4 @@
-export type RainrailEventSourceType = 'github' | 'cloudflare' | 'manual' | 'system' | (string & {});
+export type RainrailEventSourceType = 'github' | 'cloudflare' | 'manual' | 'chat' | 'system' | (string & {});
 
 export type RainrailEventName =
   | 'github.issue'
@@ -7,6 +7,8 @@ export type RainrailEventName =
   | 'github.review'
   | 'cloudflare.tail'
   | 'cloudflare.error'
+  | 'rainrail.manual.message'
+  | 'rainrail.chat.message'
   | (string & {});
 
 export interface RainrailEventSource {
@@ -30,7 +32,7 @@ export interface RainrailRawPayloadReference {
 }
 
 export interface RainrailEventSubject {
-  type: 'issue' | 'pull_request' | 'check_run' | 'review' | 'worker' | (string & {});
+  type: 'issue' | 'pull_request' | 'check_run' | 'review' | 'worker' | 'conversation' | (string & {});
   id: string;
   url?: string;
 }

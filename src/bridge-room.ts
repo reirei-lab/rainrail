@@ -24,8 +24,18 @@ const GITHUB_MENTION_PAYLOAD_KEYS = new Set([
   'comment',
   'review',
 ]);
+const MANUAL_INPUT_PAYLOAD_KEYS = new Set([
+  'provider',
+  'channel',
+  'action',
+  'conversation',
+  'message',
+  'actor',
+  'attachments',
+  'replyTarget',
+]);
 const ALLOWED_RAW_PAYLOAD_KINDS = new Set(['external-reference', 'inline-redacted']);
-const ALLOWED_URL_PROTOCOLS = new Set(['https:', 'github:', 'cloudflare:']);
+const ALLOWED_URL_PROTOCOLS = new Set(['https:', 'github:', 'cloudflare:', 'manual:', 'chat:']);
 const SAFE_DELIVERY_REFERENCE_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 const SAFE_IDENTIFIER_TOKEN = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/;
 const SAFE_METADATA_TOKEN = /^[a-z0-9][a-z0-9._:-]{0,63}$/i;
@@ -536,6 +546,11 @@ function normalizePayload(value: unknown, context: { sourceType: string; name: s
       if (normalized !== undefined) {
         payload[key] = normalized;
       }
+    } else if (isManualInputPayload(value, context) && MANUAL_INPUT_PAYLOAD_KEYS.has(key)) {
+      const normalized = normalizeManualInputPayloadField(key, nestedValue);
+      if (normalized !== undefined) {
+        payload[key] = normalized;
+      }
     }
   }
 
@@ -628,6 +643,82 @@ function normalizeGitHubMentionPayloadField(key: string, value: unknown): unknow
   if (key === 'resource' || key === 'pullRequest') return normalizeGitHubResource(value);
   if (key === 'comment' || key === 'review') return normalizeGitHubComment(value);
   return undefined;
+}
+
+function isManualInputPayload(
+  value: Record<string, unknown>,
+  context: { sourceType: string; name: string },
+): boolean {
+  return (context.sourceType === 'manual' && context.name === 'rainrail.manual.message')
+    || (context.sourceType === 'chat' && context.name === 'rainrail.chat.message')
+    || (value.provider === 'rainrail' && (value.channel === 'manual' || value.channel === 'chat'));
+}
+
+function normalizeManualInputPayloadField(key: string, value: unknown): unknown {
+  if (key === 'provider') return value === 'rainrail' ? value : undefined;
+  if (key === 'channel') return value === 'manual' || value === 'chat' ? value : undefined;
+  if (key === 'action') return value === 'message' ? value : undefined;
+  if (key === 'conversation') return normalizeManualConversation(value);
+  if (key === 'message') return normalizeManualMessage(value);
+  if (key === 'actor') return normalizeManualActor(value);
+  if (key === 'attachments') return normalizeManualAttachments(value);
+  if (key === 'replyTarget') return normalizeManualReplyTarget(value);
+  return undefined;
+}
+
+function normalizeManualConversation(value: unknown): unknown {
+  if (!isRecord(value)) return undefined;
+  const normalized = {
+    ...pickManualStringFields(value, ['id', 'url']),
+  };
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function normalizeManualMessage(value: unknown): unknown {
+  if (!isRecord(value)) return undefined;
+  const normalized = {
+    ...pickManualStringFields(value, ['id', 'text']),
+  };
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function normalizeManualActor(value: unknown): unknown {
+  if (!isRecord(value)) return undefined;
+  const normalized = {
+    ...pickManualStringFields(value, ['id', 'displayName', 'type']),
+  };
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function normalizeManualAttachments(value: unknown): unknown {
+  if (!Array.isArray(value)) return undefined;
+  const attachments = value.flatMap((attachment) => {
+    if (!isRecord(attachment)) return [];
+    const normalized = {
+      ...pickManualStringFields(attachment, ['id', 'name', 'contentType', 'url']),
+    };
+    return Object.keys(normalized).length > 0 ? [normalized] : [];
+  });
+  return attachments.length > 0 ? attachments : undefined;
+}
+
+function normalizeManualReplyTarget(value: unknown): unknown {
+  if (!isRecord(value)) return undefined;
+  const normalized = {
+    ...pickManualStringFields(value, ['id', 'url']),
+  };
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function pickManualStringFields(record: Record<string, unknown>, keys: string[]): Record<string, string> {
+  const normalized: Record<string, string> = {};
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'string' && value.length > 0) {
+      normalized[key] = key === 'url' ? sanitizePayloadUrl(value) ?? '' : sanitizePayloadText(value);
+    }
+  }
+  return Object.fromEntries(Object.entries(normalized).filter(([, value]) => value.length > 0));
 }
 
 function normalizeGitHubRepository(value: unknown): unknown {

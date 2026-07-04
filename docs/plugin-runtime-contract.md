@@ -66,6 +66,47 @@ fallback delivery id に batch index を混ぜ、同一 ms の Cron/Queue tail �
 実装の入口は `createCloudflareTailSourcePlugin` で、入力 payload は
 `CloudflareTailEvent` として扱う。
 
+## Manual / Web chat source
+
+Manual trigger や Web chat UI からの user input は EEP Bridge 固有の webhook ではなく、
+Rainrail が直接持つ非 webhook source として扱う。最小 contract は
+`createManualInputEvent` と `createManualInputIntakeAdapter` で提供する。
+型は `ManualInputChannel`、`ManualInputPayload`、`ManualInputActor`、
+`ManualInputAttachment`、`ManualInputReplyTarget`、`ManualInputHttpBody`、
+`ManualInputRainrailEvent`、`ManualInputIntakeAdapterOptions`、
+`CreateManualInputEventInput` を公開 API とする。
+
+event name は channel ごとに固定する。
+
+- manual trigger: `rainrail.manual.message`
+- Web chat message: `rainrail.chat.message`
+
+`source.type` は `manual` または `chat`、`source.name` は既定で
+`manual-input` または `web-chat` とする。`subject` はどちらも
+`type: "conversation"` とし、`subject.id` には conversation id を置く。
+payload は provider 固有 raw body ではなく、次の正規化済み shape にする。
+
+- `provider: "rainrail"`
+- `channel: "manual" | "chat"`
+- `action: "message"`
+- `conversation.id`
+- `message.id` と `message.text`
+- 任意の `actor`、`attachments`、`replyTarget`
+
+`message.text` は workflow が runtime start prompt などに使う正規化済み user content
+として envelope に載せる。一方で HTTP request body や Web chat provider の extra field は
+Core storage / durable replay に残さない。`rawPayload` は `inline-redacted` とし、
+`manual://deliveries/<delivery-id>` または `chat://deliveries/<delivery-id>` の参照と
+digest だけを保持する。token、secret、password、API key、Bearer credential 形式は
+source adapter 側で短く redaction する。
+
+HTTP intake の既定 route は `/intake/manual` と `/intake/chat` で、adapter は JSON body から
+`conversationId`、`message`、任意の `messageId`、`actor`、`attachments`、`replyTarget`
+を読み、正規化済み envelope を `RainrailIntakeAdapterContext.publish()` へ渡す。
+Workflow plugin は通常の event と同じく `rainrail.chat.message` や
+`rainrail.manual.message` に `accepts` / local handler を設定し、
+`runtime:start` capability を宣言したうえで `context.actions.startRuntime()` を呼べる。
+
 ## Task provider
 
 Task provider は forge/task system の操作面を表す。初期 contract は
