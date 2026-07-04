@@ -415,6 +415,41 @@ describe('Rainrail dashboard API', () => {
     operationalStore.close();
   });
 
+  it('reports unknown source auth when an intake adapter does not declare auth metadata', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:12:00.000Z'),
+    });
+    const app = createTestApp({
+      eventsBearerToken: 'events-token',
+      operationalStore,
+      intakeAdapters: [{
+        name: 'custom-http',
+        source: { type: 'manual' },
+        routes: [{
+          path: '/custom/intake',
+          methods: ['POST'],
+          handle: () => new Response(null, { status: 202 }),
+        }],
+      }],
+    });
+
+    const sources = await app.fetch(new Request('https://rainrail.local/api/v1/sources', {
+      headers: { authorization: 'Bearer events-token' },
+    }));
+    expect(sources.status).toBe(200);
+    await expect(sources.json()).resolves.toMatchObject({
+      data: [{
+        id: 'custom-http',
+        endpoint: '/custom/intake',
+        auth: { status: 'unknown' },
+      }],
+    });
+
+    operationalStore.close();
+  });
+
   it('uses unique source row ids so duplicate adapter names can paginate', async () => {
     const operationalStore = new RainrailOperationalStore({
       databasePath: ':memory:',
@@ -606,6 +641,70 @@ describe('Rainrail dashboard API', () => {
         upcomingIssues: 1,
         inProgressCount: 1,
         claimedCount: 1,
+      },
+    });
+
+    operationalStore.close();
+  });
+
+  it('skips represented project issues before selecting the next upcoming queue issue', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:12:00.000Z'),
+    });
+    operationalStore.recordAgentTask({
+      id: 'agent_task_running',
+      title: 'Already claimed issue',
+      agentSessionId: 'agent:main:rainrail-115',
+      branchName: 'agent/reirei-lab-rainrail-115',
+      status: 'running',
+      issue: { repository: 'reirei-lab/rainrail', number: 115 },
+      claim: { projectItemId: 'PVTI_115', originalStatus: 'In Progress' },
+    });
+    const app = createTestApp({
+      eventsBearerToken: 'events-token',
+      operationalStore,
+      taskQueue: {
+        selection: { todoStatus: 'Todo', backlogStatus: 'Backlog', inProgressStatus: 'In Progress', maxConcurrentAgentTasks: 2 },
+        listProjectIssues: async () => [
+          {
+            id: 'PVTI_115',
+            title: 'Project status has not caught up',
+            status: 'Todo',
+            state: 'OPEN',
+            assigneeLogins: ['reirei-agent'],
+            repository: 'reirei-lab/rainrail',
+            number: 115,
+            url: 'https://github.com/reirei-lab/rainrail/issues/115',
+          },
+          {
+            id: 'PVTI_118',
+            title: 'Next startable issue',
+            status: 'Todo',
+            state: 'OPEN',
+            assigneeLogins: ['reirei-agent'],
+            repository: 'reirei-lab/rainrail',
+            number: 118,
+            url: 'https://github.com/reirei-lab/rainrail/issues/118',
+          },
+        ],
+      },
+    });
+
+    const queue = await app.fetch(new Request('https://rainrail.local/api/v1/queue?filter[status]=upcoming', {
+      headers: { authorization: 'Bearer events-token' },
+    }));
+    expect(queue.status).toBe(200);
+    await expect(queue.json()).resolves.toMatchObject({
+      data: [{
+        id: 'project:PVTI_118',
+        status: 'upcoming',
+        title: 'Next startable issue',
+      }],
+      summary: {
+        upcomingIssues: 1,
+        inProgressCount: 1,
       },
     });
 
@@ -904,6 +1003,34 @@ describe('Rainrail dashboard API', () => {
     expect(body.data.find((row) => row.id === 'max-concurrency')).toMatchObject({
       id: 'max-concurrency',
       value: '3 agent tasks',
+    });
+
+    operationalStore.close();
+  });
+
+  it('reports the effective default queue max concurrency in settings', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:12:00.000Z'),
+    });
+    const app = createTestApp({
+      eventsBearerToken: 'events-token',
+      operationalStore,
+      taskQueue: {
+        selection: {},
+        listProjectIssues: async () => [],
+      },
+    });
+
+    const settings = await app.fetch(new Request('https://rainrail.local/api/v1/settings', {
+      headers: { authorization: 'Bearer events-token' },
+    }));
+    expect(settings.status).toBe(200);
+    const body = await settings.json() as { data: Array<{ id: string; value: string }> };
+    expect(body.data.find((row) => row.id === 'max-concurrency')).toMatchObject({
+      id: 'max-concurrency',
+      value: '1 agent task (default)',
     });
 
     operationalStore.close();

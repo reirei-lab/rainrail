@@ -24,6 +24,8 @@ import type {
 import { getNextProjectIssueToStart, type ProjectIssue } from './project-issues.js';
 import type { TaskQueueProvider } from './task-queue.js';
 
+const DEFAULT_MAX_CONCURRENT_AGENT_TASKS = 1;
+
 export interface RainrailBridgeRoomFetchTarget {
   fetch(request: Request): Response | Promise<Response>;
 }
@@ -580,9 +582,8 @@ function dashboardV1SettingsResponse(url: URL, options: RainrailHttpAppOptions):
   if (!collection.ok) return collection.response;
 
   const retryCount = store.listEventHandlerRetries().length;
-  const maxConcurrentAgentTasks = options.taskQueue?.selection?.maxConcurrentAgentTasks;
   const rows = [
-    settingRow('max-concurrency', 'Max concurrency', maxConcurrentAgentTasks === undefined ? 'not configured' : `${maxConcurrentAgentTasks} agent tasks`),
+    settingRow('max-concurrency', 'Max concurrency', formatMaxConcurrentAgentTasksSetting(options.taskQueue)),
     settingRow('auto-start', 'Auto-start', 'not configured'),
     settingRow('retry-policy', 'Retry policy', retryCount === 1 ? '1 retry pending' : `${retryCount} retries pending`),
     settingRow('operational-snapshot-limit', 'Operational snapshot limit', `${store.eventLimit()} events`),
@@ -814,7 +815,7 @@ function latestEventBySourceName(events: StoredOperationalEvent[]): Map<string, 
 function intakeAdapterToSourceRow(adapter: RainrailIntakeAdapter, latestEvent: StoredOperationalEvent | undefined, id = adapter.name) {
   const route = adapter.routes?.[0];
   const sourceType = adapter.source?.type ?? latestEvent?.source.type ?? 'system';
-  const authStatus = adapter.source?.authStatus ?? (route === undefined ? 'not_required' : 'configured');
+  const authStatus = adapter.source?.authStatus ?? (route === undefined ? 'not_required' : undefined);
   return {
     id,
     type: 'source',
@@ -834,9 +835,9 @@ function intakeAdapterToSourceRow(adapter: RainrailIntakeAdapter, latestEvent: S
   };
 }
 
-function formatSourceAuthStatus(status: NonNullable<RainrailIntakeAdapter['source']>['authStatus']): string {
+function formatSourceAuthStatus(status: NonNullable<RainrailIntakeAdapter['source']>['authStatus'] | undefined): string {
   if (status === 'not_required') return 'not required';
-  return status ?? 'configured';
+  return status ?? 'unknown';
 }
 
 function agentTaskToQueueRow(task: StoredAgentTask, staleWarning: StoredStaleProjectClaimWarning | undefined) {
@@ -882,9 +883,24 @@ async function projectIssueQueueRows(
   } catch {
     return [];
   }
-  const nextIssue = getNextProjectIssueToStart(issues, taskQueue.selection);
-  if (nextIssue === undefined || representedIssueKeys.has(projectIssueKey(nextIssue))) return [];
+  const nextIssue = nextUnrepresentedProjectIssueToStart(issues, taskQueue.selection, representedIssueKeys);
+  if (nextIssue === undefined) return [];
   return [projectIssueToQueueRow(nextIssue)];
+}
+
+function nextUnrepresentedProjectIssueToStart(
+  issues: ProjectIssue[],
+  selection: Pick<TaskQueueProvider, 'selection'>['selection'],
+  representedIssueKeys: Set<string>,
+): ProjectIssue | undefined {
+  let candidateIssues = issues;
+  while (candidateIssues.length > 0) {
+    const nextIssue = getNextProjectIssueToStart(candidateIssues, selection);
+    if (nextIssue === undefined) return undefined;
+    if (!isRepresentedProjectIssue(nextIssue, representedIssueKeys)) return nextIssue;
+    candidateIssues = candidateIssues.filter((issue) => !isSameProjectIssue(issue, nextIssue));
+  }
+  return undefined;
 }
 
 function projectIssueToQueueRow(issue: ProjectIssue) {
@@ -930,6 +946,14 @@ function projectIssueKey(issue: ProjectIssue): string {
     return `${issue.repository}#${issue.number}`;
   }
   return issue.id;
+}
+
+function isRepresentedProjectIssue(issue: ProjectIssue, representedIssueKeys: Set<string>): boolean {
+  return representedIssueKeys.has(projectIssueKey(issue)) || representedIssueKeys.has(issue.id);
+}
+
+function isSameProjectIssue(left: ProjectIssue, right: ProjectIssue): boolean {
+  return left.id === right.id || projectIssueKey(left) === projectIssueKey(right);
 }
 
 function projectIssueKeyFromUnknown(issue: unknown): string | undefined {
@@ -1002,6 +1026,17 @@ function settingRow(id: string, label: string, value: string) {
     label,
     value,
   };
+}
+
+function formatMaxConcurrentAgentTasksSetting(taskQueue: Pick<TaskQueueProvider, 'selection'> | undefined): string {
+  if (taskQueue === undefined) return 'not configured';
+  const maxConcurrentAgentTasks = taskQueue.selection?.maxConcurrentAgentTasks;
+  if (maxConcurrentAgentTasks === undefined) return `${formatAgentTaskCount(DEFAULT_MAX_CONCURRENT_AGENT_TASKS)} (default)`;
+  return formatAgentTaskCount(maxConcurrentAgentTasks);
+}
+
+function formatAgentTaskCount(count: number): string {
+  return count === 1 ? '1 agent task' : `${count} agent tasks`;
 }
 
 function recordValue(value: unknown): Record<string, unknown> | undefined {
