@@ -854,6 +854,23 @@ async function handleDashboardCommandRequest(
     return commandResponse({ error: 'command_handler_not_configured' }, requestId, 503);
   }
 
+  const sensitiveInputValues = sensitiveStringValues(body.value);
+  const commandInputs = JSON.parse(JSON.stringify(body.value)) as Record<string, unknown>;
+  try {
+    options.operationalStore.recordCommandResult({
+      actionType: command.actionType,
+      targetType: command.targetType,
+      targetId: command.targetId,
+      status: 'dispatching',
+      actor: auth.principal.actor,
+      ...(client === undefined ? {} : { client }),
+      requestId,
+      dryRun: false,
+    });
+  } catch {
+    return commandResponse({ error: 'operational_store_unavailable' }, requestId, 503);
+  }
+
   const commandRequest: RainrailCommandRequest = {
     actionType: command.actionType,
     targetType: command.targetType,
@@ -862,7 +879,7 @@ async function handleDashboardCommandRequest(
     ...(client === undefined ? {} : { client }),
     requestId,
     dryRun: false,
-    inputs: body.value,
+    inputs: commandInputs,
   };
 
   let handlerResult: unknown;
@@ -870,7 +887,7 @@ async function handleDashboardCommandRequest(
     handlerResult = await options.commandHandler(commandRequest);
   } catch (error) {
     const rawMessage = error instanceof Error ? error.message : String(error);
-    const message = sanitizeCommandErrorMessage(rawMessage, body.value);
+    const message = sanitizeCommandErrorMessage(rawMessage, sensitiveInputValues);
     const result = options.operationalStore.recordCommandResult({
       actionType: command.actionType,
       targetType: command.targetType,
@@ -905,7 +922,7 @@ async function handleDashboardCommandRequest(
     }, requestId, 502);
   }
 
-  const storedHandlerResult = sanitizeCommandResult(handlerResult, sensitiveStringValues(body.value));
+  const storedHandlerResult = sanitizeCommandResult(handlerResult, sensitiveInputValues);
   const result = options.operationalStore.recordCommandResult({
     actionType: command.actionType,
     targetType: command.targetType,
@@ -1130,13 +1147,13 @@ function sanitizeCommandResult(value: unknown, sensitiveValues: readonly string[
   return sanitized;
 }
 
-function sanitizeCommandErrorMessage(message: string, inputs: Record<string, unknown>): string {
+function sanitizeCommandErrorMessage(message: string, sensitiveValues: readonly string[]): string {
   let sanitized = redactSensitiveText(message);
-  const sensitiveValues = sensitiveStringValues(inputs)
+  const orderedValues = [...sensitiveValues]
     .filter((value) => value.length > 0)
     .sort((left, right) => right.length - left.length);
 
-  for (const value of sensitiveValues) {
+  for (const value of orderedValues) {
     sanitized = sanitized.split(value).join('[redacted]');
   }
 
@@ -1174,7 +1191,7 @@ function sensitiveStringValues(value: unknown, sensitiveContext = false): string
 
 function redactSensitiveText(value: string): string {
   return value
-    .replace(/\b(authorization\s*[:=]\s*)(?:bearer|token)\s+[^\s"',}]+/giu, '$1[redacted]')
+    .replace(/\b(authorization\s*[:=]\s*)[^\r\n]+/giu, '$1[redacted]')
     .replace(/\b([\w.-]*(?:authorization|token|secret|password|key|code|reset|verification|session|confirmation)[\w.-]*\b\s*[:=]\s*)(?:bearer|token)\s+[^\s"',}]+/giu, '$1[redacted]')
     .replace(/\b((?:set-)?cookie\s*:\s*)[^\r\n]+/giu, '$1[redacted]')
     .replace(
