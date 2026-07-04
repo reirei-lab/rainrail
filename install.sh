@@ -93,33 +93,12 @@ require_command() {
 }
 
 require_command node
-require_command npm
 require_command tar
 
 if ! node -e 'const major = Number(process.versions.node.split(".")[0]); process.exit(major >= 20 ? 0 : 1)' >/dev/null 2>&1; then
   echo "Rainrail requires Node.js 20 or newer." >&2
   exit 1
 fi
-
-npm_version="$(npm --version 2>/dev/null || true)"
-if [ -z "${npm_version}" ]; then
-  echo "Rainrail requires a working npm or npm-compatible installer command." >&2
-  exit 1
-fi
-
-npm_major="${npm_version%%.*}"
-case "${npm_major}" in
-  ''|*[!0-9]*)
-    echo "Rainrail could not determine the npm-compatible installer version: ${npm_version}" >&2
-    exit 1
-    ;;
-  *)
-    if [ "${npm_major}" -lt 9 ]; then
-      echo "Rainrail requires npm or an npm-compatible installer version 9 or newer." >&2
-      exit 1
-    fi
-    ;;
-esac
 
 download() {
   local url="$1"
@@ -156,7 +135,11 @@ if [ -z "${asset_url}" ]; then
 fi
 
 tmpdir="$(mktemp -d)"
+staging_dir=""
 cleanup() {
+  if [ -n "${staging_dir}" ]; then
+    rm -rf "${staging_dir}"
+  fi
   rm -rf "${tmpdir}"
 }
 trap cleanup EXIT
@@ -186,12 +169,36 @@ fi
 target_dir="${prefix}/lib/rainrail/${installed_version}"
 bin_dir="${prefix}/bin"
 path_line="export PATH=$(shell_escape "${bin_dir}"):\$PATH"
-mkdir -p "${target_dir}" "${bin_dir}"
-rm -rf "${target_dir}"
-mkdir -p "$(dirname "${target_dir}")"
-cp -R "${package_dir}" "${target_dir}"
-chmod +x "${target_dir}/dist/bin/rainrail.js"
-ln -sfn "../lib/rainrail/${installed_version}/dist/bin/rainrail.js" "${bin_dir}/rainrail"
+target_parent="$(dirname "${target_dir}")"
+bin_path="${bin_dir}/rainrail"
+mkdir -p "${target_parent}" "${bin_dir}"
+if [ -d "${bin_path}" ] && [ ! -L "${bin_path}" ]; then
+  echo "Cannot replace existing directory at ${bin_path}." >&2
+  exit 1
+fi
+
+staging_dir="$(mktemp -d "${target_parent}/.${installed_version}.XXXXXX")"
+cp -R "${package_dir}/." "${staging_dir}/"
+chmod +x "${staging_dir}/dist/bin/rainrail.js"
+
+backup_dir=""
+if [ -e "${target_dir}" ]; then
+  backup_dir="${target_parent}/.${installed_version}.backup.$$"
+  rm -rf "${backup_dir}"
+  mv "${target_dir}" "${backup_dir}"
+fi
+if mv "${staging_dir}" "${target_dir}"; then
+  staging_dir=""
+  if [ -n "${backup_dir}" ]; then
+    rm -rf "${backup_dir}"
+  fi
+else
+  if [ -n "${backup_dir}" ] && [ -e "${backup_dir}" ]; then
+    mv "${backup_dir}" "${target_dir}"
+  fi
+  exit 1
+fi
+ln -sfn "../lib/rainrail/${installed_version}/dist/bin/rainrail.js" "${bin_path}"
 
 echo "Installed Rainrail CLI ${installed_version} to ${target_dir}"
 
@@ -205,6 +212,11 @@ case ":${PATH}:" in
 esac
 
 if [ "${add_to_shell}" = "true" ]; then
+  if [ -z "${HOME:-}" ]; then
+    echo "Skipping shell rc update because HOME is not set." >&2
+    exit 0
+  fi
+
   shell_name="$(basename "${SHELL:-}")"
   case "${shell_name}" in
     zsh) rc_file="${HOME}/.zshrc" ;;

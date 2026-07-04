@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 /**
  * @param {string} version
@@ -37,7 +37,7 @@ function runChecked(spawn, command, args) {
  * @returns {{ assetName: string; assetPath: string; version: string }}
  */
 export function packageCliRelease({
-  root = new URL('..', import.meta.url).pathname,
+  root = fileURLToPath(new URL('..', import.meta.url)),
   outDir = join(root, 'dist', 'release'),
   spawn = (command, args) => spawnSync(command, args, { stdio: ['ignore', 'ignore', 'inherit'] }),
 } = {}) {

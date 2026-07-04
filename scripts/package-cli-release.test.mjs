@@ -14,6 +14,13 @@ describe('CLI release package builder', () => {
     expect(getCliReleaseAssetName('1.2.3')).toBe('rainrail-cli-v1.2.3.tgz');
   });
 
+  it('derives the default repository root through fileURLToPath', () => {
+    const script = readFileSync(new URL('./package-cli-release.mjs', import.meta.url), 'utf8');
+
+    expect(script).toContain('fileURLToPath');
+    expect(script).not.toContain("new URL('..', import.meta.url).pathname");
+  });
+
   it('packs the CLI workspace package and writes the GitHub Release asset name', async () => {
     const root = await mkdtemp(join(tmpdir(), 'rainrail-release-pack-'));
     const cli = join(root, 'packages', 'cli');

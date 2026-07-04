@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
-import { dirname, normalize, sep } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { dirname, join, normalize, parse, resolve, sep } from 'node:path';
 
 export type BuiltInCommandName =
   | 'new'
@@ -53,20 +54,33 @@ export type CommandRunner = (
   options: CommandRunnerOptions,
 ) => CommandRunnerResult;
 
-export type RainrailCliDependencies = {
+export type RainrailCliEnvironment = {
+  readonly cwd?: string;
   readonly commandRunner?: CommandRunner;
   readonly currentBinPath?: string;
 };
 
+export type RainrailProject = {
+  readonly root: string;
+  readonly configPath: string;
+  readonly lockPath: string;
+  readonly pluginDirectory: string;
+};
+
 const DEFAULT_INSTALLER_URL =
   'https://raw.githubusercontent.com/reirei-lab/rainrail/main/install.sh';
+const rainrailConfigFileName = 'rainrail.config.json';
+const rainrailLockFileName = 'rainrail.lock';
+const rainrailDirectoryName = '.rainrail';
+const rainrailPluginDirectoryName = 'plugins';
+const safeProjectNamePattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 
 export const BUILT_IN_COMMANDS: readonly BuiltInCommand[] = [
   {
     name: 'new',
     kind: 'built-in',
     summary: 'Create a new Rainrail project or workspace scaffold.',
-    implemented: false,
+    implemented: true,
   },
   {
     name: 'setup',
@@ -219,6 +233,31 @@ export function formatHelp(): string {
     '  --yes              Confirm non-interactive prompts.',
     '',
   ].join('\n');
+}
+
+export function discoverRainrailProject(startPath: string): RainrailProject | undefined {
+  let current = resolve(startPath);
+  if (existsSync(current) && !statSync(current).isDirectory()) {
+    current = dirname(current);
+  }
+
+  while (true) {
+    const configPath = join(current, rainrailConfigFileName);
+    if (existsSync(configPath)) {
+      return {
+        root: current,
+        configPath,
+        lockPath: join(current, rainrailLockFileName),
+        pluginDirectory: join(current, rainrailDirectoryName, rainrailPluginDirectoryName),
+      };
+    }
+
+    const parent = dirname(current);
+    if (parent === current) {
+      return undefined;
+    }
+    current = parent;
+  }
 }
 
 function parseUpdateArguments(args: readonly string[]): {
@@ -389,7 +428,7 @@ function inferRainrailInstallPrefix(currentBinPath: string | undefined): string 
 
 export function runRainrailCli(
   argv: readonly string[],
-  dependencies: RainrailCliDependencies = {},
+  environment: RainrailCliEnvironment = {},
 ): RainrailCliResult {
   const parsed = parseRainrailArguments(argv);
   if (parsed.errors.length > 0) {
@@ -422,14 +461,18 @@ export function runRainrailCli(
     return runUpdateCommand(
       parsed.commandArgs,
       parsed.options,
-      dependencies.commandRunner ??
+      environment.commandRunner ??
         ((commandName, args, commandOptions) =>
           spawnSync(commandName, args, {
             encoding: 'utf8',
             stdio: commandOptions.stdio,
           })),
-      dependencies.currentBinPath ?? process.argv[1],
+      environment.currentBinPath ?? process.argv[1],
     );
+  }
+
+  if (command.name === 'new') {
+    return runNewCommand(parsed.commandArgs, environment);
   }
 
   return {
@@ -437,4 +480,93 @@ export function runRainrailCli(
     stdout: '',
     stderr: `rainrail ${command.name} is not implemented yet.\n`,
   };
+}
+
+function runNewCommand(args: readonly string[], environment: RainrailCliEnvironment): RainrailCliResult {
+  const projectName = args[0];
+  if (projectName === undefined || args.length !== 1) {
+    return {
+      exitCode: 1,
+      stdout: '',
+      stderr: 'Usage: rainrail new <projectName>\n',
+    };
+  }
+
+  if (!safeProjectNamePattern.test(projectName) || parse(projectName).base !== projectName) {
+    return {
+      exitCode: 1,
+      stdout: '',
+      stderr: 'Project name must be a safe directory name.\n',
+    };
+  }
+
+  const cwd = environment.cwd === undefined ? process.cwd() : environment.cwd;
+  const projectRoot = resolve(cwd, projectName);
+  const alreadyExisted = existsSync(projectRoot);
+
+  try {
+    createRainrailProject(projectRoot, projectName);
+  } catch (error) {
+    return {
+      exitCode: 1,
+      stdout: '',
+      stderr: `${error instanceof Error ? error.message : String(error)}\n`,
+    };
+  }
+
+  return {
+    exitCode: 0,
+    stdout: alreadyExisted
+      ? `Rainrail project already exists at ${projectRoot}\n`
+      : `Created Rainrail project at ${projectRoot}\n`,
+    stderr: '',
+  };
+}
+
+function createRainrailProject(projectRoot: string, projectName: string): void {
+  mkdirSync(projectRoot, { recursive: true });
+  mkdirSync(join(projectRoot, rainrailDirectoryName, rainrailPluginDirectoryName), { recursive: true });
+
+  writeGeneratedFile(
+    join(projectRoot, rainrailConfigFileName),
+    formatRainrailConfig(projectName),
+  );
+  writeGeneratedFile(
+    join(projectRoot, rainrailLockFileName),
+    formatRainrailLock(projectName),
+  );
+  writeGeneratedFile(
+    join(projectRoot, rainrailDirectoryName, rainrailPluginDirectoryName, '.gitkeep'),
+    '',
+  );
+}
+
+function writeGeneratedFile(path: string, content: string): void {
+  if (existsSync(path)) {
+    const existing = readFileSync(path, 'utf8');
+    if (existing !== content) {
+      throw new Error(`Refusing to overwrite existing file with different content: ${path}`);
+    }
+    return;
+  }
+
+  writeFileSync(path, content, { flag: 'wx' });
+}
+
+function formatRainrailConfig(projectName: string): string {
+  return `${JSON.stringify({
+    project: { name: projectName },
+    sourceBundles: [],
+    sources: [],
+    taskProviders: {},
+    runtimeProviders: {},
+  }, null, 2)}\n`;
+}
+
+function formatRainrailLock(projectName: string): string {
+  return `${JSON.stringify({
+    lockfileVersion: 1,
+    project: { name: projectName },
+    plugins: [],
+  }, null, 2)}\n`;
 }

@@ -17,16 +17,19 @@ const installScript = new URL('../install.sh', import.meta.url);
 /**
  * @param {string} root
  * @param {string} version
+ * @param {{ includeBin?: boolean }} [options]
  */
-function createReleaseTarball(root, version) {
+function createReleaseTarball(root, version, { includeBin = true } = {}) {
   const packageRoot = join(root, 'package');
   mkdirSync(join(packageRoot, 'dist', 'bin'), { recursive: true });
   writeFileSync(join(packageRoot, 'package.json'), JSON.stringify({ version }));
-  writeFileSync(
-    join(packageRoot, 'dist', 'bin', 'rainrail.js'),
-    '#!/usr/bin/env node\nconsole.log("rainrail");\n',
-  );
-  chmodSync(join(packageRoot, 'dist', 'bin', 'rainrail.js'), 0o755);
+  if (includeBin) {
+    writeFileSync(
+      join(packageRoot, 'dist', 'bin', 'rainrail.js'),
+      '#!/usr/bin/env node\nconsole.log("rainrail");\n',
+    );
+    chmodSync(join(packageRoot, 'dist', 'bin', 'rainrail.js'), 0o755);
+  }
 
   const tarball = join(root, 'rainrail-cli.tgz');
   const pack = spawnSync('tar', ['-czf', tarball, '-C', root, 'package']);
@@ -99,6 +102,60 @@ describe('install.sh', () => {
     );
   });
 
+  it('skips shell rc updates without failing when HOME is unset', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rainrail-install-no-home-shell-'));
+    const tarball = createReleaseTarball(root, '9.8.7');
+    const prefix = join(root, 'prefix');
+    const { HOME: _home, ...envWithoutHome } = process.env;
+
+    const result = spawnSync(
+      'bash',
+      [
+        installScript.pathname,
+        '--asset-url',
+        `file://${tarball}`,
+        '--prefix',
+        prefix,
+        '--add-to-shell',
+        '--yes',
+      ],
+      {
+        encoding: 'utf8',
+        env: envWithoutHome,
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain('Skipping shell rc update because HOME is not set');
+    expect(readlinkSync(join(prefix, 'bin', 'rainrail'))).toBe(
+      '../lib/rainrail/9.8.7/dist/bin/rainrail.js',
+    );
+  });
+
+  it('does not require npm when installing from a release tarball', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rainrail-install-no-npm-'));
+    const tarball = createReleaseTarball(root, '9.8.7');
+    const prefix = join(root, 'prefix');
+    const fakeBin = join(root, 'bin');
+    mkdirSync(fakeBin);
+    writeFileSync(join(fakeBin, 'npm'), '#!/usr/bin/env sh\nexit 127\n');
+    chmodSync(join(fakeBin, 'npm'), 0o755);
+
+    const result = spawnSync(
+      'bash',
+      [installScript.pathname, '--asset-url', `file://${tarball}`, '--prefix', prefix],
+      {
+        encoding: 'utf8',
+        env: { ...process.env, PATH: `${fakeBin}:${process.env.PATH ?? ''}` },
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(readlinkSync(join(prefix, 'bin', 'rainrail'))).toBe(
+      '../lib/rainrail/9.8.7/dist/bin/rainrail.js',
+    );
+  });
+
   it('shell-quotes the PATH line written to a shell rc file', async () => {
     const root = await mkdtemp(join(tmpdir(), 'rainrail-install-rc-'));
     const tarball = createReleaseTarball(root, '9.8.7');
@@ -144,5 +201,42 @@ describe('install.sh', () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain('Release asset package version is invalid');
     expect(existsSync(join(root, 'outside'))).toBe(false);
+  });
+
+  it('leaves the current install intact when staging a replacement fails', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rainrail-install-stage-fail-'));
+    const tarball = createReleaseTarball(root, '9.8.7', { includeBin: false });
+    const prefix = join(root, 'prefix');
+    const currentTarget = join(prefix, 'lib', 'rainrail', '9.8.7');
+    mkdirSync(join(currentTarget, 'dist', 'bin'), { recursive: true });
+    writeFileSync(join(currentTarget, 'package.json'), JSON.stringify({ version: 'old' }));
+    writeFileSync(join(currentTarget, 'dist', 'bin', 'rainrail.js'), 'old');
+    mkdirSync(join(prefix, 'bin'), { recursive: true });
+
+    const result = spawnSync(
+      'bash',
+      [installScript.pathname, '--asset-url', `file://${tarball}`, '--prefix', prefix],
+      { encoding: 'utf8' },
+    );
+
+    expect(result.status).toBe(1);
+    expect(readFileSync(join(currentTarget, 'package.json'), 'utf8')).toContain('"old"');
+  });
+
+  it('fails when the rainrail bin path is an existing directory', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rainrail-install-bin-dir-'));
+    const tarball = createReleaseTarball(root, '9.8.7');
+    const prefix = join(root, 'prefix');
+    mkdirSync(join(prefix, 'bin', 'rainrail'), { recursive: true });
+
+    const result = spawnSync(
+      'bash',
+      [installScript.pathname, '--asset-url', `file://${tarball}`, '--prefix', prefix],
+      { encoding: 'utf8' },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('Cannot replace existing directory at');
+    expect(existsSync(join(prefix, 'bin', 'rainrail', 'rainrail.js'))).toBe(false);
   });
 });

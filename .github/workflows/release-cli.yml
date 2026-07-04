@@ -40,11 +40,12 @@ jobs:
 
       - name: Verify release tag matches CLI version
         if: github.event_name == 'release'
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           cli_version="$(node -p "require('./packages/cli/package.json').version")"
-          release_tag="${{ github.event.release.tag_name }}"
-          if [ "${release_tag}" != "v${cli_version}" ]; then
-            echo "Release tag ${release_tag} does not match CLI package version ${cli_version}." >&2
+          if [ "${RELEASE_TAG}" != "v${cli_version}" ]; then
+            echo "Release tag ${RELEASE_TAG} does not match CLI package version ${cli_version}." >&2
             exit 1
           fi
 
@@ -52,4 +53,5 @@ jobs:
         if: github.event_name == 'release'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ github.event.release.tag_name }}" "${{ steps.release-asset.outputs.asset_path }}" --clobber
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "${RELEASE_TAG}" "${{ steps.release-asset.outputs.asset_path }}" --clobber

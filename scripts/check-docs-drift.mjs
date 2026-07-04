@@ -607,13 +607,18 @@ export const validateContractsManifest = (root = repoRoot) => {
         errors.push(`${id} public export ${publicExport} is not exported as ${expectedKind} by its sources`);
       }
 
+      const indexExportingSources = exportingSources.filter(
+        (source) => source.exportPath !== undefined,
+      );
       if (
-        exportingSources.length > 0 &&
-        !exportingSources.some(
-          (source) =>
-            source.exportPath !== undefined &&
-            source.exportKind !== undefined &&
-            indexReExportsPublicName(indexSource, source.exportPath, publicExport, source.exportKind),
+        indexExportingSources.length > 0 &&
+        !indexExportingSources.some(
+          (source) => {
+            const exportPath = source.exportPath;
+            return exportPath !== undefined &&
+              source.exportKind !== undefined &&
+              indexReExportsPublicName(indexSource, exportPath, publicExport, source.exportKind);
+          },
         )
       ) {
         errors.push(`${id} public export ${publicExport} is not re-exported from src/index.ts`);
