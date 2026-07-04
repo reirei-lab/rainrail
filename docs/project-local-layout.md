@@ -42,7 +42,9 @@ idempotent.
 
 `rainrail plugins remove <officialPluginName>` removes the canonical lockfile
 entry and deletes the matching project-local plugin directory. Removing a plugin
-that is not installed is idempotent.
+that is not installed is idempotent. If deleting the plugin directory fails
+after the lockfile was updated, the command restores the previous lockfile entry
+before returning the filesystem error.
 
 These commands must be run inside a Rainrail project. Global plugin install,
 third-party plugin install, and Git URL plugin install are intentionally out of
@@ -55,6 +57,7 @@ used by tests and future embedding code:
 
 - Types: `BuiltInCommandName`, `BuiltInCommand`, `SharedOptions`,
   `ParsedRainrailArguments`, `RainrailCliResult`, `RainrailCliEnvironment`,
-  `RainrailProject`, `RainrailLockPlugin`, and `RainrailLockfile`.
+  `RainrailCliFileSystem`, `RainrailProject`, `RainrailLockPlugin`, and
+  `RainrailLockfile`.
 - Values: `BUILT_IN_COMMANDS`, `getBuiltInCommand`, `parseRainrailArguments`,
   `formatHelp`, `discoverRainrailProject`, and `runRainrailCli`.

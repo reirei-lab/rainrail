@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
@@ -551,15 +551,53 @@ describe('Rainrail CLI built-in commands', () => {
       const lockPath = join(projectRoot, 'rainrail.lock');
       const manifestPath = join(projectRoot, '.rainrail', 'plugins', 'github', 'plugin.json');
       expect(runRainrailCli(['plugins', 'add', 'github'], { cwd: projectRoot }).exitCode).toBe(0);
-      await chmod(lockPath, 0o400);
 
-      const result = runRainrailCli(['plugins', 'remove', 'github'], { cwd: projectRoot });
+      const result = runRainrailCli(['plugins', 'remove', 'github'], {
+        cwd: projectRoot,
+        fileSystem: {
+          writeFileSync: (path) => {
+            if (path === lockPath) {
+              throw new Error('mock lock write failed');
+            }
+          },
+        },
+      });
 
       expect(result.exitCode).toBe(1);
       expect(result.stdout).toBe('');
+      expect(result.stderr).toBe('mock lock write failed\n');
       expect(result.stderr).not.toContain('Error:');
       await expect(readFile(manifestPath, 'utf8')).resolves.toContain('"name": "github"');
-      await chmod(lockPath, 0o600);
+      await expect(readFile(lockPath, 'utf8')).resolves.toContain('"name": "github"');
+    });
+  });
+
+  it('restores the lockfile when remove cannot delete the plugin manifest directory', async () => {
+    await withTempDirectory(async (directory) => {
+      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
+      const projectRoot = join(directory, 'my-agent-ops');
+      const lockPath = join(projectRoot, 'rainrail.lock');
+      const pluginPath = join(projectRoot, '.rainrail', 'plugins', 'github');
+      expect(runRainrailCli(['plugins', 'add', 'github'], { cwd: projectRoot }).exitCode).toBe(0);
+
+      const result = runRainrailCli(['plugins', 'remove', 'github'], {
+        cwd: projectRoot,
+        fileSystem: {
+          rmSync: (path) => {
+            if (path === pluginPath) {
+              throw new Error('mock plugin delete failed');
+            }
+          },
+        },
+      });
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toBe('mock plugin delete failed\n');
+      await expect(readFile(lockPath, 'utf8')).resolves.toContain('"name": "github"');
+      await expect(readFile(join(pluginPath, 'plugin.json'), 'utf8')).resolves.toContain(
+        '"name": "github"',
+      );
     });
   });
 

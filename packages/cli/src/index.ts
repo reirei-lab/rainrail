@@ -75,10 +75,20 @@ export type CommandRunner = (
   options: CommandRunnerOptions,
 ) => CommandRunnerResult;
 
+export type RainrailCliFileSystem = {
+  readonly existsSync: typeof existsSync;
+  readonly mkdirSync: typeof mkdirSync;
+  readonly readFileSync: typeof readFileSync;
+  readonly rmSync: typeof rmSync;
+  readonly statSync: typeof statSync;
+  readonly writeFileSync: typeof writeFileSync;
+};
+
 export type RainrailCliEnvironment = {
   readonly cwd?: string;
   readonly commandRunner?: CommandRunner;
   readonly currentBinPath?: string;
+  readonly fileSystem?: Partial<RainrailCliFileSystem>;
 };
 
 export type RainrailProject = {
@@ -109,6 +119,14 @@ const rainrailLockFileName = 'rainrail.lock';
 const rainrailDirectoryName = '.rainrail';
 const rainrailPluginDirectoryName = 'plugins';
 const safeProjectNamePattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
+const defaultRainrailCliFileSystem: RainrailCliFileSystem = {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+};
 
 export const BUILT_IN_COMMANDS: readonly BuiltInCommand[] = [
   {
@@ -653,9 +671,10 @@ function runPluginsCommand(
   }
 
   const cwd = environment.cwd === undefined ? process.cwd() : environment.cwd;
+  const fileSystem = getRainrailCliFileSystem(environment);
   let project: RainrailProject | undefined;
   try {
-    project = resolveRainrailProject(cwd, options);
+    project = resolveRainrailProject(cwd, options, fileSystem);
   } catch (error) {
     return {
       exitCode: 1,
@@ -673,9 +692,9 @@ function runPluginsCommand(
   }
 
   try {
-    const lockfile = readRainrailLockfile(project.lockPath);
+    const lockfile = readRainrailLockfile(project.lockPath, fileSystem);
     if (subcommand === 'list') {
-      return listProjectPlugins(project, lockfile);
+      return listProjectPlugins(project, lockfile, fileSystem);
     }
 
     const pluginName = args[1];
@@ -698,10 +717,10 @@ function runPluginsCommand(
     }
 
     if (subcommand === 'add') {
-      return addProjectPlugin(project, lockfile, plugin.alias, plugin.version);
+      return addProjectPlugin(project, lockfile, plugin.alias, plugin.version, fileSystem);
     }
 
-    return removeProjectPlugin(project, lockfile, plugin.alias);
+    return removeProjectPlugin(project, lockfile, plugin.alias, fileSystem);
   } catch (error) {
     return {
       exitCode: 1,
@@ -711,16 +730,27 @@ function runPluginsCommand(
   }
 }
 
-function resolveRainrailProject(cwd: string, options: SharedOptions): RainrailProject | undefined {
+function getRainrailCliFileSystem(environment: RainrailCliEnvironment): RainrailCliFileSystem {
+  return {
+    ...defaultRainrailCliFileSystem,
+    ...environment.fileSystem,
+  };
+}
+
+function resolveRainrailProject(
+  cwd: string,
+  options: SharedOptions,
+  fileSystem: RainrailCliFileSystem,
+): RainrailProject | undefined {
   if (options.config === undefined) {
     return discoverRainrailProject(cwd);
   }
 
   const configPath = resolve(cwd, options.config);
-  if (!existsSync(configPath)) {
+  if (!fileSystem.existsSync(configPath)) {
     throw new Error(`Rainrail config file not found: ${configPath}`);
   }
-  if (!statSync(configPath).isFile()) {
+  if (!fileSystem.statSync(configPath).isFile()) {
     throw new Error(`Rainrail config path is not a file: ${configPath}`);
   }
 
@@ -733,10 +763,14 @@ function resolveRainrailProject(cwd: string, options: SharedOptions): RainrailPr
   };
 }
 
-function listProjectPlugins(project: RainrailProject, lockfile: RainrailLockfile): RainrailCliResult {
+function listProjectPlugins(
+  project: RainrailProject,
+  lockfile: RainrailLockfile,
+  fileSystem: RainrailCliFileSystem,
+): RainrailCliResult {
   for (const plugin of lockfile.plugins) {
     const manifestPath = join(project.pluginDirectory, plugin.name, 'plugin.json');
-    if (!existsSync(manifestPath)) {
+    if (!fileSystem.existsSync(manifestPath)) {
       return {
         exitCode: 1,
         stdout: '',
@@ -745,7 +779,7 @@ function listProjectPlugins(project: RainrailProject, lockfile: RainrailLockfile
       };
     }
     const expectedManifest = formatJson(plugin);
-    if (readFileSync(manifestPath, 'utf8') !== expectedManifest) {
+    if (fileSystem.readFileSync(manifestPath, 'utf8') !== expectedManifest) {
       return {
         exitCode: 1,
         stdout: '',
@@ -769,10 +803,11 @@ function addProjectPlugin(
   lockfile: RainrailLockfile,
   name: string,
   version: string,
+  fileSystem: RainrailCliFileSystem,
 ): RainrailCliResult {
   const installedPlugin = lockfile.plugins.find((plugin) => plugin.name === name);
   if (installedPlugin !== undefined) {
-    writeProjectPluginManifest(project, installedPlugin);
+    writeProjectPluginManifest(project, installedPlugin, fileSystem);
     return {
       exitCode: 0,
       stdout: `Official plugin ${name} is already installed.\n`,
@@ -785,8 +820,8 @@ function addProjectPlugin(
     ...lockfile,
     plugins: sortLockPlugins([...lockfile.plugins, pluginEntry]),
   };
-  writeProjectPluginManifest(project, pluginEntry);
-  writeFileSync(project.lockPath, formatJson(nextLockfile), { flag: 'w' });
+  writeProjectPluginManifest(project, pluginEntry, fileSystem);
+  fileSystem.writeFileSync(project.lockPath, formatJson(nextLockfile), { flag: 'w' });
 
   return {
     exitCode: 0,
@@ -795,9 +830,13 @@ function addProjectPlugin(
   };
 }
 
-function writeProjectPluginManifest(project: RainrailProject, plugin: RainrailLockPlugin): void {
-  mkdirSync(join(project.pluginDirectory, plugin.name), { recursive: true });
-  writeFileSync(join(project.pluginDirectory, plugin.name, 'plugin.json'), formatJson(plugin), {
+function writeProjectPluginManifest(
+  project: RainrailProject,
+  plugin: RainrailLockPlugin,
+  fileSystem: RainrailCliFileSystem,
+): void {
+  fileSystem.mkdirSync(join(project.pluginDirectory, plugin.name), { recursive: true });
+  fileSystem.writeFileSync(join(project.pluginDirectory, plugin.name, 'plugin.json'), formatJson(plugin), {
     flag: 'w',
   });
 }
@@ -806,6 +845,7 @@ function removeProjectPlugin(
   project: RainrailProject,
   lockfile: RainrailLockfile,
   name: string,
+  fileSystem: RainrailCliFileSystem,
 ): RainrailCliResult {
   if (!lockfile.plugins.some((plugin) => plugin.name === name)) {
     return {
@@ -819,8 +859,13 @@ function removeProjectPlugin(
     ...lockfile,
     plugins: lockfile.plugins.filter((plugin) => plugin.name !== name),
   };
-  writeFileSync(project.lockPath, formatJson(nextLockfile), { flag: 'w' });
-  rmSync(join(project.pluginDirectory, name), { recursive: true, force: true });
+  fileSystem.writeFileSync(project.lockPath, formatJson(nextLockfile), { flag: 'w' });
+  try {
+    fileSystem.rmSync(join(project.pluginDirectory, name), { recursive: true, force: true });
+  } catch (error) {
+    fileSystem.writeFileSync(project.lockPath, formatJson(lockfile), { flag: 'w' });
+    throw error;
+  }
 
   return {
     exitCode: 0,
@@ -837,12 +882,12 @@ function createLockPlugin(name: string, version: string): RainrailLockPlugin {
   };
 }
 
-function readRainrailLockfile(path: string): RainrailLockfile {
-  if (!existsSync(path)) {
+function readRainrailLockfile(path: string, fileSystem: RainrailCliFileSystem): RainrailLockfile {
+  if (!fileSystem.existsSync(path)) {
     throw new Error(`Rainrail lockfile not found: ${path}`);
   }
 
-  const parsed = JSON.parse(readFileSync(path, 'utf8')) as Partial<RainrailLockfile>;
+  const parsed = JSON.parse(fileSystem.readFileSync(path, 'utf8')) as Partial<RainrailLockfile>;
   if (
     parsed.lockfileVersion !== 1 ||
     typeof parsed.project?.name !== 'string' ||
