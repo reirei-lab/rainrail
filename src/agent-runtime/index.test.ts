@@ -6,15 +6,15 @@ import { basename, join } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { createEventEnvelope } from './events.js';
+import { createEventEnvelope } from '../events.js';
 import {
   createAgentAssignmentRuntimeFromProvider,
   createOpenClawRuntimeProvider,
   nextRuntimeResumeAttemptId,
   readRuntimeRunCompletionFromLog,
   runningRuntimeTaskPid,
-} from './agent-runtime.js';
-import type { RuntimeAgentTask } from './runtime-provider.js';
+} from './index.js';
+import type { RuntimeAgentTask } from '../runtime-provider.js';
 
 const temporaryDirectories: string[] = [];
 

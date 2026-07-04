@@ -195,6 +195,10 @@ root package は OpenClaw runtime/timeline helper として `OpenClawRuntimeProv
 `readRuntimeJsonl`、`extractRuntimeSessionId`、`extractRuntimeFallbackSessionId`、
 `runtimeTrajectoryPathForSessionId`、`parseRuntimeTrajectoryTimeline`、
 `classifyRuntimeToolCall` を公開 API として re-export する。
+runtime / timeline の実体は `src/agent-runtime/AGENTS.md` の scoped rules が適用される
+`src/agent-runtime/index.ts` と `src/agent-runtime/timeline.ts` に置く。既存の
+`src/agent-runtime.ts` と `src/agent-timeline.ts` は runtime compatibility shim として残し、
+root package の re-export と既存 import path を壊さない。
 timeline/status/jsonl の session 解決は resume attempts を新しい順に読んだうえで、
 stdout `logPath` と対応する `stderrLogPath` または `.stderr.log` の embedded fallback marker も参照する。
 fallbackSessionKey metadata と fallback marker は種類で後から優先順位を変えず、log 探索順で最初に
