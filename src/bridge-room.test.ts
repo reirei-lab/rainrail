@@ -55,6 +55,38 @@ describe('Rainrail bridge room', () => {
     expect(chunk).toContain('"id":"github-webhook:delivery-17:github.issue"');
   });
 
+  it('rejects manual and chat publishes that use external raw payload references', async () => {
+    const storage = fakeState();
+    const room = createTestRoom(storage, { replayLimit: 10 });
+    const event = createEventEnvelope({
+      source: { type: 'chat', name: 'web-chat' },
+      name: 'rainrail.chat.message',
+      delivery: {
+        id: 'delivery-17',
+        receivedAt: '2026-07-04T09:20:00.000Z',
+      },
+      occurredAt: '2026-07-04T09:20:00.000Z',
+      subject: { type: 'conversation', id: 'conversation-17' },
+      payload: {
+        provider: 'rainrail',
+        channel: 'chat',
+        action: 'message',
+        conversation: { id: 'conversation-17' },
+        message: { text: 'hello' },
+      },
+      rawPayload: {
+        kind: 'external-reference',
+        reference: 'chat://deliveries/delivery-17',
+      },
+    });
+
+    const response = await room.fetch(publishRequest(event));
+
+    expect(response.status).toBe(400);
+    await expect(response.text()).resolves.toContain('manual/chat raw payload kind must be inline-redacted');
+    expect(storage.storedEvents()).toEqual([]);
+  });
+
   it('reports health for current subscribers and replay buffer', async () => {
     const room = createTestRoom(fakeState(), { replayLimit: 10 });
     const response = await room.fetch(new Request('https://rainrail.local/healthz'));

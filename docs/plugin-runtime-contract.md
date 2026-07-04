@@ -109,6 +109,8 @@ delivery id / source name は元値を永続化せず、fallback 名と安定 ha
 standalone GitHub token 形式だけでなく、`token=...` や `session: ...` などの
 credential key/value 形式も含む。先頭記号へ fallback prefix を足す場合も、元から
 prefix 付きだった identifier と衝突しないよう短い hash を残す。
+URL 形式の identifier は userinfo や credential らしい path segment を含む場合も
+fallback 名と安定 hash へ縮約し、元の host/path は Core storage に残さない。
 任意 host/path は Core storage に残さない。
 空文字または空白だけの `messageId` は未指定として扱い、UUID fallback で delivery id の
 一意性を保つ。明示された `deliveryId` が空文字または空白だけの場合も未指定として扱い、

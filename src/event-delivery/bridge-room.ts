@@ -304,7 +304,7 @@ function validatePublishEnvelope(value: unknown): RainrailEventEnvelope {
   }
 
   const sanitizedRawPayloadReference = expectSanitizedUrl(rawPayloadReference, 'reference');
-  assertManualInputRawPayloadReferenceMatches(sourceType, name, sanitizedRawPayloadReference);
+  assertManualInputRawPayloadMatches(sourceType, name, rawPayloadKind, sanitizedRawPayloadReference);
 
   const event: RainrailEventEnvelope = {
     id,
@@ -700,8 +700,11 @@ function assertManualInputEventSourceMatches(sourceType: string, name: string): 
   }
 }
 
-function assertManualInputRawPayloadReferenceMatches(sourceType: string, name: string, reference: string): void {
+function assertManualInputRawPayloadMatches(sourceType: string, name: string, kind: string, reference: string): void {
   if (!isManualInputPayload({ sourceType, name })) return;
+  if (kind !== 'inline-redacted') {
+    throw new TypeError('manual/chat raw payload kind must be inline-redacted');
+  }
   const protocol = new URL(reference).protocol;
   if (protocol !== `${sourceType}:`) {
     throw new TypeError('manual/chat raw payload reference must match source.type');

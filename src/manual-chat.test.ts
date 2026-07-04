@@ -489,6 +489,25 @@ describe('manual and chat input source contract', () => {
     expect(serialized).not.toContain('token:');
   });
 
+  it('hashes URL credential-looking identifiers before storage', async () => {
+    const event = await createManualInputEvent({
+      channel: 'chat',
+      receivedAt: new Date('2026-07-04T09:21:23.000Z'),
+      conversationId: 'https://user:conversation-secret@example.com/room',
+      messageId: 'https://chat.example/rooms/session/secret-message-token',
+      message: 'hello',
+    });
+
+    const serialized = JSON.stringify(event);
+    expect(event.subject.id).toMatch(/^conversation-[A-Za-z0-9]+$/);
+    expect(event.payload.conversation.id).toBe(event.subject.id);
+    expect(event.payload.message.id).toMatch(/^message-[A-Za-z0-9]+$/);
+    expect(event.delivery.id).toMatch(/^chat-delivery-[A-Za-z0-9]+-message-[A-Za-z0-9]+$/);
+    expect(serialized).not.toContain('conversation-secret');
+    expect(serialized).not.toContain('secret-message-token');
+    expect(serialized).not.toContain('user:');
+  });
+
   it('keeps delivery ids distinct for long conversations that share message ids', async () => {
     const prefix = 'conversation-delivery-prefix-'.repeat(7);
     const first = await createManualInputEvent({
@@ -681,6 +700,46 @@ describe('manual and chat input source contract', () => {
     expect(first.delivery.id).not.toBe(second.delivery.id);
     expect(first.subject.id).not.toBe(second.subject.id);
     expect(first.payload.message.id).not.toBe(second.payload.message.id);
+  });
+
+  it('drops blank reply target ids from HTTP intake payloads', async () => {
+    const storage = fakeState();
+    const app = createRainrailHttpApp({
+      room: new RainrailBridgeRoom(storage, { publishToken: TEST_PUBLISH_TOKEN }),
+      publishToken: TEST_PUBLISH_TOKEN,
+      intakeAdapters: [
+        createManualInputIntakeAdapter({
+          channel: 'chat',
+          bearerToken: 'chat-intake-token',
+          receivedAt: () => new Date('2026-07-04T09:21:25.000Z'),
+          deliveryId: () => 'chat-blank-reply',
+        }),
+      ],
+    });
+
+    const response = await app.fetch(new Request('https://rainrail.local/intake/chat', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer chat-intake-token',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        conversationId: 'chat-blank-reply-session',
+        message: 'hello',
+        replyTarget: {
+          id: '   ',
+          url: 'https://chat.example/messages/1',
+        },
+      }),
+    }));
+
+    expect(response.status).toBe(202);
+    expect(storage.storedEvents()[0]).toMatchObject({
+      payload: {
+        conversation: { id: 'chat-blank-reply-session' },
+      },
+    });
+    expect(JSON.stringify(storage.storedEvents()[0])).not.toContain('replyTarget');
   });
 
   it('rejects unsafe manual and chat raw payload references in bridge storage', async () => {
