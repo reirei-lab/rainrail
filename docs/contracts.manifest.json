@@ -8,6 +8,7 @@
         "src/source-plugin.ts",
         "src/workflow-plugin.ts",
         "src/dispatcher.ts",
+        "src/dispatcher/index.ts",
         "src/plugin-loader.ts",
         "src/route-workflow.ts",
         "src/pr-lifecycle.ts",

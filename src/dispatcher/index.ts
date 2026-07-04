@@ -1,5 +1,5 @@
 import type { RainrailEventEnvelope } from '../events.js';
-import type { GitHubPullRequestProvider } from '../pr-lifecycle.js';
+import { workflowProviderGuards, type WorkflowProviderGuard } from '../provider-guards.js';
 import type { RuntimeProvider } from '../runtime-provider.js';
 import type { TaskProvider, TaskProviderRegistry } from '../task-provider.js';
 import type {
@@ -284,10 +284,6 @@ function snapshotWorkflowPolicy(
     name: workflow.name,
     capabilities: new Set((capabilityAccessor === undefined ? workflow.capabilities : capabilityAccessor()) ?? []),
   };
-}
-
-function readWorkflowName(workflow: WorkflowPlugin): string {
-  return readWorkflowNameMetadata(workflow).name;
 }
 
 function readWorkflowNameMetadata(workflow: WorkflowPlugin): { name: string; error?: unknown } {
@@ -2033,6 +2029,7 @@ function createGuardedProviders(
   lifecycle: WorkflowLifecycle,
 ): TaskProviderRegistry {
   const guardedProviderCache = new Map<string, unknown>();
+  const providerGuards = new Map(workflowProviderGuards.map((guard) => [guard.name, guard]));
   const getProviders = () => options.runtime.providers ?? unavailableProviders;
   const readProvider = (property: string | symbol): unknown => {
     if (property === 'tasks') {
@@ -2046,19 +2043,20 @@ function createGuardedProviders(
     }
 
     const providerName = String(property);
+    const providerGuard = providerGuards.get(providerName);
     if (guardedProviderCache.has(providerName)) {
       return guardedProviderCache.get(providerName);
     }
 
     if (lifecycle.isSideEffectClosed()) {
-      if (providerName === 'githubPullRequests') {
-        const guardedProvider = createGuardedPullRequestProvider(
+      if (providerGuard !== undefined) {
+        const guardedProvider = createGuardedProvider(
           options,
           policy,
           event,
           lifecycle,
-          () => unavailablePullRequestsProvider,
-          providerName,
+          () => providerGuard.unavailable,
+          providerGuard,
         );
         guardedProviderCache.set(providerName, guardedProvider);
         return guardedProvider;
@@ -2082,22 +2080,22 @@ function createGuardedProviders(
 
     const providers = getProviders();
     const provider = Reflect.get(providers, property, providers);
-    if (providerName === 'githubPullRequests' && !isPullRequestProvider(provider)) {
-      const guardedProvider = createGuardedPullRequestProvider(
+    if (providerGuard !== undefined && !providerGuard.isProvider(provider)) {
+      const guardedProvider = createGuardedProvider(
         options,
         policy,
         event,
         lifecycle,
-        () => unavailablePullRequestsProvider,
-        providerName,
+        () => providerGuard.unavailable,
+        providerGuard,
       );
       guardedProviderCache.set(providerName, guardedProvider);
       return guardedProvider;
     }
     const guardedProvider = isTaskProvider(provider)
       ? createGuardedTaskProvider(options, policy, event, lifecycle, () => provider, providerName)
-      : isPullRequestProvider(provider)
-        ? createGuardedPullRequestProvider(options, policy, event, lifecycle, () => provider, providerName)
+      : providerGuard?.isProvider(provider)
+        ? createGuardedProvider(options, policy, event, lifecycle, () => provider, providerGuard)
         : provider;
     guardedProviderCache.set(providerName, guardedProvider);
     return guardedProvider;
@@ -2143,75 +2141,53 @@ function isTaskProvider(provider: unknown): provider is TaskProvider {
   );
 }
 
-const unavailablePullRequestsProvider: GitHubPullRequestProvider = {
-  name: 'unavailable-pull-requests',
-  kind: 'pull-request-provider',
-  async getPullRequest() {
-    throw new PluginLifecycleEndedError();
-  },
-  async findPullRequestByHead() {
-    throw new PluginLifecycleEndedError();
-  },
-  async requestReview() {
-    throw new PluginLifecycleEndedError();
-  },
-};
-
-function isPullRequestProvider(provider: unknown): provider is GitHubPullRequestProvider {
-  return (
-    typeof provider === 'object' &&
-    provider !== null &&
-    (provider as GitHubPullRequestProvider).kind === 'pull-request-provider' &&
-    typeof (provider as GitHubPullRequestProvider).getPullRequest === 'function' &&
-    typeof (provider as GitHubPullRequestProvider).findPullRequestByHead === 'function' &&
-    typeof (provider as GitHubPullRequestProvider).requestReview === 'function'
-  );
-}
-
-function createGuardedPullRequestProvider(
+function createGuardedProvider(
   options: RuntimeDispatcherOptions,
   policy: WorkflowExecutionPolicy,
   event: RainrailEventEnvelope,
   lifecycle: WorkflowLifecycle,
-  getPullRequests: () => GitHubPullRequestProvider,
-  actionPrefix: string,
-): GitHubPullRequestProvider {
-  const auditAction = (name: string) => `${actionPrefix}.${name}` as WorkflowAuditEntry['action'];
-  const guardedPullRequests: GitHubPullRequestProvider = {
+  getProvider: () => object,
+  guard: WorkflowProviderGuard,
+): object {
+  const auditAction = (name: string) => `${guard.name}.${name}` as WorkflowAuditEntry['action'];
+  const guardedProvider: Record<string, unknown> = {
     get name() {
-      return getPullRequests().name ?? actionPrefix;
+      const name = (getProvider() as { name?: unknown }).name;
+      return typeof name === 'string' ? name : guard.name;
     },
     get kind() {
-      return 'pull-request-provider' as const;
-    },
-    async getPullRequest(input, context) {
-      const denied = getDeniedProviderCallReason(options, policy, event, lifecycle, auditAction('getPullRequest'));
-      if (denied !== undefined) throw denied;
-      const pullRequests = getPullRequests();
-      return pullRequests.getPullRequest.call(pullRequests, input, { signal: combineAbortSignals(lifecycle.signal, context?.signal) });
-    },
-    async findPullRequestByHead(input, context) {
-      const denied = getDeniedProviderCallReason(options, policy, event, lifecycle, auditAction('findPullRequestByHead'));
-      if (denied !== undefined) throw denied;
-      const pullRequests = getPullRequests();
-      return pullRequests.findPullRequestByHead.call(pullRequests, input, { signal: combineAbortSignals(lifecycle.signal, context?.signal) });
-    },
-    async requestReview(input, context) {
-      const denied = getDeniedProviderCallReason(options, policy, event, lifecycle, auditAction('requestReview'));
-      if (denied !== undefined) throw denied;
-      const pullRequests = getPullRequests();
-      return pullRequests.requestReview.call(pullRequests, input, { signal: combineAbortSignals(lifecycle.signal, context?.signal) });
+      return (getProvider() as { kind?: unknown }).kind;
     },
   };
-  defineOptionalGuardedPullRequestMethod(guardedPullRequests, 'findOpenPullRequestsByBase', getPullRequests, options, policy, event, lifecycle, auditAction);
-  defineOptionalGuardedPullRequestMethod(guardedPullRequests, 'findPullRequestsByHead', getPullRequests, options, policy, event, lifecycle, auditAction);
-  defineOptionalGuardedPullRequestMethod(guardedPullRequests, 'removeReviewRequest', getPullRequests, options, policy, event, lifecycle, auditAction);
-  defineOptionalGuardedPullRequestMethod(guardedPullRequests, 'listReviewComments', getPullRequests, options, policy, event, lifecycle, auditAction);
 
-  return new Proxy(guardedPullRequests, {
+  for (const key of guard.requiredMethods) {
+    guardedProvider[key] = async (input: never, context?: { signal?: AbortSignal }) => {
+      const denied = getDeniedProviderCallReason(options, policy, event, lifecycle, auditAction(key));
+      if (denied !== undefined) {
+        throw denied;
+      }
+
+      const provider = getProvider() as Record<string, unknown>;
+      const implementation = provider[key];
+      if (typeof implementation !== 'function') {
+        throw new Error(`Provider ${guard.name} method ${key} is not available`);
+      }
+
+      return Reflect.apply(implementation, provider, [
+        input,
+        { signal: combineAbortSignals(lifecycle.signal, context?.signal) },
+      ]);
+    };
+  }
+
+  for (const key of guard.optionalMethods) {
+    defineOptionalGuardedProviderMethod(guardedProvider, key, getProvider, options, policy, event, lifecycle, auditAction);
+  }
+
+  return new Proxy(guardedProvider, {
     getOwnPropertyDescriptor(target, property) {
-      if (isOptionalPullRequestMethodKey(property)) {
-        if (lifecycle.isSideEffectClosed() || getPullRequests()[property] === undefined) {
+      if (guard.optionalMethods.includes(String(property))) {
+        if (lifecycle.isSideEffectClosed() || (getProvider() as Record<string, unknown>)[String(property)] === undefined) {
           return undefined;
         }
       }
@@ -2219,12 +2195,12 @@ function createGuardedPullRequestProvider(
       return Reflect.getOwnPropertyDescriptor(target, property);
     },
     has(target, property) {
-      if (isOptionalPullRequestMethodKey(property)) {
+      if (guard.optionalMethods.includes(String(property))) {
         if (lifecycle.isSideEffectClosed()) {
           return false;
         }
 
-        return getPullRequests()[property] !== undefined;
+        return (getProvider() as Record<string, unknown>)[String(property)] !== undefined;
       }
 
       return property in target;
@@ -2232,33 +2208,24 @@ function createGuardedPullRequestProvider(
     ownKeys(target) {
       return Reflect.ownKeys(target).filter(
         (property) =>
-          !isOptionalPullRequestMethodKey(property) ||
-          (!lifecycle.isSideEffectClosed() && getPullRequests()[property] !== undefined),
+          !guard.optionalMethods.includes(String(property)) ||
+          (!lifecycle.isSideEffectClosed() && (getProvider() as Record<string, unknown>)[String(property)] !== undefined),
       );
     },
   });
 }
 
-type OptionalPullRequestMethodKey = 'findOpenPullRequestsByBase' | 'findPullRequestsByHead' | 'removeReviewRequest' | 'listReviewComments';
-
-function isOptionalPullRequestMethodKey(property: string | symbol): property is OptionalPullRequestMethodKey {
-  return property === 'findOpenPullRequestsByBase'
-    || property === 'findPullRequestsByHead'
-    || property === 'removeReviewRequest'
-    || property === 'listReviewComments';
-}
-
-function defineOptionalGuardedPullRequestMethod<TKey extends OptionalPullRequestMethodKey>(
-  guardedPullRequests: GitHubPullRequestProvider,
-  key: TKey,
-  getPullRequests: () => GitHubPullRequestProvider,
+function defineOptionalGuardedProviderMethod(
+  guardedProvider: Record<string, unknown>,
+  key: string,
+  getProvider: () => object,
   options: RuntimeDispatcherOptions,
   policy: WorkflowExecutionPolicy,
   event: RainrailEventEnvelope,
   lifecycle: WorkflowLifecycle,
   auditAction: (name: string) => WorkflowAuditEntry['action'],
 ): void {
-  Object.defineProperty(guardedPullRequests, key, {
+  Object.defineProperty(guardedProvider, key, {
     configurable: true,
     enumerable: true,
     get() {
@@ -2269,10 +2236,13 @@ function defineOptionalGuardedPullRequestMethod<TKey extends OptionalPullRequest
         };
       }
 
-      const pullRequests = getPullRequests();
-      const implementation = pullRequests[key];
+      const provider = getProvider() as Record<string, unknown>;
+      const implementation = provider[key];
       if (implementation === undefined) {
         return undefined;
+      }
+      if (typeof implementation !== 'function') {
+        throw new Error(`Provider method ${key} is not callable`);
       }
 
       return async (input: never, context?: { signal?: AbortSignal }) => {
@@ -2281,8 +2251,10 @@ function defineOptionalGuardedPullRequestMethod<TKey extends OptionalPullRequest
           throw denied;
         }
 
-        return (implementation as (this: GitHubPullRequestProvider, input: never, context: { signal: AbortSignal }) => unknown)
-          .call(pullRequests, input, { signal: combineAbortSignals(lifecycle.signal, context?.signal) });
+        return Reflect.apply(implementation, provider, [
+          input,
+          { signal: combineAbortSignals(lifecycle.signal, context?.signal) },
+        ]);
       };
     },
   });

@@ -3,7 +3,10 @@ import { describe, expect, it } from 'vitest';
 
 const agents = readFileSync(new URL('../AGENTS.md', import.meta.url), 'utf8');
 const dispatcherAgents = readFileSync(new URL('../src/dispatcher/AGENTS.md', import.meta.url), 'utf8');
+const dispatcherImplementation = readFileSync(new URL('../src/dispatcher/index.ts', import.meta.url), 'utf8');
 const pluginRuntimeContract = readFileSync(new URL('../docs/plugin-runtime-contract.md', import.meta.url), 'utf8');
+/** @type {{contracts: Array<{id?: string, sources?: string[]}>}} */
+const contractsManifest = JSON.parse(readFileSync(new URL('../docs/contracts.manifest.json', import.meta.url), 'utf8'));
 
 describe('AGENTS.md development rules', () => {
   it('documents Rainrail as a TypeScript monorepo for event orchestration work', () => {
@@ -54,6 +57,12 @@ describe('AGENTS.md development rules', () => {
     expect(dispatcherAgents).toContain('this binding');
   });
 
+  it('keeps provider-specific dispatcher guards outside the dispatcher directory', () => {
+    expect(dispatcherImplementation).not.toContain('githubPullRequests');
+    expect(dispatcherImplementation).not.toContain('GitHubPullRequestProvider');
+    expect(dispatcherImplementation).not.toContain('pull-request-provider');
+  });
+
   it('documents the dispatcher module split and compatibility shim decision', () => {
     expect(pluginRuntimeContract).toContain('src/dispatcher/index.ts');
     expect(pluginRuntimeContract).toContain('src/dispatcher.ts');
@@ -61,5 +70,11 @@ describe('AGENTS.md development rules', () => {
     expect(pluginRuntimeContract).toContain('capability policy');
     expect(pluginRuntimeContract).toContain('lifecycle');
     expect(pluginRuntimeContract).toContain('capability view');
+  });
+
+  it('tracks the dispatcher implementation as a plugin runtime contract source', () => {
+    const pluginRuntime = contractsManifest.contracts.find((contract) => contract.id === 'plugin-runtime');
+    expect(pluginRuntime?.sources).toContain('src/dispatcher.ts');
+    expect(pluginRuntime?.sources).toContain('src/dispatcher/index.ts');
   });
 });
