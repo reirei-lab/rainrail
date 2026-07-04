@@ -556,7 +556,7 @@ async function dashboardV1QueueResponse(url: URL, options: RainrailHttpAppOption
   const tasks = store.listAgentTasks();
   const staleWarningsByTaskId = new Map(snapshot.warnings.staleProjectClaims.map((warning) => [warning.taskId, warning]));
   const taskRows = tasks.map((task) => agentTaskToQueueRow(task, staleWarningsByTaskId.get(task.id)));
-  const projectIssueRows = await projectIssueQueueRows(options.taskQueue, tasks);
+  const projectIssueRows = await projectIssueQueueRows(options.taskQueue, tasks, staleWarningsByTaskId);
   const allRows = sortQueueRows([...taskRows, ...projectIssueRows]);
   const rows = allRows
     .filter((row) => matchesOptionalFilter(row.status, url.searchParams.get('filter[status]')));
@@ -580,8 +580,9 @@ function dashboardV1SettingsResponse(url: URL, options: RainrailHttpAppOptions):
   if (!collection.ok) return collection.response;
 
   const retryCount = store.listEventHandlerRetries().length;
+  const maxConcurrentAgentTasks = options.taskQueue?.selection?.maxConcurrentAgentTasks;
   const rows = [
-    settingRow('max-concurrency', 'Max concurrency', 'not configured'),
+    settingRow('max-concurrency', 'Max concurrency', maxConcurrentAgentTasks === undefined ? 'not configured' : `${maxConcurrentAgentTasks} agent tasks`),
     settingRow('auto-start', 'Auto-start', 'not configured'),
     settingRow('retry-policy', 'Retry policy', retryCount === 1 ? '1 retry pending' : `${retryCount} retries pending`),
     settingRow('operational-snapshot-limit', 'Operational snapshot limit', `${store.eventLimit()} events`),
@@ -870,11 +871,17 @@ function agentTaskToQueueRow(task: StoredAgentTask, staleWarning: StoredStalePro
 async function projectIssueQueueRows(
   taskQueue: Pick<TaskQueueProvider, 'listProjectIssues' | 'selection'> | undefined,
   tasks: StoredAgentTask[],
+  staleWarningsByTaskId: Map<string, StoredStaleProjectClaimWarning>,
 ) {
   if (taskQueue === undefined) return [];
 
-  const representedIssueKeys = new Set(tasks.flatMap(taskProjectIssueKeys));
-  const issues = await taskQueue.listProjectIssues();
+  const representedIssueKeys = new Set(tasks.flatMap((task) => taskProjectIssueKeys(task, staleWarningsByTaskId.get(task.id))));
+  let issues: ProjectIssue[];
+  try {
+    issues = await taskQueue.listProjectIssues();
+  } catch {
+    return [];
+  }
   const nextIssue = getNextProjectIssueToStart(issues, taskQueue.selection);
   if (nextIssue === undefined || representedIssueKeys.has(projectIssueKey(nextIssue))) return [];
   return [projectIssueToQueueRow(nextIssue)];
@@ -895,23 +902,27 @@ function projectIssueToQueueRow(issue: ProjectIssue) {
   };
 }
 
-function taskProjectIssueKeys(task: StoredAgentTask): string[] {
-  if (!taskRepresentsProjectIssue(task)) return [];
+function taskProjectIssueKeys(task: StoredAgentTask, staleWarning: StoredStaleProjectClaimWarning | undefined): string[] {
+  if (!taskRepresentsProjectIssue(task, staleWarning)) return [];
   return [
     projectIssueKeyFromUnknown(task.issue),
     stringField(recordValue(task.claim), 'projectItemId'),
   ].filter((value): value is string => value !== undefined);
 }
 
-function taskRepresentsProjectIssue(task: StoredAgentTask): boolean {
-  if (task.status === 'queued' || task.status === 'pending' || task.status === 'running') return true;
+function taskRepresentsProjectIssue(task: StoredAgentTask, staleWarning: StoredStaleProjectClaimWarning | undefined): boolean {
+  if (taskHasActiveClaimLock(task, staleWarning)) return true;
   return task.claim !== undefined && task.projectClaim?.status === 'release_failed';
 }
 
 function taskHasActiveClaimLock(task: StoredAgentTask, staleWarning: StoredStaleProjectClaimWarning | undefined): boolean {
   if (task.claim === undefined) return false;
   if (staleWarning !== undefined) return true;
-  return task.status === 'queued' || task.status === 'pending' || task.status === 'running';
+  return task.status === 'queued'
+    || task.status === 'pending'
+    || task.status === 'running'
+    || task.status === 'needs_human'
+    || task.status === 'split_recommended';
 }
 
 function projectIssueKey(issue: ProjectIssue): string {

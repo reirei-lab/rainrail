@@ -67,6 +67,17 @@ describe('Rainrail dashboard API', () => {
     const app = createTestApp({
       eventsBearerToken: 'events-token',
       operationalStore,
+      taskQueue: {
+        listProjectIssues: async () => [{
+          id: 'PVTI_STOPPED',
+          title: 'Stopped task claim',
+          status: 'Todo',
+          state: 'OPEN',
+          assigneeLogins: ['reirei-agent'],
+          repository: 'reirei-lab/rainrail',
+          number: 116,
+        }],
+      },
     });
 
     const overview = await app.fetch(new Request('https://rainrail.local/api/v1/overview', {
@@ -303,6 +314,57 @@ describe('Rainrail dashboard API', () => {
       ],
       updatePolicy: { requiredScope: 'admin', audit: 'required' },
       page: { limit: 50, nextCursor: null },
+    });
+
+    const upcoming = await app.fetch(new Request('https://rainrail.local/api/v1/queue?filter[status]=upcoming', {
+      headers: { authorization: 'Bearer events-token' },
+    }));
+    expect(upcoming.status).toBe(200);
+    await expect(upcoming.json()).resolves.toMatchObject({
+      data: [],
+      summary: {
+        upcomingIssues: 0,
+      },
+    });
+
+    operationalStore.close();
+  });
+
+  it('keeps stored queue rows when the task queue provider fails', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:12:00.000Z'),
+    });
+    operationalStore.recordAgentTask({
+      id: 'agent_task_running',
+      title: 'Stored running task',
+      agentSessionId: 'agent:main:running',
+      branchName: 'agent/running',
+      status: 'running',
+      issue: { repository: 'reirei-lab/rainrail', number: 115 },
+      claim: { projectItemId: 'PVTI_RUNNING', originalStatus: 'In Progress' },
+    });
+    const app = createTestApp({
+      eventsBearerToken: 'events-token',
+      operationalStore,
+      taskQueue: {
+        listProjectIssues: async () => {
+          throw new Error('GitHub Project API unavailable');
+        },
+      },
+    });
+
+    const queue = await app.fetch(new Request('https://rainrail.local/api/v1/queue', {
+      headers: { authorization: 'Bearer events-token' },
+    }));
+    expect(queue.status).toBe(200);
+    await expect(queue.json()).resolves.toMatchObject({
+      data: [{ id: 'agent_task_running', status: 'in-progress' }],
+      summary: {
+        inProgressCount: 1,
+        upcomingIssues: 0,
+      },
     });
 
     operationalStore.close();
@@ -697,6 +759,7 @@ describe('Rainrail dashboard API', () => {
       branchName: 'agent/needs-human',
       status: 'needs_human',
       issue: { repository: 'reirei-lab/rainrail', number: 119 },
+      claim: { projectItemId: 'PVTI_NEEDS_HUMAN', originalStatus: 'In Progress' },
     });
     operationalStore.recordAgentTask({
       id: 'agent_task_split',
@@ -705,6 +768,7 @@ describe('Rainrail dashboard API', () => {
       branchName: 'agent/split',
       status: 'split_recommended',
       issue: { repository: 'reirei-lab/rainrail', number: 120 },
+      claim: { projectItemId: 'PVTI_SPLIT', originalStatus: 'In Progress' },
     });
     const app = createTestApp({
       eventsBearerToken: 'events-token',
@@ -717,10 +781,18 @@ describe('Rainrail dashboard API', () => {
     expect(queue.status).toBe(200);
     await expect(queue.json()).resolves.toMatchObject({
       data: [
-        { id: 'agent_task_needs_human', status: 'blocked' },
-        { id: 'agent_task_split', status: 'blocked' },
+        {
+          id: 'agent_task_needs_human',
+          status: 'blocked',
+          claimLock: { projectItemId: 'PVTI_NEEDS_HUMAN', heldBy: 'agent:main:needs-human' },
+        },
+        {
+          id: 'agent_task_split',
+          status: 'blocked',
+          claimLock: { projectItemId: 'PVTI_SPLIT', heldBy: 'agent:main:split' },
+        },
       ],
-      summary: { blockedCount: 2 },
+      summary: { blockedCount: 2, claimedCount: 2 },
     });
 
     operationalStore.close();
@@ -805,6 +877,34 @@ describe('Rainrail dashboard API', () => {
       summary: { claimedCount: 0 },
     });
     expect(body.data[0]?.claimLock).toBeUndefined();
+
+    operationalStore.close();
+  });
+
+  it('reports configured queue max concurrency in settings', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:12:00.000Z'),
+    });
+    const app = createTestApp({
+      eventsBearerToken: 'events-token',
+      operationalStore,
+      taskQueue: {
+        selection: { maxConcurrentAgentTasks: 3 },
+        listProjectIssues: async () => [],
+      },
+    });
+
+    const settings = await app.fetch(new Request('https://rainrail.local/api/v1/settings', {
+      headers: { authorization: 'Bearer events-token' },
+    }));
+    expect(settings.status).toBe(200);
+    const body = await settings.json() as { data: Array<{ id: string; value: string }> };
+    expect(body.data.find((row) => row.id === 'max-concurrency')).toMatchObject({
+      id: 'max-concurrency',
+      value: '3 agent tasks',
+    });
 
     operationalStore.close();
   });
