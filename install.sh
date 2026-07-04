@@ -166,6 +166,11 @@ installed_version="$(
     "${package_dir}/package.json"
 )"
 
+if [[ ! "${installed_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+  echo "Release asset package version is invalid: ${installed_version}" >&2
+  exit 1
+fi
+
 target_dir="${prefix}/lib/rainrail/${installed_version}"
 bin_dir="${prefix}/bin"
 mkdir -p "${target_dir}" "${bin_dir}"
@@ -197,10 +202,11 @@ if [ "${add_to_shell}" = "true" ]; then
   should_edit="${assume_yes}"
   if [ "${should_edit}" != "true" ]; then
     printf 'Add Rainrail to PATH in %s? [y/N] ' "${rc_file}"
-    read -r answer
-    case "${answer}" in
-      y|Y|yes|YES) should_edit="true" ;;
-    esac
+    if IFS= read -r answer; then
+      case "${answer}" in
+        y|Y|yes|YES) should_edit="true" ;;
+      esac
+    fi
   fi
 
   if [ "${should_edit}" = "true" ]; then

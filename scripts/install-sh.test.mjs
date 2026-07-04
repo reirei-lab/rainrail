@@ -1,4 +1,11 @@
-import { chmodSync, mkdirSync, readFileSync, readlinkSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -7,21 +14,30 @@ import { describe, expect, it } from 'vitest';
 
 const installScript = new URL('../install.sh', import.meta.url);
 
+/**
+ * @param {string} root
+ * @param {string} version
+ */
+function createReleaseTarball(root, version) {
+  const packageRoot = join(root, 'package');
+  mkdirSync(join(packageRoot, 'dist', 'bin'), { recursive: true });
+  writeFileSync(join(packageRoot, 'package.json'), JSON.stringify({ version }));
+  writeFileSync(
+    join(packageRoot, 'dist', 'bin', 'rainrail.js'),
+    '#!/usr/bin/env node\nconsole.log("rainrail");\n',
+  );
+  chmodSync(join(packageRoot, 'dist', 'bin', 'rainrail.js'), 0o755);
+
+  const tarball = join(root, 'rainrail-cli.tgz');
+  const pack = spawnSync('tar', ['-czf', tarball, '-C', root, 'package']);
+  expect(pack.status).toBe(0);
+  return tarball;
+}
+
 describe('install.sh', () => {
   it('installs a release tarball into a user-local Rainrail prefix', async () => {
     const root = await mkdtemp(join(tmpdir(), 'rainrail-install-'));
-    const packageRoot = join(root, 'package');
-    mkdirSync(join(packageRoot, 'dist', 'bin'), { recursive: true });
-    writeFileSync(join(packageRoot, 'package.json'), JSON.stringify({ version: '9.8.7' }));
-    writeFileSync(
-      join(packageRoot, 'dist', 'bin', 'rainrail.js'),
-      '#!/usr/bin/env node\nconsole.log("rainrail");\n',
-    );
-    chmodSync(join(packageRoot, 'dist', 'bin', 'rainrail.js'), 0o755);
-
-    const tarball = join(root, 'rainrail-cli-v9.8.7.tgz');
-    const pack = spawnSync('tar', ['-czf', tarball, '-C', root, 'package']);
-    expect(pack.status).toBe(0);
+    const tarball = createReleaseTarball(root, '9.8.7');
 
     const prefix = join(root, 'prefix');
     const result = spawnSync(
@@ -37,5 +53,44 @@ describe('install.sh', () => {
       '../lib/rainrail/9.8.7/dist/bin/rainrail.js',
     );
     expect(result.stdout).toContain(`${join(prefix, 'bin')} is not on PATH`);
+  });
+
+  it('treats EOF on the shell rc prompt as no without failing the install', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rainrail-install-eof-'));
+    const tarball = createReleaseTarball(root, '9.8.7');
+    const prefix = join(root, 'prefix');
+    const home = join(root, 'home');
+    mkdirSync(home);
+
+    const result = spawnSync(
+      'bash',
+      [installScript.pathname, '--asset-url', `file://${tarball}`, '--prefix', prefix, '--add-to-shell'],
+      {
+        encoding: 'utf8',
+        env: { ...process.env, HOME: home, SHELL: '/bin/zsh' },
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(readlinkSync(join(prefix, 'bin', 'rainrail'))).toBe(
+      '../lib/rainrail/9.8.7/dist/bin/rainrail.js',
+    );
+    expect(existsSync(join(home, '.zshrc'))).toBe(false);
+  });
+
+  it('rejects release tarballs with a path-like package version before installing', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rainrail-install-version-'));
+    const tarball = createReleaseTarball(root, '../../../outside');
+    const prefix = join(root, 'prefix');
+
+    const result = spawnSync(
+      'bash',
+      [installScript.pathname, '--asset-url', `file://${tarball}`, '--prefix', prefix],
+      { encoding: 'utf8' },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('Release asset package version is invalid');
+    expect(existsSync(join(root, 'outside'))).toBe(false);
   });
 });
