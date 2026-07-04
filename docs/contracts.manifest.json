@@ -330,6 +330,7 @@
       "tests": [
         "src/cloudflare-tail.test.ts",
         "src/worker.test.ts",
+        "scripts/validate-package-scripts.test.mjs",
         "scripts/validate-cloudflare-worker-ops.test.mjs",
         "scripts/validate-cloudflare-pages.test.mjs"
       ],
