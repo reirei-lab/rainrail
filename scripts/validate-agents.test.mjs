@@ -11,14 +11,14 @@ const agentRuntimeAgents = readFileSync(new URL('../src/agent-runtime/AGENTS.md'
 const githubProviderAgents = readFileSync(new URL('../src/providers/github/AGENTS.md', import.meta.url), 'utf8');
 const eventDeliveryAgents = readFileSync(new URL('../src/event-delivery/AGENTS.md', import.meta.url), 'utf8');
 const cloudflareAgents = readFileSync(new URL('../src/cloudflare/AGENTS.md', import.meta.url), 'utf8');
-/** @type {{contracts: Array<{id: string, sources: string[]}>}} */
+/** @type {{contracts: Array<{id: string, sources: string[], docs: string[]}>}} */
 const contractsManifest = JSON.parse(
   readFileSync(new URL('../docs/contracts.manifest.json', import.meta.url), 'utf8'),
 );
 
 /**
  * @param {string} id
- * @returns {{ sources: string[] }}
+ * @returns {{ sources: string[], docs: string[] }}
  */
 const contractById = (id) => {
   const contract = contractsManifest.contracts.find(
@@ -255,9 +255,12 @@ describe('Cloudflare scoped agent rules', () => {
     const boundaryContract = contractById('core-eep-bridge-source-adapter-boundary');
 
     expect(sourceContract.sources).toContain('src/cloudflare/tail.ts');
+    expect(sourceContract.docs).toContain('src/cloudflare/AGENTS.md');
     expect(sourceContract.sources).not.toContain('src/cloudflare-tail.ts');
     expect(workflowContract.sources).toContain('src/cloudflare/issue-reporter.ts');
+    expect(workflowContract.docs).toContain('src/cloudflare/AGENTS.md');
     expect(workflowContract.sources).not.toContain('src/cloudflare-issue-reporter.ts');
     expect(boundaryContract.sources).toContain('src/cloudflare/tail.ts');
+    expect(boundaryContract.docs).toContain('src/cloudflare/AGENTS.md');
   });
 });

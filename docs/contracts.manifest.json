@@ -271,6 +271,7 @@
         "src/operational-store.ts"
       ],
       "docs": [
+        "src/cloudflare/AGENTS.md",
         "docs/core-eep-bridge-source-adapter-boundary.md",
         "docs/plugin-runtime-contract.md",
         "docs/event-delivery.md"
@@ -444,7 +445,7 @@
       "id": "workflow-plugins",
       "title": "Packaged workflow plugins",
       "sources": ["src/mention-draft.ts", "src/cloudflare/issue-reporter.ts"],
-      "docs": ["README.md"],
+      "docs": ["README.md", "src/cloudflare/AGENTS.md"],
       "tests": ["src/mention-draft.test.ts", "src/cloudflare-issue-reporter.test.ts"],
       "publicExports": [
         "createMentionDraftWorkflow",
