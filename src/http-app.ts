@@ -337,18 +337,24 @@ function dashboardV1EventsResponse(url: URL, options: RainrailHttpAppOptions): R
     return jsonResponse({ error: 'operational_store_not_configured' }, { status: 503 });
   }
 
-  const collection = parseCollectionRequest(url, ['filter[repository]', 'filter[source]', 'filter[subjectType]']);
+  const collection = parseCollectionRequest(url, ['filter[repository]', 'filter[source]', 'filter[subjectType]', 'filter[name]']);
   if (!collection.ok) return collection.response;
 
   const filtered = store.listEvents()
     .filter((event) => matchesOptionalFilter(event.source.repository, url.searchParams.get('filter[repository]')))
     .filter((event) => matchesOptionalFilter(event.source.type, url.searchParams.get('filter[source]')))
-    .filter((event) => matchesOptionalFilter(event.subject.type, url.searchParams.get('filter[subjectType]')));
+    .filter((event) => matchesOptionalFilter(event.subject.type, url.searchParams.get('filter[subjectType]')))
+    .filter((event) => matchesOptionalFilter(event.name, url.searchParams.get('filter[name]')));
   const page = pageRows(filtered, collection.limit, collection.cursor, eventCursorValue);
   if (!page.ok) return page.response;
+  const activityEvents = store.listActivityEvents();
+  const handlerRetries = store.listEventHandlerRetries();
 
   return jsonResponse({
-    data: page.rows.map(eventToCompactRow),
+    data: page.rows.map((event) => eventToCompactRow(event, {
+      activityEvents: activityEvents.filter((activity) => activity.sourceEventId === event.id),
+      handlerRetries: handlerRetries.filter((retry) => retry.eventId === event.id),
+    })),
     page: { limit: collection.limit, nextCursor: page.nextCursor },
   });
 }
@@ -363,22 +369,25 @@ function dashboardV1EventDetailResponse(eventId: string, options: RainrailHttpAp
   if (event === undefined) {
     return jsonResponse({ error: 'event_not_found' }, { status: 404 });
   }
+  const activityEvents = store.listActivityEvents().filter((activity) => activity.sourceEventId === event.id);
+  const handlerRetries = store.listEventHandlerRetries().filter((retry) => retry.eventId === event.id);
 
   return jsonResponse({
     data: {
       id: event.id,
       type: 'event',
-      compact: eventToCompactRow(event),
+      compact: eventToCompactRow(event, { activityEvents, handlerRetries }),
       record: {
         name: event.name,
+        humanSummary: eventSummary(event),
         source: event.source,
         delivery: event.delivery,
         subject: event.subject,
         occurredAt: event.occurredAt,
         receivedAt: event.receivedAt,
-        envelope: event.envelope,
-        activityEvents: store.listActivityEvents().filter((activity) => activity.sourceEventId === event.id),
-        handlerRetries: store.listEventHandlerRetries().filter((retry) => retry.eventId === event.id),
+        envelope: sanitizedEventEnvelope(event),
+        activityEvents,
+        handlerRetries,
       },
     },
   });
@@ -565,12 +574,27 @@ function matchesOptionalFilter(value: string | undefined, filter: string | null)
   return filter === null || value === filter;
 }
 
-function eventToCompactRow(event: StoredOperationalEvent) {
+interface EventCompactContext {
+  activityEvents?: StoredActivityEvent[];
+  handlerRetries?: StoredEventHandlerRetry[];
+}
+
+function eventToCompactRow(event: StoredOperationalEvent, context: EventCompactContext = {}) {
+  const activityEvents = context.activityEvents ?? [];
+  const handlerRetries = context.handlerRetries ?? [];
+  const latestActivity = activityEvents[0];
+
   return {
     id: event.id,
     type: 'event',
+    name: event.name,
     status: 'received',
     summary: eventSummary(event),
+    deliveryId: event.delivery.id,
+    rawPayloadReference: event.envelope.rawPayload.reference,
+    workflowRunCount: activityEvents.length,
+    handlerRetryCount: handlerRetries.length,
+    ...(latestActivity === undefined ? {} : { latestOutcome: latestActivity.outcome }),
     source: {
       type: event.source.type,
       name: event.source.name,
@@ -591,6 +615,20 @@ function eventSummary(event: StoredOperationalEvent): string {
   }
   if (subjectId !== undefined) return `${event.name} ${event.subject.type}#${subjectId}`;
   return event.name;
+}
+
+function sanitizedEventEnvelope(event: StoredOperationalEvent) {
+  return {
+    id: event.envelope.id,
+    schemaVersion: event.envelope.schemaVersion,
+    source: event.envelope.source,
+    name: event.envelope.name,
+    delivery: event.envelope.delivery,
+    occurredAt: event.envelope.occurredAt,
+    subject: event.envelope.subject,
+    rawPayload: event.envelope.rawPayload,
+    ...(event.envelope.links === undefined ? {} : { links: event.envelope.links }),
+  };
 }
 
 function activityToWorkflowRunRow(activity: StoredActivityEvent) {

@@ -99,6 +99,10 @@ Transport は HTTP/Fetch/Node/Worker の入出力を Core API へ接続する薄
 
 - `Authorization` や publish token のような Core endpoint auth は transport/core adapter で検証する。
 - `GET /events`、`GET /healthz`、dashboard API の request/response 形式を扱う。
+- dashboard API v1 は operational store snapshot から Overview、Event Inbox、Workflow Runs などの
+  provider-neutral projection を作る。この projection は delivery id、workflow/audit summary、
+  sanitized envelope だけを返し、provider raw payload body や normalized `payload` 本体を
+  transport response に漏らさない。
 - `POST /publish` は `RainrailBridgeRoom.fetch()` の room-internal endpoint として扱う。
   The public `createRainrailHttpApp` surface does not expose a generic `POST /publish` route.
   public app から provider event を受ける場合は `/webhooks/github` や Worker `tail()` を
