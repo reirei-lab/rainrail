@@ -2,6 +2,8 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 const agents = readFileSync(new URL('../AGENTS.md', import.meta.url), 'utf8');
+const dispatcherAgents = readFileSync(new URL('../src/dispatcher/AGENTS.md', import.meta.url), 'utf8');
+const pluginRuntimeContract = readFileSync(new URL('../docs/plugin-runtime-contract.md', import.meta.url), 'utf8');
 
 describe('AGENTS.md development rules', () => {
   it('documents Rainrail as a TypeScript monorepo for event orchestration work', () => {
@@ -38,5 +40,26 @@ describe('AGENTS.md development rules', () => {
     expect(agents).toContain('Write review comments in Japanese');
     expect(agents).toContain('security risks');
     expect(agents).toContain('edge cases');
+  });
+
+  it('keeps dispatcher capability boundary rules in a scoped AGENTS.md', () => {
+    expect(dispatcherAgents).toContain('capability getter');
+    expect(dispatcherAgents).toContain('context.actions');
+    expect(dispatcherAgents).toContain('context.runtime');
+    expect(dispatcherAgents).toContain('readSecret');
+    expect(dispatcherAgents).toContain('timeout / abort');
+    expect(dispatcherAgents).toContain('audit');
+    expect(dispatcherAgents).toContain('raw descriptor');
+    expect(dispatcherAgents).toContain('internal reason');
+    expect(dispatcherAgents).toContain('this binding');
+  });
+
+  it('documents the dispatcher module split and compatibility shim decision', () => {
+    expect(pluginRuntimeContract).toContain('src/dispatcher/index.ts');
+    expect(pluginRuntimeContract).toContain('src/dispatcher.ts');
+    expect(pluginRuntimeContract).toContain('compatibility shim');
+    expect(pluginRuntimeContract).toContain('capability policy');
+    expect(pluginRuntimeContract).toContain('lifecycle');
+    expect(pluginRuntimeContract).toContain('capability view');
   });
 });
