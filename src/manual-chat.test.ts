@@ -152,7 +152,7 @@ describe('manual and chat input source contract', () => {
       source: 'manual',
     });
 
-    const storedEvent = storage.storedEvents()[0];
+    const storedEvent = storage.storedEvents()[0] as { id: string; source: { name: string } } | undefined;
     expect(storedEvent).toMatchObject({
       id: 'manual-input:manual-delivery-1:rainrail.manual.message',
       name: 'rainrail.manual.message',
@@ -313,6 +313,42 @@ describe('manual and chat input source contract', () => {
     });
   });
 
+  it('normalizes custom source names before publishing through HTTP intake', async () => {
+    const storage = fakeState();
+    const app = createRainrailHttpApp({
+      room: new RainrailBridgeRoom(storage, { publishToken: TEST_PUBLISH_TOKEN }),
+      publishToken: TEST_PUBLISH_TOKEN,
+      intakeAdapters: [
+        createManualInputIntakeAdapter({
+          channel: 'chat',
+          bearerToken: 'chat-intake-token',
+          sourceName: `web chat ${'source-'.repeat(24)}`,
+          receivedAt: () => new Date('2026-07-04T09:21:22.000Z'),
+          deliveryId: () => 'chat-custom-source',
+        }),
+      ],
+    });
+
+    const response = await app.fetch(new Request('https://rainrail.local/intake/chat', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer chat-intake-token',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        conversationId: 'conversation-custom-source',
+        messageId: 'message-custom-source',
+        message: 'hello',
+      }),
+    }));
+
+    expect(response.status).toBe(202);
+    const storedEvent = storage.storedEvents()[0] as { id: string; source: { name: string } } | undefined;
+    expect(storedEvent?.source.name).toMatch(/^web-chat-source-/);
+    expect(storedEvent?.source.name.length).toBeLessThanOrEqual(128);
+    expect(storedEvent?.id.length).toBeLessThanOrEqual(128);
+  });
+
   it('uses delivery-reference-safe ids for colon-bearing external ids', async () => {
     const event = await createManualInputEvent({
       channel: 'chat',
@@ -407,6 +443,26 @@ describe('manual and chat input source contract', () => {
     expect(first.subject.id).not.toBe(second.subject.id);
     expect(first.subject.id).toMatch(/^conversation-[A-Za-z0-9]+$/);
     expect(second.subject.id).toMatch(/^conversation-[A-Za-z0-9]+$/);
+  });
+
+  it('hashes credential-looking conversation and message identifiers before storage', async () => {
+    const tokenLikeConversationId = 'ghp_abcdefghijklmnopqrstuvwxyz0123456789';
+    const tokenLikeMessageId = 'github_pat_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    const event = await createManualInputEvent({
+      channel: 'chat',
+      receivedAt: new Date('2026-07-04T09:21:23.000Z'),
+      conversationId: tokenLikeConversationId,
+      messageId: tokenLikeMessageId,
+      message: 'hello',
+    });
+
+    const serialized = JSON.stringify(event);
+    expect(event.subject.id).toMatch(/^conversation-[A-Za-z0-9]+$/);
+    expect(event.payload.conversation.id).toBe(event.subject.id);
+    expect(event.payload.message.id).toMatch(/^message-[A-Za-z0-9]+$/);
+    expect(event.delivery.id).toMatch(/^chat-delivery-[A-Za-z0-9]+-message-[A-Za-z0-9]+$/);
+    expect(serialized).not.toContain(tokenLikeConversationId);
+    expect(serialized).not.toContain(tokenLikeMessageId);
   });
 
   it('keeps delivery ids distinct for long conversations that share message ids', async () => {

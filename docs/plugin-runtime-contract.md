@@ -103,7 +103,10 @@ digest だけを保持する。manual/chat の raw payload reference は既存 p
 `deliveries` host と安全な 1 path segment の delivery id だけを許可し、delivery id 生成時に
 `:` など reference に使えない文字は `-` へ正規化する。長い conversation id や message id は
 末尾の一意要素と短い hash を残し、Bridge room の 128 文字 id 制限を超える場合は top-level
-event id も短い明示 id にする。任意 host/path は Core storage に残さない。
+event id も短い明示 id にする。`sourceName` は `source.name` と event id に使う前に
+安全な identifier へ正規化する。credential-looking な conversation id / message id /
+delivery id / source name は元値を永続化せず、fallback 名と安定 hash だけを残す。
+任意 host/path は Core storage に残さない。
 空文字または空白だけの `messageId` は未指定として扱い、UUID fallback で delivery id の
 一意性を保つ。明示された `deliveryId` が空文字または空白だけの場合も未指定として扱い、
 conversation/message 由来の delivery id 生成へ戻す。空文字または空白だけの `conversationId` /

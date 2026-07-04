@@ -9,6 +9,7 @@ import type { RainrailIntakeAdapter } from './intake-adapter.js';
 const encoder = new TextEncoder();
 const MAX_MANUAL_INPUT_TEXT_LENGTH = 8_000;
 const MAX_MANUAL_INPUT_ATTACHMENTS = 20;
+const CREDENTIAL_LIKE_IDENTIFIER_PATTERN = /\b(?:github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9_]{20,})\b/u;
 
 export type ManualInputChannel = 'manual' | 'chat';
 
@@ -121,6 +122,7 @@ export async function createManualInputEvent({
   const occurredAt = receivedAt.toISOString();
   const safeConversationUrl = safeUrl(conversationUrl);
   const name = channel === 'chat' ? 'rainrail.chat.message' : 'rainrail.manual.message';
+  const normalizedSourceName = safeIdentifierSegment(sourceName, 'source');
   const payload: ManualInputPayload = {
     provider: 'rainrail',
     channel,
@@ -139,10 +141,10 @@ export async function createManualInputEvent({
   };
 
   return createEventEnvelope({
-    ...buildOptionalManualInputEventId(sourceName, normalizedDeliveryId, name),
+    ...buildOptionalManualInputEventId(normalizedSourceName, normalizedDeliveryId, name),
     source: {
       type: channel,
-      name: sourceName,
+      name: normalizedSourceName,
     },
     name,
     delivery: {
@@ -166,7 +168,7 @@ export async function createManualInputEvent({
 
 export function createManualInputIntakeAdapter(options: ManualInputIntakeAdapterOptions): RainrailIntakeAdapter {
   const maxBodyBytes = options.maxBodyBytes ?? DEFAULT_MAX_REQUEST_BODY_BYTES;
-  const sourceName = options.sourceName ?? defaultManualInputSourceName(options.channel);
+  const sourceName = safeIdentifierSegment(options.sourceName ?? defaultManualInputSourceName(options.channel), 'source');
   const bearerToken = requiredBearerToken(options.bearerToken);
 
   return {
@@ -403,6 +405,9 @@ function normalizeReplyTargetInput(value: unknown): ManualInputReplyTarget | und
 
 function safeIdentifierSegment(value: string, fallback: string): string {
   const trimmed = value.trim();
+  const redacted = redactedIdentifierSegment(value, fallback);
+  if (redacted !== undefined) return redacted;
+
   const normalized = trimmed.replace(/[^A-Za-z0-9_.:-]+/gu, '-').replace(/^-+|-+$/gu, '');
   const changedBySanitization = normalized !== trimmed;
   if (normalized.length === 0) {
@@ -414,6 +419,9 @@ function safeIdentifierSegment(value: string, fallback: string): string {
 
 function safeDeliveryReferenceSegment(value: string, fallback: string, maxLength = 128): string {
   const trimmed = value.trim();
+  const redacted = redactedIdentifierSegment(value, fallback, maxLength);
+  if (redacted !== undefined) return redacted;
+
   const normalized = trimmed.replace(/[^A-Za-z0-9_.-]+/gu, '-').replace(/^-+|-+$/gu, '');
   const changedBySanitization = normalized !== trimmed;
   const safe = normalized.length === 0
@@ -426,6 +434,9 @@ function safeDeliveryReferenceSegment(value: string, fallback: string, maxLength
 
 function safeDeliveryReferenceSuffix(value: string, fallback: string, maxLength: number): string {
   const trimmed = value.trim();
+  const redacted = redactedIdentifierSegment(value, fallback, maxLength);
+  if (redacted !== undefined) return redacted;
+
   const normalized = trimmed.replace(/[^A-Za-z0-9_.-]+/gu, '-').replace(/^-+|-+$/gu, '');
   const changedBySanitization = normalized !== trimmed;
   const safe = normalized.length === 0
@@ -435,6 +446,11 @@ function safeDeliveryReferenceSuffix(value: string, fallback: string, maxLength:
     includeHash: changedBySanitization || (normalized.length === 0 && trimmed.length > 0),
     keepTail: true,
   });
+}
+
+function redactedIdentifierSegment(value: string, fallback: string, maxLength = 128): string | undefined {
+  if (!CREDENTIAL_LIKE_IDENTIFIER_PATTERN.test(value)) return undefined;
+  return compactIdentifierWithHash(fallback, value, maxLength, { includeHash: true });
 }
 
 function buildManualInputDeliveryId(channel: ManualInputChannel, conversationId: string, uniqueId: string): string {

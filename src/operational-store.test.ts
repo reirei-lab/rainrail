@@ -47,6 +47,17 @@ describe('RainrailOperationalStore', () => {
         nextRetryAt: '2026-07-02T01:00:00.000Z',
         lastError: 'GitHub GraphQL request failed with HTTP 503',
       });
+      first.recordCommandResult({
+        actionType: 'agent_task_resume',
+        targetType: 'agent_task',
+        targetId: 'agent_task_rainrail_25',
+        status: 'accepted',
+        actor: 'operator',
+        client: 'dashboard',
+        requestId: 'request-resume',
+        dryRun: false,
+        result: { resumed: true },
+      });
       first.close();
 
       const second = new RainrailOperationalStore({ databasePath, eventLimit: 1, now: fixedClock() });
@@ -63,6 +74,7 @@ describe('RainrailOperationalStore', () => {
           events: 2,
           activityEvents: 1,
           agentTasks: 1,
+          commandResults: 1,
           eventHandlerRetries: 1,
         },
         events: [{ id: latest.id, name: 'github.pull_request' }],
@@ -75,6 +87,15 @@ describe('RainrailOperationalStore', () => {
             logPath: 'var/agent-task-logs/rainrail-25-resume.log',
             stderrLogPath: 'var/agent-task-logs/rainrail-25-resume.stderr.log',
           }],
+        }],
+        commandResults: [{
+          id: 'cmd_000001',
+          actionType: 'agent_task_resume',
+          targetId: 'agent_task_rainrail_25',
+          status: 'accepted',
+          actor: 'operator',
+          requestId: 'request-resume',
+          result: { resumed: true },
         }],
       });
       second.close();

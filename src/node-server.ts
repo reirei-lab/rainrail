@@ -44,6 +44,11 @@ export function createRainrailNodeServer(options: RainrailNodeServerOptions): Ra
     ...(options.eventsBearerToken === undefined ? {} : { eventsBearerToken: options.eventsBearerToken }),
     runtime: options.runtime ?? 'node',
     ...(options.operationalStore === undefined ? {} : { operationalStore: options.operationalStore }),
+    ...(options.dashboardCommandMaxBodyBytes === undefined && options.maxBodyBytes === undefined ? {} : {
+      dashboardCommandMaxBodyBytes: options.dashboardCommandMaxBodyBytes ?? options.maxBodyBytes,
+    }),
+    ...(options.dashboardAuth === undefined ? {} : { dashboardAuth: options.dashboardAuth }),
+    ...(options.commandHandler === undefined ? {} : { commandHandler: options.commandHandler }),
     intakeAdapters: [
       ...createRainrailEepBridgeIntakeAdapters({
         env: { GITHUB_WEBHOOK_SECRET: options.githubWebhookSecret },
@@ -138,7 +143,10 @@ async function toFetchRequest(
         request,
         rainrailHttpRequestBodyLimit(url.pathname, method, appOptions) ?? options.maxBodyBytes,
       );
-    } else if (shouldStreamRainrailHttpRequestBody(url.pathname, method, appOptions)) {
+    } else if (
+      shouldStreamRainrailHttpRequestBody(url.pathname, method, appOptions)
+      || isDashboardCommandRoute(url.pathname, method)
+    ) {
       init.body = Readable.toWeb(request) as ReadableStream;
       Object.assign(init, { duplex: 'half' });
     }
@@ -150,6 +158,13 @@ async function toFetchRequest(
 function methodCanHaveBody(method: string): boolean {
   const normalized = method.toUpperCase();
   return normalized !== 'GET' && normalized !== 'HEAD';
+}
+
+function isDashboardCommandRoute(pathname: string, method: string): boolean {
+  return method.toUpperCase() === 'POST'
+    && (/^\/api\/v1\/agent-tasks\/(?:[^/]+\/actions\/(?:resume|reset|terminate)|actions\/terminate-all)$/.test(pathname)
+      || pathname === '/api/v1/queue/actions/assign-next'
+      || pathname === '/api/v1/settings/actions/update');
 }
 
 function isStatusCodeError(error: unknown): error is { statusCode: number } {
