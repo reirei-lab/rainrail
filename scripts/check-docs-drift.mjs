@@ -786,6 +786,7 @@ const changedFilesFromGit = (baseRef) => {
     execFileSync('git', ['show', `${baseRef}:${path}`], {
       cwd: repoRoot,
       encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
     }));
 };
 
