@@ -15,7 +15,8 @@ project; generated plugin state is not global.
   `github@0.1.0` resolves to `official:github@0.1.0`.
   Plugin entries are treated as external input when read back: the project name
   must remain present, plugin names must be unique official canonical aliases,
-  and plugin versions must be valid semantic versions.
+  plugin versions must be valid semantic versions, and non-contract plugin entry
+  fields are discarded before any manifest repair or rewrite.
 - `.rainrail/plugins/`: the project-local plugin installation directory.
 
 ## Re-run behavior
@@ -50,6 +51,9 @@ Plugin manifest paths are treated as untrusted project input. The add command
 requires `.rainrail/plugins/<name>` to be a normal directory and
 `.rainrail/plugins/<name>/plugin.json` to be a normal file when it already
 exists; symlinked manifest directories or files are rejected before writing.
+Plugin commands also require `rainrail.lock` to be a normal file and
+`.rainrail/plugins` to be a normal directory before project-local state is read,
+written, or removed.
 
 `rainrail plugins remove <officialPluginName>` removes the canonical lockfile
 entry and deletes the matching project-local plugin directory. Removing a plugin

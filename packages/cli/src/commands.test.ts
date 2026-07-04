@@ -742,7 +742,9 @@ describe('Rainrail CLI built-in commands', () => {
 
       expect(result.exitCode).toBe(1);
       expect(result.stdout).toBe('');
-      expect(result.stderr).toContain('ENOTDIR');
+      expect(result.stderr).toBe(
+        `Plugin root is not a regular directory: ${join(projectRoot, '.rainrail', 'plugins')}\n`,
+      );
       expect(result.stderr).not.toContain('Error:');
     });
   });
@@ -899,6 +901,53 @@ describe('Rainrail CLI built-in commands', () => {
     });
   });
 
+  it('rejects symlinked plugin roots before removing plugin state', async () => {
+    await withTempDirectory(async (directory) => {
+      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
+      const projectRoot = join(directory, 'my-agent-ops');
+      const lockPath = join(projectRoot, 'rainrail.lock');
+      const pluginRoot = join(projectRoot, '.rainrail', 'plugins');
+      const outsideRoot = join(directory, 'outside-plugin-root');
+      const outsidePlugin = join(outsideRoot, 'github');
+      expect(runRainrailCli(['plugins', 'add', 'github'], { cwd: projectRoot }).exitCode).toBe(0);
+      await rm(pluginRoot, { recursive: true });
+      await mkdir(outsidePlugin, { recursive: true });
+      await writeFile(join(outsidePlugin, 'sentinel.txt'), 'keep me\n');
+      await symlink(outsideRoot, pluginRoot, 'dir');
+
+      const result = runRainrailCli(['plugins', 'remove', 'github'], { cwd: projectRoot });
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toBe(`Plugin root is not a regular directory: ${pluginRoot}\n`);
+      await expect(readFile(join(outsidePlugin, 'sentinel.txt'), 'utf8')).resolves.toBe('keep me\n');
+      await expect(readFile(lockPath, 'utf8')).resolves.toContain('"name": "github"');
+    });
+  });
+
+  it('rejects symlinked lockfiles before writing plugin state', async () => {
+    await withTempDirectory(async (directory) => {
+      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
+      const projectRoot = join(directory, 'my-agent-ops');
+      const lockPath = join(projectRoot, 'rainrail.lock');
+      const outsideLockPath = join(directory, 'outside-rainrail.lock');
+      await writeFile(outsideLockPath, `${JSON.stringify({
+        lockfileVersion: 1,
+        project: { name: 'outside-project' },
+        plugins: [],
+      }, null, 2)}\n`);
+      await rm(lockPath);
+      await symlink(outsideLockPath, lockPath, 'file');
+
+      const result = runRainrailCli(['plugins', 'add', 'github'], { cwd: projectRoot });
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toBe(`Rainrail lockfile is not a regular file: ${lockPath}\n`);
+      await expect(readFile(outsideLockPath, 'utf8')).resolves.not.toContain('"name": "github"');
+    });
+  });
+
   it('restores the lockfile when remove cannot delete the plugin manifest directory', async () => {
     await withTempDirectory(async (directory) => {
       expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
@@ -1025,6 +1074,40 @@ describe('Rainrail CLI built-in commands', () => {
         stdout: '',
         stderr: `Unsupported Rainrail lockfile plugin entry in ${join(projectRoot, 'rainrail.lock')}\n`,
       });
+    });
+  });
+
+  it('normalizes extra lockfile plugin entry fields before repairing manifests', async () => {
+    await withTempDirectory(async (directory) => {
+      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
+      const projectRoot = join(directory, 'my-agent-ops');
+      const manifestPath = join(projectRoot, '.rainrail', 'plugins', 'github', 'plugin.json');
+      await rm(join(projectRoot, '.rainrail', 'plugins', 'github'), { recursive: true, force: true });
+      await writeFile(join(projectRoot, 'rainrail.lock'), `${JSON.stringify({
+        lockfileVersion: 1,
+        project: { name: 'my-agent-ops' },
+        plugins: [
+          {
+            name: 'github',
+            version: '0.1.0',
+            resolvedSource: 'official:github@0.1.0',
+            unexpected: 'must not reach plugin.json',
+          },
+        ],
+      }, null, 2)}\n`);
+
+      const result = runRainrailCli(['plugins', 'add', 'github'], { cwd: projectRoot });
+
+      expect(result).toEqual({
+        exitCode: 0,
+        stdout: 'Official plugin github is already installed.\n',
+        stderr: '',
+      });
+      await expect(readFile(manifestPath, 'utf8')).resolves.toBe(`${JSON.stringify({
+        name: 'github',
+        version: '0.1.0',
+        resolvedSource: 'official:github@0.1.0',
+      }, null, 2)}\n`);
     });
   });
 

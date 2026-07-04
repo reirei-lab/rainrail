@@ -877,6 +877,7 @@ function listProjectPlugins(
   lockfile: RainrailLockfile,
   fileSystem: RainrailCliFileSystem,
 ): RainrailCliResult {
+  ensureProjectPluginRoot(project, fileSystem);
   for (const plugin of lockfile.plugins) {
     const manifestPath = join(project.pluginDirectory, plugin.name, 'plugin.json');
     if (!fileSystem.existsSync(manifestPath)) {
@@ -914,6 +915,7 @@ function addProjectPlugin(
   version: string,
   fileSystem: RainrailCliFileSystem,
 ): RainrailCliResult {
+  ensureProjectPluginRoot(project, fileSystem);
   const installedPlugin = lockfile.plugins.find((plugin) => plugin.name === name);
   if (installedPlugin !== undefined) {
     writeProjectPluginManifest(project, installedPlugin, fileSystem);
@@ -1013,6 +1015,7 @@ function removeProjectPlugin(
   name: string,
   fileSystem: RainrailCliFileSystem,
 ): RainrailCliResult {
+  ensureProjectPluginRoot(project, fileSystem);
   if (!lockfile.plugins.some((plugin) => plugin.name === name)) {
     return {
       exitCode: 0,
@@ -1040,6 +1043,17 @@ function removeProjectPlugin(
   };
 }
 
+function ensureProjectPluginRoot(project: RainrailProject, fileSystem: RainrailCliFileSystem): void {
+  if (!fileSystem.existsSync(project.pluginDirectory)) {
+    fileSystem.mkdirSync(project.pluginDirectory, { recursive: true });
+  }
+
+  const pluginRootStat = fileSystem.lstatSync(project.pluginDirectory);
+  if (!pluginRootStat.isDirectory() || pluginRootStat.isSymbolicLink()) {
+    throw new Error(`Plugin root is not a regular directory: ${project.pluginDirectory}`);
+  }
+}
+
 function createLockPlugin(name: string, version: string): RainrailLockPlugin {
   return {
     name,
@@ -1051,6 +1065,10 @@ function createLockPlugin(name: string, version: string): RainrailLockPlugin {
 function readRainrailLockfile(path: string, fileSystem: RainrailCliFileSystem): RainrailLockfile {
   if (!fileSystem.existsSync(path)) {
     throw new Error(`Rainrail lockfile not found: ${path}`);
+  }
+  const lockfileStat = fileSystem.lstatSync(path);
+  if (!lockfileStat.isFile() || lockfileStat.isSymbolicLink()) {
+    throw new Error(`Rainrail lockfile is not a regular file: ${path}`);
   }
 
   const parsed = JSON.parse(fileSystem.readFileSync(path, 'utf8')) as Partial<RainrailLockfile>;
@@ -1067,7 +1085,11 @@ function readRainrailLockfile(path: string, fileSystem: RainrailCliFileSystem): 
     if (!isLockPlugin(plugin)) {
       throw new Error(`Unsupported Rainrail lockfile plugin entry in ${path}`);
     }
-    return plugin;
+    return {
+      name: plugin.name,
+      version: plugin.version,
+      resolvedSource: plugin.resolvedSource,
+    };
   });
   const pluginNames = new Set<string>();
   for (const plugin of plugins) {
