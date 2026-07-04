@@ -134,6 +134,9 @@ message id として扱い、retry 時に同じ delivery id を再生成でき�
 を保存する場合は `id` を必須とし、`url` だけの reply target は contract payload として
 扱わない。`actor` の各 field と `replyTarget.id` は trim 後に空でない文字列だけを
 保存し、空白だけの入力から fallback id や user type を作らない。
+adapter は `/api/v1/sources` で初回 delivery 前から `manual` / `chat` source として見えるよう、
+`source.type` と `authStatus: "configured"` を宣言する。HTTP `Content-Type` header は
+raw payload へ入れる前に media type だけへ正規化し、parameter は保存しない。
 `createManualInputIntakeAdapter` は `ManualInputIntakeAdapterOptions.bearerToken` を必須とし、
 body を読む前に `Authorization: Bearer <token>` を検証する。manual/chat input は
 `runtime:start` へ接続され得るため、Core の generic intake route ではなく adapter 境界で

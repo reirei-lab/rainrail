@@ -161,7 +161,7 @@ export async function createManualInputEvent({
     rawPayload: {
       kind: 'inline-redacted',
       reference: `${channel}://deliveries/${normalizedDeliveryId}`,
-      ...(contentType === undefined ? {} : { contentType }),
+      ...(contentType === undefined ? {} : { contentType: safeContentType(contentType) }),
       sha256: await sha256Hex(rawBody),
     },
   });
@@ -174,6 +174,10 @@ export function createManualInputIntakeAdapter(options: ManualInputIntakeAdapter
 
   return {
     name: sourceName,
+    source: {
+      type: options.channel,
+      authStatus: 'configured',
+    },
     routes: [{
       path: options.routePath ?? defaultManualInputRoutePath(options.channel),
       methods: ['POST'],

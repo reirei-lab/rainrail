@@ -178,6 +178,37 @@ describe('manual and chat input source contract', () => {
     expect(JSON.stringify(storedEvent)).not.toContain('do-not-store');
   });
 
+  it('normalizes HTTP content type before publishing manual input events', async () => {
+    const adapter = createManualInputIntakeAdapter({
+      channel: 'chat',
+      bearerToken: 'chat-intake-token',
+      receivedAt: () => new Date('2026-07-04T09:21:05.000Z'),
+      deliveryId: () => 'chat-content-type',
+    });
+    let published: ManualInputRainrailEvent | undefined;
+
+    const response = await adapter.routes?.[0]?.handle(new Request('https://rainrail.local/intake/chat', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer chat-intake-token',
+        'content-type': 'application/json; token=secret',
+      },
+      body: JSON.stringify({
+        conversationId: 'chat-content-type-session',
+        message: 'hello',
+      }),
+    }), {
+      publish: async (event) => {
+        published = event as ManualInputRainrailEvent;
+        return { ok: true, status: 200 };
+      },
+    });
+
+    expect(response?.status).toBe(202);
+    expect(published?.rawPayload.contentType).toBe('application/json');
+    expect(JSON.stringify(published)).not.toContain('token=secret');
+  });
+
   it('requires a bearer token before accepting manual or chat HTTP input', async () => {
     expect(() => createManualInputIntakeAdapter({
       channel: 'chat',
