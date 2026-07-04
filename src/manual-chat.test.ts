@@ -522,6 +522,29 @@ describe('manual and chat input source contract', () => {
     expect(second.payload.message).not.toHaveProperty('id');
   });
 
+  it('treats blank explicit delivery ids as unspecified', async () => {
+    const first = await createManualInputEvent({
+      channel: 'chat',
+      receivedAt: new Date('2026-07-04T09:21:24.000Z'),
+      deliveryId: '',
+      conversationId: 'conversation-empty-delivery',
+      messageId: 'message-1',
+      message: 'first',
+    });
+    const second = await createManualInputEvent({
+      channel: 'chat',
+      receivedAt: new Date('2026-07-04T09:21:25.000Z'),
+      deliveryId: '   ',
+      conversationId: 'conversation-empty-delivery',
+      messageId: 'message-2',
+      message: 'second',
+    });
+
+    expect(first.delivery.id).toBe('chat-conversation-empty-delivery-message-1');
+    expect(second.delivery.id).toBe('chat-conversation-empty-delivery-message-2');
+    expect(first.id).not.toBe(second.id);
+  });
+
   it('normalizes leading punctuation in conversation and message identifiers', async () => {
     const event = await createManualInputEvent({
       channel: 'chat',

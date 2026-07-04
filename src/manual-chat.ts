@@ -114,9 +114,10 @@ export async function createManualInputEvent({
 
   const normalizedConversationId = safeIdentifierSegment(conversationId, 'conversation');
   const normalizedMessageId = messageId === undefined || messageId.trim().length === 0 ? undefined : messageId;
-  const normalizedDeliveryId = deliveryId === undefined
+  const normalizedExplicitDeliveryId = deliveryId === undefined || deliveryId.trim().length === 0 ? undefined : deliveryId;
+  const normalizedDeliveryId = normalizedExplicitDeliveryId === undefined
     ? buildManualInputDeliveryId(channel, conversationId, normalizedMessageId ?? crypto.randomUUID())
-    : safeDeliveryReferenceSegment(deliveryId, `${channel}-delivery`);
+    : safeDeliveryReferenceSegment(normalizedExplicitDeliveryId, `${channel}-delivery`);
   const occurredAt = receivedAt.toISOString();
   const safeConversationUrl = safeUrl(conversationUrl);
   const name = channel === 'chat' ? 'rainrail.chat.message' : 'rainrail.manual.message';

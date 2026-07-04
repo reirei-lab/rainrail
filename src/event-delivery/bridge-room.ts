@@ -297,6 +297,7 @@ function validatePublishEnvelope(value: unknown): RainrailEventEnvelope {
   const subjectId = expectSubjectIdentifier(subject);
   const rawPayloadKind = expectRawPayloadKind(rawPayload);
   const rawPayloadReference = expectString(rawPayload, 'reference');
+  assertManualInputEventSourceMatches(sourceType, name);
 
   if (!('payload' in value)) {
     throw new TypeError('payload is required');
@@ -323,7 +324,7 @@ function validatePublishEnvelope(value: unknown): RainrailEventEnvelope {
       id: subjectId,
       ...optionalUrl(subject, 'url'),
     },
-    payload: normalizePayload(value.payload, { sourceType, name }),
+    payload: normalizePayload(value.payload, { sourceType, name, subjectType, subjectId }),
     rawPayload: {
       kind: rawPayloadKind,
       reference: expectSanitizedUrl(rawPayloadReference, 'reference'),
@@ -534,7 +535,10 @@ function optionalSha256(record: Record<string, unknown>): Record<string, string>
   return { sha256: record.sha256.toLowerCase() };
 }
 
-function normalizePayload(value: unknown, context: { sourceType: string; name: string }): unknown {
+function normalizePayload(
+  value: unknown,
+  context: { sourceType: string; name: string; subjectType: string; subjectId: string },
+): unknown {
   if (!isRecord(value)) {
     return {};
   }
@@ -577,7 +581,10 @@ function normalizePayload(value: unknown, context: { sourceType: string; name: s
     ) {
       throw new TypeError('manual/chat payload is missing required fields');
     }
-    if (!isRecord(payload.message) || typeof payload.message.text !== 'string' || payload.message.text.length === 0) {
+    if (context.subjectType !== 'conversation' || payload.conversation.id !== context.subjectId) {
+      throw new TypeError('manual/chat subject must match payload conversation');
+    }
+    if (!isRecord(payload.message) || typeof payload.message.text !== 'string' || payload.message.text.trim().length === 0) {
       throw new TypeError('payload.message.text is required');
     }
   }
@@ -676,6 +683,15 @@ function normalizeGitHubMentionPayloadField(key: string, value: unknown): unknow
 function isManualInputPayload(context: { sourceType: string; name: string }): boolean {
   return (context.sourceType === 'manual' && context.name === 'rainrail.manual.message')
     || (context.sourceType === 'chat' && context.name === 'rainrail.chat.message');
+}
+
+function assertManualInputEventSourceMatches(sourceType: string, name: string): void {
+  if (
+    (name === 'rainrail.manual.message' && sourceType !== 'manual')
+    || (name === 'rainrail.chat.message' && sourceType !== 'chat')
+  ) {
+    throw new TypeError('manual/chat event name must match source.type');
+  }
 }
 
 function normalizeManualInputPayloadField(key: string, value: unknown, context: { sourceType: string; name: string }): unknown {
@@ -858,7 +874,8 @@ function sanitizePayloadText(value: string): string {
     .replace(/(^|[.?&{\s"'<>`,;\[(])([A-Za-z0-9_.-]*authorization[A-Za-z0-9_.-]*)\s*=\s*([^\r\n"'<>`,;]*?)(?=(?:\s+[A-Za-z0-9_.-]*(?:authorization|cookie|set-cookie|token|secret|password|key|code|reset|verification|session)[A-Za-z0-9_.-]*\s*=)|[&\r\n"'<>`,;]|$)/giu, '$1$2=[redacted]')
     .replace(/(^|[.?&{\s"'<>`,;\[(])([A-Za-z0-9_.-]*(?:cookie|set-cookie)[A-Za-z0-9_.-]*)\s*=\s*([^;\s\r\n"'<>`,]*(?:;\s*[^=;\s\r\n"'<>`,]+=[^;\s\r\n"'<>`,]*)*)/giu, '$1$2=[redacted]')
     .replace(/(^|[.?&{\s"'<>`,;\[(])([A-Za-z0-9_.-]*(?:token|secret|password|key|code|reset|verification|session)[A-Za-z0-9_.-]*)\s*=\s*([^&\s"'<>`,;]+)/giu, '$1$2=[redacted]')
-    .replace(/\bBearer\s+[A-Za-z0-9._~+/-]+=*/giu, 'Bearer [redacted]');
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/-]+=*/giu, 'Bearer [redacted]')
+    .replace(/\b(?:github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9_]{20,})\b/gu, '[redacted-token]');
 }
 
 function sanitizePayloadCredentialUrl(value: string): string {

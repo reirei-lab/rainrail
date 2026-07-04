@@ -1122,9 +1122,9 @@ describe('Rainrail bridge room', () => {
   it('bounds manual chat payload strings before storing replay events', async () => {
     const storage = fakeState();
     const room = createTestRoom(storage, { replayLimit: 10 });
-    const longMessage = `${'m'.repeat(9_000)}message-tail`;
-    const longDisplayName = `${'a'.repeat(9_000)}actor-tail`;
-    const longAttachmentName = `${'n'.repeat(9_000)}attachment-tail`;
+    const longMessage = `ghp_abcdefghijklmnopqrstuvwxyz0123456789 ${'m'.repeat(9_000)}message-tail`;
+    const longDisplayName = `github_pat_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ${'a'.repeat(9_000)}actor-tail`;
+    const longAttachmentName = `ghp_abcdefghijklmnopqrstuvwxyz0123456789 ${'n'.repeat(9_000)}attachment-tail`;
     const event = createEventEnvelope({
       source: { type: 'chat', name: 'web-chat' },
       name: 'rainrail.chat.message',
@@ -1168,6 +1168,72 @@ describe('Rainrail bridge room', () => {
     expect(JSON.stringify(storedPayload)).not.toContain('message-tail');
     expect(JSON.stringify(storedPayload)).not.toContain('actor-tail');
     expect(JSON.stringify(storedPayload)).not.toContain('attachment-tail');
+    expect(JSON.stringify(storedPayload)).not.toContain('ghp_abcdefghijklmnopqrstuvwxyz0123456789');
+    expect(JSON.stringify(storedPayload)).not.toContain('github_pat_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789');
+  });
+
+  it('rejects manual chat event names with mismatched source types', async () => {
+    const storage = fakeState();
+    const room = createTestRoom(storage, { replayLimit: 10 });
+    const event = createEventEnvelope({
+      source: { type: 'manual', name: 'manual-input' },
+      name: 'rainrail.chat.message',
+      delivery: {
+        id: 'chat-source-mismatch',
+        receivedAt: '2026-06-29T18:18:21.000Z',
+      },
+      occurredAt: '2026-06-29T18:18:20.000Z',
+      subject: { type: 'conversation', id: 'chat-source-mismatch' },
+      payload: {
+        provider: 'rainrail',
+        channel: 'chat',
+        action: 'message',
+        conversation: { id: 'chat-source-mismatch' },
+        message: { text: 'hello' },
+      },
+      rawPayload: {
+        kind: 'inline-redacted',
+        reference: 'chat://deliveries/chat-source-mismatch',
+      },
+    });
+
+    const publishResponse = await room.fetch(publishRequest(event));
+
+    expect(publishResponse.status).toBe(400);
+    await expect(publishResponse.text()).resolves.toContain('manual/chat event name must match source.type');
+    expect(storage.storedEvents()).toEqual([]);
+  });
+
+  it('rejects direct manual chat payloads with mismatched subjects', async () => {
+    const storage = fakeState();
+    const room = createTestRoom(storage, { replayLimit: 10 });
+    const event = createEventEnvelope({
+      source: { type: 'chat', name: 'web-chat' },
+      name: 'rainrail.chat.message',
+      delivery: {
+        id: 'chat-subject-mismatch',
+        receivedAt: '2026-06-29T18:18:21.000Z',
+      },
+      occurredAt: '2026-06-29T18:18:20.000Z',
+      subject: { type: 'issue', id: 'chat-subject-mismatch' },
+      payload: {
+        provider: 'rainrail',
+        channel: 'chat',
+        action: 'message',
+        conversation: { id: 'other-conversation' },
+        message: { text: 'hello' },
+      },
+      rawPayload: {
+        kind: 'inline-redacted',
+        reference: 'chat://deliveries/chat-subject-mismatch',
+      },
+    });
+
+    const publishResponse = await room.fetch(publishRequest(event));
+
+    expect(publishResponse.status).toBe(400);
+    await expect(publishResponse.text()).resolves.toContain('manual/chat subject must match payload conversation');
+    expect(storage.storedEvents()).toEqual([]);
   });
 
   it('rejects direct manual chat payloads with non-message actions', async () => {
@@ -1224,6 +1290,38 @@ describe('Rainrail bridge room', () => {
       rawPayload: {
         kind: 'inline-redacted',
         reference: 'chat://deliveries/chat-missing-message-text',
+      },
+    });
+
+    const publishResponse = await room.fetch(publishRequest(event));
+
+    expect(publishResponse.status).toBe(400);
+    await expect(publishResponse.text()).resolves.toContain('payload.message.text is required');
+    expect(storage.storedEvents()).toEqual([]);
+  });
+
+  it('rejects direct manual chat payloads with blank message text', async () => {
+    const storage = fakeState();
+    const room = createTestRoom(storage, { replayLimit: 10 });
+    const event = createEventEnvelope({
+      source: { type: 'chat', name: 'web-chat' },
+      name: 'rainrail.chat.message',
+      delivery: {
+        id: 'chat-blank-message-text',
+        receivedAt: '2026-06-29T18:18:21.000Z',
+      },
+      occurredAt: '2026-06-29T18:18:20.000Z',
+      subject: { type: 'conversation', id: 'chat-blank-message-text' },
+      payload: {
+        provider: 'rainrail',
+        channel: 'chat',
+        action: 'message',
+        conversation: { id: 'chat-blank-message-text' },
+        message: { text: '   \n\t' },
+      },
+      rawPayload: {
+        kind: 'inline-redacted',
+        reference: 'chat://deliveries/chat-blank-message-text',
       },
     });
 

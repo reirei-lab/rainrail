@@ -105,8 +105,10 @@ digest だけを保持する。manual/chat の raw payload reference は既存 p
 末尾の一意要素と短い hash を残し、Bridge room の 128 文字 id 制限を超える場合は top-level
 event id も短い明示 id にする。任意 host/path は Core storage に残さない。
 空文字または空白だけの `messageId` は未指定として扱い、UUID fallback で delivery id の
-一意性を保つ。空文字または空白だけの `conversationId` / `message` は、HTTP intake と同じく
-`createManualInputEvent` でも event 作成前に拒否する。`attachments` は先頭 20 件だけを
+一意性を保つ。明示された `deliveryId` が空文字または空白だけの場合も未指定として扱い、
+conversation/message 由来の delivery id 生成へ戻す。空文字または空白だけの `conversationId` /
+`message` は、HTTP intake と同じく `createManualInputEvent` でも event 作成前に拒否する。
+`attachments` は先頭 20 件だけを
 正規化する。token、secret、password、API key、Bearer credential 形式は `key=value`、
 JSON/YAML 風の `key: value`、quoted JSON field のいずれも source adapter 側で短く
 redaction する。redaction は credential key の大小文字差、structured object / array 値、
