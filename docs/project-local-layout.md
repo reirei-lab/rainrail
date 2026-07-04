@@ -22,3 +22,14 @@ stops instead of overwriting it.
 Config discovery walks upward from the current path until it finds
 `rainrail.config.json`; that directory is the project root. The lockfile and
 plugin directory are resolved relative to that root.
+
+## CLI public API
+
+The `@rainrail/cli` entrypoint exposes the command metadata and parser helpers
+used by tests and future embedding code:
+
+- Types: `BuiltInCommandName`, `BuiltInCommand`, `SharedOptions`,
+  `ParsedRainrailArguments`, `RainrailCliResult`, `RainrailCliEnvironment`,
+  and `RainrailProject`.
+- Values: `BUILT_IN_COMMANDS`, `getBuiltInCommand`, `parseRainrailArguments`,
+  `formatHelp`, `discoverRainrailProject`, and `runRainrailCli`.

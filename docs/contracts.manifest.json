@@ -447,7 +447,37 @@
       "title": "CLI project-local layout",
       "sources": ["packages/cli/src/index.ts"],
       "docs": ["docs/project-local-layout.md"],
-      "tests": ["packages/cli/src/commands.test.ts"]
+      "tests": ["packages/cli/src/commands.test.ts"],
+      "publicExports": [
+        "BuiltInCommandName",
+        "BuiltInCommand",
+        "SharedOptions",
+        "ParsedRainrailArguments",
+        "RainrailCliResult",
+        "RainrailCliEnvironment",
+        "RainrailProject",
+        "BUILT_IN_COMMANDS",
+        "getBuiltInCommand",
+        "parseRainrailArguments",
+        "formatHelp",
+        "discoverRainrailProject",
+        "runRainrailCli"
+      ],
+      "publicExportKinds": {
+        "BuiltInCommandName": "type",
+        "BuiltInCommand": "type",
+        "SharedOptions": "type",
+        "ParsedRainrailArguments": "type",
+        "RainrailCliResult": "type",
+        "RainrailCliEnvironment": "type",
+        "RainrailProject": "type",
+        "BUILT_IN_COMMANDS": "value",
+        "getBuiltInCommand": "value",
+        "parseRainrailArguments": "value",
+        "formatHelp": "value",
+        "discoverRainrailProject": "value",
+        "runRainrailCli": "value"
+      }
     },
     {
       "id": "workflow-plugins",
