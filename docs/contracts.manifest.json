@@ -324,11 +324,15 @@
         "src/agent-assignment.ts",
         "src/providers/github/project-task-queue.ts"
       ],
-      "docs": ["docs/task-queue-project-issues.md"],
+      "docs": [
+        "docs/task-queue-project-issues.md",
+        "docs/plugin-runtime-contract.md"
+      ],
       "tests": [
         "src/project-issues.test.ts",
         "src/agent-assignment.test.ts",
-        "src/github-project.test.ts"
+        "src/github-project.test.ts",
+        "src/github-provider-boundary.test.ts"
       ],
       "publicExports": [
         "ProjectIssue",
