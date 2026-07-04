@@ -18,6 +18,7 @@ import type {
   RainrailOperationalStore,
   StoredActivityEvent,
   StoredAgentTask,
+  StoredCommandResult,
   StoredEventHandlerRetry,
   StoredOperationalEvent,
 } from './operational-store.js';
@@ -815,26 +816,31 @@ async function handleDashboardCommandRequest(
   };
 
   if (dryRun) {
-    const result = options.operationalStore.recordCommandResult({
-      actionType: command.actionType,
-      targetType: command.targetType,
-      targetId: command.targetId,
-      status: 'preview',
-      actor: auth.principal.actor,
-      ...(client === undefined ? {} : { client }),
-      requestId,
-      dryRun: true,
-      result: preview,
-    });
-    options.operationalStore.recordActivityEvent({
-      category: 'command',
-      targetType: command.targetType,
-      targetId: command.targetId,
-      actionType: command.actionType,
-      outcome: 'skipped',
-      summary: `Previewed ${command.actionType} for ${command.targetType} ${command.targetId}`,
-      metadata: auditMetadata(auth.principal.actor, client, requestId, true),
-    });
+    let result: StoredCommandResult;
+    try {
+      result = options.operationalStore.recordCommandResult({
+        actionType: command.actionType,
+        targetType: command.targetType,
+        targetId: command.targetId,
+        status: 'preview',
+        actor: auth.principal.actor,
+        ...(client === undefined ? {} : { client }),
+        requestId,
+        dryRun: true,
+        result: preview,
+      });
+      options.operationalStore.recordActivityEvent({
+        category: 'command',
+        targetType: command.targetType,
+        targetId: command.targetId,
+        actionType: command.actionType,
+        outcome: 'skipped',
+        summary: `Previewed ${command.actionType} for ${command.targetType} ${command.targetId}`,
+        metadata: auditMetadata(auth.principal.actor, client, requestId, true),
+      });
+    } catch {
+      return commandResponse({ error: 'operational_store_unavailable' }, requestId, 503);
+    }
 
     return commandResponse({
       data: {
@@ -1145,6 +1151,8 @@ function sanitizeCommandResult(value: unknown, sensitiveValues: readonly string[
         const sanitized = sanitizeCommandResult(item, sensitiveValues, seen);
         return sanitized === undefined ? null : sanitized;
       });
+    } catch {
+      return '[unserializable]';
     } finally {
       seen.delete(value);
     }
@@ -1186,7 +1194,7 @@ function sanitizeCommandErrorMessage(message: string, sensitiveValues: readonly 
 }
 
 function redactKnownSensitiveValues(value: string, sensitiveValues: readonly string[]): string {
-  let sanitized = value;
+  let sanitized = redactSensitiveText(value);
   const orderedValues = [...sensitiveValues]
     .filter((sensitiveValue) => sensitiveValue.length > 0)
     .sort((left, right) => right.length - left.length);
