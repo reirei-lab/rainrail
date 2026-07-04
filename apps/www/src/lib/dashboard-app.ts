@@ -273,6 +273,8 @@ if (root !== null) {
       statItem('Retrying handlers', counts.eventHandlerRetries ?? 0),
       statItem('Provider status', providerCount(latestData?.events ?? [])),
       statItem('Agent tasks', counts.agentTasks ?? 0),
+      statItem('Sources', latestData?.sources.length ?? 0),
+      statItem('Queue', latestData?.queue.length ?? 0),
     ]);
   }
 
@@ -286,6 +288,8 @@ if (root !== null) {
       statItem('Retrying handlers', 0),
       statItem('Provider status', 0),
       statItem('Agent tasks', 0),
+      statItem('Sources', 0),
+      statItem('Queue', 0),
     );
   }
 
@@ -432,6 +436,7 @@ if (root !== null) {
         <div><dt>Issue</dt><dd>${escapeHtml(formatIssue(row))}</dd></div>
         <div><dt>Action audit</dt><dd>${escapeHtml(label)}</dd></div>
       </dl>
+      ${renderMetadata(row)}
     `;
   }
 
@@ -653,6 +658,53 @@ function rowMeta(row: DashboardRow): string {
     return row.value;
   }
   return row.id;
+}
+
+function renderMetadata(row: DashboardRow): string {
+  const items: Array<[string, string]> = [];
+
+  if (row.type === 'source') {
+    items.push(
+      ['Source type', row.sourceType],
+      ['Endpoint', row.endpoint ?? 'n/a'],
+      ['Transport', row.transport ?? 'n/a'],
+      ['Auth', row.auth?.status ?? 'unknown'],
+      ['Last delivery', row.lastDelivery?.receivedAt ?? 'none'],
+      ['Bundle model', sourceBundleLabels.join(', ')],
+    );
+  }
+
+  if (row.type === 'queue-item') {
+    items.push(
+      ['Project status', row.projectStatus ?? 'unknown'],
+      ['Claim lock', row.claimLock?.projectItemId ?? 'none'],
+      ['Held by', row.claimLock?.heldBy ?? 'n/a'],
+      ['Blocked reason', row.blockedReason ?? 'none'],
+      ['Queue signals', queueLabels.join(', ')],
+    );
+  }
+
+  if (row.type === 'setting') {
+    items.push(
+      ['Value', row.value],
+      ['Update scope', 'admin'],
+      ['Audit', 'required'],
+      ['Settings model', settingsLabels.join(', ')],
+    );
+  }
+
+  if (items.length === 0) return '';
+
+  return `
+    <div class="dashboard-meta-grid">
+      ${items.map(([label, value]) => `
+        <div class="dashboard-meta-item">
+          <span>${escapeHtml(label)}</span>
+          <strong>${escapeHtml(value)}</strong>
+        </div>
+      `).join('')}
+    </div>
+  `;
 }
 
 function providerCount(events: DashboardEvent[]): number {
