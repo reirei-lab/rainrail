@@ -479,6 +479,38 @@ describe('manual and chat input source contract', () => {
     expect(storedEvent?.subject).not.toHaveProperty('url');
   });
 
+  it('redacts credential-bearing header lines from message text before storage', async () => {
+    const event = await createManualInputEvent({
+      channel: 'chat',
+      receivedAt: new Date('2026-07-04T09:21:24.000Z'),
+      conversationId: 'conversation-header-secret',
+      message: [
+        'Please inspect this request:',
+        'Authorization: Bearer abc.def.ghi',
+        'Cookie: session=secret-cookie; theme=dark',
+        'then continue',
+      ].join('\n'),
+    });
+
+    expect(event.payload.message.text).toContain('Authorization: [redacted]');
+    expect(event.payload.message.text).toContain('Cookie: [redacted]');
+    expect(event.payload.message.text).not.toContain('Bearer abc.def.ghi');
+    expect(event.payload.message.text).not.toContain('secret-cookie');
+  });
+
+  it('redacts non-HTTPS URLs instead of preserving credential-like path segments', async () => {
+    const event = await createManualInputEvent({
+      channel: 'chat',
+      receivedAt: new Date('2026-07-04T09:21:24.000Z'),
+      conversationId: 'conversation-http-secret-url',
+      message: 'Open http://example.com/reset/sensitive-reset-token-12345?token=secret and continue',
+    });
+
+    expect(event.payload.message.text).toContain('[redacted-url]');
+    expect(event.payload.message.text).not.toContain('sensitive-reset-token-12345');
+    expect(event.payload.message.text).not.toContain('token=secret');
+  });
+
   it('keeps generated delivery ids unique for long message ids with the same prefix', async () => {
     const prefix = 'message-prefix-'.repeat(12);
     const first = await createManualInputEvent({

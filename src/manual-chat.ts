@@ -528,7 +528,8 @@ function safeUrl(value: string | undefined): string | undefined {
 function redactUserText(value: string): string {
   return redactManualSecretStructuredValues(value)
     .replace(/\b[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s"'<>`/@]*@[^\s"'<>`,;)]+/giu, () => '[redacted-url]')
-    .replace(/\bhttps:\/\/[^\s"'<>`,;)]+/giu, (url) => sanitizeManualTextUrl(url))
+    .replace(/\b[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s"'<>`,;)]+/giu, (url) => sanitizeManualTextUrl(url))
+    .replace(/(^|\r?\n)([ \t]*)(authorization|proxy-authorization|cookie|set-cookie)\s*:\s*[^\r\n]*/giu, '$1$2$3: [redacted]')
     .replace(/(^|[.?&{\s"'<>`,;\[(])(["']?)([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification|session)[A-Za-z0-9_.-]*)\2\s*=\s*(["'])(?:\\.|(?!\4)[^\\])*\4/giu, '$1$2$3$2=[redacted]')
     .replace(/(^|[.?&{\s"'<>`,;\[(])(["']?)([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification|session)[A-Za-z0-9_.-]*)\2\s*=\s*([^&\s"'<>`,;)]+)/giu, '$1$2$3$2=[redacted]')
     .replace(/(["'])([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification|session)[A-Za-z0-9_.-]*)\1(\s*:\s*)(["'])(?:\\.|(?!\4)[^\\])*\4/giu, '$1$2$1$3$4[redacted]$4')

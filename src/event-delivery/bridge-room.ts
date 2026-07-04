@@ -539,12 +539,15 @@ function normalizePayload(
   value: unknown,
   context: { sourceType: string; name: string; subjectType: string; subjectId: string },
 ): unknown {
+  const manualPayload = isManualInputPayload(context);
   if (!isRecord(value)) {
+    if (manualPayload) {
+      throw new TypeError('manual/chat payload must be an object');
+    }
     return {};
   }
 
   const payload: Record<string, unknown> = {};
-  const manualPayload = isManualInputPayload(context);
   for (const [key, nestedValue] of Object.entries(value)) {
     if (manualPayload) {
       if (MANUAL_INPUT_PAYLOAD_KEYS.has(key)) {

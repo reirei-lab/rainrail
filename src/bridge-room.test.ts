@@ -1066,6 +1066,41 @@ describe('Rainrail bridge room', () => {
     expect(chunk).not.toContain('secret scalar webhook body');
   });
 
+  it('rejects non-object direct manual chat payloads before storage', async () => {
+    const storage = fakeState();
+    const room = createTestRoom(storage, { replayLimit: 10 });
+    const event = {
+      ...createEventEnvelope({
+        source: { type: 'chat', name: 'web-chat' },
+        name: 'rainrail.chat.message',
+        delivery: {
+          id: 'chat-null-payload',
+          receivedAt: '2026-06-29T18:18:21.000Z',
+        },
+        occurredAt: '2026-06-29T18:18:20.000Z',
+        subject: { type: 'conversation', id: 'chat-null-payload' },
+        payload: {
+          provider: 'rainrail',
+          channel: 'chat',
+          action: 'message',
+          conversation: { id: 'chat-null-payload' },
+          message: { text: 'hello' },
+        },
+        rawPayload: {
+          kind: 'inline-redacted',
+          reference: 'chat://deliveries/chat-null-payload',
+        },
+      }),
+      payload: null,
+    };
+
+    const publishResponse = await room.fetch(publishRequest(event));
+
+    expect(publishResponse.status).toBe(400);
+    await expect(publishResponse.text()).resolves.toContain('manual/chat payload must be an object');
+    expect(storage.storedEvents()).toEqual([]);
+  });
+
   it('ignores invalid stored replay entries during restore', async () => {
     const valid = fixtureEvent('delivery-1', 'github.issue');
     const room = createTestRoom(storedReplayState([valid, {}, { ...valid, id: 'bad\nid' }]), { replayLimit: 10 });
