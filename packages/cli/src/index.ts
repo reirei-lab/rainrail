@@ -1,6 +1,27 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, normalize, parse, resolve, sep } from 'node:path';
+import {
+  OFFICIAL_PLUGIN_CATALOG,
+  formatOfficialPluginCommandHelp,
+  formatOfficialPluginHelp,
+  getOfficialPluginByAlias,
+  getOfficialPluginCommand,
+  isOfficialPluginCommandHelpRequest,
+  isOfficialPluginHelpRequest,
+} from './official-plugin-catalog.js';
+
+export {
+  OFFICIAL_PLUGIN_CATALOG,
+  formatOfficialPluginCommandHelp,
+  formatOfficialPluginHelp,
+  getOfficialPluginByAlias,
+  getOfficialPluginCommand,
+  isOfficialPluginCommandHelpRequest,
+  isOfficialPluginHelpRequest,
+  type OfficialPluginCommandMetadata,
+  type OfficialPluginMetadata,
+} from './official-plugin-catalog.js';
 
 export type BuiltInCommandName =
   | 'new'
@@ -219,12 +240,20 @@ export function formatHelp(): string {
     const paddedName = command.name.padEnd(8, ' ');
     return `  ${paddedName} ${command.summary}`;
   }).join('\n');
+  const pluginRows = OFFICIAL_PLUGIN_CATALOG.map((plugin) => {
+    const paddedAlias = plugin.alias.padEnd(11, ' ');
+    const aliasText = plugin.aliases.length > 1 ? ` (${plugin.aliases.slice(1).join(', ')})` : '';
+    return `  ${paddedAlias} ${plugin.summary}${aliasText}`;
+  }).join('\n');
 
   return [
     'Usage: rainrail <command> [options]',
     '',
     'Built-in commands:',
     commandRows,
+    '',
+    'Official plugin aliases:',
+    pluginRows,
     '',
     'Common options:',
     '  --config <path>    Use a Rainrail config file.',
@@ -440,8 +469,42 @@ export function runRainrailCli(
   }
 
   const command = getBuiltInCommand(parsed.commandName);
+  const officialPlugin = getOfficialPluginByAlias(parsed.commandName);
 
   if (command === undefined) {
+    if (officialPlugin !== undefined) {
+      if (isOfficialPluginHelpRequest(parsed.commandArgs)) {
+        return {
+          exitCode: 0,
+          stdout: formatOfficialPluginHelp(officialPlugin),
+          stderr: '',
+        };
+      }
+
+      const pluginCommand = getOfficialPluginCommand(officialPlugin, parsed.commandArgs);
+      if (pluginCommand === undefined) {
+        return {
+          exitCode: 1,
+          stdout: '',
+          stderr: `Unknown rainrail ${officialPlugin.alias} command: ${parsed.commandArgs.join(' ')}\n\n${formatOfficialPluginHelp(officialPlugin)}`,
+        };
+      }
+
+      if (isOfficialPluginCommandHelpRequest(pluginCommand, parsed.commandArgs)) {
+        return {
+          exitCode: 0,
+          stdout: formatOfficialPluginCommandHelp(officialPlugin, pluginCommand),
+          stderr: '',
+        };
+      }
+
+      return {
+        exitCode: 2,
+        stdout: '',
+        stderr: `rainrail ${officialPlugin.alias} ${pluginCommand.name} requires plugin execution, which is not implemented yet.\n`,
+      };
+    }
+
     return {
       exitCode: 1,
       stdout: '',
