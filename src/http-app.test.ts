@@ -117,10 +117,23 @@ describe('Rainrail HTTP app', () => {
 
     expect(() => createTestApp(fakeState(), {
       intakeAdapters: [{
-        name: 'core-conflict',
+        name: 'core-health-conflict',
         routes: [{
           path: '/healthz',
           methods: ['POST'],
+          async handle() {
+            return Response.json({ ok: true });
+          },
+        }],
+      }],
+    })).toThrow(/reserved by Rainrail core/i);
+
+    expect(() => createTestApp(fakeState(), {
+      intakeAdapters: [{
+        name: 'core-v1-conflict',
+        routes: [{
+          path: '/api/v1/events/evt_1',
+          methods: ['GET'],
           async handle() {
             return Response.json({ ok: true });
           },

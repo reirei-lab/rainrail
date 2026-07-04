@@ -95,6 +95,10 @@ HTTP entrypoint の公開入口は Fetch adapter の `createRainrailHttpApp` と
 `createRainrailHttpApp` は provider 固有の ingress route を直接持たない。HTTP webhook、
 manual publish UI、Worker tail などの外部入力は `RainrailIntakeAdapter` として登録し、
 adapter handler が `RainrailEventEnvelope` へ正規化して context の `publish()` に渡す。
+intake 登録 API の public contract は `RainrailIntakeAdapter`、`RainrailIntakeRoute`、
+`RainrailIntakeAdapterContext`、`RainrailIntakePublishResult`、`RainrailIntakeRegistry`、
+`RainrailIntakeRouteMatch`、`RainrailIntakeRouteMethodMismatch`、
+`createRainrailIntakeRegistry` である。
 未登録 route は `404`、Core route や adapter 同士の method/path 衝突は app 作成時の
 configuration error とする。現行の `createRainrailNodeServer` と Cloudflare Worker entrypoint
 は互換性のため GitHub webhook adapter を `/webhooks/github` に登録する。

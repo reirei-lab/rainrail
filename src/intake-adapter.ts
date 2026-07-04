@@ -42,7 +42,17 @@ const CORE_ROUTE_PATHS = new Set([
   '/healthz',
   '/events',
   '/api/state',
+  '/api/v1/overview',
+  '/api/v1/events',
+  '/api/v1/workflow-runs',
+  '/api/v1/agent-tasks',
 ]);
+const CORE_ROUTE_PREFIXES = [
+  '/api/events/',
+  '/api/v1/events/',
+  '/api/v1/workflow-runs/',
+  '/api/v1/agent-tasks/',
+] as const;
 
 export function createRainrailIntakeRegistry(adapters: readonly RainrailIntakeAdapter[] = []): RainrailIntakeRegistry {
   const routeHandlers = new Map<string, RainrailIntakeRoute>();
@@ -54,7 +64,7 @@ export function createRainrailIntakeRegistry(adapters: readonly RainrailIntakeAd
     for (const route of adapter.routes ?? []) {
       for (const method of normalizedMethods(route.methods)) {
         const key = `${method} ${route.path}`;
-        if (CORE_ROUTE_PATHS.has(route.path) || route.path.startsWith('/api/events/')) {
+        if (isCoreRoutePath(route.path)) {
           throw new Error(`conflicting intake route: ${adapter.name} ${key} is reserved by Rainrail core`);
         }
         if (routeHandlers.has(key)) {
@@ -105,4 +115,8 @@ export function createRainrailIntakeRegistry(adapters: readonly RainrailIntakeAd
 
 function normalizedMethods(methods: readonly string[]): string[] {
   return methods.map((method) => method.toUpperCase());
+}
+
+function isCoreRoutePath(pathname: string): boolean {
+  return CORE_ROUTE_PATHS.has(pathname) || CORE_ROUTE_PREFIXES.some((prefix) => pathname.startsWith(prefix));
 }
