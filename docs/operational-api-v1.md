@@ -139,8 +139,10 @@ session、不安定な回線を前提に compact list と detail fetch を明確
 - 一覧画面は collection endpoint の compact row だけで描画する。初期取得は `limit=25` を推奨し、
   user action で `page.nextCursor` を使って追加読み込みする。auto prefetch は active filters と
   `sort` を必ず引き継ぐ。
-- Detail 画面は row tap 後に detail endpoint を取得する。list response にない activity、retry、
-  log summary、command result へ依存する UI は detail fetch 完了後に表示する。
+- Detail 画面は row tap 後に detail endpoint を取得する。現行 detail endpoint は
+  `/api/v1/events/{eventId}`、`/api/v1/workflow-runs/{runId}`、`/api/v1/agent-tasks/{taskId}` に限る。
+  Sources、queue、settings の row は collection response の compact row で描画し、detail route を前提にしない。
+  list response にない activity、retry、log summary、command result へ依存する UI は detail fetch 完了後に表示する。
 - Mobile は foreground 復帰時に先頭 page から再取得し、`page.nextCursor` は再利用せず差分を確認する。
   `ETag` / `If-None-Match` / `304` は未実装の future optimization であり、現行 client は
   conditional GET を前提にしない。
@@ -150,8 +152,9 @@ session、不安定な回線を前提に compact list と detail fetch を明確
   `message`、任意の `data` object、存在する場合の `requestId` を表示/診断用に保持し、未知の field は
   無視する。
 - すべての request は `X-Request-ID` を送る。現行 action endpoint は idempotency dedupe を保証しない
-  (does not guarantee)。そのため、mobile は network timeout 後に destructive action を自動 retry しない。
-  client generated idempotency
+  (does not guarantee)。そのため、mobile は network timeout 後に action `POST` を自動 retry しない。
+  Destructive action だけでなく、resume や queue assignment などの non-destructive action も user intent を
+  再確認してから再送する。client generated idempotency
   key や future `Idempotency-Key` header は、保存済み結果の再利用を実装するまで advisory metadata とする。
 - Destructive action は local confirmation UI、server confirmation token、`operator` 以上の scope の
   3点が揃うまで送らない。`read-only` token の mobile client は action endpoint を discovery しても
@@ -171,7 +174,7 @@ endpoint を再取得し、SSE と push notification は latency と wake-up の
 | Channel | Role | Client behavior |
 | --- | --- | --- |
 | Polling | Authoritative refresh path。list/detail cache を `/api/v1` response で更新する。 | Foreground 中は 15-30 秒間隔を既定にし、operator action 後は対象 detail と関連 list を即時再取得する。 |
-| SSE | Foreground session の low-latency hint。event body を authoritative state として保存しない。 | 現行 `/events` は `SSE_BEARER_TOKEN` 用の別 bearer token が必要。`Last-Event-ID` を送って reconnect し、受け取った event id/source/subject から該当 collection を再取得する。 |
+| SSE | Foreground session の low-latency hint。event body を authoritative state として保存しない。 | 現行 `/events` は `SSE_BEARER_TOKEN` 用の別 bearer token が必要。`Last-Event-ID` を送って reconnect し、named event listener で受け取った event id/source/subject から該当 collection を再取得する。 |
 | Push notification | Background wake-up と user visible alert。秘密情報や raw payload は含めない。 | notification tap で対象 detail を fetch する。payload は `notificationHint`、resource type/id、redacted summary だけにする。 |
 
 SSE message は operational API response と同じ schema ではなく、更新があったことを知らせる hint とする。
@@ -179,6 +182,8 @@ Mobile は OS background 制約により SSE 常時接続を期待しない。fo
 polling interval を延ばしてよいが、SSE disconnect、tab/app sleep、network change の後は polling に戻す。
 SSE の scoped dashboard token 対応は未実装であり、`read-only` / `operator` / `admin` token を
 `/events` に流用できる契約にはしない。
+SSE frame は `event: ${event.name}` を使うため、browser-compatible client は default `onmessage` だけではなく、
+`github.issue` など必要な event name の named event listener を登録する。
 
 Push notification payload は operator token、webhook secret、raw provider payload、full log、
 confirmation token を含めない。通知から action を直接実行せず、app 起動後に detail fetch、

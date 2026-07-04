@@ -6,6 +6,9 @@ const apiSpec = readFileSync(
   'utf8',
 );
 const docsIndex = readFileSync(new URL('../docs/README.md', import.meta.url), 'utf8');
+const contractsManifest = JSON.parse(
+  readFileSync(new URL('../docs/contracts.manifest.json', import.meta.url), 'utf8'),
+);
 
 describe('operational API v1 design note', () => {
   it('defines the shared dashboard/mobile API surface and migration path', () => {
@@ -30,7 +33,9 @@ describe('operational API v1 design note', () => {
       '`GET /api/v1/events`',
       '`GET /api/v1/events/{eventId}`',
       '`GET /api/v1/workflow-runs`',
+      '`/api/v1/workflow-runs/{runId}`',
       '`GET /api/v1/agent-tasks`',
+      '`/api/v1/agent-tasks/{taskId}`',
       '`GET /api/v1/sources`',
       '`GET /api/v1/queue`',
       '`GET /api/v1/settings`',
@@ -54,6 +59,8 @@ describe('operational API v1 design note', () => {
       '`SSE_BEARER_TOKEN`',
       'future optimization',
       'does not guarantee',
+      'action `POST`',
+      'named event listener',
       'polling',
       'SSE',
       'push notification',
@@ -68,5 +75,20 @@ describe('operational API v1 design note', () => {
 
   it('links the v1 API note from the docs index', () => {
     expect(docsIndex).toContain('operational-api-v1.md');
+  });
+
+  it('registers the operational API contract in the contracts manifest', () => {
+    expect(contractsManifest.contracts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'operational-api-v1',
+          docs: expect.arrayContaining(['docs/operational-api-v1.md']),
+          tests: expect.arrayContaining([
+            'scripts/validate-operational-api-v1.test.mjs',
+            'src/dashboard-api.test.ts',
+          ]),
+        }),
+      ]),
+    );
   });
 });
