@@ -1,3 +1,5 @@
+import { spawnSync } from 'node:child_process';
+
 export type BuiltInCommandName =
   | 'new'
   | 'setup'
@@ -34,6 +36,24 @@ export type RainrailCliResult = {
   readonly stderr: string;
 };
 
+export type CommandRunnerResult = {
+  readonly status: number | null;
+  readonly stdout?: string | Buffer;
+  readonly stderr?: string | Buffer;
+};
+
+export type CommandRunner = (
+  command: string,
+  args: readonly string[],
+) => CommandRunnerResult;
+
+export type RainrailCliDependencies = {
+  readonly commandRunner?: CommandRunner;
+};
+
+const DEFAULT_INSTALLER_URL =
+  'https://raw.githubusercontent.com/reirei-lab/rainrail/main/install.sh';
+
 export const BUILT_IN_COMMANDS: readonly BuiltInCommand[] = [
   {
     name: 'new',
@@ -68,8 +88,8 @@ export const BUILT_IN_COMMANDS: readonly BuiltInCommand[] = [
   {
     name: 'update',
     kind: 'built-in',
-    summary: 'Update Rainrail CLI or project metadata.',
-    implemented: false,
+    summary: 'Update the Rainrail CLI from GitHub Releases.',
+    implemented: true,
   },
   {
     name: 'help',
@@ -194,7 +214,112 @@ export function formatHelp(): string {
   ].join('\n');
 }
 
-export function runRainrailCli(argv: readonly string[]): RainrailCliResult {
+function parseUpdateArguments(args: readonly string[]): {
+  readonly installer: string;
+  readonly installerArgs: readonly string[];
+  readonly errors: readonly string[];
+} {
+  const installerArgs: string[] = [];
+  const errors: string[] = [];
+  let installer = DEFAULT_INSTALLER_URL;
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+
+    if (arg === undefined) {
+      continue;
+    }
+
+    if (arg === '--version' || arg === '--installer') {
+      const value = args[index + 1];
+      if (value === undefined || value.startsWith('--')) {
+        errors.push(`Missing value for ${arg}.`);
+        continue;
+      }
+
+      if (arg === '--installer') {
+        installer = value;
+      } else {
+        installerArgs.push(arg, value);
+      }
+      index += 1;
+      continue;
+    }
+
+    if (arg.startsWith('--version=')) {
+      const value = arg.slice('--version='.length);
+      if (value.length === 0) {
+        errors.push('Missing value for --version.');
+        continue;
+      }
+      installerArgs.push('--version', value);
+      continue;
+    }
+
+    if (arg.startsWith('--installer=')) {
+      const value = arg.slice('--installer='.length);
+      if (value.length === 0) {
+        errors.push('Missing value for --installer.');
+        continue;
+      }
+      installer = value;
+      continue;
+    }
+
+    installerArgs.push(arg);
+  }
+
+  return { installer, installerArgs, errors };
+}
+
+function toOutput(value: string | Buffer | undefined): string {
+  if (value === undefined) {
+    return '';
+  }
+  return typeof value === 'string' ? value : value.toString('utf8');
+}
+
+function runUpdateCommand(
+  args: readonly string[],
+  options: SharedOptions,
+  commandRunner: CommandRunner,
+): RainrailCliResult {
+  const parsed = parseUpdateArguments(args);
+  if (parsed.errors.length > 0) {
+    return {
+      exitCode: 1,
+      stdout: '',
+      stderr: `${parsed.errors.join('\n')}\n`,
+    };
+  }
+
+  const installerArgs = [...parsed.installerArgs];
+  if (options.yes) {
+    installerArgs.push('--yes');
+  }
+
+  const result = parsed.installer.startsWith('http://') ||
+    parsed.installer.startsWith('https://')
+    ? commandRunner('bash', [
+        '-c',
+        'set -euo pipefail; tmp="$(mktemp)"; trap \'rm -f "$tmp"\' EXIT; curl -fsSL "$1" -o "$tmp"; bash "$tmp" "${@:2}"',
+        'rainrail-update',
+        parsed.installer,
+        ...installerArgs,
+      ])
+    : commandRunner('bash', [parsed.installer, ...installerArgs]);
+
+  return {
+    exitCode: result.status ?? 1,
+    stdout: toOutput(result.stdout),
+    stderr: toOutput(result.stderr),
+  };
+}
+
+export function runRainrailCli(
+  argv: readonly string[],
+  dependencies: RainrailCliDependencies = {},
+): RainrailCliResult {
   const parsed = parseRainrailArguments(argv);
   if (parsed.errors.length > 0) {
     return {
@@ -220,6 +345,15 @@ export function runRainrailCli(argv: readonly string[]): RainrailCliResult {
       stdout: formatHelp(),
       stderr: '',
     };
+  }
+
+  if (command.name === 'update') {
+    return runUpdateCommand(
+      parsed.commandArgs,
+      parsed.options,
+      dependencies.commandRunner ??
+        ((commandName, args) => spawnSync(commandName, args, { encoding: 'utf8' })),
+    );
   }
 
   return {

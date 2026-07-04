@@ -102,6 +102,39 @@ describe('Rainrail CLI built-in commands', () => {
     expect(result.stderr).toContain('rainrail doctor is not implemented yet.');
   });
 
+  it('runs the shared installer for rainrail update', () => {
+    const calls: Array<{ command: string; args: readonly string[] }> = [];
+
+    const result = runRainrailCli(
+      ['--yes', 'update', '--version', '1.2.3', '--installer', '/tmp/install.sh'],
+      {
+        commandRunner: (command, args) => {
+          calls.push({ command, args });
+          return { status: 0, stdout: 'installed\n', stderr: '' };
+        },
+      },
+    );
+
+    expect(result).toEqual({
+      exitCode: 0,
+      stdout: 'installed\n',
+      stderr: '',
+    });
+    expect(calls).toEqual([
+      {
+        command: 'bash',
+        args: ['/tmp/install.sh', '--version', '1.2.3', '--yes'],
+      },
+    ]);
+  });
+
+  it('rejects the unsupported rainrail self-update command name', () => {
+    const result = runRainrailCli(['self-update']);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('Unknown rainrail command: self-update');
+  });
+
   it('returns a parse error before running a command when required shared option values are missing', () => {
     expect(runRainrailCli(['--config'])).toEqual({
       exitCode: 1,
