@@ -14,6 +14,8 @@ describe('Cloudflare Pages product site deploys', () => {
     expect(docs).toContain('apps/www/dist');
     expect(docs).toContain('CLOUDFLARE_ACCOUNT_ID');
     expect(docs).toContain('CLOUDFLARE_API_TOKEN');
+    expect(docs).toContain('PUBLIC_RAINRAIL_OPERATIONAL_API_URL');
+    expect(docs).toContain('operational store');
     expect(docs).toContain('pnpm pages:deploy:preview');
     expect(docs).toContain('pnpm pages:deploy:production');
     expect(docs).toContain('GitHub Actions は secrets が未設定の場合でも build または artifact download まで実行し');
@@ -69,5 +71,10 @@ describe('Cloudflare Pages product site deploys', () => {
     expect(workflow).toContain('group: cloudflare-pages-production-main');
     expect(workflow).toContain('pnpm pages:build');
     expect(workflow).toContain('pnpm exec wrangler pages deploy apps/www/dist --project-name rainrail-www --branch main');
+  });
+
+  it('passes the operational API URL into static Pages builds before artifact deploys', () => {
+    expect(workflow).toContain('PUBLIC_RAINRAIL_OPERATIONAL_API_URL: ${{ vars.RAINRAIL_OPERATIONAL_API_URL }}');
+    expect(workflow).toMatch(/^ {6}- name: Build Cloudflare Pages production\n {8}env:\n {10}PUBLIC_RAINRAIL_OPERATIONAL_API_URL: \$\{\{ vars\.RAINRAIL_OPERATIONAL_API_URL \}\}\n {8}run: pnpm pages:build$/m);
   });
 });

@@ -11,6 +11,11 @@ GitHub Actions と手元の Wrangler deploy には Cloudflare API credential が
 
 - `CLOUDFLARE_ACCOUNT_ID`: `rainrail-www` を所有する Cloudflare account ID。
 - `CLOUDFLARE_API_TOKEN`: Cloudflare Pages deploy 権限を持つ API token。
+- Variable `RAINRAIL_OPERATIONAL_API_URL`: `/dashboard` の静的 HTML に焼き込む operational API
+  origin。GitHub Actions はこの値を `PUBLIC_RAINRAIL_OPERATIONAL_API_URL` として Astro build に渡す。
+  `/api/v1/*` を提供し、operational store が構成済みの origin を指定する。未設定の場合、
+  dashboard の入力欄から Operational API URL を指定して同じ session 内で利用する。既存の
+  Cloudflare Worker deployment を指定する場合は、先に Worker 側で operational store を接続する。
 
 GitHub Actions は secrets が未設定の場合でも build または artifact download まで実行し、
 deploy だけを skip する。これにより preview / production の buildability は PR 上で確認できる。

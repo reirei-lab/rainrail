@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { verifyRainrailEventsBearerToken } from './index.js';
+import { rainrailEventsAuthErrorResponse, verifyRainrailEventsBearerToken } from './index.js';
 
 describe('Rainrail events auth', () => {
   it('requires a bearer token for events subscriptions', () => {
@@ -66,6 +66,19 @@ describe('Rainrail events auth', () => {
       status: 503,
       reason: 'events_auth_not_configured',
     });
+  });
+
+  it('returns CORS headers on auth error responses for cross-origin dashboards', async () => {
+    const response = rainrailEventsAuthErrorResponse({
+      ok: false,
+      status: 403,
+      reason: 'invalid_bearer_token',
+    });
+
+    expect(response.status).toBe(403);
+    expect(response.headers.get('Access-Control-Allow-Origin')).toBe('*');
+    expect(response.headers.get('Access-Control-Allow-Headers')).toContain('Authorization');
+    await expect(response.json()).resolves.toEqual({ error: 'invalid_bearer_token' });
   });
 
   it('compares mismatched token lengths across the maximum token length', () => {
