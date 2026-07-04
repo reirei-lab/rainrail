@@ -5,22 +5,32 @@ import {
   type DashboardDetail,
   type DashboardEvent,
   type DashboardOverview,
+  type DashboardQueueItem,
+  type DashboardSetting,
+  type DashboardSource,
   type DashboardWorkflowRun,
 } from './dashboard-client';
 
-type DashboardTab = 'overview' | 'events' | 'workflow-runs' | 'agent-tasks';
+type DashboardTab = 'overview' | 'events' | 'workflow-runs' | 'agent-tasks' | 'sources' | 'queue' | 'settings';
+type DashboardRow = DashboardEvent | DashboardWorkflowRun | DashboardAgentTask | DashboardSource | DashboardQueueItem | DashboardSetting;
 
 interface DashboardData {
   overview: DashboardOverview;
   events: DashboardEvent[];
   workflowRuns: DashboardWorkflowRun[];
   agentTasks: DashboardAgentTask[];
+  sources: DashboardSource[];
+  queue: DashboardQueueItem[];
+  settings: DashboardSetting[];
 }
 
 const TOKEN_STORAGE_KEY = 'rainrail-dashboard-token';
 const API_BASE_URL_STORAGE_KEY = 'rainrail-dashboard-api-base-url';
 const OPERATOR_STORAGE_KEY = 'rainrail-dashboard-operator';
 const STALE_AFTER_MS = 45000;
+const sourceBundleLabels = ['EEP Bridge', 'GitHub webhook', 'Cloudflare tail', 'manual/chat'];
+const queueLabels = ['upcoming issue', 'blocked reason', 'in-progress count', 'claim lock', 'Project status'];
+const settingsLabels = ['max concurrency', 'auto-start', 'retry policy', 'operational snapshot limit', 'dashboard auth'];
 
 const root = document.querySelector<HTMLElement>('[data-dashboard-app]');
 const sessionStore = createSafeStorage(() => window.sessionStorage);
@@ -128,7 +138,7 @@ if (root !== null) {
   for (const button of tabButtons) {
     button.addEventListener('click', () => {
       const tab = button.dataset.dashboardTab;
-      if (tab === 'overview' || tab === 'events' || tab === 'workflow-runs' || tab === 'agent-tasks') {
+      if (isDashboardTab(tab)) {
         selectedTab = tab;
         renderCurrentList();
       }
@@ -163,6 +173,9 @@ if (root !== null) {
         events: (await activeClient.events(currentEventFilters())).data,
         workflowRuns: (await activeClient.workflowRuns()).data,
         agentTasks: (await activeClient.agentTasks()).data,
+        sources: (await activeClient.sources()).data,
+        queue: (await activeClient.queue()).data,
+        settings: (await activeClient.settings()).data,
       };
       if (!isCurrentRefresh(activeClient, activeRefreshId)) return;
 
@@ -171,7 +184,7 @@ if (root !== null) {
       scheduleStaleCheck();
       renderStats(latestData.overview);
       renderCurrentList();
-      const hasOperationalData = hasOperationalRecords(latestData.overview);
+      const hasOperationalData = hasDashboardRecords(latestData);
       setState(hasOperationalData ? 'ready' : 'empty', hasOperationalData ? 'Live operational state' : 'No operational records yet');
     } catch (error) {
       if (!isCurrentRefresh(activeClient, activeRefreshId)) return;
@@ -197,14 +210,14 @@ if (root !== null) {
     list.replaceChildren(...rows.map((row) => rowButton(row)));
     if (rows.length === 0) {
       clearSelectedDetail();
-      detail.textContent = 'Select another stream or wait for the next poll.';
+      detail.textContent = emptyDetailMessage(selectedTab);
       return;
     }
 
     void renderDetail(rows[0]!);
   }
 
-  function rowButton(row: DashboardEvent | DashboardWorkflowRun | DashboardAgentTask): HTMLButtonElement {
+  function rowButton(row: DashboardRow): HTMLButtonElement {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'dashboard-row';
@@ -219,7 +232,7 @@ if (root !== null) {
     return button;
   }
 
-  async function renderDetail(row: DashboardEvent | DashboardWorkflowRun | DashboardAgentTask): Promise<void> {
+  async function renderDetail(row: DashboardRow): Promise<void> {
     if (detail === null) return;
 
     const detailRequestId = ++detailRequestSequence;
@@ -246,9 +259,14 @@ if (root !== null) {
         renderWorkflowRunDetail(row, loaded);
         return;
       }
-      const loaded = await activeClient.agentTaskDetail(row.id);
+      if (row.type === 'agent-task') {
+        const loaded = await activeClient.agentTaskDetail(row.id);
+        if (!isCurrentDetailRequest(activeClient, detailRequestId, row.id)) return;
+        renderAgentTaskDetail(row, loaded);
+        return;
+      }
       if (!isCurrentDetailRequest(activeClient, detailRequestId, row.id)) return;
-      renderAgentTaskDetail(row, loaded);
+      renderBasicDetail(row, `${row.type} summary`);
     } catch {
       if (isCurrentDetailRequest(activeClient, detailRequestId, row.id)) {
         renderBasicDetail(row, 'Detail request failed');
@@ -267,6 +285,8 @@ if (root !== null) {
       statItem('Retrying handlers', counts.eventHandlerRetries ?? 0),
       statItem('Provider status', providerCount(latestData?.events ?? [])),
       statItem('Agent tasks', counts.agentTasks ?? 0),
+      statItem('Sources', latestData?.sources.length ?? 0),
+      statItem('Queue', latestData?.queue.length ?? 0),
     ]);
   }
 
@@ -280,6 +300,8 @@ if (root !== null) {
       statItem('Retrying handlers', 0),
       statItem('Provider status', 0),
       statItem('Agent tasks', 0),
+      statItem('Sources', 0),
+      statItem('Queue', 0),
     );
   }
 
@@ -297,9 +319,12 @@ if (root !== null) {
     return item;
   }
 
-  function selectedRows(data: DashboardData): Array<DashboardEvent | DashboardWorkflowRun | DashboardAgentTask> {
+  function selectedRows(data: DashboardData): DashboardRow[] {
     if (selectedTab === 'workflow-runs') return data.workflowRuns;
     if (selectedTab === 'agent-tasks') return data.agentTasks;
+    if (selectedTab === 'sources') return data.sources;
+    if (selectedTab === 'queue') return data.queue;
+    if (selectedTab === 'settings') return data.settings;
     if (selectedTab === 'overview') return [...data.overview.data.recentActivity, ...data.agentTasks];
     return data.events;
   }
@@ -401,6 +426,13 @@ if (root !== null) {
     detailRequestSequence += 1;
   }
 
+  function emptyDetailMessage(tab: DashboardTab): string {
+    if (tab === 'sources') return `Waiting for configured source adapters: ${sourceBundleLabels.join(', ')}.`;
+    if (tab === 'queue') return `Waiting for queue records covering ${queueLabels.join(', ')}.`;
+    if (tab === 'settings') return `Waiting for settings metadata covering ${settingsLabels.join(', ')}.`;
+    return 'Select another stream or wait for the next poll.';
+  }
+
   function currentEventFilters(): { sourceType?: string; name?: string } {
     return {
       sourceType: eventSourceFilter?.value.trim() ?? '',
@@ -408,7 +440,7 @@ if (root !== null) {
     };
   }
 
-  function renderBasicDetail(row: DashboardEvent | DashboardWorkflowRun | DashboardAgentTask, label: string): void {
+  function renderBasicDetail(row: DashboardRow, label: string): void {
     if (detail === null) return;
     selectedAgentTaskId = row.type === 'agent-task' ? row.id : undefined;
     setOperatorActionsEnabled(localStore.get(OPERATOR_STORAGE_KEY) === '1');
@@ -425,6 +457,7 @@ if (root !== null) {
         <div><dt>Issue</dt><dd>${escapeHtml(formatIssue(row))}</dd></div>
         <div><dt>Action audit</dt><dd>${escapeHtml(label)}</dd></div>
       </dl>
+      ${renderMetadata(row)}
     `;
   }
 
@@ -657,12 +690,28 @@ function isDashboardAuthError(error: unknown): boolean {
     && (error.status === 401 || error.status === 403 || error.code === 'invalid_bearer_token');
 }
 
+function isDashboardTab(value: string | undefined): value is DashboardTab {
+  return value === 'overview'
+    || value === 'events'
+    || value === 'workflow-runs'
+    || value === 'agent-tasks'
+    || value === 'sources'
+    || value === 'queue'
+    || value === 'settings';
+}
+
 function hasOperationalRecords(overview: DashboardOverview): boolean {
   const counts = overview.data.counts;
   return Object.values(counts).some((value) => value > 0);
 }
 
-function formatIssue(row: DashboardEvent | DashboardWorkflowRun | DashboardAgentTask): string {
+function hasDashboardRecords(data: DashboardData): boolean {
+  return hasOperationalRecords(data.overview)
+    || data.sources.length > 0
+    || data.queue.length > 0;
+}
+
+function formatIssue(row: DashboardRow): string {
   if ('issue' in row && row.issue?.repository !== undefined && row.issue.number !== undefined) {
     return `${row.issue.repository}#${row.issue.number}`;
   }
@@ -675,13 +724,15 @@ function formatIssue(row: DashboardEvent | DashboardWorkflowRun | DashboardAgent
   return 'n/a';
 }
 
-function rowTitle(row: DashboardEvent | DashboardWorkflowRun | DashboardAgentTask): string {
+function rowTitle(row: DashboardRow): string {
+  if ('label' in row && typeof row.label === 'string') return row.label;
   if ('summary' in row && typeof row.summary === 'string') return row.summary;
+  if (row.type !== 'event' && 'name' in row && typeof row.name === 'string') return row.name;
   if ('title' in row && typeof row.title === 'string') return row.title;
   return row.id;
 }
 
-function rowMeta(row: DashboardEvent | DashboardWorkflowRun | DashboardAgentTask): string {
+function rowMeta(row: DashboardRow): string {
   if (row.type === 'event') {
     return [
       row.deliveryId === undefined ? undefined : `Delivery ${row.deliveryId}`,
@@ -693,12 +744,79 @@ function rowMeta(row: DashboardEvent | DashboardWorkflowRun | DashboardAgentTask
   if (row.type === 'workflow-run') {
     return row.sourceEventId === undefined ? row.id : `Source event ${row.sourceEventId}`;
   }
-  return [
-    row.issue?.repository !== undefined && row.issue.number !== undefined ? `${row.issue.repository}#${row.issue.number}` : undefined,
-    row.branchName,
-    row.agentSessionId,
-    row.warnings?.staleProjectClaim ? 'stale project claim' : undefined,
-  ].filter((value): value is string => value !== undefined && value !== '').join(' | ') || row.id;
+  if (row.type === 'agent-task') {
+    return [
+      row.issue?.repository !== undefined && row.issue.number !== undefined ? `${row.issue.repository}#${row.issue.number}` : undefined,
+      row.branchName,
+      row.agentSessionId,
+      row.warnings?.staleProjectClaim ? 'stale project claim' : undefined,
+    ].filter((value): value is string => value !== undefined && value !== '').join(' | ') || row.id;
+  }
+  if (row.type === 'source') {
+    return [
+      row.sourceType,
+      row.transport,
+      row.lastDelivery?.id === undefined ? undefined : `Last delivery ${row.lastDelivery.id}`,
+    ].filter((value): value is string => value !== undefined).join(' | ') || row.id;
+  }
+  if (row.type === 'queue-item') {
+    return [
+      row.projectStatus === undefined ? undefined : `Project ${row.projectStatus}`,
+      row.blockedReason === undefined ? undefined : `Blocked ${row.blockedReason}`,
+      row.claimLock?.heldBy === undefined ? undefined : `Claim ${row.claimLock.heldBy}`,
+    ].filter((value): value is string => value !== undefined).join(' | ') || row.id;
+  }
+  if (row.type === 'setting') {
+    return row.value;
+  }
+  return 'unknown';
+}
+
+function renderMetadata(row: DashboardRow): string {
+  const items: Array<[string, string]> = [];
+
+  if (row.type === 'source') {
+    items.push(
+      ['Source type', row.sourceType],
+      ['Endpoint', row.endpoint ?? 'n/a'],
+      ['Transport', row.transport ?? 'n/a'],
+      ['Auth', row.auth?.status ?? 'unknown'],
+      ['Last delivery', row.lastDelivery?.receivedAt ?? 'none'],
+      ['Bundle model', sourceBundleLabels.join(', ')],
+    );
+  }
+
+  if (row.type === 'queue-item') {
+    items.push(
+      ['Project status', row.projectStatus ?? 'unknown'],
+      ['Claim lock', row.claimLock?.projectItemId ?? 'none'],
+      ['Held by', row.claimLock?.heldBy ?? 'n/a'],
+      ['Blocked reason', row.blockedReason ?? 'none'],
+      ['Queue signals', queueLabels.join(', ')],
+    );
+  }
+
+  if (row.type === 'setting') {
+    items.push(
+      ['Value', row.value],
+      ['Update scope', 'admin'],
+      ['Audit', 'required'],
+      ['Settings model', settingsLabels.join(', ')],
+    );
+  }
+
+  if (items.length === 0) return '';
+
+  return `
+    <div class="dashboard-meta-grid">
+      ${items.map(([label, value]) => `
+        <div class="dashboard-meta-item">
+          <span>${escapeHtml(label)}</span>
+          <strong>${escapeHtml(value)}</strong>
+        </div>
+      `).join('')}
+    </div>
+  `;
 }
 
 function providerCount(events: DashboardEvent[]): number {

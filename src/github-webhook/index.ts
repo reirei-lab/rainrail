@@ -134,6 +134,10 @@ export async function handleGitHubWebhookRequest(
 export function createGitHubWebhookIntakeAdapter(options: GitHubWebhookIntakeAdapterOptions): RainrailIntakeAdapter {
   return {
     name: options.sourceName ?? 'github-webhook',
+    source: {
+      type: 'github',
+      authStatus: options.secret.length === 0 ? 'missing' : 'configured',
+    },
     routes: [{
       path: options.endpoint ?? '/webhooks/github',
       methods: ['POST'],

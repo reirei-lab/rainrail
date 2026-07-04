@@ -132,6 +132,43 @@ describe('Rainrail Node server', () => {
     expect(chunk).toContain('event: cloudflare.tail\n');
   });
 
+  it('passes task queue options into the shared HTTP dashboard app', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:12:00.000Z'),
+    });
+    const { app } = createRainrailNodeServer({
+      githubWebhookSecret: 'secret',
+      publishToken: 'test-publish-token',
+      eventsBearerToken: 'events-token',
+      operationalStore,
+      taskQueue: {
+        listProjectIssues: async () => [{
+          id: 'PVTI_NODE',
+          title: 'Node queued issue',
+          status: 'Todo',
+          state: 'OPEN',
+          assigneeLogins: ['reirei-agent'],
+          repository: 'reirei-lab/rainrail',
+          number: 115,
+          url: 'https://github.com/reirei-lab/rainrail/issues/115',
+        }],
+      },
+    });
+
+    const queue = await app.fetch(new Request('https://rainrail.local/api/v1/queue?filter[status]=upcoming', {
+      headers: { authorization: 'Bearer events-token' },
+    }));
+    expect(queue.status).toBe(200);
+    await expect(queue.json()).resolves.toMatchObject({
+      data: [{ id: 'project:PVTI_NODE', status: 'upcoming', title: 'Node queued issue' }],
+      summary: { upcomingIssues: 1 },
+    });
+
+    operationalStore.close();
+  });
+
   it('preserves custom Node tail adapters instead of registering the bundled Cloudflare tail twice', async () => {
     const customTail: RainrailIntakeAdapter = {
       name: 'custom-tail',

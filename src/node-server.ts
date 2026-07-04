@@ -43,6 +43,7 @@ export function createRainrailNodeServer(options: RainrailNodeServerOptions): Ra
     ...(options.eventsBearerToken === undefined ? {} : { eventsBearerToken: options.eventsBearerToken }),
     runtime: options.runtime ?? 'node',
     ...(options.operationalStore === undefined ? {} : { operationalStore: options.operationalStore }),
+    ...(options.taskQueue === undefined ? {} : { taskQueue: options.taskQueue }),
     ...(options.dashboardCommandMaxBodyBytes === undefined && options.maxBodyBytes === undefined ? {} : {
       dashboardCommandMaxBodyBytes: options.dashboardCommandMaxBodyBytes ?? options.maxBodyBytes,
     }),

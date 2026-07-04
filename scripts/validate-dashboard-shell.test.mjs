@@ -34,12 +34,33 @@ describe('dashboard app shell', () => {
     expect(dashboardPage).toContain('data-action-permission="operator"');
   });
 
+  it('adds Sources, Queue, and Settings views for operator context', () => {
+    for (const tab of ['sources', 'queue', 'settings']) {
+      expect(dashboardPage).toContain(`data-dashboard-tab="${tab}"`);
+    }
+
+    for (const method of ['sources()', 'queue()', 'settings()']) {
+      expect(dashboardClient).toContain(method);
+    }
+
+    expect(dashboardApp).toContain("type DashboardTab = 'overview' | 'events' | 'workflow-runs' | 'agent-tasks' | 'sources' | 'queue' | 'settings'");
+    expect(dashboardApp).toContain('sources: (await activeClient.sources()).data');
+    expect(dashboardApp).toContain('queue: (await activeClient.queue()).data');
+    expect(dashboardApp).toContain('settings: (await activeClient.settings()).data');
+    expect(dashboardApp).toContain("const sourceBundleLabels = ['EEP Bridge', 'GitHub webhook', 'Cloudflare tail', 'manual/chat']");
+    expect(dashboardApp).toContain("const queueLabels = ['upcoming issue', 'blocked reason', 'in-progress count', 'claim lock', 'Project status']");
+    expect(dashboardApp).toContain("const settingsLabels = ['max concurrency', 'auto-start', 'retry policy', 'operational snapshot limit', 'dashboard auth']");
+  });
+
   it('keeps UI code behind an operational API client instead of hard-coded fetch URLs', () => {
     for (const endpoint of [
       '/api/v1/overview',
       '/api/v1/events',
       '/api/v1/workflow-runs',
       '/api/v1/agent-tasks',
+      '/api/v1/sources',
+      '/api/v1/queue',
+      '/api/v1/settings',
     ]) {
       expect(dashboardClient).toContain(endpoint);
       expect(dashboardApp).not.toContain(endpoint);
@@ -130,6 +151,8 @@ describe('dashboard app shell', () => {
       '.dashboard-two-pane',
       '.dashboard-list',
       '.dashboard-detail',
+      '.dashboard-meta-grid',
+      '.dashboard-meta-item',
       '.dashboard-state',
       '.dashboard-stale',
       '.dashboard-action',
