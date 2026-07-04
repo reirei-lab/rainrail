@@ -6,8 +6,10 @@ const dispatcherAgents = readFileSync(new URL('../src/dispatcher/AGENTS.md', imp
 const dispatcherImplementation = readFileSync(new URL('../src/dispatcher/index.ts', import.meta.url), 'utf8');
 const pluginRuntimeContract = readFileSync(new URL('../docs/plugin-runtime-contract.md', import.meta.url), 'utf8');
 const githubWebhookAgents = readFileSync(new URL('../src/github-webhook/AGENTS.md', import.meta.url), 'utf8');
+const prLifecycleAgents = readFileSync(new URL('../src/AGENTS.md', import.meta.url), 'utf8');
 const agentRuntimeAgents = readFileSync(new URL('../src/agent-runtime/AGENTS.md', import.meta.url), 'utf8');
 const githubProviderAgents = readFileSync(new URL('../src/providers/github/AGENTS.md', import.meta.url), 'utf8');
+const eventDeliveryAgents = readFileSync(new URL('../src/event-delivery/AGENTS.md', import.meta.url), 'utf8');
 /** @type {{contracts: Array<{id: string, sources: string[]}>}} */
 const contractsManifest = JSON.parse(
   readFileSync(new URL('../docs/contracts.manifest.json', import.meta.url), 'utf8'),
@@ -121,6 +123,30 @@ describe('GitHub webhook scoped agent rules', () => {
   });
 });
 
+describe('PR lifecycle scoped agent rules', () => {
+  it('documents the current root-level lifecycle scope and staged module split decision', () => {
+    expect(prLifecycleAgents).toContain('PR lifecycle');
+    expect(prLifecycleAgents).toContain('src/pr-lifecycle.ts');
+    expect(prLifecycleAgents).toContain('src/autoMerge.test.ts');
+    expect(prLifecycleAgents).toContain('src/codexReview.test.ts');
+    expect(prLifecycleAgents).toContain('compatibility shim');
+    expect(prLifecycleAgents).toContain('src/pr-lifecycle/index.ts');
+    expect(prLifecycleAgents).toContain('GitHubPullRequestProvider');
+    expect(prLifecycleAgents).toContain('normalized');
+  });
+
+  it('keeps review, check, and merge freshness rules near the workflow code', () => {
+    expect(prLifecycleAgents).toContain('Codex review');
+    expect(prLifecycleAgents).toContain('latest actionable review');
+    expect(prLifecycleAgents).toContain('review comments pagination');
+    expect(prLifecycleAgents).toContain('unresolved review thread');
+    expect(prLifecycleAgents).toContain('stale checks');
+    expect(prLifecycleAgents).toContain('headSha');
+    expect(prLifecycleAgents).toContain('auto-merge blockers');
+    expect(prLifecycleAgents).toContain('context.actions.mergePullRequest');
+  });
+});
+
 describe('agent runtime scoped agent rules', () => {
   it('documents runtime, timeline, resume lifecycle, and masking expectations', () => {
     expect(agentRuntimeAgents).toContain('agent runtime');
@@ -164,5 +190,40 @@ describe('GitHub provider scoped agent rules', () => {
     expect(githubProviderAgents).toContain('pageInfo.hasNextPage');
     expect(githubProviderAgents).toContain('reuse');
     expect(githubProviderAgents).toContain('releaseProjectIssue');
+  });
+});
+
+describe('event delivery scoped agent rules', () => {
+  it('documents storage, publish, replay, and SSE framing invariants', () => {
+    expect(eventDeliveryAgents).toContain('event delivery');
+    expect(eventDeliveryAgents).toContain('storage');
+    expect(eventDeliveryAgents).toContain('publish');
+    expect(eventDeliveryAgents).toContain('replay');
+    expect(eventDeliveryAgents).toContain('SSE framing');
+    expect(eventDeliveryAgents).toContain('Last-Event-ID');
+    expect(eventDeliveryAgents).toContain('replayLimit=0');
+  });
+
+  it('documents lifecycle edge cases for aborts, cleanup, duplicates, and serialization failures', () => {
+    expect(eventDeliveryAgents).toContain('abort');
+    expect(eventDeliveryAgents).toContain('cleanup');
+    expect(eventDeliveryAgents).toContain('duplicate id');
+    expect(eventDeliveryAgents).toContain('serialization failure');
+    expect(eventDeliveryAgents).toContain('single writer');
+    expect(eventDeliveryAgents).toContain('persist before broadcast');
+  });
+
+  it('tracks event delivery implementation files under the scoped directory', () => {
+    const eventDelivery = contractById('event-delivery');
+    const boundaryContract = contractById('core-eep-bridge-source-adapter-boundary');
+
+    expect(eventDelivery.sources).toContain('src/event-delivery/bridge-room.ts');
+    expect(eventDelivery.sources).toContain('src/event-delivery/event-bus.ts');
+    expect(eventDelivery.sources).toContain('src/event-delivery/sse.ts');
+    expect(eventDelivery.sources).not.toContain('src/bridge-room.ts');
+    expect(eventDelivery.sources).not.toContain('src/event-bus.ts');
+    expect(eventDelivery.sources).not.toContain('src/sse.ts');
+    expect(boundaryContract.sources).toContain('src/event-delivery/bridge-room.ts');
+    expect(boundaryContract.sources).toContain('src/event-delivery/event-bus.ts');
   });
 });
