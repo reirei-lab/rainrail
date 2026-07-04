@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  createCloudflareTailIntakeAdapter,
   createEventEnvelope,
   createGitHubWebhookIntakeAdapter,
   createGitHubWebhookSignature,
@@ -301,6 +302,116 @@ describe('Rainrail dashboard API', () => {
         { id: 'runtime', type: 'setting', status: 'read-only', value: 'node' },
       ],
       updatePolicy: { requiredScope: 'admin', audit: 'required' },
+      page: { limit: 50, nextCursor: null },
+    });
+
+    operationalStore.close();
+  });
+
+  it('uses intake adapter source metadata for source type and auth status', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:12:00.000Z'),
+    });
+    const app = createTestApp({
+      eventsBearerToken: 'events-token',
+      operationalStore,
+      intakeAdapters: [
+        createGitHubWebhookIntakeAdapter({ secret: '', sourceName: 'prod-webhook', endpoint: '/webhooks/github' }),
+        createCloudflareTailIntakeAdapter({
+          sourceName: 'prod-tail',
+          fallbackDeliveryId: () => 'tail-delivery',
+        }),
+      ],
+    });
+
+    const cloudflare = await app.fetch(new Request('https://rainrail.local/api/v1/sources?filter[source]=cloudflare', {
+      headers: { authorization: 'Bearer events-token' },
+    }));
+    await expect(cloudflare.json()).resolves.toMatchObject({
+      data: [{
+        id: 'prod-tail',
+        sourceType: 'cloudflare',
+        auth: { status: 'not required' },
+      }],
+      page: { limit: 50, nextCursor: null },
+    });
+
+    const github = await app.fetch(new Request('https://rainrail.local/api/v1/sources?filter[source]=github', {
+      headers: { authorization: 'Bearer events-token' },
+    }));
+    await expect(github.json()).resolves.toMatchObject({
+      data: [{
+        id: 'prod-webhook',
+        sourceType: 'github',
+        auth: { status: 'missing' },
+      }],
+      page: { limit: 50, nextCursor: null },
+    });
+
+    operationalStore.close();
+  });
+
+  it('marks stale project claims and abnormal terminal statuses as blocked queue rows', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:12:00.000Z'),
+    });
+    operationalStore.recordAgentTask({
+      id: 'agent_task_compaction_failed',
+      title: 'Release stale claim',
+      agentSessionId: 'agent:main:rainrail-stale',
+      branchName: 'agent/reirei-lab-rainrail-stale',
+      status: 'compaction_failed',
+      issue: { repository: 'reirei-lab/rainrail', number: 115 },
+      claim: { projectItemId: 'PVTI_STALE', originalStatus: 'In Progress' },
+    });
+    operationalStore.recordAgentTask({
+      id: 'agent_task_stopped',
+      title: 'Stopped task claim',
+      agentSessionId: 'agent:main:rainrail-stopped',
+      branchName: 'agent/reirei-lab-rainrail-stopped',
+      status: 'stopped',
+      issue: { repository: 'reirei-lab/rainrail', number: 116 },
+      claim: { projectItemId: 'PVTI_STOPPED', originalStatus: 'In Progress' },
+    });
+    const app = createTestApp({
+      eventsBearerToken: 'events-token',
+      operationalStore,
+    });
+
+    const queue = await app.fetch(new Request('https://rainrail.local/api/v1/queue?filter[status]=blocked', {
+      headers: { authorization: 'Bearer events-token' },
+    }));
+
+    expect(queue.status).toBe(200);
+    await expect(queue.json()).resolves.toMatchObject({
+      data: [
+        {
+          id: 'agent_task_stopped',
+          status: 'blocked',
+          blockedReason: 'stale project claim: stopped',
+          staleProjectClaim: true,
+          claimLock: { projectItemId: 'PVTI_STOPPED', heldBy: 'agent:main:rainrail-stopped' },
+        },
+        {
+          id: 'agent_task_compaction_failed',
+          status: 'blocked',
+          blockedReason: 'stale project claim: compaction_failed',
+          staleProjectClaim: true,
+          claimLock: { projectItemId: 'PVTI_STALE', heldBy: 'agent:main:rainrail-stale' },
+        },
+      ],
+      summary: {
+        blockedCount: 2,
+        staleClaimCount: 2,
+        blockedReasons: [
+          'stale project claim: stopped',
+          'stale project claim: compaction_failed',
+        ],
+      },
       page: { limit: 50, nextCursor: null },
     });
 

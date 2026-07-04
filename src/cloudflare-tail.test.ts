@@ -4,6 +4,7 @@ import { getReaderOrThrow, readNext, readUntil } from './test-helpers.js';
 
 import {
   RainrailBridgeRoom,
+  createCloudflareTailIntakeAdapter,
   createCloudflareIssueReporterWorkflow,
   createCloudflareTailEvent,
   createCloudflareTailSourcePlugin,
@@ -17,6 +18,18 @@ import {
 const TEST_PUBLISH_TOKEN = 'test-publish-token';
 
 describe('Cloudflare tail source', () => {
+  it('marks Cloudflare tail intake metadata as Cloudflare without auth', () => {
+    const adapter = createCloudflareTailIntakeAdapter({
+      sourceName: 'prod-tail',
+      fallbackDeliveryId: () => 'tail-delivery',
+    });
+
+    expect(adapter.source).toEqual({
+      type: 'cloudflare',
+      authStatus: 'not_required',
+    });
+  });
+
   it('normalizes Cloudflare Worker exceptions as subscribable cloudflare.error events', async () => {
     const event = await createCloudflareTailEvent({
       tailEvent: cloudflareTailFixture({

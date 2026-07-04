@@ -1,4 +1,4 @@
-import type { RainrailEventEnvelope } from './events.js';
+import type { RainrailEventEnvelope, RainrailEventSourceType } from './events.js';
 
 export interface RainrailIntakePublishResult {
   ok: boolean;
@@ -18,6 +18,10 @@ export interface RainrailIntakeRoute {
 
 export interface RainrailIntakeAdapter {
   name: string;
+  source?: {
+    type: RainrailEventSourceType;
+    authStatus?: 'configured' | 'missing' | 'not_required';
+  };
   routes?: readonly RainrailIntakeRoute[];
   tail?: (events: unknown[], context: RainrailIntakeAdapterContext) => unknown | Promise<unknown>;
 }
@@ -55,6 +59,9 @@ const CORE_ROUTE_PREFIXES = [
   '/api/v1/events/',
   '/api/v1/workflow-runs/',
   '/api/v1/agent-tasks/',
+  '/api/v1/sources/',
+  '/api/v1/queue/',
+  '/api/v1/settings/',
 ] as const;
 
 export function createRainrailIntakeRegistry(adapters: readonly RainrailIntakeAdapter[] = []): RainrailIntakeRegistry {

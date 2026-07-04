@@ -19,6 +19,7 @@ import type {
   StoredAgentTask,
   StoredEventHandlerRetry,
   StoredOperationalEvent,
+  StoredStaleProjectClaimWarning,
 } from './operational-store.js';
 
 export interface RainrailBridgeRoomFetchTarget {
@@ -538,16 +539,18 @@ function dashboardV1QueueResponse(url: URL, options: RainrailHttpAppOptions): Re
   const collection = parseCollectionRequest(url, ['filter[status]']);
   if (!collection.ok) return collection.response;
 
+  const snapshot = store.snapshot();
   const tasks = store.listAgentTasks();
+  const staleWarningsByTaskId = new Map(snapshot.warnings.staleProjectClaims.map((warning) => [warning.taskId, warning]));
   const rows = tasks
-    .map(agentTaskToQueueRow)
+    .map((task) => agentTaskToQueueRow(task, staleWarningsByTaskId.get(task.id)))
     .filter((row) => matchesOptionalFilter(row.status, url.searchParams.get('filter[status]')));
   const page = pageRows(rows, collection.limit, collection.cursor, (row) => row.updatedAt);
   if (!page.ok) return page.response;
 
   return jsonResponse({
     data: page.rows,
-    summary: queueSummary(tasks, store.listEventHandlerRetries()),
+    summary: queueSummary(tasks, store.listEventHandlerRetries(), snapshot.warnings.staleProjectClaims),
     page: { limit: collection.limit, nextCursor: page.nextCursor },
   });
 }
@@ -781,7 +784,8 @@ function latestEventBySourceName(events: StoredOperationalEvent[]): Map<string, 
 
 function intakeAdapterToSourceRow(adapter: RainrailIntakeAdapter, latestEvent: StoredOperationalEvent | undefined) {
   const route = adapter.routes?.[0];
-  const sourceType = sourceTypeFromAdapterName(adapter.name);
+  const sourceType = adapter.source?.type ?? latestEvent?.source.type ?? 'system';
+  const authStatus = adapter.source?.authStatus ?? (route === undefined ? 'not_required' : 'configured');
   return {
     id: adapter.name,
     type: 'source',
@@ -790,7 +794,7 @@ function intakeAdapterToSourceRow(adapter: RainrailIntakeAdapter, latestEvent: S
     name: adapter.name,
     ...(route === undefined ? {} : { endpoint: route.path }),
     transport: adapter.tail === undefined ? 'http' : 'tail',
-    auth: { status: route === undefined ? 'not required' : 'configured' },
+    auth: { status: formatSourceAuthStatus(authStatus) },
     ...(latestEvent === undefined ? {} : {
       lastDelivery: {
         id: latestEvent.delivery.id,
@@ -801,19 +805,18 @@ function intakeAdapterToSourceRow(adapter: RainrailIntakeAdapter, latestEvent: S
   };
 }
 
-function sourceTypeFromAdapterName(name: string): string {
-  if (name.includes('github')) return 'github';
-  if (name.includes('cloudflare')) return 'cloudflare';
-  if (name.includes('manual') || name.includes('chat')) return 'manual';
-  return 'system';
+function formatSourceAuthStatus(status: NonNullable<RainrailIntakeAdapter['source']>['authStatus']): string {
+  if (status === 'not_required') return 'not required';
+  return status ?? 'configured';
 }
 
-function agentTaskToQueueRow(task: StoredAgentTask) {
+function agentTaskToQueueRow(task: StoredAgentTask, staleWarning: StoredStaleProjectClaimWarning | undefined) {
   const claim = recordValue(task.claim);
+  const staleReason = staleWarning === undefined ? undefined : `stale project claim: ${staleWarning.status}`;
   return {
     id: task.id,
     type: 'queue-item',
-    status: queueStatusFromTaskStatus(task.status),
+    status: staleWarning === undefined ? queueStatusFromTaskStatus(task.status) : 'blocked',
     title: task.title,
     updatedAt: task.updatedAt,
     ...(task.issue === undefined ? {} : { issue: task.issue }),
@@ -825,9 +828,12 @@ function agentTaskToQueueRow(task: StoredAgentTask) {
         ...(task.agentSessionId === undefined ? {} : { heldBy: task.agentSessionId }),
       },
     }),
-    ...(task.projectClaim === undefined ? {} : {
-      blockedReason: task.projectClaim.reason,
-      releaseStatus: task.projectClaim.status,
+    ...(staleWarning === undefined ? {} : {
+      staleProjectClaim: true,
+    }),
+    ...(staleReason === undefined && task.projectClaim === undefined ? {} : {
+      blockedReason: staleReason ?? task.projectClaim?.reason,
+      ...(task.projectClaim === undefined ? {} : { releaseStatus: task.projectClaim.status }),
     }),
   };
 }
@@ -835,17 +841,35 @@ function agentTaskToQueueRow(task: StoredAgentTask) {
 function queueStatusFromTaskStatus(status: string): string {
   if (status === 'running') return 'in-progress';
   if (status === 'queued' || status === 'pending') return 'upcoming';
-  if (status === 'failed' || status === 'canceled' || status === 'timed_out') return 'blocked';
+  if (
+    status === 'failed'
+    || status === 'canceled'
+    || status === 'stopped'
+    || status === 'timed_out'
+    || status === 'compaction_failed'
+  ) return 'blocked';
   return status;
 }
 
-function queueSummary(tasks: StoredAgentTask[], retries: StoredEventHandlerRetry[]) {
+function queueSummary(
+  tasks: StoredAgentTask[],
+  retries: StoredEventHandlerRetry[],
+  staleWarnings: StoredStaleProjectClaimWarning[],
+) {
+  const blockedReasons = [...new Set([
+    ...staleWarnings.map((warning) => `stale project claim: ${warning.status}`),
+    ...tasks.map((task) => task.projectClaim?.reason).filter((reason): reason is string => reason !== undefined),
+    ...retries.map((retry) => retry.lastError),
+  ])];
+  const blockedCount = tasks.filter((task) =>
+    queueStatusFromTaskStatus(task.status) === 'blocked'
+    || staleWarnings.some((warning) => warning.taskId === task.id)
+  ).length;
   return {
     upcomingIssues: tasks.filter((task) => queueStatusFromTaskStatus(task.status) === 'upcoming').length,
-    blockedReasons: [...new Set([
-      ...tasks.map((task) => task.projectClaim?.reason).filter((reason): reason is string => reason !== undefined),
-      ...retries.map((retry) => retry.lastError),
-    ])],
+    blockedReasons,
+    blockedCount,
+    staleClaimCount: staleWarnings.length,
     inProgressCount: tasks.filter((task) => queueStatusFromTaskStatus(task.status) === 'in-progress').length,
     claimedCount: tasks.filter((task) => task.claim !== undefined).length,
   };

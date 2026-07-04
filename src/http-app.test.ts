@@ -141,8 +141,22 @@ describe('Rainrail HTTP app', () => {
         }],
 	      }],
 	    })).toThrow(/reserved by Rainrail core/i);
+
+    expect(() => createTestApp(fakeState(), {
+      intakeAdapters: [{
+        name: 'core-v1-queue-conflict',
+        routes: [{
+          path: '/api/v1/queue/PVTI_1/release',
+          methods: ['POST'],
+          async handle() {
+            return Response.json({ ok: true });
+          },
+        }],
+      }],
+    })).toThrow(/reserved by Rainrail core/i);
 	    expect(isCoreRoutePath('/healthz')).toBe(true);
 	    expect(isCoreRoutePath('/api/v1/events/evt_1')).toBe(true);
+    expect(isCoreRoutePath('/api/v1/queue/PVTI_1/release')).toBe(true);
 	    expect(isCoreRoutePath('/intake/manual')).toBe(false);
 	  });
 
