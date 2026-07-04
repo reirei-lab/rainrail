@@ -721,6 +721,66 @@ describe('Rainrail dashboard API', () => {
     operationalStore.close();
   });
 
+  it('does not show upcoming project issues when local running tasks reach the concurrency limit', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:12:00.000Z'),
+    });
+    operationalStore.recordAgentTask({
+      id: 'agent_task_running',
+      title: 'Already running issue',
+      agentSessionId: 'agent:main:rainrail-115',
+      branchName: 'agent/reirei-lab-rainrail-115',
+      status: 'running',
+      issue: { repository: 'reirei-lab/rainrail', number: 115 },
+      claim: { projectItemId: 'PVTI_115', originalStatus: 'In Progress' },
+    });
+    const app = createTestApp({
+      eventsBearerToken: 'events-token',
+      operationalStore,
+      taskQueue: {
+        selection: {},
+        listProjectIssues: async () => [
+          {
+            id: 'PVTI_115',
+            title: 'Project status has not caught up',
+            status: 'Todo',
+            state: 'OPEN',
+            assigneeLogins: ['reirei-agent'],
+            repository: 'reirei-lab/rainrail',
+            number: 115,
+            url: 'https://github.com/reirei-lab/rainrail/issues/115',
+          },
+          {
+            id: 'PVTI_118',
+            title: 'Next startable issue',
+            status: 'Todo',
+            state: 'OPEN',
+            assigneeLogins: ['reirei-agent'],
+            repository: 'reirei-lab/rainrail',
+            number: 118,
+            url: 'https://github.com/reirei-lab/rainrail/issues/118',
+          },
+        ],
+      },
+    });
+
+    const queue = await app.fetch(new Request('https://rainrail.local/api/v1/queue?filter[status]=upcoming', {
+      headers: { authorization: 'Bearer events-token' },
+    }));
+    expect(queue.status).toBe(200);
+    await expect(queue.json()).resolves.toMatchObject({
+      data: [],
+      summary: {
+        upcomingIssues: 0,
+        inProgressCount: 1,
+      },
+    });
+
+    operationalStore.close();
+  });
+
   it('keeps represented project issues in selection context before suppressing duplicate rows', async () => {
     const operationalStore = new RainrailOperationalStore({
       databasePath: ':memory:',
@@ -1046,6 +1106,30 @@ describe('Rainrail dashboard API', () => {
     operationalStore.close();
   });
 
+  it('reports dashboard scoped tokens as configured dashboard auth', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:12:00.000Z'),
+    });
+    const app = createTestApp({
+      operationalStore,
+      dashboardAuth: { readOnlyToken: 'read-only-token' },
+    });
+
+    const settings = await app.fetch(new Request('https://rainrail.local/api/v1/settings', {
+      headers: { authorization: 'Bearer read-only-token' },
+    }));
+    expect(settings.status).toBe(200);
+    const body = await settings.json() as { data: Array<{ id: string; value: string }> };
+    expect(body.data.find((row) => row.id === 'dashboard-auth')).toMatchObject({
+      id: 'dashboard-auth',
+      value: 'bearer token configured',
+    });
+
+    operationalStore.close();
+  });
+
   it('rejects newest sort for the status-prioritized queue', async () => {
     const operationalStore = new RainrailOperationalStore({
       databasePath: ':memory:',
@@ -1062,6 +1146,26 @@ describe('Rainrail dashboard API', () => {
     }));
     expect(queue.status).toBe(400);
     await expect(queue.json()).resolves.toEqual({ error: 'unsupported_sort', sort: 'newest' });
+
+    operationalStore.close();
+  });
+
+  it('rejects newest sort for registration-ordered sources', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:12:00.000Z'),
+    });
+    const app = createTestApp({
+      eventsBearerToken: 'events-token',
+      operationalStore,
+    });
+
+    const sources = await app.fetch(new Request('https://rainrail.local/api/v1/sources?sort=newest', {
+      headers: { authorization: 'Bearer events-token' },
+    }));
+    expect(sources.status).toBe(400);
+    await expect(sources.json()).resolves.toEqual({ error: 'unsupported_sort', sort: 'newest' });
 
     operationalStore.close();
   });
@@ -2525,6 +2629,7 @@ describe('Rainrail dashboard API', () => {
 
 function createTestApp(options: {
   eventsBearerToken?: string;
+  dashboardAuth?: Parameters<typeof createRainrailHttpApp>[0]['dashboardAuth'];
   operationalStore?: RainrailOperationalStore;
   runtime?: string;
   intakeAdapters?: Parameters<typeof createRainrailHttpApp>[0]['intakeAdapters'];
@@ -2534,6 +2639,7 @@ function createTestApp(options: {
     room: new RainrailBridgeRoom(fakeState(), { publishToken: 'publish-token' }),
     publishToken: 'publish-token',
     ...(options.eventsBearerToken === undefined ? {} : { eventsBearerToken: options.eventsBearerToken }),
+    ...(options.dashboardAuth === undefined ? {} : { dashboardAuth: options.dashboardAuth }),
     ...(options.operationalStore === undefined ? {} : { operationalStore: options.operationalStore }),
     ...(options.runtime === undefined ? {} : { runtime: options.runtime }),
     ...(options.taskQueue === undefined ? {} : { taskQueue: options.taskQueue }),

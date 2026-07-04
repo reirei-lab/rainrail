@@ -627,6 +627,10 @@ function dashboardV1SourcesResponse(url: URL, options: RainrailHttpAppOptions): 
 
   const collection = parseCollectionRequest(url, ['filter[source]']);
   if (!collection.ok) return collection.response;
+  const sort = url.searchParams.get('sort');
+  if (sort === 'newest') {
+    return jsonResponse({ error: 'unsupported_sort', sort }, { status: 400 });
+  }
 
   const latestBySource = latestEventBySourceName(store.listEvents());
   const adapters = options.intakeAdapters ?? [];
@@ -693,7 +697,7 @@ function dashboardV1SettingsResponse(url: URL, options: RainrailHttpAppOptions):
     settingRow('auto-start', 'Auto-start', 'not configured'),
     settingRow('retry-policy', 'Retry policy', retryCount === 1 ? '1 retry pending' : `${retryCount} retries pending`),
     settingRow('operational-snapshot-limit', 'Operational snapshot limit', `${store.eventLimit()} events`),
-    settingRow('dashboard-auth', 'Dashboard auth', options.eventsBearerToken === undefined ? 'bearer token not configured' : 'bearer token configured'),
+    settingRow('dashboard-auth', 'Dashboard auth', hasConfiguredDashboardToken(options) ? 'bearer token configured' : 'bearer token not configured'),
     settingRow('runtime', 'Runtime', options.runtime ?? 'fetch'),
   ];
   const page = pageRows(rows, collection.limit, collection.cursor, (row) => row.id);
@@ -985,6 +989,8 @@ async function projectIssueQueueRows(
   staleWarningsByTaskId: Map<string, StoredStaleProjectClaimWarning>,
 ) {
   if (taskQueue === undefined) return [];
+  const effectiveMaxConcurrentAgentTasks = maxConcurrentAgentTasksForSelection(taskQueue.selection);
+  if (localActiveAgentTaskCount(tasks) >= effectiveMaxConcurrentAgentTasks) return [];
 
   const representedIssueKeys = new Set(tasks.flatMap((task) => taskProjectIssueKeys(task, staleWarningsByTaskId.get(task.id))));
   let issues: ProjectIssue[];
@@ -1049,6 +1055,18 @@ function taskHasActiveClaimLock(task: StoredAgentTask, staleWarning: StoredStale
     || task.status === 'running'
     || task.status === 'needs_human'
     || task.status === 'split_recommended';
+}
+
+function localActiveAgentTaskCount(tasks: StoredAgentTask[]): number {
+  return tasks.filter((task) =>
+    task.status === 'queued'
+    || task.status === 'pending'
+    || task.status === 'running'
+  ).length;
+}
+
+function maxConcurrentAgentTasksForSelection(selection: Pick<TaskQueueProvider, 'selection'>['selection']): number {
+  return selection?.maxConcurrentAgentTasks ?? DEFAULT_MAX_CONCURRENT_AGENT_TASKS;
 }
 
 function projectIssueKey(issue: ProjectIssue): string {
@@ -1157,6 +1175,10 @@ function stringField(record: Record<string, unknown> | undefined, field: string)
   const value = record?.[field];
   if (typeof value === 'string') return value;
   return value === null || value === undefined ? undefined : String(value);
+}
+
+function hasConfiguredDashboardToken(options: RainrailHttpAppOptions): boolean {
+  return dashboardTokens(options).some((configured) => configured !== undefined && configured.length > 0);
 }
 
 function numberField(record: Record<string, unknown> | undefined, field: string): number | undefined {
