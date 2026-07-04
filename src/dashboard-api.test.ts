@@ -369,6 +369,35 @@ describe('Rainrail dashboard API', () => {
     operationalStore.close();
   });
 
+  it('rejects duplicated dashboard tokens across different scopes', () => {
+    expect(() => createRainrailHttpApp({
+      room: new RainrailBridgeRoom(fakeState(), { publishToken: 'publish-token' }),
+      publishToken: 'publish-token',
+      eventsBearerToken: 'shared-token',
+      dashboardAuth: {
+        adminToken: 'shared-token',
+      },
+    })).toThrow(/duplicate dashboard token scopes/i);
+
+    expect(() => createRainrailHttpApp({
+      room: new RainrailBridgeRoom(fakeState(), { publishToken: 'publish-token' }),
+      publishToken: 'publish-token',
+      dashboardAuth: {
+        operatorToken: 'shared-token',
+        adminToken: 'shared-token',
+      },
+    })).toThrow(/duplicate dashboard token scopes/i);
+
+    expect(() => createRainrailHttpApp({
+      room: new RainrailBridgeRoom(fakeState(), { publishToken: 'publish-token' }),
+      publishToken: 'publish-token',
+      eventsBearerToken: 'read-token',
+      dashboardAuth: {
+        readOnlyToken: 'read-token',
+      },
+    })).not.toThrow();
+  });
+
   it('returns a stable unavailable response when the operational store is not configured', async () => {
     const app = createTestApp();
 
@@ -891,6 +920,50 @@ describe('Rainrail dashboard API', () => {
     operationalStore.close();
   });
 
+  it('redacts sensitive input values echoed under neutral command result keys', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:00:00.000Z'),
+    });
+    const commandHandler = vi.fn(async (command) => ({
+      appliedValue: command.inputs.settings && typeof command.inputs.settings === 'object' && 'apiToken' in command.inputs.settings
+        ? command.inputs.settings.apiToken
+        : undefined,
+      providerMessage: `stored ${String((command.inputs.settings as { apiToken?: unknown }).apiToken)}`,
+    }));
+    const app = createRainrailHttpApp({
+      room: new RainrailBridgeRoom(fakeState(), { publishToken: 'publish-token' }),
+      publishToken: 'publish-token',
+      operationalStore,
+      dashboardAuth: {
+        adminToken: 'admin-token',
+      },
+      commandHandler,
+    });
+
+    const response = await app.fetch(new Request('https://rainrail.local/api/v1/settings/actions/update', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer admin-token',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        settings: {
+          apiToken: 'admin-input-secret',
+        },
+        confirmationToken: 'confirm:settings_update:settings:global',
+      }),
+    }));
+
+    expect(response.status).toBe(202);
+    const bodyText = await response.text();
+    expect(bodyText).toContain('[redacted]');
+    expect(bodyText).not.toContain('admin-input-secret');
+    expect(JSON.stringify(operationalStore.snapshot().commandResults)).not.toContain('admin-input-secret');
+    operationalStore.close();
+  });
+
   it('does not persist secrets exposed through command result toJSON hooks', async () => {
     const operationalStore = new RainrailOperationalStore({
       databasePath: ':memory:',
@@ -1071,7 +1144,7 @@ describe('Rainrail dashboard API', () => {
         adminToken: 'admin-token',
       },
       async commandHandler() {
-        throw new Error('upstream rejected Authorization: Bearer ghp_handler_secret Cookie: sessionid=secret_cookie');
+        throw new Error('upstream rejected Authorization=Bearer ghp_handler_secret apiToken=Bearer ghp_api_secret Cookie: sessionid=secret_cookie');
       },
     });
 
@@ -1090,9 +1163,11 @@ describe('Rainrail dashboard API', () => {
     const bodyText = await response.text();
     expect(bodyText).toContain('[redacted]');
     expect(bodyText).not.toContain('ghp_handler_secret');
+    expect(bodyText).not.toContain('ghp_api_secret');
     expect(bodyText).not.toContain('secret_cookie');
     const commandResults = JSON.stringify(operationalStore.snapshot().commandResults);
     expect(commandResults).not.toContain('ghp_handler_secret');
+    expect(commandResults).not.toContain('ghp_api_secret');
     expect(commandResults).not.toContain('secret_cookie');
     operationalStore.close();
   });

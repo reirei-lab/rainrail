@@ -77,6 +77,7 @@ export interface RainrailHttpApp {
 const INTERNAL_ROOM_ORIGIN = 'https://rainrail-room.local';
 
 export function createRainrailHttpApp(options: RainrailHttpAppOptions): RainrailHttpApp {
+  assertUniqueDashboardTokenScopes(options);
   const intakeRegistry = createRainrailIntakeRegistry(options.intakeAdapters);
 
   return {
@@ -904,7 +905,7 @@ async function handleDashboardCommandRequest(
     }, requestId, 502);
   }
 
-  const storedHandlerResult = sanitizeCommandResult(handlerResult);
+  const storedHandlerResult = sanitizeCommandResult(handlerResult, sensitiveStringValues(body.value));
   const result = options.operationalStore.recordCommandResult({
     actionType: command.actionType,
     targetType: command.targetType,
@@ -997,11 +998,32 @@ function matchesToken(token: string, expectedToken: string | undefined): boolean
 }
 
 function dashboardTokens(options: RainrailHttpAppOptions): Array<string | undefined> {
+  return dashboardTokenEntries(options).map((entry) => entry.token);
+}
+
+function assertUniqueDashboardTokenScopes(options: RainrailHttpAppOptions): void {
+  const scopesByToken = new Map<string, Set<RainrailDashboardScope>>();
+  for (const { token, scope } of dashboardTokenEntries(options)) {
+    if (token === undefined || token.length === 0) continue;
+
+    const scopes = scopesByToken.get(token) ?? new Set<RainrailDashboardScope>();
+    scopes.add(scope);
+    scopesByToken.set(token, scopes);
+  }
+
+  for (const scopes of scopesByToken.values()) {
+    if (scopes.size > 1) {
+      throw new Error('duplicate dashboard token scopes are not allowed');
+    }
+  }
+}
+
+function dashboardTokenEntries(options: RainrailHttpAppOptions): Array<{ token: string | undefined; scope: RainrailDashboardScope }> {
   return [
-    options.dashboardAuth?.adminToken,
-    options.dashboardAuth?.operatorToken,
-    options.dashboardAuth?.readOnlyToken,
-    options.eventsBearerToken,
+    { token: options.dashboardAuth?.adminToken, scope: 'admin' },
+    { token: options.dashboardAuth?.operatorToken, scope: 'operator' },
+    { token: options.dashboardAuth?.readOnlyToken, scope: 'read-only' },
+    { token: options.eventsBearerToken, scope: 'read-only' },
   ];
 }
 
@@ -1053,7 +1075,7 @@ async function readJsonObjectBody(request: Request, maxBytes: number): Promise<
   }
 }
 
-function sanitizeCommandResult(value: unknown, seen = new WeakSet<object>()): unknown {
+function sanitizeCommandResult(value: unknown, sensitiveValues: readonly string[] = [], seen = new WeakSet<object>()): unknown {
   if (value === undefined || typeof value === 'function' || typeof value === 'symbol') {
     return undefined;
   }
@@ -1062,6 +1084,9 @@ function sanitizeCommandResult(value: unknown, seen = new WeakSet<object>()): un
   }
   if (typeof value === 'number') {
     return Number.isFinite(value) ? value : '[unserializable]';
+  }
+  if (typeof value === 'string') {
+    return redactKnownSensitiveValues(value, sensitiveValues);
   }
   if (typeof value !== 'object' || value === null) {
     return value;
@@ -1075,7 +1100,7 @@ function sanitizeCommandResult(value: unknown, seen = new WeakSet<object>()): un
   if (Array.isArray(value)) {
     try {
       return value.map((item) => {
-        const sanitized = sanitizeCommandResult(item, seen);
+        const sanitized = sanitizeCommandResult(item, sensitiveValues, seen);
         return sanitized === undefined ? null : sanitized;
       });
     } finally {
@@ -1091,7 +1116,7 @@ function sanitizeCommandResult(value: unknown, seen = new WeakSet<object>()): un
         continue;
       }
 
-      const sanitizedNested = sanitizeCommandResult(nested, seen);
+      const sanitizedNested = sanitizeCommandResult(nested, sensitiveValues, seen);
       if (sanitizedNested !== undefined) {
         sanitized[key] = sanitizedNested;
       }
@@ -1118,6 +1143,19 @@ function sanitizeCommandErrorMessage(message: string, inputs: Record<string, unk
   return sanitized;
 }
 
+function redactKnownSensitiveValues(value: string, sensitiveValues: readonly string[]): string {
+  let sanitized = value;
+  const orderedValues = [...sensitiveValues]
+    .filter((sensitiveValue) => sensitiveValue.length > 0)
+    .sort((left, right) => right.length - left.length);
+
+  for (const sensitiveValue of orderedValues) {
+    sanitized = sanitized.split(sensitiveValue).join('[redacted]');
+  }
+
+  return sanitized;
+}
+
 function sensitiveStringValues(value: unknown, sensitiveContext = false): string[] {
   if (typeof value === 'string') {
     return sensitiveContext ? [value] : [];
@@ -1136,7 +1174,8 @@ function sensitiveStringValues(value: unknown, sensitiveContext = false): string
 
 function redactSensitiveText(value: string): string {
   return value
-    .replace(/\b(authorization\s*:\s*)(?:bearer|token)\s+[^\s"',}]+/giu, '$1[redacted]')
+    .replace(/\b(authorization\s*[:=]\s*)(?:bearer|token)\s+[^\s"',}]+/giu, '$1[redacted]')
+    .replace(/\b([\w.-]*(?:authorization|token|secret|password|key|code|reset|verification|session|confirmation)[\w.-]*\b\s*[:=]\s*)(?:bearer|token)\s+[^\s"',}]+/giu, '$1[redacted]')
     .replace(/\b((?:set-)?cookie\s*:\s*)[^\r\n]+/giu, '$1[redacted]')
     .replace(
       /((["'])[\w.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification|session|confirmation)[\w.-]*\2\s*:\s*)(["'])(?:\\.|(?!\3).)*\3/giu,
