@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
@@ -541,6 +541,73 @@ describe('Rainrail CLI built-in commands', () => {
       expect(result.stdout).toBe('');
       expect(result.stderr).toContain('ENOTDIR');
       expect(result.stderr).not.toContain('Error:');
+    });
+  });
+
+  it('keeps the plugin manifest when remove cannot update the lockfile', async () => {
+    await withTempDirectory(async (directory) => {
+      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
+      const projectRoot = join(directory, 'my-agent-ops');
+      const lockPath = join(projectRoot, 'rainrail.lock');
+      const manifestPath = join(projectRoot, '.rainrail', 'plugins', 'github', 'plugin.json');
+      expect(runRainrailCli(['plugins', 'add', 'github'], { cwd: projectRoot }).exitCode).toBe(0);
+      await chmod(lockPath, 0o400);
+
+      const result = runRainrailCli(['plugins', 'remove', 'github'], { cwd: projectRoot });
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).not.toContain('Error:');
+      await expect(readFile(manifestPath, 'utf8')).resolves.toContain('"name": "github"');
+      await chmod(lockPath, 0o600);
+    });
+  });
+
+  it('rejects lockfiles without a string project name before writing changes', async () => {
+    await withTempDirectory(async (directory) => {
+      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
+      const projectRoot = join(directory, 'my-agent-ops');
+      const lockPath = join(projectRoot, 'rainrail.lock');
+      await writeFile(lockPath, `${JSON.stringify({ lockfileVersion: 1, plugins: [] }, null, 2)}\n`);
+
+      const result = runRainrailCli(['plugins', 'add', 'github'], { cwd: projectRoot });
+
+      expect(result).toEqual({
+        exitCode: 1,
+        stdout: '',
+        stderr: `Unsupported Rainrail lockfile format: ${lockPath}\n`,
+      });
+      await expect(readFile(lockPath, 'utf8')).resolves.not.toContain('"name": "github"');
+    });
+  });
+
+  it('rejects lockfile plugin names that are not official canonical aliases', async () => {
+    await withTempDirectory(async (directory) => {
+      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
+      const projectRoot = join(directory, 'my-agent-ops');
+      const maliciousPlugin = {
+        name: '../escape',
+        version: '0.1.0',
+        resolvedSource: 'official:../escape@0.1.0',
+      };
+      await writeFile(join(projectRoot, 'rainrail.lock'), `${JSON.stringify({
+        lockfileVersion: 1,
+        project: { name: 'my-agent-ops' },
+        plugins: [maliciousPlugin],
+      }, null, 2)}\n`);
+      await mkdir(join(projectRoot, '.rainrail', 'escape'), { recursive: true });
+      await writeFile(
+        join(projectRoot, '.rainrail', 'escape', 'plugin.json'),
+        `${JSON.stringify(maliciousPlugin, null, 2)}\n`,
+      );
+
+      const result = runRainrailCli(['plugins', 'list'], { cwd: projectRoot });
+
+      expect(result).toEqual({
+        exitCode: 1,
+        stdout: '',
+        stderr: `Unsupported Rainrail lockfile plugin entry in ${join(projectRoot, 'rainrail.lock')}\n`,
+      });
     });
   });
 

@@ -819,8 +819,8 @@ function removeProjectPlugin(
     ...lockfile,
     plugins: lockfile.plugins.filter((plugin) => plugin.name !== name),
   };
-  rmSync(join(project.pluginDirectory, name), { recursive: true, force: true });
   writeFileSync(project.lockPath, formatJson(nextLockfile), { flag: 'w' });
+  rmSync(join(project.pluginDirectory, name), { recursive: true, force: true });
 
   return {
     exitCode: 0,
@@ -843,7 +843,12 @@ function readRainrailLockfile(path: string): RainrailLockfile {
   }
 
   const parsed = JSON.parse(readFileSync(path, 'utf8')) as Partial<RainrailLockfile>;
-  if (parsed.lockfileVersion !== 1 || !Array.isArray(parsed.plugins)) {
+  if (
+    parsed.lockfileVersion !== 1 ||
+    typeof parsed.project?.name !== 'string' ||
+    parsed.project.name.length === 0 ||
+    !Array.isArray(parsed.plugins)
+  ) {
     throw new Error(`Unsupported Rainrail lockfile format: ${path}`);
   }
 
@@ -857,18 +862,27 @@ function readRainrailLockfile(path: string): RainrailLockfile {
   return {
     lockfileVersion: 1,
     project: {
-      name: typeof parsed.project?.name === 'string' ? parsed.project.name : '',
+      name: parsed.project.name,
     },
     plugins: sortLockPlugins(plugins),
   };
 }
 
 function isLockPlugin(value: unknown): value is RainrailLockPlugin {
-  return typeof value === 'object' &&
+  if (
+    !(typeof value === 'object' &&
     value !== null &&
     typeof (value as { name?: unknown }).name === 'string' &&
     typeof (value as { version?: unknown }).version === 'string' &&
-    typeof (value as { resolvedSource?: unknown }).resolvedSource === 'string';
+    typeof (value as { resolvedSource?: unknown }).resolvedSource === 'string')
+  ) {
+    return false;
+  }
+
+  const plugin = value as RainrailLockPlugin;
+  const officialPlugin = getOfficialPluginByAlias(plugin.name);
+  return officialPlugin?.alias === plugin.name &&
+    plugin.resolvedSource === `official:${plugin.name}@${plugin.version}`;
 }
 
 function sortLockPlugins(plugins: readonly RainrailLockPlugin[]): readonly RainrailLockPlugin[] {

@@ -13,6 +13,8 @@ project; generated plugin state is not global.
   project name, and a `plugins` array. Installed official plugins are recorded
   as `{ name, version, resolvedSource }`; for example
   `github@0.1.0` resolves to `official:github@0.1.0`.
+  Plugin entries are treated as external input when read back: the project name
+  must remain present, and plugin names must be official canonical aliases.
 - `.rainrail/plugins/`: the project-local plugin installation directory.
 
 ## Re-run behavior
