@@ -7,6 +7,13 @@ Core、EEP Bridge bundle、Source adapter、transport の責務境界は
 [Core / EEP Bridge / Source adapter boundary](core-eep-bridge-source-adapter-boundary.md)
 で固定する。
 
+source bundle は provider webhook、Worker tail、manual/chat input などを
+Core intake へ接続する外側の composition であり、Core event delivery そのものではない。
+Core-owned routes stay provider-neutral: `/events`、`/healthz`、dashboard/API route は
+正規化済み envelope、sanitized replay、operational projection だけを扱い、GitHub webhook
+body、Cloudflare tail log、manual/chat request body の raw provider/input payload を
+route 固有の durable state として持たない。
+
 Bridge room、event bus、SSE framing の実装本体は `src/event-delivery/` に置く。
 この directory の `AGENTS.md` は storage / publish / replay / SSE framing の
 review rule を持つ scoped rules である。既存 import path のために

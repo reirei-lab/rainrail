@@ -13,6 +13,11 @@ const concepts = [
       'The boundary that accepts provider-specific input, such as GitHub webhooks or Cloudflare tail events, and normalizes it into a RainrailEventEnvelope.',
   },
   {
+    title: 'Source bundle',
+    body:
+      'The composition layer that wires one or more source adapters, such as EEP Bridge, manual input, or web chat, into Core intake without moving provider behavior into Core.',
+  },
+  {
     title: 'Workflow plugin',
     body:
       'The routing unit that accepts neutral events and maps them to task provider calls, runtime starts, or local deterministic decisions.',
@@ -51,8 +56,12 @@ const concepts = [
     </div>
     <div class="panel event-flow" aria-label="Concept stack">
       <div class="flow-step">
+        <strong>Source bundle</strong>
+        <span>Connects GitHub, Cloudflare, manual, and chat ingress.</span>
+      </div>
+      <div class="flow-step">
         <strong>Source plugin</strong>
-        <span>Normalizes provider input.</span>
+        <span>Normalizes each input into an envelope.</span>
       </div>
       <div class="flow-step">
         <strong>RainrailEventEnvelope</strong>
