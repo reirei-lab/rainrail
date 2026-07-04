@@ -36,6 +36,8 @@ pnpm cf:dev
 
 `wrangler dev --local` は `wrangler.jsonc` と `.dev.vars` を使って local Worker を起動する。
 GitHub webhook の URL は `/webhooks/github`、health check は `/healthz`。
+Worker entrypoint は `createGitHubWebhookIntakeAdapter` と `createCloudflareTailIntakeAdapter`
+を `createRainrailHttpApp` に登録し、Core は provider 固有 route / tail payload を直接持たない。
 
 ## Production Deploy
 
@@ -89,7 +91,7 @@ template は `pnpm cf:deploy:check` で dry-run と不足入力検出を行っ�
 Cloudflare 上での GitHub webhook から downstream consumer までの最小経路は次の通り。
 
 1. GitHub webhook は production Worker の `POST /webhooks/github` に delivery する。
-2. Worker は `GITHUB_WEBHOOK_SECRET` で `x-hub-signature-256` を検証する。
+2. Worker の GitHub intake adapter は `GITHUB_WEBHOOK_SECRET` で `x-hub-signature-256` を検証する。
 3. 署名検証後、GitHub payload は Rainrail event に正規化され、`BRIDGE_ROOM` Durable Object
    の replay buffer に保存される。
 4. downstream consumer は `GET /events` に `Authorization: Bearer <SSE_BEARER_TOKEN>` を付けて接続し、

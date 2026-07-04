@@ -202,6 +202,7 @@
         "src/events-auth.ts",
         "src/http-app.ts",
         "src/http-utils.ts",
+        "src/intake-adapter.ts",
         "src/node-server.ts"
       ],
       "docs": ["docs/event-delivery.md"],
@@ -221,7 +222,15 @@
         "formatRainrailSseEvent",
         "verifyRainrailEventsBearerToken",
         "createRainrailHttpApp",
-        "createRainrailNodeServer"
+        "createRainrailNodeServer",
+        "RainrailIntakeAdapter",
+        "RainrailIntakeRoute",
+        "RainrailIntakeAdapterContext",
+        "RainrailIntakePublishResult",
+        "RainrailIntakeRegistry",
+        "RainrailIntakeRouteMatch",
+        "RainrailIntakeRouteMethodMismatch",
+        "createRainrailIntakeRegistry"
       ],
       "publicExportKinds": {
         "createRainrailEventBus": "value",
@@ -229,7 +238,15 @@
         "formatRainrailSseEvent": "value",
         "verifyRainrailEventsBearerToken": "value",
         "createRainrailHttpApp": "value",
-        "createRainrailNodeServer": "value"
+        "createRainrailNodeServer": "value",
+        "RainrailIntakeAdapter": "type",
+        "RainrailIntakeRoute": "type",
+        "RainrailIntakeAdapterContext": "type",
+        "RainrailIntakePublishResult": "type",
+        "RainrailIntakeRegistry": "type",
+        "RainrailIntakeRouteMatch": "type",
+        "RainrailIntakeRouteMethodMismatch": "type",
+        "createRainrailIntakeRegistry": "value"
       }
     },
     {

@@ -1,4 +1,10 @@
 import { createEventEnvelope, type RainrailEventEnvelope, type RainrailEventName } from '../events.js';
+import {
+  DEFAULT_MAX_REQUEST_BODY_BYTES,
+  jsonResponse,
+  readFetchRequestBody,
+} from '../http-utils.js';
+import type { RainrailIntakeAdapter } from '../intake-adapter.js';
 import { defineSourcePlugin, type SourcePlugin } from '../source-plugin.js';
 
 const encoder = new TextEncoder();
@@ -69,6 +75,12 @@ export interface GitHubWebhookRequestOptions {
   sourceName?: string;
 }
 
+export interface GitHubWebhookIntakeAdapterOptions {
+  secret: string;
+  sourceName?: string;
+  maxBodyBytes?: number;
+}
+
 export type GitHubWebhookRequestResult =
   | { ok: true; event: RainrailEventEnvelope }
   | { ok: false; status: 400 | 401; reason: string };
@@ -116,6 +128,63 @@ export async function handleGitHubWebhookRequest(
   });
 
   return { ok: true, event };
+}
+
+export function createGitHubWebhookIntakeAdapter(options: GitHubWebhookIntakeAdapterOptions): RainrailIntakeAdapter {
+  return {
+    name: options.sourceName ?? 'github-webhook',
+    routes: [{
+      path: '/webhooks/github',
+      methods: ['POST'],
+      maxBodyBytes: options.maxBodyBytes ?? DEFAULT_MAX_REQUEST_BODY_BYTES,
+      async handle(request, context) {
+        let rawBody: ArrayBuffer;
+        try {
+          rawBody = await readFetchRequestBody(request, options.maxBodyBytes ?? DEFAULT_MAX_REQUEST_BODY_BYTES);
+        } catch (error) {
+          if (isStatusCodeError(error) && error.statusCode === 413) {
+            return jsonResponse({ error: 'request_body_too_large' }, { status: 413 });
+          }
+
+          throw error;
+        }
+
+        const limitedRequest = new Request(request.url, {
+          method: request.method,
+          headers: request.headers,
+          body: rawBody,
+          signal: request.signal,
+        });
+        const result = await handleGitHubWebhookRequest(limitedRequest, {
+          secret: options.secret,
+          ...(options.sourceName === undefined ? {} : { sourceName: options.sourceName }),
+        });
+
+        if (!result.ok) {
+          return jsonResponse({ error: result.reason }, { status: result.status });
+        }
+
+        const publishResponse = await context.publish(result.event);
+        if (!publishResponse.ok) {
+          return jsonResponse({ error: 'failed_to_publish_event' }, { status: 502 });
+        }
+
+        return jsonResponse({
+          ok: true,
+          id: result.event.id,
+          name: result.event.name,
+          source: 'github',
+        }, { status: 202 });
+      },
+    }],
+  };
+}
+
+function isStatusCodeError(error: unknown): error is { statusCode: number } {
+  return typeof error === 'object'
+    && error !== null
+    && 'statusCode' in error
+    && typeof error.statusCode === 'number';
 }
 
 export interface CreateGitHubWebhookEventInput {

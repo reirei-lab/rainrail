@@ -1,4 +1,5 @@
 import { createEventEnvelope, type RainrailEventEnvelope } from './events.js';
+import type { RainrailIntakeAdapter, RainrailIntakePublishResult } from './intake-adapter.js';
 import { defineSourcePlugin, type SourcePlugin, type SourcePluginNormalizeContext } from './source-plugin.js';
 
 const FAILURE_OUTCOMES = new Set([
@@ -66,7 +67,11 @@ export type CloudflareTailRainrailEvent = RainrailEventEnvelope<
 >;
 
 export interface PublishCloudflareTailEventsOptions extends Omit<CreateCloudflareTailEventInput, 'tailEvent'> {
-  publish(event: CloudflareTailRainrailEvent): Response | Promise<Response>;
+  publish(event: CloudflareTailRainrailEvent): RainrailIntakePublishResult | Promise<RainrailIntakePublishResult>;
+}
+
+export interface CloudflareTailIntakeAdapterOptions extends Omit<PublishCloudflareTailEventsOptions, 'publish' | 'fallbackDeliveryId'> {
+  fallbackDeliveryId(events: CloudflareTailEvent[]): string | Promise<string>;
 }
 
 export type PublishCloudflareTailEventResult =
@@ -87,6 +92,24 @@ export function createCloudflareTailSourcePlugin(name = 'cloudflare-tail'): Sour
       });
     },
   });
+}
+
+export function createCloudflareTailIntakeAdapter(
+  options: CloudflareTailIntakeAdapterOptions,
+): RainrailIntakeAdapter {
+  return {
+    name: options.sourceName ?? 'cloudflare-tail',
+    async tail(events, context) {
+      return publishCloudflareTailEvents(events as CloudflareTailEvent[], {
+        ...(options.receivedAt === undefined ? {} : { receivedAt: options.receivedAt }),
+        ...(options.sourceName === undefined ? {} : { sourceName: options.sourceName }),
+        ...(options.account === undefined ? {} : { account: options.account }),
+        ...(options.environment === undefined ? {} : { environment: options.environment }),
+        fallbackDeliveryId: await options.fallbackDeliveryId(events as CloudflareTailEvent[]),
+        publish: (event) => context.publish(event),
+      });
+    },
+  };
 }
 
 export async function createCloudflareTailEvent({

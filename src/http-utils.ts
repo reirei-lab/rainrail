@@ -33,10 +33,15 @@ export function textResponse(body: string, init: JsonResponseInit = {}): Respons
   });
 }
 
-export function corsPreflightResponse(): Response {
+export function corsPreflightResponse(allowedMethods?: readonly string[]): Response {
   return new Response(null, {
     status: 204,
-    headers: defaultCorsHeaders,
+    headers: {
+      ...defaultCorsHeaders,
+      ...(allowedMethods === undefined ? {} : {
+        'Access-Control-Allow-Methods': allowedMethods.join(', '),
+      }),
+    },
   });
 }
 
