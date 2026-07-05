@@ -73,7 +73,10 @@ scope for this layout.
 `rainrail setup` previews official bundled plugins only. Without `--yes`, it
 does not mutate project state. Passing plugin names or aliases limits the
 selection to those plugins; omitted plugin arguments mean every official bundled
-plugin in catalog order.
+plugin in catalog order. Text preview output follows the same selection: a
+selected preview lists only the selected canonical plugins and points at the
+selected setup command, while an unfiltered preview lists every official
+bundled plugin.
 
 `rainrail setup --yes [officialPluginName...]` orchestrates each selected
 plugin in order:
@@ -87,7 +90,9 @@ The core CLI owns the orchestration and project-local install step. Provider or
 runtime-specific setup actions stay behind the plugin command route. Until a
 plugin registers concrete setup actions, the bundled official setup route may
 complete with a deterministic no-op message rather than failing through the
-unimplemented plugin execution placeholder.
+unimplemented plugin execution placeholder. That no-op setup route accepts only
+the setup command itself; extra plugin-specific arguments are rejected so typos
+are not reported as successful configuration.
 
 If any install or setup step fails, setup stops at that step and returns the
 step exit code. Earlier successful install state is left in place so rerunning
@@ -116,7 +121,9 @@ Preview mode (`rainrail --json setup [officialPluginName...]`) returns
 `completed: false`, an empty `steps` array, the selected canonical aliases in
 `plugins`, and a `nextAction` command string. When the preview was limited to
 selected plugins, `nextAction` includes those canonical aliases, for example
-`rainrail setup github --yes`.
+`rainrail setup github --yes`. When target selectors were provided,
+`nextAction` also includes them, for example `rainrail --config
+/abs/rainrail.config.json --profile ci setup github --yes`.
 
 Input errors in JSON mode also return a JSON object with `completed: false`,
 empty `plugins` and `steps`, and an `error` string.

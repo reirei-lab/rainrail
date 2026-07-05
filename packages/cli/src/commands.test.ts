@@ -184,6 +184,14 @@ describe('Rainrail CLI built-in commands', () => {
     expect(result.stderr).toBe('');
   });
 
+  it('rejects unsupported official plugin setup arguments', () => {
+    const result = runRainrailCli(['plugin', 'github', 'setup', 'typo']);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('Unknown rainrail plugin github command: setup typo');
+  });
+
   it('keeps built-in commands ahead of plugin aliases and points verbose callers to canonical plugin form', () => {
     const result = runRainrailCli(['--verbose', 'plugins', 'run'], {
       pluginAliasResolver: (alias) => alias === 'plugins'
@@ -317,6 +325,23 @@ describe('Rainrail CLI built-in commands', () => {
       await expect(readFile(join(projectRoot, 'rainrail.lock'), 'utf8')).resolves.toContain(
         '"plugins": []',
       );
+    });
+  });
+
+  it('prints only selected official setup choices when plugin arguments are provided', async () => {
+    await withTempDirectory(async (directory) => {
+      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
+      const projectRoot = join(directory, 'my-agent-ops');
+
+      const result = runRainrailCli(['setup', 'gh'], { cwd: projectRoot });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+      expect(result.stdout).toContain('Official plugins selected for setup:');
+      expect(result.stdout).toContain('  github');
+      expect(result.stdout).not.toContain('  cloudflare');
+      expect(result.stdout).not.toContain('  openclaw');
+      expect(result.stdout).toContain('Run `rainrail setup github --yes` to install and set up selected official plugins.');
     });
   });
 
@@ -475,6 +500,31 @@ describe('Rainrail CLI built-in commands', () => {
       await expect(readFile(join(projectRoot, 'rainrail.lock'), 'utf8')).resolves.toContain(
         '"plugins": []',
       );
+    });
+  });
+
+  it('includes target options in setup JSON preview nextAction', async () => {
+    await withTempDirectory(async (directory) => {
+      expect(runRainrailCli(['new', 'target-project'], { cwd: directory }).exitCode).toBe(0);
+      const projectRoot = join(directory, 'target-project');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+
+      const result = runRainrailCli([
+        '--json',
+        '--config',
+        configPath,
+        '--profile',
+        'ci',
+        'setup',
+        'gh',
+      ], { cwd: directory });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+      expect(JSON.parse(result.stdout) as unknown).toMatchObject({
+        plugins: ['github'],
+        nextAction: `rainrail --config ${configPath} --profile ci setup github --yes`,
+      });
     });
   });
 

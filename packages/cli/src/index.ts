@@ -562,6 +562,15 @@ function runPluginCommand(
   }
 
   if (pluginCommand.name === 'setup' && isOfficialBundledPlugin(plugin)) {
+    const commandLength = pluginCommand.name.split(' ').length;
+    if (args.length !== commandLength) {
+      return {
+        exitCode: 1,
+        stdout: '',
+        stderr: `Unknown rainrail ${invocation.join(' ')} command: ${args.join(' ')}\n\n${formatOfficialPluginHelp(plugin, invocation)}`,
+      };
+    }
+
     return {
       exitCode: 0,
       stdout:
@@ -831,12 +840,12 @@ function runSetupCommand(
 
   if (!options.yes) {
     if (options.json) {
-      return formatSetupPreview(plugins, args.length > 0);
+      return formatSetupPreview(plugins, args.length > 0, setupOptions);
     }
 
     return {
       exitCode: 0,
-      stdout: formatSetupChoices(),
+      stdout: formatSetupChoices(plugins, args.length > 0),
       stderr: '',
     };
   }
@@ -868,7 +877,7 @@ function runSetupCommand(
       ...formatForwardedSetupOptions(setupOptions),
     ];
     const pluginSetupResult = environment.commandRunner === undefined
-      ? runPluginCommand(plugin, ['setup', ...formatForwardedSetupOptions(setupOptions)], [
+      ? runPluginCommand(plugin, ['setup'], [
           'plugin',
           plugin.alias,
         ])
@@ -967,18 +976,28 @@ function resolveSetupPlugins(args: readonly string[]): {
   return { plugins };
 }
 
-function formatSetupChoices(): string {
-  const pluginRows = OFFICIAL_PLUGIN_CATALOG.map((plugin) => {
+function formatSetupChoices(
+  plugins: readonly OfficialPluginMetadata[],
+  includePluginArguments: boolean,
+): string {
+  const pluginRows = plugins.map((plugin) => {
     const aliasText = plugin.aliases.length > 1 ? ` (${plugin.aliases.slice(1).join(', ')})` : '';
     return `  ${plugin.alias.padEnd(11, ' ')} ${plugin.summary}${aliasText}`;
   }).join('\n');
+  const heading = includePluginArguments
+    ? 'Official plugins selected for setup:'
+    : 'Official plugins available for setup:';
 
   return [
-    'Official plugins available for setup:',
+    heading,
     pluginRows,
     '',
-    'Run `rainrail setup --yes` to install and set up all official plugins.',
-    'Run `rainrail setup <plugin...> --yes` to install and set up selected official plugins.',
+    includePluginArguments
+      ? `Run \`${formatSetupNextAction(plugins, true, {})}\` to install and set up selected official plugins.`
+      : 'Run `rainrail setup --yes` to install and set up all official plugins.',
+    includePluginArguments
+      ? ''
+      : 'Run `rainrail setup <plugin...> --yes` to install and set up selected official plugins.',
     '',
   ].join('\n');
 }
@@ -986,6 +1005,7 @@ function formatSetupChoices(): string {
 function formatSetupPreview(
   plugins: readonly OfficialPluginMetadata[],
   includePluginArguments: boolean,
+  options: SharedOptions,
 ): RainrailCliResult {
   return {
     exitCode: 0,
@@ -994,7 +1014,7 @@ function formatSetupPreview(
       completed: false,
       plugins: plugins.map((plugin) => plugin.alias),
       steps: [],
-      nextAction: formatSetupNextAction(plugins, includePluginArguments),
+      nextAction: formatSetupNextAction(plugins, includePluginArguments, options),
     }),
     stderr: '',
   };
@@ -1003,9 +1023,11 @@ function formatSetupPreview(
 function formatSetupNextAction(
   plugins: readonly OfficialPluginMetadata[],
   includePluginArguments: boolean,
+  options: Pick<SharedOptions, 'config' | 'profile'>,
 ): string {
   return [
     'rainrail',
+    ...formatForwardedTargetOptions(options),
     'setup',
     ...(includePluginArguments ? plugins.map((plugin) => plugin.alias) : []),
     '--yes',
@@ -1019,7 +1041,9 @@ function formatForwardedSetupOptions(options: SharedOptions): readonly string[] 
   ];
 }
 
-function formatForwardedTargetOptions(options: SharedOptions): readonly string[] {
+function formatForwardedTargetOptions(
+  options: Pick<SharedOptions, 'config' | 'profile'>,
+): readonly string[] {
   const forwardedOptions: string[] = [];
   if (options.config !== undefined) {
     forwardedOptions.push('--config', options.config);
