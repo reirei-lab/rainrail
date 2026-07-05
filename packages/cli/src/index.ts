@@ -96,6 +96,13 @@ export type ReleaseFetchResult = {
 };
 
 export type ReleaseFetcher = (url: string) => ReleaseFetchResult;
+export type AsyncReleaseFetcherOptions = {
+  readonly signal: AbortSignal;
+};
+export type AsyncReleaseFetcher = (
+  url: string,
+  options: AsyncReleaseFetcherOptions,
+) => Promise<ReleaseFetchResult>;
 
 export type RainrailCliFileSystem = {
   readonly existsSync: typeof existsSync;
@@ -120,9 +127,24 @@ export type RainrailCliEnvironment = {
   readonly now?: () => Date;
   readonly pluginAliasResolver?: PluginAliasResolver;
   readonly releaseFetcher?: ReleaseFetcher;
+  readonly asyncReleaseFetcher?: AsyncReleaseFetcher;
   readonly stdin?: string;
   readonly stdinReader?: () => string;
   readonly stderrWriter?: (message: string) => void;
+};
+
+export type RainrailCliEntrypointIO = {
+  readonly stdout: { readonly write: (value: string) => void };
+  readonly stderr: { readonly write: (value: string) => void };
+};
+
+export type RainrailCliEntrypointEnvironment = RainrailCliEnvironment & {
+  readonly runCli?: (
+    argv: readonly string[],
+    environment?: RainrailCliEnvironment,
+  ) => RainrailCliResult;
+  readonly updateNoticeCheck?: (signal: AbortSignal) => Promise<string | undefined>;
+  readonly updateNoticeTimeoutMs?: number;
 };
 
 export type RainrailProject = {
@@ -160,6 +182,7 @@ const GITHUB_LATEST_RELEASE_URL =
   'https://api.github.com/repos/reirei-lab/rainrail/releases/latest';
 const updateCheckCacheFileName = 'update-check.json';
 const updateCheckCacheTtlMs = 24 * 60 * 60 * 1000;
+const updateNoticeTimeoutMs = 150;
 const rainrailConfigFileName = 'rainrail.config.json';
 const rainrailLockFileName = 'rainrail.lock';
 const rainrailDirectoryName = '.rainrail';
@@ -604,53 +627,61 @@ function checkLatestRelease(
     const response = releaseFetcher === undefined
       ? defaultReleaseFetcher(GITHUB_LATEST_RELEASE_URL, commandRunner)
       : releaseFetcher(GITHUB_LATEST_RELEASE_URL);
-    if (response.status < 200 || response.status >= 300) {
-      return { cacheable: false, result: createNoopUpdateCheck(currentVersion, checkedAt) };
-    }
-
-    const release = JSON.parse(response.body) as {
-      assets?: unknown;
-      tag_name?: unknown;
-      prerelease?: unknown;
-    };
-    if (release.prerelease === true || typeof release.tag_name !== 'string') {
-      return { cacheable: false, result: createNoopUpdateCheck(currentVersion, checkedAt) };
-    }
-
-    const latestVersion = normalizeReleaseTag(release.tag_name);
-    if (
-      latestVersion === undefined ||
-      isPrereleaseVersion(latestVersion)
-    ) {
-      return { cacheable: false, result: createNoopUpdateCheck(currentVersion, checkedAt) };
-    }
-
-    if (!hasRainrailCliReleaseAsset(release.assets, latestVersion)) {
-      return { cacheable: false, result: createNoopUpdateCheck(currentVersion, checkedAt) };
-    }
-
-    if (compareSemver(latestVersion, currentVersion) <= 0) {
-      return {
-        cacheable: true,
-        result: createKnownNoUpdateCheck(currentVersion, checkedAt, latestVersion),
-      };
-    }
-
-    const updateVersion = formatReleaseTagForUpdateCommand(release.tag_name, latestVersion);
-
-    return {
-      cacheable: true,
-      result: {
-        checkedAt,
-        currentVersion,
-        latestVersion,
-        updateAvailable: true,
-        updateCommand: `rainrail update --version ${shellQuoteArgument(updateVersion)}`,
-      },
-    };
+    return evaluateLatestReleaseResponse(response, currentVersion, checkedAt);
   } catch {
     return { cacheable: false, result: createNoopUpdateCheck(currentVersion, checkedAt) };
   }
+}
+
+function evaluateLatestReleaseResponse(
+  response: ReleaseFetchResult,
+  currentVersion: string,
+  checkedAt: string,
+): LatestReleaseCheck {
+  if (response.status < 200 || response.status >= 300) {
+    return { cacheable: false, result: createNoopUpdateCheck(currentVersion, checkedAt) };
+  }
+
+  const release = JSON.parse(response.body) as {
+    assets?: unknown;
+    tag_name?: unknown;
+    prerelease?: unknown;
+  };
+  if (release.prerelease === true || typeof release.tag_name !== 'string') {
+    return { cacheable: false, result: createNoopUpdateCheck(currentVersion, checkedAt) };
+  }
+
+  const latestVersion = normalizeReleaseTag(release.tag_name);
+  if (
+    latestVersion === undefined ||
+    isPrereleaseVersion(latestVersion)
+  ) {
+    return { cacheable: false, result: createNoopUpdateCheck(currentVersion, checkedAt) };
+  }
+
+  if (!hasRainrailCliReleaseAsset(release.assets, latestVersion)) {
+    return { cacheable: false, result: createNoopUpdateCheck(currentVersion, checkedAt) };
+  }
+
+  if (compareSemver(latestVersion, currentVersion) <= 0) {
+    return {
+      cacheable: true,
+      result: createKnownNoUpdateCheck(currentVersion, checkedAt, latestVersion),
+    };
+  }
+
+  const updateVersion = formatReleaseTagForUpdateCommand(release.tag_name, latestVersion);
+
+  return {
+    cacheable: true,
+    result: {
+      checkedAt,
+      currentVersion,
+      latestVersion,
+      updateAvailable: true,
+      updateCommand: `rainrail update --version ${shellQuoteArgument(updateVersion)}`,
+    },
+  };
 }
 
 function createNoopUpdateCheck(currentVersion: string, checkedAt: string): UpdateCheckCache {
@@ -729,6 +760,183 @@ function formatNoUpdateText(result: UpdateCheckResult): string {
   }
 
   return `Rainrail is up to date (${result.currentVersion}).\n`;
+}
+
+export async function runRainrailCliEntrypoint(
+  argv: readonly string[],
+  io: RainrailCliEntrypointIO = {
+    stdout: process.stdout,
+    stderr: process.stderr,
+  },
+  environment: RainrailCliEntrypointEnvironment = {},
+): Promise<RainrailCliResult> {
+  const updateNoticeTask = shouldStartUpdateNoticeCheck(argv, environment)
+    ? startUpdateNoticeCheck(environment)
+    : undefined;
+  const {
+    runCli: injectedRunCli,
+    updateNoticeCheck: _updateNoticeCheck,
+    updateNoticeTimeoutMs: _updateNoticeTimeoutMs,
+    asyncReleaseFetcher: _asyncReleaseFetcher,
+    ...cliEnvironment
+  } = environment;
+  const runCli = injectedRunCli ?? runRainrailCli;
+  const result = runCli(argv, cliEnvironment);
+
+  if (result.stdout.length > 0) {
+    io.stdout.write(result.stdout);
+  }
+
+  if (result.stderr.length > 0) {
+    io.stderr.write(result.stderr);
+  }
+
+  if (result.exitCode !== 0) {
+    updateNoticeTask?.abort();
+  }
+
+  if (result.exitCode === 0 && updateNoticeTask !== undefined) {
+    const notice = await waitForUpdateNotice(
+      updateNoticeTask,
+      environment.updateNoticeTimeoutMs ?? updateNoticeTimeoutMs,
+    );
+    if (notice !== undefined && notice.length > 0) {
+      io.stderr.write(notice);
+    }
+  }
+
+  return result;
+}
+
+function shouldStartUpdateNoticeCheck(
+  argv: readonly string[],
+  environment: RainrailCliEntrypointEnvironment,
+): boolean {
+  const parsed = parseRainrailArguments(argv);
+  if (parsed.errors.length > 0) {
+    return false;
+  }
+
+  if (['help', 'version', 'update'].includes(parsed.commandName)) {
+    return false;
+  }
+
+  const pluginAliasResolver = environment.pluginAliasResolver ?? defaultPluginAliasResolver;
+  if (parsed.commandName === 'plugin') {
+    const pluginName = parsed.commandArgs[0];
+    const plugin = pluginName === undefined ? undefined : pluginAliasResolver(pluginName);
+    return plugin === undefined ||
+      !isPluginHelpRequestForNotice(plugin, parsed.commandArgs.slice(1));
+  }
+
+  const plugin = pluginAliasResolver(parsed.commandName);
+  return plugin === undefined || !isPluginHelpRequestForNotice(plugin, parsed.commandArgs);
+}
+
+function isPluginHelpRequestForNotice(
+  plugin: OfficialPluginMetadata,
+  args: readonly string[],
+): boolean {
+  if (isOfficialPluginHelpRequest(args)) {
+    return true;
+  }
+
+  const pluginCommand = getOfficialPluginCommand(plugin, args);
+  return pluginCommand !== undefined && isOfficialPluginCommandHelpRequest(pluginCommand, args);
+}
+
+type UpdateNoticeTask = {
+  readonly promise: Promise<string | undefined>;
+  readonly abort: () => void;
+}
+
+function startUpdateNoticeCheck(
+  environment: RainrailCliEntrypointEnvironment,
+): UpdateNoticeTask {
+  const abortController = new AbortController();
+  const promise = (environment.updateNoticeCheck ??
+    ((signal) => checkRainrailUpdateNotice(environment, signal)))(abortController.signal)
+    .catch(() => undefined);
+
+  return {
+    promise,
+    abort: () => abortController.abort(),
+  };
+}
+
+async function waitForUpdateNotice(
+  updateNoticeTask: UpdateNoticeTask,
+  timeoutMs: number,
+): Promise<string | undefined> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      updateNoticeTask.promise,
+      new Promise<undefined>((resolve) => {
+        timeout = setTimeout(() => {
+          updateNoticeTask.abort();
+          resolve(undefined);
+        }, Math.max(0, timeoutMs));
+      }),
+    ]);
+  } finally {
+    if (timeout !== undefined) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+async function checkRainrailUpdateNotice(
+  environment: RainrailCliEnvironment,
+  signal: AbortSignal,
+): Promise<string | undefined> {
+  const now = environment.now?.() ?? new Date();
+  const currentVersion = environment.currentVersion ?? getRainrailCliPackageVersion();
+  const cachePath = getUpdateCheckCachePath(environment);
+  const cachedResult = readFreshUpdateCheckCache(cachePath, currentVersion, now, environment);
+  if (cachedResult !== undefined) {
+    return formatUpdateNotice(cachedResult);
+  }
+
+  try {
+    const checkedAt = now.toISOString();
+    const response = environment.asyncReleaseFetcher === undefined
+      ? await defaultAsyncReleaseFetcher(GITHUB_LATEST_RELEASE_URL, { signal })
+      : await environment.asyncReleaseFetcher(GITHUB_LATEST_RELEASE_URL, { signal });
+    const result = evaluateLatestReleaseResponse(response, currentVersion, checkedAt);
+    if (result.cacheable) {
+      writeUpdateCheckCache(cachePath, result.result, environment);
+    }
+    return formatUpdateNotice(result.result);
+  } catch {
+    return undefined;
+  }
+}
+
+function formatUpdateNotice(result: UpdateCheckCache): string | undefined {
+  if (!result.updateAvailable || result.latestVersion === null || result.updateCommand === null) {
+    return undefined;
+  }
+
+  return `Rainrail ${result.latestVersion} is available. Run \`${result.updateCommand}\` to update.\n`;
+}
+
+async function defaultAsyncReleaseFetcher(
+  url: string,
+  options: AsyncReleaseFetcherOptions,
+): Promise<ReleaseFetchResult> {
+  const response = await fetch(url, {
+    headers: {
+      Accept: 'application/vnd.github+json',
+      'User-Agent': 'rainrail-cli',
+    },
+    signal: options.signal,
+  });
+
+  return {
+    status: response.status,
+    body: await response.text(),
+  };
 }
 
 function defaultReleaseFetcher(url: string, commandRunner: CommandRunner): ReleaseFetchResult {

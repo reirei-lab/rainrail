@@ -516,7 +516,7 @@
       "title": "CLI project-local layout",
       "sources": ["packages/cli/src/index.ts"],
       "docs": ["docs/project-local-layout.md"],
-      "tests": ["packages/cli/src/commands.test.ts"],
+      "tests": ["packages/cli/src/commands.test.ts", "packages/cli/src/bin.test.ts"],
       "publicExports": [
         "BuiltInCommandName",
         "BuiltInCommand",
@@ -528,7 +528,11 @@
         "CommandRunner",
         "ReleaseFetchResult",
         "ReleaseFetcher",
+        "AsyncReleaseFetcherOptions",
+        "AsyncReleaseFetcher",
         "RainrailCliEnvironment",
+        "RainrailCliEntrypointIO",
+        "RainrailCliEntrypointEnvironment",
         "RainrailCliFileSystem",
         "PluginAliasResolver",
         "RainrailProject",
@@ -539,7 +543,8 @@
         "parseRainrailArguments",
         "formatHelp",
         "discoverRainrailProject",
-        "runRainrailCli"
+        "runRainrailCli",
+        "runRainrailCliEntrypoint"
       ],
       "publicExportKinds": {
         "BuiltInCommandName": "type",
@@ -552,7 +557,11 @@
         "CommandRunner": "type",
         "ReleaseFetchResult": "type",
         "ReleaseFetcher": "type",
+        "AsyncReleaseFetcherOptions": "type",
+        "AsyncReleaseFetcher": "type",
         "RainrailCliEnvironment": "type",
+        "RainrailCliEntrypointIO": "type",
+        "RainrailCliEntrypointEnvironment": "type",
         "RainrailCliFileSystem": "type",
         "PluginAliasResolver": "type",
         "RainrailProject": "type",
@@ -563,7 +572,8 @@
         "parseRainrailArguments": "value",
         "formatHelp": "value",
         "discoverRainrailProject": "value",
-        "runRainrailCli": "value"
+        "runRainrailCli": "value",
+        "runRainrailCliEntrypoint": "value"
       }
     },
     {
