@@ -12,10 +12,27 @@ permissions:
 jobs:
   add-issue-to-project:
     name: Add issue to Reirei project
-    if: ${{ contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association) }}
     runs-on: ubuntu-latest
     steps:
+      - name: Check trusted issue author
+        id: check-trusted-author
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const { data: issue } = await github.rest.issues.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const trustedAssociations = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
+            const trusted = trustedAssociations.has(issue.author_association);
+            core.setOutput('trusted', String(trusted));
+            if (!trusted) {
+              core.notice(`Skipping issue automation for untrusted author association: ${issue.author_association}`);
+            }
+
       - name: Assign issue to reirei-agent
+        if: ${{ steps.check-trusted-author.outputs.trusted == 'true' }}
         uses: actions/github-script@v9
         with:
           script: |
@@ -27,6 +44,7 @@ jobs:
             });
 
       - name: Add issue to Reirei project
+        if: ${{ steps.check-trusted-author.outputs.trusted == 'true' }}
         uses: actions/add-to-project@v2.0.0
         with:
           project-url: https://github.com/orgs/reirei-lab/projects/1

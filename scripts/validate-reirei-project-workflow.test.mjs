@@ -18,9 +18,22 @@ describe('add issue to Reirei project workflow', () => {
     expect(workflow).not.toContain('runs-on: self-hosted');
   });
 
-  it('runs issue automation only for trusted issue authors', () => {
-    expect(workflow).toContain('github.event.issue.author_association');
-    expect(workflow).toContain("contains(fromJSON('[\"OWNER\",\"MEMBER\",\"COLLABORATOR\"]'), github.event.issue.author_association)");
+  it('does not skip the job based on the issue event payload author association', () => {
+    expect(workflow).not.toContain('github.event.issue.author_association');
+    expect(workflow).not.toMatch(/^ {4}if:/m);
+  });
+
+  it('loads the opened issue over REST before trusting its author association', () => {
+    expect(workflow).toContain('id: check-trusted-author');
+    expect(workflow).toContain('const { data: issue } = await github.rest.issues.get({');
+    expect(workflow).toContain('issue_number: context.issue.number');
+    expect(workflow).toContain("const trustedAssociations = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);");
+    expect(workflow).toContain("core.setOutput('trusted', String(trusted));");
+  });
+
+  it('gates project and assignment side effects on trusted REST issue authors', () => {
+    expect(workflow).toMatch(/^ {8}if: \$\{\{ steps\.check-trusted-author\.outputs\.trusted == 'true' \}\}$/m);
+    expect(workflow).not.toContain("if: ${{ contains(fromJSON('[\"OWNER\",\"MEMBER\",\"COLLABORATOR\"]'),");
   });
 
   it('adds the opened issue to the Reirei organization project', () => {
