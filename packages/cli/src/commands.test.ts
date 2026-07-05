@@ -1016,6 +1016,35 @@ describe('Rainrail CLI built-in commands', () => {
     });
   });
 
+  it('writes the init confirmation prompt before reading stdin in the binary path', async () => {
+    await withTempDirectory(async (directory) => {
+      await writeFile(join(directory, 'README.md'), 'existing workspace\n');
+      const calls: string[] = [];
+
+      const result = runRainrailCli(['init'], {
+        cwd: directory,
+        stderrWriter: (message) => {
+          calls.push(`stderr:${message}`);
+        },
+        stdinReader: () => {
+          calls.push('stdin');
+          return 'n\n';
+        },
+      });
+
+      expect(result).toEqual({
+        exitCode: 0,
+        stdout: '',
+        stderr: '',
+      });
+      expect(calls).toEqual([
+        'stderr:Current directory is not empty. Initialize Rainrail workspace here? [y/N]\n',
+        'stdin',
+      ]);
+      await expect(stat(join(directory, 'rainrail.config.json'))).rejects.toThrow();
+    });
+  });
+
   it('skips the non-empty directory prompt when --yes is provided', async () => {
     await withTempDirectory(async (directory) => {
       await writeFile(join(directory, 'README.md'), 'existing workspace\n');
@@ -1028,6 +1057,61 @@ describe('Rainrail CLI built-in commands', () => {
       await expect(readFile(join(directory, 'rainrail.lock'), 'utf8')).resolves.toContain(
         '"plugins": []',
       );
+    });
+  });
+
+  it('does not read the current directory listing when --yes skips the prompt', async () => {
+    await withTempDirectory(async (directory) => {
+      const cwd = join(directory, 'no-read-project');
+      const directories = new Set<string>([cwd]);
+      const files = new Map<string, string>();
+      const statsFor = (path: string) => ({
+        isDirectory: () => directories.has(path),
+        isFile: () => files.has(path),
+        isSymbolicLink: () => false,
+      });
+      const missing = (path: string) => Object.assign(new Error(`missing: ${path}`), {
+        code: 'ENOENT',
+      });
+      const virtualFileSystem: Partial<RainrailCliFileSystem> = {
+        existsSync: (path) => directories.has(String(path)) || files.has(String(path)),
+        lstatSync: ((path) => {
+          const value = String(path);
+          if (!directories.has(value) && !files.has(value)) {
+            throw missing(value);
+          }
+          return statsFor(value);
+        }) as RainrailCliFileSystem['lstatSync'],
+        mkdirSync: ((path) => {
+          directories.add(String(path));
+          return undefined;
+        }) as RainrailCliFileSystem['mkdirSync'],
+        readdirSync: (() => {
+          throw Object.assign(new Error('directory listing should not be read'), {
+            code: 'EACCES',
+          });
+        }) as RainrailCliFileSystem['readdirSync'],
+        readFileSync: ((path) => {
+          const content = files.get(String(path));
+          if (content === undefined) {
+            throw missing(String(path));
+          }
+          return content;
+        }) as RainrailCliFileSystem['readFileSync'],
+        writeFileSync: ((path, data) => {
+          files.set(String(path), String(data));
+        }) as RainrailCliFileSystem['writeFileSync'],
+      };
+
+      expect(runRainrailCli(['init', '--yes'], {
+        cwd,
+        fileSystem: virtualFileSystem,
+      })).toEqual({
+        exitCode: 0,
+        stdout: `Initialized Rainrail workspace at ${cwd}\n`,
+        stderr: '',
+      });
+      expect(files.get(join(cwd, 'rainrail.config.json'))).toContain('"name": "no-read-project"');
     });
   });
 

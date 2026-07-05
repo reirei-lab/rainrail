@@ -108,6 +108,8 @@ export type RainrailCliEnvironment = {
   readonly fileSystem?: Partial<RainrailCliFileSystem>;
   readonly pluginAliasResolver?: PluginAliasResolver;
   readonly stdin?: string;
+  readonly stdinReader?: () => string;
+  readonly stderrWriter?: (message: string) => void;
 };
 
 export type RainrailProject = {
@@ -787,13 +789,15 @@ function runInitCommand(
     };
   }
 
-  if (!alreadyInitialized && isDirectoryNonEmpty(projectRoot, fileSystem) && !options.yes) {
-    const confirmed = readInitConfirmation(environment).trim().toLowerCase();
+  if (!options.yes && !alreadyInitialized && isDirectoryNonEmpty(projectRoot, fileSystem)) {
+    const prompt = 'Current directory is not empty. Initialize Rainrail workspace here? [y/N]\n';
+    const confirmation = readInitConfirmation(environment, prompt);
+    const confirmed = confirmation.input.trim().toLowerCase();
     if (!(confirmed === 'y' || confirmed === 'yes')) {
       return {
         exitCode: 0,
         stdout: '',
-        stderr: 'Current directory is not empty. Initialize Rainrail workspace here? [y/N]\n',
+        stderr: confirmation.promptWritten ? '' : prompt,
       };
     }
   }
@@ -836,15 +840,32 @@ function isDirectoryNonEmpty(
   return fileSystem.readdirSync(path).length > 0;
 }
 
-function readInitConfirmation(environment: RainrailCliEnvironment): string {
+function readInitConfirmation(
+  environment: RainrailCliEnvironment,
+  prompt: string,
+): { input: string; promptWritten: boolean } {
   if (environment.stdin !== undefined) {
-    return environment.stdin;
+    return { input: environment.stdin, promptWritten: false };
+  }
+
+  if (environment.stderrWriter !== undefined) {
+    environment.stderrWriter(prompt);
+    return {
+      input: environment.stdinReader === undefined
+        ? readFileSync(0, 'utf8')
+        : environment.stdinReader(),
+      promptWritten: true,
+    };
+  }
+
+  if (environment.stdinReader !== undefined) {
+    return { input: environment.stdinReader(), promptWritten: false };
   }
 
   try {
-    return readFileSync(0, 'utf8');
+    return { input: readFileSync(0, 'utf8'), promptWritten: false };
   } catch {
-    return '';
+    return { input: '', promptWritten: false };
   }
 }
 
