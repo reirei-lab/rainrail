@@ -343,7 +343,7 @@ export function discoverRainrailProject(
 
   while (true) {
     const configPath = join(current, rainrailConfigFileName);
-    if (fileSystem.existsSync(configPath)) {
+    if (fileSystem.existsSync(configPath) && isRegularFile(configPath, fileSystem)) {
       return {
         root: current,
         configPath,
@@ -709,11 +709,12 @@ function runNewCommand(args: readonly string[], environment: RainrailCliEnvironm
   }
 
   const cwd = environment.cwd === undefined ? process.cwd() : environment.cwd;
+  const fileSystem = getRainrailCliFileSystem(environment);
   const projectRoot = resolve(cwd, projectName);
-  const alreadyExisted = existsSync(projectRoot);
+  const alreadyExisted = fileSystem.existsSync(projectRoot);
 
   try {
-    createRainrailProject(projectRoot, projectName);
+    createRainrailProject(projectRoot, projectName, fileSystem);
   } catch (error) {
     return {
       exitCode: 1,
@@ -731,21 +732,33 @@ function runNewCommand(args: readonly string[], environment: RainrailCliEnvironm
   };
 }
 
-function createRainrailProject(projectRoot: string, projectName: string): void {
-  mkdirSync(projectRoot, { recursive: true });
-  mkdirSync(join(projectRoot, rainrailDirectoryName, rainrailPluginDirectoryName), { recursive: true });
+function createRainrailProject(
+  projectRoot: string,
+  projectName: string,
+  fileSystem: RainrailCliFileSystem,
+): void {
+  fileSystem.mkdirSync(projectRoot, { recursive: true });
+  const stateDirectory = ensureRainrailStateDirectory(projectRoot, fileSystem);
+  const pluginDirectory = join(stateDirectory, rainrailPluginDirectoryName);
+  if (!fileSystem.existsSync(pluginDirectory)) {
+    fileSystem.mkdirSync(pluginDirectory, { recursive: true });
+  }
+  ensureRegularDirectory(pluginDirectory, `Plugin root is not a regular directory: ${pluginDirectory}`, fileSystem);
 
   writeGeneratedFile(
     join(projectRoot, rainrailConfigFileName),
     formatRainrailConfig(projectName),
+    fileSystem,
   );
   writeGeneratedFile(
     join(projectRoot, rainrailLockFileName),
     formatRainrailLock(projectName),
+    fileSystem,
   );
   writeGeneratedFile(
-    join(projectRoot, rainrailDirectoryName, rainrailPluginDirectoryName, '.gitkeep'),
+    join(pluginDirectory, '.gitkeep'),
     '',
+    fileSystem,
   );
 }
 
@@ -859,7 +872,7 @@ function resolveRainrailProject(
   if (!fileSystem.existsSync(configPath)) {
     throw new Error(`Rainrail config file not found: ${configPath}`);
   }
-  if (!fileSystem.statSync(configPath).isFile()) {
+  if (!isRegularFile(configPath, fileSystem)) {
     throw new Error(`Rainrail config path is not a file: ${configPath}`);
   }
 
@@ -1044,14 +1057,49 @@ function removeProjectPlugin(
 }
 
 function ensureProjectPluginRoot(project: RainrailProject, fileSystem: RainrailCliFileSystem): void {
+  ensureRainrailStateDirectory(project.root, fileSystem);
   if (!fileSystem.existsSync(project.pluginDirectory)) {
     fileSystem.mkdirSync(project.pluginDirectory, { recursive: true });
   }
 
-  const pluginRootStat = fileSystem.lstatSync(project.pluginDirectory);
-  if (!pluginRootStat.isDirectory() || pluginRootStat.isSymbolicLink()) {
-    throw new Error(`Plugin root is not a regular directory: ${project.pluginDirectory}`);
+  ensureRegularDirectory(
+    project.pluginDirectory,
+    `Plugin root is not a regular directory: ${project.pluginDirectory}`,
+    fileSystem,
+  );
+}
+
+function ensureRainrailStateDirectory(
+  projectRoot: string,
+  fileSystem: RainrailCliFileSystem,
+): string {
+  const stateDirectory = join(projectRoot, rainrailDirectoryName);
+  if (!fileSystem.existsSync(stateDirectory)) {
+    fileSystem.mkdirSync(stateDirectory, { recursive: true });
   }
+
+  ensureRegularDirectory(
+    stateDirectory,
+    `Rainrail state directory is not a regular directory: ${stateDirectory}`,
+    fileSystem,
+  );
+  return stateDirectory;
+}
+
+function ensureRegularDirectory(
+  path: string,
+  message: string,
+  fileSystem: RainrailCliFileSystem,
+): void {
+  const pathStat = fileSystem.lstatSync(path);
+  if (!pathStat.isDirectory() || pathStat.isSymbolicLink()) {
+    throw new Error(message);
+  }
+}
+
+function isRegularFile(path: string, fileSystem: RainrailCliFileSystem): boolean {
+  const pathStat = fileSystem.lstatSync(path);
+  return pathStat.isFile() && !pathStat.isSymbolicLink();
 }
 
 function createLockPlugin(name: string, version: string): RainrailLockPlugin {
@@ -1130,16 +1178,23 @@ function sortLockPlugins(plugins: readonly RainrailLockPlugin[]): readonly Rainr
   return [...plugins].sort((left, right) => left.name.localeCompare(right.name));
 }
 
-function writeGeneratedFile(path: string, content: string): void {
-  if (existsSync(path)) {
-    const existing = readFileSync(path, 'utf8');
+function writeGeneratedFile(
+  path: string,
+  content: string,
+  fileSystem: RainrailCliFileSystem,
+): void {
+  if (fileSystem.existsSync(path)) {
+    if (!isRegularFile(path, fileSystem)) {
+      throw new Error(`Generated file path is not a regular file: ${path}`);
+    }
+    const existing = fileSystem.readFileSync(path, 'utf8');
     if (existing !== content) {
       throw new Error(`Refusing to overwrite existing file with different content: ${path}`);
     }
     return;
   }
 
-  writeFileSync(path, content, { flag: 'wx' });
+  fileSystem.writeFileSync(path, content, { flag: 'wx' });
 }
 
 function formatRainrailConfig(projectName: string): string {

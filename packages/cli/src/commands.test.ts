@@ -488,6 +488,58 @@ describe('Rainrail CLI built-in commands', () => {
     });
   });
 
+  it('scaffolds a project-local layout through the injected filesystem', async () => {
+    await withTempDirectory(async (directory) => {
+      const cwd = join(directory, 'virtual-cwd');
+      const projectRoot = join(cwd, 'my-agent-ops');
+      const directories = new Set<string>();
+      const files = new Map<string, string>();
+      const statsFor = (path: string) => ({
+        isDirectory: () => directories.has(path),
+        isFile: () => files.has(path),
+        isSymbolicLink: () => false,
+      });
+      const virtualFileSystem: Partial<RainrailCliFileSystem> = {
+        existsSync: (path) => directories.has(String(path)) || files.has(String(path)),
+        lstatSync: ((path) => statsFor(String(path))) as RainrailCliFileSystem['lstatSync'],
+        mkdirSync: ((path) => {
+          directories.add(String(path));
+          return undefined;
+        }) as RainrailCliFileSystem['mkdirSync'],
+        readFileSync: ((path) => {
+          const content = files.get(String(path));
+          if (content === undefined) {
+            throw new Error(`missing virtual file: ${String(path)}`);
+          }
+          return content;
+        }) as RainrailCliFileSystem['readFileSync'],
+        writeFileSync: ((path, data) => {
+          if (files.has(String(path))) {
+            throw new Error(`virtual file already exists: ${String(path)}`);
+          }
+          files.set(String(path), String(data));
+        }) as RainrailCliFileSystem['writeFileSync'],
+      };
+
+      expect(runRainrailCli(['new', 'my-agent-ops'], {
+        cwd,
+        fileSystem: virtualFileSystem,
+      })).toEqual({
+        exitCode: 0,
+        stdout: `Created Rainrail project at ${projectRoot}\n`,
+        stderr: '',
+      });
+
+      expect(directories.has(projectRoot)).toBe(true);
+      expect(directories.has(join(projectRoot, '.rainrail'))).toBe(true);
+      expect(directories.has(join(projectRoot, '.rainrail', 'plugins'))).toBe(true);
+      expect(files.get(join(projectRoot, 'rainrail.config.json'))).toContain('"name": "my-agent-ops"');
+      expect(files.get(join(projectRoot, 'rainrail.lock'))).toContain('"plugins": []');
+      expect(files.get(join(projectRoot, '.rainrail', 'plugins', '.gitkeep'))).toBe('');
+      await expect(stat(projectRoot)).rejects.toThrow();
+    });
+  });
+
   it('treats repeated scaffolding as safe when generated files are unchanged', async () => {
     await withTempDirectory(async (directory) => {
       expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
@@ -524,6 +576,26 @@ describe('Rainrail CLI built-in commands', () => {
         lockPath: join(directory, 'my-agent-ops', 'rainrail.lock'),
         pluginDirectory: join(directory, 'my-agent-ops', '.rainrail', 'plugins'),
       });
+    });
+  });
+
+  it('does not discover directories named like Rainrail config files as projects', async () => {
+    await withTempDirectory(async (directory) => {
+      await mkdir(join(directory, 'repo', 'rainrail.config.json'), { recursive: true });
+      await writeFile(join(directory, 'repo', 'rainrail.lock'), `${JSON.stringify({
+        lockfileVersion: 1,
+        project: { name: 'repo' },
+        plugins: [],
+      }, null, 2)}\n`);
+
+      const result = runRainrailCli(['plugins', 'add', 'github'], { cwd: join(directory, 'repo') });
+
+      expect(result).toEqual({
+        exitCode: 1,
+        stdout: '',
+        stderr: 'rainrail plugins requires a Rainrail project. Run it inside a directory with rainrail.config.json.\n',
+      });
+      await expect(stat(join(directory, 'repo', '.rainrail'))).rejects.toThrow();
     });
   });
 
@@ -922,6 +994,27 @@ describe('Rainrail CLI built-in commands', () => {
       expect(result.stderr).toBe(`Plugin root is not a regular directory: ${pluginRoot}\n`);
       await expect(readFile(join(outsidePlugin, 'sentinel.txt'), 'utf8')).resolves.toBe('keep me\n');
       await expect(readFile(lockPath, 'utf8')).resolves.toContain('"name": "github"');
+    });
+  });
+
+  it('rejects symlinked Rainrail state directories before writing plugin state', async () => {
+    await withTempDirectory(async (directory) => {
+      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
+      const projectRoot = join(directory, 'my-agent-ops');
+      const stateDirectory = join(projectRoot, '.rainrail');
+      const outsideStateDirectory = join(directory, 'outside-state');
+      await rm(stateDirectory, { recursive: true });
+      await mkdir(outsideStateDirectory);
+      await symlink(outsideStateDirectory, stateDirectory, 'dir');
+
+      const result = runRainrailCli(['plugins', 'add', 'github'], { cwd: projectRoot });
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toBe(
+        `Rainrail state directory is not a regular directory: ${stateDirectory}\n`,
+      );
+      await expect(stat(join(outsideStateDirectory, 'plugins'))).rejects.toThrow();
     });
   });
 

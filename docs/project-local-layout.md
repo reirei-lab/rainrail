@@ -23,15 +23,17 @@ project; generated plugin state is not global.
 
 Scaffolding is idempotent when generated files already contain the expected
 content. If a generated file exists with different content, `rainrail new`
-stops instead of overwriting it.
+stops instead of overwriting it. Embedded callers that pass
+`RainrailCliEnvironment.fileSystem` use that filesystem for scaffolding
+existence checks, directory creation, and generated file writes.
 
 Config discovery walks upward from the current path until it finds
-`rainrail.config.json`; that directory is the project root. The lockfile and
-plugin directory are resolved relative to that root. When `--config <path>` is
-provided, plugin management commands use that config file's parent directory as
-the project root instead of discovering from the current directory. Embedded
-callers that pass `RainrailCliEnvironment.fileSystem` use that filesystem for
-both discovery and project-local state reads/writes.
+`rainrail.config.json` as a normal file; that directory is the project root. The
+lockfile and plugin directory are resolved relative to that root. When
+`--config <path>` is provided, plugin management commands use that config file's
+parent directory as the project root instead of discovering from the current
+directory. Embedded callers that pass `RainrailCliEnvironment.fileSystem` use
+that filesystem for both discovery and project-local state reads/writes.
 
 ## Project-local official plugins
 
@@ -51,9 +53,9 @@ Plugin manifest paths are treated as untrusted project input. The add command
 requires `.rainrail/plugins/<name>` to be a normal directory and
 `.rainrail/plugins/<name>/plugin.json` to be a normal file when it already
 exists; symlinked manifest directories or files are rejected before writing.
-Plugin commands also require `rainrail.lock` to be a normal file and
-`.rainrail/plugins` to be a normal directory before project-local state is read,
-written, or removed.
+Plugin commands also require `rainrail.lock` to be a normal file,
+`.rainrail` to be a normal directory, and `.rainrail/plugins` to be a normal
+directory before project-local state is read, written, or removed.
 
 `rainrail plugins remove <officialPluginName>` removes the canonical lockfile
 entry and deletes the matching project-local plugin directory. Removing a plugin
