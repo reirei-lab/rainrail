@@ -8,6 +8,9 @@ const workflow = readFileSync(
 
 const trustedAuthorGuard = "if: ${{ steps.check-trusted-author.outputs.trusted == 'true' }}";
 
+/**
+ * @param {string} name
+ */
 function workflowStepBlock(name) {
   const stepStart = workflow.indexOf(`      - name: ${name}`);
   if (stepStart === -1) {
