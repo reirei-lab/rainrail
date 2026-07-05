@@ -126,6 +126,7 @@ export type RainrailStartOptions = {
   readonly port: number;
   readonly root: string;
   readonly configPath: string;
+  readonly allowedHosts: readonly string[];
   readonly dashboardToken?: string;
   readonly sources: readonly RainrailLocalSource[];
 };
@@ -1453,6 +1454,7 @@ type StartConfig = {
   readonly server?: {
     readonly host?: string;
     readonly port?: number;
+    readonly allowedHosts?: readonly string[];
   };
   readonly sources: readonly RainrailLocalSource[];
 };
@@ -1664,7 +1666,7 @@ function readStartConfig(
   }
 
   const server = parseStartConfigServer(value.server);
-  const sources = parseStartConfigSources(value);
+  const sources = parseStartConfigSources(value, env);
   return server === undefined ? { sources } : { server, sources };
 }
 
@@ -1676,7 +1678,7 @@ function parseStartConfigServer(value: unknown): StartConfig['server'] {
     throw new Error('config.server must be an object');
   }
 
-  const server: { host?: string; port?: number } = {};
+  const server: { host?: string; port?: number; allowedHosts?: readonly string[] } = {};
   if (value.host !== undefined) {
     const host = parseStartHost(value.host, 'config.server.host');
     if (typeof host !== 'string') throw new Error(host.message);
@@ -1687,19 +1689,26 @@ function parseStartConfigServer(value: unknown): StartConfig['server'] {
     if (typeof port !== 'number') throw new Error(port.message);
     server.port = port;
   }
+  if (value.allowedHosts !== undefined) {
+    server.allowedHosts = parseStartAllowedHosts(value.allowedHosts, 'config.server.allowedHosts');
+  }
   return server;
 }
 
-function parseStartConfigSources(value: Record<string, unknown>): RainrailLocalSource[] {
+function parseStartConfigSources(
+  value: Record<string, unknown>,
+  env: Record<string, string | undefined>,
+): RainrailLocalSource[] {
   const sources: RainrailLocalSource[] = [];
-  appendSourceBundleSources(sources, value.sourceBundles);
-  appendConfiguredSources(sources, value.sources);
+  appendSourceBundleSources(sources, value.sourceBundles, env);
+  appendConfiguredSources(sources, value.sources, env);
   return dedupeLocalSources(sources);
 }
 
 function appendSourceBundleSources(
   sources: RainrailLocalSource[],
   value: unknown,
+  env: Record<string, string | undefined>,
 ): void {
   if (value === undefined) {
     return;
@@ -1718,7 +1727,7 @@ function appendSourceBundleSources(
       if (!isRecord(source)) {
         throw new Error('config.sourceBundles[].sources[] must be an object');
       }
-      const localSource = parseLocalSource(source);
+      const localSource = parseLocalSource(source, env);
       if (localSource !== undefined) {
         sources.push(localSource);
       }
@@ -1729,6 +1738,7 @@ function appendSourceBundleSources(
 function appendConfiguredSources(
   sources: RainrailLocalSource[],
   value: unknown,
+  env: Record<string, string | undefined>,
 ): void {
   if (value === undefined) {
     return;
@@ -1740,32 +1750,35 @@ function appendConfiguredSources(
     if (!isRecord(source)) {
       throw new Error('config.sources[] must be an object');
     }
-    const localSource = parseLocalSource(source);
+    const localSource = parseLocalSource(source, env);
     if (localSource !== undefined) {
       sources.push(localSource);
     }
   }
 }
 
-function parseLocalSource(source: Record<string, unknown>): RainrailLocalSource | undefined {
+function parseLocalSource(
+  source: Record<string, unknown>,
+  env: Record<string, string | undefined>,
+): RainrailLocalSource | undefined {
   const name = typeof source.name === 'string' && source.name.length > 0 ? source.name : undefined;
   const sourceType = typeof source.sourceType === 'string' && source.sourceType.length > 0
     ? source.sourceType
     : typeof source.type === 'string' && source.type === 'github'
       ? 'github'
       : undefined;
-  const endpoint = typeof source.endpoint === 'string' && source.endpoint.startsWith('/')
-    ? parseLocalSourceEndpoint(source.endpoint)
-    : source.type === 'github-webhook'
+  const endpoint = source.endpoint === undefined
+    ? source.type === 'github-webhook'
       ? '/webhooks/github'
-      : undefined;
+      : undefined
+    : parseLocalSourceEndpoint(source.endpoint);
   if (name === undefined || sourceType === undefined || endpoint === undefined) {
     return undefined;
   }
   const maxBodyBytes = source.maxBodyBytes === undefined ? undefined : parseLocalSourceMaxBodyBytes(source.maxBodyBytes);
 
   const webhookSecret = typeof source.webhookSecret === 'string' && source.webhookSecret.length > 0
-    ? source.webhookSecret
+    ? env[source.webhookSecret] ?? source.webhookSecret
     : undefined;
   const localSource: {
     name: string;
@@ -1791,11 +1804,33 @@ function parseLocalSource(source: Record<string, unknown>): RainrailLocalSource 
   return localSource;
 }
 
-function parseLocalSourceEndpoint(endpoint: string): string {
+function parseLocalSourceEndpoint(endpoint: unknown): string {
+  if (typeof endpoint !== 'string') {
+    throw new Error('config endpoint must be a string');
+  }
+  if (!endpoint.startsWith('/')) {
+    throw new Error('config endpoint must start with "/"');
+  }
   if (endpoint.includes('?') || endpoint.includes('#')) {
     throw new Error('config endpoint must be a path without query or fragment');
   }
   return endpoint;
+}
+
+function parseStartAllowedHosts(value: unknown, label: string): readonly string[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`${label} must be an array`);
+  }
+  return value.map((host, index) => {
+    if (typeof host !== 'string' || host.length === 0) {
+      throw new Error(`${label}[${index}] must be a non-empty string`);
+    }
+    const hostName = hostHeaderName(host);
+    if (hostName === undefined) {
+      throw new Error(`${label}[${index}] must be a hostname or IP address`);
+    }
+    return hostName;
+  });
 }
 
 function parseLocalSourceMaxBodyBytes(value: unknown): number {
@@ -1841,6 +1876,18 @@ function resolveStartOptions(
     return { error: envPort.message };
   }
 
+  let envAllowedHosts: readonly string[] | undefined;
+  try {
+    envAllowedHosts = env.RAINRAIL_ALLOWED_HOSTS === undefined || env.RAINRAIL_ALLOWED_HOSTS.length === 0
+      ? undefined
+      : parseStartAllowedHosts(
+        env.RAINRAIL_ALLOWED_HOSTS.split(',').map((host) => host.trim()).filter((host) => host.length > 0),
+        'RAINRAIL_ALLOWED_HOSTS',
+      );
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) };
+  }
+
   const host = args.host ?? envHost ?? config.server?.host ?? '127.0.0.1';
   const dashboardToken = env.SSE_BEARER_TOKEN === undefined || env.SSE_BEARER_TOKEN.length === 0
     ? undefined
@@ -1855,6 +1902,7 @@ function resolveStartOptions(
       port: args.port ?? envPort ?? config.server?.port ?? 8787,
       root: project.root,
       configPath: project.configPath,
+      allowedHosts: envAllowedHosts ?? config.server?.allowedHosts ?? [],
       sources: config.sources,
       ...(dashboardToken === undefined ? {} : { dashboardToken }),
     },
@@ -3088,8 +3136,9 @@ async function handleLocalRainrailRequest(
     return;
   }
 
-  if (requiresLocalServerAuth(url.pathname, options) && !isAuthorizedLocalRequest(request, options)) {
-    writeJsonResponse(response, 401, { error: 'events_auth_invalid' });
+  const authError = getLocalServerAuthError(request, url.pathname, options);
+  if (authError !== undefined) {
+    writeJsonResponse(response, authError.status, { error: authError.code });
     return;
   }
 
@@ -3177,7 +3226,7 @@ async function handleLocalRainrailRequest(
   }
 
   if (request.method === 'GET' && url.pathname === '/api/v1/events') {
-    writeJsonResponse(response, 200, paginatedCollectionResponse(state.events, url));
+    writeJsonResponse(response, 200, paginatedCollectionResponse([...state.events].reverse(), url));
     return;
   }
 
@@ -3273,6 +3322,7 @@ function isSafeHostHeader(host: string, options?: RainrailStartOptions): boolean
     'localhost',
     '127.0.0.1',
     '::1',
+    ...options.allowedHosts,
   ]);
   return allowed.has(hostName);
 }
@@ -3297,9 +3347,22 @@ function requiresLocalServerAuth(pathname: string, options: RainrailStartOptions
     (pathname === '/events' || pathname.startsWith('/api/'));
 }
 
-function isAuthorizedLocalRequest(request: IncomingMessage, options: RainrailStartOptions): boolean {
-  return options.dashboardToken !== undefined &&
-    request.headers.authorization === `Bearer ${options.dashboardToken}`;
+function getLocalServerAuthError(
+  request: IncomingMessage,
+  pathname: string,
+  options: RainrailStartOptions,
+): { readonly status: number; readonly code: string } | undefined {
+  if (!requiresLocalServerAuth(pathname, options)) {
+    return undefined;
+  }
+  const authorization = request.headers.authorization;
+  if (typeof authorization !== 'string' || authorization.length === 0) {
+    return { status: 401, code: 'missing_bearer_token' };
+  }
+  if (authorization !== `Bearer ${options.dashboardToken}`) {
+    return { status: 403, code: 'invalid_bearer_token' };
+  }
+  return undefined;
 }
 
 function isAuthorizedLocalIntakeRequest(

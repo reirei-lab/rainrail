@@ -581,6 +581,10 @@ describe('Rainrail CLI built-in commands', () => {
         const firstPage = await fetch(`http://127.0.0.1:${port}/api/v1/events?limit=2`);
         const firstPageBody = await firstPage.json() as { data: Array<{ id: string; links: { self: string } }>; page: { nextCursor: string | null } };
         expect(firstPageBody.data).toHaveLength(2);
+        expect(firstPageBody.data.map((event) => event.id)).toEqual([
+          'local-event-000003',
+          'local-event-000002',
+        ]);
         expect(firstPageBody.page.nextCursor).toBe('2');
 
         const detail = await fetch(`http://127.0.0.1:${port}${firstPageBody.data[0]!.links.self}`);
@@ -594,8 +598,9 @@ describe('Rainrail CLI built-in commands', () => {
         });
 
         const secondPage = await fetch(`http://127.0.0.1:${port}/api/v1/events?limit=2&cursor=${firstPageBody.page.nextCursor}`);
-        const secondPageBody = await secondPage.json() as { data: unknown[]; page: { nextCursor: string | null } };
+        const secondPageBody = await secondPage.json() as { data: Array<{ id: string }>; page: { nextCursor: string | null } };
         expect(secondPageBody.data).toHaveLength(1);
+        expect(secondPageBody.data.map((event) => event.id)).toEqual(['local-event-000001']);
         expect(secondPageBody.page.nextCursor).toBeNull();
       } finally {
         await closeTestServer(result);
@@ -646,6 +651,72 @@ describe('Rainrail CLI built-in commands', () => {
     });
   });
 
+  it('uses configured allowed hosts for authenticated public dashboard requests', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'public-allowed-host');
+      const port = await getFreePort();
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        server: { host: '0.0.0.0', port, allowedHosts: ['192.168.1.10'] },
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+
+      const result = await runRainrailCliAsync(['start'], {
+        cwd: projectRoot,
+        env: { SSE_BEARER_TOKEN: 'events-token' },
+      });
+      try {
+        expect(result.exitCode).toBe(0);
+        const socket = net.createConnection({ host: '127.0.0.1', port });
+        socket.write([
+          'GET /api/v1/overview HTTP/1.1',
+          `Host: 192.168.1.10:${port}`,
+          'Authorization: Bearer events-token',
+          'Connection: close',
+          '',
+          '',
+        ].join('\r\n'));
+        let response = '';
+        socket.setEncoding('utf8');
+        socket.on('data', (chunk) => {
+          response += chunk;
+        });
+        await once(socket, 'end');
+
+        expect(response).toContain('200 OK');
+      } finally {
+        await closeTestServer(result);
+      }
+    });
+  });
+
+  it('matches dashboard bearer auth error contracts', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'dashboard-auth-contract');
+      const port = await getFreePort();
+      const result = await runRainrailCliAsync(['start', '--port', String(port)], {
+        cwd: projectRoot,
+        env: { SSE_BEARER_TOKEN: 'events-token' },
+      });
+      try {
+        expect(result.exitCode).toBe(0);
+
+        const missing = await fetch(`http://127.0.0.1:${port}/api/v1/overview`);
+        expect(missing.status).toBe(401);
+        await expect(missing.json()).resolves.toEqual({ error: 'missing_bearer_token' });
+
+        const invalid = await fetch(`http://127.0.0.1:${port}/api/v1/overview`, {
+          headers: { Authorization: 'Bearer wrong-token' },
+        });
+        expect(invalid.status).toBe(403);
+        await expect(invalid.json()).resolves.toEqual({ error: 'invalid_bearer_token' });
+      } finally {
+        await closeTestServer(result);
+      }
+    });
+  });
+
   it('requires source-specific signatures instead of dashboard bearer auth for public intake routes', async () => {
     await withTempDirectory(async (directory) => {
       const projectRoot = await initRainrailProject(directory, 'public-intake-auth');
@@ -685,6 +756,51 @@ describe('Rainrail CLI built-in commands', () => {
         const accepted = await fetch(`http://127.0.0.1:${port}/webhooks/github`, {
           method: 'POST',
           headers: { 'x-hub-signature-256': githubSignature('secret', body) },
+          body,
+        });
+        expect(accepted.status).toBe(202);
+      } finally {
+        await closeTestServer(result);
+      }
+    });
+  });
+
+  it('resolves configured webhookSecret names from the environment for public intake routes', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'webhook-secret-name');
+      const port = await getFreePort();
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        server: { host: '0.0.0.0', port },
+        sourceBundles: [{
+          type: 'eep-bridge',
+          name: 'local',
+          sources: [{
+            type: 'github-webhook',
+            name: 'github-local',
+            sourceType: 'github',
+            provider: 'github',
+            webhookSecret: 'GITHUB_WEBHOOK_SECRET',
+            endpoint: '/webhooks/github',
+          }],
+        }],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+
+      const result = await runRainrailCliAsync(['start'], {
+        cwd: projectRoot,
+        env: {
+          GITHUB_WEBHOOK_SECRET: 'actual-secret',
+          SSE_BEARER_TOKEN: 'events-token',
+        },
+      });
+      try {
+        expect(result.exitCode).toBe(0);
+        const body = '{}';
+        const accepted = await fetch(`http://127.0.0.1:${port}/webhooks/github`, {
+          method: 'POST',
+          headers: { 'x-hub-signature-256': githubSignature('actual-secret', body) },
           body,
         });
         expect(accepted.status).toBe(202);
@@ -740,6 +856,31 @@ describe('Rainrail CLI built-in commands', () => {
       });
       expect(invalidEndpoint.exitCode).toBe(1);
       expect(invalidEndpoint.stderr).toContain('config endpoint must be a path without query or fragment');
+
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        sourceBundles: [{
+          type: 'eep-bridge',
+          name: 'local',
+          sources: [{
+            type: 'github-webhook',
+            name: 'github-local',
+            sourceType: 'github',
+            provider: 'github',
+            webhookSecret: 'secret',
+            endpoint: 'webhooks/github',
+          }],
+        }],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+
+      const relativeEndpoint = runRainrailCli(['start'], {
+        cwd: projectRoot,
+        serverStarter: () => ({ stop: () => undefined }),
+      });
+      expect(relativeEndpoint.exitCode).toBe(1);
+      expect(relativeEndpoint.stderr).toContain('config endpoint must start with "/"');
 
       await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
         sourceBundles: [{
