@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.3.0](https://github.com/reirei-lab/rainrail/compare/release/0.2.1...release/0.3.0) (2026-07-05)
+
+
+### Features
+
+* add CLI release update check cache ([#188](https://github.com/reirei-lab/rainrail/issues/188)) ([2af92e3](https://github.com/reirei-lab/rainrail/commit/2af92e3a0b9c39e32adb0f057fc2fec6cdcaf619))
+* add rainrail version command ([#185](https://github.com/reirei-lab/rainrail/issues/185)) ([e524321](https://github.com/reirei-lab/rainrail/commit/e5243219883130c74642f4e2610b5ca3a38fa664))
+* **cli:** add foreground start command ([#194](https://github.com/reirei-lab/rainrail/issues/194)) ([f7c8855](https://github.com/reirei-lab/rainrail/commit/f7c8855799d59f737363f00e33a3231186551138))
+* **cli:** replace new command with init ([#189](https://github.com/reirei-lab/rainrail/issues/189)) ([d942046](https://github.com/reirei-lab/rainrail/commit/d942046f6b1acf4944c3826c4699b72b2fe364a5))
+* show CLI update notice after successful runs ([#193](https://github.com/reirei-lab/rainrail/issues/193)) ([81da7a3](https://github.com/reirei-lab/rainrail/commit/81da7a32d603b71fdcdc083f83547f015fbe7201))
+
+
+### Bug Fixes
+
+* restrict issue project automation to trusted authors ([#176](https://github.com/reirei-lab/rainrail/issues/176)) ([a4e6e7c](https://github.com/reirei-lab/rainrail/commit/a4e6e7cd9b2af37cfc6cd14fd9adbc8852f12140))
+* trust collaborator issue intake ([#192](https://github.com/reirei-lab/rainrail/issues/192)) ([ac92d2c](https://github.com/reirei-lab/rainrail/commit/ac92d2ca8a40e6fe723eadff8978224fb727bb1f))
+
 ## [0.2.1](https://github.com/reirei-lab/rainrail/compare/release/0.2.0...release/0.2.1) (2026-07-05)
 
 
