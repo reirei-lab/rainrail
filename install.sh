@@ -119,11 +119,46 @@ shell_escape() {
   printf '%q' "$1"
 }
 
+normalize_release_version() {
+  sed -e 's/^v//' -e 's#^release/##' -e 's#^release%2F##' -e 's#^release%2f##'
+}
+
+encode_release_tag_for_url() {
+  local tag="$1"
+  printf '%s' "${tag//\//%2F}"
+}
+
 resolve_latest_version() {
+  if command -v gh >/dev/null 2>&1; then
+    if gh release view --repo "${repo}" --json tagName --jq '.tagName' 2>/dev/null | normalize_release_version; then
+      return
+    fi
+  fi
+
   require_command curl
   local effective_url
   effective_url="$(curl -fsSL -o /dev/null -w '%{url_effective}' "https://github.com/${repo}/releases/latest")"
-  basename "${effective_url}" | sed -e 's/^v//' -e 's#^release/##' -e 's#^release%2F##' -e 's#^release%2f##'
+  basename "${effective_url}" | normalize_release_version
+}
+
+download_release_asset() {
+  local release_tag="$1"
+  local asset_name="$2"
+  local output="$3"
+  local output_dir
+  local encoded_release_tag
+  output_dir="$(dirname "${output}")"
+  encoded_release_tag="$(encode_release_tag_for_url "${release_tag}")"
+
+  if command -v gh >/dev/null 2>&1; then
+    rm -f "${output_dir}/${asset_name}"
+    if gh release download "${release_tag}" --repo "${repo}" --pattern "${asset_name}" --dir "${output_dir}" >/dev/null 2>&1; then
+      mv "${output_dir}/${asset_name}" "${output}"
+      return
+    fi
+  fi
+
+  download "https://github.com/${repo}/releases/download/${encoded_release_tag}/${asset_name}" "${output}"
 }
 
 if [ -z "${asset_url}" ]; then
@@ -134,7 +169,6 @@ if [ -z "${asset_url}" ]; then
   version="${version#release/}"
   version="${version#release%2F}"
   version="${version#release%2f}"
-  asset_url="https://github.com/${repo}/releases/download/release%2F${version}/rainrail-cli-v${version}.tgz"
 fi
 
 tmpdir="$(mktemp -d)"
@@ -150,7 +184,11 @@ trap cleanup EXIT
 tarball="${tmpdir}/rainrail-cli.tgz"
 extract_dir="${tmpdir}/extract"
 mkdir -p "${extract_dir}"
-download "${asset_url}" "${tarball}"
+if [ -n "${asset_url}" ]; then
+  download "${asset_url}" "${tarball}"
+else
+  download_release_asset "release/${version}" "rainrail-cli-v${version}.tgz" "${tarball}"
+fi
 tar -xzf "${tarball}" -C "${extract_dir}"
 
 package_dir="${extract_dir}/package"
