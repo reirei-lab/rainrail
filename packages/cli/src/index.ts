@@ -39,6 +39,7 @@ export type BuiltInCommandName =
   | 'plugins'
   | 'plugin'
   | 'update'
+  | 'version'
   | 'help';
 
 export type BuiltInCommand = {
@@ -189,6 +190,12 @@ export const BUILT_IN_COMMANDS: readonly BuiltInCommand[] = [
     name: 'update',
     kind: 'built-in',
     summary: 'Update the Rainrail CLI from GitHub Releases.',
+    implemented: true,
+  },
+  {
+    name: 'version',
+    kind: 'built-in',
+    summary: 'Print the Rainrail CLI version.',
     implemented: true,
   },
   {
@@ -695,6 +702,10 @@ export function runRainrailCli(
     );
   }
 
+  if (command.name === 'version') {
+    return runVersionCommand(parsed.commandArgs);
+  }
+
   if (command.name === 'new') {
     return runNewCommand(parsed.commandArgs, environment);
   }
@@ -715,6 +726,34 @@ export function runRainrailCli(
       pluginCollisionHint ?? '',
     ].join(''),
   };
+}
+
+function runVersionCommand(args: readonly string[]): RainrailCliResult {
+  if (args.length !== 0) {
+    return {
+      exitCode: 1,
+      stdout: '',
+      stderr: 'Usage: rainrail version\n',
+    };
+  }
+
+  return {
+    exitCode: 0,
+    stdout: `rainrail ${getRainrailCliPackageVersion()}\n`,
+    stderr: '',
+  };
+}
+
+function getRainrailCliPackageVersion(): string {
+  const packageJson = JSON.parse(
+    readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
+  ) as { version?: unknown };
+
+  if (typeof packageJson.version !== 'string') {
+    throw new Error('Rainrail CLI package.json is missing a string version.');
+  }
+
+  return packageJson.version;
 }
 
 function runNewCommand(args: readonly string[], environment: RainrailCliEnvironment): RainrailCliResult {
