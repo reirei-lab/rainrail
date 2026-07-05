@@ -40,6 +40,9 @@ you are implementing or reviewing Rainrail behavior.
 
 ## Operations and deployment
 
+- [CLI update check and version commands](cli-update-and-version.md): user and
+  implementation-facing behavior for `rainrail version`, `rainrail update
+  check`, cache handling, and automatic update notices.
 - [Cloudflare Worker operations](cloudflare-worker.md): Worker deploy, secrets,
   local dev, and production smoke checks.
 - [Cloudflare Pages operations](cloudflare-pages.md): product site preview and
