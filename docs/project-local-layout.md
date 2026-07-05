@@ -1,8 +1,8 @@
 # Rainrail project-local layout
 
-`rainrail new <projectName>` creates a project directory that keeps Rainrail
-CLI state local to the project. The CLI itself is still installed outside the
-project; generated plugin state is not global.
+`rainrail init` initializes the current directory as a Rainrail workspace that
+keeps CLI state local to the project. The CLI itself is still installed outside
+the project; generated plugin state is not global.
 
 ## Generated files
 
@@ -22,8 +22,10 @@ project; generated plugin state is not global.
 ## Re-run behavior
 
 Scaffolding is idempotent when generated files already contain the expected
-content. If a generated file exists with different content, `rainrail new`
-stops instead of overwriting it. Embedded callers that pass
+content. If a generated file exists with different content, `rainrail init`
+stops instead of overwriting it. When the current directory is non-empty and is
+not already initialized, `rainrail init` asks for confirmation before writing;
+`--yes` skips that prompt. Embedded callers that pass
 `RainrailCliEnvironment.fileSystem` use that filesystem for scaffolding
 existence checks, directory creation, and generated file writes.
 

@@ -3,7 +3,9 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
+  readSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -34,7 +36,7 @@ export {
 } from './official-plugin-catalog.js';
 
 export type BuiltInCommandName =
-  | 'new'
+  | 'init'
   | 'setup'
   | 'doctor'
   | 'plugins'
@@ -99,6 +101,7 @@ export type RainrailCliFileSystem = {
   readonly existsSync: typeof existsSync;
   readonly lstatSync: typeof lstatSync;
   readonly mkdirSync: typeof mkdirSync;
+  readonly readdirSync: typeof readdirSync;
   readonly readFileSync: typeof readFileSync;
   readonly rmSync: typeof rmSync;
   readonly statSync: typeof statSync;
@@ -117,6 +120,9 @@ export type RainrailCliEnvironment = {
   readonly now?: () => Date;
   readonly pluginAliasResolver?: PluginAliasResolver;
   readonly releaseFetcher?: ReleaseFetcher;
+  readonly stdin?: string;
+  readonly stdinReader?: () => string;
+  readonly stderrWriter?: (message: string) => void;
 };
 
 export type RainrailProject = {
@@ -165,6 +171,7 @@ const defaultRainrailCliFileSystem: RainrailCliFileSystem = {
   existsSync,
   lstatSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   rmSync,
   statSync,
@@ -173,9 +180,9 @@ const defaultRainrailCliFileSystem: RainrailCliFileSystem = {
 
 export const BUILT_IN_COMMANDS: readonly BuiltInCommand[] = [
   {
-    name: 'new',
+    name: 'init',
     kind: 'built-in',
-    summary: 'Create a new Rainrail project or workspace scaffold.',
+    summary: 'Initialize the current directory as a Rainrail workspace.',
     implemented: true,
   },
   {
@@ -1128,8 +1135,8 @@ export function runRainrailCli(
     return runVersionCommand(parsed.commandArgs);
   }
 
-  if (command.name === 'new') {
-    return runNewCommand(parsed.commandArgs, environment);
+  if (command.name === 'init') {
+    return runInitCommand(parsed.commandArgs, parsed.options, environment);
   }
 
   if (command.name === 'setup') {
@@ -1178,31 +1185,57 @@ function getRainrailCliPackageVersion(): string {
   return packageJson.version;
 }
 
-function runNewCommand(args: readonly string[], environment: RainrailCliEnvironment): RainrailCliResult {
-  const projectName = args[0];
-  if (projectName === undefined || args.length !== 1) {
+function runInitCommand(
+  args: readonly string[],
+  options: SharedOptions,
+  environment: RainrailCliEnvironment,
+): RainrailCliResult {
+  if (args.length !== 0) {
     return {
       exitCode: 1,
       stdout: '',
-      stderr: 'Usage: rainrail new <projectName>\n',
-    };
-  }
-
-  if (!safeProjectNamePattern.test(projectName) || parse(projectName).base !== projectName) {
-    return {
-      exitCode: 1,
-      stdout: '',
-      stderr: 'Project name must be a safe directory name.\n',
+      stderr: 'Usage: rainrail init\n',
     };
   }
 
   const cwd = environment.cwd === undefined ? process.cwd() : environment.cwd;
   const fileSystem = getRainrailCliFileSystem(environment);
-  const projectRoot = resolve(cwd, projectName);
-  const alreadyExisted = fileSystem.existsSync(projectRoot);
+  const projectRoot = resolve(cwd);
+  const projectName = parse(projectRoot).base;
 
+  if (!safeProjectNamePattern.test(projectName)) {
+    return {
+      exitCode: 1,
+      stdout: '',
+      stderr: 'Current directory name must be a safe Rainrail project name.\n',
+    };
+  }
+
+  let alreadyInitialized = false;
   try {
-    createRainrailProject(projectRoot, projectName, fileSystem);
+    alreadyInitialized = isRainrailWorkspaceRoot(projectRoot, fileSystem);
+    if (alreadyInitialized) {
+      return {
+        exitCode: 0,
+        stdout: `Rainrail workspace already initialized at ${projectRoot}\n`,
+        stderr: '',
+      };
+    }
+
+    if (!options.yes && isDirectoryNonEmpty(projectRoot, fileSystem)) {
+      const prompt = 'Current directory is not empty. Initialize Rainrail workspace here? [y/N]\n';
+      const confirmation = readInitConfirmation(environment, prompt);
+      const confirmed = confirmation.input.trim().toLowerCase();
+      if (!(confirmed === 'y' || confirmed === 'yes')) {
+        return {
+          exitCode: 0,
+          stdout: '',
+          stderr: confirmation.promptWritten ? '' : prompt,
+        };
+      }
+    }
+
+    initializeRainrailWorkspace(projectRoot, projectName, fileSystem);
   } catch (error) {
     return {
       exitCode: 1,
@@ -1213,14 +1246,90 @@ function runNewCommand(args: readonly string[], environment: RainrailCliEnvironm
 
   return {
     exitCode: 0,
-    stdout: alreadyExisted
-      ? `Rainrail project already exists at ${projectRoot}\n`
-      : `Created Rainrail project at ${projectRoot}\n`,
+    stdout: `Initialized Rainrail workspace at ${projectRoot}\n`,
     stderr: '',
   };
 }
 
-function createRainrailProject(
+function isRainrailWorkspaceRoot(
+  projectRoot: string,
+  fileSystem: RainrailCliFileSystem,
+): boolean {
+  const configPath = join(projectRoot, rainrailConfigFileName);
+  const lockPath = join(projectRoot, rainrailLockFileName);
+  const pluginDirectory = join(projectRoot, rainrailDirectoryName, rainrailPluginDirectoryName);
+  if (
+    !fileSystem.existsSync(configPath) ||
+    !isRegularFile(configPath, fileSystem) ||
+    !fileSystem.existsSync(lockPath) ||
+    !fileSystem.existsSync(pluginDirectory) ||
+    lstatPath(pluginDirectory, fileSystem)?.isDirectory() !== true
+  ) {
+    return false;
+  }
+
+  readRainrailLockfile(lockPath, fileSystem);
+  return true;
+}
+
+function isDirectoryNonEmpty(
+  path: string,
+  fileSystem: RainrailCliFileSystem,
+): boolean {
+  if (!fileSystem.existsSync(path)) {
+    return false;
+  }
+
+  return fileSystem.readdirSync(path).length > 0;
+}
+
+function readInitConfirmation(
+  environment: RainrailCliEnvironment,
+  prompt: string,
+): { input: string; promptWritten: boolean } {
+  if (environment.stdin !== undefined) {
+    return { input: environment.stdin, promptWritten: false };
+  }
+
+  if (environment.stderrWriter !== undefined) {
+    environment.stderrWriter(prompt);
+    return {
+      input: environment.stdinReader === undefined
+        ? readStdinLineSync()
+        : environment.stdinReader(),
+      promptWritten: true,
+    };
+  }
+
+  if (environment.stdinReader !== undefined) {
+    return { input: environment.stdinReader(), promptWritten: false };
+  }
+
+  return { input: '', promptWritten: false };
+}
+
+function readStdinLineSync(): string {
+  const input: string[] = [];
+  const buffer = Buffer.alloc(1);
+
+  while (true) {
+    const bytesRead = readSync(0, buffer, 0, 1, null);
+    if (bytesRead === 0) {
+      break;
+    }
+
+    const character = buffer.toString('utf8', 0, bytesRead);
+    if (character === '\n' || character === '\r') {
+      break;
+    }
+
+    input.push(character);
+  }
+
+  return input.join('');
+}
+
+function initializeRainrailWorkspace(
   projectRoot: string,
   projectName: string,
   fileSystem: RainrailCliFileSystem,
