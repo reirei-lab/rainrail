@@ -296,6 +296,176 @@ describe('Rainrail CLI built-in commands', () => {
     expect(runRainrailCli(['--help'])).toEqual(runRainrailCli(['help']));
   });
 
+  it('prints official setup choices without mutating the project when --yes is omitted', async () => {
+    await withTempDirectory(async (directory) => {
+      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
+      const projectRoot = join(directory, 'my-agent-ops');
+
+      const result = runRainrailCli(['setup'], { cwd: projectRoot });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+      expect(result.stdout).toContain('Official plugins available for setup:');
+      expect(result.stdout).toContain('  github');
+      expect(result.stdout).toContain('  cloudflare');
+      expect(result.stdout).toContain('  openclaw');
+      expect(result.stdout).toContain('Run `rainrail setup --yes` to install and set up all official plugins.');
+      await expect(readFile(join(projectRoot, 'rainrail.lock'), 'utf8')).resolves.toContain(
+        '"plugins": []',
+      );
+    });
+  });
+
+  it('orchestrates official plugin install and setup commands in --yes mode', async () => {
+    await withTempDirectory(async (directory) => {
+      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
+      const projectRoot = join(directory, 'my-agent-ops');
+      const calls: Array<{
+        command: string;
+        args: readonly string[];
+        options: unknown;
+      }> = [];
+
+      const result = runRainrailCli(['setup', '--yes'], {
+        cwd: projectRoot,
+        currentBinPath: '/opt/rainrail/bin/rainrail',
+        commandRunner: (command, args, options) => {
+          calls.push({ command, args, options });
+          return { status: 0, stdout: `${args.join(' ')} complete\n`, stderr: '' };
+        },
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+      expect(result.stdout).toContain('Added official plugin github@0.1.0');
+      expect(result.stdout).toContain('plugin github setup --yes complete');
+      expect(result.stdout).toContain('Added official plugin cloudflare@0.1.0');
+      expect(result.stdout).toContain('plugin cloudflare setup --yes complete');
+      expect(result.stdout).toContain('Added official plugin openclaw@0.1.0');
+      expect(result.stdout).toContain('plugin openclaw setup --yes complete');
+      expect(calls).toEqual([
+        {
+          command: '/opt/rainrail/bin/rainrail',
+          args: ['plugin', 'github', 'setup', '--yes'],
+          options: { stdio: 'pipe', cwd: projectRoot },
+        },
+        {
+          command: '/opt/rainrail/bin/rainrail',
+          args: ['plugin', 'cloudflare', 'setup', '--yes'],
+          options: { stdio: 'pipe', cwd: projectRoot },
+        },
+        {
+          command: '/opt/rainrail/bin/rainrail',
+          args: ['plugin', 'openclaw', 'setup', '--yes'],
+          options: { stdio: 'pipe', cwd: projectRoot },
+        },
+      ]);
+      const lockfile = await readFile(join(projectRoot, 'rainrail.lock'), 'utf8');
+      expect(lockfile).toContain('"name": "cloudflare"');
+      expect(lockfile).toContain('"name": "github"');
+      expect(lockfile).toContain('"name": "openclaw"');
+    });
+  });
+
+  it('limits setup orchestration to explicitly selected official plugins', async () => {
+    await withTempDirectory(async (directory) => {
+      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
+      const projectRoot = join(directory, 'my-agent-ops');
+      const calls: Array<{ args: readonly string[] }> = [];
+
+      const result = runRainrailCli(['--yes', 'setup', 'gh', 'oc'], {
+        cwd: projectRoot,
+        currentBinPath: '/opt/rainrail/bin/rainrail',
+        commandRunner: (_command, args) => {
+          calls.push({ args });
+          return { status: 0, stdout: '', stderr: '' };
+        },
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(calls.map((call) => call.args)).toEqual([
+        ['plugin', 'github', 'setup', '--yes'],
+        ['plugin', 'openclaw', 'setup', '--yes'],
+      ]);
+      const lockfile = await readFile(join(projectRoot, 'rainrail.lock'), 'utf8');
+      expect(lockfile).toContain('"name": "github"');
+      expect(lockfile).not.toContain('"name": "cloudflare"');
+      expect(lockfile).toContain('"name": "openclaw"');
+    });
+  });
+
+  it('returns setup orchestration steps as JSON for automation', async () => {
+    await withTempDirectory(async (directory) => {
+      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
+      const projectRoot = join(directory, 'my-agent-ops');
+
+      const result = runRainrailCli(['--json', '--yes', 'setup', 'github'], {
+        cwd: projectRoot,
+        currentBinPath: '/opt/rainrail/bin/rainrail',
+        commandRunner: () => ({ status: 0, stdout: 'github setup ok\n', stderr: '' }),
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+      expect(JSON.parse(result.stdout) as unknown).toEqual({
+        command: 'setup',
+        completed: true,
+        plugins: ['github'],
+        steps: [
+          {
+            plugin: 'github',
+            action: 'install',
+            command: ['rainrail', 'plugins', 'add', 'github'],
+            exitCode: 0,
+            status: 'completed',
+            stdout: 'Added official plugin github@0.1.0\n',
+            stderr: '',
+          },
+          {
+            plugin: 'github',
+            action: 'setup',
+            command: ['rainrail', 'plugin', 'github', 'setup', '--yes', '--json'],
+            exitCode: 0,
+            status: 'completed',
+            stdout: 'github setup ok\n',
+            stderr: '',
+          },
+        ],
+      });
+    });
+  });
+
+  it('stops setup orchestration at the failed plugin setup step', async () => {
+    await withTempDirectory(async (directory) => {
+      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
+      const projectRoot = join(directory, 'my-agent-ops');
+      const calls: Array<{ args: readonly string[] }> = [];
+
+      const result = runRainrailCli(['--yes', 'setup'], {
+        cwd: projectRoot,
+        currentBinPath: '/opt/rainrail/bin/rainrail',
+        commandRunner: (_command, args) => {
+          calls.push({ args });
+          return args[1] === 'cloudflare'
+            ? { status: 2, stdout: '', stderr: 'cloudflare missing credentials\n' }
+            : { status: 0, stdout: '', stderr: '' };
+        },
+      });
+
+      expect(result.exitCode).toBe(2);
+      expect(result.stdout).toContain('Added official plugin github@0.1.0');
+      expect(result.stdout).toContain('Added official plugin cloudflare@0.1.0');
+      expect(result.stderr).toBe(
+        'rainrail plugin cloudflare setup --yes failed with exit code 2.\ncloudflare missing credentials\n',
+      );
+      expect(calls.map((call) => call.args[1])).toEqual(['github', 'cloudflare']);
+      const lockfile = await readFile(join(projectRoot, 'rainrail.lock'), 'utf8');
+      expect(lockfile).toContain('"name": "github"');
+      expect(lockfile).toContain('"name": "cloudflare"');
+      expect(lockfile).not.toContain('"name": "openclaw"');
+    });
+  });
+
   it('returns a clear placeholder error for commands that are not implemented yet', () => {
     const result = runRainrailCli(['doctor']);
 

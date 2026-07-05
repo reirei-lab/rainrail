@@ -77,6 +77,7 @@ export type CommandRunnerResult = {
 
 export type CommandRunnerOptions = {
   readonly stdio: 'inherit' | 'pipe';
+  readonly cwd?: string;
 };
 
 export type CommandRunner = (
@@ -164,7 +165,7 @@ export const BUILT_IN_COMMANDS: readonly BuiltInCommand[] = [
     name: 'setup',
     kind: 'built-in',
     summary: 'Prepare local Rainrail configuration.',
-    implemented: false,
+    implemented: true,
   },
   {
     name: 'doctor',
@@ -676,6 +677,10 @@ export function runRainrailCli(
     return runNewCommand(parsed.commandArgs, environment);
   }
 
+  if (command.name === 'setup') {
+    return runSetupCommand(parsed.commandArgs, parsed.options, environment);
+  }
+
   if (command.name === 'plugins') {
     return runPluginsCommand(parsed.commandArgs, parsed.options, environment);
   }
@@ -760,6 +765,287 @@ function createRainrailProject(
     '',
     fileSystem,
   );
+}
+
+type SetupStepAction = 'install' | 'setup';
+type SetupStepStatus = 'completed' | 'failed';
+
+type SetupStepResult = {
+  readonly plugin: string;
+  readonly action: SetupStepAction;
+  readonly command: readonly string[];
+  readonly status: SetupStepStatus;
+  readonly exitCode: number;
+  readonly stdout: string;
+  readonly stderr: string;
+};
+
+type SetupJsonResult = {
+  readonly command: 'setup';
+  readonly completed: boolean;
+  readonly plugins: readonly string[];
+  readonly steps: readonly SetupStepResult[];
+};
+
+function runSetupCommand(
+  args: readonly string[],
+  options: SharedOptions,
+  environment: RainrailCliEnvironment,
+): RainrailCliResult {
+  const cwd = environment.cwd === undefined ? process.cwd() : environment.cwd;
+  const fileSystem = getRainrailCliFileSystem(environment);
+  let project: RainrailProject | undefined;
+  try {
+    project = resolveRainrailProject(cwd, options, fileSystem);
+  } catch (error) {
+    return formatSetupError(options, error);
+  }
+  if (project === undefined) {
+    return {
+      exitCode: 1,
+      stdout: '',
+      stderr:
+        'rainrail setup requires a Rainrail project. Run it inside a directory with rainrail.config.json.\n',
+    };
+  }
+
+  const selectedPlugins = resolveSetupPlugins(args);
+  if (selectedPlugins.error !== undefined) {
+    return {
+      exitCode: 1,
+      stdout: '',
+      stderr: selectedPlugins.error,
+    };
+  }
+
+  if (!options.yes) {
+    return {
+      exitCode: 0,
+      stdout: formatSetupChoices(),
+      stderr: '',
+    };
+  }
+
+  const plugins = selectedPlugins.plugins;
+  const commandRunner = environment.commandRunner ??
+    ((commandName, commandArgs, commandOptions) =>
+      spawnSync(commandName, commandArgs, {
+        cwd: commandOptions.cwd,
+        encoding: 'utf8',
+        stdio: commandOptions.stdio,
+      }));
+  const invocation = createRainrailCommandInvocation(environment.currentBinPath ?? process.argv[1]);
+  const steps: SetupStepResult[] = [];
+
+  for (const plugin of plugins) {
+    const installResult = runPluginsCommand(['add', plugin.alias], options, {
+      ...environment,
+      cwd: project.root,
+    });
+    const installStep = createSetupStep(
+      plugin.alias,
+      'install',
+      ['rainrail', 'plugins', 'add', plugin.alias],
+      installResult,
+    );
+    steps.push(installStep);
+    if (installResult.exitCode !== 0) {
+      return formatSetupResult(false, plugins, steps, options, installStep);
+    }
+
+    const setupArgs = [
+      ...invocation.args,
+      'plugin',
+      plugin.alias,
+      'setup',
+      ...formatForwardedSetupOptions(options),
+    ];
+    const setupResult = commandRunner(invocation.command, setupArgs, {
+      stdio: 'pipe',
+      cwd: project.root,
+    });
+    const pluginSetupResult = {
+      exitCode: setupResult.status ?? 1,
+      stdout: toOutput(setupResult.stdout),
+      stderr: toOutput(setupResult.stderr),
+    };
+    const setupStep = createSetupStep(
+      plugin.alias,
+      'setup',
+      ['rainrail', 'plugin', plugin.alias, 'setup', ...formatForwardedSetupOptions(options)],
+      pluginSetupResult,
+    );
+    steps.push(setupStep);
+    if (pluginSetupResult.exitCode !== 0) {
+      return formatSetupResult(false, plugins, steps, options, setupStep);
+    }
+  }
+
+  return formatSetupResult(true, plugins, steps, options);
+}
+
+function formatSetupError(options: SharedOptions, error: unknown): RainrailCliResult {
+  const message = error instanceof Error ? error.message : String(error);
+  if (!options.json) {
+    return {
+      exitCode: 1,
+      stdout: '',
+      stderr: `${message}\n`,
+    };
+  }
+
+  return {
+    exitCode: 1,
+    stdout: formatJson({
+      command: 'setup',
+      completed: false,
+      plugins: [],
+      steps: [],
+      error: message,
+    }),
+    stderr: '',
+  };
+}
+
+function resolveSetupPlugins(args: readonly string[]): {
+  readonly plugins: readonly OfficialPluginMetadata[];
+  readonly error?: string;
+} {
+  if (args.length === 0) {
+    return { plugins: OFFICIAL_PLUGIN_CATALOG };
+  }
+
+  const plugins: OfficialPluginMetadata[] = [];
+  const seenAliases = new Set<string>();
+  for (const arg of args) {
+    const plugin = getOfficialPluginByAlias(arg);
+    if (plugin === undefined) {
+      return {
+        plugins: [],
+        error: `Unknown official plugin: ${arg}. Third-party and Git URL plugins are not supported by rainrail setup.\n`,
+      };
+    }
+    if (!seenAliases.has(plugin.alias)) {
+      plugins.push(plugin);
+      seenAliases.add(plugin.alias);
+    }
+  }
+
+  return { plugins };
+}
+
+function formatSetupChoices(): string {
+  const pluginRows = OFFICIAL_PLUGIN_CATALOG.map((plugin) => {
+    const aliasText = plugin.aliases.length > 1 ? ` (${plugin.aliases.slice(1).join(', ')})` : '';
+    return `  ${plugin.alias.padEnd(11, ' ')} ${plugin.summary}${aliasText}`;
+  }).join('\n');
+
+  return [
+    'Official plugins available for setup:',
+    pluginRows,
+    '',
+    'Run `rainrail setup --yes` to install and set up all official plugins.',
+    'Run `rainrail setup <plugin...> --yes` to install and set up selected official plugins.',
+    '',
+  ].join('\n');
+}
+
+function formatForwardedSetupOptions(options: SharedOptions): readonly string[] {
+  const forwardedOptions: string[] = [];
+  if (options.config !== undefined) {
+    forwardedOptions.push('--config', options.config);
+  }
+  if (options.profile !== undefined) {
+    forwardedOptions.push('--profile', options.profile);
+  }
+  if (options.yes) {
+    forwardedOptions.push('--yes');
+  }
+  if (options.json) {
+    forwardedOptions.push('--json');
+  }
+  return forwardedOptions;
+}
+
+function createRainrailCommandInvocation(currentBinPath: string | undefined): {
+  readonly command: string;
+  readonly args: readonly string[];
+} {
+  if (currentBinPath !== undefined && currentBinPath.length > 0) {
+    const normalizedBinPath = normalize(currentBinPath);
+    if (normalizedBinPath.endsWith(`${sep}rainrail.js`)) {
+      return {
+        command: process.execPath,
+        args: [currentBinPath],
+      };
+    }
+
+    if (parse(normalizedBinPath).base === 'rainrail') {
+      return {
+        command: currentBinPath,
+        args: [],
+      };
+    }
+  }
+
+  return {
+    command: 'rainrail',
+    args: [],
+  };
+}
+
+function createSetupStep(
+  plugin: string,
+  action: SetupStepAction,
+  command: readonly string[],
+  result: RainrailCliResult,
+): SetupStepResult {
+  return {
+    plugin,
+    action,
+    command,
+    exitCode: result.exitCode,
+    status: result.exitCode === 0 ? 'completed' : 'failed',
+    stdout: result.stdout,
+    stderr: result.stderr,
+  };
+}
+
+function formatSetupResult(
+  completed: boolean,
+  plugins: readonly OfficialPluginMetadata[],
+  steps: readonly SetupStepResult[],
+  options: SharedOptions,
+  failedStep?: SetupStepResult,
+): RainrailCliResult {
+  if (options.json) {
+    const jsonResult: SetupJsonResult = {
+      command: 'setup',
+      completed,
+      plugins: plugins.map((plugin) => plugin.alias),
+      steps,
+    };
+    return {
+      exitCode: failedStep?.exitCode ?? 0,
+      stdout: formatJson(jsonResult),
+      stderr: '',
+    };
+  }
+
+  const stdout = steps.map((step) => step.stdout).join('');
+  if (failedStep !== undefined) {
+    return {
+      exitCode: failedStep.exitCode,
+      stdout,
+      stderr: `${failedStep.command.join(' ')} failed with exit code ${failedStep.exitCode}.\n${failedStep.stderr}`,
+    };
+  }
+
+  return {
+    exitCode: 0,
+    stdout,
+    stderr: '',
+  };
 }
 
 function runPluginsCommand(
