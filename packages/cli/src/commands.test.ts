@@ -973,6 +973,25 @@ describe('Rainrail CLI built-in commands', () => {
     });
   });
 
+  it('rejects broken symlinked plugin manifest files before writing plugin state', async () => {
+    await withTempDirectory(async (directory) => {
+      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
+      const projectRoot = join(directory, 'my-agent-ops');
+      const pluginPath = join(projectRoot, '.rainrail', 'plugins', 'github');
+      const manifestPath = join(pluginPath, 'plugin.json');
+      const outsideTarget = join(directory, 'missing-outside-manifest.json');
+      await mkdir(pluginPath, { recursive: true });
+      await symlink(outsideTarget, manifestPath, 'file');
+
+      const result = runRainrailCli(['plugins', 'add', 'github'], { cwd: projectRoot });
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toBe(`Plugin manifest path is not a regular file: ${manifestPath}\n`);
+      await expect(stat(outsideTarget)).rejects.toThrow();
+    });
+  });
+
   it('rejects symlinked plugin roots before removing plugin state', async () => {
     await withTempDirectory(async (directory) => {
       expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);

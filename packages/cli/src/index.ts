@@ -966,9 +966,9 @@ function writeProjectPluginManifest(
 ): PluginManifestRollback {
   const pluginDirectoryPath = join(project.pluginDirectory, plugin.name);
   const manifestPath = join(pluginDirectoryPath, 'plugin.json');
-  const createdPluginDirectory = !fileSystem.existsSync(pluginDirectoryPath);
-  if (!createdPluginDirectory) {
-    const pluginDirectoryStat = fileSystem.lstatSync(pluginDirectoryPath);
+  const pluginDirectoryStat = lstatPath(pluginDirectoryPath, fileSystem);
+  const createdPluginDirectory = pluginDirectoryStat === undefined;
+  if (pluginDirectoryStat !== undefined) {
     if (!pluginDirectoryStat.isDirectory() || pluginDirectoryStat.isSymbolicLink()) {
       throw new Error(`Plugin manifest directory is not a regular directory: ${pluginDirectoryPath}`);
     }
@@ -980,9 +980,9 @@ function writeProjectPluginManifest(
     throw new Error(`Plugin manifest directory is not a regular directory: ${pluginDirectoryPath}`);
   }
 
-  const hadManifest = fileSystem.existsSync(manifestPath);
-  if (hadManifest) {
-    const manifestStat = fileSystem.lstatSync(manifestPath);
+  const manifestStat = lstatPath(manifestPath, fileSystem);
+  const hadManifest = manifestStat !== undefined;
+  if (manifestStat !== undefined) {
     if (!manifestStat.isFile() || manifestStat.isSymbolicLink()) {
       throw new Error(`Plugin manifest path is not a regular file: ${manifestPath}`);
     }
@@ -1091,15 +1091,43 @@ function ensureRegularDirectory(
   message: string,
   fileSystem: RainrailCliFileSystem,
 ): void {
-  const pathStat = fileSystem.lstatSync(path);
-  if (!pathStat.isDirectory() || pathStat.isSymbolicLink()) {
+  const pathStat = lstatPath(path, fileSystem);
+  if (pathStat === undefined || !pathStat.isDirectory() || pathStat.isSymbolicLink()) {
     throw new Error(message);
   }
 }
 
 function isRegularFile(path: string, fileSystem: RainrailCliFileSystem): boolean {
-  const pathStat = fileSystem.lstatSync(path);
-  return pathStat.isFile() && !pathStat.isSymbolicLink();
+  const pathStat = lstatPath(path, fileSystem);
+  return pathStat !== undefined && pathStat.isFile() && !pathStat.isSymbolicLink();
+}
+
+function lstatPath(
+  path: string,
+  fileSystem: RainrailCliFileSystem,
+): ReturnType<typeof lstatSync> | undefined {
+  try {
+    const pathStat = fileSystem.lstatSync(path);
+    if (
+      !pathStat.isFile() &&
+      !pathStat.isDirectory() &&
+      !pathStat.isSymbolicLink() &&
+      !fileSystem.existsSync(path)
+    ) {
+      return undefined;
+    }
+    return pathStat;
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      'code' in error &&
+      ((error as NodeJS.ErrnoException).code === 'ENOENT' ||
+        (error as NodeJS.ErrnoException).code === 'ENOTDIR')
+    ) {
+      return undefined;
+    }
+    throw error;
+  }
 }
 
 function createLockPlugin(name: string, version: string): RainrailLockPlugin {
@@ -1111,10 +1139,10 @@ function createLockPlugin(name: string, version: string): RainrailLockPlugin {
 }
 
 function readRainrailLockfile(path: string, fileSystem: RainrailCliFileSystem): RainrailLockfile {
-  if (!fileSystem.existsSync(path)) {
+  const lockfileStat = lstatPath(path, fileSystem);
+  if (lockfileStat === undefined) {
     throw new Error(`Rainrail lockfile not found: ${path}`);
   }
-  const lockfileStat = fileSystem.lstatSync(path);
   if (!lockfileStat.isFile() || lockfileStat.isSymbolicLink()) {
     throw new Error(`Rainrail lockfile is not a regular file: ${path}`);
   }
@@ -1183,8 +1211,9 @@ function writeGeneratedFile(
   content: string,
   fileSystem: RainrailCliFileSystem,
 ): void {
-  if (fileSystem.existsSync(path)) {
-    if (!isRegularFile(path, fileSystem)) {
+  const pathStat = lstatPath(path, fileSystem);
+  if (pathStat !== undefined) {
+    if (!pathStat.isFile() || pathStat.isSymbolicLink()) {
       throw new Error(`Generated file path is not a regular file: ${path}`);
     }
     const existing = fileSystem.readFileSync(path, 'utf8');
