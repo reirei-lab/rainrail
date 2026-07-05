@@ -886,6 +886,31 @@ describe('Rainrail CLI built-in commands', () => {
         sourceBundles: [{
           type: 'eep-bridge',
           name: 'local',
+          sources: [{
+            type: 'github-webhook',
+            name: 'github-local',
+            sourceType: 'github',
+            provider: 'github',
+            webhookSecret: 'secret',
+            endpoint: '/api/v1/events',
+          }],
+        }],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+
+      const coreEndpoint = runRainrailCli(['start'], {
+        cwd: projectRoot,
+        serverStarter: () => ({ stop: () => undefined }),
+      });
+      expect(coreEndpoint.exitCode).toBe(1);
+      expect(coreEndpoint.stderr).toContain('config endpoint must not use a Rainrail core route');
+
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        sourceBundles: [{
+          type: 'eep-bridge',
+          name: 'local',
           sources: [
             {
               type: 'github-webhook',
@@ -936,6 +961,83 @@ describe('Rainrail CLI built-in commands', () => {
         await once(socket, 'end');
 
         expect(response).toContain('400 Bad Request');
+      } finally {
+        await closeTestServer(result);
+      }
+    });
+  });
+
+  it('does not treat unresolved webhookSecret names as public intake secrets', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'unresolved-webhook-secret');
+      const port = await getFreePort();
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        server: { host: '0.0.0.0', port },
+        sourceBundles: [{
+          type: 'eep-bridge',
+          name: 'local',
+          sources: [{
+            type: 'github-webhook',
+            name: 'github-local',
+            sourceType: 'github',
+            provider: 'github',
+            webhookSecret: 'GITHUB_WEBHOOK_SECRET',
+            endpoint: '/webhooks/github',
+          }],
+        }],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+
+      const result = await runRainrailCliAsync(['start'], {
+        cwd: projectRoot,
+        env: { SSE_BEARER_TOKEN: 'events-token' },
+      });
+      try {
+        expect(result.exitCode).toBe(0);
+        const body = '{}';
+        const rejected = await fetch(`http://127.0.0.1:${port}/webhooks/github`, {
+          method: 'POST',
+          headers: { 'x-hub-signature-256': githubSignature('GITHUB_WEBHOOK_SECRET', body) },
+          body,
+        });
+        expect(rejected.status).toBe(401);
+
+        const sources = await fetch(`http://127.0.0.1:${port}/api/v1/sources`, {
+          headers: { Authorization: 'Bearer events-token' },
+        });
+        await expect(sources.json()).resolves.toMatchObject({
+          data: [{ auth: { status: 'not configured' } }],
+        });
+      } finally {
+        await closeTestServer(result);
+      }
+    });
+  });
+
+  it('answers dashboard API CORS preflight before bearer auth', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'dashboard-preflight');
+      const port = await getFreePort();
+      const result = await runRainrailCliAsync(['start', '--host', '0.0.0.0', '--port', String(port)], {
+        cwd: projectRoot,
+        env: { SSE_BEARER_TOKEN: 'events-token' },
+      });
+      try {
+        expect(result.exitCode).toBe(0);
+        const preflight = await fetch(`http://127.0.0.1:${port}/api/v1/overview`, {
+          method: 'OPTIONS',
+          headers: {
+            Origin: 'http://localhost:3000',
+            'Access-Control-Request-Method': 'GET',
+            'Access-Control-Request-Headers': 'authorization',
+          },
+        });
+
+        expect(preflight.status).toBe(204);
+        expect(preflight.headers.get('access-control-allow-origin')).toBe('*');
+        expect(preflight.headers.get('access-control-allow-headers')?.toLowerCase()).toContain('authorization');
       } finally {
         await closeTestServer(result);
       }

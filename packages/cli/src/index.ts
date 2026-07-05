@@ -1778,7 +1778,7 @@ function parseLocalSource(
   const maxBodyBytes = source.maxBodyBytes === undefined ? undefined : parseLocalSourceMaxBodyBytes(source.maxBodyBytes);
 
   const webhookSecret = typeof source.webhookSecret === 'string' && source.webhookSecret.length > 0
-    ? env[source.webhookSecret] ?? source.webhookSecret
+    ? resolveLocalWebhookSecret(source.webhookSecret, env)
     : undefined;
   const localSource: {
     name: string;
@@ -1814,7 +1814,26 @@ function parseLocalSourceEndpoint(endpoint: unknown): string {
   if (endpoint.includes('?') || endpoint.includes('#')) {
     throw new Error('config endpoint must be a path without query or fragment');
   }
+  if (isLocalCoreRoutePath(endpoint)) {
+    throw new Error('config endpoint must not use a Rainrail core route');
+  }
   return endpoint;
+}
+
+function resolveLocalWebhookSecret(
+  value: string,
+  env: Record<string, string | undefined>,
+): string | undefined {
+  const envValue = env[value];
+  if (envValue !== undefined) {
+    return envValue.length === 0 ? undefined : envValue;
+  }
+  return /^[A-Z_][A-Z0-9_]*$/u.test(value) ? undefined : value;
+}
+
+function isLocalCoreRoutePath(pathname: string): boolean {
+  return localCoreRoutePaths.has(pathname) ||
+    localCoreRoutePrefixes.some((prefix) => pathname.startsWith(prefix));
 }
 
 function parseStartAllowedHosts(value: unknown, label: string): readonly string[] {
@@ -3032,6 +3051,36 @@ function formatRainrailLock(projectName: string): string {
   });
 }
 
+const localCorsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Authorization, Content-Type, Last-Event-ID, X-GitHub-Delivery, X-GitHub-Event, X-Hub-Signature-256, X-Rainrail-Client, X-Rainrail-Publish-Token, X-Request-ID',
+  'Access-Control-Expose-Headers': 'X-Request-ID',
+  'Access-Control-Max-Age': '86400',
+} as const;
+
+const localCoreRoutePaths = new Set([
+  '/healthz',
+  '/events',
+  '/api/state',
+  '/api/v1/overview',
+  '/api/v1/events',
+  '/api/v1/workflow-runs',
+  '/api/v1/agent-tasks',
+  '/api/v1/sources',
+  '/api/v1/queue',
+  '/api/v1/settings',
+]);
+const localCoreRoutePrefixes = [
+  '/api/events/',
+  '/api/v1/events/',
+  '/api/v1/workflow-runs/',
+  '/api/v1/agent-tasks/',
+  '/api/v1/sources/',
+  '/api/v1/queue/',
+  '/api/v1/settings/',
+] as const;
+
 type LocalRainrailEvent = {
   readonly id: string;
   readonly type: 'event';
@@ -3124,6 +3173,11 @@ async function handleLocalRainrailRequest(
   const url = parseLocalRequestUrl(request, options);
   if (url === undefined) {
     writeJsonResponse(response, 400, { error: 'invalid_host_header' });
+    return;
+  }
+
+  if (request.method === 'OPTIONS') {
+    writeCorsPreflightResponse(response, preflightMethodsForLocalPath(url.pathname, options));
     return;
   }
 
@@ -3476,8 +3530,44 @@ function safeDecodeURIComponent(value: string): string | undefined {
   }
 }
 
+function preflightMethodsForLocalPath(pathname: string, options: RainrailStartOptions): readonly string[] | undefined {
+  if (pathname === '/healthz') return ['GET', 'OPTIONS'];
+  if (pathname === '/events') return ['GET', 'OPTIONS'];
+  if (pathname === '/api/state') return ['GET', 'OPTIONS'];
+  if (pathname === '/api/v1/overview') return ['GET', 'OPTIONS'];
+  if (pathname === '/api/v1/events') return ['GET', 'OPTIONS'];
+  if (/^\/api\/v1\/events\/[^/]+$/u.test(pathname)) return ['GET', 'OPTIONS'];
+  if (
+    pathname === '/api/v1/workflow-runs' ||
+    pathname === '/api/v1/agent-tasks' ||
+    pathname === '/api/v1/sources' ||
+    pathname === '/api/v1/queue' ||
+    pathname === '/api/v1/settings'
+  ) {
+    return ['GET', 'OPTIONS'];
+  }
+  if (options.sources.some((source) => source.endpoint === pathname)) {
+    return ['POST', 'OPTIONS'];
+  }
+  return undefined;
+}
+
+function writeCorsPreflightResponse(
+  response: ServerResponse,
+  allowedMethods: readonly string[] | undefined,
+): void {
+  response.writeHead(204, {
+    ...localCorsHeaders,
+    ...(allowedMethods === undefined ? {} : {
+      'Access-Control-Allow-Methods': allowedMethods.join(', '),
+    }),
+  });
+  response.end();
+}
+
 function writeJsonResponse(response: ServerResponse, statusCode: number, body: unknown): void {
   response.writeHead(statusCode, {
+    ...localCorsHeaders,
     'Content-Type': 'application/json; charset=utf-8',
   });
   response.end(`${JSON.stringify(body)}\n`);
