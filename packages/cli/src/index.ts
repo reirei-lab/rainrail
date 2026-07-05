@@ -892,7 +892,24 @@ function listProjectPlugins(
 ): RainrailCliResult {
   ensureProjectPluginRoot(project, fileSystem);
   for (const plugin of lockfile.plugins) {
-    const manifestPath = join(project.pluginDirectory, plugin.name, 'plugin.json');
+    const pluginDirectoryPath = join(project.pluginDirectory, plugin.name);
+    const manifestPath = join(pluginDirectoryPath, 'plugin.json');
+    const pluginDirectoryStat = lstatPath(pluginDirectoryPath, fileSystem);
+    if (pluginDirectoryStat === undefined) {
+      return {
+        exitCode: 1,
+        stdout: '',
+        stderr:
+          `Plugin lockfile entry ${plugin.name} is missing ${manifestPath}. Re-run rainrail plugins add ${plugin.name}.\n`,
+      };
+    }
+    if (!pluginDirectoryStat.isDirectory() || pluginDirectoryStat.isSymbolicLink()) {
+      return {
+        exitCode: 1,
+        stdout: '',
+        stderr: `Plugin manifest directory is not a regular directory: ${pluginDirectoryPath}\n`,
+      };
+    }
     const manifestStat = lstatPath(manifestPath, fileSystem);
     if (manifestStat === undefined) {
       return {
