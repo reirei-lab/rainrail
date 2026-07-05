@@ -12,7 +12,8 @@ permissions:
 jobs:
   add-issue-to-project:
     name: Add issue to Reirei project
-    runs-on: self-hosted
+    if: ${{ contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association) }}
+    runs-on: ubuntu-latest
     steps:
       - name: Assign issue to reirei-agent
         uses: actions/github-script@v9
