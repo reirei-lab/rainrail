@@ -482,7 +482,7 @@ function runUpdateCommand(
   environment: RainrailCliEnvironment,
 ): RainrailCliResult {
   if (args[0] === 'check') {
-    return runUpdateCheckCommand(args.slice(1), options, environment);
+    return runUpdateCheckCommand(args.slice(1), options, commandRunner, environment);
   }
 
   const parsed = parseUpdateArguments(args);
@@ -555,6 +555,7 @@ type LatestReleaseCheck = {
 function runUpdateCheckCommand(
   args: readonly string[],
   options: SharedOptions,
+  commandRunner: CommandRunner,
   environment: RainrailCliEnvironment,
 ): RainrailCliResult {
   if (args.length !== 0) {
@@ -574,7 +575,12 @@ function runUpdateCheckCommand(
   }
 
   const checkedAt = now.toISOString();
-  const result = checkLatestRelease(currentVersion, checkedAt, environment.releaseFetcher);
+  const result = checkLatestRelease(
+    currentVersion,
+    checkedAt,
+    commandRunner,
+    environment.releaseFetcher,
+  );
   if (result.cacheable) {
     writeUpdateCheckCache(cachePath, result.result, environment);
   }
@@ -584,10 +590,13 @@ function runUpdateCheckCommand(
 function checkLatestRelease(
   currentVersion: string,
   checkedAt: string,
+  commandRunner: CommandRunner,
   releaseFetcher: ReleaseFetcher | undefined,
 ): LatestReleaseCheck {
   try {
-    const response = (releaseFetcher ?? defaultReleaseFetcher)(GITHUB_LATEST_RELEASE_URL);
+    const response = releaseFetcher === undefined
+      ? defaultReleaseFetcher(GITHUB_LATEST_RELEASE_URL, commandRunner)
+      : releaseFetcher(GITHUB_LATEST_RELEASE_URL);
     if (response.status < 200 || response.status >= 300) {
       return { cacheable: false, result: createNoopUpdateCheck(currentVersion, checkedAt) };
     }
@@ -600,10 +609,16 @@ function checkLatestRelease(
     const latestVersion = normalizeReleaseTag(release.tag_name);
     if (
       latestVersion === undefined ||
-      isPrereleaseVersion(latestVersion) ||
-      compareStableSemver(latestVersion, currentVersion) <= 0
+      isPrereleaseVersion(latestVersion)
     ) {
-      return { cacheable: latestVersion !== undefined, result: createNoopUpdateCheck(currentVersion, checkedAt) };
+      return { cacheable: false, result: createNoopUpdateCheck(currentVersion, checkedAt) };
+    }
+
+    if (compareSemver(latestVersion, currentVersion) <= 0) {
+      return {
+        cacheable: true,
+        result: createKnownNoUpdateCheck(currentVersion, checkedAt, latestVersion),
+      };
     }
 
     return {
@@ -631,6 +646,20 @@ function createNoopUpdateCheck(currentVersion: string, checkedAt: string): Updat
   };
 }
 
+function createKnownNoUpdateCheck(
+  currentVersion: string,
+  checkedAt: string,
+  latestVersion: string,
+): UpdateCheckCache {
+  return {
+    checkedAt,
+    currentVersion,
+    latestVersion,
+    updateAvailable: false,
+    updateCommand: null,
+  };
+}
+
 function formatUpdateCheckResult(result: UpdateCheckResult, options: SharedOptions): RainrailCliResult {
   if (options.json) {
     return {
@@ -644,27 +673,43 @@ function formatUpdateCheckResult(result: UpdateCheckResult, options: SharedOptio
     exitCode: 0,
     stdout: result.updateAvailable && result.latestVersion !== null
       ? `Rainrail ${result.latestVersion} is available. Run \`${result.updateCommand}\` to update.\n`
-      : `Rainrail is up to date (${result.currentVersion}).\n`,
+      : formatNoUpdateText(result),
     stderr: '',
   };
 }
 
-function defaultReleaseFetcher(url: string): ReleaseFetchResult {
-  const result = spawnSync('curl', [
+function formatNoUpdateText(result: UpdateCheckResult): string {
+  if (result.latestVersion === null) {
+    return 'Unable to check Rainrail updates. Try again later.\n';
+  }
+
+  return `Rainrail is up to date (${result.currentVersion}).\n`;
+}
+
+function defaultReleaseFetcher(url: string, commandRunner: CommandRunner): ReleaseFetchResult {
+  const result = commandRunner('curl', [
     '-fsSL',
+    '--connect-timeout',
+    '5',
+    '--max-time',
+    '10',
     '-H',
     'Accept: application/vnd.github+json',
     '-H',
     'User-Agent: rainrail-cli',
+    '-w',
+    '\n%{http_code}',
     url,
-  ], {
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
+  ], { stdio: 'pipe' });
+  const output = toOutput(result.stdout);
+  const separatorIndex = output.lastIndexOf('\n');
+  const body = separatorIndex >= 0 ? output.slice(0, separatorIndex) : output;
+  const httpCodeText = separatorIndex >= 0 ? output.slice(separatorIndex + 1).trim() : '';
+  const httpCode = Number(httpCodeText);
 
   return {
-    status: result.status ?? 1,
-    body: toOutput(result.stdout),
+    status: Number.isInteger(httpCode) ? httpCode : 0,
+    body,
   };
 }
 
@@ -751,37 +796,94 @@ function isPrereleaseVersion(version: string): boolean {
   return match?.[4] !== undefined;
 }
 
-function compareStableSemver(left: string, right: string): number {
-  const leftParts = parseStableSemver(left);
-  const rightParts = parseStableSemver(right);
+type ParsedSemver = {
+  readonly major: number;
+  readonly minor: number;
+  readonly patch: number;
+  readonly prerelease: readonly string[];
+};
+
+function compareSemver(left: string, right: string): number {
+  const leftParts = parseSemver(left);
+  const rightParts = parseSemver(right);
   if (leftParts === undefined || rightParts === undefined) {
     return 0;
   }
 
-  for (let index = 0; index < leftParts.length; index += 1) {
-    const leftPart = leftParts[index];
-    const rightPart = rightParts[index];
-    if (leftPart === undefined || rightPart === undefined) {
-      return 0;
-    }
-    const difference = leftPart - rightPart;
+  for (const key of ['major', 'minor', 'patch'] as const) {
+    const difference = leftParts[key] - rightParts[key];
     if (difference !== 0) {
       return difference;
     }
   }
+
+  return comparePrerelease(leftParts.prerelease, rightParts.prerelease);
+}
+
+function comparePrerelease(left: readonly string[], right: readonly string[]): number {
+  if (left.length === 0 && right.length > 0) {
+    return 1;
+  }
+  if (left.length > 0 && right.length === 0) {
+    return -1;
+  }
+
+  const length = Math.max(left.length, right.length);
+  for (let index = 0; index < length; index += 1) {
+    const leftIdentifier = left[index];
+    const rightIdentifier = right[index];
+    if (leftIdentifier === undefined) {
+      return -1;
+    }
+    if (rightIdentifier === undefined) {
+      return 1;
+    }
+    const difference = comparePrereleaseIdentifier(leftIdentifier, rightIdentifier);
+    if (difference !== 0) {
+      return difference;
+    }
+  }
+
   return 0;
 }
 
-function parseStableSemver(version: string): readonly [number, number, number] | undefined {
-  const match = semverVersionPattern.exec(version);
-  if (match === null || match[4] !== undefined) {
+function comparePrereleaseIdentifier(left: string, right: string): number {
+  const leftNumber = parseNumericPrereleaseIdentifier(left);
+  const rightNumber = parseNumericPrereleaseIdentifier(right);
+  if (leftNumber !== undefined && rightNumber !== undefined) {
+    return leftNumber - rightNumber;
+  }
+  if (leftNumber !== undefined) {
+    return -1;
+  }
+  if (rightNumber !== undefined) {
+    return 1;
+  }
+  return left.localeCompare(right);
+}
+
+function parseNumericPrereleaseIdentifier(identifier: string): number | undefined {
+  if (!/^(0|[1-9]\d*)$/u.test(identifier)) {
     return undefined;
   }
-  const [, major, minor, patch] = match;
+  return Number(identifier);
+}
+
+function parseSemver(version: string): ParsedSemver | undefined {
+  const match = semverVersionPattern.exec(version);
+  if (match === null) {
+    return undefined;
+  }
+  const [, major, minor, patch, prerelease] = match;
   if (major === undefined || minor === undefined || patch === undefined) {
     return undefined;
   }
-  return [Number(major), Number(minor), Number(patch)];
+  return {
+    major: Number(major),
+    minor: Number(minor),
+    patch: Number(patch),
+    prerelease: prerelease === undefined ? [] : prerelease.split('.'),
+  };
 }
 
 function inferRainrailInstallPrefix(currentBinPath: string | undefined): string | undefined {

@@ -948,6 +948,91 @@ describe('Rainrail CLI built-in commands', () => {
     });
   });
 
+  it('offers a stable release update to users currently on a prerelease', async () => {
+    await withTempDirectory(async (directory) => {
+      const result = runRainrailCli(['--json', 'update', 'check'], {
+        cacheDirectory: join(directory, 'cache'),
+        currentVersion: '0.3.0-beta.1',
+        releaseFetcher: () => ({
+          status: 200,
+          body: JSON.stringify({
+            tag_name: 'v0.3.0',
+            prerelease: false,
+          }),
+        }),
+      });
+
+      expect(JSON.parse(result.stdout) as unknown).toMatchObject({
+        currentVersion: '0.3.0-beta.1',
+        latestVersion: '0.3.0',
+        updateAvailable: true,
+        updateCommand: 'rainrail update --version 0.3.0',
+      });
+    });
+  });
+
+  it('does not describe failed update checks as up to date in text output', async () => {
+    await withTempDirectory(async (directory) => {
+      const result = runRainrailCli(['update', 'check'], {
+        cacheDirectory: join(directory, 'cache'),
+        currentVersion: '0.2.1',
+        releaseFetcher: () => ({ status: 403, body: '' }),
+      });
+
+      expect(result).toEqual({
+        exitCode: 0,
+        stdout: 'Unable to check Rainrail updates. Try again later.\n',
+        stderr: '',
+      });
+    });
+  });
+
+  it('uses curl HTTP codes and timeouts for the default GitHub Releases check', async () => {
+    await withTempDirectory(async (directory) => {
+      const calls: Array<{ command: string; args: readonly string[]; options: unknown }> = [];
+      const result = runRainrailCli(['--json', 'update', 'check'], {
+        cacheDirectory: join(directory, 'cache'),
+        currentVersion: '0.2.0',
+        commandRunner: (command, args, options) => {
+          calls.push({ command, args, options });
+          return {
+            status: 0,
+            stdout: `${JSON.stringify({
+              tag_name: 'v0.2.1',
+              prerelease: false,
+            })}\n200`,
+            stderr: '',
+          };
+        },
+      });
+
+      expect(JSON.parse(result.stdout) as unknown).toMatchObject({
+        latestVersion: '0.2.1',
+        updateAvailable: true,
+      });
+      expect(calls).toEqual([
+        {
+          command: 'curl',
+          args: [
+            '-fsSL',
+            '--connect-timeout',
+            '5',
+            '--max-time',
+            '10',
+            '-H',
+            'Accept: application/vnd.github+json',
+            '-H',
+            'User-Agent: rainrail-cli',
+            '-w',
+            '\n%{http_code}',
+            'https://api.github.com/repos/reirei-lab/rainrail/releases/latest',
+          ],
+          options: { stdio: 'pipe' },
+        },
+      ]);
+    });
+  });
+
   it('uses a fresh update check cache without calling GitHub Releases again', async () => {
     await withTempDirectory(async (directory) => {
       await mkdir(join(directory, 'cache'), { recursive: true });
