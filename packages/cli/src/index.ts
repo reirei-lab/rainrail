@@ -5,6 +5,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  readSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -852,7 +853,7 @@ function readInitConfirmation(
     environment.stderrWriter(prompt);
     return {
       input: environment.stdinReader === undefined
-        ? readFileSync(0, 'utf8')
+        ? readStdinLineSync()
         : environment.stdinReader(),
       promptWritten: true,
     };
@@ -863,10 +864,31 @@ function readInitConfirmation(
   }
 
   try {
-    return { input: readFileSync(0, 'utf8'), promptWritten: false };
+    return { input: readStdinLineSync(), promptWritten: false };
   } catch {
     return { input: '', promptWritten: false };
   }
+}
+
+function readStdinLineSync(): string {
+  const input: string[] = [];
+  const buffer = Buffer.alloc(1);
+
+  while (true) {
+    const bytesRead = readSync(0, buffer, 0, 1, null);
+    if (bytesRead === 0) {
+      break;
+    }
+
+    const character = buffer.toString('utf8', 0, bytesRead);
+    if (character === '\n' || character === '\r') {
+      break;
+    }
+
+    input.push(character);
+  }
+
+  return input.join('');
 }
 
 function initializeRainrailWorkspace(

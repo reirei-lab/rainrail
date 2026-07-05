@@ -29,8 +29,9 @@ Run a minimal first-use smoke test in a disposable directory:
 
     mkdir -p ~/rainrail-sandbox
     cd ~/rainrail-sandbox
-    rainrail new my-agent-ops
+    mkdir my-agent-ops
     cd my-agent-ops
+    rainrail init
     cat rainrail.config.json
     rainrail openclaw help
     rainrail openclaw session test help
