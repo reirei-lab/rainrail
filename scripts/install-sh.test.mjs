@@ -43,8 +43,10 @@ describe('install.sh', () => {
 
     expect(script).toContain("sed -e 's/^v//' -e 's#^release/##' -e 's#^release%2F##' -e 's#^release%2f##'");
     expect(script).toContain('printf \'%s\' "${tag//\\//%2F}"');
-    expect(script).toContain('version="${version#release/}"');
-    expect(script).toContain('version="${version#release%2F}"');
+    expect(script).toContain('release_tag="${version}"');
+    expect(script).toContain('version="$(printf \'%s\' "${version}" | normalize_release_version)"');
+    expect(script).toContain('release_tag="release/${version}"');
+    expect(script).toContain('download_release_asset "${release_tag}" "rainrail-cli-v${version}.tgz" "${tarball}"');
     expect(script).toContain('download "https://github.com/${repo}/releases/download/${encoded_release_tag}/${asset_name}" "${output}"');
   });
 
@@ -208,6 +210,56 @@ exit 1
     );
 
     expect(result.status).toBe(0);
+    expect(readlinkSync(join(prefix, 'bin', 'rainrail'))).toBe(
+      '../lib/rainrail/9.8.7/dist/bin/rainrail.js',
+    );
+  });
+
+  it('downloads v-prefixed release tags without rewriting them to release/v-prefixed tags', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rainrail-install-gh-v-tag-'));
+    const tarball = createReleaseTarball(root, '9.8.7');
+    const prefix = join(root, 'prefix');
+    const fakeBin = join(root, 'bin');
+    const logPath = join(root, 'gh.log');
+    mkdirSync(fakeBin);
+    writeFileSync(
+      join(fakeBin, 'gh'),
+      `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "${logPath}"
+if [ "$1 $2" = "release download" ]; then
+  release_tag="$3"
+  out_dir=""
+  pattern=""
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --dir) out_dir="$2"; shift 2 ;;
+      --pattern) pattern="$2"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  if [ "$release_tag" != "v9.8.7" ]; then
+    exit 1
+  fi
+  cp "${tarball}" "$out_dir/$pattern"
+  exit 0
+fi
+exit 1
+`,
+    );
+    chmodSync(join(fakeBin, 'gh'), 0o755);
+
+    const result = spawnSync(
+      'bash',
+      [installScript.pathname, '--version', 'v9.8.7', '--prefix', prefix],
+      {
+        encoding: 'utf8',
+        env: { ...process.env, PATH: `${fakeBin}:${process.env.PATH ?? ''}` },
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(readFileSync(logPath, 'utf8')).toContain('release download v9.8.7');
     expect(readlinkSync(join(prefix, 'bin', 'rainrail'))).toBe(
       '../lib/rainrail/9.8.7/dist/bin/rainrail.js',
     );

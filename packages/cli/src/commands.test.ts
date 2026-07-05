@@ -894,6 +894,369 @@ describe('Rainrail CLI built-in commands', () => {
     ]);
   });
 
+  it('checks GitHub Releases latest and reports an available stable update as JSON', async () => {
+    await withTempDirectory(async (directory) => {
+      const result = runRainrailCli(['--json', 'update', 'check'], {
+        cacheDirectory: join(directory, 'cache'),
+        currentVersion: '0.2.0',
+        now: () => new Date('2026-07-05T00:00:00.000Z'),
+        releaseFetcher: (url) => {
+          expect(url).toBe('https://api.github.com/repos/reirei-lab/rainrail/releases/latest');
+          return {
+            status: 200,
+            body: JSON.stringify({
+              tag_name: 'release/0.2.1',
+              prerelease: false,
+              assets: [{ name: 'rainrail-cli-v0.2.1.tgz', state: 'uploaded', size: 123 }],
+            }),
+          };
+        },
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+      expect(JSON.parse(result.stdout) as unknown).toEqual({
+        command: 'update check',
+        checkedAt: '2026-07-05T00:00:00.000Z',
+        currentVersion: '0.2.0',
+        latestVersion: '0.2.1',
+        updateAvailable: true,
+        updateCommand: 'rainrail update --version release/0.2.1',
+        cached: false,
+      });
+    });
+  });
+
+  it('normalizes v-prefixed release tags and reports no update for the current version', async () => {
+    await withTempDirectory(async (directory) => {
+      const result = runRainrailCli(['update', 'check'], {
+        cacheDirectory: join(directory, 'cache'),
+        currentVersion: '0.2.1',
+        releaseFetcher: () => ({
+          status: 200,
+          body: JSON.stringify({
+            tag_name: 'v0.2.1',
+            prerelease: false,
+            assets: [{ name: 'rainrail-cli-v0.2.1.tgz', state: 'uploaded', size: 123 }],
+          }),
+        }),
+      });
+
+      expect(result).toEqual({
+        exitCode: 0,
+        stdout: 'Rainrail is up to date (0.2.1).\n',
+        stderr: '',
+      });
+    });
+  });
+
+  it('offers a stable release update to users currently on a prerelease', async () => {
+    await withTempDirectory(async (directory) => {
+      const result = runRainrailCli(['--json', 'update', 'check'], {
+        cacheDirectory: join(directory, 'cache'),
+        currentVersion: '0.3.0-beta.1',
+        releaseFetcher: () => ({
+          status: 200,
+          body: JSON.stringify({
+            tag_name: 'v0.3.0',
+            prerelease: false,
+            assets: [{ name: 'rainrail-cli-v0.3.0.tgz', state: 'uploaded', size: 123 }],
+          }),
+        }),
+      });
+
+      expect(JSON.parse(result.stdout) as unknown).toMatchObject({
+        currentVersion: '0.3.0-beta.1',
+        latestVersion: '0.3.0',
+        updateAvailable: true,
+        updateCommand: 'rainrail update --version v0.3.0',
+      });
+    });
+  });
+
+  it('does not describe failed update checks as up to date in text output', async () => {
+    await withTempDirectory(async (directory) => {
+      const result = runRainrailCli(['update', 'check'], {
+        cacheDirectory: join(directory, 'cache'),
+        currentVersion: '0.2.1',
+        releaseFetcher: () => ({ status: 403, body: '' }),
+      });
+
+      expect(result).toEqual({
+        exitCode: 0,
+        stdout: 'Unable to check Rainrail updates. Try again later.\n',
+        stderr: '',
+      });
+    });
+  });
+
+  it('does not report an update before the matching CLI release asset is published', async () => {
+    await withTempDirectory(async (directory) => {
+      const result = runRainrailCli(['--json', 'update', 'check'], {
+        cacheDirectory: join(directory, 'cache'),
+        currentVersion: '0.2.0',
+        releaseFetcher: () => ({
+          status: 200,
+          body: JSON.stringify({
+            tag_name: 'v0.2.1',
+            prerelease: false,
+            assets: [{ name: 'rainrail-source-v0.2.1.zip' }],
+          }),
+        }),
+      });
+
+      expect(JSON.parse(result.stdout) as unknown).toMatchObject({
+        latestVersion: null,
+        updateAvailable: false,
+        updateCommand: null,
+      });
+      await expect(readFile(join(directory, 'cache', 'update-check.json'), 'utf8'))
+        .rejects.toThrow();
+    });
+  });
+
+  it('does not report an update while the matching CLI asset upload is incomplete', async () => {
+    await withTempDirectory(async (directory) => {
+      const result = runRainrailCli(['--json', 'update', 'check'], {
+        cacheDirectory: join(directory, 'cache'),
+        currentVersion: '0.2.0',
+        releaseFetcher: () => ({
+          status: 200,
+          body: JSON.stringify({
+            tag_name: 'release/0.2.1',
+            prerelease: false,
+            assets: [{ name: 'rainrail-cli-v0.2.1.tgz', state: 'starter', size: 0 }],
+          }),
+        }),
+      });
+
+      expect(JSON.parse(result.stdout) as unknown).toMatchObject({
+        latestVersion: null,
+        updateAvailable: false,
+        updateCommand: null,
+      });
+    });
+  });
+
+  it('passes v-prefixed release tags through the generated update command', async () => {
+    await withTempDirectory(async (directory) => {
+      const result = runRainrailCli(['--json', 'update', 'check'], {
+        cacheDirectory: join(directory, 'cache'),
+        currentVersion: '0.2.0',
+        releaseFetcher: () => ({
+          status: 200,
+          body: JSON.stringify({
+            tag_name: 'v0.2.1',
+            prerelease: false,
+            assets: [{ name: 'rainrail-cli-v0.2.1.tgz', state: 'uploaded', size: 123 }],
+          }),
+        }),
+      });
+
+      expect(JSON.parse(result.stdout) as unknown).toMatchObject({
+        latestVersion: '0.2.1',
+        updateAvailable: true,
+        updateCommand: 'rainrail update --version v0.2.1',
+      });
+    });
+  });
+
+  it('uses curl HTTP codes and timeouts for the default GitHub Releases check', async () => {
+    await withTempDirectory(async (directory) => {
+      const calls: Array<{ command: string; args: readonly string[]; options: unknown }> = [];
+      const result = runRainrailCli(['--json', 'update', 'check'], {
+        cacheDirectory: join(directory, 'cache'),
+        currentVersion: '0.2.0',
+        commandRunner: (command, args, options) => {
+          calls.push({ command, args, options });
+          return {
+            status: 0,
+            stdout: `${JSON.stringify({
+              tag_name: 'v0.2.1',
+              prerelease: false,
+              assets: [{ name: 'rainrail-cli-v0.2.1.tgz', state: 'uploaded', size: 123 }],
+            })}\n200`,
+            stderr: '',
+          };
+        },
+      });
+
+      expect(JSON.parse(result.stdout) as unknown).toMatchObject({
+        latestVersion: '0.2.1',
+        updateAvailable: true,
+      });
+      expect(calls).toEqual([
+        {
+          command: 'curl',
+          args: [
+            '-fsSL',
+            '--connect-timeout',
+            '5',
+            '--max-time',
+            '10',
+            '-H',
+            'Accept: application/vnd.github+json',
+            '-H',
+            'User-Agent: rainrail-cli',
+            '-w',
+            '\n%{http_code}',
+            'https://api.github.com/repos/reirei-lab/rainrail/releases/latest',
+          ],
+          options: { stdio: 'pipe' },
+        },
+      ]);
+    });
+  });
+
+  it('uses a fresh update check cache without calling GitHub Releases again', async () => {
+    await withTempDirectory(async (directory) => {
+      await mkdir(join(directory, 'cache'), { recursive: true });
+      await writeFile(
+        join(directory, 'cache', 'update-check.json'),
+        JSON.stringify({
+          checkedAt: '2026-07-05T00:00:00.000Z',
+          currentVersion: '0.2.0',
+          latestVersion: '0.2.2',
+          updateAvailable: true,
+          updateCommand: 'rainrail update --version 0.2.2',
+        }),
+      );
+
+      const result = runRainrailCli(['--json', 'update', 'check'], {
+        cacheDirectory: join(directory, 'cache'),
+        currentVersion: '0.2.0',
+        now: () => new Date('2026-07-05T12:00:00.000Z'),
+        releaseFetcher: () => {
+          throw new Error('releaseFetcher should not be called on cache hit');
+        },
+      });
+
+      expect(JSON.parse(result.stdout) as unknown).toMatchObject({
+        checkedAt: '2026-07-05T00:00:00.000Z',
+        latestVersion: '0.2.2',
+        updateAvailable: true,
+        cached: true,
+      });
+    });
+  });
+
+  it('refreshes a stale update check cache and writes the latest result', async () => {
+    await withTempDirectory(async (directory) => {
+      await mkdir(join(directory, 'cache'), { recursive: true });
+      await writeFile(
+        join(directory, 'cache', 'update-check.json'),
+        JSON.stringify({
+          checkedAt: '2026-07-03T23:59:00.000Z',
+          currentVersion: '0.2.0',
+          latestVersion: '0.2.1',
+          updateAvailable: true,
+          updateCommand: 'rainrail update --version 0.2.1',
+        }),
+      );
+
+      const result = runRainrailCli(['--json', 'update', 'check'], {
+        cacheDirectory: join(directory, 'cache'),
+        currentVersion: '0.2.0',
+        now: () => new Date('2026-07-05T00:00:00.000Z'),
+        releaseFetcher: () => ({
+          status: 200,
+          body: JSON.stringify({
+            tag_name: 'v0.2.3',
+            prerelease: false,
+            assets: [{ name: 'rainrail-cli-v0.2.3.tgz', state: 'uploaded', size: 123 }],
+          }),
+        }),
+      });
+
+      expect(JSON.parse(result.stdout) as unknown).toMatchObject({
+        checkedAt: '2026-07-05T00:00:00.000Z',
+        latestVersion: '0.2.3',
+        updateAvailable: true,
+        cached: false,
+      });
+      await expect(readFile(join(directory, 'cache', 'update-check.json'), 'utf8'))
+        .resolves.toContain('"latestVersion": "0.2.3"');
+    });
+  });
+
+  it('treats fetch failures, invalid JSON, unknown tags, and prereleases as no-op checks', async () => {
+    const cases = [
+      () => {
+        throw new Error('rate limited');
+      },
+      () => ({ status: 200, body: '{' }),
+      () => ({
+        status: 200,
+        body: JSON.stringify({ tag_name: 'nightly', prerelease: false }),
+      }),
+      () => ({
+        status: 200,
+        body: JSON.stringify({
+          tag_name: 'v0.3.0-beta.1',
+          prerelease: true,
+          assets: [{ name: 'rainrail-cli-v0.3.0-beta.1.tgz', state: 'uploaded', size: 123 }],
+        }),
+      }),
+    ];
+
+    await withTempDirectory(async (directory) => {
+      for (const [index, releaseFetcher] of cases.entries()) {
+        const result = runRainrailCli(['--json', 'update', 'check'], {
+          cacheDirectory: join(directory, `cache-${index}`),
+          currentVersion: '0.2.0',
+          now: () => new Date('2026-07-05T00:00:00.000Z'),
+          releaseFetcher,
+        });
+
+        expect(result.exitCode).toBe(0);
+        expect(result.stderr).toBe('');
+        expect(JSON.parse(result.stdout) as unknown).toMatchObject({
+          currentVersion: '0.2.0',
+          latestVersion: null,
+          updateAvailable: false,
+          updateCommand: null,
+        });
+      }
+    });
+  });
+
+  it('treats update check cache timestamps in the future as stale', async () => {
+    await withTempDirectory(async (directory) => {
+      await mkdir(join(directory, 'cache'), { recursive: true });
+      await writeFile(
+        join(directory, 'cache', 'update-check.json'),
+        JSON.stringify({
+          checkedAt: '2026-07-06T00:00:00.000Z',
+          currentVersion: '0.2.0',
+          latestVersion: '0.2.1',
+          updateAvailable: true,
+          updateCommand: 'rainrail update --version 0.2.1',
+        }),
+      );
+
+      const result = runRainrailCli(['--json', 'update', 'check'], {
+        cacheDirectory: join(directory, 'cache'),
+        currentVersion: '0.2.0',
+        now: () => new Date('2026-07-05T00:00:00.000Z'),
+        releaseFetcher: () => ({
+          status: 200,
+          body: JSON.stringify({
+            tag_name: 'v0.2.3',
+            prerelease: false,
+            assets: [{ name: 'rainrail-cli-v0.2.3.tgz', state: 'uploaded', size: 123 }],
+          }),
+        }),
+      });
+
+      expect(JSON.parse(result.stdout) as unknown).toMatchObject({
+        checkedAt: '2026-07-05T00:00:00.000Z',
+        latestVersion: '0.2.3',
+        updateAvailable: true,
+        cached: false,
+      });
+    });
+  });
+
   it('scaffolds a project-local config, lockfile, and plugin directory', async () => {
     await withTempDirectory(async (directory) => {
       const result = runRainrailCli(['new', 'my-agent-ops'], { cwd: directory });

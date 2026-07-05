@@ -140,8 +140,10 @@ used by tests and future embedding code:
 
 - Types: `BuiltInCommandName`, `BuiltInCommand`, `SharedOptions`,
   `ParsedRainrailArguments`, `RainrailCliResult`, `RainrailCliEnvironment`,
-  `RainrailCliFileSystem`, `PluginAliasResolver`, `RainrailProject`,
-  `RainrailLockPlugin`, and `RainrailLockfile`.
+  `CommandRunnerResult`, `CommandRunnerOptions`, `CommandRunner`,
+  `ReleaseFetchResult`, `ReleaseFetcher`, `RainrailCliFileSystem`,
+  `PluginAliasResolver`, `RainrailProject`, `RainrailLockPlugin`, and
+  `RainrailLockfile`.
 - Values: `BUILT_IN_COMMANDS`, `getBuiltInCommand`, `parseRainrailArguments`,
   `formatHelp`, `discoverRainrailProject`, and `runRainrailCli`.
 
