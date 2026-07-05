@@ -142,6 +142,7 @@ export type RainrailServerStarter = (
 export type RainrailLocalSource = {
   readonly name: string;
   readonly sourceType: string;
+  readonly configuredType?: string;
   readonly endpoint: string;
   readonly transport: 'http';
   readonly authConfigured: boolean;
@@ -1459,6 +1460,8 @@ type StartConfig = {
   readonly sources: readonly RainrailLocalSource[];
 };
 
+const localDefaultMaxRequestBodyBytes = 25 * 1024 * 1024;
+
 function runStartCommand(
   args: readonly string[],
   options: SharedOptions,
@@ -1660,17 +1663,18 @@ function readStartConfig(
   env: Record<string, string | undefined>,
 ): StartConfig {
   const raw = fileSystem.readFileSync(configPath, 'utf8');
-  const rawValue = JSON.parse(raw) as unknown;
-  const value = JSON.parse(expandConfigEnv(raw, env)) as unknown;
+  const expanded = expandConfigEnv(raw, env);
+  const value = JSON.parse(expanded) as unknown;
+  const markerValue = JSON.parse(markWebhookSecretEnvExpansions(raw, env)) as unknown;
   if (!isRecord(value)) {
     throw new Error('config must be an object');
   }
-  if (!isRecord(rawValue)) {
+  if (!isRecord(markerValue)) {
     throw new Error('config must be an object');
   }
 
   const server = parseStartConfigServer(value.server);
-  const sources = parseStartConfigSources(value, rawValue, env);
+  const sources = parseStartConfigSources(value, markerValue, env);
   return server === undefined ? { sources } : { server, sources };
 }
 
@@ -1747,6 +1751,7 @@ function appendSourceBundleSources(
       if (!isRecord(rawSource)) {
         throw new Error('config.sourceBundles[].sources[] must be an object');
       }
+      validateLocalSourceBundleSourceContract(source, `config.sourceBundles[${index}].sources[${sourceIndex}]`);
       const localSource = parseLocalSource(source, rawSource, env);
       if (localSource !== undefined) {
         sources.push(localSource);
@@ -1813,6 +1818,7 @@ function parseLocalSource(
   const localSource: {
     name: string;
     sourceType: string;
+    configuredType?: string;
     endpoint: string;
     transport: 'http';
     authConfigured: boolean;
@@ -1821,6 +1827,7 @@ function parseLocalSource(
   } = {
     name,
     sourceType,
+    ...(typeof source.type === 'string' ? { configuredType: source.type } : {}),
     endpoint,
     transport: 'http',
     authConfigured: webhookSecret !== undefined,
@@ -1832,6 +1839,53 @@ function parseLocalSource(
     localSource.maxBodyBytes = maxBodyBytes;
   }
   return localSource;
+}
+
+function validateLocalSourceBundleSourceContract(source: Record<string, unknown>, path: string): void {
+  const type = parseLocalConfiguredSourceType(source.type, `${path}.type`);
+  const name = parseLocalNonEmptyString(source.name, `${path}.name`);
+  const sourceType = parseLocalSourceEventType(source.sourceType, `${path}.sourceType`);
+  if (!/^[A-Za-z0-9_-]+$/u.test(name)) {
+    throw new Error(`${path}.name must be a safe identifier`);
+  }
+  if (type === 'github-webhook' && source.provider !== 'github') {
+    throw new Error(`${path}.provider must be "github" for github-webhook sources`);
+  }
+  if (type === 'github-webhook' && sourceType !== 'github') {
+    throw new Error(`${path}.sourceType must be "github" for github-webhook sources`);
+  }
+  if (type === 'github-webhook' && (typeof source.webhookSecret !== 'string' || source.webhookSecret.length === 0)) {
+    throw new Error(`${path}.webhookSecret must be a non-empty string for github-webhook sources`);
+  }
+  if (type === 'cloudflare-tail' && sourceType !== 'cloudflare') {
+    throw new Error(`${path}.sourceType must be "cloudflare" for cloudflare-tail sources`);
+  }
+  if (type === 'manual-chat' && sourceType !== 'manual' && sourceType !== 'chat') {
+    throw new Error(`${path}.sourceType must be "manual" or "chat" for manual-chat sources`);
+  }
+}
+
+function parseLocalConfiguredSourceType(value: unknown, path: string): string {
+  const type = parseLocalNonEmptyString(value, path);
+  if (type !== 'github-webhook' && type !== 'cloudflare-tail' && type !== 'manual-chat') {
+    throw new Error(`${path} must be one of: github-webhook, cloudflare-tail, manual-chat`);
+  }
+  return type;
+}
+
+function parseLocalSourceEventType(value: unknown, path: string): string {
+  const type = parseLocalNonEmptyString(value, path);
+  if (type !== 'github' && type !== 'cloudflare' && type !== 'manual' && type !== 'chat' && type !== 'system') {
+    throw new Error(`${path} must be one of: github, cloudflare, manual, chat, system`);
+  }
+  return type;
+}
+
+function parseLocalNonEmptyString(value: unknown, path: string): string {
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new Error(`${path} must be a non-empty string`);
+  }
+  return value;
 }
 
 function validateLocalSourceContract(source: Record<string, unknown>, sourceType: string): void {
@@ -1875,7 +1929,7 @@ function resolveLocalWebhookSecret(
   rawValue: unknown,
   env: Record<string, string | undefined>,
 ): string | undefined {
-  if (typeof rawValue === 'string' && wasWebhookSecretFieldExpanded(rawValue, value, env)) {
+  if (wasWebhookSecretFieldExpanded(rawValue, value, env)) {
     return value;
   }
   const envValue = env[value];
@@ -1886,12 +1940,20 @@ function resolveLocalWebhookSecret(
 }
 
 function wasWebhookSecretFieldExpanded(
-  rawValue: string,
+  rawValue: unknown,
   value: string,
   env: Record<string, string | undefined>,
 ): boolean {
-  const match = /^\$\{([A-Z0-9_]+)\}$/u.exec(rawValue);
-  return match?.[1] !== undefined && (env[match[1]] ?? '') === value;
+  const marker = parseWebhookSecretEnvMarker(rawValue);
+  return marker !== undefined && (env[marker] ?? '') === value;
+}
+
+function parseWebhookSecretEnvMarker(value: unknown): string | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const marker = value.__rainrailWebhookSecretEnv;
+  return typeof marker === 'string' ? marker : undefined;
 }
 
 function isLocalCoreRoutePath(pathname: string): boolean {
@@ -3439,7 +3501,7 @@ async function handleLocalIntakeRequest(
 ): Promise<void> {
   let body: Buffer;
   try {
-    body = await readRequestBodyForLocalServer(request, intakeSource.maxBodyBytes ?? 1024 * 1024);
+    body = await readRequestBodyForLocalServer(request, intakeSource.maxBodyBytes ?? localDefaultMaxRequestBodyBytes);
   } catch (error) {
     if (error instanceof LocalRequestBodyTooLargeError) {
       writeJsonResponse(response, 413, { error: 'request_body_too_large' }, request);
@@ -3449,6 +3511,11 @@ async function handleLocalIntakeRequest(
   }
   if (!isAuthorizedLocalIntakeRequest(request, options, intakeSource, body)) {
     writeJsonResponse(response, 401, { error: 'intake_auth_invalid' }, request);
+    return;
+  }
+  const payloadError = validateLocalIntakePayload(request, intakeSource, body);
+  if (payloadError !== undefined) {
+    writeJsonResponse(response, 400, { error: payloadError }, request);
     return;
   }
   const id = `local-event-${String(state.nextEventId).padStart(6, '0')}`;
@@ -3640,8 +3707,30 @@ function getLocalServerAuthError(
   if (typeof authorization !== 'string' || authorization.length === 0) {
     return { status: 401, code: 'missing_bearer_token' };
   }
-  if (authorization !== `Bearer ${options.dashboardToken}`) {
+  if (!timingSafeStringEqual(authorization, `Bearer ${options.dashboardToken}`)) {
     return { status: 403, code: 'invalid_bearer_token' };
+  }
+  return undefined;
+}
+
+function validateLocalIntakePayload(
+  request: IncomingMessage,
+  source: RainrailLocalSource,
+  body: Buffer,
+): 'missing_github_headers' | 'invalid_json_payload' | undefined {
+  if (source.sourceType !== 'github') {
+    return undefined;
+  }
+  const githubEvent = request.headers['x-github-event'];
+  const deliveryId = request.headers['x-github-delivery'];
+  if (typeof githubEvent !== 'string' || githubEvent.length === 0 ||
+    typeof deliveryId !== 'string' || deliveryId.length === 0) {
+    return 'missing_github_headers';
+  }
+  try {
+    JSON.parse(body.toString('utf8')) as unknown;
+  } catch {
+    return 'invalid_json_payload';
   }
   return undefined;
 }
@@ -3900,10 +3989,34 @@ function stripTrailingNewline(value: string): string {
 }
 
 function expandConfigEnv(raw: string, env: Record<string, string | undefined>): string {
-  return raw.replace(
-    /\$\{([A-Z0-9_]+)\}/gu,
-    (_match, name: string) => JSON.stringify(env[name] ?? '').slice(1, -1),
+  return raw
+    .replace(
+      /(:\s*)\$\{([A-Z0-9_]+)\}/gu,
+      (_match, prefix: string, name: string) => `${prefix}${env[name] ?? ''}`,
+    )
+    .replace(
+      /([\[,]\s*)\$\{([A-Z0-9_]+)\}/gu,
+      (_match, prefix: string, name: string) => `${prefix}${env[name] ?? ''}`,
+    )
+    .replace(
+      /\$\{([A-Z0-9_]+)\}/gu,
+      (_match, name: string) => escapeJsonStringContent(env[name] ?? ''),
+    );
+}
+
+function markWebhookSecretEnvExpansions(raw: string, env: Record<string, string | undefined>): string {
+  const marked = raw.replace(
+    /("webhookSecret"\s*:\s*)"\$\{([A-Z0-9_]+)\}"/gu,
+    (_match, prefix: string, name: string) => `${prefix}${JSON.stringify({
+      __rainrailWebhookSecretEnv: name,
+      value: env[name] ?? '',
+    })}`,
   );
+  return expandConfigEnv(marked, env);
+}
+
+function escapeJsonStringContent(value: string): string {
+  return JSON.stringify(value).slice(1, -1);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
