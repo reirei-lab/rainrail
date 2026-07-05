@@ -49,11 +49,11 @@ command rolls back only the manifest content or plugin directory it created
 during that invocation before returning the filesystem error. Existing
 project-local plugin directories and unrelated files are preserved.
 
-Plugin manifest paths are treated as untrusted project input. The add command
-requires `.rainrail/plugins/<name>` to be a normal directory and
-`.rainrail/plugins/<name>/plugin.json` to be a normal file when it already
-exists; symlinked manifest directories or files, including broken symlinks, are
-rejected before writing.
+Plugin manifest paths are treated as untrusted project input. Plugin commands
+require `.rainrail/plugins/<name>` to be a normal directory and
+`.rainrail/plugins/<name>/plugin.json` to be a normal file before reading or
+writing an existing manifest; symlinked manifest directories or files, including
+broken symlinks, are rejected.
 Plugin commands also require `rainrail.lock` to be a normal file,
 `.rainrail` to be a normal directory, and `.rainrail/plugins` to be a normal
 directory before project-local state is read, written, or removed.
