@@ -831,7 +831,7 @@ function runSetupCommand(
 
   if (!options.yes) {
     if (options.json) {
-      return formatSetupPreview(plugins);
+      return formatSetupPreview(plugins, args.length > 0);
     }
 
     return {
@@ -852,7 +852,7 @@ function runSetupCommand(
     const installStep = createSetupStep(
       plugin.alias,
       'install',
-      ['rainrail', 'plugins', 'add', plugin.alias],
+      ['rainrail', ...formatForwardedTargetOptions(setupOptions), 'plugins', 'add', plugin.alias],
       installResult,
     );
     steps.push(installStep);
@@ -879,7 +879,14 @@ function runSetupCommand(
     const setupStep = createSetupStep(
       plugin.alias,
       'setup',
-      ['rainrail', 'plugin', plugin.alias, 'setup', ...formatForwardedSetupOptions(setupOptions)],
+      [
+        'rainrail',
+        ...formatForwardedTargetOptions(setupOptions),
+        'plugin',
+        plugin.alias,
+        'setup',
+        ...formatForwardedExecutionOptions(setupOptions),
+      ],
       pluginSetupResult,
     );
     steps.push(setupStep);
@@ -976,7 +983,10 @@ function formatSetupChoices(): string {
   ].join('\n');
 }
 
-function formatSetupPreview(plugins: readonly OfficialPluginMetadata[]): RainrailCliResult {
+function formatSetupPreview(
+  plugins: readonly OfficialPluginMetadata[],
+  includePluginArguments: boolean,
+): RainrailCliResult {
   return {
     exitCode: 0,
     stdout: formatJson({
@@ -984,13 +994,32 @@ function formatSetupPreview(plugins: readonly OfficialPluginMetadata[]): Rainrai
       completed: false,
       plugins: plugins.map((plugin) => plugin.alias),
       steps: [],
-      nextAction: 'Run rainrail setup --yes to install and set up the selected official plugins.',
+      nextAction: formatSetupNextAction(plugins, includePluginArguments),
     }),
     stderr: '',
   };
 }
 
+function formatSetupNextAction(
+  plugins: readonly OfficialPluginMetadata[],
+  includePluginArguments: boolean,
+): string {
+  return [
+    'rainrail',
+    'setup',
+    ...(includePluginArguments ? plugins.map((plugin) => plugin.alias) : []),
+    '--yes',
+  ].join(' ');
+}
+
 function formatForwardedSetupOptions(options: SharedOptions): readonly string[] {
+  return [
+    ...formatForwardedTargetOptions(options),
+    ...formatForwardedExecutionOptions(options),
+  ];
+}
+
+function formatForwardedTargetOptions(options: SharedOptions): readonly string[] {
   const forwardedOptions: string[] = [];
   if (options.config !== undefined) {
     forwardedOptions.push('--config', options.config);
@@ -998,6 +1027,11 @@ function formatForwardedSetupOptions(options: SharedOptions): readonly string[] 
   if (options.profile !== undefined) {
     forwardedOptions.push('--profile', options.profile);
   }
+  return forwardedOptions;
+}
+
+function formatForwardedExecutionOptions(options: SharedOptions): readonly string[] {
+  const forwardedOptions: string[] = [];
   if (options.yes) {
     forwardedOptions.push('--yes');
   }

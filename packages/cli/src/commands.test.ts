@@ -470,11 +470,58 @@ describe('Rainrail CLI built-in commands', () => {
         completed: false,
         plugins: ['github'],
         steps: [],
-        nextAction: 'Run rainrail setup --yes to install and set up the selected official plugins.',
+        nextAction: 'rainrail setup github --yes',
       });
       await expect(readFile(join(projectRoot, 'rainrail.lock'), 'utf8')).resolves.toContain(
         '"plugins": []',
       );
+    });
+  });
+
+  it('includes target options in setup JSON step commands', async () => {
+    await withTempDirectory(async (directory) => {
+      expect(runRainrailCli(['new', 'target-project'], { cwd: directory }).exitCode).toBe(0);
+      const projectRoot = join(directory, 'target-project');
+      const nested = join(projectRoot, 'nested');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      await mkdir(nested);
+
+      const result = runRainrailCli([
+        '--config',
+        '../rainrail.config.json',
+        '--json',
+        '--yes',
+        'setup',
+        'github',
+      ], {
+        cwd: nested,
+        currentBinPath: '/opt/rainrail/bin/rainrail',
+        commandRunner: () => ({ status: 0, stdout: 'github setup ok\n', stderr: '' }),
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+      expect(JSON.parse(result.stdout) as unknown).toMatchObject({
+        steps: [
+          {
+            action: 'install',
+            command: ['rainrail', '--config', configPath, 'plugins', 'add', 'github'],
+          },
+          {
+            action: 'setup',
+            command: [
+              'rainrail',
+              '--config',
+              configPath,
+              'plugin',
+              'github',
+              'setup',
+              '--yes',
+              '--json',
+            ],
+          },
+        ],
+      });
     });
   });
 

@@ -68,6 +68,59 @@ These commands must be run inside a Rainrail project. Global plugin install,
 third-party plugin install, and Git URL plugin install are intentionally out of
 scope for this layout.
 
+## Setup orchestration contract
+
+`rainrail setup` previews official bundled plugins only. Without `--yes`, it
+does not mutate project state. Passing plugin names or aliases limits the
+selection to those plugins; omitted plugin arguments mean every official bundled
+plugin in catalog order.
+
+`rainrail setup --yes [officialPluginName...]` orchestrates each selected
+plugin in order:
+
+1. Install the plugin with the project-local equivalent of
+   `rainrail plugins add <canonicalAlias>`.
+2. Run the plugin setup command through the canonical equivalent of
+   `rainrail plugin <canonicalAlias> setup`.
+
+The core CLI owns the orchestration and project-local install step. Provider or
+runtime-specific setup actions stay behind the plugin command route. Until a
+plugin registers concrete setup actions, the bundled official setup route may
+complete with a deterministic no-op message rather than failing through the
+unimplemented plugin execution placeholder.
+
+If any install or setup step fails, setup stops at that step and returns the
+step exit code. Earlier successful install state is left in place so rerunning
+the same setup command can repair or continue from the first incomplete step.
+Successful step stdout is concatenated into top-level stdout, and successful
+step stderr is preserved in top-level stderr for warnings or follow-up notes.
+
+`--config <path>` and `--profile <name>` are target selectors for setup and are
+forwarded into recorded step commands. Relative `--config` values are resolved
+from the caller's original current directory before setup changes to the
+project root, so automation can reuse JSON step commands without accidentally
+targeting a different project.
+
+With `--json`, setup writes a single JSON object to stdout. The object has
+`command: "setup"`, `completed`, `plugins`, and `steps`. Each step has
+`plugin`, `action`, `command`, `status`, `exitCode`, `stdout`, and `stderr`.
+For example, a successful `rainrail --json --yes setup github` returns
+`plugins: ["github"]` and two steps: an `install` step whose command is
+`["rainrail", "plugins", "add", "github"]`, followed by a `setup` step whose
+command is `["rainrail", "plugin", "github", "setup", "--yes", "--json"]`.
+When target selectors are present, recorded step commands include them, for
+example `["rainrail", "--config", "/abs/rainrail.config.json", "plugins",
+"add", "github"]`.
+
+Preview mode (`rainrail --json setup [officialPluginName...]`) returns
+`completed: false`, an empty `steps` array, the selected canonical aliases in
+`plugins`, and a `nextAction` command string. When the preview was limited to
+selected plugins, `nextAction` includes those canonical aliases, for example
+`rainrail setup github --yes`.
+
+Input errors in JSON mode also return a JSON object with `completed: false`,
+empty `plugins` and `steps`, and an `error` string.
+
 ## CLI public API
 
 The `@rainrail/cli` entrypoint exposes the command metadata and parser helpers
