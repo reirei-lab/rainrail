@@ -601,7 +601,11 @@ function checkLatestRelease(
       return { cacheable: false, result: createNoopUpdateCheck(currentVersion, checkedAt) };
     }
 
-    const release = JSON.parse(response.body) as { tag_name?: unknown; prerelease?: unknown };
+    const release = JSON.parse(response.body) as {
+      assets?: unknown;
+      tag_name?: unknown;
+      prerelease?: unknown;
+    };
     if (release.prerelease === true || typeof release.tag_name !== 'string') {
       return { cacheable: false, result: createNoopUpdateCheck(currentVersion, checkedAt) };
     }
@@ -611,6 +615,10 @@ function checkLatestRelease(
       latestVersion === undefined ||
       isPrereleaseVersion(latestVersion)
     ) {
+      return { cacheable: false, result: createNoopUpdateCheck(currentVersion, checkedAt) };
+    }
+
+    if (!hasRainrailCliReleaseAsset(release.assets, latestVersion)) {
       return { cacheable: false, result: createNoopUpdateCheck(currentVersion, checkedAt) };
     }
 
@@ -644,6 +652,20 @@ function createNoopUpdateCheck(currentVersion: string, checkedAt: string): Updat
     updateAvailable: false,
     updateCommand: null,
   };
+}
+
+function hasRainrailCliReleaseAsset(assets: unknown, version: string): boolean {
+  if (!Array.isArray(assets)) {
+    return false;
+  }
+
+  const expectedAssetName = `rainrail-cli-v${version}.tgz`;
+  return assets.some((asset) =>
+    typeof asset === 'object' &&
+    asset !== null &&
+    'name' in asset &&
+    (asset as { name?: unknown }).name === expectedAssetName
+  );
 }
 
 function createKnownNoUpdateCheck(
@@ -750,7 +772,11 @@ function readFreshUpdateCheckCache(
       return undefined;
     }
     const checkedAtMs = Date.parse(parsed.checkedAt);
-    if (!Number.isFinite(checkedAtMs) || now.getTime() - checkedAtMs >= updateCheckCacheTtlMs) {
+    if (
+      !Number.isFinite(checkedAtMs) ||
+      checkedAtMs > now.getTime() ||
+      now.getTime() - checkedAtMs >= updateCheckCacheTtlMs
+    ) {
       return undefined;
     }
     return parsed;
