@@ -141,6 +141,7 @@ describe('parseConfig', () => {
     expect(config.server).toEqual({
       host: '127.0.0.1',
       port: 8787,
+      allowedHosts: [],
     });
   });
 
@@ -149,6 +150,7 @@ describe('parseConfig', () => {
       server: {
         host: '127.0.0.1',
         port: 8787,
+        allowedHosts: [],
       },
       sourceBundles: [],
       sources: [],
@@ -177,6 +179,7 @@ describe('parseConfig', () => {
     }).server).toEqual({
       host: 'localhost',
       port: 9999,
+      allowedHosts: [],
     });
   });
 
@@ -405,6 +408,22 @@ describe('parseConfig', () => {
         },
       },
     }).runtimeProviders.openclaw.timeoutSeconds).toBe(timeoutSeconds);
+  });
+
+  it('parses server allowedHosts from config', () => {
+    expect(parseConfig({
+      server: {
+        host: '0.0.0.0',
+        port: 8787,
+        allowedHosts: ['localhost', 'dashboard.local'],
+      },
+    }).server.allowedHosts).toEqual(['localhost', 'dashboard.local']);
+
+    expect(() => parseConfig({
+      server: {
+        allowedHosts: ['localhost', ''],
+      },
+    })).toThrow('config.server.allowedHosts[1] must be a non-empty string');
   });
 
   it('expands environment variables as JSON string content before parsing', async () => {

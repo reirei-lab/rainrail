@@ -50,6 +50,7 @@ export interface RuntimeProviderConfig {
 export interface RainrailServerConfig {
   host: string;
   port: number;
+  allowedHosts: string[];
 }
 
 export interface RainrailConfig {
@@ -73,6 +74,7 @@ const defaultOpenClawRuntimeProviderConfig: OpenClawRuntimeProviderConfig = {
 const defaultServerConfig: RainrailServerConfig = {
   host: '127.0.0.1',
   port: 8787,
+  allowedHosts: [],
 };
 const safeSourceNamePattern = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/u;
 const githubWebhookSourceNameMaxLength = 53;
@@ -112,6 +114,7 @@ function parseServer(value: unknown): RainrailServerConfig {
   return {
     host: parseOptionalString(value.host, 'config.server.host') ?? defaultServerConfig.host,
     port: parseOptionalPort(value.port, 'config.server.port') ?? defaultServerConfig.port,
+    allowedHosts: parseOptionalStringArray(value.allowedHosts, 'config.server.allowedHosts') ?? defaultServerConfig.allowedHosts,
   };
 }
 
@@ -415,6 +418,16 @@ function parseOptionalString(value: unknown, path: string): string | undefined {
     return undefined;
   }
   return parseRequiredString(value, path);
+}
+
+function parseOptionalStringArray(value: unknown, path: string): string[] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(value)) {
+    throw new Error(`${path} must be an array`);
+  }
+  return value.map((item, index) => parseRequiredString(item, `${path}[${index}]`));
 }
 
 function parseOptionalNonNegativeNumber(value: unknown, path: string): number | undefined {

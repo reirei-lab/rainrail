@@ -1753,7 +1753,9 @@ function appendSourceBundleSources(
         throw new Error('config.sourceBundles[].sources[] must be an object');
       }
       validateLocalSourceBundleSourceContract(source, `config.sourceBundles[${index}].sources[${sourceIndex}]`);
-      const localSource = parseLocalSource(source, rawSource, env, `config.sourceBundles[${index}].sources[${sourceIndex}]`);
+      const localSource = parseLocalSource(source, rawSource, env, `config.sourceBundles[${index}].sources[${sourceIndex}]`, {
+        topLevel: false,
+      });
       if (localSource !== undefined) {
         sources.push(localSource);
       }
@@ -1784,7 +1786,9 @@ function appendConfiguredSources(
     if (!isRecord(rawSource)) {
       throw new Error('config.sources[] must be an object');
     }
-    const localSource = parseLocalSource(source, rawSource, env, `config.sources[${index}]`);
+    const localSource = parseLocalSource(source, rawSource, env, `config.sources[${index}]`, {
+      topLevel: true,
+    });
     if (localSource !== undefined) {
       sources.push(localSource);
     }
@@ -1796,13 +1800,16 @@ function parseLocalSource(
   rawSource: Record<string, unknown>,
   env: Record<string, string | undefined>,
   path: string,
-): RainrailLocalSource {
-  parseLocalNonEmptyString(source.type, `${path}.type`);
+  options: { readonly topLevel: boolean },
+): RainrailLocalSource | undefined {
+  const type = parseLocalNonEmptyString(source.type, `${path}.type`);
   const name = parseLocalNonEmptyString(source.name, `${path}.name`);
   const sourceType = typeof source.sourceType === 'string' && source.sourceType.length > 0
     ? source.sourceType
-    : typeof source.type === 'string' && source.type === 'github'
-      ? 'github'
+    : options.topLevel
+      ? type
+      : type === 'github'
+        ? 'github'
       : undefined;
   const endpoint = source.endpoint === undefined
     ? source.type === 'github-webhook' || source.type === 'github'
@@ -1813,6 +1820,9 @@ function parseLocalSource(
     throw new Error(`${path}.sourceType must be a non-empty string`);
   }
   if (endpoint === undefined) {
+    if (!options.topLevel) {
+      return undefined;
+    }
     throw new Error(`${path}.endpoint must be a string`);
   }
   validateLocalSourceContract(source, sourceType);
@@ -3798,9 +3808,7 @@ function validateLocalIntakePayload(
     typeof deliveryId !== 'string' || deliveryId.length === 0) {
     return { ok: false, error: 'missing_github_headers' };
   }
-  try {
-    JSON.parse(body.toString('utf8')) as unknown;
-  } catch {
+  if (!isValidLocalGitHubPayload(request, body)) {
     return { ok: false, error: 'invalid_json_payload' };
   }
   return {
@@ -3808,6 +3816,26 @@ function validateLocalIntakePayload(
     eventName: toLocalGitHubEventName(githubEvent),
     deliveryId,
   };
+}
+
+function isValidLocalGitHubPayload(request: IncomingMessage, body: Buffer): boolean {
+  const contentType = request.headers['content-type'];
+  const contentTypeValue = Array.isArray(contentType) ? contentType[0] : contentType;
+  try {
+    if (typeof contentTypeValue === 'string' &&
+      contentTypeValue.toLowerCase().split(';', 1)[0]?.trim() === 'application/x-www-form-urlencoded') {
+      const payload = new URLSearchParams(body.toString('utf8')).get('payload');
+      if (payload === null) {
+        return false;
+      }
+      JSON.parse(payload) as unknown;
+      return true;
+    }
+    JSON.parse(body.toString('utf8')) as unknown;
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function toLocalGitHubEventName(githubEvent: string): string {
