@@ -1045,6 +1045,72 @@ describe('Rainrail CLI built-in commands', () => {
     });
   });
 
+  it('does not read stdin in embedded mode when no prompt writer is provided', async () => {
+    await withTempDirectory(async (directory) => {
+      await writeFile(join(directory, 'README.md'), 'existing workspace\n');
+
+      expect(runRainrailCli(['init'], { cwd: directory })).toEqual({
+        exitCode: 0,
+        stdout: '',
+        stderr: 'Current directory is not empty. Initialize Rainrail workspace here? [y/N]\n',
+      });
+      await expect(stat(join(directory, 'rainrail.config.json'))).rejects.toThrow();
+    });
+  });
+
+  it('returns directory listing failures as CLI errors during init confirmation checks', async () => {
+    await withTempDirectory(async (directory) => {
+      const cwd = join(directory, 'no-read-project');
+      const directories = new Set<string>([cwd]);
+      const files = new Map<string, string>();
+      const statsFor = (path: string) => ({
+        isDirectory: () => directories.has(path),
+        isFile: () => files.has(path),
+        isSymbolicLink: () => false,
+      });
+      const missing = (path: string) => Object.assign(new Error(`missing: ${path}`), {
+        code: 'ENOENT',
+      });
+      const virtualFileSystem: Partial<RainrailCliFileSystem> = {
+        existsSync: (path) => directories.has(String(path)) || files.has(String(path)),
+        lstatSync: ((path) => {
+          const value = String(path);
+          if (!directories.has(value) && !files.has(value)) {
+            throw missing(value);
+          }
+          return statsFor(value);
+        }) as RainrailCliFileSystem['lstatSync'],
+        readdirSync: (() => {
+          throw Object.assign(new Error('mock directory read failed'), {
+            code: 'EACCES',
+          });
+        }) as RainrailCliFileSystem['readdirSync'],
+      };
+
+      expect(runRainrailCli(['init'], {
+        cwd,
+        fileSystem: virtualFileSystem,
+      })).toEqual({
+        exitCode: 1,
+        stdout: '',
+        stderr: 'mock directory read failed\n',
+      });
+    });
+  });
+
+  it('still asks before initializing a non-empty directory that only has a config file', async () => {
+    await withTempDirectory(async (directory) => {
+      await writeFile(join(directory, 'rainrail.config.json'), '{}\n');
+
+      expect(runRainrailCli(['init'], { cwd: directory })).toEqual({
+        exitCode: 0,
+        stdout: '',
+        stderr: 'Current directory is not empty. Initialize Rainrail workspace here? [y/N]\n',
+      });
+      await expect(stat(join(directory, 'rainrail.lock'))).rejects.toThrow();
+    });
+  });
+
   it('skips the non-empty directory prompt when --yes is provided', async () => {
     await withTempDirectory(async (directory) => {
       await writeFile(join(directory, 'README.md'), 'existing workspace\n');

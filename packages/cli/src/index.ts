@@ -780,7 +780,6 @@ function runInitCommand(
   const fileSystem = getRainrailCliFileSystem(environment);
   const projectRoot = resolve(cwd);
   const projectName = parse(projectRoot).base;
-  const alreadyInitialized = isRainrailWorkspaceRoot(projectRoot, fileSystem);
 
   if (!safeProjectNamePattern.test(projectName)) {
     return {
@@ -790,20 +789,22 @@ function runInitCommand(
     };
   }
 
-  if (!options.yes && !alreadyInitialized && isDirectoryNonEmpty(projectRoot, fileSystem)) {
-    const prompt = 'Current directory is not empty. Initialize Rainrail workspace here? [y/N]\n';
-    const confirmation = readInitConfirmation(environment, prompt);
-    const confirmed = confirmation.input.trim().toLowerCase();
-    if (!(confirmed === 'y' || confirmed === 'yes')) {
-      return {
-        exitCode: 0,
-        stdout: '',
-        stderr: confirmation.promptWritten ? '' : prompt,
-      };
-    }
-  }
-
+  let alreadyInitialized = false;
   try {
+    alreadyInitialized = isRainrailWorkspaceRoot(projectRoot, fileSystem);
+    if (!options.yes && !alreadyInitialized && isDirectoryNonEmpty(projectRoot, fileSystem)) {
+      const prompt = 'Current directory is not empty. Initialize Rainrail workspace here? [y/N]\n';
+      const confirmation = readInitConfirmation(environment, prompt);
+      const confirmed = confirmation.input.trim().toLowerCase();
+      if (!(confirmed === 'y' || confirmed === 'yes')) {
+        return {
+          exitCode: 0,
+          stdout: '',
+          stderr: confirmation.promptWritten ? '' : prompt,
+        };
+      }
+    }
+
     initializeRainrailWorkspace(projectRoot, projectName, fileSystem);
   } catch (error) {
     return {
@@ -827,7 +828,14 @@ function isRainrailWorkspaceRoot(
   fileSystem: RainrailCliFileSystem,
 ): boolean {
   const configPath = join(projectRoot, rainrailConfigFileName);
-  return fileSystem.existsSync(configPath) && isRegularFile(configPath, fileSystem);
+  const lockPath = join(projectRoot, rainrailLockFileName);
+  const pluginDirectory = join(projectRoot, rainrailDirectoryName, rainrailPluginDirectoryName);
+  return fileSystem.existsSync(configPath) &&
+    isRegularFile(configPath, fileSystem) &&
+    fileSystem.existsSync(lockPath) &&
+    isRegularFile(lockPath, fileSystem) &&
+    fileSystem.existsSync(pluginDirectory) &&
+    lstatPath(pluginDirectory, fileSystem)?.isDirectory() === true;
 }
 
 function isDirectoryNonEmpty(
@@ -863,11 +871,7 @@ function readInitConfirmation(
     return { input: environment.stdinReader(), promptWritten: false };
   }
 
-  try {
-    return { input: readStdinLineSync(), promptWritten: false };
-  } catch {
-    return { input: '', promptWritten: false };
-  }
+  return { input: '', promptWritten: false };
 }
 
 function readStdinLineSync(): string {
