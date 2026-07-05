@@ -9,6 +9,7 @@ describe('rainrail binary entrypoint', () => {
     expect(bin).toContain('#!/usr/bin/env node');
     expect(bin).toContain("from '../index.js'");
     expect(bin).toContain('await runRainrailCliEntrypoint(process.argv.slice(2)');
+    expect(bin).toContain('stderrWriter');
     expect(bin).toContain('process.exitCode = result.exitCode');
   });
 

@@ -117,8 +117,9 @@ rainrail help</code></pre>
     <p>Run a minimal first-use smoke test in a disposable directory:</p>
     <pre><code>mkdir -p ~/rainrail-sandbox
 cd ~/rainrail-sandbox
-rainrail new my-agent-ops
+mkdir my-agent-ops
 cd my-agent-ops
+rainrail init
 cat rainrail.config.json
 rainrail openclaw help
 rainrail openclaw session test help</code></pre>
