@@ -25,7 +25,22 @@ jobs:
               issue_number: context.issue.number,
             });
             const trustedAssociations = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
-            const trusted = trustedAssociations.has(issue.author_association);
+            const trustedPermissions = new Set(['admin', 'maintain', 'write', 'triage']);
+            let trusted = trustedAssociations.has(issue.author_association);
+            if (!trusted && issue.user?.login) {
+              try {
+                const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  username: issue.user.login,
+                });
+                trusted = trustedPermissions.has(data.permission);
+              } catch (error) {
+                if (error.status !== 404) {
+                  throw error;
+                }
+              }
+            }
             core.setOutput('trusted', String(trusted));
             if (!trusted) {
               core.notice(`Skipping issue automation for untrusted author association: ${issue.author_association}`);
