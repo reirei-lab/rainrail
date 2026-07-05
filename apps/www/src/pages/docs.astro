@@ -103,18 +103,28 @@ const docs = [
   <section class="section">
     <h2>CLI quick start</h2>
     <p>
-      Install the Rainrail CLI by downloading the installer first, inspecting
-      it locally, and then running the same script.
+      Install the Rainrail CLI with Node.js 20 or newer available on your
+      machine.
     </p>
-    <pre><code>curl -fsSLO https://rainrail.dev/install.sh
-less install.sh
-bash install.sh
-~/.rainrail/bin/rainrail help</code></pre>
+    <pre><code>curl -fsSL https://rainrail.dev/install.sh | bash -s -- --add-to-shell --yes
+exec $SHELL
+rainrail help</code></pre>
     <p>
-      The installer places the CLI under <code>~/.rainrail/bin</code>. After
-      your shell can find that bin directory, use <code>rainrail help</code>
-      for built-in commands and official plugin aliases. Use
-      <code>{'rainrail <plugin> help'}</code> for each plugin's command details.
+      The installer places the CLI under <code>~/.rainrail/bin</code> and can
+      add that directory to your shell profile. Use <code>rainrail help</code>
+      for built-in commands and official plugin aliases.
+    </p>
+    <p>Run a minimal first-use smoke test in a disposable directory:</p>
+    <pre><code>mkdir -p ~/rainrail-sandbox
+cd ~/rainrail-sandbox
+rainrail new my-agent-ops
+cd my-agent-ops
+cat rainrail.config.json
+rainrail openclaw help
+rainrail openclaw session test help</code></pre>
+    <p>
+      Use <code>{'rainrail <plugin> help'}</code> for each plugin's command
+      details.
     </p>
   </section>
 </SiteLayout>
