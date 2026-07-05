@@ -426,6 +426,13 @@ describe('parseConfig', () => {
     })).toThrow('config.server.allowedHosts[1] must be a non-empty string');
   });
 
+  it('does not share default server allowedHosts arrays across parsed configs', () => {
+    const first = parseConfig({ server: { host: '127.0.0.1' } });
+    first.server.allowedHosts.push('dashboard.local');
+
+    expect(parseConfig({ server: { host: '127.0.0.1' } }).server.allowedHosts).toEqual([]);
+  });
+
   it('expands environment variables as JSON string content before parsing', async () => {
     vi.stubEnv('RAINRAIL_GITHUB_TOKEN', 'expanded-"token"\\with\nnewline');
     const directory = join(tmpdir(), `rainrail-config-${crypto.randomUUID()}`);

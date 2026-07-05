@@ -335,6 +335,68 @@ describe('Rainrail CLI built-in commands', () => {
     });
   });
 
+  it('keeps uppercase webhookSecret values expanded inside env JSON fragments', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'expanded-fragment-uppercase-secret');
+      await writeFile(join(projectRoot, 'rainrail.config.json'), [
+        '{',
+        '  "sourceBundles": ${RAINRAIL_SOURCE_BUNDLES},',
+        '  "sources": [],',
+        '  "taskProviders": {},',
+        '  "runtimeProviders": {}',
+        '}',
+      ].join('\n'));
+      let startOptions: RainrailStartOptions | undefined;
+
+      const result = runRainrailCli(['start'], {
+        cwd: projectRoot,
+        env: {
+          GITHUB_WEBHOOK_SECRET: 'ABC123',
+          RAINRAIL_SOURCE_BUNDLES: JSON.stringify([{
+            type: 'eep-bridge',
+            name: 'local',
+            sources: [{
+              type: 'github-webhook',
+              name: 'github-local',
+              sourceType: 'github',
+              provider: 'github',
+              webhookSecret: '${GITHUB_WEBHOOK_SECRET}',
+              endpoint: '/webhooks/github',
+            }],
+          }]),
+        },
+        serverStarter: (options) => {
+          startOptions = options;
+          return { stop: () => undefined };
+        },
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(startOptions?.sources[0]?.webhookSecret).toBe('ABC123');
+    });
+  });
+
+  it('rejects string server ports from start config files', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'string-config-port');
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        server: { host: '127.0.0.1', port: '8787' },
+        sourceBundles: [],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+
+      const result = runRainrailCli(['start'], {
+        cwd: projectRoot,
+        serverStarter: () => ({ stop: () => undefined }),
+      });
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('config.server.port must be an integer from 1 to 65535');
+    });
+  });
+
   it('rejects malformed source bundle source contracts before starting', async () => {
     await withTempDirectory(async (directory) => {
       const projectRoot = await initRainrailProject(directory, 'source-bundle-contract');
@@ -1729,6 +1791,31 @@ describe('Rainrail CLI built-in commands', () => {
         sourceBundles: [{
           type: 'eep-bridge',
           name: 'local',
+          sources: [{
+            type: 'github-webhook',
+            name: 'a'.repeat(54),
+            sourceType: 'github',
+            provider: 'github',
+            webhookSecret: 'secret',
+            endpoint: '/webhooks/github',
+          }],
+        }],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+
+      const longGitHubWebhookName = runRainrailCli(['start'], {
+        cwd: projectRoot,
+        serverStarter: () => ({ stop: () => undefined }),
+      });
+      expect(longGitHubWebhookName.exitCode).toBe(1);
+      expect(longGitHubWebhookName.stderr).toContain('config.sourceBundles[0].sources[0].name must be 53 characters or fewer for github-webhook sources');
+
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        sourceBundles: [{
+          type: 'eep-bridge',
+          name: 'local',
           sources: [
             {
               type: 'github-webhook',
@@ -1994,14 +2081,27 @@ describe('Rainrail CLI built-in commands', () => {
         const firstPage = await fetch(`http://127.0.0.1:${port}/api/v1/settings?limit=1`);
         const firstPageBody = await firstPage.json() as { data: Array<{ id: string }>; page: { limit: number; nextCursor: string | null } };
         expect(firstPage.status).toBe(200);
-        expect(firstPageBody.data).toHaveLength(1);
+        expect(firstPageBody.data).toEqual([
+          { id: 'max-concurrency', type: 'setting', status: 'read-only', label: 'Max concurrency', value: '1 task' },
+        ]);
         expect(firstPageBody.page).toMatchObject({ limit: 1, nextCursor: expect.any(String) });
 
         const secondPage = await fetch(`http://127.0.0.1:${port}/api/v1/settings?limit=1&cursor=${firstPageBody.page.nextCursor}`);
         await expect(secondPage.json()).resolves.toMatchObject({
-          data: [{ id: 'runtime' }],
-          page: { limit: 1, nextCursor: null },
+          data: [{ id: 'auto-start' }],
+          page: { limit: 1, nextCursor: expect.any(String) },
         });
+
+        const fullCollection = await fetch(`http://127.0.0.1:${port}/api/v1/settings`);
+        const fullBody = await fullCollection.json() as { data: Array<{ id: string }> };
+        expect(fullBody.data.map((row) => row.id)).toEqual([
+          'max-concurrency',
+          'auto-start',
+          'retry-policy',
+          'operational-snapshot-limit',
+          'dashboard-auth',
+          'runtime',
+        ]);
 
         const badCursor = await fetch(`http://127.0.0.1:${port}/api/v1/settings?cursor=not-a-cursor`);
         expect(badCursor.status).toBe(400);

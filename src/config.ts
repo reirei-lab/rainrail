@@ -105,7 +105,7 @@ export function parseConfig(value: unknown): RainrailConfig {
 
 function parseServer(value: unknown): RainrailServerConfig {
   if (value === undefined) {
-    return { ...defaultServerConfig };
+    return { ...defaultServerConfig, allowedHosts: [...defaultServerConfig.allowedHosts] };
   }
   if (!isRecord(value)) {
     throw new Error('config.server must be an object');
@@ -114,7 +114,8 @@ function parseServer(value: unknown): RainrailServerConfig {
   return {
     host: parseOptionalString(value.host, 'config.server.host') ?? defaultServerConfig.host,
     port: parseOptionalPort(value.port, 'config.server.port') ?? defaultServerConfig.port,
-    allowedHosts: parseOptionalStringArray(value.allowedHosts, 'config.server.allowedHosts') ?? defaultServerConfig.allowedHosts,
+    allowedHosts: parseOptionalStringArray(value.allowedHosts, 'config.server.allowedHosts') ??
+      [...defaultServerConfig.allowedHosts],
   };
 }
 

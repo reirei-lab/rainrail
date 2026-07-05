@@ -1461,6 +1461,7 @@ type StartConfig = {
 };
 
 const localDefaultMaxRequestBodyBytes = 25 * 1024 * 1024;
+const localGitHubWebhookSourceNameMaxLength = 53;
 
 function runStartCommand(
   args: readonly string[],
@@ -1693,7 +1694,7 @@ function parseStartConfigServer(value: unknown): StartConfig['server'] {
     server.host = host;
   }
   if (value.port !== undefined) {
-    const port = parseStartPort(value.port, 'config.server.port');
+    const port = parseStartConfigPort(value.port, 'config.server.port');
     if (typeof port !== 'number') throw new Error(port.message);
     server.port = port;
   }
@@ -1874,6 +1875,9 @@ function validateLocalSourceBundleSourceContract(source: Record<string, unknown>
   const sourceType = parseLocalSourceEventType(source.sourceType, `${path}.sourceType`);
   if (!/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/u.test(name)) {
     throw new Error(`${path}.name must be a safe identifier`);
+  }
+  if (type === 'github-webhook' && name.length > localGitHubWebhookSourceNameMaxLength) {
+    throw new Error(`${path}.name must be ${localGitHubWebhookSourceNameMaxLength} characters or fewer for github-webhook sources`);
   }
   if (type === 'github-webhook' && source.provider !== 'github') {
     throw new Error(`${path}.provider must be "github" for github-webhook sources`);
@@ -2106,6 +2110,13 @@ function parseStartPort(value: unknown, label: string): number | { readonly mess
     return { message: `${label} must be an integer from 1 to 65535` };
   }
   return port;
+}
+
+function parseStartConfigPort(value: unknown, label: string): number | { readonly message: string } {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > 65535) {
+    return { message: `${label} must be an integer from 1 to 65535` };
+  }
+  return value;
 }
 
 function formatStartOutput(options: RainrailStartOptions): string {
@@ -3695,6 +3706,10 @@ type LocalSettingRow = {
 
 function localSettingsRows(options: RainrailStartOptions): readonly LocalSettingRow[] {
   return [
+    { id: 'max-concurrency', type: 'setting', status: 'read-only', label: 'Max concurrency', value: '1 task' },
+    { id: 'auto-start', type: 'setting', status: 'read-only', label: 'Auto-start', value: 'not configured' },
+    { id: 'retry-policy', type: 'setting', status: 'read-only', label: 'Retry policy', value: '0 retries pending' },
+    { id: 'operational-snapshot-limit', type: 'setting', status: 'read-only', label: 'Operational snapshot limit', value: '50 events' },
     { id: 'dashboard-auth', type: 'setting', status: 'read-only', label: 'Dashboard auth', value: options.dashboardToken === undefined ? 'not configured' : 'bearer token configured' },
     { id: 'runtime', type: 'setting', status: 'read-only', label: 'Runtime', value: 'node' },
   ];
@@ -4149,14 +4164,24 @@ function expandConfigEnv(raw: string, env: Record<string, string | undefined>): 
 }
 
 function markWebhookSecretEnvExpansions(raw: string, env: Record<string, string | undefined>): string {
-  const marked = raw.replace(
+  const markerEnv = Object.fromEntries(
+    Object.entries(env).map(([name, value]) => [
+      name,
+      value === undefined ? undefined : markWebhookSecretEnvReferences(value, env),
+    ]),
+  ) as Record<string, string | undefined>;
+  const marked = markWebhookSecretEnvReferences(raw, env);
+  return expandConfigEnv(marked, markerEnv);
+}
+
+function markWebhookSecretEnvReferences(raw: string, env: Record<string, string | undefined>): string {
+  return raw.replace(
     /("webhookSecret"\s*:\s*)"\$\{([A-Z0-9_]+)\}"/gu,
     (_match, prefix: string, name: string) => `${prefix}${JSON.stringify({
       __rainrailWebhookSecretEnv: name,
       value: env[name] ?? '',
     })}`,
   );
-  return expandConfigEnv(marked, env);
 }
 
 function escapeJsonStringContent(value: string): string {
