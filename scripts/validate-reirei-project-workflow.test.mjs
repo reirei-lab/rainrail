@@ -43,10 +43,12 @@ describe('add issue to Reirei project workflow', () => {
     expect(workflow).toContain('const { data: issue } = await github.rest.issues.get({');
     expect(workflow).toContain('issue_number: context.issue.number');
     expect(workflow).toContain("const trustedAssociations = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);");
-    expect(workflow).toContain("const trustedPermissions = new Set(['admin', 'maintain', 'write', 'triage']);");
+    expect(workflow).toContain("const trustedPermissions = new Set(['admin', 'maintain', 'write']);");
+    expect(workflow).toContain("const trustedRoles = new Set(['admin', 'maintain', 'write', 'triage']);");
     expect(workflow).toContain('github.rest.repos.getCollaboratorPermissionLevel({');
     expect(workflow).toContain('username: issue.user.login');
     expect(workflow).toContain('trustedPermissions.has(data.permission)');
+    expect(workflow).toContain('trustedRoles.has(data.role_name)');
     expect(workflow).toContain("core.setOutput('trusted', String(trusted));");
   });
 
