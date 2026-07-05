@@ -44,7 +44,7 @@ jobs:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           cli_version="$(node -p "require('./packages/cli/package.json').version")"
-          if [ "${RELEASE_TAG}" != "v${cli_version}" ]; then
+          if [ "${RELEASE_TAG}" != "release/${cli_version}" ]; then
             echo "Release tag ${RELEASE_TAG} does not match CLI package version ${cli_version}." >&2
             exit 1
           fi

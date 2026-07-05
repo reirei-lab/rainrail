@@ -38,6 +38,15 @@ function createReleaseTarball(root, version, { includeBin = true } = {}) {
 }
 
 describe('install.sh', () => {
+  it('builds default asset URLs from release/x.y.z tags', () => {
+    const script = readFileSync(installScript, 'utf8');
+
+    expect(script).toContain("sed -e 's/^v//' -e 's#^release/##' -e 's#^release%2F##' -e 's#^release%2f##'");
+    expect(script).toContain('version="${version#release/}"');
+    expect(script).toContain('version="${version#release%2F}"');
+    expect(script).toContain('asset_url="https://github.com/${repo}/releases/download/release%2F${version}/rainrail-cli-v${version}.tgz"');
+  });
+
   it('installs a release tarball into a user-local Rainrail prefix', async () => {
     const root = await mkdtemp(join(tmpdir(), 'rainrail-install-'));
     const tarball = createReleaseTarball(root, '9.8.7');
