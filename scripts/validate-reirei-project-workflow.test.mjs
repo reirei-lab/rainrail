@@ -6,6 +6,18 @@ const workflow = readFileSync(
   'utf8',
 );
 
+const trustedAuthorGuard = "if: ${{ steps.check-trusted-author.outputs.trusted == 'true' }}";
+
+function workflowStepBlock(name) {
+  const stepStart = workflow.indexOf(`      - name: ${name}`);
+  if (stepStart === -1) {
+    throw new Error(`Workflow step not found: ${name}`);
+  }
+
+  const nextStepStart = workflow.indexOf('\n      - name:', stepStart + 1);
+  return workflow.slice(stepStart, nextStepStart === -1 ? undefined : nextStepStart);
+}
+
 describe('add issue to Reirei project workflow', () => {
   it('runs only when a new issue is opened', () => {
     expect(workflow).toMatch(/^on:\n {2}issues:\n {4}types:\n {6}- opened/m);
@@ -32,7 +44,8 @@ describe('add issue to Reirei project workflow', () => {
   });
 
   it('gates project and assignment side effects on trusted REST issue authors', () => {
-    expect(workflow).toMatch(/^ {8}if: \$\{\{ steps\.check-trusted-author\.outputs\.trusted == 'true' \}\}$/m);
+    expect(workflowStepBlock('Assign issue to reirei-agent')).toContain(trustedAuthorGuard);
+    expect(workflowStepBlock('Add issue to Reirei project')).toContain(trustedAuthorGuard);
     expect(workflow).not.toContain("if: ${{ contains(fromJSON('[\"OWNER\",\"MEMBER\",\"COLLABORATOR\"]'),");
   });
 
