@@ -123,10 +123,15 @@ Preview mode (`rainrail --json setup [officialPluginName...]`) returns
 selected plugins, `nextAction` includes those canonical aliases, for example
 `rainrail setup github --yes`. When target selectors were provided,
 `nextAction` also includes them, for example `rainrail --config
-/abs/rainrail.config.json --profile ci setup github --yes`.
+/abs/rainrail.config.json --profile ci setup github --yes`. `nextAction` is a
+shell-oriented command string: arguments that contain whitespace or other
+unsafe shell characters are single-quoted.
 
-Input errors in JSON mode also return a JSON object with `completed: false`,
-empty `plugins` and `steps`, and an `error` string.
+Setup-specific validation errors in JSON mode also return a JSON object with
+`completed: false`, empty `plugins` and `steps`, and an `error` string. Shared
+option parse errors, such as a missing `--config` or `--profile` value, are
+reported by the shared parser before the setup command is selected and keep the
+normal top-level parse-error shape.
 
 ## CLI public API
 

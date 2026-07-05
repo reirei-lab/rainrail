@@ -345,6 +345,29 @@ describe('Rainrail CLI built-in commands', () => {
     });
   });
 
+  it('includes target options in selected setup text preview next action', async () => {
+    await withTempDirectory(async (directory) => {
+      expect(runRainrailCli(['new', 'target-project'], { cwd: directory }).exitCode).toBe(0);
+      const projectRoot = join(directory, 'target-project');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+
+      const result = runRainrailCli([
+        '--config',
+        configPath,
+        '--profile',
+        'ci',
+        'setup',
+        'gh',
+      ], { cwd: directory });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+      expect(result.stdout).toContain(
+        `Run \`rainrail --config ${configPath} --profile ci setup github --yes\` to install and set up selected official plugins.`,
+      );
+    });
+  });
+
   it('orchestrates official plugin install and setup commands in --yes mode', async () => {
     await withTempDirectory(async (directory) => {
       expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
@@ -524,6 +547,30 @@ describe('Rainrail CLI built-in commands', () => {
       expect(JSON.parse(result.stdout) as unknown).toMatchObject({
         plugins: ['github'],
         nextAction: `rainrail --config ${configPath} --profile ci setup github --yes`,
+      });
+    });
+  });
+
+  it('shell-quotes unsafe setup JSON preview nextAction arguments', async () => {
+    await withTempDirectory(async (directory) => {
+      const spacedParent = join(directory, 'space parent');
+      await mkdir(spacedParent);
+      expect(runRainrailCli(['new', 'target-project'], { cwd: spacedParent }).exitCode).toBe(0);
+      const projectRoot = join(spacedParent, 'target-project');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+
+      const result = runRainrailCli([
+        '--json',
+        '--config',
+        configPath,
+        'setup',
+        'gh',
+      ], { cwd: directory });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+      expect(JSON.parse(result.stdout) as unknown).toMatchObject({
+        nextAction: `rainrail --config '${configPath}' setup github --yes`,
       });
     });
   });

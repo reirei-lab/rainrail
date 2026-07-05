@@ -845,7 +845,7 @@ function runSetupCommand(
 
     return {
       exitCode: 0,
-      stdout: formatSetupChoices(plugins, args.length > 0),
+      stdout: formatSetupChoices(plugins, args.length > 0, setupOptions),
       stderr: '',
     };
   }
@@ -979,6 +979,7 @@ function resolveSetupPlugins(args: readonly string[]): {
 function formatSetupChoices(
   plugins: readonly OfficialPluginMetadata[],
   includePluginArguments: boolean,
+  options: Pick<SharedOptions, 'config' | 'profile'>,
 ): string {
   const pluginRows = plugins.map((plugin) => {
     const aliasText = plugin.aliases.length > 1 ? ` (${plugin.aliases.slice(1).join(', ')})` : '';
@@ -993,8 +994,8 @@ function formatSetupChoices(
     pluginRows,
     '',
     includePluginArguments
-      ? `Run \`${formatSetupNextAction(plugins, true, {})}\` to install and set up selected official plugins.`
-      : 'Run `rainrail setup --yes` to install and set up all official plugins.',
+      ? `Run \`${formatSetupNextAction(plugins, true, options)}\` to install and set up selected official plugins.`
+      : `Run \`${formatSetupNextAction(plugins, false, options)}\` to install and set up all official plugins.`,
     includePluginArguments
       ? ''
       : 'Run `rainrail setup <plugin...> --yes` to install and set up selected official plugins.',
@@ -1031,7 +1032,15 @@ function formatSetupNextAction(
     'setup',
     ...(includePluginArguments ? plugins.map((plugin) => plugin.alias) : []),
     '--yes',
-  ].join(' ');
+  ].map(shellQuoteArgument).join(' ');
+}
+
+function shellQuoteArgument(argument: string): string {
+  if (/^[A-Za-z0-9_./:@%+=,-]+$/u.test(argument)) {
+    return argument;
+  }
+
+  return `'${argument.replaceAll("'", "'\\''")}'`;
 }
 
 function formatForwardedSetupOptions(options: SharedOptions): readonly string[] {
