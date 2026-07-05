@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/reirei-lab/rainrail/compare/release/0.2.0...release/0.2.1) (2026-07-05)
+
+
+### Bug Fixes
+
+* install private release assets with gh ([#173](https://github.com/reirei-lab/rainrail/issues/173)) ([e8a726f](https://github.com/reirei-lab/rainrail/commit/e8a726f7e50e7fa16e4127f439bbd769fb859f4f))
+
 ## [0.2.0](https://github.com/reirei-lab/rainrail/compare/release/0.1.0...release/0.2.0) (2026-07-05)
 
 
