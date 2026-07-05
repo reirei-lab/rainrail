@@ -1775,6 +1775,7 @@ function parseLocalSource(
   if (name === undefined || sourceType === undefined || endpoint === undefined) {
     return undefined;
   }
+  validateLocalSourceContract(source, sourceType);
   const maxBodyBytes = source.maxBodyBytes === undefined ? undefined : parseLocalSourceMaxBodyBytes(source.maxBodyBytes);
 
   const webhookSecret = typeof source.webhookSecret === 'string' && source.webhookSecret.length > 0
@@ -1802,6 +1803,23 @@ function parseLocalSource(
     localSource.maxBodyBytes = maxBodyBytes;
   }
   return localSource;
+}
+
+function validateLocalSourceContract(source: Record<string, unknown>, sourceType: string): void {
+  if (source.type === 'github-webhook') {
+    if (source.provider !== 'github') {
+      throw new Error('config provider must be "github" for github-webhook sources');
+    }
+    if (sourceType !== 'github') {
+      throw new Error('config sourceType must be "github" for github-webhook sources');
+    }
+  }
+  if (source.type === 'cloudflare-tail' && sourceType !== 'cloudflare') {
+    throw new Error('config sourceType must be "cloudflare" for cloudflare-tail sources');
+  }
+  if (source.type === 'manual-chat' && sourceType !== 'manual' && sourceType !== 'chat') {
+    throw new Error('config sourceType must be "manual" or "chat" for manual-chat sources');
+  }
 }
 
 function parseLocalSourceEndpoint(endpoint: unknown): string {
@@ -1936,7 +1954,7 @@ function parseStartHost(value: unknown, label: string): string | { readonly mess
   if (typeof value !== 'string' || value.length === 0) {
     return { message: `${label} must be a non-empty string` };
   }
-  return value;
+  return value === '[::1]' ? '::1' : value;
 }
 
 function parseStartPort(value: unknown, label: string): number | { readonly message: string } {
@@ -3190,6 +3208,12 @@ async function handleLocalRainrailRequest(
     return;
   }
 
+  const intakeSource = options.sources.find((source) => source.endpoint === url.pathname);
+  if (request.method === 'POST' && intakeSource !== undefined) {
+    await handleLocalIntakeRequest(request, response, options, state, intakeSource);
+    return;
+  }
+
   const authError = getLocalServerAuthError(request, url.pathname, options);
   if (authError !== undefined) {
     writeJsonResponse(response, authError.status, { error: authError.code });
@@ -3198,6 +3222,7 @@ async function handleLocalRainrailRequest(
 
   if (request.method === 'GET' && url.pathname === '/events') {
     response.writeHead(200, {
+      ...localCorsHeaders,
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
       Connection: 'keep-alive',
@@ -3207,45 +3232,6 @@ async function handleLocalRainrailRequest(
       state.sseClients.delete(response);
     });
     response.write(': rainrail local server connected\n\n');
-    return;
-  }
-
-  const intakeSource = options.sources.find((source) => source.endpoint === url.pathname);
-  if (request.method === 'POST' && intakeSource !== undefined) {
-    let body: Buffer;
-    try {
-      body = await readRequestBodyForLocalServer(request, intakeSource.maxBodyBytes ?? 1024 * 1024);
-    } catch (error) {
-      if (error instanceof LocalRequestBodyTooLargeError) {
-        writeJsonResponse(response, 413, { error: 'request_body_too_large' });
-        return;
-      }
-      throw error;
-    }
-    if (!isAuthorizedLocalIntakeRequest(request, options, intakeSource, body)) {
-      writeJsonResponse(response, 401, { error: 'intake_auth_invalid' });
-      return;
-    }
-    const id = `local-event-${String(state.nextEventId).padStart(6, '0')}`;
-    state.nextEventId += 1;
-    const event: LocalRainrailEvent = {
-      id,
-      type: 'event',
-      name: `${intakeSource.sourceType}.event`,
-      status: 'received',
-      summary: `${intakeSource.name} event received`,
-      receivedAt: new Date().toISOString(),
-      source: {
-        type: intakeSource.sourceType,
-        name: intakeSource.name,
-      },
-      links: {
-        self: `/api/v1/events/${encodeURIComponent(id)}`,
-      },
-    };
-    state.events.push(event);
-    broadcastLocalEvent(state, event);
-    writeJsonResponse(response, 202, { data: event });
     return;
   }
 
@@ -3280,7 +3266,7 @@ async function handleLocalRainrailRequest(
   }
 
   if (request.method === 'GET' && url.pathname === '/api/v1/events') {
-    writeJsonResponse(response, 200, paginatedCollectionResponse([...state.events].reverse(), url));
+    writeJsonResponse(response, 200, paginatedCollectionResponse(filterLocalEvents([...state.events].reverse(), url), url));
     return;
   }
 
@@ -3349,6 +3335,61 @@ async function handleLocalRainrailRequest(
   }
 
   writeJsonResponse(response, 404, { error: 'not_found' });
+}
+
+async function handleLocalIntakeRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  options: RainrailStartOptions,
+  state: LocalRainrailServerState,
+  intakeSource: RainrailLocalSource,
+): Promise<void> {
+  let body: Buffer;
+  try {
+    body = await readRequestBodyForLocalServer(request, intakeSource.maxBodyBytes ?? 1024 * 1024);
+  } catch (error) {
+    if (error instanceof LocalRequestBodyTooLargeError) {
+      writeJsonResponse(response, 413, { error: 'request_body_too_large' });
+      return;
+    }
+    throw error;
+  }
+  if (!isAuthorizedLocalIntakeRequest(request, options, intakeSource, body)) {
+    writeJsonResponse(response, 401, { error: 'intake_auth_invalid' });
+    return;
+  }
+  const id = `local-event-${String(state.nextEventId).padStart(6, '0')}`;
+  state.nextEventId += 1;
+  const event: LocalRainrailEvent = {
+    id,
+    type: 'event',
+    name: `${intakeSource.sourceType}.event`,
+    status: 'received',
+    summary: `${intakeSource.name} event received`,
+    receivedAt: new Date().toISOString(),
+    source: {
+      type: intakeSource.sourceType,
+      name: intakeSource.name,
+    },
+    links: {
+      self: `/api/v1/events/${encodeURIComponent(id)}`,
+    },
+  };
+  state.events.push(event);
+  broadcastLocalEvent(state, event);
+  writeJsonResponse(response, 202, { data: event });
+}
+
+function filterLocalEvents(events: readonly LocalRainrailEvent[], url: URL): readonly LocalRainrailEvent[] {
+  const sourceFilter = url.searchParams.get('filter[source]');
+  const nameFilter = url.searchParams.get('filter[name]');
+  return events
+    .filter((event) => matchesOptionalLocalFilter(event.source.type, sourceFilter))
+    .filter((event) => matchesOptionalLocalFilter(event.name, nameFilter));
+}
+
+function matchesOptionalLocalFilter(value: string | undefined, filter: string | null): boolean {
+  return filter === null || filter.length === 0 || value === filter;
 }
 
 function parseLocalRequestUrl(request: IncomingMessage, options: RainrailStartOptions): URL | undefined {
