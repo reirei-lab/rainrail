@@ -44,6 +44,7 @@ describe('rainrail binary entrypoint', () => {
 
   it('suppresses a ready update notice when the CLI exits unsuccessfully', async () => {
     const writes: string[] = [];
+    let aborted = false;
 
     const result = await runRainrailCliEntrypoint(
       ['doctor'],
@@ -53,16 +54,23 @@ describe('rainrail binary entrypoint', () => {
       },
       {
         runCli: () => ({ exitCode: 2, stdout: '', stderr: 'doctor failed\n' }),
-        updateNoticeCheck: () => Promise.resolve('Rainrail 0.2.1 is available.\n'),
+        updateNoticeCheck: (signal) => {
+          signal.addEventListener('abort', () => {
+            aborted = true;
+          });
+          return Promise.resolve('Rainrail 0.2.1 is available.\n');
+        },
       },
     );
 
     expect(result.exitCode).toBe(2);
+    expect(aborted).toBe(true);
     expect(writes).toEqual(['stderr:doctor failed\n']);
   });
 
   it('does not wait for a slow update notice check before returning from a successful CLI run', async () => {
     const writes: string[] = [];
+    let aborted = false;
 
     const result = await runRainrailCliEntrypoint(
       ['doctor'],
@@ -72,12 +80,19 @@ describe('rainrail binary entrypoint', () => {
       },
       {
         runCli: () => ({ exitCode: 0, stdout: 'doctor ok\n', stderr: '' }),
-        updateNoticeCheck: () => new Promise(() => {}),
+        updateNoticeCheck: (signal) =>
+          new Promise((resolve) => {
+            signal.addEventListener('abort', () => {
+              aborted = true;
+              resolve(undefined);
+            });
+          }),
         updateNoticeTimeoutMs: 0,
       },
     );
 
     expect(result.exitCode).toBe(0);
+    expect(aborted).toBe(true);
     expect(writes).toEqual(['stdout:doctor ok\n']);
   });
 
@@ -95,8 +110,9 @@ describe('rainrail binary entrypoint', () => {
         currentVersion: '0.2.0',
         now: () => new Date('2026-07-05T00:00:00.000Z'),
         runCli: () => ({ exitCode: 0, stdout: '', stderr: '' }),
-        asyncReleaseFetcher: (url) => {
+        asyncReleaseFetcher: (url, options) => {
           expect(url).toBe('https://api.github.com/repos/reirei-lab/rainrail/releases/latest');
+          expect(options.signal.aborted).toBe(false);
           return Promise.resolve({
             status: 200,
             body: JSON.stringify({
@@ -119,6 +135,10 @@ describe('rainrail binary entrypoint', () => {
     ['--help'],
     ['version'],
     ['update', 'check'],
+    ['github', 'help'],
+    ['github', 'webhook', 'add', 'help'],
+    ['plugin', 'github', 'help'],
+    ['plugin', 'github', 'webhook', 'add', 'help'],
   ])('skips the update notice check for %s', async (...argv) => {
     let updateCheckStarted = false;
 

@@ -94,7 +94,13 @@ export type ReleaseFetchResult = {
 };
 
 export type ReleaseFetcher = (url: string) => ReleaseFetchResult;
-export type AsyncReleaseFetcher = (url: string) => Promise<ReleaseFetchResult>;
+export type AsyncReleaseFetcherOptions = {
+  readonly signal: AbortSignal;
+};
+export type AsyncReleaseFetcher = (
+  url: string,
+  options: AsyncReleaseFetcherOptions,
+) => Promise<ReleaseFetchResult>;
 
 export type RainrailCliFileSystem = {
   readonly existsSync: typeof existsSync;
@@ -131,7 +137,7 @@ export type RainrailCliEntrypointEnvironment = RainrailCliEnvironment & {
     argv: readonly string[],
     environment?: RainrailCliEnvironment,
   ) => RainrailCliResult;
-  readonly updateNoticeCheck?: () => Promise<string | undefined>;
+  readonly updateNoticeCheck?: (signal: AbortSignal) => Promise<string | undefined>;
   readonly updateNoticeTimeoutMs?: number;
 };
 
@@ -757,7 +763,7 @@ export async function runRainrailCliEntrypoint(
   },
   environment: RainrailCliEntrypointEnvironment = {},
 ): Promise<RainrailCliResult> {
-  const updateNoticePromise = shouldStartUpdateNoticeCheck(argv)
+  const updateNoticeTask = shouldStartUpdateNoticeCheck(argv, environment)
     ? startUpdateNoticeCheck(environment)
     : undefined;
   const {
@@ -778,9 +784,13 @@ export async function runRainrailCliEntrypoint(
     io.stderr.write(result.stderr);
   }
 
-  if (result.exitCode === 0 && updateNoticePromise !== undefined) {
+  if (result.exitCode !== 0) {
+    updateNoticeTask?.abort();
+  }
+
+  if (result.exitCode === 0 && updateNoticeTask !== undefined) {
     const notice = await waitForUpdateNotice(
-      updateNoticePromise,
+      updateNoticeTask,
       environment.updateNoticeTimeoutMs ?? updateNoticeTimeoutMs,
     );
     if (notice !== undefined && notice.length > 0) {
@@ -791,32 +801,75 @@ export async function runRainrailCliEntrypoint(
   return result;
 }
 
-function shouldStartUpdateNoticeCheck(argv: readonly string[]): boolean {
+function shouldStartUpdateNoticeCheck(
+  argv: readonly string[],
+  environment: RainrailCliEntrypointEnvironment,
+): boolean {
   const parsed = parseRainrailArguments(argv);
   if (parsed.errors.length > 0) {
     return false;
   }
 
-  return !['help', 'version', 'update'].includes(parsed.commandName);
+  if (['help', 'version', 'update'].includes(parsed.commandName)) {
+    return false;
+  }
+
+  const pluginAliasResolver = environment.pluginAliasResolver ?? defaultPluginAliasResolver;
+  if (parsed.commandName === 'plugin') {
+    const pluginName = parsed.commandArgs[0];
+    const plugin = pluginName === undefined ? undefined : pluginAliasResolver(pluginName);
+    return plugin === undefined ||
+      !isPluginHelpRequestForNotice(plugin, parsed.commandArgs.slice(1));
+  }
+
+  const plugin = pluginAliasResolver(parsed.commandName);
+  return plugin === undefined || !isPluginHelpRequestForNotice(plugin, parsed.commandArgs);
+}
+
+function isPluginHelpRequestForNotice(
+  plugin: OfficialPluginMetadata,
+  args: readonly string[],
+): boolean {
+  if (isOfficialPluginHelpRequest(args)) {
+    return true;
+  }
+
+  const pluginCommand = getOfficialPluginCommand(plugin, args);
+  return pluginCommand !== undefined && isOfficialPluginCommandHelpRequest(pluginCommand, args);
+}
+
+type UpdateNoticeTask = {
+  readonly promise: Promise<string | undefined>;
+  readonly abort: () => void;
 }
 
 function startUpdateNoticeCheck(
   environment: RainrailCliEntrypointEnvironment,
-): Promise<string | undefined> {
-  return (environment.updateNoticeCheck ?? (() => checkRainrailUpdateNotice(environment)))()
+): UpdateNoticeTask {
+  const abortController = new AbortController();
+  const promise = (environment.updateNoticeCheck ??
+    ((signal) => checkRainrailUpdateNotice(environment, signal)))(abortController.signal)
     .catch(() => undefined);
+
+  return {
+    promise,
+    abort: () => abortController.abort(),
+  };
 }
 
 async function waitForUpdateNotice(
-  updateNoticePromise: Promise<string | undefined>,
+  updateNoticeTask: UpdateNoticeTask,
   timeoutMs: number,
 ): Promise<string | undefined> {
   let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
-      updateNoticePromise,
+      updateNoticeTask.promise,
       new Promise<undefined>((resolve) => {
-        timeout = setTimeout(() => resolve(undefined), Math.max(0, timeoutMs));
+        timeout = setTimeout(() => {
+          updateNoticeTask.abort();
+          resolve(undefined);
+        }, Math.max(0, timeoutMs));
       }),
     ]);
   } finally {
@@ -828,6 +881,7 @@ async function waitForUpdateNotice(
 
 async function checkRainrailUpdateNotice(
   environment: RainrailCliEnvironment,
+  signal: AbortSignal,
 ): Promise<string | undefined> {
   const now = environment.now?.() ?? new Date();
   const currentVersion = environment.currentVersion ?? getRainrailCliPackageVersion();
@@ -840,8 +894,8 @@ async function checkRainrailUpdateNotice(
   try {
     const checkedAt = now.toISOString();
     const response = environment.asyncReleaseFetcher === undefined
-      ? await defaultAsyncReleaseFetcher(GITHUB_LATEST_RELEASE_URL)
-      : await environment.asyncReleaseFetcher(GITHUB_LATEST_RELEASE_URL);
+      ? await defaultAsyncReleaseFetcher(GITHUB_LATEST_RELEASE_URL, { signal })
+      : await environment.asyncReleaseFetcher(GITHUB_LATEST_RELEASE_URL, { signal });
     const result = evaluateLatestReleaseResponse(response, currentVersion, checkedAt);
     if (result.cacheable) {
       writeUpdateCheckCache(cachePath, result.result, environment);
@@ -860,12 +914,16 @@ function formatUpdateNotice(result: UpdateCheckCache): string | undefined {
   return `Rainrail ${result.latestVersion} is available. Run \`${result.updateCommand}\` to update.\n`;
 }
 
-async function defaultAsyncReleaseFetcher(url: string): Promise<ReleaseFetchResult> {
+async function defaultAsyncReleaseFetcher(
+  url: string,
+  options: AsyncReleaseFetcherOptions,
+): Promise<ReleaseFetchResult> {
   const response = await fetch(url, {
     headers: {
       Accept: 'application/vnd.github+json',
       'User-Agent': 'rainrail-cli',
     },
+    signal: options.signal,
   });
 
   return {
