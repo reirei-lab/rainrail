@@ -436,10 +436,14 @@ describe('Rainrail CLI built-in commands', () => {
       try {
         expect(result.exitCode).toBe(0);
 
+        const acceptedBody = JSON.stringify({ action: 'opened' });
         const accepted = await fetch(`http://127.0.0.1:${port}/webhooks/github`, {
           method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ action: 'opened' }),
+          headers: {
+            'content-type': 'application/json',
+            'x-hub-signature-256': githubSignature('secret', acceptedBody),
+          },
+          body: acceptedBody,
         });
         expect(accepted.status).toBe(202);
 
@@ -548,6 +552,7 @@ describe('Rainrail CLI built-in commands', () => {
 
         const posted = await fetch(`http://127.0.0.1:${port}/webhooks/github`, {
           method: 'POST',
+          headers: { 'x-hub-signature-256': githubSignature('secret', '{}') },
           body: '{}',
         });
         expect(posted.status).toBe(202);
@@ -591,6 +596,7 @@ describe('Rainrail CLI built-in commands', () => {
         for (let index = 0; index < 3; index += 1) {
           const posted = await fetch(`http://127.0.0.1:${port}/webhooks/github`, {
             method: 'POST',
+            headers: { 'x-hub-signature-256': githubSignature('secret', '{}') },
             body: '{}',
           });
           expect(posted.status).toBe(202);
@@ -603,7 +609,7 @@ describe('Rainrail CLI built-in commands', () => {
           'local-event-000003',
           'local-event-000002',
         ]);
-        expect(firstPageBody.page.nextCursor).toBe('2');
+        expect(firstPageBody.page.nextCursor).toEqual(expect.any(String));
 
         const detail = await fetch(`http://127.0.0.1:${port}${firstPageBody.data[0]!.links.self}`);
         expect(detail.status).toBe(200);
@@ -659,7 +665,11 @@ describe('Rainrail CLI built-in commands', () => {
 
       const result = await runRainrailCliAsync(['start'], { cwd: projectRoot });
       try {
-        expect((await fetch(`http://127.0.0.1:${port}/webhooks/github`, { method: 'POST', body: '{}' })).status).toBe(202);
+        expect((await fetch(`http://127.0.0.1:${port}/webhooks/github`, {
+          method: 'POST',
+          headers: { 'x-hub-signature-256': githubSignature('secret', '{}') },
+          body: '{}',
+        })).status).toBe(202);
         expect((await fetch(`http://127.0.0.1:${port}/manual`, { method: 'POST', body: '{}' })).status).toBe(202);
 
         const manualEvents = await fetch(`http://127.0.0.1:${port}/api/v1/events?filter[source]=manual`);
@@ -689,6 +699,24 @@ describe('Rainrail CLI built-in commands', () => {
         const response = await fetch(`http://127.0.0.1:${port}/api/v1/events?cursor=not-a-cursor`);
         expect(response.status).toBe(400);
         await expect(response.json()).resolves.toEqual({ error: 'invalid_cursor' });
+      } finally {
+        await closeTestServer(result);
+      }
+    });
+  });
+
+  it('rejects invalid local collection limits', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'invalid-event-limit');
+      const port = await getFreePort();
+      const result = await runRainrailCliAsync(['start', '--port', String(port)], { cwd: projectRoot });
+      try {
+        expect(result.exitCode).toBe(0);
+        for (const limit of ['0', '1000']) {
+          const response = await fetch(`http://127.0.0.1:${port}/api/v1/events?limit=${limit}`);
+          expect(response.status).toBe(400);
+          await expect(response.json()).resolves.toEqual({ error: 'invalid_limit' });
+        }
       } finally {
         await closeTestServer(result);
       }
@@ -870,6 +898,51 @@ describe('Rainrail CLI built-in commands', () => {
     });
   });
 
+  it('requires configured intake signatures on localhost', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'localhost-intake-auth');
+      const port = await getFreePort();
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        server: { host: '127.0.0.1', port },
+        sourceBundles: [{
+          type: 'eep-bridge',
+          name: 'local',
+          sources: [{
+            type: 'github-webhook',
+            name: 'github-local',
+            sourceType: 'github',
+            provider: 'github',
+            webhookSecret: 'secret',
+            endpoint: '/webhooks/github',
+          }],
+        }],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+
+      const result = await runRainrailCliAsync(['start'], { cwd: projectRoot });
+      try {
+        expect(result.exitCode).toBe(0);
+        const body = '{}';
+        const rejected = await fetch(`http://127.0.0.1:${port}/webhooks/github`, {
+          method: 'POST',
+          body,
+        });
+        expect(rejected.status).toBe(401);
+
+        const accepted = await fetch(`http://127.0.0.1:${port}/webhooks/github`, {
+          method: 'POST',
+          headers: { 'x-hub-signature-256': githubSignature('secret', body) },
+          body,
+        });
+        expect(accepted.status).toBe(202);
+      } finally {
+        await closeTestServer(result);
+      }
+    });
+  });
+
   it('accepts signed public intake routes under non-core api paths', async () => {
     await withTempDirectory(async (directory) => {
       const projectRoot = await initRainrailProject(directory, 'api-intake-route');
@@ -1002,6 +1075,53 @@ describe('Rainrail CLI built-in commands', () => {
     });
   });
 
+  it('does not treat unrelated expanded values as webhookSecret expansion', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'unrelated-expanded-secret-name');
+      const port = await getFreePort();
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        server: { host: '0.0.0.0', port },
+        sourceBundles: [{
+          type: 'eep-bridge',
+          name: 'local',
+          sources: [{
+            type: 'github-webhook',
+            name: 'github-local',
+            sourceType: 'github',
+            provider: 'github',
+            webhookSecret: 'GITHUB_WEBHOOK_SECRET',
+            endpoint: '/webhooks/github',
+          }],
+        }],
+        sources: [],
+        taskProviders: {
+          github: { token: '${TOKEN_ALIAS}' },
+        },
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+
+      const result = await runRainrailCliAsync(['start'], {
+        cwd: projectRoot,
+        env: {
+          SSE_BEARER_TOKEN: 'events-token',
+          TOKEN_ALIAS: 'GITHUB_WEBHOOK_SECRET',
+        },
+      });
+      try {
+        expect(result.exitCode).toBe(0);
+        const body = '{}';
+        const rejected = await fetch(`http://127.0.0.1:${port}/webhooks/github`, {
+          method: 'POST',
+          headers: { 'x-hub-signature-256': githubSignature('GITHUB_WEBHOOK_SECRET', body) },
+          body,
+        });
+        expect(rejected.status).toBe(401);
+      } finally {
+        await closeTestServer(result);
+      }
+    });
+  });
+
   it('uses the default github webhook endpoint for top-level github sources', async () => {
     await withTempDirectory(async (directory) => {
       const projectRoot = await initRainrailProject(directory, 'top-level-github-source');
@@ -1032,6 +1152,7 @@ describe('Rainrail CLI built-in commands', () => {
         });
         const accepted = await fetch(`http://127.0.0.1:${port}/webhooks/github`, {
           method: 'POST',
+          headers: { 'x-hub-signature-256': githubSignature('secret', '{}') },
           body: '{}',
         });
         expect(accepted.status).toBe(202);
@@ -1315,7 +1436,7 @@ describe('Rainrail CLI built-in commands', () => {
         const firstPage = await fetch(`http://127.0.0.1:${port}/api/v1/sources?limit=1`);
         const firstPageBody = await firstPage.json() as { data: Array<{ name: string }>; page: { nextCursor: string | null } };
         expect(firstPageBody.data).toHaveLength(1);
-        expect(firstPageBody.page.nextCursor).toBe('1');
+        expect(firstPageBody.page.nextCursor).toEqual(expect.any(String));
 
         const secondPage = await fetch(`http://127.0.0.1:${port}/api/v1/sources?limit=1&cursor=${firstPageBody.page.nextCursor}`);
         const secondPageBody = await secondPage.json() as { data: Array<{ name: string }>; page: { nextCursor: string | null } };
@@ -1347,8 +1468,26 @@ describe('Rainrail CLI built-in commands', () => {
         });
 
         expect(preflight.status).toBe(204);
-        expect(preflight.headers.get('access-control-allow-origin')).toBe('*');
+        expect(preflight.headers.get('access-control-allow-origin')).toBe('http://localhost:3000');
         expect(preflight.headers.get('access-control-allow-headers')?.toLowerCase()).toContain('authorization');
+      } finally {
+        await closeTestServer(result);
+      }
+    });
+  });
+
+  it('does not grant CORS access to arbitrary origins', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'dashboard-cors-origin');
+      const port = await getFreePort();
+      const result = await runRainrailCliAsync(['start', '--port', String(port)], { cwd: projectRoot });
+      try {
+        expect(result.exitCode).toBe(0);
+        const response = await fetch(`http://127.0.0.1:${port}/api/v1/events`, {
+          headers: { Origin: 'https://attacker.example' },
+        });
+        expect(response.status).toBe(200);
+        expect(response.headers.get('access-control-allow-origin')).toBeNull();
       } finally {
         await closeTestServer(result);
       }
@@ -1368,7 +1507,7 @@ describe('Rainrail CLI built-in commands', () => {
           signal: controller.signal,
         });
         expect(events.status).toBe(200);
-        expect(events.headers.get('access-control-allow-origin')).toBe('*');
+        expect(events.headers.get('access-control-allow-origin')).toBe('http://localhost:3000');
       } finally {
         controller.abort();
         await closeTestServer(result);

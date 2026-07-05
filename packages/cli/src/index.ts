@@ -1660,14 +1660,14 @@ function readStartConfig(
   env: Record<string, string | undefined>,
 ): StartConfig {
   const raw = fileSystem.readFileSync(configPath, 'utf8');
-  const expandedValues = new Set<string>();
-  const value = JSON.parse(expandConfigEnv(raw, env, expandedValues)) as unknown;
+  const expandedWebhookSecrets = collectExpandedWebhookSecrets(raw, env);
+  const value = JSON.parse(expandConfigEnv(raw, env)) as unknown;
   if (!isRecord(value)) {
     throw new Error('config must be an object');
   }
 
   const server = parseStartConfigServer(value.server);
-  const sources = parseStartConfigSources(value, env, expandedValues);
+  const sources = parseStartConfigSources(value, env, expandedWebhookSecrets);
   return server === undefined ? { sources } : { server, sources };
 }
 
@@ -1699,11 +1699,11 @@ function parseStartConfigServer(value: unknown): StartConfig['server'] {
 function parseStartConfigSources(
   value: Record<string, unknown>,
   env: Record<string, string | undefined>,
-  expandedValues: ReadonlySet<string>,
+  expandedWebhookSecrets: ReadonlySet<string>,
 ): RainrailLocalSource[] {
   const sources: RainrailLocalSource[] = [];
-  appendSourceBundleSources(sources, value.sourceBundles, env, expandedValues);
-  appendConfiguredSources(sources, value.sources, env, expandedValues);
+  appendSourceBundleSources(sources, value.sourceBundles, env, expandedWebhookSecrets);
+  appendConfiguredSources(sources, value.sources, env, expandedWebhookSecrets);
   return dedupeLocalSources(sources);
 }
 
@@ -1711,7 +1711,7 @@ function appendSourceBundleSources(
   sources: RainrailLocalSource[],
   value: unknown,
   env: Record<string, string | undefined>,
-  expandedValues: ReadonlySet<string>,
+  expandedWebhookSecrets: ReadonlySet<string>,
 ): void {
   if (value === undefined) {
     return;
@@ -1730,7 +1730,7 @@ function appendSourceBundleSources(
       if (!isRecord(source)) {
         throw new Error('config.sourceBundles[].sources[] must be an object');
       }
-      const localSource = parseLocalSource(source, env, expandedValues);
+      const localSource = parseLocalSource(source, env, expandedWebhookSecrets);
       if (localSource !== undefined) {
         sources.push(localSource);
       }
@@ -1742,7 +1742,7 @@ function appendConfiguredSources(
   sources: RainrailLocalSource[],
   value: unknown,
   env: Record<string, string | undefined>,
-  expandedValues: ReadonlySet<string>,
+  expandedWebhookSecrets: ReadonlySet<string>,
 ): void {
   if (value === undefined) {
     return;
@@ -1754,7 +1754,7 @@ function appendConfiguredSources(
     if (!isRecord(source)) {
       throw new Error('config.sources[] must be an object');
     }
-    const localSource = parseLocalSource(source, env, expandedValues);
+    const localSource = parseLocalSource(source, env, expandedWebhookSecrets);
     if (localSource !== undefined) {
       sources.push(localSource);
     }
@@ -1764,7 +1764,7 @@ function appendConfiguredSources(
 function parseLocalSource(
   source: Record<string, unknown>,
   env: Record<string, string | undefined>,
-  expandedValues: ReadonlySet<string>,
+  expandedWebhookSecrets: ReadonlySet<string>,
 ): RainrailLocalSource | undefined {
   const name = typeof source.name === 'string' && source.name.length > 0 ? source.name : undefined;
   const sourceType = typeof source.sourceType === 'string' && source.sourceType.length > 0
@@ -1784,7 +1784,7 @@ function parseLocalSource(
   const maxBodyBytes = source.maxBodyBytes === undefined ? undefined : parseLocalSourceMaxBodyBytes(source.maxBodyBytes);
 
   const webhookSecret = typeof source.webhookSecret === 'string' && source.webhookSecret.length > 0
-    ? resolveLocalWebhookSecret(source.webhookSecret, env, expandedValues)
+    ? resolveLocalWebhookSecret(source.webhookSecret, env, expandedWebhookSecrets)
     : undefined;
   const localSource: {
     name: string;
@@ -1846,9 +1846,9 @@ function parseLocalSourceEndpoint(endpoint: unknown): string {
 function resolveLocalWebhookSecret(
   value: string,
   env: Record<string, string | undefined>,
-  expandedValues: ReadonlySet<string>,
+  expandedWebhookSecrets: ReadonlySet<string>,
 ): string | undefined {
-  if (expandedValues.has(value)) {
+  if (expandedWebhookSecrets.has(value)) {
     return value;
   }
   const envValue = env[value];
@@ -3079,7 +3079,6 @@ function formatRainrailLock(projectName: string): string {
 }
 
 const localCorsHeaders = {
-  'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
   'Access-Control-Allow-Headers': 'Authorization, Content-Type, Last-Event-ID, X-GitHub-Delivery, X-GitHub-Event, X-Hub-Signature-256, X-Rainrail-Client, X-Rainrail-Publish-Token, X-Request-ID',
   'Access-Control-Expose-Headers': 'X-Request-ID',
@@ -3148,7 +3147,7 @@ async function startLocalRainrailServer(options: RainrailStartOptions): Promise<
   const server = http.createServer((request, response) => {
     handleLocalRainrailRequest(request, response, options, state).catch(() => {
       if (!response.headersSent) {
-        writeJsonResponse(response, 500, { error: 'internal_server_error' });
+    writeJsonResponse(response, 500, { error: 'internal_server_error' }, request);
       } else {
         response.destroy();
       }
@@ -3208,12 +3207,12 @@ async function handleLocalRainrailRequest(
 ): Promise<void> {
   const url = parseLocalRequestUrl(request, options);
   if (url === undefined) {
-    writeJsonResponse(response, 400, { error: 'invalid_host_header' });
+    writeJsonResponse(response, 400, { error: 'invalid_host_header' }, request);
     return;
   }
 
   if (request.method === 'OPTIONS') {
-    writeCorsPreflightResponse(response, preflightMethodsForLocalPath(url.pathname, options));
+    writeCorsPreflightResponse(response, preflightMethodsForLocalPath(url.pathname, options), request);
     return;
   }
 
@@ -3222,7 +3221,7 @@ async function handleLocalRainrailRequest(
       ok: true,
       runtime: 'node',
       workspace: options.root,
-    } : { ok: true, runtime: 'node' });
+    } : { ok: true, runtime: 'node' }, request);
     return;
   }
 
@@ -3234,13 +3233,14 @@ async function handleLocalRainrailRequest(
 
   const authError = getLocalServerAuthError(request, url.pathname, options);
   if (authError !== undefined) {
-    writeJsonResponse(response, authError.status, { error: authError.code });
+    writeJsonResponse(response, authError.status, { error: authError.code }, request);
     return;
   }
 
   if (request.method === 'GET' && url.pathname === '/events') {
     response.writeHead(200, {
       ...localCorsHeaders,
+      ...localOriginCorsHeader(request),
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
       Connection: 'keep-alive',
@@ -3258,7 +3258,7 @@ async function handleLocalRainrailRequest(
       counts: { events: state.events.length, activityEvents: 0 },
       events: state.events,
       workspace: options.root,
-    });
+    }, request);
     return;
   }
 
@@ -3279,12 +3279,18 @@ async function handleLocalRainrailRequest(
           settings: '/api/v1/settings',
         },
       },
-    });
+    }, request);
     return;
   }
 
   if (request.method === 'GET' && url.pathname === '/api/v1/events') {
-    writeLocalCollectionResponse(response, filterLocalEvents([...state.events].reverse(), url), url);
+    writeLocalCollectionResponse(
+      response,
+      filterLocalEvents([...state.events].reverse(), url),
+      url,
+      request,
+      (row) => typeof row.receivedAt === 'string' ? row.receivedAt : row.id,
+    );
     return;
   }
 
@@ -3293,7 +3299,7 @@ async function handleLocalRainrailRequest(
     const eventId = safeDecodeURIComponent(eventDetailMatch[1] ?? '');
     const event = eventId === undefined ? undefined : state.events.find((item) => item.id === eventId);
     if (event === undefined) {
-      writeJsonResponse(response, 404, { error: 'event_not_found' });
+      writeJsonResponse(response, 404, { error: 'event_not_found' }, request);
       return;
     }
     writeJsonResponse(response, 200, {
@@ -3302,22 +3308,28 @@ async function handleLocalRainrailRequest(
         type: 'event',
         record: event,
       },
-    });
+    }, request);
     return;
   }
 
   if (request.method === 'GET' && url.pathname === '/api/v1/workflow-runs') {
-    writeJsonResponse(response, 200, collectionResponse([]));
+    writeJsonResponse(response, 200, collectionResponse([]), request);
     return;
   }
 
   if (request.method === 'GET' && url.pathname === '/api/v1/agent-tasks') {
-    writeJsonResponse(response, 200, collectionResponse([]));
+    writeJsonResponse(response, 200, collectionResponse([]), request);
     return;
   }
 
   if (request.method === 'GET' && url.pathname === '/api/v1/sources') {
-    writeLocalCollectionResponse(response, filterLocalSources(localSourceRows(options.sources), url), url);
+    writeLocalCollectionResponse(
+      response,
+      filterLocalSources(localSourceRows(options.sources), url),
+      url,
+      request,
+      (row) => typeof row.name === 'string' ? row.name : row.id,
+    );
     return;
   }
 
@@ -3330,7 +3342,7 @@ async function handleLocalRainrailRequest(
         inProgressCount: 0,
         claimedCount: 0,
       },
-    });
+    }, request);
     return;
   }
 
@@ -3338,11 +3350,11 @@ async function handleLocalRainrailRequest(
     writeJsonResponse(response, 200, collectionResponse([
       { id: 'dashboard-auth', type: 'setting', status: 'read-only', label: 'Dashboard auth', value: options.dashboardToken === undefined ? 'not configured' : 'bearer token configured' },
       { id: 'runtime', type: 'setting', status: 'read-only', label: 'Runtime', value: 'node' },
-    ]));
+    ]), request);
     return;
   }
 
-  writeJsonResponse(response, 404, { error: 'not_found' });
+  writeJsonResponse(response, 404, { error: 'not_found' }, request);
 }
 
 async function handleLocalIntakeRequest(
@@ -3357,13 +3369,13 @@ async function handleLocalIntakeRequest(
     body = await readRequestBodyForLocalServer(request, intakeSource.maxBodyBytes ?? 1024 * 1024);
   } catch (error) {
     if (error instanceof LocalRequestBodyTooLargeError) {
-      writeJsonResponse(response, 413, { error: 'request_body_too_large' });
+      writeJsonResponse(response, 413, { error: 'request_body_too_large' }, request);
       return;
     }
     throw error;
   }
   if (!isAuthorizedLocalIntakeRequest(request, options, intakeSource, body)) {
-    writeJsonResponse(response, 401, { error: 'intake_auth_invalid' });
+    writeJsonResponse(response, 401, { error: 'intake_auth_invalid' }, request);
     return;
   }
   const id = `local-event-${String(state.nextEventId).padStart(6, '0')}`;
@@ -3396,7 +3408,7 @@ async function handleLocalIntakeRequest(
   };
   state.events.push(event);
   broadcastLocalEvent(state, event);
-  writeJsonResponse(response, 202, { data: event });
+  writeJsonResponse(response, 202, { data: event }, request);
 }
 
 function filterLocalEvents(events: readonly LocalRainrailEvent[], url: URL): readonly LocalRainrailEvent[] {
@@ -3407,7 +3419,19 @@ function filterLocalEvents(events: readonly LocalRainrailEvent[], url: URL): rea
     .filter((event) => matchesOptionalLocalFilter(event.name, nameFilter));
 }
 
-function localSourceRows(sources: readonly RainrailLocalSource[]): readonly unknown[] {
+type LocalSourceRow = {
+  readonly id: string;
+  readonly type: 'source';
+  readonly status: 'configured';
+  readonly sourceType: string;
+  readonly name: string;
+  readonly endpoint: string;
+  readonly transport: 'http';
+  readonly auth: { readonly status: string };
+  readonly links: { readonly self: string };
+};
+
+function localSourceRows(sources: readonly RainrailLocalSource[]): readonly LocalSourceRow[] {
   return sources.map((source) => ({
     id: source.name,
     type: 'source',
@@ -3421,7 +3445,7 @@ function localSourceRows(sources: readonly RainrailLocalSource[]): readonly unkn
   }));
 }
 
-function filterLocalSources(sources: readonly unknown[], url: URL): readonly unknown[] {
+function filterLocalSources(sources: readonly LocalSourceRow[], url: URL): readonly LocalSourceRow[] {
   const sourceFilter = url.searchParams.get('filter[source]');
   return sources.filter((source) => {
     if (!isRecord(source)) {
@@ -3509,11 +3533,8 @@ function isAuthorizedLocalIntakeRequest(
   source: RainrailLocalSource,
   body: Buffer,
 ): boolean {
-  if (isLocalBindHost(options.host)) {
-    return true;
-  }
   if (source.webhookSecret === undefined) {
-    return false;
+    return isLocalBindHost(options.host);
   }
   const signature = request.headers['x-hub-signature-256'];
   if (typeof signature !== 'string') {
@@ -3570,19 +3591,26 @@ function collectionResponse(data: readonly unknown[]): {
   };
 }
 
-function writeLocalCollectionResponse(response: ServerResponse, data: readonly unknown[], url: URL): void {
-  const page = paginatedCollectionResponse(data, url);
+function writeLocalCollectionResponse<TRow extends { readonly id: string }>(
+  response: ServerResponse,
+  data: readonly TRow[],
+  url: URL,
+  request: IncomingMessage,
+  cursorValue: (row: TRow) => string,
+): void {
+  const page = paginatedCollectionResponse(data, url, cursorValue);
   if (!page.ok) {
-    writeJsonResponse(response, 400, { error: page.error });
+    writeJsonResponse(response, 400, { error: page.error }, request);
     return;
   }
-  writeJsonResponse(response, 200, page.body);
+  writeJsonResponse(response, 200, page.body, request);
 }
 
-function paginatedCollectionResponse(
-  data: readonly unknown[],
+function paginatedCollectionResponse<TRow extends { readonly id: string }>(
+  data: readonly TRow[],
   url: URL,
-): { readonly ok: false; readonly error: 'invalid_cursor' } | {
+  cursorValue: (row: TRow) => string,
+): { readonly ok: false; readonly error: 'invalid_cursor' | 'invalid_limit' } | {
   readonly ok: true;
   readonly body: {
     readonly data: readonly unknown[];
@@ -3592,25 +3620,59 @@ function paginatedCollectionResponse(
     };
   };
 } {
-  const limit = parsePositiveInteger(url.searchParams.get('limit')) ?? 50;
-  const cursorValue = url.searchParams.get('cursor');
-  const cursor = parseNonNegativeInteger(cursorValue);
-  if (cursorValue !== null && cursor === undefined) {
+  const limitValue = url.searchParams.get('limit');
+  const limit = limitValue === null ? 50 : Number(limitValue);
+  if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+    return { ok: false, error: 'invalid_limit' };
+  }
+  const cursorParam = url.searchParams.get('cursor');
+  const cursor = cursorParam === null ? undefined : decodeLocalPageCursor(cursorParam);
+  if (cursorParam !== null && cursor === undefined) {
     return { ok: false, error: 'invalid_cursor' };
   }
-  const offset = cursor ?? 0;
+  const offset = cursor === undefined
+    ? 0
+    : data.findIndex((row) => cursorValue(row) === cursor.value && row.id === cursor.id) + 1;
+  if (cursor !== undefined && offset === 0) {
+    return { ok: false, error: 'invalid_cursor' };
+  }
   const pageData = data.slice(offset, offset + limit);
-  const nextOffset = offset + pageData.length;
+  const last = pageData.at(-1);
+  const hasNext = offset + limit < data.length;
   return {
     ok: true,
     body: {
       data: pageData,
       page: {
         limit,
-        nextCursor: nextOffset < data.length ? String(nextOffset) : null,
+        nextCursor: hasNext && last !== undefined
+          ? encodeLocalPageCursor({ value: cursorValue(last), id: last.id })
+          : null,
       },
     },
   };
+}
+
+type LocalPageCursor = {
+  readonly value: string;
+  readonly id: string;
+};
+
+function encodeLocalPageCursor(cursor: LocalPageCursor): string {
+  return btoa(JSON.stringify(cursor)).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/u, '');
+}
+
+function decodeLocalPageCursor(value: string): LocalPageCursor | undefined {
+  try {
+    const padded = value.replaceAll('-', '+').replaceAll('_', '/').padEnd(Math.ceil(value.length / 4) * 4, '=');
+    const parsed = JSON.parse(atob(padded)) as Partial<LocalPageCursor>;
+    if (typeof parsed.value !== 'string' || typeof parsed.id !== 'string') {
+      return undefined;
+    }
+    return { value: parsed.value, id: parsed.id };
+  } catch {
+    return undefined;
+  }
 }
 
 function parsePositiveInteger(value: string | null): number | undefined {
@@ -3662,9 +3724,11 @@ function preflightMethodsForLocalPath(pathname: string, options: RainrailStartOp
 function writeCorsPreflightResponse(
   response: ServerResponse,
   allowedMethods: readonly string[] | undefined,
+  request: IncomingMessage,
 ): void {
   response.writeHead(204, {
     ...localCorsHeaders,
+    ...localOriginCorsHeader(request),
     ...(allowedMethods === undefined ? {} : {
       'Access-Control-Allow-Methods': allowedMethods.join(', '),
     }),
@@ -3672,12 +3736,39 @@ function writeCorsPreflightResponse(
   response.end();
 }
 
-function writeJsonResponse(response: ServerResponse, statusCode: number, body: unknown): void {
+function writeJsonResponse(
+  response: ServerResponse,
+  statusCode: number,
+  body: unknown,
+  request?: IncomingMessage,
+): void {
   response.writeHead(statusCode, {
     ...localCorsHeaders,
+    ...localOriginCorsHeader(request),
     'Content-Type': 'application/json; charset=utf-8',
   });
   response.end(`${JSON.stringify(body)}\n`);
+}
+
+function localOriginCorsHeader(request: IncomingMessage | undefined): { readonly 'Access-Control-Allow-Origin'?: string; readonly Vary?: string } {
+  const origin = request?.headers.origin;
+  if (typeof origin !== 'string' || !isAllowedLocalCorsOrigin(origin)) {
+    return {};
+  }
+  return {
+    'Access-Control-Allow-Origin': origin,
+    Vary: 'Origin',
+  };
+}
+
+function isAllowedLocalCorsOrigin(origin: string): boolean {
+  try {
+    const url = new URL(origin);
+    return (url.protocol === 'http:' || url.protocol === 'https:') &&
+      (url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '[::1]');
+  } catch {
+    return false;
+  }
 }
 
 function formatJson(value: unknown): string {
@@ -3688,18 +3779,51 @@ function stripTrailingNewline(value: string): string {
   return value.endsWith('\n') ? value.slice(0, -1) : value;
 }
 
-function expandConfigEnv(
-  raw: string,
+function collectExpandedWebhookSecrets(raw: string, env: Record<string, string | undefined>): ReadonlySet<string> {
+  const expanded = new Set<string>();
+  let value: unknown;
+  try {
+    value = JSON.parse(raw) as unknown;
+  } catch {
+    return expanded;
+  }
+  if (!isRecord(value)) {
+    return expanded;
+  }
+  collectWebhookSecretEnvValuesFromSources(value.sources, env, expanded);
+  if (Array.isArray(value.sourceBundles)) {
+    for (const bundle of value.sourceBundles) {
+      if (isRecord(bundle)) {
+        collectWebhookSecretEnvValuesFromSources(bundle.sources, env, expanded);
+      }
+    }
+  }
+  return expanded;
+}
+
+function collectWebhookSecretEnvValuesFromSources(
+  sources: unknown,
   env: Record<string, string | undefined>,
-  expandedValues?: Set<string>,
-): string {
+  expanded: Set<string>,
+): void {
+  if (!Array.isArray(sources)) {
+    return;
+  }
+  for (const source of sources) {
+    if (!isRecord(source) || typeof source.webhookSecret !== 'string') {
+      continue;
+    }
+    const match = /^\$\{([A-Z0-9_]+)\}$/u.exec(source.webhookSecret);
+    if (match?.[1] !== undefined) {
+      expanded.add(env[match[1]] ?? '');
+    }
+  }
+}
+
+function expandConfigEnv(raw: string, env: Record<string, string | undefined>): string {
   return raw.replace(
     /\$\{([A-Z0-9_]+)\}/gu,
-    (_match, name: string) => {
-      const value = env[name] ?? '';
-      expandedValues?.add(value);
-      return JSON.stringify(value).slice(1, -1);
-    },
+    (_match, name: string) => JSON.stringify(env[name] ?? '').slice(1, -1),
   );
 }
 
