@@ -792,7 +792,15 @@ function runInitCommand(
   let alreadyInitialized = false;
   try {
     alreadyInitialized = isRainrailWorkspaceRoot(projectRoot, fileSystem);
-    if (!options.yes && !alreadyInitialized && isDirectoryNonEmpty(projectRoot, fileSystem)) {
+    if (alreadyInitialized) {
+      return {
+        exitCode: 0,
+        stdout: `Rainrail workspace already initialized at ${projectRoot}\n`,
+        stderr: '',
+      };
+    }
+
+    if (!options.yes && isDirectoryNonEmpty(projectRoot, fileSystem)) {
       const prompt = 'Current directory is not empty. Initialize Rainrail workspace here? [y/N]\n';
       const confirmation = readInitConfirmation(environment, prompt);
       const confirmed = confirmation.input.trim().toLowerCase();
@@ -816,9 +824,7 @@ function runInitCommand(
 
   return {
     exitCode: 0,
-    stdout: alreadyInitialized
-      ? `Rainrail workspace already initialized at ${projectRoot}\n`
-      : `Initialized Rainrail workspace at ${projectRoot}\n`,
+    stdout: `Initialized Rainrail workspace at ${projectRoot}\n`,
     stderr: '',
   };
 }
@@ -830,12 +836,18 @@ function isRainrailWorkspaceRoot(
   const configPath = join(projectRoot, rainrailConfigFileName);
   const lockPath = join(projectRoot, rainrailLockFileName);
   const pluginDirectory = join(projectRoot, rainrailDirectoryName, rainrailPluginDirectoryName);
-  return fileSystem.existsSync(configPath) &&
-    isRegularFile(configPath, fileSystem) &&
-    fileSystem.existsSync(lockPath) &&
-    isRegularFile(lockPath, fileSystem) &&
-    fileSystem.existsSync(pluginDirectory) &&
-    lstatPath(pluginDirectory, fileSystem)?.isDirectory() === true;
+  if (
+    !fileSystem.existsSync(configPath) ||
+    !isRegularFile(configPath, fileSystem) ||
+    !fileSystem.existsSync(lockPath) ||
+    !fileSystem.existsSync(pluginDirectory) ||
+    lstatPath(pluginDirectory, fileSystem)?.isDirectory() !== true
+  ) {
+    return false;
+  }
+
+  readRainrailLockfile(lockPath, fileSystem);
+  return true;
 }
 
 function isDirectoryNonEmpty(

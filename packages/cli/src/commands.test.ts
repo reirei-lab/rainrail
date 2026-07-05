@@ -985,7 +985,23 @@ describe('Rainrail CLI built-in commands', () => {
     });
   });
 
-  it('refuses to overwrite changed project-local files during scaffolding', async () => {
+  it('treats initialized workspaces with installed plugins as safe when init is rerun', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'my-agent-ops');
+      expect(runRainrailCli(['plugins', 'add', 'github'], { cwd: projectRoot }).exitCode).toBe(0);
+
+      expect(runRainrailCli(['init'], { cwd: projectRoot })).toEqual({
+        exitCode: 0,
+        stdout: `Rainrail workspace already initialized at ${projectRoot}\n`,
+        stderr: '',
+      });
+      await expect(readFile(join(projectRoot, 'rainrail.lock'), 'utf8')).resolves.toContain(
+        '"name": "github"',
+      );
+    });
+  });
+
+  it('refuses invalid project-local lockfiles during scaffolding', async () => {
     await withTempDirectory(async (directory) => {
       const projectRoot = await initRainrailProject(directory, 'my-agent-ops');
       await writeFile(join(projectRoot, 'rainrail.lock'), '{"plugins":["custom"]}\n');
@@ -993,8 +1009,11 @@ describe('Rainrail CLI built-in commands', () => {
       expect(runRainrailCli(['init'], { cwd: projectRoot })).toEqual({
         exitCode: 1,
         stdout: '',
-        stderr: `Refusing to overwrite existing file with different content: ${join(projectRoot, 'rainrail.lock')}\n`,
+        stderr: `Unsupported Rainrail lockfile format: ${join(projectRoot, 'rainrail.lock')}\n`,
       });
+      await expect(readFile(join(projectRoot, 'rainrail.lock'), 'utf8')).resolves.toBe(
+        '{"plugins":["custom"]}\n',
+      );
     });
   });
 
