@@ -1660,13 +1660,14 @@ function readStartConfig(
   env: Record<string, string | undefined>,
 ): StartConfig {
   const raw = fileSystem.readFileSync(configPath, 'utf8');
-  const value = JSON.parse(expandConfigEnv(raw, env)) as unknown;
+  const expandedValues = new Set<string>();
+  const value = JSON.parse(expandConfigEnv(raw, env, expandedValues)) as unknown;
   if (!isRecord(value)) {
     throw new Error('config must be an object');
   }
 
   const server = parseStartConfigServer(value.server);
-  const sources = parseStartConfigSources(value, env);
+  const sources = parseStartConfigSources(value, env, expandedValues);
   return server === undefined ? { sources } : { server, sources };
 }
 
@@ -1698,10 +1699,11 @@ function parseStartConfigServer(value: unknown): StartConfig['server'] {
 function parseStartConfigSources(
   value: Record<string, unknown>,
   env: Record<string, string | undefined>,
+  expandedValues: ReadonlySet<string>,
 ): RainrailLocalSource[] {
   const sources: RainrailLocalSource[] = [];
-  appendSourceBundleSources(sources, value.sourceBundles, env);
-  appendConfiguredSources(sources, value.sources, env);
+  appendSourceBundleSources(sources, value.sourceBundles, env, expandedValues);
+  appendConfiguredSources(sources, value.sources, env, expandedValues);
   return dedupeLocalSources(sources);
 }
 
@@ -1709,6 +1711,7 @@ function appendSourceBundleSources(
   sources: RainrailLocalSource[],
   value: unknown,
   env: Record<string, string | undefined>,
+  expandedValues: ReadonlySet<string>,
 ): void {
   if (value === undefined) {
     return;
@@ -1727,7 +1730,7 @@ function appendSourceBundleSources(
       if (!isRecord(source)) {
         throw new Error('config.sourceBundles[].sources[] must be an object');
       }
-      const localSource = parseLocalSource(source, env);
+      const localSource = parseLocalSource(source, env, expandedValues);
       if (localSource !== undefined) {
         sources.push(localSource);
       }
@@ -1739,6 +1742,7 @@ function appendConfiguredSources(
   sources: RainrailLocalSource[],
   value: unknown,
   env: Record<string, string | undefined>,
+  expandedValues: ReadonlySet<string>,
 ): void {
   if (value === undefined) {
     return;
@@ -1750,7 +1754,7 @@ function appendConfiguredSources(
     if (!isRecord(source)) {
       throw new Error('config.sources[] must be an object');
     }
-    const localSource = parseLocalSource(source, env);
+    const localSource = parseLocalSource(source, env, expandedValues);
     if (localSource !== undefined) {
       sources.push(localSource);
     }
@@ -1760,6 +1764,7 @@ function appendConfiguredSources(
 function parseLocalSource(
   source: Record<string, unknown>,
   env: Record<string, string | undefined>,
+  expandedValues: ReadonlySet<string>,
 ): RainrailLocalSource | undefined {
   const name = typeof source.name === 'string' && source.name.length > 0 ? source.name : undefined;
   const sourceType = typeof source.sourceType === 'string' && source.sourceType.length > 0
@@ -1768,7 +1773,7 @@ function parseLocalSource(
       ? 'github'
       : undefined;
   const endpoint = source.endpoint === undefined
-    ? source.type === 'github-webhook'
+    ? source.type === 'github-webhook' || source.type === 'github'
       ? '/webhooks/github'
       : undefined
     : parseLocalSourceEndpoint(source.endpoint);
@@ -1779,7 +1784,7 @@ function parseLocalSource(
   const maxBodyBytes = source.maxBodyBytes === undefined ? undefined : parseLocalSourceMaxBodyBytes(source.maxBodyBytes);
 
   const webhookSecret = typeof source.webhookSecret === 'string' && source.webhookSecret.length > 0
-    ? resolveLocalWebhookSecret(source.webhookSecret, env)
+    ? resolveLocalWebhookSecret(source.webhookSecret, env, expandedValues)
     : undefined;
   const localSource: {
     name: string;
@@ -1841,7 +1846,11 @@ function parseLocalSourceEndpoint(endpoint: unknown): string {
 function resolveLocalWebhookSecret(
   value: string,
   env: Record<string, string | undefined>,
+  expandedValues: ReadonlySet<string>,
 ): string | undefined {
+  if (expandedValues.has(value)) {
+    return value;
+  }
   const envValue = env[value];
   if (envValue !== undefined) {
     return envValue.length === 0 ? undefined : envValue;
@@ -3105,6 +3114,15 @@ type LocalRainrailEvent = {
   readonly name: string;
   readonly status: string;
   readonly summary: string;
+  readonly deliveryId: string;
+  readonly rawPayloadReference: string;
+  readonly workflowRunCount: number;
+  readonly handlerRetryCount: number;
+  readonly subject: {
+    readonly type: string;
+    readonly id: string;
+  };
+  readonly occurredAt: string;
   readonly receivedAt: string;
   readonly source: {
     readonly type: string;
@@ -3266,7 +3284,7 @@ async function handleLocalRainrailRequest(
   }
 
   if (request.method === 'GET' && url.pathname === '/api/v1/events') {
-    writeJsonResponse(response, 200, paginatedCollectionResponse(filterLocalEvents([...state.events].reverse(), url), url));
+    writeLocalCollectionResponse(response, filterLocalEvents([...state.events].reverse(), url), url);
     return;
   }
 
@@ -3299,17 +3317,7 @@ async function handleLocalRainrailRequest(
   }
 
   if (request.method === 'GET' && url.pathname === '/api/v1/sources') {
-    writeJsonResponse(response, 200, collectionResponse(options.sources.map((source) => ({
-      id: source.name,
-      type: 'source',
-      status: 'configured',
-      sourceType: source.sourceType,
-      name: source.name,
-      endpoint: source.endpoint,
-      transport: source.transport,
-      auth: { status: source.authConfigured ? 'configured' : 'not configured' },
-      links: { self: `/api/v1/sources/${encodeURIComponent(source.name)}` },
-    }))));
+    writeLocalCollectionResponse(response, filterLocalSources(localSourceRows(options.sources), url), url);
     return;
   }
 
@@ -3360,13 +3368,24 @@ async function handleLocalIntakeRequest(
   }
   const id = `local-event-${String(state.nextEventId).padStart(6, '0')}`;
   state.nextEventId += 1;
+  const eventName = `${intakeSource.sourceType}.event`;
+  const occurredAt = new Date().toISOString();
   const event: LocalRainrailEvent = {
     id,
     type: 'event',
-    name: `${intakeSource.sourceType}.event`,
+    name: eventName,
     status: 'received',
     summary: `${intakeSource.name} event received`,
-    receivedAt: new Date().toISOString(),
+    deliveryId: id,
+    rawPayloadReference: `local://events/${id}`,
+    workflowRunCount: 0,
+    handlerRetryCount: 0,
+    subject: {
+      type: eventName,
+      id,
+    },
+    occurredAt,
+    receivedAt: occurredAt,
     source: {
       type: intakeSource.sourceType,
       name: intakeSource.name,
@@ -3386,6 +3405,30 @@ function filterLocalEvents(events: readonly LocalRainrailEvent[], url: URL): rea
   return events
     .filter((event) => matchesOptionalLocalFilter(event.source.type, sourceFilter))
     .filter((event) => matchesOptionalLocalFilter(event.name, nameFilter));
+}
+
+function localSourceRows(sources: readonly RainrailLocalSource[]): readonly unknown[] {
+  return sources.map((source) => ({
+    id: source.name,
+    type: 'source',
+    status: 'configured',
+    sourceType: source.sourceType,
+    name: source.name,
+    endpoint: source.endpoint,
+    transport: source.transport,
+    auth: { status: source.authConfigured ? 'configured' : 'not configured' },
+    links: { self: `/api/v1/sources/${encodeURIComponent(source.name)}` },
+  }));
+}
+
+function filterLocalSources(sources: readonly unknown[], url: URL): readonly unknown[] {
+  const sourceFilter = url.searchParams.get('filter[source]');
+  return sources.filter((source) => {
+    if (!isRecord(source)) {
+      return false;
+    }
+    return matchesOptionalLocalFilter(typeof source.sourceType === 'string' ? source.sourceType : undefined, sourceFilter);
+  });
 }
 
 function matchesOptionalLocalFilter(value: string | undefined, filter: string | null): boolean {
@@ -3527,22 +3570,45 @@ function collectionResponse(data: readonly unknown[]): {
   };
 }
 
-function paginatedCollectionResponse(data: readonly unknown[], url: URL): {
-  readonly data: readonly unknown[];
-  readonly page: {
-    readonly limit: number;
-    readonly nextCursor: string | null;
+function writeLocalCollectionResponse(response: ServerResponse, data: readonly unknown[], url: URL): void {
+  const page = paginatedCollectionResponse(data, url);
+  if (!page.ok) {
+    writeJsonResponse(response, 400, { error: page.error });
+    return;
+  }
+  writeJsonResponse(response, 200, page.body);
+}
+
+function paginatedCollectionResponse(
+  data: readonly unknown[],
+  url: URL,
+): { readonly ok: false; readonly error: 'invalid_cursor' } | {
+  readonly ok: true;
+  readonly body: {
+    readonly data: readonly unknown[];
+    readonly page: {
+      readonly limit: number;
+      readonly nextCursor: string | null;
+    };
   };
 } {
   const limit = parsePositiveInteger(url.searchParams.get('limit')) ?? 50;
-  const cursor = parseNonNegativeInteger(url.searchParams.get('cursor')) ?? 0;
-  const pageData = data.slice(cursor, cursor + limit);
-  const nextOffset = cursor + pageData.length;
+  const cursorValue = url.searchParams.get('cursor');
+  const cursor = parseNonNegativeInteger(cursorValue);
+  if (cursorValue !== null && cursor === undefined) {
+    return { ok: false, error: 'invalid_cursor' };
+  }
+  const offset = cursor ?? 0;
+  const pageData = data.slice(offset, offset + limit);
+  const nextOffset = offset + pageData.length;
   return {
-    data: pageData,
-    page: {
-      limit,
-      nextCursor: nextOffset < data.length ? String(nextOffset) : null,
+    ok: true,
+    body: {
+      data: pageData,
+      page: {
+        limit,
+        nextCursor: nextOffset < data.length ? String(nextOffset) : null,
+      },
     },
   };
 }
@@ -3622,10 +3688,18 @@ function stripTrailingNewline(value: string): string {
   return value.endsWith('\n') ? value.slice(0, -1) : value;
 }
 
-function expandConfigEnv(raw: string, env: Record<string, string | undefined>): string {
+function expandConfigEnv(
+  raw: string,
+  env: Record<string, string | undefined>,
+  expandedValues?: Set<string>,
+): string {
   return raw.replace(
     /\$\{([A-Z0-9_]+)\}/gu,
-    (_match, name: string) => JSON.stringify(env[name] ?? '').slice(1, -1),
+    (_match, name: string) => {
+      const value = env[name] ?? '';
+      expandedValues?.add(value);
+      return JSON.stringify(value).slice(1, -1);
+    },
   );
 }
 
