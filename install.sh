@@ -130,7 +130,7 @@ encode_release_tag_for_url() {
 
 resolve_latest_version() {
   if command -v gh >/dev/null 2>&1; then
-    if gh release view --repo "${repo}" --json tagName --jq '.tagName' 2>/dev/null | normalize_release_version; then
+    if gh release view --repo "${repo}" --json tagName --jq '.tagName' 2>/dev/null; then
       return
     fi
   fi
@@ -138,7 +138,7 @@ resolve_latest_version() {
   require_command curl
   local effective_url
   effective_url="$(curl -fsSL -o /dev/null -w '%{url_effective}' "https://github.com/${repo}/releases/latest")"
-  basename "${effective_url}" | normalize_release_version
+  basename "${effective_url}"
 }
 
 download_release_asset() {
@@ -161,14 +161,20 @@ download_release_asset() {
   download "https://github.com/${repo}/releases/download/${encoded_release_tag}/${asset_name}" "${output}"
 }
 
+release_tag=""
 if [ -z "${asset_url}" ]; then
   if [ -z "${version}" ]; then
     version="$(resolve_latest_version)"
   fi
-  version="${version#v}"
-  version="${version#release/}"
-  version="${version#release%2F}"
-  version="${version#release%2f}"
+  release_tag="${version}"
+  version="$(printf '%s' "${version}" | normalize_release_version)"
+  case "${release_tag}" in
+    release/*|release%2F*|release%2f*|v*)
+      ;;
+    *)
+      release_tag="release/${version}"
+      ;;
+  esac
 fi
 
 tmpdir="$(mktemp -d)"
@@ -187,7 +193,7 @@ mkdir -p "${extract_dir}"
 if [ -n "${asset_url}" ]; then
   download "${asset_url}" "${tarball}"
 else
-  download_release_asset "release/${version}" "rainrail-cli-v${version}.tgz" "${tarball}"
+  download_release_asset "${release_tag}" "rainrail-cli-v${version}.tgz" "${tarball}"
 fi
 tar -xzf "${tarball}" -C "${extract_dir}"
 

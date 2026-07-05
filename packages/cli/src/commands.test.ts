@@ -907,7 +907,7 @@ describe('Rainrail CLI built-in commands', () => {
             body: JSON.stringify({
               tag_name: 'release/0.2.1',
               prerelease: false,
-              assets: [{ name: 'rainrail-cli-v0.2.1.tgz' }],
+              assets: [{ name: 'rainrail-cli-v0.2.1.tgz', state: 'uploaded', size: 123 }],
             }),
           };
         },
@@ -921,7 +921,7 @@ describe('Rainrail CLI built-in commands', () => {
         currentVersion: '0.2.0',
         latestVersion: '0.2.1',
         updateAvailable: true,
-        updateCommand: 'rainrail update --version 0.2.1',
+        updateCommand: 'rainrail update --version release/0.2.1',
         cached: false,
       });
     });
@@ -937,7 +937,7 @@ describe('Rainrail CLI built-in commands', () => {
           body: JSON.stringify({
             tag_name: 'v0.2.1',
             prerelease: false,
-            assets: [{ name: 'rainrail-cli-v0.2.1.tgz' }],
+            assets: [{ name: 'rainrail-cli-v0.2.1.tgz', state: 'uploaded', size: 123 }],
           }),
         }),
       });
@@ -960,7 +960,7 @@ describe('Rainrail CLI built-in commands', () => {
           body: JSON.stringify({
             tag_name: 'v0.3.0',
             prerelease: false,
-            assets: [{ name: 'rainrail-cli-v0.3.0.tgz' }],
+            assets: [{ name: 'rainrail-cli-v0.3.0.tgz', state: 'uploaded', size: 123 }],
           }),
         }),
       });
@@ -969,7 +969,7 @@ describe('Rainrail CLI built-in commands', () => {
         currentVersion: '0.3.0-beta.1',
         latestVersion: '0.3.0',
         updateAvailable: true,
-        updateCommand: 'rainrail update --version 0.3.0',
+        updateCommand: 'rainrail update --version v0.3.0',
       });
     });
   });
@@ -1015,6 +1015,52 @@ describe('Rainrail CLI built-in commands', () => {
     });
   });
 
+  it('does not report an update while the matching CLI asset upload is incomplete', async () => {
+    await withTempDirectory(async (directory) => {
+      const result = runRainrailCli(['--json', 'update', 'check'], {
+        cacheDirectory: join(directory, 'cache'),
+        currentVersion: '0.2.0',
+        releaseFetcher: () => ({
+          status: 200,
+          body: JSON.stringify({
+            tag_name: 'release/0.2.1',
+            prerelease: false,
+            assets: [{ name: 'rainrail-cli-v0.2.1.tgz', state: 'starter', size: 0 }],
+          }),
+        }),
+      });
+
+      expect(JSON.parse(result.stdout) as unknown).toMatchObject({
+        latestVersion: null,
+        updateAvailable: false,
+        updateCommand: null,
+      });
+    });
+  });
+
+  it('passes v-prefixed release tags through the generated update command', async () => {
+    await withTempDirectory(async (directory) => {
+      const result = runRainrailCli(['--json', 'update', 'check'], {
+        cacheDirectory: join(directory, 'cache'),
+        currentVersion: '0.2.0',
+        releaseFetcher: () => ({
+          status: 200,
+          body: JSON.stringify({
+            tag_name: 'v0.2.1',
+            prerelease: false,
+            assets: [{ name: 'rainrail-cli-v0.2.1.tgz', state: 'uploaded', size: 123 }],
+          }),
+        }),
+      });
+
+      expect(JSON.parse(result.stdout) as unknown).toMatchObject({
+        latestVersion: '0.2.1',
+        updateAvailable: true,
+        updateCommand: 'rainrail update --version v0.2.1',
+      });
+    });
+  });
+
   it('uses curl HTTP codes and timeouts for the default GitHub Releases check', async () => {
     await withTempDirectory(async (directory) => {
       const calls: Array<{ command: string; args: readonly string[]; options: unknown }> = [];
@@ -1028,7 +1074,7 @@ describe('Rainrail CLI built-in commands', () => {
             stdout: `${JSON.stringify({
               tag_name: 'v0.2.1',
               prerelease: false,
-              assets: [{ name: 'rainrail-cli-v0.2.1.tgz' }],
+              assets: [{ name: 'rainrail-cli-v0.2.1.tgz', state: 'uploaded', size: 123 }],
             })}\n200`,
             stderr: '',
           };
@@ -1117,7 +1163,7 @@ describe('Rainrail CLI built-in commands', () => {
           body: JSON.stringify({
             tag_name: 'v0.2.3',
             prerelease: false,
-            assets: [{ name: 'rainrail-cli-v0.2.3.tgz' }],
+            assets: [{ name: 'rainrail-cli-v0.2.3.tgz', state: 'uploaded', size: 123 }],
           }),
         }),
       });
@@ -1148,7 +1194,7 @@ describe('Rainrail CLI built-in commands', () => {
         body: JSON.stringify({
           tag_name: 'v0.3.0-beta.1',
           prerelease: true,
-          assets: [{ name: 'rainrail-cli-v0.3.0-beta.1.tgz' }],
+          assets: [{ name: 'rainrail-cli-v0.3.0-beta.1.tgz', state: 'uploaded', size: 123 }],
         }),
       }),
     ];
@@ -1197,7 +1243,7 @@ describe('Rainrail CLI built-in commands', () => {
           body: JSON.stringify({
             tag_name: 'v0.2.3',
             prerelease: false,
-            assets: [{ name: 'rainrail-cli-v0.2.3.tgz' }],
+            assets: [{ name: 'rainrail-cli-v0.2.3.tgz', state: 'uploaded', size: 123 }],
           }),
         }),
       });

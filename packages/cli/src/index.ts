@@ -629,6 +629,8 @@ function checkLatestRelease(
       };
     }
 
+    const updateVersion = formatReleaseTagForUpdateCommand(release.tag_name, latestVersion);
+
     return {
       cacheable: true,
       result: {
@@ -636,7 +638,7 @@ function checkLatestRelease(
         currentVersion,
         latestVersion,
         updateAvailable: true,
-        updateCommand: `rainrail update --version ${latestVersion}`,
+        updateCommand: `rainrail update --version ${shellQuoteArgument(updateVersion)}`,
       },
     };
   } catch {
@@ -660,12 +662,26 @@ function hasRainrailCliReleaseAsset(assets: unknown, version: string): boolean {
   }
 
   const expectedAssetName = `rainrail-cli-v${version}.tgz`;
-  return assets.some((asset) =>
-    typeof asset === 'object' &&
-    asset !== null &&
-    'name' in asset &&
-    (asset as { name?: unknown }).name === expectedAssetName
-  );
+  return assets.some((asset) => isUploadedReleaseAsset(asset, expectedAssetName));
+}
+
+function isUploadedReleaseAsset(asset: unknown, expectedAssetName: string): boolean {
+  if (typeof asset !== 'object' || asset === null) {
+    return false;
+  }
+
+  const candidate = asset as { name?: unknown; size?: unknown; state?: unknown };
+  return candidate.name === expectedAssetName &&
+    candidate.state === 'uploaded' &&
+    typeof candidate.size === 'number' &&
+    candidate.size > 0;
+}
+
+function formatReleaseTagForUpdateCommand(tag: string, normalizedVersion: string): string {
+  if (tag.startsWith('release/') || tag.startsWith('v')) {
+    return tag;
+  }
+  return normalizedVersion;
 }
 
 function createKnownNoUpdateCheck(
