@@ -21,23 +21,19 @@ durable contracts and operational decisions that implementation work depends on.
 Rainrail's installer requires Node.js 20 or newer. Install the CLI from the
 public installer, reload your shell, and check the built-in help:
 
-```sh
-curl -fsSL https://rainrail.dev/install.sh | bash -s -- --add-to-shell --yes
-exec $SHELL -l
-rainrail help
-```
+    curl -fsSL https://rainrail.dev/install.sh | bash -s -- --add-to-shell --yes
+    exec $SHELL
+    rainrail help
 
 Run a minimal first-use smoke test in a disposable directory:
 
-```sh
-mkdir -p ~/rainrail-sandbox
-cd ~/rainrail-sandbox
-rainrail new my-agent-ops
-cd my-agent-ops
-cat rainrail.config.json
-rainrail openclaw help
-rainrail openclaw session test help
-```
+    mkdir -p ~/rainrail-sandbox
+    cd ~/rainrail-sandbox
+    rainrail new my-agent-ops
+    cd my-agent-ops
+    cat rainrail.config.json
+    rainrail openclaw help
+    rainrail openclaw session test help
 
 ## Repository structure
 

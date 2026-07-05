@@ -67,7 +67,7 @@ describe('product site concepts, guides, and examples', () => {
 
     for (const command of [
       'curl -fsSL https://rainrail.dev/install.sh | bash -s -- --add-to-shell --yes',
-      'exec $SHELL -l',
+      'exec $SHELL',
       'rainrail help',
       'mkdir -p ~/rainrail-sandbox',
       'cd ~/rainrail-sandbox',
@@ -83,7 +83,7 @@ describe('product site concepts, guides, and examples', () => {
 
     for (const command of [
       'curl -fsSL https://rainrail.dev/install.sh | bash -s -- --add-to-shell --yes',
-      'exec $SHELL -l',
+      'exec $SHELL',
       'rainrail help',
       'mkdir -p ~/rainrail-sandbox',
       'cd ~/rainrail-sandbox',
