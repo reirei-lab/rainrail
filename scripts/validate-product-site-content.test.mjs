@@ -15,6 +15,7 @@ const layout = readFileSync(
   'utf8',
 );
 const docsPage = page('docs');
+const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
 const rootInstallScript = new URL('../install.sh', import.meta.url);
 const publicInstallScript = new URL('../apps/www/public/install.sh', import.meta.url);
 
@@ -62,22 +63,46 @@ describe('product site concepts, guides, and examples', () => {
 
   it('keeps CLI setup docs minimal and points command details at rainrail help', () => {
     expect(docsPage).toContain('CLI quick start');
+    expect(readme).toContain('## Getting Started');
 
     for (const command of [
-      'curl -fsSLO https://rainrail.dev/install.sh',
-      'less install.sh',
-      'bash install.sh',
-      '~/.rainrail/bin/rainrail help',
+      'curl -fsSL https://rainrail.dev/install.sh | bash -s -- --add-to-shell --yes',
+      'exec $SHELL -l',
+      'rainrail help',
+      'mkdir -p ~/rainrail-sandbox',
+      'cd ~/rainrail-sandbox',
+      'rainrail new my-agent-ops',
+      'cd my-agent-ops',
+      'cat rainrail.config.json',
+      'rainrail openclaw help',
+      'rainrail openclaw session test help',
       'rainrail <plugin> help',
     ]) {
       expect(docsPage).toContain(command);
     }
 
+    for (const command of [
+      'curl -fsSL https://rainrail.dev/install.sh | bash -s -- --add-to-shell --yes',
+      'exec $SHELL -l',
+      'rainrail help',
+      'mkdir -p ~/rainrail-sandbox',
+      'cd ~/rainrail-sandbox',
+      'rainrail new my-agent-ops',
+      'cd my-agent-ops',
+      'cat rainrail.config.json',
+      'rainrail openclaw help',
+      'rainrail openclaw session test help',
+    ]) {
+      expect(readme).toContain(command);
+    }
+
+    expect(readme).toContain('Node.js 20 or newer');
+    expect(docsPage).not.toContain('less install.sh');
+    expect(docsPage).not.toContain('bash install.sh');
     expect(docsPage).not.toContain('Usage: rainrail github');
     expect(docsPage).not.toContain('Usage: rainrail cloudflare');
     expect(docsPage).not.toContain('Usage: rainrail openclaw');
     expect(docsPage).not.toContain('webhook add');
-    expect(docsPage).not.toContain('session test');
   });
 
   it('publishes the root installer through the product site public assets', () => {
