@@ -1,14 +1,6 @@
 #!/usr/bin/env node
-import { runRainrailCli } from '../index.js';
+import { runRainrailCliEntrypoint } from '../index.js';
 
-const result = runRainrailCli(process.argv.slice(2));
-
-if (result.stdout.length > 0) {
-  process.stdout.write(result.stdout);
-}
-
-if (result.stderr.length > 0) {
-  process.stderr.write(result.stderr);
-}
+const result = await runRainrailCliEntrypoint(process.argv.slice(2));
 
 process.exitCode = result.exitCode;
