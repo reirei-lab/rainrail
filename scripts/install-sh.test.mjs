@@ -42,9 +42,10 @@ describe('install.sh', () => {
     const script = readFileSync(installScript, 'utf8');
 
     expect(script).toContain("sed -e 's/^v//' -e 's#^release/##' -e 's#^release%2F##' -e 's#^release%2f##'");
+    expect(script).toContain('printf \'%s\' "${tag//\\//%2F}"');
     expect(script).toContain('version="${version#release/}"');
     expect(script).toContain('version="${version#release%2F}"');
-    expect(script).toContain('asset_url="https://github.com/${repo}/releases/download/release%2F${version}/rainrail-cli-v${version}.tgz"');
+    expect(script).toContain('download "https://github.com/${repo}/releases/download/${encoded_release_tag}/${asset_name}" "${output}"');
   });
 
   it('installs a release tarball into a user-local Rainrail prefix', async () => {
@@ -153,6 +154,53 @@ describe('install.sh', () => {
     const result = spawnSync(
       'bash',
       [installScript.pathname, '--asset-url', `file://${tarball}`, '--prefix', prefix],
+      {
+        encoding: 'utf8',
+        env: { ...process.env, PATH: `${fakeBin}:${process.env.PATH ?? ''}` },
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(readlinkSync(join(prefix, 'bin', 'rainrail'))).toBe(
+      '../lib/rainrail/9.8.7/dist/bin/rainrail.js',
+    );
+  });
+
+  it('uses authenticated gh release downloads for private repositories', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rainrail-install-gh-'));
+    const tarball = createReleaseTarball(root, '9.8.7');
+    const prefix = join(root, 'prefix');
+    const fakeBin = join(root, 'bin');
+    mkdirSync(fakeBin);
+    writeFileSync(
+      join(fakeBin, 'gh'),
+      `#!/usr/bin/env bash
+set -euo pipefail
+if [ "$1 $2" = "release view" ]; then
+  printf 'release/9.8.7\\n'
+  exit 0
+fi
+if [ "$1 $2" = "release download" ]; then
+  out_dir=""
+  pattern=""
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --dir) out_dir="$2"; shift 2 ;;
+      --pattern) pattern="$2"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  cp "${tarball}" "$out_dir/$pattern"
+  exit 0
+fi
+exit 1
+`,
+    );
+    chmodSync(join(fakeBin, 'gh'), 0o755);
+
+    const result = spawnSync(
+      'bash',
+      [installScript.pathname, '--prefix', prefix],
       {
         encoding: 'utf8',
         env: { ...process.env, PATH: `${fakeBin}:${process.env.PATH ?? ''}` },
