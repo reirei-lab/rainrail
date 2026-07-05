@@ -309,13 +309,14 @@ describe('docs drift checks', () => {
     );
   });
 
-  it('ignores package manifest changes that only bump dependency declarations', () => {
+  it('ignores package manifest changes that only bump version or dependency declarations', () => {
     const root = makeRepo();
     writeFileSync(
       join(root, 'package.json'),
       JSON.stringify(
         {
           name: 'rainrail',
+          version: '0.2.0',
           scripts: { test: 'vitest run' },
           devDependencies: { vitest: '^4.1.9' },
         },
@@ -326,6 +327,7 @@ describe('docs drift checks', () => {
     const basePackageJson = JSON.stringify(
       {
         name: 'rainrail',
+        version: '0.1.0',
         scripts: { test: 'vitest run' },
         devDependencies: { vitest: '^3.2.6' },
       },

@@ -728,6 +728,7 @@ export const validateChangedFiles = (root = repoRoot, changedFiles = [], baseCon
 };
 
 const dependencyOnlyPackageJsonFields = [
+  'version',
   'dependencies',
   'devDependencies',
   'peerDependencies',
