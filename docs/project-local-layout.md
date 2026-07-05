@@ -143,11 +143,24 @@ used by tests and future embedding code:
 - Types: `BuiltInCommandName`, `BuiltInCommand`, `SharedOptions`,
   `ParsedRainrailArguments`, `RainrailCliResult`, `RainrailCliEnvironment`,
   `CommandRunnerResult`, `CommandRunnerOptions`, `CommandRunner`,
-  `ReleaseFetchResult`, `ReleaseFetcher`, `RainrailCliFileSystem`,
+  `ReleaseFetchResult`, `ReleaseFetcher`, `AsyncReleaseFetcherOptions`,
+  `AsyncReleaseFetcher`, `RainrailCliEntrypointIO`,
+  `RainrailCliEntrypointEnvironment`, `RainrailCliFileSystem`,
   `PluginAliasResolver`, `RainrailProject`, `RainrailLockPlugin`, and
   `RainrailLockfile`.
 - Values: `BUILT_IN_COMMANDS`, `getBuiltInCommand`, `parseRainrailArguments`,
-  `formatHelp`, `discoverRainrailProject`, and `runRainrailCli`.
+  `formatHelp`, `discoverRainrailProject`, `runRainrailCli`, and
+  `runRainrailCliEntrypoint`.
+
+`runRainrailCli` stays synchronous for embedded callers. The installed binary
+uses `runRainrailCliEntrypoint`, which starts an asynchronous update notice
+check before running the synchronous CLI and prints an available-update notice
+to stderr only after a successful non-help, non-version, non-update command.
+The entrypoint waits only a short timeout for that notice and aborts the
+background request on timeout so normal commands are not delayed by slow update
+checks. Built-in help plus official plugin help routes such as `rainrail github
+help`, `rainrail github webhook add help`, and their canonical
+`rainrail plugin ... help` equivalents do not start the update notice check.
 
 ## Plugin command resolution
 
