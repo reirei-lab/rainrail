@@ -36,6 +36,15 @@ Run a minimal first-use smoke test in a disposable directory:
     rainrail openclaw help
     rainrail openclaw session test help
 
+Check the installed CLI version and whether a newer GitHub Release is available:
+
+    rainrail version
+    rainrail update check
+
+Update discovery is advisory and cached locally; see
+[docs/cli-update-and-version.md](docs/cli-update-and-version.md) for the exact
+output, cache, and automatic notice behavior.
+
 ## Repository structure
 
 - `apps/www`: Astro product site for product narrative, docs gateway pages,

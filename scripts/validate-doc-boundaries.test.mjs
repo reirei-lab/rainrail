@@ -27,6 +27,10 @@ const coreBridgeBoundary = readFileSync(
   new URL('../docs/core-eep-bridge-source-adapter-boundary.md', import.meta.url),
   'utf8',
 );
+const cliUpdateAndVersion = readFileSync(
+  new URL('../docs/cli-update-and-version.md', import.meta.url),
+  'utf8',
+);
 
 describe('product site information architecture', () => {
   it('keeps the product sitemap, docs boundary, and content priorities in one plan', () => {
@@ -53,6 +57,7 @@ describe('product site information architecture', () => {
       'docs/README.md',
       'docs/plugin-runtime-contract.md',
       'docs/task-queue-project-issues.md',
+      'docs/cli-update-and-version.md',
       'docs/cloudflare-pages.md',
       'apps/www',
       'src/',
@@ -70,6 +75,7 @@ describe('product site information architecture', () => {
       'github-webhook-normalization.md',
       'event-delivery.md',
       'task-queue-project-issues.md',
+      'cli-update-and-version.md',
       'cloudflare-worker.md',
       'cloudflare-pages.md',
       'repo-test-coverage-matrix.md',
@@ -122,5 +128,25 @@ describe('product site information architecture', () => {
     expect(eventDeliveryContract).toContain('Core-owned routes stay provider-neutral');
     expect(coverageMatrix).toContain('Core/source boundary mapping');
     expect(coverageMatrix).toContain('Manual/chat input is covered outside the legacy EEP Bridge inventories');
+  });
+
+  it('documents CLI version and update-check behavior from the implemented command surface', () => {
+    for (const entry of [
+      'rainrail version',
+      'rainrail update check',
+      'rainrail update --version release/0.2.1',
+      'Rainrail 0.2.1 is available',
+      'Rainrail is up to date (0.2.1).',
+      'Unable to check Rainrail updates. Try again later.',
+      'update-check.json',
+      'cached',
+      'Automatic update notice',
+    ]) {
+      expect(cliUpdateAndVersion).toContain(entry);
+    }
+
+    expect(readme).toContain('rainrail version');
+    expect(readme).toContain('rainrail update check');
+    expect(docsIndex).toContain('CLI update check and version commands');
   });
 });
