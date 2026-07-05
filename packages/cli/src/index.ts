@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import http, { type IncomingMessage, type ServerResponse } from 'node:http';
+import http, { type IncomingMessage, type OutgoingHttpHeaders, type ServerResponse } from 'node:http';
 import {
   existsSync,
   lstatSync,
@@ -1660,14 +1660,17 @@ function readStartConfig(
   env: Record<string, string | undefined>,
 ): StartConfig {
   const raw = fileSystem.readFileSync(configPath, 'utf8');
-  const expandedWebhookSecrets = collectExpandedWebhookSecrets(raw, env);
+  const rawValue = JSON.parse(raw) as unknown;
   const value = JSON.parse(expandConfigEnv(raw, env)) as unknown;
   if (!isRecord(value)) {
     throw new Error('config must be an object');
   }
+  if (!isRecord(rawValue)) {
+    throw new Error('config must be an object');
+  }
 
   const server = parseStartConfigServer(value.server);
-  const sources = parseStartConfigSources(value, env, expandedWebhookSecrets);
+  const sources = parseStartConfigSources(value, rawValue, env);
   return server === undefined ? { sources } : { server, sources };
 }
 
@@ -1698,20 +1701,20 @@ function parseStartConfigServer(value: unknown): StartConfig['server'] {
 
 function parseStartConfigSources(
   value: Record<string, unknown>,
+  rawValue: Record<string, unknown>,
   env: Record<string, string | undefined>,
-  expandedWebhookSecrets: ReadonlySet<string>,
 ): RainrailLocalSource[] {
   const sources: RainrailLocalSource[] = [];
-  appendSourceBundleSources(sources, value.sourceBundles, env, expandedWebhookSecrets);
-  appendConfiguredSources(sources, value.sources, env, expandedWebhookSecrets);
+  appendSourceBundleSources(sources, value.sourceBundles, rawValue.sourceBundles, env);
+  appendConfiguredSources(sources, value.sources, rawValue.sources, env);
   return dedupeLocalSources(sources);
 }
 
 function appendSourceBundleSources(
   sources: RainrailLocalSource[],
   value: unknown,
+  rawValue: unknown,
   env: Record<string, string | undefined>,
-  expandedWebhookSecrets: ReadonlySet<string>,
 ): void {
   if (value === undefined) {
     return;
@@ -1719,18 +1722,32 @@ function appendSourceBundleSources(
   if (!Array.isArray(value)) {
     throw new Error('config.sourceBundles must be an array');
   }
-  for (const bundle of value) {
+  if (!Array.isArray(rawValue)) {
+    throw new Error('config.sourceBundles must be an array');
+  }
+  for (const [index, bundle] of value.entries()) {
+    const rawBundle = rawValue[index];
     if (!isRecord(bundle)) {
+      throw new Error('config.sourceBundles[] must be an object');
+    }
+    if (!isRecord(rawBundle)) {
       throw new Error('config.sourceBundles[] must be an object');
     }
     if (!Array.isArray(bundle.sources)) {
       throw new Error('config.sourceBundles[].sources must be an array');
     }
-    for (const source of bundle.sources) {
+    if (!Array.isArray(rawBundle.sources)) {
+      throw new Error('config.sourceBundles[].sources must be an array');
+    }
+    for (const [sourceIndex, source] of bundle.sources.entries()) {
+      const rawSource = rawBundle.sources[sourceIndex];
       if (!isRecord(source)) {
         throw new Error('config.sourceBundles[].sources[] must be an object');
       }
-      const localSource = parseLocalSource(source, env, expandedWebhookSecrets);
+      if (!isRecord(rawSource)) {
+        throw new Error('config.sourceBundles[].sources[] must be an object');
+      }
+      const localSource = parseLocalSource(source, rawSource, env);
       if (localSource !== undefined) {
         sources.push(localSource);
       }
@@ -1741,8 +1758,8 @@ function appendSourceBundleSources(
 function appendConfiguredSources(
   sources: RainrailLocalSource[],
   value: unknown,
+  rawValue: unknown,
   env: Record<string, string | undefined>,
-  expandedWebhookSecrets: ReadonlySet<string>,
 ): void {
   if (value === undefined) {
     return;
@@ -1750,11 +1767,18 @@ function appendConfiguredSources(
   if (!Array.isArray(value)) {
     throw new Error('config.sources must be an array');
   }
-  for (const source of value) {
+  if (!Array.isArray(rawValue)) {
+    throw new Error('config.sources must be an array');
+  }
+  for (const [index, source] of value.entries()) {
+    const rawSource = rawValue[index];
     if (!isRecord(source)) {
       throw new Error('config.sources[] must be an object');
     }
-    const localSource = parseLocalSource(source, env, expandedWebhookSecrets);
+    if (!isRecord(rawSource)) {
+      throw new Error('config.sources[] must be an object');
+    }
+    const localSource = parseLocalSource(source, rawSource, env);
     if (localSource !== undefined) {
       sources.push(localSource);
     }
@@ -1763,8 +1787,8 @@ function appendConfiguredSources(
 
 function parseLocalSource(
   source: Record<string, unknown>,
+  rawSource: Record<string, unknown>,
   env: Record<string, string | undefined>,
-  expandedWebhookSecrets: ReadonlySet<string>,
 ): RainrailLocalSource | undefined {
   const name = typeof source.name === 'string' && source.name.length > 0 ? source.name : undefined;
   const sourceType = typeof source.sourceType === 'string' && source.sourceType.length > 0
@@ -1784,7 +1808,7 @@ function parseLocalSource(
   const maxBodyBytes = source.maxBodyBytes === undefined ? undefined : parseLocalSourceMaxBodyBytes(source.maxBodyBytes);
 
   const webhookSecret = typeof source.webhookSecret === 'string' && source.webhookSecret.length > 0
-    ? resolveLocalWebhookSecret(source.webhookSecret, env, expandedWebhookSecrets)
+    ? resolveLocalWebhookSecret(source.webhookSecret, rawSource.webhookSecret, env)
     : undefined;
   const localSource: {
     name: string;
@@ -1818,6 +1842,9 @@ function validateLocalSourceContract(source: Record<string, unknown>, sourceType
     if (sourceType !== 'github') {
       throw new Error('config sourceType must be "github" for github-webhook sources');
     }
+    if (typeof source.webhookSecret !== 'string' || source.webhookSecret.length === 0) {
+      throw new Error('config source webhookSecret must be a non-empty string for github-webhook sources');
+    }
   }
   if (source.type === 'cloudflare-tail' && sourceType !== 'cloudflare') {
     throw new Error('config sourceType must be "cloudflare" for cloudflare-tail sources');
@@ -1845,10 +1872,10 @@ function parseLocalSourceEndpoint(endpoint: unknown): string {
 
 function resolveLocalWebhookSecret(
   value: string,
+  rawValue: unknown,
   env: Record<string, string | undefined>,
-  expandedWebhookSecrets: ReadonlySet<string>,
 ): string | undefined {
-  if (expandedWebhookSecrets.has(value)) {
+  if (typeof rawValue === 'string' && wasWebhookSecretFieldExpanded(rawValue, value, env)) {
     return value;
   }
   const envValue = env[value];
@@ -1856,6 +1883,15 @@ function resolveLocalWebhookSecret(
     return envValue.length === 0 ? undefined : envValue;
   }
   return /^[A-Z_][A-Z0-9_]*$/u.test(value) ? undefined : value;
+}
+
+function wasWebhookSecretFieldExpanded(
+  rawValue: string,
+  value: string,
+  env: Record<string, string | undefined>,
+): boolean {
+  const match = /^\$\{([A-Z0-9_]+)\}$/u.exec(rawValue);
+  return match?.[1] !== undefined && (env[match[1]] ?? '') === value;
 }
 
 function isLocalCoreRoutePath(pathname: string): boolean {
@@ -1887,13 +1923,18 @@ function parseLocalSourceMaxBodyBytes(value: unknown): number {
 }
 
 function dedupeLocalSources(sources: readonly RainrailLocalSource[]): RainrailLocalSource[] {
-  const seen = new Set<string>();
+  const endpoints = new Set<string>();
+  const names = new Set<string>();
   const deduped: RainrailLocalSource[] = [];
   for (const source of sources) {
-    if (seen.has(source.endpoint)) {
+    if (endpoints.has(source.endpoint)) {
       throw new Error(`config endpoints must be unique: ${source.endpoint}`);
     }
-    seen.add(source.endpoint);
+    if (names.has(source.name)) {
+      throw new Error(`config source names must be unique: ${source.name}`);
+    }
+    endpoints.add(source.endpoint);
+    names.add(source.name);
     deduped.push(source);
   }
   return deduped;
@@ -3230,6 +3271,12 @@ async function handleLocalRainrailRequest(
     await handleLocalIntakeRequest(request, response, options, state, intakeSource);
     return;
   }
+  if (intakeSource !== undefined) {
+    writeJsonResponse(response, 405, { error: 'method_not_allowed' }, request, {
+      Allow: 'POST, OPTIONS',
+    });
+    return;
+  }
 
   const authError = getLocalServerAuthError(request, url.pathname, options);
   if (authError !== undefined) {
@@ -3284,6 +3331,11 @@ async function handleLocalRainrailRequest(
   }
 
   if (request.method === 'GET' && url.pathname === '/api/v1/events') {
+    const queryError = validateLocalCollectionQuery(url, ['filter[source]', 'filter[name]']);
+    if (queryError !== undefined) {
+      writeJsonResponse(response, 400, queryError, request);
+      return;
+    }
     writeLocalCollectionResponse(
       response,
       filterLocalEvents([...state.events].reverse(), url),
@@ -3323,13 +3375,34 @@ async function handleLocalRainrailRequest(
   }
 
   if (request.method === 'GET' && url.pathname === '/api/v1/sources') {
+    const queryError = validateLocalCollectionQuery(url, ['filter[source]']);
+    if (queryError !== undefined) {
+      writeJsonResponse(response, 400, queryError, request);
+      return;
+    }
     writeLocalCollectionResponse(
       response,
-      filterLocalSources(localSourceRows(options.sources), url),
+      filterLocalSources(localSourceRows(options.sources, state), url),
       url,
       request,
       (row) => typeof row.name === 'string' ? row.name : row.id,
     );
+    return;
+  }
+
+  const sourceDetailMatch = /^\/api\/v1\/sources\/([^/]+)$/u.exec(url.pathname);
+  if (request.method === 'GET' && sourceDetailMatch !== null) {
+    const sourceId = safeDecodeURIComponent(sourceDetailMatch[1] ?? '');
+    const row = sourceId === undefined
+      ? undefined
+      : localSourceRows(options.sources, state).find((source) => source.id === sourceId);
+    if (row === undefined) {
+      writeJsonResponse(response, 404, { error: 'source_not_found' }, request);
+      return;
+    }
+    writeJsonResponse(response, 200, {
+      data: row,
+    }, request);
     return;
   }
 
@@ -3429,20 +3502,47 @@ type LocalSourceRow = {
   readonly transport: 'http';
   readonly auth: { readonly status: string };
   readonly links: { readonly self: string };
+  readonly lastDelivery?: {
+    readonly id: string;
+    readonly status: string;
+    readonly occurredAt: string;
+    readonly receivedAt: string;
+    readonly links: { readonly self: string };
+  };
 };
 
-function localSourceRows(sources: readonly RainrailLocalSource[]): readonly LocalSourceRow[] {
-  return sources.map((source) => ({
-    id: source.name,
-    type: 'source',
-    status: 'configured',
-    sourceType: source.sourceType,
-    name: source.name,
-    endpoint: source.endpoint,
-    transport: source.transport,
-    auth: { status: source.authConfigured ? 'configured' : 'not configured' },
-    links: { self: `/api/v1/sources/${encodeURIComponent(source.name)}` },
-  }));
+function localSourceRows(
+  sources: readonly RainrailLocalSource[],
+  state: LocalRainrailServerState,
+): readonly LocalSourceRow[] {
+  return sources.map((source) => {
+    const latestEvent = [...state.events]
+      .reverse()
+      .find((event) => event.source.name === source.name && event.source.type === source.sourceType);
+    const row = {
+      id: source.name,
+      type: 'source',
+      status: 'configured',
+      sourceType: source.sourceType,
+      name: source.name,
+      endpoint: source.endpoint,
+      transport: source.transport,
+      auth: { status: source.authConfigured ? 'configured' : 'not configured' },
+      links: { self: `/api/v1/sources/${encodeURIComponent(source.name)}` },
+    } satisfies Omit<LocalSourceRow, 'lastDelivery'>;
+    return latestEvent === undefined
+      ? row
+      : {
+        ...row,
+        lastDelivery: {
+          id: latestEvent.id,
+          status: latestEvent.status,
+          occurredAt: latestEvent.occurredAt,
+          receivedAt: latestEvent.receivedAt,
+          links: latestEvent.links,
+        },
+      };
+  });
 }
 
 function filterLocalSources(sources: readonly LocalSourceRow[], url: URL): readonly LocalSourceRow[] {
@@ -3457,6 +3557,25 @@ function filterLocalSources(sources: readonly LocalSourceRow[], url: URL): reado
 
 function matchesOptionalLocalFilter(value: string | undefined, filter: string | null): boolean {
   return filter === null || filter.length === 0 || value === filter;
+}
+
+function validateLocalCollectionQuery(
+  url: URL,
+  supportedFilters: readonly string[],
+): { readonly error: 'unsupported_filter'; readonly filter: string } | {
+  readonly error: 'unsupported_sort';
+  readonly sort: string;
+} | undefined {
+  for (const key of url.searchParams.keys()) {
+    if (key.startsWith('filter[') && !supportedFilters.includes(key)) {
+      return { error: 'unsupported_filter', filter: key };
+    }
+  }
+  const sort = url.searchParams.get('sort');
+  if (sort !== null && sort.length > 0) {
+    return { error: 'unsupported_sort', sort };
+  }
+  return undefined;
 }
 
 function parseLocalRequestUrl(request: IncomingMessage, options: RainrailStartOptions): URL | undefined {
@@ -3659,13 +3778,12 @@ type LocalPageCursor = {
 };
 
 function encodeLocalPageCursor(cursor: LocalPageCursor): string {
-  return btoa(JSON.stringify(cursor)).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/u, '');
+  return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url');
 }
 
 function decodeLocalPageCursor(value: string): LocalPageCursor | undefined {
   try {
-    const padded = value.replaceAll('-', '+').replaceAll('_', '/').padEnd(Math.ceil(value.length / 4) * 4, '=');
-    const parsed = JSON.parse(atob(padded)) as Partial<LocalPageCursor>;
+    const parsed = JSON.parse(Buffer.from(value, 'base64url').toString('utf8')) as Partial<LocalPageCursor>;
     if (typeof parsed.value !== 'string' || typeof parsed.id !== 'string') {
       return undefined;
     }
@@ -3741,11 +3859,13 @@ function writeJsonResponse(
   statusCode: number,
   body: unknown,
   request?: IncomingMessage,
+  headers: OutgoingHttpHeaders = {},
 ): void {
   response.writeHead(statusCode, {
     ...localCorsHeaders,
     ...localOriginCorsHeader(request),
     'Content-Type': 'application/json; charset=utf-8',
+    ...headers,
   });
   response.end(`${JSON.stringify(body)}\n`);
 }
@@ -3777,47 +3897,6 @@ function formatJson(value: unknown): string {
 
 function stripTrailingNewline(value: string): string {
   return value.endsWith('\n') ? value.slice(0, -1) : value;
-}
-
-function collectExpandedWebhookSecrets(raw: string, env: Record<string, string | undefined>): ReadonlySet<string> {
-  const expanded = new Set<string>();
-  let value: unknown;
-  try {
-    value = JSON.parse(raw) as unknown;
-  } catch {
-    return expanded;
-  }
-  if (!isRecord(value)) {
-    return expanded;
-  }
-  collectWebhookSecretEnvValuesFromSources(value.sources, env, expanded);
-  if (Array.isArray(value.sourceBundles)) {
-    for (const bundle of value.sourceBundles) {
-      if (isRecord(bundle)) {
-        collectWebhookSecretEnvValuesFromSources(bundle.sources, env, expanded);
-      }
-    }
-  }
-  return expanded;
-}
-
-function collectWebhookSecretEnvValuesFromSources(
-  sources: unknown,
-  env: Record<string, string | undefined>,
-  expanded: Set<string>,
-): void {
-  if (!Array.isArray(sources)) {
-    return;
-  }
-  for (const source of sources) {
-    if (!isRecord(source) || typeof source.webhookSecret !== 'string') {
-      continue;
-    }
-    const match = /^\$\{([A-Z0-9_]+)\}$/u.exec(source.webhookSecret);
-    if (match?.[1] !== undefined) {
-      expanded.add(env[match[1]] ?? '');
-    }
-  }
 }
 
 function expandConfigEnv(raw: string, env: Record<string, string | undefined>): string {

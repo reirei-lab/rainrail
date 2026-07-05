@@ -1122,6 +1122,68 @@ describe('Rainrail CLI built-in commands', () => {
     });
   });
 
+  it('tracks webhookSecret env expansion per source', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'per-source-webhook-secret-expansion');
+      const port = await getFreePort();
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        server: { host: '0.0.0.0', port },
+        sourceBundles: [{
+          type: 'eep-bridge',
+          name: 'local',
+          sources: [
+            {
+              type: 'github-webhook',
+              name: 'github-expanded',
+              sourceType: 'github',
+              provider: 'github',
+              webhookSecret: '${SECRET_A}',
+              endpoint: '/webhooks/github-expanded',
+            },
+            {
+              type: 'github-webhook',
+              name: 'github-unresolved',
+              sourceType: 'github',
+              provider: 'github',
+              webhookSecret: 'GITHUB_WEBHOOK_SECRET',
+              endpoint: '/webhooks/github-unresolved',
+            },
+          ],
+        }],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+
+      const result = await runRainrailCliAsync(['start'], {
+        cwd: projectRoot,
+        env: {
+          SSE_BEARER_TOKEN: 'events-token',
+          SECRET_A: 'GITHUB_WEBHOOK_SECRET',
+        },
+      });
+      try {
+        expect(result.exitCode).toBe(0);
+        const body = '{}';
+        const accepted = await fetch(`http://127.0.0.1:${port}/webhooks/github-expanded`, {
+          method: 'POST',
+          headers: { 'x-hub-signature-256': githubSignature('GITHUB_WEBHOOK_SECRET', body) },
+          body,
+        });
+        expect(accepted.status).toBe(202);
+
+        const rejected = await fetch(`http://127.0.0.1:${port}/webhooks/github-unresolved`, {
+          method: 'POST',
+          headers: { 'x-hub-signature-256': githubSignature('GITHUB_WEBHOOK_SECRET', body) },
+          body,
+        });
+        expect(rejected.status).toBe(401);
+      } finally {
+        await closeTestServer(result);
+      }
+    });
+  });
+
   it('uses the default github webhook endpoint for top-level github sources', async () => {
     await withTempDirectory(async (directory) => {
       const projectRoot = await initRainrailProject(directory, 'top-level-github-source');
@@ -1288,6 +1350,30 @@ describe('Rainrail CLI built-in commands', () => {
         sourceBundles: [{
           type: 'eep-bridge',
           name: 'local',
+          sources: [{
+            type: 'github-webhook',
+            name: 'github-local',
+            sourceType: 'github',
+            provider: 'github',
+            endpoint: '/webhooks/github',
+          }],
+        }],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+
+      const missingWebhookSecret = runRainrailCli(['start'], {
+        cwd: projectRoot,
+        serverStarter: () => ({ stop: () => undefined }),
+      });
+      expect(missingWebhookSecret.exitCode).toBe(1);
+      expect(missingWebhookSecret.stderr).toContain('config source webhookSecret must be a non-empty string for github-webhook sources');
+
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        sourceBundles: [{
+          type: 'eep-bridge',
+          name: 'local',
           sources: [
             {
               type: 'github-webhook',
@@ -1318,6 +1404,41 @@ describe('Rainrail CLI built-in commands', () => {
       });
       expect(duplicateEndpoint.exitCode).toBe(1);
       expect(duplicateEndpoint.stderr).toContain('config endpoints must be unique');
+
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        sourceBundles: [{
+          type: 'eep-bridge',
+          name: 'local',
+          sources: [
+            {
+              type: 'github-webhook',
+              name: 'github-local',
+              sourceType: 'github',
+              provider: 'github',
+              webhookSecret: 'secret',
+              endpoint: '/webhooks/github',
+            },
+            {
+              type: 'github-webhook',
+              name: 'github-local',
+              sourceType: 'github',
+              provider: 'github',
+              webhookSecret: 'secret',
+              endpoint: '/webhooks/github-2',
+            },
+          ],
+        }],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+
+      const duplicateName = runRainrailCli(['start'], {
+        cwd: projectRoot,
+        serverStarter: () => ({ stop: () => undefined }),
+      });
+      expect(duplicateName.exitCode).toBe(1);
+      expect(duplicateName.stderr).toContain('config source names must be unique');
     });
   });
 
@@ -1442,6 +1563,167 @@ describe('Rainrail CLI built-in commands', () => {
         const secondPageBody = await secondPage.json() as { data: Array<{ name: string }>; page: { nextCursor: string | null } };
         expect(secondPageBody.data).toHaveLength(1);
         expect(secondPageBody.page.nextCursor).toBeNull();
+      } finally {
+        await closeTestServer(result);
+      }
+    });
+  });
+
+  it('serves local source detail self links and last delivery state', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'source-detail');
+      const port = await getFreePort();
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        server: { host: '127.0.0.1', port },
+        sourceBundles: [{
+          type: 'eep-bridge',
+          name: 'local',
+          sources: [{
+            type: 'github-webhook',
+            name: 'github-local',
+            sourceType: 'github',
+            provider: 'github',
+            webhookSecret: 'secret',
+            endpoint: '/webhooks/github',
+          }],
+        }],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+
+      const result = await runRainrailCliAsync(['start'], { cwd: projectRoot });
+      try {
+        expect(result.exitCode).toBe(0);
+        const body = '{}';
+        const intake = await fetch(`http://127.0.0.1:${port}/webhooks/github`, {
+          method: 'POST',
+          headers: { 'x-hub-signature-256': githubSignature('secret', body) },
+          body,
+        });
+        expect(intake.status).toBe(202);
+
+        const sources = await fetch(`http://127.0.0.1:${port}/api/v1/sources`);
+        const sourcesBody = await sources.json() as { data: Array<{ links: { self: string }; lastDelivery?: unknown }> };
+        expect(sourcesBody.data[0]?.lastDelivery).toMatchObject({
+          id: 'local-event-000001',
+          status: 'received',
+        });
+
+        const detail = await fetch(`http://127.0.0.1:${port}${sourcesBody.data[0]?.links.self}`);
+        expect(detail.status).toBe(200);
+        await expect(detail.json()).resolves.toMatchObject({
+          data: {
+            id: 'github-local',
+            type: 'source',
+            lastDelivery: { id: 'local-event-000001' },
+          },
+        });
+      } finally {
+        await closeTestServer(result);
+      }
+    });
+  });
+
+  it('rejects unsupported local dashboard filters and sorts', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'unsupported-query');
+      const port = await getFreePort();
+      const result = await runRainrailCliAsync(['start', '--port', String(port)], { cwd: projectRoot });
+      try {
+        expect(result.exitCode).toBe(0);
+        const badFilter = await fetch(`http://127.0.0.1:${port}/api/v1/events?filter[status]=failed`);
+        expect(badFilter.status).toBe(400);
+        await expect(badFilter.json()).resolves.toEqual({ error: 'unsupported_filter', filter: 'filter[status]' });
+
+        const badSort = await fetch(`http://127.0.0.1:${port}/api/v1/events?sort=oldest`);
+        expect(badSort.status).toBe(400);
+        await expect(badSort.json()).resolves.toEqual({ error: 'unsupported_sort', sort: 'oldest' });
+      } finally {
+        await closeTestServer(result);
+      }
+    });
+  });
+
+  it('returns 405 for configured intake method mismatches', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'intake-method');
+      const port = await getFreePort();
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        server: { host: '127.0.0.1', port },
+        sourceBundles: [{
+          type: 'eep-bridge',
+          name: 'local',
+          sources: [{
+            type: 'github-webhook',
+            name: 'github-local',
+            sourceType: 'github',
+            provider: 'github',
+            webhookSecret: 'secret',
+            endpoint: '/webhooks/github',
+          }],
+        }],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+
+      const result = await runRainrailCliAsync(['start'], { cwd: projectRoot });
+      try {
+        expect(result.exitCode).toBe(0);
+        const mismatch = await fetch(`http://127.0.0.1:${port}/webhooks/github`, { method: 'PUT' });
+        expect(mismatch.status).toBe(405);
+        expect(mismatch.headers.get('allow')).toBe('POST, OPTIONS');
+        await expect(mismatch.json()).resolves.toEqual({ error: 'method_not_allowed' });
+      } finally {
+        await closeTestServer(result);
+      }
+    });
+  });
+
+  it('paginates UTF-8 local source names', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'utf8-source-cursor');
+      const port = await getFreePort();
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        server: { host: '127.0.0.1', port },
+        sourceBundles: [{
+          type: 'eep-bridge',
+          name: 'local',
+          sources: [
+            {
+              type: 'manual-chat',
+              name: '日本語-source',
+              sourceType: 'manual',
+              endpoint: '/manual-a',
+            },
+            {
+              type: 'manual-chat',
+              name: 'manual-local',
+              sourceType: 'manual',
+              endpoint: '/manual-b',
+            },
+          ],
+        }],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+
+      const result = await runRainrailCliAsync(['start'], { cwd: projectRoot });
+      try {
+        expect(result.exitCode).toBe(0);
+        const firstPage = await fetch(`http://127.0.0.1:${port}/api/v1/sources?limit=1`);
+        expect(firstPage.status).toBe(200);
+        const firstPageBody = await firstPage.json() as { page: { nextCursor: string | null } };
+        expect(firstPageBody.page.nextCursor).toEqual(expect.any(String));
+
+        const secondPage = await fetch(`http://127.0.0.1:${port}/api/v1/sources?limit=1&cursor=${firstPageBody.page.nextCursor}`);
+        expect(secondPage.status).toBe(200);
+        await expect(secondPage.json()).resolves.toMatchObject({
+          data: [{ name: 'manual-local' }],
+          page: { nextCursor: null },
+        });
       } finally {
         await closeTestServer(result);
       }
