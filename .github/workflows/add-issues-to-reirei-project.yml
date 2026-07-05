@@ -12,10 +12,44 @@ permissions:
 jobs:
   add-issue-to-project:
     name: Add issue to Reirei project
-    if: ${{ contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association) }}
     runs-on: ubuntu-latest
     steps:
+      - name: Check trusted issue author
+        id: check-trusted-author
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const { data: issue } = await github.rest.issues.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const trustedAssociations = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
+            const trustedPermissions = new Set(['admin', 'maintain', 'write']);
+            const trustedRoles = new Set(['admin', 'maintain', 'write', 'triage']);
+            let trusted = trustedAssociations.has(issue.author_association);
+            if (!trusted && issue.user?.login) {
+              try {
+                const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  username: issue.user.login,
+                });
+                trusted = trustedPermissions.has(data.permission)
+                  || trustedRoles.has(data.role_name);
+              } catch (error) {
+                if (error.status !== 404) {
+                  throw error;
+                }
+              }
+            }
+            core.setOutput('trusted', String(trusted));
+            if (!trusted) {
+              core.notice(`Skipping issue automation for untrusted author association: ${issue.author_association}`);
+            }
+
       - name: Assign issue to reirei-agent
+        if: ${{ steps.check-trusted-author.outputs.trusted == 'true' }}
         uses: actions/github-script@v9
         with:
           script: |
@@ -27,6 +61,7 @@ jobs:
             });
 
       - name: Add issue to Reirei project
+        if: ${{ steps.check-trusted-author.outputs.trusted == 'true' }}
         uses: actions/add-to-project@v2.0.0
         with:
           project-url: https://github.com/orgs/reirei-lab/projects/1
