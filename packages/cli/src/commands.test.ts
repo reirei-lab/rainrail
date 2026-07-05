@@ -206,6 +206,25 @@ describe('Rainrail CLI built-in commands', () => {
     });
   });
 
+  it('does not invoke async server starters from the sync start command path', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'sync-start-async-starter');
+      let called = false;
+
+      const result = runRainrailCli(['start'], {
+        cwd: projectRoot,
+        serverStarter: async () => {
+          called = true;
+          return { stop: () => undefined };
+        },
+      });
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toBe('rainrail start requires the async CLI runner.\n');
+      expect(called).toBe(false);
+    });
+  });
+
   it('uses rainrail.config.json server host and port for rainrail start', async () => {
     await withTempDirectory(async (directory) => {
       const projectRoot = await initRainrailProject(directory, 'configured-server');
@@ -1067,6 +1086,55 @@ describe('Rainrail CLI built-in commands', () => {
         expect(secondPageBody.data).toHaveLength(1);
         expect(secondPageBody.data.map((event) => event.id)).toEqual(['local-event-000001']);
         expect(secondPageBody.page.nextCursor).toBeNull();
+      } finally {
+        await closeTestServer(result);
+      }
+    });
+  });
+
+  it('keeps only the latest local intake events in memory', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'event-history-limit');
+      const port = await getFreePort();
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        server: { host: '127.0.0.1', port },
+        sourceBundles: [{
+          type: 'eep-bridge',
+          name: 'local',
+          sources: [{
+            type: 'github-webhook',
+            name: 'github-local',
+            sourceType: 'github',
+            provider: 'github',
+            webhookSecret: 'secret',
+            endpoint: '/webhooks/github',
+          }],
+        }],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+
+      const result = await runRainrailCliAsync(['start'], { cwd: projectRoot });
+      try {
+        expect(result.exitCode).toBe(0);
+        for (let index = 0; index < 55; index += 1) {
+          const body = JSON.stringify({ index });
+          const posted = await fetch(`http://127.0.0.1:${port}/webhooks/github`, {
+            method: 'POST',
+            headers: githubWebhookHeaders('secret', body, { delivery: `delivery-${index}` }),
+            body,
+          });
+          expect(posted.status).toBe(202);
+        }
+
+        const events = await fetch(`http://127.0.0.1:${port}/api/v1/events`);
+        const body = await events.json() as { data: Array<{ id: string }>; page: { nextCursor: string | null } };
+        expect(body.data).toHaveLength(50);
+        expect(body.data[0]?.id).toBe('local-event-000055');
+        expect(body.data.at(-1)?.id).toBe('local-event-000006');
+        expect(body.data.some((event) => event.id === 'local-event-000001')).toBe(false);
+        expect(body.page.nextCursor).toBeNull();
       } finally {
         await closeTestServer(result);
       }
@@ -2071,6 +2139,37 @@ describe('Rainrail CLI built-in commands', () => {
     });
   });
 
+  it('applies collection query contracts to empty local dashboard collections', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'empty-collection-query-contract');
+      const port = await getFreePort();
+      const result = await runRainrailCliAsync(['start', '--port', String(port)], { cwd: projectRoot });
+      try {
+        expect(result.exitCode).toBe(0);
+
+        const workflowRuns = await fetch(`http://127.0.0.1:${port}/api/v1/workflow-runs?limit=25`);
+        await expect(workflowRuns.json()).resolves.toMatchObject({
+          data: [],
+          page: { limit: 25, nextCursor: null },
+        });
+
+        const badAgentTaskCursor = await fetch(`http://127.0.0.1:${port}/api/v1/agent-tasks?cursor=not-a-cursor`);
+        expect(badAgentTaskCursor.status).toBe(400);
+        await expect(badAgentTaskCursor.json()).resolves.toEqual({ error: 'invalid_cursor' });
+
+        const badQueueFilter = await fetch(`http://127.0.0.1:${port}/api/v1/queue?filter[unknown]=upcoming`);
+        expect(badQueueFilter.status).toBe(400);
+        await expect(badQueueFilter.json()).resolves.toEqual({ error: 'unsupported_filter', filter: 'filter[unknown]' });
+
+        const badWorkflowSort = await fetch(`http://127.0.0.1:${port}/api/v1/workflow-runs?sort=newest`);
+        expect(badWorkflowSort.status).toBe(400);
+        await expect(badWorkflowSort.json()).resolves.toEqual({ error: 'unsupported_sort', sort: 'newest' });
+      } finally {
+        await closeTestServer(result);
+      }
+    });
+  });
+
   it('paginates local dashboard settings', async () => {
     await withTempDirectory(async (directory) => {
       const projectRoot = await initRainrailProject(directory, 'settings-pagination');
@@ -2141,6 +2240,23 @@ describe('Rainrail CLI built-in commands', () => {
         const mismatch = await fetch(`http://127.0.0.1:${port}/webhooks/github`, { method: 'PUT' });
         expect(mismatch.status).toBe(405);
         expect(mismatch.headers.get('allow')).toBe('POST, OPTIONS');
+        await expect(mismatch.json()).resolves.toEqual({ error: 'method_not_allowed' });
+      } finally {
+        await closeTestServer(result);
+      }
+    });
+  });
+
+  it('returns 405 for local dashboard route method mismatches', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'dashboard-method');
+      const port = await getFreePort();
+      const result = await runRainrailCliAsync(['start', '--port', String(port)], { cwd: projectRoot });
+      try {
+        expect(result.exitCode).toBe(0);
+        const mismatch = await fetch(`http://127.0.0.1:${port}/api/v1/overview`, { method: 'POST' });
+        expect(mismatch.status).toBe(405);
+        expect(mismatch.headers.get('allow')).toBe('GET, OPTIONS');
         await expect(mismatch.json()).resolves.toEqual({ error: 'method_not_allowed' });
       } finally {
         await closeTestServer(result);

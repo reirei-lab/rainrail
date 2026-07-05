@@ -1462,6 +1462,8 @@ type StartConfig = {
 
 const localDefaultMaxRequestBodyBytes = 25 * 1024 * 1024;
 const localGitHubWebhookSourceNameMaxLength = 53;
+const localEventHistoryLimit = 50;
+const localEmptyCollectionRows: readonly { readonly id: string }[] = [];
 
 function runStartCommand(
   args: readonly string[],
@@ -1469,6 +1471,13 @@ function runStartCommand(
   environment: RainrailCliEnvironment,
 ): RainrailCliResult {
   if (environment.serverStarter === undefined) {
+    return {
+      exitCode: 1,
+      stdout: '',
+      stderr: 'rainrail start requires the async CLI runner.\n',
+    };
+  }
+  if (isAsyncFunction(environment.serverStarter)) {
     return {
       exitCode: 1,
       stdout: '',
@@ -1484,6 +1493,9 @@ function runStartCommand(
   try {
     const server = environment.serverStarter(resolved.options);
     if (server instanceof Promise) {
+      void server.then((started) => {
+        started.stop();
+      }, () => undefined);
       return {
         exitCode: 1,
         stdout: '',
@@ -1503,6 +1515,10 @@ function runStartCommand(
       stderr: `${error instanceof Error ? error.message : String(error)}\n`,
     };
   }
+}
+
+function isAsyncFunction(value: unknown): boolean {
+  return typeof value === 'function' && value.constructor.name === 'AsyncFunction';
 }
 
 async function runStartCommandAsync(
@@ -3378,6 +3394,14 @@ async function handleLocalRainrailRequest(
     return;
   }
 
+  const allowedMethods = preflightMethodsForLocalPath(url.pathname, options);
+  if (allowedMethods !== undefined && !allowedMethods.includes(request.method ?? '')) {
+    writeJsonResponse(response, 405, { error: 'method_not_allowed' }, request, {
+      Allow: allowedMethods.join(', '),
+    });
+    return;
+  }
+
   const authError = getLocalServerAuthError(request, url.pathname, options);
   if (authError !== undefined) {
     writeJsonResponse(response, authError.status, { error: authError.code }, request);
@@ -3461,12 +3485,16 @@ async function handleLocalRainrailRequest(
   }
 
   if (request.method === 'GET' && url.pathname === '/api/v1/workflow-runs') {
-    writeJsonResponse(response, 200, collectionResponse([]), request);
+    if (!writeValidatedLocalCollectionResponse(response, localEmptyCollectionRows, url, request, (row) => row.id, ['filter[status]'])) {
+      return;
+    }
     return;
   }
 
   if (request.method === 'GET' && url.pathname === '/api/v1/agent-tasks') {
-    writeJsonResponse(response, 200, collectionResponse([]), request);
+    if (!writeValidatedLocalCollectionResponse(response, localEmptyCollectionRows, url, request, (row) => row.id, ['filter[status]'])) {
+      return;
+    }
     return;
   }
 
@@ -3503,15 +3531,16 @@ async function handleLocalRainrailRequest(
   }
 
   if (request.method === 'GET' && url.pathname === '/api/v1/queue') {
-    writeJsonResponse(response, 200, {
-      ...collectionResponse([]),
+    if (!writeValidatedLocalCollectionResponse(response, localEmptyCollectionRows, url, request, (row) => row.id, ['filter[status]'], {
       summary: {
         upcomingIssues: 0,
         blockedReasons: [],
         inProgressCount: 0,
         claimedCount: 0,
       },
-    }, request);
+    })) {
+      return;
+    }
     return;
   }
 
@@ -3585,6 +3614,9 @@ async function handleLocalIntakeRequest(
     },
   };
   state.events.push(event);
+  if (state.events.length > localEventHistoryLimit) {
+    state.events.splice(0, state.events.length - localEventHistoryLimit);
+  }
   broadcastLocalEvent(state, event);
   writeJsonResponse(response, 202, { data: event }, request);
 }
@@ -3709,7 +3741,7 @@ function localSettingsRows(options: RainrailStartOptions): readonly LocalSetting
     { id: 'max-concurrency', type: 'setting', status: 'read-only', label: 'Max concurrency', value: '1 task' },
     { id: 'auto-start', type: 'setting', status: 'read-only', label: 'Auto-start', value: 'not configured' },
     { id: 'retry-policy', type: 'setting', status: 'read-only', label: 'Retry policy', value: '0 retries pending' },
-    { id: 'operational-snapshot-limit', type: 'setting', status: 'read-only', label: 'Operational snapshot limit', value: '50 events' },
+    { id: 'operational-snapshot-limit', type: 'setting', status: 'read-only', label: 'Operational snapshot limit', value: `${localEventHistoryLimit} events` },
     { id: 'dashboard-auth', type: 'setting', status: 'read-only', label: 'Dashboard auth', value: options.dashboardToken === undefined ? 'not configured' : 'bearer token configured' },
     { id: 'runtime', type: 'setting', status: 'read-only', label: 'Runtime', value: 'node' },
   ];
@@ -3945,19 +3977,6 @@ function broadcastLocalEvent(state: LocalRainrailServerState, event: LocalRainra
   }
 }
 
-function collectionResponse(data: readonly unknown[]): {
-  readonly data: readonly unknown[];
-  readonly page: {
-    readonly limit: 50;
-    readonly nextCursor: null;
-  };
-} {
-  return {
-    data,
-    page: { limit: 50, nextCursor: null },
-  };
-}
-
 function writeLocalCollectionResponse<TRow extends { readonly id: string }>(
   response: ServerResponse,
   data: readonly TRow[],
@@ -3971,6 +3990,32 @@ function writeLocalCollectionResponse<TRow extends { readonly id: string }>(
     return;
   }
   writeJsonResponse(response, 200, page.body, request);
+}
+
+function writeValidatedLocalCollectionResponse<TRow extends { readonly id: string }>(
+  response: ServerResponse,
+  data: readonly TRow[],
+  url: URL,
+  request: IncomingMessage,
+  cursorValue: (row: TRow) => string,
+  supportedFilters: readonly string[],
+  extra?: Record<string, unknown>,
+): boolean {
+  const queryError = validateLocalCollectionQuery(url, supportedFilters);
+  if (queryError !== undefined) {
+    writeJsonResponse(response, 400, queryError, request);
+    return false;
+  }
+  const page = paginatedCollectionResponse(data, url, cursorValue);
+  if (!page.ok) {
+    writeJsonResponse(response, 400, { error: page.error }, request);
+    return false;
+  }
+  writeJsonResponse(response, 200, extra === undefined ? page.body : {
+    ...page.body,
+    ...extra,
+  }, request);
+  return true;
 }
 
 function paginatedCollectionResponse<TRow extends { readonly id: string }>(
