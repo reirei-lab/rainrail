@@ -1,7 +1,9 @@
 import { writeFileSync as realWriteFileSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import net from 'node:net';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { once } from 'node:events';
 import { describe, expect, it } from 'vitest';
 import {
   BUILT_IN_COMMANDS,
@@ -13,6 +15,7 @@ import {
   getOfficialPluginByAlias,
   parseRainrailArguments,
   runRainrailCli,
+  runRainrailCliAsync,
 } from './index.js';
 
 async function withTempDirectory(test: (directory: string) => Promise<void>): Promise<void> {
@@ -29,6 +32,24 @@ async function initRainrailProject(parentDirectory: string, projectName: string)
   await mkdir(projectRoot, { recursive: true });
   expect(runRainrailCli(['init', '--yes'], { cwd: projectRoot }).exitCode).toBe(0);
   return projectRoot;
+}
+
+async function getFreePort(): Promise<number> {
+  const server = net.createServer();
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address();
+  if (address === null || typeof address === 'string') {
+    throw new Error('failed to allocate a test port');
+  }
+  const port = address.port;
+  server.close();
+  await once(server, 'close');
+  return port;
+}
+
+async function closeTestServer(result: { server?: { stop: () => void | Promise<void> } }): Promise<void> {
+  await result.server?.stop();
 }
 
 describe('Rainrail CLI built-in commands', () => {
@@ -199,6 +220,63 @@ describe('Rainrail CLI built-in commands', () => {
     });
   });
 
+  it('expands environment variables while reading rainrail start config', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'expanded-config');
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        server: {
+          host: '127.0.0.1',
+          port: 8787,
+        },
+        sourceBundles: [
+          {
+            type: 'eep-bridge',
+            name: 'local',
+            sources: [
+              {
+                type: 'github-webhook',
+                name: 'github-local',
+                sourceType: 'github',
+                provider: 'github',
+                webhookSecret: '${GITHUB_WEBHOOK_SECRET}',
+                endpoint: '/webhooks/github',
+              },
+            ],
+          },
+        ],
+        sources: [],
+        taskProviders: {
+          github: {
+            token: '${GITHUB_TOKEN}',
+          },
+        },
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+      let startOptions: RainrailStartOptions | undefined;
+
+      const result = runRainrailCli(['start'], {
+        cwd: projectRoot,
+        env: {
+          GITHUB_TOKEN: 'expanded-token',
+          GITHUB_WEBHOOK_SECRET: 'expanded-secret',
+        },
+        serverStarter: (options) => {
+          startOptions = options;
+          return { stop: () => undefined };
+        },
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(startOptions?.sources).toEqual([{
+        endpoint: '/webhooks/github',
+        name: 'github-local',
+        sourceType: 'github',
+        transport: 'http',
+        authConfigured: true,
+      }]);
+    });
+  });
+
   it('lets RAINRAIL_HOST and RAINRAIL_PORT override start config when flags are absent', async () => {
     await withTempDirectory(async (directory) => {
       const projectRoot = await initRainrailProject(directory, 'env-server');
@@ -219,6 +297,7 @@ describe('Rainrail CLI built-in commands', () => {
         env: {
           RAINRAIL_HOST: '0.0.0.0',
           RAINRAIL_PORT: '9999',
+          SSE_BEARER_TOKEN: 'events-token',
         },
         serverStarter: (options) => {
           startOptions = options;
@@ -288,6 +367,165 @@ describe('Rainrail CLI built-in commands', () => {
       expect(result.stdout).toBe('');
       expect(result.stderr).toContain('rainrail start --port must be an integer from 1 to 65535');
       expect(started).toBe(false);
+    });
+  });
+
+  it('reports bind failures before printing start success', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'bind-failure');
+      const occupied = net.createServer();
+      occupied.listen(0, '127.0.0.1');
+      await once(occupied, 'listening');
+      const address = occupied.address();
+      if (address === null || typeof address === 'string') {
+        throw new Error('failed to allocate occupied port');
+      }
+
+      try {
+        const result = await runRainrailCliAsync(['start', '--port', String(address.port)], {
+          cwd: projectRoot,
+        });
+
+        expect(result.exitCode).toBe(1);
+        expect(result.stdout).toBe('');
+        expect(result.stderr).toContain('Unable to bind Rainrail local server');
+      } finally {
+        occupied.close();
+        await once(occupied, 'close');
+      }
+    });
+  });
+
+  it('serves configured intake routes and dashboard v1 collections from rainrail start', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'configured-intake');
+      const port = await getFreePort();
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        server: {
+          host: '127.0.0.1',
+          port,
+        },
+        sourceBundles: [
+          {
+            type: 'eep-bridge',
+            name: 'local',
+            sources: [
+              {
+                type: 'github-webhook',
+                name: 'github-local',
+                sourceType: 'github',
+                provider: 'github',
+                webhookSecret: 'secret',
+                endpoint: '/webhooks/github',
+              },
+            ],
+          },
+        ],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+
+      const result = await runRainrailCliAsync(['start'], { cwd: projectRoot });
+      try {
+        expect(result.exitCode).toBe(0);
+
+        const accepted = await fetch(`http://127.0.0.1:${port}/webhooks/github`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ action: 'opened' }),
+        });
+        expect(accepted.status).toBe(202);
+
+        const overview = await fetch(`http://127.0.0.1:${port}/api/v1/overview`);
+        await expect(overview.json()).resolves.toMatchObject({
+          data: {
+            counts: { events: 1 },
+            warnings: { staleProjectClaims: [] },
+            recentActivity: [],
+            links: {
+              events: '/api/v1/events',
+              workflowRuns: '/api/v1/workflow-runs',
+              agentTasks: '/api/v1/agent-tasks',
+              sources: '/api/v1/sources',
+              queue: '/api/v1/queue',
+              settings: '/api/v1/settings',
+            },
+          },
+        });
+
+        for (const route of [
+          '/api/v1/events',
+          '/api/v1/workflow-runs',
+          '/api/v1/agent-tasks',
+          '/api/v1/sources',
+          '/api/v1/queue',
+          '/api/v1/settings',
+        ]) {
+          const response = await fetch(`http://127.0.0.1:${port}${route}`);
+          expect(response.status, route).toBe(200);
+          await expect(response.json(), route).resolves.toMatchObject({
+            data: expect.any(Array),
+            page: { limit: 50, nextCursor: null },
+          });
+        }
+
+        const sources = await fetch(`http://127.0.0.1:${port}/api/v1/sources`);
+        await expect(sources.json()).resolves.toMatchObject({
+          data: [{
+            id: 'github-local',
+            type: 'source',
+            status: 'configured',
+            sourceType: 'github',
+            name: 'github-local',
+            endpoint: '/webhooks/github',
+            auth: { status: 'configured' },
+          }],
+        });
+      } finally {
+        await closeTestServer(result);
+      }
+    });
+  });
+
+  it('keeps running after receiving an invalid Host header', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'bad-host');
+      const port = await getFreePort();
+
+      const result = await runRainrailCliAsync(['start', '--port', String(port)], { cwd: projectRoot });
+      try {
+        expect(result.exitCode).toBe(0);
+        const socket = net.createConnection({ host: '127.0.0.1', port });
+        socket.write('GET /healthz HTTP/1.1\\r\\nHost: bad host\\r\\nConnection: close\\r\\n\\r\\n');
+        let response = '';
+        socket.setEncoding('utf8');
+        socket.on('data', (chunk) => {
+          response += chunk;
+        });
+        await once(socket, 'end');
+
+        expect(response).toContain('400 Bad Request');
+        const health = await fetch(`http://127.0.0.1:${port}/healthz`);
+        expect(health.status).toBe(200);
+      } finally {
+        await closeTestServer(result);
+      }
+    });
+  });
+
+  it('requires an SSE bearer token before binding to public interfaces', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'public-bind');
+      const port = await getFreePort();
+
+      const result = await runRainrailCliAsync(['start', '--host', '0.0.0.0', '--port', String(port)], {
+        cwd: projectRoot,
+      });
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toContain('SSE_BEARER_TOKEN is required when rainrail start binds outside localhost');
     });
   });
 

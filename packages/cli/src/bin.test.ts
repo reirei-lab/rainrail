@@ -6,6 +6,7 @@ describe('rainrail binary entrypoint', () => {
     const bin = readFileSync(new URL('./bin/rainrail.ts', import.meta.url), 'utf8');
 
     expect(bin).toContain('#!/usr/bin/env node');
+    expect(bin).toContain("runRainrailCliAsync");
     expect(bin).toContain("from '../index.js'");
     expect(bin).toContain('stderrWriter');
     expect(bin).toContain('process.exitCode = result.exitCode');

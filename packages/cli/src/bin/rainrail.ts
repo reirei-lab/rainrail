@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-import { runRainrailCli } from '../index.js';
+import { runRainrailCliAsync } from '../index.js';
 
-const result = runRainrailCli(process.argv.slice(2), {
+const result = await runRainrailCliAsync(process.argv.slice(2), {
   stderrWriter: (message) => {
     process.stderr.write(message);
   },
