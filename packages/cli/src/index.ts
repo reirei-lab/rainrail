@@ -8,6 +8,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
+import { homedir } from 'node:os';
 import { dirname, join, normalize, parse, resolve, sep } from 'node:path';
 import {
   OFFICIAL_PLUGIN_CATALOG,
@@ -87,6 +88,13 @@ export type CommandRunner = (
   options: CommandRunnerOptions,
 ) => CommandRunnerResult;
 
+export type ReleaseFetchResult = {
+  readonly status: number;
+  readonly body: string;
+};
+
+export type ReleaseFetcher = (url: string) => ReleaseFetchResult;
+
 export type RainrailCliFileSystem = {
   readonly existsSync: typeof existsSync;
   readonly lstatSync: typeof lstatSync;
@@ -100,11 +108,15 @@ export type RainrailCliFileSystem = {
 export type PluginAliasResolver = (alias: string) => OfficialPluginMetadata | undefined;
 
 export type RainrailCliEnvironment = {
+  readonly cacheDirectory?: string;
   readonly cwd?: string;
   readonly commandRunner?: CommandRunner;
+  readonly currentVersion?: string;
   readonly currentBinPath?: string;
   readonly fileSystem?: Partial<RainrailCliFileSystem>;
+  readonly now?: () => Date;
   readonly pluginAliasResolver?: PluginAliasResolver;
+  readonly releaseFetcher?: ReleaseFetcher;
 };
 
 export type RainrailProject = {
@@ -138,6 +150,10 @@ type PluginManifestRollback = {
 
 const DEFAULT_INSTALLER_URL =
   'https://raw.githubusercontent.com/reirei-lab/rainrail/main/install.sh';
+const GITHUB_LATEST_RELEASE_URL =
+  'https://api.github.com/repos/reirei-lab/rainrail/releases/latest';
+const updateCheckCacheFileName = 'update-check.json';
+const updateCheckCacheTtlMs = 24 * 60 * 60 * 1000;
 const rainrailConfigFileName = 'rainrail.config.json';
 const rainrailLockFileName = 'rainrail.lock';
 const rainrailDirectoryName = '.rainrail';
@@ -463,8 +479,12 @@ function runUpdateCommand(
   args: readonly string[],
   options: SharedOptions,
   commandRunner: CommandRunner,
-  currentBinPath: string | undefined,
+  environment: RainrailCliEnvironment,
 ): RainrailCliResult {
+  if (args[0] === 'check') {
+    return runUpdateCheckCommand(args.slice(1), options, environment);
+  }
+
   const parsed = parseUpdateArguments(args);
   if (parsed.errors.length > 0) {
     return {
@@ -476,7 +496,7 @@ function runUpdateCommand(
 
   const installerArgs = [...parsed.installerArgs];
   if (!parsed.hasExplicitPrefix) {
-    const inferredPrefix = inferRainrailInstallPrefix(currentBinPath);
+    const inferredPrefix = inferRainrailInstallPrefix(environment.currentBinPath);
     if (inferredPrefix === undefined) {
       return {
         exitCode: 1,
@@ -512,6 +532,256 @@ function runUpdateCommand(
     stdout: toOutput(result.stdout),
     stderr: toOutput(result.stderr),
   };
+}
+
+type UpdateCheckCache = {
+  readonly checkedAt: string;
+  readonly currentVersion: string;
+  readonly latestVersion: string | null;
+  readonly updateAvailable: boolean;
+  readonly updateCommand: string | null;
+};
+
+type UpdateCheckResult = UpdateCheckCache & {
+  readonly command: 'update check';
+  readonly cached: boolean;
+};
+
+type LatestReleaseCheck = {
+  readonly cacheable: boolean;
+  readonly result: UpdateCheckCache;
+};
+
+function runUpdateCheckCommand(
+  args: readonly string[],
+  options: SharedOptions,
+  environment: RainrailCliEnvironment,
+): RainrailCliResult {
+  if (args.length !== 0) {
+    return {
+      exitCode: 1,
+      stdout: '',
+      stderr: 'Usage: rainrail update check\n',
+    };
+  }
+
+  const now = environment.now?.() ?? new Date();
+  const currentVersion = environment.currentVersion ?? getRainrailCliPackageVersion();
+  const cachePath = getUpdateCheckCachePath(environment);
+  const cachedResult = readFreshUpdateCheckCache(cachePath, currentVersion, now, environment);
+  if (cachedResult !== undefined) {
+    return formatUpdateCheckResult({ ...cachedResult, command: 'update check', cached: true }, options);
+  }
+
+  const checkedAt = now.toISOString();
+  const result = checkLatestRelease(currentVersion, checkedAt, environment.releaseFetcher);
+  if (result.cacheable) {
+    writeUpdateCheckCache(cachePath, result.result, environment);
+  }
+  return formatUpdateCheckResult({ ...result.result, command: 'update check', cached: false }, options);
+}
+
+function checkLatestRelease(
+  currentVersion: string,
+  checkedAt: string,
+  releaseFetcher: ReleaseFetcher | undefined,
+): LatestReleaseCheck {
+  try {
+    const response = (releaseFetcher ?? defaultReleaseFetcher)(GITHUB_LATEST_RELEASE_URL);
+    if (response.status < 200 || response.status >= 300) {
+      return { cacheable: false, result: createNoopUpdateCheck(currentVersion, checkedAt) };
+    }
+
+    const release = JSON.parse(response.body) as { tag_name?: unknown; prerelease?: unknown };
+    if (release.prerelease === true || typeof release.tag_name !== 'string') {
+      return { cacheable: false, result: createNoopUpdateCheck(currentVersion, checkedAt) };
+    }
+
+    const latestVersion = normalizeReleaseTag(release.tag_name);
+    if (
+      latestVersion === undefined ||
+      isPrereleaseVersion(latestVersion) ||
+      compareStableSemver(latestVersion, currentVersion) <= 0
+    ) {
+      return { cacheable: latestVersion !== undefined, result: createNoopUpdateCheck(currentVersion, checkedAt) };
+    }
+
+    return {
+      cacheable: true,
+      result: {
+        checkedAt,
+        currentVersion,
+        latestVersion,
+        updateAvailable: true,
+        updateCommand: `rainrail update --version ${latestVersion}`,
+      },
+    };
+  } catch {
+    return { cacheable: false, result: createNoopUpdateCheck(currentVersion, checkedAt) };
+  }
+}
+
+function createNoopUpdateCheck(currentVersion: string, checkedAt: string): UpdateCheckCache {
+  return {
+    checkedAt,
+    currentVersion,
+    latestVersion: null,
+    updateAvailable: false,
+    updateCommand: null,
+  };
+}
+
+function formatUpdateCheckResult(result: UpdateCheckResult, options: SharedOptions): RainrailCliResult {
+  if (options.json) {
+    return {
+      exitCode: 0,
+      stdout: formatJson(result),
+      stderr: '',
+    };
+  }
+
+  return {
+    exitCode: 0,
+    stdout: result.updateAvailable && result.latestVersion !== null
+      ? `Rainrail ${result.latestVersion} is available. Run \`${result.updateCommand}\` to update.\n`
+      : `Rainrail is up to date (${result.currentVersion}).\n`,
+    stderr: '',
+  };
+}
+
+function defaultReleaseFetcher(url: string): ReleaseFetchResult {
+  const result = spawnSync('curl', [
+    '-fsSL',
+    '-H',
+    'Accept: application/vnd.github+json',
+    '-H',
+    'User-Agent: rainrail-cli',
+    url,
+  ], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  return {
+    status: result.status ?? 1,
+    body: toOutput(result.stdout),
+  };
+}
+
+function getUpdateCheckCachePath(environment: RainrailCliEnvironment): string | undefined {
+  const cacheDirectory = environment.cacheDirectory ?? getDefaultCacheDirectory();
+  if (cacheDirectory === undefined) {
+    return undefined;
+  }
+  return join(cacheDirectory, updateCheckCacheFileName);
+}
+
+function getDefaultCacheDirectory(): string | undefined {
+  if (process.env.XDG_CACHE_HOME !== undefined && process.env.XDG_CACHE_HOME.length > 0) {
+    return join(process.env.XDG_CACHE_HOME, 'rainrail');
+  }
+
+  const homeDirectory = homedir();
+  return homeDirectory.length > 0 ? join(homeDirectory, '.cache', 'rainrail') : undefined;
+}
+
+function readFreshUpdateCheckCache(
+  path: string | undefined,
+  currentVersion: string,
+  now: Date,
+  environment: RainrailCliEnvironment,
+): UpdateCheckCache | undefined {
+  if (path === undefined) {
+    return undefined;
+  }
+
+  const fileSystem = getRainrailCliFileSystem(environment);
+  try {
+    if (!fileSystem.existsSync(path)) {
+      return undefined;
+    }
+    const parsed = JSON.parse(fileSystem.readFileSync(path, 'utf8')) as Partial<UpdateCheckCache>;
+    if (!isUpdateCheckCache(parsed) || parsed.currentVersion !== currentVersion) {
+      return undefined;
+    }
+    const checkedAtMs = Date.parse(parsed.checkedAt);
+    if (!Number.isFinite(checkedAtMs) || now.getTime() - checkedAtMs >= updateCheckCacheTtlMs) {
+      return undefined;
+    }
+    return parsed;
+  } catch {
+    return undefined;
+  }
+}
+
+function writeUpdateCheckCache(
+  path: string | undefined,
+  result: UpdateCheckCache,
+  environment: RainrailCliEnvironment,
+): void {
+  if (path === undefined) {
+    return;
+  }
+
+  const fileSystem = getRainrailCliFileSystem(environment);
+  try {
+    fileSystem.mkdirSync(dirname(path), { recursive: true });
+    fileSystem.writeFileSync(path, formatJson(result), { flag: 'w' });
+  } catch {
+    // Update checks must never fail the CLI because cache storage is unavailable.
+  }
+}
+
+function isUpdateCheckCache(value: Partial<UpdateCheckCache>): value is UpdateCheckCache {
+  return typeof value.checkedAt === 'string' &&
+    typeof value.currentVersion === 'string' &&
+    (typeof value.latestVersion === 'string' || value.latestVersion === null) &&
+    typeof value.updateAvailable === 'boolean' &&
+    (typeof value.updateCommand === 'string' || value.updateCommand === null);
+}
+
+function normalizeReleaseTag(tag: string): string | undefined {
+  const normalized = tag.startsWith('release/') ? tag.slice('release/'.length) : tag;
+  const withoutPrefix = normalized.startsWith('v') ? normalized.slice(1) : normalized;
+  return semverVersionPattern.test(withoutPrefix) ? withoutPrefix : undefined;
+}
+
+function isPrereleaseVersion(version: string): boolean {
+  const match = semverVersionPattern.exec(version);
+  return match?.[4] !== undefined;
+}
+
+function compareStableSemver(left: string, right: string): number {
+  const leftParts = parseStableSemver(left);
+  const rightParts = parseStableSemver(right);
+  if (leftParts === undefined || rightParts === undefined) {
+    return 0;
+  }
+
+  for (let index = 0; index < leftParts.length; index += 1) {
+    const leftPart = leftParts[index];
+    const rightPart = rightParts[index];
+    if (leftPart === undefined || rightPart === undefined) {
+      return 0;
+    }
+    const difference = leftPart - rightPart;
+    if (difference !== 0) {
+      return difference;
+    }
+  }
+  return 0;
+}
+
+function parseStableSemver(version: string): readonly [number, number, number] | undefined {
+  const match = semverVersionPattern.exec(version);
+  if (match === null || match[4] !== undefined) {
+    return undefined;
+  }
+  const [, major, minor, patch] = match;
+  if (major === undefined || minor === undefined || patch === undefined) {
+    return undefined;
+  }
+  return [Number(major), Number(minor), Number(patch)];
 }
 
 function inferRainrailInstallPrefix(currentBinPath: string | undefined): string | undefined {
@@ -689,6 +959,12 @@ export function runRainrailCli(
   }
 
   if (command.name === 'update') {
+    const updateEnvironment: RainrailCliEnvironment = environment.currentBinPath === undefined
+      ? environment
+      : {
+          ...environment,
+          currentBinPath: environment.currentBinPath,
+        };
     return runUpdateCommand(
       parsed.commandArgs,
       parsed.options,
@@ -698,7 +974,9 @@ export function runRainrailCli(
             encoding: 'utf8',
             stdio: commandOptions.stdio,
           })),
-      environment.currentBinPath ?? process.argv[1],
+      environment.currentBinPath === undefined && process.argv[1] !== undefined
+        ? { ...updateEnvironment, currentBinPath: process.argv[1] }
+        : updateEnvironment,
     );
   }
 
