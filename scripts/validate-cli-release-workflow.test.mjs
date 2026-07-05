@@ -32,7 +32,7 @@ describe('CLI release workflow', () => {
     expect(workflow).toContain('Verify release tag matches CLI version');
     expect(workflow).toContain("cli_version=\"$(node -p \"require('./packages/cli/package.json').version\")\"");
     expect(workflow).toContain('RELEASE_TAG: ${{ github.event.release.tag_name }}');
-    expect(workflow).toContain('[ "${RELEASE_TAG}" != "v${cli_version}" ]');
+    expect(workflow).toContain('[ "${RELEASE_TAG}" != "release/${cli_version}" ]');
     expect(workflow).not.toContain('release_tag="${{ github.event.release.tag_name }}"');
     expect(workflow.indexOf('Verify release tag matches CLI version')).toBeLessThan(
       workflow.indexOf('Upload release asset'),

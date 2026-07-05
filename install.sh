@@ -123,7 +123,7 @@ resolve_latest_version() {
   require_command curl
   local effective_url
   effective_url="$(curl -fsSL -o /dev/null -w '%{url_effective}' "https://github.com/${repo}/releases/latest")"
-  basename "${effective_url}" | sed 's/^v//'
+  basename "${effective_url}" | sed -e 's/^v//' -e 's#^release/##' -e 's#^release%2F##' -e 's#^release%2f##'
 }
 
 if [ -z "${asset_url}" ]; then
@@ -131,7 +131,10 @@ if [ -z "${asset_url}" ]; then
     version="$(resolve_latest_version)"
   fi
   version="${version#v}"
-  asset_url="https://github.com/${repo}/releases/download/v${version}/rainrail-cli-v${version}.tgz"
+  version="${version#release/}"
+  version="${version#release%2F}"
+  version="${version#release%2f}"
+  asset_url="https://github.com/${repo}/releases/download/release%2F${version}/rainrail-cli-v${version}.tgz"
 fi
 
 tmpdir="$(mktemp -d)"
