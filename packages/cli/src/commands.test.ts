@@ -32,6 +32,7 @@ describe('Rainrail CLI built-in commands', () => {
       'plugins',
       'plugin',
       'update',
+      'version',
       'help',
     ]);
 
@@ -110,6 +111,19 @@ describe('Rainrail CLI built-in commands', () => {
     expect(result.stdout).toContain('  github');
     expect(result.stdout).toContain('  cloudflare');
     expect(result.stdout).toContain('  openclaw');
+  });
+
+  it('prints the CLI package version from rainrail version', async () => {
+    const packageJson = JSON.parse(
+      await readFile(new URL('../package.json', import.meta.url), 'utf8'),
+    ) as { version: string };
+    const result = runRainrailCli(['version']);
+
+    expect(result).toEqual({
+      exitCode: 0,
+      stdout: `rainrail ${packageJson.version}\n`,
+      stderr: '',
+    });
   });
 
   it('ships static metadata for initial official plugin command discovery', () => {
