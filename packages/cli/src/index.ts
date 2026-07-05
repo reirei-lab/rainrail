@@ -1,4 +1,6 @@
 import { spawnSync } from 'node:child_process';
+import { createHmac, timingSafeEqual } from 'node:crypto';
+import http, { type IncomingMessage, type OutgoingHttpHeaders, type ServerResponse } from 'node:http';
 import {
   existsSync,
   lstatSync,
@@ -38,6 +40,7 @@ export {
 export type BuiltInCommandName =
   | 'init'
   | 'setup'
+  | 'start'
   | 'doctor'
   | 'plugins'
   | 'plugin'
@@ -71,6 +74,7 @@ export type RainrailCliResult = {
   readonly exitCode: number;
   readonly stdout: string;
   readonly stderr: string;
+  readonly server?: RainrailStartedServer;
 };
 
 export type CommandRunnerResult = {
@@ -117,16 +121,47 @@ export type RainrailCliFileSystem = {
 
 export type PluginAliasResolver = (alias: string) => OfficialPluginMetadata | undefined;
 
+export type RainrailStartOptions = {
+  readonly host: string;
+  readonly port: number;
+  readonly root: string;
+  readonly configPath: string;
+  readonly allowedHosts: readonly string[];
+  readonly dashboardToken?: string;
+  readonly sources: readonly RainrailLocalSource[];
+};
+
+export type RainrailStartedServer = {
+  readonly stop: () => void | Promise<void>;
+};
+
+export type RainrailServerStarter = (
+  options: RainrailStartOptions,
+) => RainrailStartedServer | Promise<RainrailStartedServer>;
+
+export type RainrailLocalSource = {
+  readonly name: string;
+  readonly sourceType: string;
+  readonly configuredType?: string;
+  readonly endpoint: string;
+  readonly transport: 'http';
+  readonly authConfigured: boolean;
+  readonly webhookSecret?: string;
+  readonly maxBodyBytes?: number;
+};
+
 export type RainrailCliEnvironment = {
   readonly cacheDirectory?: string;
   readonly cwd?: string;
   readonly commandRunner?: CommandRunner;
   readonly currentVersion?: string;
   readonly currentBinPath?: string;
+  readonly env?: Record<string, string | undefined>;
   readonly fileSystem?: Partial<RainrailCliFileSystem>;
   readonly now?: () => Date;
   readonly pluginAliasResolver?: PluginAliasResolver;
   readonly releaseFetcher?: ReleaseFetcher;
+  readonly serverStarter?: RainrailServerStarter;
   readonly asyncReleaseFetcher?: AsyncReleaseFetcher;
   readonly stdin?: string;
   readonly stdinReader?: () => string;
@@ -142,7 +177,7 @@ export type RainrailCliEntrypointEnvironment = RainrailCliEnvironment & {
   readonly runCli?: (
     argv: readonly string[],
     environment?: RainrailCliEnvironment,
-  ) => RainrailCliResult;
+  ) => RainrailCliResult | Promise<RainrailCliResult>;
   readonly updateNoticeCheck?: (signal: AbortSignal) => Promise<string | undefined>;
   readonly updateNoticeTimeoutMs?: number;
 };
@@ -212,6 +247,12 @@ export const BUILT_IN_COMMANDS: readonly BuiltInCommand[] = [
     name: 'setup',
     kind: 'built-in',
     summary: 'Prepare local Rainrail configuration.',
+    implemented: true,
+  },
+  {
+    name: 'start',
+    kind: 'built-in',
+    summary: 'Start the local Rainrail server in the foreground.',
     implemented: true,
   },
   {
@@ -780,8 +821,8 @@ export async function runRainrailCliEntrypoint(
     asyncReleaseFetcher: _asyncReleaseFetcher,
     ...cliEnvironment
   } = environment;
-  const runCli = injectedRunCli ?? runRainrailCli;
-  const result = runCli(argv, cliEnvironment);
+  const runCli = injectedRunCli ?? runRainrailCliAsync;
+  const result = await runCli(argv, cliEnvironment);
 
   if (result.stdout.length > 0) {
     io.stdout.write(result.stdout);
@@ -1351,6 +1392,10 @@ export function runRainrailCli(
     return runSetupCommand(parsed.commandArgs, parsed.options, environment);
   }
 
+  if (command.name === 'start') {
+    return runStartCommand(parsed.commandArgs, parsed.options, environment);
+  }
+
   if (command.name === 'plugins') {
     return runPluginsCommand(parsed.commandArgs, parsed.options, environment);
   }
@@ -1363,6 +1408,751 @@ export function runRainrailCli(
       pluginCollisionHint ?? '',
     ].join(''),
   };
+}
+
+export async function runRainrailCliAsync(
+  argv: readonly string[],
+  environment: RainrailCliEnvironment = {},
+): Promise<RainrailCliResult> {
+  const parsed = parseRainrailArguments(argv);
+  if (parsed.errors.length > 0) {
+    return {
+      exitCode: 1,
+      stdout: '',
+      stderr: `${parsed.errors.join('\n')}\n`,
+    };
+  }
+
+  const command = getBuiltInCommand(parsed.commandName);
+  if (command?.name !== 'start') {
+    return runRainrailCli(argv, environment);
+  }
+
+  const pluginCollisionHint = getPluginCollisionHint(
+    command.name,
+    parsed.commandArgs,
+    parsed.options,
+    environment.pluginAliasResolver ?? defaultPluginAliasResolver,
+  );
+  if (pluginCollisionHint !== undefined) {
+    return {
+      exitCode: 2,
+      stdout: '',
+      stderr: `rainrail ${command.name} is a built-in command.\n${pluginCollisionHint}`,
+    };
+  }
+
+  return runStartCommandAsync(parsed.commandArgs, parsed.options, environment);
+}
+
+type StartArguments = {
+  readonly host?: string;
+  readonly port?: number;
+  readonly errors: readonly string[];
+};
+
+type StartConfig = {
+  readonly server?: {
+    readonly host?: string;
+    readonly port?: number;
+    readonly allowedHosts?: readonly string[];
+  };
+  readonly sources: readonly RainrailLocalSource[];
+};
+
+const localDefaultMaxRequestBodyBytes = 25 * 1024 * 1024;
+const localGitHubWebhookSourceNameMaxLength = 53;
+const localEventHistoryLimit = 50;
+const localEmptyCollectionRows: readonly { readonly id: string }[] = [];
+
+function runStartCommand(
+  args: readonly string[],
+  options: SharedOptions,
+  environment: RainrailCliEnvironment,
+): RainrailCliResult {
+  if (environment.serverStarter === undefined) {
+    return {
+      exitCode: 1,
+      stdout: '',
+      stderr: 'rainrail start requires the async CLI runner.\n',
+    };
+  }
+  if (isAsyncFunction(environment.serverStarter)) {
+    return {
+      exitCode: 1,
+      stdout: '',
+      stderr: 'rainrail start requires the async CLI runner.\n',
+    };
+  }
+
+  const resolved = resolveStartCommandOptions(args, options, environment);
+  if ('result' in resolved) {
+    return resolved.result;
+  }
+
+  try {
+    const server = environment.serverStarter(resolved.options);
+    if (server instanceof Promise) {
+      void server.then((started) => {
+        started.stop();
+      }, () => undefined);
+      return {
+        exitCode: 1,
+        stdout: '',
+        stderr: 'rainrail start requires the async CLI runner.\n',
+      };
+    }
+    return {
+      exitCode: 0,
+      stdout: formatStartOutput(resolved.options),
+      stderr: '',
+      server,
+    };
+  } catch (error) {
+    return {
+      exitCode: 1,
+      stdout: '',
+      stderr: `${error instanceof Error ? error.message : String(error)}\n`,
+    };
+  }
+}
+
+function isAsyncFunction(value: unknown): boolean {
+  return typeof value === 'function' && value.constructor.name === 'AsyncFunction';
+}
+
+async function runStartCommandAsync(
+  args: readonly string[],
+  options: SharedOptions,
+  environment: RainrailCliEnvironment,
+): Promise<RainrailCliResult> {
+  const resolved = resolveStartCommandOptions(args, options, environment);
+  if ('result' in resolved) {
+    return resolved.result;
+  }
+
+  try {
+    const server = await (environment.serverStarter ?? startLocalRainrailServer)(resolved.options);
+    return {
+      exitCode: 0,
+      stdout: formatStartOutput(resolved.options),
+      stderr: '',
+      server,
+    };
+  } catch (error) {
+    return {
+      exitCode: 1,
+      stdout: '',
+      stderr: `Unable to bind Rainrail local server: ${error instanceof Error ? error.message : String(error)}\n`,
+    };
+  }
+}
+
+function resolveStartCommandOptions(
+  args: readonly string[],
+  options: SharedOptions,
+  environment: RainrailCliEnvironment,
+): { readonly options: RainrailStartOptions } | { readonly result: RainrailCliResult } {
+  const parsedStart = parseStartArguments(args);
+  if (parsedStart.errors.length > 0) {
+    return {
+      result: {
+        exitCode: 1,
+        stdout: '',
+        stderr: `${parsedStart.errors.join('\n')}\n`,
+      },
+    };
+  }
+
+  const cwd = environment.cwd === undefined ? process.cwd() : environment.cwd;
+  const fileSystem = getRainrailCliFileSystem(environment);
+  let project: RainrailProject | undefined;
+  try {
+    project = resolveRainrailProject(cwd, options, fileSystem);
+  } catch (error) {
+    return {
+      result: {
+        exitCode: 1,
+        stdout: '',
+        stderr: `${error instanceof Error ? error.message : String(error)}\n`,
+      },
+    };
+  }
+  if (project === undefined) {
+    return {
+      result: {
+        exitCode: 1,
+        stdout: '',
+        stderr:
+          'rainrail start requires a Rainrail project. Run it inside a directory with rainrail.config.json.\n',
+      },
+    };
+  }
+
+  let config: StartConfig;
+  try {
+    config = readStartConfig(project.configPath, fileSystem, environment.env ?? process.env);
+  } catch (error) {
+    return {
+      result: {
+        exitCode: 1,
+        stdout: '',
+        stderr: `${error instanceof Error ? error.message : String(error)}\n`,
+      },
+    };
+  }
+
+  const resolved = resolveStartOptions(
+    project,
+    config,
+    environment.env ?? process.env,
+    parsedStart,
+  );
+  if (resolved.error !== undefined) {
+    return {
+      result: {
+        exitCode: 1,
+        stdout: '',
+        stderr: `${resolved.error}\n`,
+      },
+    };
+  }
+
+  return {
+    options: resolved.options,
+  };
+}
+
+function parseStartArguments(args: readonly string[]): StartArguments {
+  const errors: string[] = [];
+  let host: string | undefined;
+  let port: number | undefined;
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === undefined) continue;
+
+    if (arg === '--host' || arg === '--port') {
+      const value = args[index + 1];
+      if (value === undefined || value.startsWith('--')) {
+        errors.push(`Missing value for rainrail start ${arg}.`);
+        continue;
+      }
+      if (arg === '--host') {
+        const parsedHost = parseStartHost(value, 'rainrail start --host');
+        if (typeof parsedHost === 'string') host = parsedHost;
+        else errors.push(parsedHost.message);
+      } else {
+        const parsedPort = parseStartPort(value, 'rainrail start --port');
+        if (typeof parsedPort === 'number') port = parsedPort;
+        else errors.push(parsedPort.message);
+      }
+      index += 1;
+      continue;
+    }
+
+    if (arg.startsWith('--host=')) {
+      const parsedHost = parseStartHost(arg.slice('--host='.length), 'rainrail start --host');
+      if (typeof parsedHost === 'string') host = parsedHost;
+      else errors.push(parsedHost.message);
+      continue;
+    }
+
+    if (arg.startsWith('--port=')) {
+      const parsedPort = parseStartPort(arg.slice('--port='.length), 'rainrail start --port');
+      if (typeof parsedPort === 'number') port = parsedPort;
+      else errors.push(parsedPort.message);
+      continue;
+    }
+
+    errors.push(`Unknown rainrail start option: ${arg}.`);
+  }
+
+  const result: { host?: string; port?: number; errors: readonly string[] } = { errors };
+  if (host !== undefined) result.host = host;
+  if (port !== undefined) result.port = port;
+  return result;
+}
+
+function readStartConfig(
+  configPath: string,
+  fileSystem: RainrailCliFileSystem,
+  env: Record<string, string | undefined>,
+): StartConfig {
+  const raw = fileSystem.readFileSync(configPath, 'utf8');
+  const expanded = expandConfigEnv(raw, env);
+  const value = JSON.parse(expanded) as unknown;
+  const markerValue = JSON.parse(markWebhookSecretEnvExpansions(raw, env)) as unknown;
+  if (!isRecord(value)) {
+    throw new Error('config must be an object');
+  }
+  if (!isRecord(markerValue)) {
+    throw new Error('config must be an object');
+  }
+
+  const server = parseStartConfigServer(value.server);
+  const sources = parseStartConfigSources(value, markerValue, env);
+  return server === undefined ? { sources } : { server, sources };
+}
+
+function parseStartConfigServer(value: unknown): StartConfig['server'] {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!isRecord(value)) {
+    throw new Error('config.server must be an object');
+  }
+
+  const server: { host?: string; port?: number; allowedHosts?: readonly string[] } = {};
+  if (value.host !== undefined) {
+    const host = parseStartHost(value.host, 'config.server.host');
+    if (typeof host !== 'string') throw new Error(host.message);
+    server.host = host;
+  }
+  if (value.port !== undefined) {
+    const port = parseStartConfigPort(value.port, 'config.server.port');
+    if (typeof port !== 'number') throw new Error(port.message);
+    server.port = port;
+  }
+  if (value.allowedHosts !== undefined) {
+    server.allowedHosts = parseStartAllowedHosts(value.allowedHosts, 'config.server.allowedHosts');
+  }
+  return server;
+}
+
+function parseStartConfigSources(
+  value: Record<string, unknown>,
+  rawValue: Record<string, unknown>,
+  env: Record<string, string | undefined>,
+): RainrailLocalSource[] {
+  const sources: RainrailLocalSource[] = [];
+  appendSourceBundleSources(sources, value.sourceBundles, rawValue.sourceBundles, env);
+  appendConfiguredSources(sources, value.sources, rawValue.sources, env);
+  return dedupeLocalSources(sources);
+}
+
+function appendSourceBundleSources(
+  sources: RainrailLocalSource[],
+  value: unknown,
+  rawValue: unknown,
+  env: Record<string, string | undefined>,
+): void {
+  if (value === undefined) {
+    return;
+  }
+  if (!Array.isArray(value)) {
+    throw new Error('config.sourceBundles must be an array');
+  }
+  if (!Array.isArray(rawValue)) {
+    throw new Error('config.sourceBundles must be an array');
+  }
+  for (const [index, bundle] of value.entries()) {
+    const rawBundle = rawValue[index];
+    if (!isRecord(bundle)) {
+      throw new Error('config.sourceBundles[] must be an object');
+    }
+    if (!isRecord(rawBundle)) {
+      throw new Error('config.sourceBundles[] must be an object');
+    }
+    validateLocalSourceBundleContract(bundle, `config.sourceBundles[${index}]`);
+    if (!Array.isArray(bundle.sources)) {
+      throw new Error('config.sourceBundles[].sources must be an array');
+    }
+    if (!Array.isArray(rawBundle.sources)) {
+      throw new Error('config.sourceBundles[].sources must be an array');
+    }
+    for (const [sourceIndex, source] of bundle.sources.entries()) {
+      const rawSource = rawBundle.sources[sourceIndex];
+      if (!isRecord(source)) {
+        throw new Error('config.sourceBundles[].sources[] must be an object');
+      }
+      if (!isRecord(rawSource)) {
+        throw new Error('config.sourceBundles[].sources[] must be an object');
+      }
+      validateLocalSourceBundleSourceContract(source, `config.sourceBundles[${index}].sources[${sourceIndex}]`);
+      const localSource = parseLocalSource(source, rawSource, env, `config.sourceBundles[${index}].sources[${sourceIndex}]`, {
+        topLevel: false,
+      });
+      if (localSource !== undefined) {
+        sources.push(localSource);
+      }
+    }
+  }
+}
+
+function appendConfiguredSources(
+  sources: RainrailLocalSource[],
+  value: unknown,
+  rawValue: unknown,
+  env: Record<string, string | undefined>,
+): void {
+  if (value === undefined) {
+    return;
+  }
+  if (!Array.isArray(value)) {
+    throw new Error('config.sources must be an array');
+  }
+  if (!Array.isArray(rawValue)) {
+    throw new Error('config.sources must be an array');
+  }
+  for (const [index, source] of value.entries()) {
+    const rawSource = rawValue[index];
+    if (!isRecord(source)) {
+      throw new Error('config.sources[] must be an object');
+    }
+    if (!isRecord(rawSource)) {
+      throw new Error('config.sources[] must be an object');
+    }
+    const localSource = parseLocalSource(source, rawSource, env, `config.sources[${index}]`, {
+      topLevel: true,
+    });
+    if (localSource !== undefined) {
+      sources.push(localSource);
+    }
+  }
+}
+
+function parseLocalSource(
+  source: Record<string, unknown>,
+  rawSource: Record<string, unknown>,
+  env: Record<string, string | undefined>,
+  path: string,
+  options: { readonly topLevel: boolean },
+): RainrailLocalSource | undefined {
+  const type = parseLocalNonEmptyString(source.type, `${path}.type`);
+  const name = parseLocalNonEmptyString(source.name, `${path}.name`);
+  const sourceType = typeof source.sourceType === 'string' && source.sourceType.length > 0
+    ? source.sourceType
+    : options.topLevel
+      ? type
+      : type === 'github'
+        ? 'github'
+      : undefined;
+  const endpoint = source.endpoint === undefined
+    ? source.type === 'github-webhook' || source.type === 'github'
+    ? '/webhooks/github'
+      : undefined
+    : parseLocalSourceEndpoint(source.endpoint);
+  if (sourceType === undefined) {
+    throw new Error(`${path}.sourceType must be a non-empty string`);
+  }
+  if (endpoint === undefined) {
+    if (!options.topLevel) {
+      return undefined;
+    }
+    throw new Error(`${path}.endpoint must be a string`);
+  }
+  validateLocalSourceContract(source, sourceType);
+  const maxBodyBytes = source.maxBodyBytes === undefined ? undefined : parseLocalSourceMaxBodyBytes(source.maxBodyBytes);
+
+  const webhookSecret = typeof source.webhookSecret === 'string' && source.webhookSecret.length > 0
+    ? resolveLocalWebhookSecret(source.webhookSecret, rawSource.webhookSecret, env)
+    : undefined;
+  if ((source.type === 'github-webhook' || source.type === 'github') && webhookSecret === undefined) {
+    throw new Error(`${path}.webhookSecret must resolve to a non-empty string for GitHub webhook sources`);
+  }
+  const localSource: {
+    name: string;
+    sourceType: string;
+    configuredType?: string;
+    endpoint: string;
+    transport: 'http';
+    authConfigured: boolean;
+    webhookSecret?: string;
+    maxBodyBytes?: number;
+  } = {
+    name,
+    sourceType,
+    ...(typeof source.type === 'string' ? { configuredType: source.type } : {}),
+    endpoint,
+    transport: 'http',
+    authConfigured: webhookSecret !== undefined,
+  };
+  if (webhookSecret !== undefined) {
+    localSource.webhookSecret = webhookSecret;
+  }
+  if (maxBodyBytes !== undefined) {
+    localSource.maxBodyBytes = maxBodyBytes;
+  }
+  return localSource;
+}
+
+function validateLocalSourceBundleContract(bundle: Record<string, unknown>, path: string): void {
+  const type = parseLocalNonEmptyString(bundle.type, `${path}.type`);
+  if (type !== 'eep-bridge') {
+    throw new Error(`${path}.type must be one of: eep-bridge`);
+  }
+  parseLocalNonEmptyString(bundle.name, `${path}.name`);
+}
+
+function validateLocalSourceBundleSourceContract(source: Record<string, unknown>, path: string): void {
+  const type = parseLocalConfiguredSourceType(source.type, `${path}.type`);
+  const name = parseLocalNonEmptyString(source.name, `${path}.name`);
+  const sourceType = parseLocalSourceEventType(source.sourceType, `${path}.sourceType`);
+  if (!/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/u.test(name)) {
+    throw new Error(`${path}.name must be a safe identifier`);
+  }
+  if (type === 'github-webhook' && name.length > localGitHubWebhookSourceNameMaxLength) {
+    throw new Error(`${path}.name must be ${localGitHubWebhookSourceNameMaxLength} characters or fewer for github-webhook sources`);
+  }
+  if (type === 'github-webhook' && source.provider !== 'github') {
+    throw new Error(`${path}.provider must be "github" for github-webhook sources`);
+  }
+  if (type === 'github-webhook' && sourceType !== 'github') {
+    throw new Error(`${path}.sourceType must be "github" for github-webhook sources`);
+  }
+  if (type === 'github-webhook' && (typeof source.webhookSecret !== 'string' || source.webhookSecret.length === 0)) {
+    throw new Error(`${path}.webhookSecret must be a non-empty string for github-webhook sources`);
+  }
+  if (type === 'cloudflare-tail' && sourceType !== 'cloudflare') {
+    throw new Error(`${path}.sourceType must be "cloudflare" for cloudflare-tail sources`);
+  }
+  if (type === 'manual-chat' && sourceType !== 'manual' && sourceType !== 'chat') {
+    throw new Error(`${path}.sourceType must be "manual" or "chat" for manual-chat sources`);
+  }
+}
+
+function parseLocalConfiguredSourceType(value: unknown, path: string): string {
+  const type = parseLocalNonEmptyString(value, path);
+  if (type !== 'github-webhook' && type !== 'cloudflare-tail' && type !== 'manual-chat') {
+    throw new Error(`${path} must be one of: github-webhook, cloudflare-tail, manual-chat`);
+  }
+  return type;
+}
+
+function parseLocalSourceEventType(value: unknown, path: string): string {
+  const type = parseLocalNonEmptyString(value, path);
+  if (type !== 'github' && type !== 'cloudflare' && type !== 'manual' && type !== 'chat' && type !== 'system') {
+    throw new Error(`${path} must be one of: github, cloudflare, manual, chat, system`);
+  }
+  return type;
+}
+
+function parseLocalNonEmptyString(value: unknown, path: string): string {
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new Error(`${path} must be a non-empty string`);
+  }
+  return value;
+}
+
+function validateLocalSourceContract(source: Record<string, unknown>, sourceType: string): void {
+  if (source.type === 'github-webhook') {
+    if (source.provider !== 'github') {
+      throw new Error('config provider must be "github" for github-webhook sources');
+    }
+    if (sourceType !== 'github') {
+      throw new Error('config sourceType must be "github" for github-webhook sources');
+    }
+    if (typeof source.webhookSecret !== 'string' || source.webhookSecret.length === 0) {
+      throw new Error('config source webhookSecret must be a non-empty string for github-webhook sources');
+    }
+  }
+  if (source.type === 'cloudflare-tail' && sourceType !== 'cloudflare') {
+    throw new Error('config sourceType must be "cloudflare" for cloudflare-tail sources');
+  }
+  if (source.type === 'manual-chat' && sourceType !== 'manual' && sourceType !== 'chat') {
+    throw new Error('config sourceType must be "manual" or "chat" for manual-chat sources');
+  }
+}
+
+function parseLocalSourceEndpoint(endpoint: unknown): string {
+  if (typeof endpoint !== 'string') {
+    throw new Error('config endpoint must be a string');
+  }
+  if (!endpoint.startsWith('/')) {
+    throw new Error('config endpoint must start with "/"');
+  }
+  if (endpoint.includes('?') || endpoint.includes('#')) {
+    throw new Error('config endpoint must be a path without query or fragment');
+  }
+  if (isLocalCoreRoutePath(endpoint)) {
+    throw new Error('config endpoint must not use a Rainrail core route');
+  }
+  return endpoint;
+}
+
+function resolveLocalWebhookSecret(
+  value: string,
+  rawValue: unknown,
+  env: Record<string, string | undefined>,
+): string | undefined {
+  if (wasWebhookSecretFieldExpanded(rawValue, value, env)) {
+    return value;
+  }
+  const envValue = env[value];
+  if (envValue !== undefined) {
+    return envValue.length === 0 ? undefined : envValue;
+  }
+  return /^[A-Z_][A-Z0-9_]*$/u.test(value) ? undefined : value;
+}
+
+function wasWebhookSecretFieldExpanded(
+  rawValue: unknown,
+  value: string,
+  env: Record<string, string | undefined>,
+): boolean {
+  const marker = parseWebhookSecretEnvMarker(rawValue);
+  return marker !== undefined && (env[marker] ?? '') === value;
+}
+
+function parseWebhookSecretEnvMarker(value: unknown): string | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const marker = value.__rainrailWebhookSecretEnv;
+  return typeof marker === 'string' ? marker : undefined;
+}
+
+function isLocalCoreRoutePath(pathname: string): boolean {
+  return localCoreRoutePaths.has(pathname) ||
+    localCoreRoutePrefixes.some((prefix) => pathname.startsWith(prefix));
+}
+
+function parseStartAllowedHosts(value: unknown, label: string): readonly string[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`${label} must be an array`);
+  }
+  return value.map((host, index) => {
+    if (typeof host !== 'string' || host.length === 0) {
+      throw new Error(`${label}[${index}] must be a non-empty string`);
+    }
+    const hostName = hostHeaderName(host);
+    if (hostName === undefined) {
+      throw new Error(`${label}[${index}] must be a hostname or IP address`);
+    }
+    return hostName;
+  });
+}
+
+function parseLocalSourceMaxBodyBytes(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    throw new Error('config source maxBodyBytes must be a finite non-negative number');
+  }
+  return value;
+}
+
+function dedupeLocalSources(sources: readonly RainrailLocalSource[]): RainrailLocalSource[] {
+  const endpoints = new Set<string>();
+  const names = new Set<string>();
+  const deduped: RainrailLocalSource[] = [];
+  for (const source of sources) {
+    if (endpoints.has(source.endpoint)) {
+      throw new Error(`config endpoints must be unique: ${source.endpoint}`);
+    }
+    if (names.has(source.name)) {
+      throw new Error(`config source names must be unique: ${source.name}`);
+    }
+    endpoints.add(source.endpoint);
+    names.add(source.name);
+    deduped.push(source);
+  }
+  return deduped;
+}
+
+function resolveStartOptions(
+  project: RainrailProject,
+  config: StartConfig,
+  env: Record<string, string | undefined>,
+  args: StartArguments,
+): { readonly options: RainrailStartOptions; readonly error?: undefined } | {
+  readonly options?: undefined;
+  readonly error: string;
+} {
+  const envHost = env.RAINRAIL_HOST === undefined
+    ? undefined
+    : parseStartHost(env.RAINRAIL_HOST, 'RAINRAIL_HOST');
+  if (envHost !== undefined && typeof envHost !== 'string') {
+    return { error: envHost.message };
+  }
+
+  const envPort = env.RAINRAIL_PORT === undefined
+    ? undefined
+    : parseStartPort(env.RAINRAIL_PORT, 'RAINRAIL_PORT');
+  if (envPort !== undefined && typeof envPort !== 'number') {
+    return { error: envPort.message };
+  }
+
+  let envAllowedHosts: readonly string[] | undefined;
+  try {
+    envAllowedHosts = env.RAINRAIL_ALLOWED_HOSTS === undefined || env.RAINRAIL_ALLOWED_HOSTS.length === 0
+      ? undefined
+      : parseStartAllowedHosts(
+        env.RAINRAIL_ALLOWED_HOSTS.split(',').map((host) => host.trim()).filter((host) => host.length > 0),
+        'RAINRAIL_ALLOWED_HOSTS',
+      );
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) };
+  }
+
+  const host = args.host ?? envHost ?? config.server?.host ?? '127.0.0.1';
+  const dashboardToken = env.SSE_BEARER_TOKEN === undefined || env.SSE_BEARER_TOKEN.length === 0
+    ? undefined
+    : env.SSE_BEARER_TOKEN;
+  if (!isLocalBindHost(host) && (dashboardToken === undefined || dashboardToken.length === 0)) {
+    return { error: 'SSE_BEARER_TOKEN is required when rainrail start binds outside localhost' };
+  }
+
+  return {
+    options: {
+      host,
+      port: args.port ?? envPort ?? config.server?.port ?? 8787,
+      root: project.root,
+      configPath: project.configPath,
+      allowedHosts: envAllowedHosts ?? config.server?.allowedHosts ?? [],
+      sources: config.sources,
+      ...(dashboardToken === undefined ? {} : { dashboardToken }),
+    },
+  };
+}
+
+function isLocalBindHost(host: string): boolean {
+  return host === '127.0.0.1' || host === 'localhost' || host === '::1' || host === '[::1]';
+}
+
+function parseStartHost(value: unknown, label: string): string | { readonly message: string } {
+  if (typeof value !== 'string' || value.length === 0) {
+    return { message: `${label} must be a non-empty string` };
+  }
+  return value === '[::1]' ? '::1' : value;
+}
+
+function parseStartPort(value: unknown, label: string): number | { readonly message: string } {
+  const port = typeof value === 'number'
+    ? value
+    : typeof value === 'string' && value.length > 0
+      ? Number(value)
+      : Number.NaN;
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    return { message: `${label} must be an integer from 1 to 65535` };
+  }
+  return port;
+}
+
+function parseStartConfigPort(value: unknown, label: string): number | { readonly message: string } {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > 65535) {
+    return { message: `${label} must be an integer from 1 to 65535` };
+  }
+  return value;
+}
+
+function formatStartOutput(options: RainrailStartOptions): string {
+  const baseUrl = `http://${formatUrlHost(options.host)}:${options.port}`;
+  return [
+    'Rainrail local server starting',
+    `Workspace: ${options.root}`,
+    `Config: ${options.configPath}`,
+    `Host: ${options.host}`,
+    `Port: ${options.port}`,
+    `Health: ${baseUrl}/healthz`,
+    `Events: ${baseUrl}/events`,
+    `Dashboard API: ${baseUrl}/api/v1/overview`,
+    'Press Ctrl+C to stop.',
+    '',
+  ].join('\n');
+}
+
+function formatUrlHost(host: string): string {
+  return host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
 }
 
 function runVersionCommand(args: readonly string[]): RainrailCliResult {
@@ -2426,6 +3216,10 @@ function writeGeneratedFile(
 function formatRainrailConfig(projectName: string): string {
   return `${JSON.stringify({
     project: { name: projectName },
+    server: {
+      host: '127.0.0.1',
+      port: 8787,
+    },
     sourceBundles: [],
     sources: [],
     taskProviders: {},
@@ -2441,10 +3235,1004 @@ function formatRainrailLock(projectName: string): string {
   });
 }
 
+const localCorsHeaders = {
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Authorization, Content-Type, Last-Event-ID, X-GitHub-Delivery, X-GitHub-Event, X-Hub-Signature-256, X-Rainrail-Client, X-Rainrail-Publish-Token, X-Request-ID',
+  'Access-Control-Expose-Headers': 'X-Request-ID',
+  'Access-Control-Max-Age': '86400',
+} as const;
+
+const localCoreRoutePaths = new Set([
+  '/healthz',
+  '/events',
+  '/api/state',
+  '/api/v1/overview',
+  '/api/v1/events',
+  '/api/v1/workflow-runs',
+  '/api/v1/agent-tasks',
+  '/api/v1/sources',
+  '/api/v1/queue',
+  '/api/v1/settings',
+]);
+const localCoreRoutePrefixes = [
+  '/api/events/',
+  '/api/v1/events/',
+  '/api/v1/workflow-runs/',
+  '/api/v1/agent-tasks/',
+  '/api/v1/sources/',
+  '/api/v1/queue/',
+  '/api/v1/settings/',
+] as const;
+
+type LocalRainrailEvent = {
+  readonly id: string;
+  readonly type: 'event';
+  readonly name: string;
+  readonly status: string;
+  readonly summary: string;
+  readonly deliveryId: string;
+  readonly rawPayloadReference: string;
+  readonly workflowRunCount: number;
+  readonly handlerRetryCount: number;
+  readonly subject: {
+    readonly type: string;
+    readonly id: string;
+  };
+  readonly occurredAt: string;
+  readonly receivedAt: string;
+  readonly source: {
+    readonly type: string;
+    readonly name: string;
+  };
+  readonly links: {
+    readonly self: string;
+  };
+};
+
+type LocalRainrailServerState = {
+  nextEventId: number;
+  events: LocalRainrailEvent[];
+  sseClients: Set<ServerResponse>;
+};
+
+async function startLocalRainrailServer(options: RainrailStartOptions): Promise<RainrailStartedServer> {
+  const state: LocalRainrailServerState = {
+    nextEventId: 1,
+    events: [],
+    sseClients: new Set(),
+  };
+  const server = http.createServer((request, response) => {
+    handleLocalRainrailRequest(request, response, options, state).catch(() => {
+      if (!response.headersSent) {
+    writeJsonResponse(response, 500, { error: 'internal_server_error' }, request);
+      } else {
+        response.destroy();
+      }
+    });
+  });
+
+  await new Promise<void>((resolveListen, rejectListen) => {
+    const onError = (error: Error): void => {
+      server.off('listening', onListening);
+      rejectListen(error);
+    };
+    const onListening = (): void => {
+      server.off('error', onError);
+      resolveListen();
+    };
+    server.once('error', onError);
+    server.once('listening', onListening);
+    server.listen(options.port, options.host);
+  });
+
+  const stop = async (): Promise<void> => {
+    await closeHttpServer(server);
+  };
+  const onSigint = (): void => {
+    stop().finally(() => {
+      process.exit(0);
+    });
+  };
+  process.once('SIGINT', onSigint);
+
+  return {
+    async stop() {
+      process.off('SIGINT', onSigint);
+      await stop();
+    },
+  };
+}
+
+async function closeHttpServer(server: http.Server): Promise<void> {
+  server.closeAllConnections?.();
+  await new Promise<void>((resolveClose, rejectClose) => {
+    server.close((error) => {
+      if (error !== undefined) {
+        rejectClose(error);
+        return;
+      }
+      resolveClose();
+    });
+  });
+}
+
+async function handleLocalRainrailRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  options: RainrailStartOptions,
+  state: LocalRainrailServerState,
+): Promise<void> {
+  const url = parseLocalRequestUrl(request, options);
+  if (url === undefined) {
+    writeJsonResponse(response, 400, { error: 'invalid_host_header' }, request);
+    return;
+  }
+
+  if (request.method === 'OPTIONS') {
+    writeCorsPreflightResponse(response, preflightMethodsForLocalPath(url.pathname, options), request);
+    return;
+  }
+
+  if (request.method === 'GET' && url.pathname === '/healthz') {
+    writeJsonResponse(response, 200, isLocalBindHost(options.host) ? {
+      ok: true,
+      runtime: 'node',
+      workspace: options.root,
+    } : { ok: true, runtime: 'node' }, request);
+    return;
+  }
+
+  const intakeSource = options.sources.find((source) => source.endpoint === url.pathname);
+  if (request.method === 'POST' && intakeSource !== undefined) {
+    await handleLocalIntakeRequest(request, response, options, state, intakeSource);
+    return;
+  }
+  if (intakeSource !== undefined) {
+    writeJsonResponse(response, 405, { error: 'method_not_allowed' }, request, {
+      Allow: 'POST, OPTIONS',
+    });
+    return;
+  }
+
+  const allowedMethods = preflightMethodsForLocalPath(url.pathname, options);
+  if (allowedMethods !== undefined && !allowedMethods.includes(request.method ?? '')) {
+    writeJsonResponse(response, 405, { error: 'method_not_allowed' }, request, {
+      Allow: allowedMethods.join(', '),
+    });
+    return;
+  }
+
+  const authError = getLocalServerAuthError(request, url.pathname, options);
+  if (authError !== undefined) {
+    writeJsonResponse(response, authError.status, { error: authError.code }, request);
+    return;
+  }
+
+  if (request.method === 'GET' && url.pathname === '/events') {
+    response.writeHead(200, {
+      ...localCorsHeaders,
+      ...localOriginCorsHeader(request),
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+    });
+    state.sseClients.add(response);
+    response.once('close', () => {
+      state.sseClients.delete(response);
+    });
+    response.write(': rainrail local server connected\n\n');
+    return;
+  }
+
+  if (request.method === 'GET' && url.pathname === '/api/state') {
+    writeJsonResponse(response, 200, {
+      counts: { events: state.events.length, activityEvents: 0 },
+      events: state.events,
+      workspace: options.root,
+    }, request);
+    return;
+  }
+
+  if (request.method === 'GET' && url.pathname === '/api/v1/overview') {
+    writeJsonResponse(response, 200, {
+      data: {
+        runtime: 'node',
+        workspace: options.root,
+        counts: { events: state.events.length, activityEvents: 0, agentTasks: 0, eventHandlerRetries: 0 },
+        warnings: { staleProjectClaims: [] },
+        recentActivity: [],
+        links: {
+          events: '/api/v1/events',
+          workflowRuns: '/api/v1/workflow-runs',
+          agentTasks: '/api/v1/agent-tasks',
+          sources: '/api/v1/sources',
+          queue: '/api/v1/queue',
+          settings: '/api/v1/settings',
+        },
+      },
+    }, request);
+    return;
+  }
+
+  if (request.method === 'GET' && url.pathname === '/api/v1/events') {
+    const queryError = validateLocalCollectionQuery(url, ['filter[source]', 'filter[name]']);
+    if (queryError !== undefined) {
+      writeJsonResponse(response, 400, queryError, request);
+      return;
+    }
+    writeLocalCollectionResponse(
+      response,
+      filterLocalEvents([...state.events].reverse(), url),
+      url,
+      request,
+      (row) => typeof row.receivedAt === 'string' ? row.receivedAt : row.id,
+    );
+    return;
+  }
+
+  const eventDetailMatch = /^\/api\/v1\/events\/([^/]+)$/u.exec(url.pathname);
+  if (request.method === 'GET' && eventDetailMatch !== null) {
+    const eventId = safeDecodeURIComponent(eventDetailMatch[1] ?? '');
+    const event = eventId === undefined ? undefined : state.events.find((item) => item.id === eventId);
+    if (event === undefined) {
+      writeJsonResponse(response, 404, { error: 'event_not_found' }, request);
+      return;
+    }
+    writeJsonResponse(response, 200, {
+      data: localEventDetail(event),
+    }, request);
+    return;
+  }
+
+  if (request.method === 'GET' && url.pathname === '/api/v1/workflow-runs') {
+    if (!writeValidatedLocalCollectionResponse(response, localEmptyCollectionRows, url, request, (row) => row.id, ['filter[status]'])) {
+      return;
+    }
+    return;
+  }
+
+  if (request.method === 'GET' && url.pathname === '/api/v1/agent-tasks') {
+    if (!writeValidatedLocalCollectionResponse(response, localEmptyCollectionRows, url, request, (row) => row.id, ['filter[status]'])) {
+      return;
+    }
+    return;
+  }
+
+  if (request.method === 'GET' && url.pathname === '/api/v1/sources') {
+    const queryError = validateLocalCollectionQuery(url, ['filter[source]']);
+    if (queryError !== undefined) {
+      writeJsonResponse(response, 400, queryError, request);
+      return;
+    }
+    writeLocalCollectionResponse(
+      response,
+      filterLocalSources(localSourceRows(options.sources, state), url),
+      url,
+      request,
+      (row) => typeof row.name === 'string' ? row.name : row.id,
+    );
+    return;
+  }
+
+  const sourceDetailMatch = /^\/api\/v1\/sources\/([^/]+)$/u.exec(url.pathname);
+  if (request.method === 'GET' && sourceDetailMatch !== null) {
+    const sourceId = safeDecodeURIComponent(sourceDetailMatch[1] ?? '');
+    const row = sourceId === undefined
+      ? undefined
+      : localSourceRows(options.sources, state).find((source) => source.id === sourceId);
+    if (row === undefined) {
+      writeJsonResponse(response, 404, { error: 'source_not_found' }, request);
+      return;
+    }
+    writeJsonResponse(response, 200, {
+      data: row,
+    }, request);
+    return;
+  }
+
+  if (request.method === 'GET' && url.pathname === '/api/v1/queue') {
+    if (!writeValidatedLocalCollectionResponse(response, localEmptyCollectionRows, url, request, (row) => row.id, ['filter[status]'], {
+      summary: {
+        upcomingIssues: 0,
+        blockedReasons: [],
+        inProgressCount: 0,
+        claimedCount: 0,
+      },
+    })) {
+      return;
+    }
+    return;
+  }
+
+  if (request.method === 'GET' && url.pathname === '/api/v1/settings') {
+    writeLocalCollectionResponse(
+      response,
+      localSettingsRows(options),
+      url,
+      request,
+      (row) => row.id,
+    );
+    return;
+  }
+
+  writeJsonResponse(response, 404, { error: 'not_found' }, request);
+}
+
+async function handleLocalIntakeRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  options: RainrailStartOptions,
+  state: LocalRainrailServerState,
+  intakeSource: RainrailLocalSource,
+): Promise<void> {
+  let body: Buffer;
+  try {
+    body = await readRequestBodyForLocalServer(request, intakeSource.maxBodyBytes ?? localDefaultMaxRequestBodyBytes);
+  } catch (error) {
+    if (error instanceof LocalRequestBodyTooLargeError) {
+      writeJsonResponse(response, 413, { error: 'request_body_too_large' }, request);
+      return;
+    }
+    throw error;
+  }
+  if (!isAuthorizedLocalIntakeRequest(request, options, intakeSource, body)) {
+    writeJsonResponse(response, 401, { error: 'intake_auth_invalid' }, request);
+    return;
+  }
+  const payload = validateLocalIntakePayload(request, intakeSource, body);
+  if (!payload.ok) {
+    writeJsonResponse(response, 400, { error: payload.error }, request);
+    return;
+  }
+  const id = `local-event-${String(state.nextEventId).padStart(6, '0')}`;
+  state.nextEventId += 1;
+  const eventName = payload.eventName ?? `${intakeSource.sourceType}.event`;
+  const deliveryId = payload.deliveryId ?? id;
+  const occurredAt = new Date().toISOString();
+  const event: LocalRainrailEvent = {
+    id,
+    type: 'event',
+    name: eventName,
+    status: 'received',
+    summary: `${intakeSource.name} event received`,
+    deliveryId,
+    rawPayloadReference: `local://events/${id}`,
+    workflowRunCount: 0,
+    handlerRetryCount: 0,
+    subject: {
+      type: localSubjectTypeForEventName(eventName),
+      id,
+    },
+    occurredAt,
+    receivedAt: occurredAt,
+    source: {
+      type: intakeSource.sourceType,
+      name: intakeSource.name,
+    },
+    links: {
+      self: `/api/v1/events/${encodeURIComponent(id)}`,
+    },
+  };
+  state.events.push(event);
+  if (state.events.length > localEventHistoryLimit) {
+    state.events.splice(0, state.events.length - localEventHistoryLimit);
+  }
+  broadcastLocalEvent(state, event);
+  writeJsonResponse(response, 202, { data: event }, request);
+}
+
+function filterLocalEvents(events: readonly LocalRainrailEvent[], url: URL): readonly LocalRainrailEvent[] {
+  const sourceFilter = url.searchParams.get('filter[source]');
+  const nameFilter = url.searchParams.get('filter[name]');
+  return events
+    .filter((event) => matchesOptionalLocalFilter(event.source.type, sourceFilter))
+    .filter((event) => matchesOptionalLocalFilter(event.name, nameFilter));
+}
+
+function localEventDetail(event: LocalRainrailEvent): {
+  readonly id: string;
+  readonly type: 'event';
+  readonly compact: LocalRainrailEvent;
+  readonly record: {
+    readonly name: string;
+    readonly humanSummary: string;
+    readonly source: LocalRainrailEvent['source'];
+    readonly delivery: { readonly id: string; readonly receivedAt: string };
+    readonly subject: LocalRainrailEvent['subject'];
+    readonly occurredAt: string;
+    readonly receivedAt: string;
+    readonly envelope: LocalRainrailEvent;
+    readonly activityEvents: readonly [];
+    readonly handlerRetries: readonly [];
+  };
+} {
+  return {
+    id: event.id,
+    type: 'event',
+    compact: event,
+    record: {
+      name: event.name,
+      humanSummary: event.summary,
+      source: event.source,
+      delivery: { id: event.deliveryId, receivedAt: event.receivedAt },
+      subject: event.subject,
+      occurredAt: event.occurredAt,
+      receivedAt: event.receivedAt,
+      envelope: event,
+      activityEvents: [],
+      handlerRetries: [],
+    },
+  };
+}
+
+type LocalSourceRow = {
+  readonly id: string;
+  readonly type: 'source';
+  readonly status: 'configured';
+  readonly sourceType: string;
+  readonly name: string;
+  readonly endpoint: string;
+  readonly transport: 'http';
+  readonly auth: { readonly status: string };
+  readonly links: { readonly self: string };
+  readonly lastDelivery?: {
+    readonly id: string;
+    readonly status: string;
+    readonly occurredAt: string;
+    readonly receivedAt: string;
+    readonly links: { readonly self: string };
+  };
+};
+
+function localSourceRows(
+  sources: readonly RainrailLocalSource[],
+  state: LocalRainrailServerState,
+): readonly LocalSourceRow[] {
+  return sources.map((source) => {
+    const latestEvent = [...state.events]
+      .reverse()
+      .find((event) => event.source.name === source.name && event.source.type === source.sourceType);
+    const row = {
+      id: source.name,
+      type: 'source',
+      status: 'configured',
+      sourceType: source.sourceType,
+      name: source.name,
+      endpoint: source.endpoint,
+      transport: source.transport,
+      auth: { status: source.authConfigured ? 'configured' : 'not configured' },
+      links: { self: `/api/v1/sources/${encodeURIComponent(source.name)}` },
+    } satisfies Omit<LocalSourceRow, 'lastDelivery'>;
+    return latestEvent === undefined
+      ? row
+      : {
+        ...row,
+        lastDelivery: {
+          id: latestEvent.id,
+          status: latestEvent.status,
+          occurredAt: latestEvent.occurredAt,
+          receivedAt: latestEvent.receivedAt,
+          links: latestEvent.links,
+        },
+      };
+  });
+}
+
+function filterLocalSources(sources: readonly LocalSourceRow[], url: URL): readonly LocalSourceRow[] {
+  const sourceFilter = url.searchParams.get('filter[source]');
+  return sources.filter((source) => {
+    if (!isRecord(source)) {
+      return false;
+    }
+    return matchesOptionalLocalFilter(typeof source.sourceType === 'string' ? source.sourceType : undefined, sourceFilter);
+  });
+}
+
+type LocalSettingRow = {
+  readonly id: string;
+  readonly type: 'setting';
+  readonly status: 'read-only';
+  readonly label: string;
+  readonly value: string;
+};
+
+function localSettingsRows(options: RainrailStartOptions): readonly LocalSettingRow[] {
+  return [
+    { id: 'max-concurrency', type: 'setting', status: 'read-only', label: 'Max concurrency', value: '1 task' },
+    { id: 'auto-start', type: 'setting', status: 'read-only', label: 'Auto-start', value: 'not configured' },
+    { id: 'retry-policy', type: 'setting', status: 'read-only', label: 'Retry policy', value: '0 retries pending' },
+    { id: 'operational-snapshot-limit', type: 'setting', status: 'read-only', label: 'Operational snapshot limit', value: `${localEventHistoryLimit} events` },
+    { id: 'dashboard-auth', type: 'setting', status: 'read-only', label: 'Dashboard auth', value: options.dashboardToken === undefined ? 'not configured' : 'bearer token configured' },
+    { id: 'runtime', type: 'setting', status: 'read-only', label: 'Runtime', value: 'node' },
+  ];
+}
+
+function matchesOptionalLocalFilter(value: string | undefined, filter: string | null): boolean {
+  return filter === null || filter.length === 0 || value === filter;
+}
+
+function validateLocalCollectionQuery(
+  url: URL,
+  supportedFilters: readonly string[],
+): { readonly error: 'unsupported_filter'; readonly filter: string } | {
+  readonly error: 'unsupported_sort';
+  readonly sort: string;
+} | undefined {
+  for (const key of url.searchParams.keys()) {
+    if (key.startsWith('filter[') && !supportedFilters.includes(key)) {
+      return { error: 'unsupported_filter', filter: key };
+    }
+  }
+  const sort = url.searchParams.get('sort');
+  if (sort !== null && sort.length > 0) {
+    return { error: 'unsupported_sort', sort };
+  }
+  return undefined;
+}
+
+function parseLocalRequestUrl(request: IncomingMessage, options: RainrailStartOptions): URL | undefined {
+  const host = request.headers.host ?? `${options.host}:${options.port}`;
+  if (!isSafeHostHeader(host, options)) {
+    return undefined;
+  }
+  try {
+    return new URL(request.url ?? '/', `http://${host}`);
+  } catch {
+    return undefined;
+  }
+}
+
+function isSafeHostHeader(host: string, options?: RainrailStartOptions): boolean {
+  const hostName = hostHeaderName(host);
+  if (hostName === undefined) {
+    return false;
+  }
+  if (options === undefined) {
+    return true;
+  }
+  const allowed = new Set([
+    normalizeHostName(options.host),
+    'localhost',
+    '127.0.0.1',
+    '::1',
+    ...options.allowedHosts,
+  ]);
+  return allowed.has(hostName);
+}
+
+function hostHeaderName(host: string): string | undefined {
+  const bracketed = /^\[([0-9A-Fa-f:.]+)\](?::[0-9]{1,5})?$/u.exec(host);
+  if (bracketed?.[1] !== undefined) {
+    return bracketed[1].toLowerCase();
+  }
+  const named = /^([A-Za-z0-9._-]+)(?::[0-9]{1,5})?$/u.exec(host);
+  return named?.[1]?.toLowerCase();
+}
+
+function normalizeHostName(host: string): string {
+  return host.startsWith('[') && host.endsWith(']')
+    ? host.slice(1, -1).toLowerCase()
+    : host.toLowerCase();
+}
+
+function requiresLocalServerAuth(pathname: string, options: RainrailStartOptions): boolean {
+  return options.dashboardToken !== undefined &&
+    (pathname === '/events' || pathname.startsWith('/api/'));
+}
+
+function getLocalServerAuthError(
+  request: IncomingMessage,
+  pathname: string,
+  options: RainrailStartOptions,
+): { readonly status: number; readonly code: string } | undefined {
+  if (!requiresLocalServerAuth(pathname, options)) {
+    return undefined;
+  }
+  const authorization = request.headers.authorization;
+  if (typeof authorization !== 'string' || authorization.length === 0) {
+    return { status: 401, code: 'missing_bearer_token' };
+  }
+  if (!timingSafeStringEqual(authorization, `Bearer ${options.dashboardToken}`)) {
+    return { status: 403, code: 'invalid_bearer_token' };
+  }
+  return undefined;
+}
+
+function validateLocalIntakePayload(
+  request: IncomingMessage,
+  source: RainrailLocalSource,
+  body: Buffer,
+): { readonly ok: true; readonly eventName?: string; readonly deliveryId?: string } | {
+  readonly ok: false;
+  readonly error: 'missing_github_headers' | 'invalid_json_payload';
+} {
+  if (source.sourceType !== 'github') {
+    return { ok: true };
+  }
+  const githubEvent = request.headers['x-github-event'];
+  const deliveryId = request.headers['x-github-delivery'];
+  if (typeof githubEvent !== 'string' || githubEvent.length === 0 ||
+    typeof deliveryId !== 'string' || deliveryId.length === 0) {
+    return { ok: false, error: 'missing_github_headers' };
+  }
+  if (!isValidLocalGitHubPayload(request, body)) {
+    return { ok: false, error: 'invalid_json_payload' };
+  }
+  return {
+    ok: true,
+    eventName: toLocalGitHubEventName(githubEvent),
+    deliveryId,
+  };
+}
+
+function isValidLocalGitHubPayload(request: IncomingMessage, body: Buffer): boolean {
+  const contentType = request.headers['content-type'];
+  const contentTypeValue = Array.isArray(contentType) ? contentType[0] : contentType;
+  try {
+    if (typeof contentTypeValue === 'string' &&
+      contentTypeValue.toLowerCase().split(';', 1)[0]?.trim() === 'application/x-www-form-urlencoded') {
+      const payload = new URLSearchParams(body.toString('utf8')).get('payload');
+      if (payload === null) {
+        return false;
+      }
+      JSON.parse(payload) as unknown;
+      return true;
+    }
+    JSON.parse(body.toString('utf8')) as unknown;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function toLocalGitHubEventName(githubEvent: string): string {
+  const normalized = normalizeLocalToken(githubEvent);
+  if (normalized === 'issues' || normalized === 'issue_comment') {
+    return 'github.issue';
+  }
+  if (normalized === 'pull_request') {
+    return 'github.pull_request';
+  }
+  if (normalized === 'check_run' || normalized === 'check_suite' || normalized === 'workflow_run') {
+    return 'github.check_run';
+  }
+  if (
+    normalized === 'pull_request_review' ||
+    normalized === 'pull_request_review_comment' ||
+    normalized === 'pull_request_review_thread'
+  ) {
+    return 'github.review';
+  }
+  return `github.${normalized || 'unknown'}`;
+}
+
+function localSubjectTypeForEventName(eventName: string): string {
+  if (eventName === 'github.issue') {
+    return 'issue';
+  }
+  if (eventName === 'github.pull_request') {
+    return 'pull_request';
+  }
+  if (eventName === 'github.review') {
+    return 'review';
+  }
+  if (eventName === 'github.check_run') {
+    return 'check_run';
+  }
+  return eventName;
+}
+
+function normalizeLocalToken(value: string): string {
+  return value.trim().toLowerCase().replaceAll('-', '_');
+}
+
+function isAuthorizedLocalIntakeRequest(
+  request: IncomingMessage,
+  options: RainrailStartOptions,
+  source: RainrailLocalSource,
+  body: Buffer,
+): boolean {
+  if (source.webhookSecret === undefined) {
+    return isLocalBindHost(options.host);
+  }
+  const signature = request.headers['x-hub-signature-256'];
+  if (typeof signature !== 'string') {
+    return false;
+  }
+  const expected = createHmac('sha256', source.webhookSecret).update(body).digest('hex');
+  return timingSafeStringEqual(signature, `sha256=${expected}`);
+}
+
+function timingSafeStringEqual(left: string, right: string): boolean {
+  const leftBuffer = Buffer.from(left);
+  const rightBuffer = Buffer.from(right);
+  return leftBuffer.byteLength === rightBuffer.byteLength &&
+    timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+class LocalRequestBodyTooLargeError extends Error {}
+
+async function readRequestBodyForLocalServer(
+  request: IncomingMessage,
+  maxBodyBytes: number,
+): Promise<Buffer> {
+  let size = 0;
+  const chunks: Buffer[] = [];
+  for await (const _chunk of request) {
+    const chunk = typeof _chunk === 'string' ? Buffer.from(_chunk) : _chunk as Buffer;
+    size += chunk.byteLength;
+    if (size > maxBodyBytes) {
+      throw new LocalRequestBodyTooLargeError('request body too large');
+    }
+    chunks.push(chunk);
+    // Drain the request so clients can reuse the connection.
+  }
+  return Buffer.concat(chunks);
+}
+
+function broadcastLocalEvent(state: LocalRainrailServerState, event: LocalRainrailEvent): void {
+  const payload = `id: ${event.id}\nevent: ${event.name}\ndata: ${JSON.stringify(event)}\n\n`;
+  for (const client of state.sseClients) {
+    client.write(payload);
+  }
+}
+
+function writeLocalCollectionResponse<TRow extends { readonly id: string }>(
+  response: ServerResponse,
+  data: readonly TRow[],
+  url: URL,
+  request: IncomingMessage,
+  cursorValue: (row: TRow) => string,
+): void {
+  const page = paginatedCollectionResponse(data, url, cursorValue);
+  if (!page.ok) {
+    writeJsonResponse(response, 400, { error: page.error }, request);
+    return;
+  }
+  writeJsonResponse(response, 200, page.body, request);
+}
+
+function writeValidatedLocalCollectionResponse<TRow extends { readonly id: string }>(
+  response: ServerResponse,
+  data: readonly TRow[],
+  url: URL,
+  request: IncomingMessage,
+  cursorValue: (row: TRow) => string,
+  supportedFilters: readonly string[],
+  extra?: Record<string, unknown>,
+): boolean {
+  const queryError = validateLocalCollectionQuery(url, supportedFilters);
+  if (queryError !== undefined) {
+    writeJsonResponse(response, 400, queryError, request);
+    return false;
+  }
+  const page = paginatedCollectionResponse(data, url, cursorValue);
+  if (!page.ok) {
+    writeJsonResponse(response, 400, { error: page.error }, request);
+    return false;
+  }
+  writeJsonResponse(response, 200, extra === undefined ? page.body : {
+    ...page.body,
+    ...extra,
+  }, request);
+  return true;
+}
+
+function paginatedCollectionResponse<TRow extends { readonly id: string }>(
+  data: readonly TRow[],
+  url: URL,
+  cursorValue: (row: TRow) => string,
+): { readonly ok: false; readonly error: 'invalid_cursor' | 'invalid_limit' } | {
+  readonly ok: true;
+  readonly body: {
+    readonly data: readonly unknown[];
+    readonly page: {
+      readonly limit: number;
+      readonly nextCursor: string | null;
+    };
+  };
+} {
+  const limitValue = url.searchParams.get('limit');
+  const limit = limitValue === null ? 50 : Number(limitValue);
+  if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+    return { ok: false, error: 'invalid_limit' };
+  }
+  const cursorParam = url.searchParams.get('cursor');
+  const cursor = cursorParam === null ? undefined : decodeLocalPageCursor(cursorParam);
+  if (cursorParam !== null && cursor === undefined) {
+    return { ok: false, error: 'invalid_cursor' };
+  }
+  const offset = cursor === undefined
+    ? 0
+    : data.findIndex((row) => cursorValue(row) === cursor.value && row.id === cursor.id) + 1;
+  if (cursor !== undefined && offset === 0) {
+    return { ok: false, error: 'invalid_cursor' };
+  }
+  const pageData = data.slice(offset, offset + limit);
+  const last = pageData.at(-1);
+  const hasNext = offset + limit < data.length;
+  return {
+    ok: true,
+    body: {
+      data: pageData,
+      page: {
+        limit,
+        nextCursor: hasNext && last !== undefined
+          ? encodeLocalPageCursor({ value: cursorValue(last), id: last.id })
+          : null,
+      },
+    },
+  };
+}
+
+type LocalPageCursor = {
+  readonly value: string;
+  readonly id: string;
+};
+
+function encodeLocalPageCursor(cursor: LocalPageCursor): string {
+  return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url');
+}
+
+function decodeLocalPageCursor(value: string): LocalPageCursor | undefined {
+  try {
+    const parsed = JSON.parse(Buffer.from(value, 'base64url').toString('utf8')) as Partial<LocalPageCursor>;
+    if (typeof parsed.value !== 'string' || typeof parsed.id !== 'string') {
+      return undefined;
+    }
+    return { value: parsed.value, id: parsed.id };
+  } catch {
+    return undefined;
+  }
+}
+
+function parsePositiveInteger(value: string | null): number | undefined {
+  if (value === null) {
+    return undefined;
+  }
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function parseNonNegativeInteger(value: string | null): number | undefined {
+  if (value === null) {
+    return undefined;
+  }
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
+function safeDecodeURIComponent(value: string): string | undefined {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function preflightMethodsForLocalPath(pathname: string, options: RainrailStartOptions): readonly string[] | undefined {
+  if (pathname === '/healthz') return ['GET', 'OPTIONS'];
+  if (pathname === '/events') return ['GET', 'OPTIONS'];
+  if (pathname === '/api/state') return ['GET', 'OPTIONS'];
+  if (pathname === '/api/v1/overview') return ['GET', 'OPTIONS'];
+  if (pathname === '/api/v1/events') return ['GET', 'OPTIONS'];
+  if (/^\/api\/v1\/events\/[^/]+$/u.test(pathname)) return ['GET', 'OPTIONS'];
+  if (
+    pathname === '/api/v1/workflow-runs' ||
+    pathname === '/api/v1/agent-tasks' ||
+    pathname === '/api/v1/sources' ||
+    pathname === '/api/v1/queue' ||
+    pathname === '/api/v1/settings'
+  ) {
+    return ['GET', 'OPTIONS'];
+  }
+  if (options.sources.some((source) => source.endpoint === pathname)) {
+    return ['POST', 'OPTIONS'];
+  }
+  return undefined;
+}
+
+function writeCorsPreflightResponse(
+  response: ServerResponse,
+  allowedMethods: readonly string[] | undefined,
+  request: IncomingMessage,
+): void {
+  response.writeHead(204, {
+    ...localCorsHeaders,
+    ...localOriginCorsHeader(request),
+    ...(allowedMethods === undefined ? {} : {
+      'Access-Control-Allow-Methods': allowedMethods.join(', '),
+    }),
+  });
+  response.end();
+}
+
+function writeJsonResponse(
+  response: ServerResponse,
+  statusCode: number,
+  body: unknown,
+  request?: IncomingMessage,
+  headers: OutgoingHttpHeaders = {},
+): void {
+  response.writeHead(statusCode, {
+    ...localCorsHeaders,
+    ...localOriginCorsHeader(request),
+    'Content-Type': 'application/json; charset=utf-8',
+    ...headers,
+  });
+  response.end(`${JSON.stringify(body)}\n`);
+}
+
+function localOriginCorsHeader(request: IncomingMessage | undefined): { readonly 'Access-Control-Allow-Origin'?: string; readonly Vary?: string } {
+  const origin = request?.headers.origin;
+  if (typeof origin !== 'string' || !isAllowedLocalCorsOrigin(origin)) {
+    return {};
+  }
+  return {
+    'Access-Control-Allow-Origin': origin,
+    Vary: 'Origin',
+  };
+}
+
+function isAllowedLocalCorsOrigin(origin: string): boolean {
+  try {
+    const url = new URL(origin);
+    return (url.protocol === 'http:' || url.protocol === 'https:') &&
+      (url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '[::1]');
+  } catch {
+    return false;
+  }
+}
+
 function formatJson(value: unknown): string {
   return `${JSON.stringify(value, null, 2)}\n`;
 }
 
 function stripTrailingNewline(value: string): string {
   return value.endsWith('\n') ? value.slice(0, -1) : value;
+}
+
+function expandConfigEnv(raw: string, env: Record<string, string | undefined>): string {
+  return raw
+    .replace(
+      /(:\s*)\$\{([A-Z0-9_]+)\}/gu,
+      (_match, prefix: string, name: string) => `${prefix}${env[name] ?? ''}`,
+    )
+    .replace(
+      /([\[,]\s*)\$\{([A-Z0-9_]+)\}/gu,
+      (_match, prefix: string, name: string) => `${prefix}${env[name] ?? ''}`,
+    )
+    .replace(
+      /\$\{([A-Z0-9_]+)\}/gu,
+      (_match, name: string) => escapeJsonStringContent(env[name] ?? ''),
+    );
+}
+
+function markWebhookSecretEnvExpansions(raw: string, env: Record<string, string | undefined>): string {
+  const markerEnv = Object.fromEntries(
+    Object.entries(env).map(([name, value]) => [
+      name,
+      value === undefined ? undefined : markWebhookSecretEnvReferences(value, env),
+    ]),
+  ) as Record<string, string | undefined>;
+  const marked = markWebhookSecretEnvReferences(raw, env);
+  return expandConfigEnv(marked, markerEnv);
+}
+
+function markWebhookSecretEnvReferences(raw: string, env: Record<string, string | undefined>): string {
+  return raw.replace(
+    /("webhookSecret"\s*:\s*)"\$\{([A-Z0-9_]+)\}"/gu,
+    (_match, prefix: string, name: string) => `${prefix}${JSON.stringify({
+      __rainrailWebhookSecretEnv: name,
+      value: env[name] ?? '',
+    })}`,
+  );
+}
+
+function escapeJsonStringContent(value: string): string {
+  return JSON.stringify(value).slice(1, -1);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

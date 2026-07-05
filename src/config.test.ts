@@ -78,6 +78,10 @@ describe('parseConfig', () => {
           logDirectory: 'var/agent-task-logs',
         },
       },
+      server: {
+        host: '127.0.0.1',
+        port: 8787,
+      },
     });
 
     expect(config.sourceBundles).toEqual([
@@ -134,10 +138,20 @@ describe('parseConfig', () => {
       timeoutSeconds: 600,
       logDirectory: 'var/agent-task-logs',
     });
+    expect(config.server).toEqual({
+      host: '127.0.0.1',
+      port: 8787,
+      allowedHosts: [],
+    });
   });
 
   it('merges default task and runtime providers when provider sections are omitted', () => {
     expect(parseConfig({})).toEqual({
+      server: {
+        host: '127.0.0.1',
+        port: 8787,
+        allowedHosts: [],
+      },
       sourceBundles: [],
       sources: [],
       taskProviders: {
@@ -154,6 +168,30 @@ describe('parseConfig', () => {
         },
       },
     });
+  });
+
+  it('parses server host and port configuration', () => {
+    expect(parseConfig({
+      server: {
+        host: 'localhost',
+        port: 9999,
+      },
+    }).server).toEqual({
+      host: 'localhost',
+      port: 9999,
+      allowedHosts: [],
+    });
+  });
+
+  it.each([
+    ['string', 'config.server must be an object'],
+    [{ host: '', port: 8787 }, 'config.server.host must be a non-empty string'],
+    [{ host: '127.0.0.1', port: '8787' }, 'config.server.port must be an integer from 1 to 65535'],
+    [{ host: '127.0.0.1', port: 0 }, 'config.server.port must be an integer from 1 to 65535'],
+    [{ host: '127.0.0.1', port: 65536 }, 'config.server.port must be an integer from 1 to 65535'],
+    [{ host: '127.0.0.1', port: 8787.5 }, 'config.server.port must be an integer from 1 to 65535'],
+  ])('rejects invalid server config %# with a config path', (server, message) => {
+    expectConfigError({ server }, message);
   });
 
   it.each([
@@ -370,6 +408,29 @@ describe('parseConfig', () => {
         },
       },
     }).runtimeProviders.openclaw.timeoutSeconds).toBe(timeoutSeconds);
+  });
+
+  it('parses server allowedHosts from config', () => {
+    expect(parseConfig({
+      server: {
+        host: '0.0.0.0',
+        port: 8787,
+        allowedHosts: ['localhost', 'dashboard.local'],
+      },
+    }).server.allowedHosts).toEqual(['localhost', 'dashboard.local']);
+
+    expect(() => parseConfig({
+      server: {
+        allowedHosts: ['localhost', ''],
+      },
+    })).toThrow('config.server.allowedHosts[1] must be a non-empty string');
+  });
+
+  it('does not share default server allowedHosts arrays across parsed configs', () => {
+    const first = parseConfig({ server: { host: '127.0.0.1' } });
+    first.server.allowedHosts.push('dashboard.local');
+
+    expect(parseConfig({ server: { host: '127.0.0.1' } }).server.allowedHosts).toEqual([]);
   });
 
   it('expands environment variables as JSON string content before parsing', async () => {
