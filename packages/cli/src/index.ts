@@ -561,11 +561,24 @@ function runPluginCommand(
     };
   }
 
+  if (pluginCommand.name === 'setup' && isOfficialBundledPlugin(plugin)) {
+    return {
+      exitCode: 0,
+      stdout:
+        `Official plugin ${plugin.alias} setup completed. No bundled setup actions are registered yet.\n`,
+      stderr: '',
+    };
+  }
+
   return {
     exitCode: 2,
     stdout: '',
     stderr: `rainrail ${[...invocation, pluginCommand.name].join(' ')} requires plugin execution, which is not implemented yet.\n`,
   };
+}
+
+function isOfficialBundledPlugin(plugin: OfficialPluginMetadata): boolean {
+  return getOfficialPluginByAlias(plugin.alias)?.alias === plugin.alias;
 }
 
 function formatPluginCollisionHint(commandName: string, commandArgs: readonly string[]): string {
@@ -785,6 +798,8 @@ type SetupJsonResult = {
   readonly completed: boolean;
   readonly plugins: readonly string[];
   readonly steps: readonly SetupStepResult[];
+  readonly nextAction?: string;
+  readonly error?: string;
 };
 
 function runSetupCommand(
@@ -801,24 +816,24 @@ function runSetupCommand(
     return formatSetupError(options, error);
   }
   if (project === undefined) {
-    return {
-      exitCode: 1,
-      stdout: '',
-      stderr:
-        'rainrail setup requires a Rainrail project. Run it inside a directory with rainrail.config.json.\n',
-    };
+    return formatSetupError(
+      options,
+      'rainrail setup requires a Rainrail project. Run it inside a directory with rainrail.config.json.',
+    );
   }
+  const setupOptions = normalizeSetupOptions(cwd, options);
 
   const selectedPlugins = resolveSetupPlugins(args);
   if (selectedPlugins.error !== undefined) {
-    return {
-      exitCode: 1,
-      stdout: '',
-      stderr: selectedPlugins.error,
-    };
+    return formatSetupError(options, selectedPlugins.error);
   }
+  const plugins = selectedPlugins.plugins;
 
   if (!options.yes) {
+    if (options.json) {
+      return formatSetupPreview(plugins);
+    }
+
     return {
       exitCode: 0,
       stdout: formatSetupChoices(),
@@ -826,19 +841,11 @@ function runSetupCommand(
     };
   }
 
-  const plugins = selectedPlugins.plugins;
-  const commandRunner = environment.commandRunner ??
-    ((commandName, commandArgs, commandOptions) =>
-      spawnSync(commandName, commandArgs, {
-        cwd: commandOptions.cwd,
-        encoding: 'utf8',
-        stdio: commandOptions.stdio,
-      }));
   const invocation = createRainrailCommandInvocation(environment.currentBinPath ?? process.argv[1]);
   const steps: SetupStepResult[] = [];
 
   for (const plugin of plugins) {
-    const installResult = runPluginsCommand(['add', plugin.alias], options, {
+    const installResult = runPluginsCommand(['add', plugin.alias], setupOptions, {
       ...environment,
       cwd: project.root,
     });
@@ -858,21 +865,21 @@ function runSetupCommand(
       'plugin',
       plugin.alias,
       'setup',
-      ...formatForwardedSetupOptions(options),
+      ...formatForwardedSetupOptions(setupOptions),
     ];
-    const setupResult = commandRunner(invocation.command, setupArgs, {
-      stdio: 'pipe',
-      cwd: project.root,
-    });
-    const pluginSetupResult = {
-      exitCode: setupResult.status ?? 1,
-      stdout: toOutput(setupResult.stdout),
-      stderr: toOutput(setupResult.stderr),
-    };
+    const pluginSetupResult = environment.commandRunner === undefined
+      ? runPluginCommand(plugin, ['setup', ...formatForwardedSetupOptions(setupOptions)], [
+          'plugin',
+          plugin.alias,
+        ])
+      : toCliResult(environment.commandRunner(invocation.command, setupArgs, {
+          stdio: 'pipe',
+          cwd: project.root,
+        }));
     const setupStep = createSetupStep(
       plugin.alias,
       'setup',
-      ['rainrail', 'plugin', plugin.alias, 'setup', ...formatForwardedSetupOptions(options)],
+      ['rainrail', 'plugin', plugin.alias, 'setup', ...formatForwardedSetupOptions(setupOptions)],
       pluginSetupResult,
     );
     steps.push(setupStep);
@@ -885,7 +892,7 @@ function runSetupCommand(
 }
 
 function formatSetupError(options: SharedOptions, error: unknown): RainrailCliResult {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = stripTrailingNewline(error instanceof Error ? error.message : String(error));
   if (!options.json) {
     return {
       exitCode: 1,
@@ -907,6 +914,25 @@ function formatSetupError(options: SharedOptions, error: unknown): RainrailCliRe
   };
 }
 
+function toCliResult(result: CommandRunnerResult): RainrailCliResult {
+  return {
+    exitCode: result.status ?? 1,
+    stdout: toOutput(result.stdout),
+    stderr: toOutput(result.stderr),
+  };
+}
+
+function normalizeSetupOptions(cwd: string, options: SharedOptions): SharedOptions {
+  if (options.config === undefined) {
+    return options;
+  }
+
+  return {
+    ...options,
+    config: resolve(cwd, options.config),
+  };
+}
+
 function resolveSetupPlugins(args: readonly string[]): {
   readonly plugins: readonly OfficialPluginMetadata[];
   readonly error?: string;
@@ -922,7 +948,7 @@ function resolveSetupPlugins(args: readonly string[]): {
     if (plugin === undefined) {
       return {
         plugins: [],
-        error: `Unknown official plugin: ${arg}. Third-party and Git URL plugins are not supported by rainrail setup.\n`,
+        error: `Unknown official plugin: ${arg}. Third-party and Git URL plugins are not supported by rainrail setup.`,
       };
     }
     if (!seenAliases.has(plugin.alias)) {
@@ -948,6 +974,20 @@ function formatSetupChoices(): string {
     'Run `rainrail setup <plugin...> --yes` to install and set up selected official plugins.',
     '',
   ].join('\n');
+}
+
+function formatSetupPreview(plugins: readonly OfficialPluginMetadata[]): RainrailCliResult {
+  return {
+    exitCode: 0,
+    stdout: formatJson({
+      command: 'setup',
+      completed: false,
+      plugins: plugins.map((plugin) => plugin.alias),
+      steps: [],
+      nextAction: 'Run rainrail setup --yes to install and set up the selected official plugins.',
+    }),
+    stderr: '',
+  };
 }
 
 function formatForwardedSetupOptions(options: SharedOptions): readonly string[] {
@@ -1033,18 +1073,19 @@ function formatSetupResult(
   }
 
   const stdout = steps.map((step) => step.stdout).join('');
+  const stderr = steps.map((step) => step.stderr).join('');
   if (failedStep !== undefined) {
     return {
       exitCode: failedStep.exitCode,
       stdout,
-      stderr: `${failedStep.command.join(' ')} failed with exit code ${failedStep.exitCode}.\n${failedStep.stderr}`,
+      stderr: `${failedStep.command.join(' ')} failed with exit code ${failedStep.exitCode}.\n${stderr}`,
     };
   }
 
   return {
     exitCode: 0,
     stdout,
-    stderr: '',
+    stderr,
   };
 }
 
@@ -1557,4 +1598,8 @@ function formatRainrailLock(projectName: string): string {
 
 function formatJson(value: unknown): string {
   return `${JSON.stringify(value, null, 2)}\n`;
+}
+
+function stripTrailingNewline(value: string): string {
+  return value.endsWith('\n') ? value.slice(0, -1) : value;
 }
