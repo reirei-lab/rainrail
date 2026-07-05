@@ -7,6 +7,7 @@ import {
   BUILT_IN_COMMANDS,
   OFFICIAL_PLUGIN_CATALOG,
   type RainrailCliFileSystem,
+  type RainrailStartOptions,
   discoverRainrailProject,
   getBuiltInCommand,
   getOfficialPluginByAlias,
@@ -35,6 +36,7 @@ describe('Rainrail CLI built-in commands', () => {
     expect(BUILT_IN_COMMANDS.map((command) => command.name)).toEqual([
       'init',
       'setup',
+      'start',
       'doctor',
       'plugins',
       'plugin',
@@ -130,6 +132,162 @@ describe('Rainrail CLI built-in commands', () => {
       exitCode: 0,
       stdout: `rainrail ${packageJson.version}\n`,
       stderr: '',
+    });
+  });
+
+  it('starts a foreground local server with built-in defaults from a Rainrail workspace', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'local-server');
+      const starts: RainrailStartOptions[] = [];
+
+      const result = runRainrailCli(['start'], {
+        cwd: projectRoot,
+        serverStarter: (options) => {
+          starts.push(options);
+          return { stop: () => undefined };
+        },
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+      expect(starts).toHaveLength(1);
+      expect(starts[0]).toMatchObject({
+        host: '127.0.0.1',
+        port: 8787,
+        root: projectRoot,
+        configPath: join(projectRoot, 'rainrail.config.json'),
+      });
+      expect(result.stdout).toContain('Rainrail local server starting');
+      expect(result.stdout).toContain('Host: 127.0.0.1');
+      expect(result.stdout).toContain('Port: 8787');
+      expect(result.stdout).toContain(`Config: ${join(projectRoot, 'rainrail.config.json')}`);
+      expect(result.stdout).toContain('Health: http://127.0.0.1:8787/healthz');
+      expect(result.stdout).toContain('Events: http://127.0.0.1:8787/events');
+      expect(result.stdout).toContain('Dashboard API: http://127.0.0.1:8787/api/v1/overview');
+    });
+  });
+
+  it('uses rainrail.config.json server host and port for rainrail start', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'configured-server');
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        server: {
+          host: 'localhost',
+          port: 9001,
+        },
+        sourceBundles: [],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+      let startOptions: RainrailStartOptions | undefined;
+
+      const result = runRainrailCli(['start'], {
+        cwd: projectRoot,
+        serverStarter: (options) => {
+          startOptions = options;
+          return { stop: () => undefined };
+        },
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+      expect(startOptions).toMatchObject({
+        host: 'localhost',
+        port: 9001,
+      });
+    });
+  });
+
+  it('lets RAINRAIL_HOST and RAINRAIL_PORT override start config when flags are absent', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'env-server');
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        server: {
+          host: '127.0.0.1',
+          port: 8787,
+        },
+        sourceBundles: [],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+      let startOptions: RainrailStartOptions | undefined;
+
+      const result = runRainrailCli(['start'], {
+        cwd: projectRoot,
+        env: {
+          RAINRAIL_HOST: '0.0.0.0',
+          RAINRAIL_PORT: '9999',
+        },
+        serverStarter: (options) => {
+          startOptions = options;
+          return { stop: () => undefined };
+        },
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+      expect(startOptions).toMatchObject({
+        host: '0.0.0.0',
+        port: 9999,
+      });
+    });
+  });
+
+  it('lets --host and --port override start environment and config', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'flag-server');
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        server: {
+          host: '127.0.0.1',
+          port: 8787,
+        },
+        sourceBundles: [],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+      let startOptions: RainrailStartOptions | undefined;
+
+      const result = runRainrailCli(['start', '--host', 'localhost', '--port', '7070'], {
+        cwd: projectRoot,
+        env: {
+          RAINRAIL_HOST: '0.0.0.0',
+          RAINRAIL_PORT: '9999',
+        },
+        serverStarter: (options) => {
+          startOptions = options;
+          return { stop: () => undefined };
+        },
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+      expect(startOptions).toMatchObject({
+        host: 'localhost',
+        port: 7070,
+      });
+    });
+  });
+
+  it('rejects invalid rainrail start ports before opening the server', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'invalid-server');
+      let started = false;
+
+      const result = runRainrailCli(['start', '--port', '70000'], {
+        cwd: projectRoot,
+        serverStarter: () => {
+          started = true;
+          return { stop: () => undefined };
+        },
+      });
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toContain('rainrail start --port must be an integer from 1 to 65535');
+      expect(started).toBe(false);
     });
   });
 
@@ -1262,6 +1420,10 @@ describe('Rainrail CLI built-in commands', () => {
       const config = await readFile(join(projectRoot, 'rainrail.config.json'), 'utf8');
       expect(JSON.parse(config) as unknown).toEqual({
         project: { name: 'my-agent-ops' },
+        server: {
+          host: '127.0.0.1',
+          port: 8787,
+        },
         sourceBundles: [],
         sources: [],
         taskProviders: {},

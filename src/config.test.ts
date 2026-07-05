@@ -78,6 +78,10 @@ describe('parseConfig', () => {
           logDirectory: 'var/agent-task-logs',
         },
       },
+      server: {
+        host: '127.0.0.1',
+        port: 8787,
+      },
     });
 
     expect(config.sourceBundles).toEqual([
@@ -134,10 +138,18 @@ describe('parseConfig', () => {
       timeoutSeconds: 600,
       logDirectory: 'var/agent-task-logs',
     });
+    expect(config.server).toEqual({
+      host: '127.0.0.1',
+      port: 8787,
+    });
   });
 
   it('merges default task and runtime providers when provider sections are omitted', () => {
     expect(parseConfig({})).toEqual({
+      server: {
+        host: '127.0.0.1',
+        port: 8787,
+      },
       sourceBundles: [],
       sources: [],
       taskProviders: {
@@ -154,6 +166,29 @@ describe('parseConfig', () => {
         },
       },
     });
+  });
+
+  it('parses server host and port configuration', () => {
+    expect(parseConfig({
+      server: {
+        host: 'localhost',
+        port: 9999,
+      },
+    }).server).toEqual({
+      host: 'localhost',
+      port: 9999,
+    });
+  });
+
+  it.each([
+    ['string', 'config.server must be an object'],
+    [{ host: '', port: 8787 }, 'config.server.host must be a non-empty string'],
+    [{ host: '127.0.0.1', port: '8787' }, 'config.server.port must be an integer from 1 to 65535'],
+    [{ host: '127.0.0.1', port: 0 }, 'config.server.port must be an integer from 1 to 65535'],
+    [{ host: '127.0.0.1', port: 65536 }, 'config.server.port must be an integer from 1 to 65535'],
+    [{ host: '127.0.0.1', port: 8787.5 }, 'config.server.port must be an integer from 1 to 65535'],
+  ])('rejects invalid server config %# with a config path', (server, message) => {
+    expectConfigError({ server }, message);
   });
 
   it.each([

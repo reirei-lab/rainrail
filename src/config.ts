@@ -47,7 +47,13 @@ export interface RuntimeProviderConfig {
   openclaw: OpenClawRuntimeProviderConfig;
 }
 
+export interface RainrailServerConfig {
+  host: string;
+  port: number;
+}
+
 export interface RainrailConfig {
+  server: RainrailServerConfig;
   sourceBundles: SourceBundleConfig[];
   sources: SourceProviderConfig[];
   taskProviders: TaskProviderConfig;
@@ -63,6 +69,10 @@ const defaultOpenClawRuntimeProviderConfig: OpenClawRuntimeProviderConfig = {
   sessionKeyPrefix: 'rainrail',
   timeoutSeconds: 600,
   logDirectory: 'var/agent-task-logs',
+};
+const defaultServerConfig: RainrailServerConfig = {
+  host: '127.0.0.1',
+  port: 8787,
 };
 const safeSourceNamePattern = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/u;
 const githubWebhookSourceNameMaxLength = 53;
@@ -83,10 +93,25 @@ export function parseConfig(value: unknown): RainrailConfig {
   }
 
   return {
+    server: parseServer(value.server),
     sourceBundles: parseSourceBundles(value.sourceBundles),
     sources: parseSources(value.sources),
     taskProviders: parseTaskProviders(value.taskProviders),
     runtimeProviders: parseRuntimeProviders(value.runtimeProviders),
+  };
+}
+
+function parseServer(value: unknown): RainrailServerConfig {
+  if (value === undefined) {
+    return { ...defaultServerConfig };
+  }
+  if (!isRecord(value)) {
+    throw new Error('config.server must be an object');
+  }
+
+  return {
+    host: parseOptionalString(value.host, 'config.server.host') ?? defaultServerConfig.host,
+    port: parseOptionalPort(value.port, 'config.server.port') ?? defaultServerConfig.port,
   };
 }
 
@@ -401,6 +426,16 @@ function parseOptionalNonNegativeNumber(value: unknown, path: string): number | 
   }
   if (value < 0) {
     throw new Error(`${path} must be a finite non-negative number`);
+  }
+  return value;
+}
+
+function parseOptionalPort(value: unknown, path: string): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > 65535) {
+    throw new Error(`${path} must be an integer from 1 to 65535`);
   }
   return value;
 }

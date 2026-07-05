@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 import {
   existsSync,
   lstatSync,
@@ -38,6 +39,7 @@ export {
 export type BuiltInCommandName =
   | 'init'
   | 'setup'
+  | 'start'
   | 'doctor'
   | 'plugins'
   | 'plugin'
@@ -110,16 +112,31 @@ export type RainrailCliFileSystem = {
 
 export type PluginAliasResolver = (alias: string) => OfficialPluginMetadata | undefined;
 
+export type RainrailStartOptions = {
+  readonly host: string;
+  readonly port: number;
+  readonly root: string;
+  readonly configPath: string;
+};
+
+export type RainrailStartedServer = {
+  readonly stop: () => void;
+};
+
+export type RainrailServerStarter = (options: RainrailStartOptions) => RainrailStartedServer;
+
 export type RainrailCliEnvironment = {
   readonly cacheDirectory?: string;
   readonly cwd?: string;
   readonly commandRunner?: CommandRunner;
   readonly currentVersion?: string;
   readonly currentBinPath?: string;
+  readonly env?: Record<string, string | undefined>;
   readonly fileSystem?: Partial<RainrailCliFileSystem>;
   readonly now?: () => Date;
   readonly pluginAliasResolver?: PluginAliasResolver;
   readonly releaseFetcher?: ReleaseFetcher;
+  readonly serverStarter?: RainrailServerStarter;
   readonly stdin?: string;
   readonly stdinReader?: () => string;
   readonly stderrWriter?: (message: string) => void;
@@ -189,6 +206,12 @@ export const BUILT_IN_COMMANDS: readonly BuiltInCommand[] = [
     name: 'setup',
     kind: 'built-in',
     summary: 'Prepare local Rainrail configuration.',
+    implemented: true,
+  },
+  {
+    name: 'start',
+    kind: 'built-in',
+    summary: 'Start the local Rainrail server in the foreground.',
     implemented: true,
   },
   {
@@ -1143,6 +1166,10 @@ export function runRainrailCli(
     return runSetupCommand(parsed.commandArgs, parsed.options, environment);
   }
 
+  if (command.name === 'start') {
+    return runStartCommand(parsed.commandArgs, parsed.options, environment);
+  }
+
   if (command.name === 'plugins') {
     return runPluginsCommand(parsed.commandArgs, parsed.options, environment);
   }
@@ -1155,6 +1182,253 @@ export function runRainrailCli(
       pluginCollisionHint ?? '',
     ].join(''),
   };
+}
+
+type StartArguments = {
+  readonly host?: string;
+  readonly port?: number;
+  readonly errors: readonly string[];
+};
+
+type StartConfig = {
+  readonly server?: {
+    readonly host?: string;
+    readonly port?: number;
+  };
+};
+
+function runStartCommand(
+  args: readonly string[],
+  options: SharedOptions,
+  environment: RainrailCliEnvironment,
+): RainrailCliResult {
+  const parsedStart = parseStartArguments(args);
+  if (parsedStart.errors.length > 0) {
+    return {
+      exitCode: 1,
+      stdout: '',
+      stderr: `${parsedStart.errors.join('\n')}\n`,
+    };
+  }
+
+  const cwd = environment.cwd === undefined ? process.cwd() : environment.cwd;
+  const fileSystem = getRainrailCliFileSystem(environment);
+  let project: RainrailProject | undefined;
+  try {
+    project = resolveRainrailProject(cwd, options, fileSystem);
+  } catch (error) {
+    return {
+      exitCode: 1,
+      stdout: '',
+      stderr: `${error instanceof Error ? error.message : String(error)}\n`,
+    };
+  }
+  if (project === undefined) {
+    return {
+      exitCode: 1,
+      stdout: '',
+      stderr:
+        'rainrail start requires a Rainrail project. Run it inside a directory with rainrail.config.json.\n',
+    };
+  }
+
+  let config: StartConfig;
+  try {
+    config = readStartConfig(project.configPath, fileSystem);
+  } catch (error) {
+    return {
+      exitCode: 1,
+      stdout: '',
+      stderr: `${error instanceof Error ? error.message : String(error)}\n`,
+    };
+  }
+
+  const resolved = resolveStartOptions(
+    project,
+    config,
+    environment.env ?? process.env,
+    parsedStart,
+  );
+  if (resolved.error !== undefined) {
+    return {
+      exitCode: 1,
+      stdout: '',
+      stderr: `${resolved.error}\n`,
+    };
+  }
+
+  const startOptions = resolved.options;
+  try {
+    (environment.serverStarter ?? startLocalRainrailServer)(startOptions);
+  } catch (error) {
+    return {
+      exitCode: 1,
+      stdout: '',
+      stderr: `${error instanceof Error ? error.message : String(error)}\n`,
+    };
+  }
+
+  return {
+    exitCode: 0,
+    stdout: formatStartOutput(startOptions),
+    stderr: '',
+  };
+}
+
+function parseStartArguments(args: readonly string[]): StartArguments {
+  const errors: string[] = [];
+  let host: string | undefined;
+  let port: number | undefined;
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === undefined) continue;
+
+    if (arg === '--host' || arg === '--port') {
+      const value = args[index + 1];
+      if (value === undefined || value.startsWith('--')) {
+        errors.push(`Missing value for rainrail start ${arg}.`);
+        continue;
+      }
+      if (arg === '--host') {
+        const parsedHost = parseStartHost(value, 'rainrail start --host');
+        if (typeof parsedHost === 'string') host = parsedHost;
+        else errors.push(parsedHost.message);
+      } else {
+        const parsedPort = parseStartPort(value, 'rainrail start --port');
+        if (typeof parsedPort === 'number') port = parsedPort;
+        else errors.push(parsedPort.message);
+      }
+      index += 1;
+      continue;
+    }
+
+    if (arg.startsWith('--host=')) {
+      const parsedHost = parseStartHost(arg.slice('--host='.length), 'rainrail start --host');
+      if (typeof parsedHost === 'string') host = parsedHost;
+      else errors.push(parsedHost.message);
+      continue;
+    }
+
+    if (arg.startsWith('--port=')) {
+      const parsedPort = parseStartPort(arg.slice('--port='.length), 'rainrail start --port');
+      if (typeof parsedPort === 'number') port = parsedPort;
+      else errors.push(parsedPort.message);
+      continue;
+    }
+
+    errors.push(`Unknown rainrail start option: ${arg}.`);
+  }
+
+  const result: { host?: string; port?: number; errors: readonly string[] } = { errors };
+  if (host !== undefined) result.host = host;
+  if (port !== undefined) result.port = port;
+  return result;
+}
+
+function readStartConfig(configPath: string, fileSystem: RainrailCliFileSystem): StartConfig {
+  const raw = fileSystem.readFileSync(configPath, 'utf8');
+  const value = JSON.parse(raw) as unknown;
+  if (!isRecord(value)) {
+    throw new Error('config must be an object');
+  }
+
+  const server = parseStartConfigServer(value.server);
+  return server === undefined ? {} : { server };
+}
+
+function parseStartConfigServer(value: unknown): StartConfig['server'] {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!isRecord(value)) {
+    throw new Error('config.server must be an object');
+  }
+
+  const server: { host?: string; port?: number } = {};
+  if (value.host !== undefined) {
+    const host = parseStartHost(value.host, 'config.server.host');
+    if (typeof host !== 'string') throw new Error(host.message);
+    server.host = host;
+  }
+  if (value.port !== undefined) {
+    const port = parseStartPort(value.port, 'config.server.port');
+    if (typeof port !== 'number') throw new Error(port.message);
+    server.port = port;
+  }
+  return server;
+}
+
+function resolveStartOptions(
+  project: RainrailProject,
+  config: StartConfig,
+  env: Record<string, string | undefined>,
+  args: StartArguments,
+): { readonly options: RainrailStartOptions; readonly error?: undefined } | {
+  readonly options?: undefined;
+  readonly error: string;
+} {
+  const envHost = env.RAINRAIL_HOST === undefined
+    ? undefined
+    : parseStartHost(env.RAINRAIL_HOST, 'RAINRAIL_HOST');
+  if (envHost !== undefined && typeof envHost !== 'string') {
+    return { error: envHost.message };
+  }
+
+  const envPort = env.RAINRAIL_PORT === undefined
+    ? undefined
+    : parseStartPort(env.RAINRAIL_PORT, 'RAINRAIL_PORT');
+  if (envPort !== undefined && typeof envPort !== 'number') {
+    return { error: envPort.message };
+  }
+
+  return {
+    options: {
+      host: args.host ?? envHost ?? config.server?.host ?? '127.0.0.1',
+      port: args.port ?? envPort ?? config.server?.port ?? 8787,
+      root: project.root,
+      configPath: project.configPath,
+    },
+  };
+}
+
+function parseStartHost(value: unknown, label: string): string | { readonly message: string } {
+  if (typeof value !== 'string' || value.length === 0) {
+    return { message: `${label} must be a non-empty string` };
+  }
+  return value;
+}
+
+function parseStartPort(value: unknown, label: string): number | { readonly message: string } {
+  const port = typeof value === 'number'
+    ? value
+    : typeof value === 'string' && value.length > 0
+      ? Number(value)
+      : Number.NaN;
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    return { message: `${label} must be an integer from 1 to 65535` };
+  }
+  return port;
+}
+
+function formatStartOutput(options: RainrailStartOptions): string {
+  const baseUrl = `http://${formatUrlHost(options.host)}:${options.port}`;
+  return [
+    'Rainrail local server starting',
+    `Workspace: ${options.root}`,
+    `Config: ${options.configPath}`,
+    `Host: ${options.host}`,
+    `Port: ${options.port}`,
+    `Health: ${baseUrl}/healthz`,
+    `Events: ${baseUrl}/events`,
+    `Dashboard API: ${baseUrl}/api/v1/overview`,
+    'Press Ctrl+C to stop.',
+    '',
+  ].join('\n');
+}
+
+function formatUrlHost(host: string): string {
+  return host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
 }
 
 function runVersionCommand(args: readonly string[]): RainrailCliResult {
@@ -2218,6 +2492,10 @@ function writeGeneratedFile(
 function formatRainrailConfig(projectName: string): string {
   return `${JSON.stringify({
     project: { name: projectName },
+    server: {
+      host: '127.0.0.1',
+      port: 8787,
+    },
     sourceBundles: [],
     sources: [],
     taskProviders: {},
@@ -2233,10 +2511,94 @@ function formatRainrailLock(projectName: string): string {
   });
 }
 
+function startLocalRainrailServer(options: RainrailStartOptions): RainrailStartedServer {
+  const server = http.createServer((request, response) => {
+    handleLocalRainrailRequest(request, response, options);
+  });
+  server.listen(options.port, options.host);
+
+  const stop = (): void => {
+    server.close(() => undefined);
+  };
+  process.once('SIGINT', () => {
+    server.close(() => {
+      process.exit(0);
+    });
+  });
+
+  return { stop };
+}
+
+function handleLocalRainrailRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  options: RainrailStartOptions,
+): void {
+  const host = request.headers.host ?? `${options.host}:${options.port}`;
+  const url = new URL(request.url ?? '/', `http://${host}`);
+
+  if (request.method === 'GET' && url.pathname === '/healthz') {
+    writeJsonResponse(response, 200, {
+      ok: true,
+      runtime: 'node',
+      workspace: options.root,
+    });
+    return;
+  }
+
+  if (request.method === 'GET' && url.pathname === '/events') {
+    response.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+    });
+    response.write(': rainrail local server connected\n\n');
+    return;
+  }
+
+  if (request.method === 'GET' && url.pathname === '/api/state') {
+    writeJsonResponse(response, 200, {
+      counts: { events: 0, activityEvents: 0 },
+      events: [],
+      workspace: options.root,
+    });
+    return;
+  }
+
+  if (request.method === 'GET' && url.pathname === '/api/v1/overview') {
+    writeJsonResponse(response, 200, {
+      data: {
+        runtime: 'node',
+        workspace: options.root,
+        counts: { events: 0, activityEvents: 0, agentTasks: 0, eventHandlerRetries: 0 },
+      },
+      links: {
+        self: '/api/v1/overview',
+        events: '/events',
+        health: '/healthz',
+      },
+    });
+    return;
+  }
+
+  writeJsonResponse(response, 404, { error: 'not_found' });
+}
+
+function writeJsonResponse(response: ServerResponse, statusCode: number, body: unknown): void {
+  response.writeHead(statusCode, {
+    'Content-Type': 'application/json; charset=utf-8',
+  });
+  response.end(`${JSON.stringify(body)}\n`);
+}
+
 function formatJson(value: unknown): string {
   return `${JSON.stringify(value, null, 2)}\n`;
 }
 
 function stripTrailingNewline(value: string): string {
   return value.endsWith('\n') ? value.slice(0, -1) : value;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
