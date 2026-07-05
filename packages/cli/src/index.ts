@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 import {
   existsSync,
@@ -136,6 +137,7 @@ export type RainrailLocalSource = {
   readonly endpoint: string;
   readonly transport: 'http';
   readonly authConfigured: boolean;
+  readonly webhookSecret?: string;
   readonly maxBodyBytes?: number;
 };
 
@@ -1545,7 +1547,7 @@ function parseLocalSource(source: Record<string, unknown>): RainrailLocalSource 
       ? 'github'
       : undefined;
   const endpoint = typeof source.endpoint === 'string' && source.endpoint.startsWith('/')
-    ? source.endpoint
+    ? parseLocalSourceEndpoint(source.endpoint)
     : source.type === 'github-webhook'
       ? '/webhooks/github'
       : undefined;
@@ -1554,24 +1556,38 @@ function parseLocalSource(source: Record<string, unknown>): RainrailLocalSource 
   }
   const maxBodyBytes = source.maxBodyBytes === undefined ? undefined : parseLocalSourceMaxBodyBytes(source.maxBodyBytes);
 
+  const webhookSecret = typeof source.webhookSecret === 'string' && source.webhookSecret.length > 0
+    ? source.webhookSecret
+    : undefined;
   const localSource: {
     name: string;
     sourceType: string;
     endpoint: string;
     transport: 'http';
     authConfigured: boolean;
+    webhookSecret?: string;
     maxBodyBytes?: number;
   } = {
     name,
     sourceType,
     endpoint,
     transport: 'http',
-    authConfigured: typeof source.webhookSecret === 'string' && source.webhookSecret.length > 0,
+    authConfigured: webhookSecret !== undefined,
   };
+  if (webhookSecret !== undefined) {
+    localSource.webhookSecret = webhookSecret;
+  }
   if (maxBodyBytes !== undefined) {
     localSource.maxBodyBytes = maxBodyBytes;
   }
   return localSource;
+}
+
+function parseLocalSourceEndpoint(endpoint: string): string {
+  if (endpoint.includes('?') || endpoint.includes('#')) {
+    throw new Error('config endpoint must be a path without query or fragment');
+  }
+  return endpoint;
 }
 
 function parseLocalSourceMaxBodyBytes(value: unknown): number {
@@ -1585,11 +1601,10 @@ function dedupeLocalSources(sources: readonly RainrailLocalSource[]): RainrailLo
   const seen = new Set<string>();
   const deduped: RainrailLocalSource[] = [];
   for (const source of sources) {
-    const key = `${source.endpoint}\0${source.name}`;
-    if (seen.has(key)) {
-      continue;
+    if (seen.has(source.endpoint)) {
+      throw new Error(`config endpoints must be unique: ${source.endpoint}`);
     }
-    seen.add(key);
+    seen.add(source.endpoint);
     deduped.push(source);
   }
   return deduped;
@@ -1619,7 +1634,9 @@ function resolveStartOptions(
   }
 
   const host = args.host ?? envHost ?? config.server?.host ?? '127.0.0.1';
-  const dashboardToken = env.SSE_BEARER_TOKEN;
+  const dashboardToken = env.SSE_BEARER_TOKEN === undefined || env.SSE_BEARER_TOKEN.length === 0
+    ? undefined
+    : env.SSE_BEARER_TOKEN;
   if (!isLocalBindHost(host) && (dashboardToken === undefined || dashboardToken.length === 0)) {
     return { error: 'SSE_BEARER_TOKEN is required when rainrail start binds outside localhost' };
   }
@@ -2855,11 +2872,11 @@ async function handleLocalRainrailRequest(
   }
 
   if (request.method === 'GET' && url.pathname === '/healthz') {
-    writeJsonResponse(response, 200, {
+    writeJsonResponse(response, 200, isLocalBindHost(options.host) ? {
       ok: true,
       runtime: 'node',
       workspace: options.root,
-    });
+    } : { ok: true, runtime: 'node' });
     return;
   }
 
@@ -2884,14 +2901,19 @@ async function handleLocalRainrailRequest(
 
   const intakeSource = options.sources.find((source) => source.endpoint === url.pathname);
   if (request.method === 'POST' && intakeSource !== undefined) {
+    let body: Buffer;
     try {
-      await readRequestBodyForLocalServer(request, intakeSource.maxBodyBytes ?? 1024 * 1024);
+      body = await readRequestBodyForLocalServer(request, intakeSource.maxBodyBytes ?? 1024 * 1024);
     } catch (error) {
       if (error instanceof LocalRequestBodyTooLargeError) {
         writeJsonResponse(response, 413, { error: 'request_body_too_large' });
         return;
       }
       throw error;
+    }
+    if (!isAuthorizedLocalIntakeRequest(request, options, intakeSource, body)) {
+      writeJsonResponse(response, 401, { error: 'intake_auth_invalid' });
+      return;
     }
     const id = `local-event-${String(state.nextEventId).padStart(6, '0')}`;
     state.nextEventId += 1;
@@ -3020,7 +3042,7 @@ async function handleLocalRainrailRequest(
 
 function parseLocalRequestUrl(request: IncomingMessage, options: RainrailStartOptions): URL | undefined {
   const host = request.headers.host ?? `${options.host}:${options.port}`;
-  if (!isSafeHostHeader(host)) {
+  if (!isSafeHostHeader(host, options)) {
     return undefined;
   }
   try {
@@ -3030,16 +3052,41 @@ function parseLocalRequestUrl(request: IncomingMessage, options: RainrailStartOp
   }
 }
 
-function isSafeHostHeader(host: string): boolean {
-  return /^[A-Za-z0-9._-]+(?::[0-9]{1,5})?$/u.test(host) ||
-    /^\[[0-9A-Fa-f:.]+\](?::[0-9]{1,5})?$/u.test(host);
+function isSafeHostHeader(host: string, options?: RainrailStartOptions): boolean {
+  const hostName = hostHeaderName(host);
+  if (hostName === undefined) {
+    return false;
+  }
+  if (options === undefined) {
+    return true;
+  }
+  const allowed = new Set([
+    normalizeHostName(options.host),
+    'localhost',
+    '127.0.0.1',
+    '::1',
+  ]);
+  return allowed.has(hostName);
+}
+
+function hostHeaderName(host: string): string | undefined {
+  const bracketed = /^\[([0-9A-Fa-f:.]+)\](?::[0-9]{1,5})?$/u.exec(host);
+  if (bracketed?.[1] !== undefined) {
+    return bracketed[1].toLowerCase();
+  }
+  const named = /^([A-Za-z0-9._-]+)(?::[0-9]{1,5})?$/u.exec(host);
+  return named?.[1]?.toLowerCase();
+}
+
+function normalizeHostName(host: string): string {
+  return host.startsWith('[') && host.endsWith(']')
+    ? host.slice(1, -1).toLowerCase()
+    : host.toLowerCase();
 }
 
 function requiresLocalServerAuth(pathname: string, options: RainrailStartOptions): boolean {
   return options.dashboardToken !== undefined &&
-    (pathname === '/events' ||
-      pathname.startsWith('/api/') ||
-      options.sources.some((source) => source.endpoint === pathname));
+    (pathname === '/events' || pathname.startsWith('/api/'));
 }
 
 function isAuthorizedLocalRequest(request: IncomingMessage, options: RainrailStartOptions): boolean {
@@ -3047,25 +3094,55 @@ function isAuthorizedLocalRequest(request: IncomingMessage, options: RainrailSta
     request.headers.authorization === `Bearer ${options.dashboardToken}`;
 }
 
+function isAuthorizedLocalIntakeRequest(
+  request: IncomingMessage,
+  options: RainrailStartOptions,
+  source: RainrailLocalSource,
+  body: Buffer,
+): boolean {
+  if (isLocalBindHost(options.host)) {
+    return true;
+  }
+  if (source.webhookSecret === undefined) {
+    return false;
+  }
+  const signature = request.headers['x-hub-signature-256'];
+  if (typeof signature !== 'string') {
+    return false;
+  }
+  const expected = createHmac('sha256', source.webhookSecret).update(body).digest('hex');
+  return timingSafeStringEqual(signature, `sha256=${expected}`);
+}
+
+function timingSafeStringEqual(left: string, right: string): boolean {
+  const leftBuffer = Buffer.from(left);
+  const rightBuffer = Buffer.from(right);
+  return leftBuffer.byteLength === rightBuffer.byteLength &&
+    timingSafeEqual(leftBuffer, rightBuffer);
+}
+
 class LocalRequestBodyTooLargeError extends Error {}
 
 async function readRequestBodyForLocalServer(
   request: IncomingMessage,
   maxBodyBytes: number,
-): Promise<void> {
+): Promise<Buffer> {
   let size = 0;
+  const chunks: Buffer[] = [];
   for await (const _chunk of request) {
     const chunk = typeof _chunk === 'string' ? Buffer.from(_chunk) : _chunk as Buffer;
     size += chunk.byteLength;
     if (size > maxBodyBytes) {
       throw new LocalRequestBodyTooLargeError('request body too large');
     }
+    chunks.push(chunk);
     // Drain the request so clients can reuse the connection.
   }
+  return Buffer.concat(chunks);
 }
 
 function broadcastLocalEvent(state: LocalRainrailServerState, event: LocalRainrailEvent): void {
-  const payload = `event: message\ndata: ${JSON.stringify(event)}\n\n`;
+  const payload = `id: ${event.id}\nevent: ${event.name}\ndata: ${JSON.stringify(event)}\n\n`;
   for (const client of state.sseClients) {
     client.write(payload);
   }

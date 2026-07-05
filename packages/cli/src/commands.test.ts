@@ -1,4 +1,5 @@
 import { writeFileSync as realWriteFileSync } from 'node:fs';
+import { createHmac } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import net from 'node:net';
 import { join } from 'node:path';
@@ -50,6 +51,10 @@ async function getFreePort(host = '127.0.0.1'): Promise<number> {
 
 async function closeTestServer(result: { server?: { stop: () => void | Promise<void> } }): Promise<void> {
   await result.server?.stop();
+}
+
+function githubSignature(secret: string, body: string): string {
+  return `sha256=${createHmac('sha256', secret).update(body).digest('hex')}`;
 }
 
 describe('Rainrail CLI built-in commands', () => {
@@ -273,6 +278,7 @@ describe('Rainrail CLI built-in commands', () => {
         sourceType: 'github',
         transport: 'http',
         authConfigured: true,
+        webhookSecret: 'expanded-secret',
       }]);
     });
   });
@@ -529,7 +535,9 @@ describe('Rainrail CLI built-in commands', () => {
         expect(posted.status).toBe(202);
 
         const chunk = await reader.read();
-        expect(new TextDecoder().decode(chunk.value)).toContain('event: message');
+        const frame = new TextDecoder().decode(chunk.value);
+        expect(frame).toContain('id: local-event-000001');
+        expect(frame).toContain('event: github.event');
       } finally {
         controller.abort();
         await closeTestServer(result);
@@ -638,7 +646,7 @@ describe('Rainrail CLI built-in commands', () => {
     });
   });
 
-  it('requires bearer auth for public intake routes', async () => {
+  it('requires source-specific signatures instead of dashboard bearer auth for public intake routes', async () => {
     await withTempDirectory(async (directory) => {
       const projectRoot = await initRainrailProject(directory, 'public-intake-auth');
       const port = await getFreePort();
@@ -667,18 +675,145 @@ describe('Rainrail CLI built-in commands', () => {
       });
       try {
         expect(result.exitCode).toBe(0);
+        const body = '{}';
         const rejected = await fetch(`http://127.0.0.1:${port}/webhooks/github`, {
           method: 'POST',
-          body: '{}',
+          body,
         });
         expect(rejected.status).toBe(401);
 
         const accepted = await fetch(`http://127.0.0.1:${port}/webhooks/github`, {
           method: 'POST',
-          headers: { authorization: 'Bearer events-token' },
-          body: '{}',
+          headers: { 'x-hub-signature-256': githubSignature('secret', body) },
+          body,
         });
         expect(accepted.status).toBe(202);
+      } finally {
+        await closeTestServer(result);
+      }
+    });
+  });
+
+  it('treats empty SSE_BEARER_TOKEN as unset on localhost', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'empty-events-token');
+      const port = await getFreePort();
+
+      const result = await runRainrailCliAsync(['start', '--port', String(port)], {
+        cwd: projectRoot,
+        env: { SSE_BEARER_TOKEN: '' },
+      });
+      try {
+        expect(result.exitCode).toBe(0);
+        const overview = await fetch(`http://127.0.0.1:${port}/api/v1/overview`);
+        expect(overview.status).toBe(200);
+      } finally {
+        await closeTestServer(result);
+      }
+    });
+  });
+
+  it('rejects endpoint values that are not plain paths and duplicate endpoints', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'invalid-endpoints');
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        sourceBundles: [{
+          type: 'eep-bridge',
+          name: 'local',
+          sources: [{
+            type: 'github-webhook',
+            name: 'github-local',
+            sourceType: 'github',
+            provider: 'github',
+            webhookSecret: 'secret',
+            endpoint: '/webhooks/github?x=1',
+          }],
+        }],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+
+      const invalidEndpoint = runRainrailCli(['start'], {
+        cwd: projectRoot,
+        serverStarter: () => ({ stop: () => undefined }),
+      });
+      expect(invalidEndpoint.exitCode).toBe(1);
+      expect(invalidEndpoint.stderr).toContain('config endpoint must be a path without query or fragment');
+
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        sourceBundles: [{
+          type: 'eep-bridge',
+          name: 'local',
+          sources: [
+            {
+              type: 'github-webhook',
+              name: 'github-one',
+              sourceType: 'github',
+              provider: 'github',
+              webhookSecret: 'secret',
+              endpoint: '/webhooks/github',
+            },
+            {
+              type: 'github-webhook',
+              name: 'github-two',
+              sourceType: 'github',
+              provider: 'github',
+              webhookSecret: 'secret',
+              endpoint: '/webhooks/github',
+            },
+          ],
+        }],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+
+      const duplicateEndpoint = runRainrailCli(['start'], {
+        cwd: projectRoot,
+        serverStarter: () => ({ stop: () => undefined }),
+      });
+      expect(duplicateEndpoint.exitCode).toBe(1);
+      expect(duplicateEndpoint.stderr).toContain('config endpoints must be unique');
+    });
+  });
+
+  it('rejects non-loopback Host headers on localhost start', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'host-allowlist');
+      const port = await getFreePort();
+      const result = await runRainrailCliAsync(['start', '--port', String(port)], { cwd: projectRoot });
+      try {
+        expect(result.exitCode).toBe(0);
+        const socket = net.createConnection({ host: '127.0.0.1', port });
+        socket.write('GET /api/v1/overview HTTP/1.1\\r\\nHost: attacker.example:8787\\r\\nConnection: close\\r\\n\\r\\n');
+        let response = '';
+        socket.setEncoding('utf8');
+        socket.on('data', (chunk) => {
+          response += chunk;
+        });
+        await once(socket, 'end');
+
+        expect(response).toContain('400 Bad Request');
+      } finally {
+        await closeTestServer(result);
+      }
+    });
+  });
+
+  it('does not expose workspace paths on public health checks', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'public-healthz');
+      const port = await getFreePort();
+      const result = await runRainrailCliAsync(['start', '--host', '0.0.0.0', '--port', String(port)], {
+        cwd: projectRoot,
+        env: { SSE_BEARER_TOKEN: 'events-token' },
+      });
+      try {
+        expect(result.exitCode).toBe(0);
+        const health = await fetch(`http://127.0.0.1:${port}/healthz`);
+        expect(health.status).toBe(200);
+        expect(await health.json()).toEqual({ ok: true, runtime: 'node' });
       } finally {
         await closeTestServer(result);
       }
