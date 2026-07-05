@@ -136,6 +136,7 @@ export type RainrailLocalSource = {
   readonly endpoint: string;
   readonly transport: 'http';
   readonly authConfigured: boolean;
+  readonly maxBodyBytes?: number;
 };
 
 export type RainrailCliEnvironment = {
@@ -1490,16 +1491,22 @@ function appendSourceBundleSources(
   sources: RainrailLocalSource[],
   value: unknown,
 ): void {
-  if (!Array.isArray(value)) {
+  if (value === undefined) {
     return;
   }
+  if (!Array.isArray(value)) {
+    throw new Error('config.sourceBundles must be an array');
+  }
   for (const bundle of value) {
-    if (!isRecord(bundle) || !Array.isArray(bundle.sources)) {
-      continue;
+    if (!isRecord(bundle)) {
+      throw new Error('config.sourceBundles[] must be an object');
+    }
+    if (!Array.isArray(bundle.sources)) {
+      throw new Error('config.sourceBundles[].sources must be an array');
     }
     for (const source of bundle.sources) {
       if (!isRecord(source)) {
-        continue;
+        throw new Error('config.sourceBundles[].sources[] must be an object');
       }
       const localSource = parseLocalSource(source);
       if (localSource !== undefined) {
@@ -1513,12 +1520,15 @@ function appendConfiguredSources(
   sources: RainrailLocalSource[],
   value: unknown,
 ): void {
-  if (!Array.isArray(value)) {
+  if (value === undefined) {
     return;
+  }
+  if (!Array.isArray(value)) {
+    throw new Error('config.sources must be an array');
   }
   for (const source of value) {
     if (!isRecord(source)) {
-      continue;
+      throw new Error('config.sources[] must be an object');
     }
     const localSource = parseLocalSource(source);
     if (localSource !== undefined) {
@@ -1542,14 +1552,33 @@ function parseLocalSource(source: Record<string, unknown>): RainrailLocalSource 
   if (name === undefined || sourceType === undefined || endpoint === undefined) {
     return undefined;
   }
+  const maxBodyBytes = source.maxBodyBytes === undefined ? undefined : parseLocalSourceMaxBodyBytes(source.maxBodyBytes);
 
-  return {
+  const localSource: {
+    name: string;
+    sourceType: string;
+    endpoint: string;
+    transport: 'http';
+    authConfigured: boolean;
+    maxBodyBytes?: number;
+  } = {
     name,
     sourceType,
     endpoint,
     transport: 'http',
     authConfigured: typeof source.webhookSecret === 'string' && source.webhookSecret.length > 0,
   };
+  if (maxBodyBytes !== undefined) {
+    localSource.maxBodyBytes = maxBodyBytes;
+  }
+  return localSource;
+}
+
+function parseLocalSourceMaxBodyBytes(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    throw new Error('config source maxBodyBytes must be a finite non-negative number');
+  }
+  return value;
 }
 
 function dedupeLocalSources(sources: readonly RainrailLocalSource[]): RainrailLocalSource[] {
@@ -2749,12 +2778,14 @@ type LocalRainrailEvent = {
 type LocalRainrailServerState = {
   nextEventId: number;
   events: LocalRainrailEvent[];
+  sseClients: Set<ServerResponse>;
 };
 
 async function startLocalRainrailServer(options: RainrailStartOptions): Promise<RainrailStartedServer> {
   const state: LocalRainrailServerState = {
     nextEventId: 1,
     events: [],
+    sseClients: new Set(),
   };
   const server = http.createServer((request, response) => {
     handleLocalRainrailRequest(request, response, options, state).catch(() => {
@@ -2843,13 +2874,25 @@ async function handleLocalRainrailRequest(
       'Cache-Control': 'no-cache',
       Connection: 'keep-alive',
     });
+    state.sseClients.add(response);
+    response.once('close', () => {
+      state.sseClients.delete(response);
+    });
     response.write(': rainrail local server connected\n\n');
     return;
   }
 
   const intakeSource = options.sources.find((source) => source.endpoint === url.pathname);
   if (request.method === 'POST' && intakeSource !== undefined) {
-    await readRequestBodyForLocalServer(request);
+    try {
+      await readRequestBodyForLocalServer(request, intakeSource.maxBodyBytes ?? 1024 * 1024);
+    } catch (error) {
+      if (error instanceof LocalRequestBodyTooLargeError) {
+        writeJsonResponse(response, 413, { error: 'request_body_too_large' });
+        return;
+      }
+      throw error;
+    }
     const id = `local-event-${String(state.nextEventId).padStart(6, '0')}`;
     state.nextEventId += 1;
     const event: LocalRainrailEvent = {
@@ -2868,6 +2911,7 @@ async function handleLocalRainrailRequest(
       },
     };
     state.events.push(event);
+    broadcastLocalEvent(state, event);
     writeJsonResponse(response, 202, { data: event });
     return;
   }
@@ -2903,7 +2947,25 @@ async function handleLocalRainrailRequest(
   }
 
   if (request.method === 'GET' && url.pathname === '/api/v1/events') {
-    writeJsonResponse(response, 200, collectionResponse(state.events));
+    writeJsonResponse(response, 200, paginatedCollectionResponse(state.events, url));
+    return;
+  }
+
+  const eventDetailMatch = /^\/api\/v1\/events\/([^/]+)$/u.exec(url.pathname);
+  if (request.method === 'GET' && eventDetailMatch !== null) {
+    const eventId = safeDecodeURIComponent(eventDetailMatch[1] ?? '');
+    const event = eventId === undefined ? undefined : state.events.find((item) => item.id === eventId);
+    if (event === undefined) {
+      writeJsonResponse(response, 404, { error: 'event_not_found' });
+      return;
+    }
+    writeJsonResponse(response, 200, {
+      data: {
+        id: event.id,
+        type: 'event',
+        record: event,
+      },
+    });
     return;
   }
 
@@ -2969,11 +3031,15 @@ function parseLocalRequestUrl(request: IncomingMessage, options: RainrailStartOp
 }
 
 function isSafeHostHeader(host: string): boolean {
-  return /^[A-Za-z0-9.[\]_-]+(?::[0-9]{1,5})?$/u.test(host);
+  return /^[A-Za-z0-9._-]+(?::[0-9]{1,5})?$/u.test(host) ||
+    /^\[[0-9A-Fa-f:.]+\](?::[0-9]{1,5})?$/u.test(host);
 }
 
 function requiresLocalServerAuth(pathname: string, options: RainrailStartOptions): boolean {
-  return options.dashboardToken !== undefined && (pathname === '/events' || pathname.startsWith('/api/'));
+  return options.dashboardToken !== undefined &&
+    (pathname === '/events' ||
+      pathname.startsWith('/api/') ||
+      options.sources.some((source) => source.endpoint === pathname));
 }
 
 function isAuthorizedLocalRequest(request: IncomingMessage, options: RainrailStartOptions): boolean {
@@ -2981,9 +3047,27 @@ function isAuthorizedLocalRequest(request: IncomingMessage, options: RainrailSta
     request.headers.authorization === `Bearer ${options.dashboardToken}`;
 }
 
-async function readRequestBodyForLocalServer(request: IncomingMessage): Promise<void> {
+class LocalRequestBodyTooLargeError extends Error {}
+
+async function readRequestBodyForLocalServer(
+  request: IncomingMessage,
+  maxBodyBytes: number,
+): Promise<void> {
+  let size = 0;
   for await (const _chunk of request) {
+    const chunk = typeof _chunk === 'string' ? Buffer.from(_chunk) : _chunk as Buffer;
+    size += chunk.byteLength;
+    if (size > maxBodyBytes) {
+      throw new LocalRequestBodyTooLargeError('request body too large');
+    }
     // Drain the request so clients can reuse the connection.
+  }
+}
+
+function broadcastLocalEvent(state: LocalRainrailServerState, event: LocalRainrailEvent): void {
+  const payload = `event: message\ndata: ${JSON.stringify(event)}\n\n`;
+  for (const client of state.sseClients) {
+    client.write(payload);
   }
 }
 
@@ -2998,6 +3082,50 @@ function collectionResponse(data: readonly unknown[]): {
     data,
     page: { limit: 50, nextCursor: null },
   };
+}
+
+function paginatedCollectionResponse(data: readonly unknown[], url: URL): {
+  readonly data: readonly unknown[];
+  readonly page: {
+    readonly limit: number;
+    readonly nextCursor: string | null;
+  };
+} {
+  const limit = parsePositiveInteger(url.searchParams.get('limit')) ?? 50;
+  const cursor = parseNonNegativeInteger(url.searchParams.get('cursor')) ?? 0;
+  const pageData = data.slice(cursor, cursor + limit);
+  const nextOffset = cursor + pageData.length;
+  return {
+    data: pageData,
+    page: {
+      limit,
+      nextCursor: nextOffset < data.length ? String(nextOffset) : null,
+    },
+  };
+}
+
+function parsePositiveInteger(value: string | null): number | undefined {
+  if (value === null) {
+    return undefined;
+  }
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function parseNonNegativeInteger(value: string | null): number | undefined {
+  if (value === null) {
+    return undefined;
+  }
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
+function safeDecodeURIComponent(value: string): string | undefined {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return undefined;
+  }
 }
 
 function writeJsonResponse(response: ServerResponse, statusCode: number, body: unknown): void {
