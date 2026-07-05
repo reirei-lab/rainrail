@@ -23,10 +23,17 @@ async function withTempDirectory(test: (directory: string) => Promise<void>): Pr
   }
 }
 
+async function initRainrailProject(parentDirectory: string, projectName: string): Promise<string> {
+  const projectRoot = join(parentDirectory, projectName);
+  await mkdir(projectRoot, { recursive: true });
+  expect(runRainrailCli(['init', '--yes'], { cwd: projectRoot }).exitCode).toBe(0);
+  return projectRoot;
+}
+
 describe('Rainrail CLI built-in commands', () => {
   it('defines the command table without provider or runtime specific handlers', () => {
     expect(BUILT_IN_COMMANDS.map((command) => command.name)).toEqual([
-      'new',
+      'init',
       'setup',
       'doctor',
       'plugins',
@@ -234,7 +241,7 @@ describe('Rainrail CLI built-in commands', () => {
     expect(result.stderr).toContain('Use `rainrail plugin plugins run` to call the plugin.');
   });
 
-  it('prints collision guidance before running implemented built-ins in verbose mode', async () => {
+  it('lets removed built-in command names resolve as plugins', async () => {
     await withTempDirectory(async (directory) => {
       const result = runRainrailCli(['--verbose', 'new', 'run'], {
         cwd: directory,
@@ -259,8 +266,7 @@ describe('Rainrail CLI built-in commands', () => {
 
       expect(result.exitCode).toBe(2);
       expect(result.stdout).toBe('');
-      expect(result.stderr).toContain('rainrail new is a built-in command.');
-      expect(result.stderr).toContain('Use `rainrail plugin new run` to call the plugin.');
+      expect(result.stderr).toContain('rainrail new run requires plugin execution');
       await expect(stat(join(directory, 'run'))).rejects.toThrow();
     });
   });
@@ -324,8 +330,7 @@ describe('Rainrail CLI built-in commands', () => {
 
   it('prints official setup choices without mutating the project when --yes is omitted', async () => {
     await withTempDirectory(async (directory) => {
-      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
-      const projectRoot = join(directory, 'my-agent-ops');
+      const projectRoot = await initRainrailProject(directory, 'my-agent-ops');
 
       const result = runRainrailCli(['setup'], { cwd: projectRoot });
 
@@ -344,8 +349,7 @@ describe('Rainrail CLI built-in commands', () => {
 
   it('prints only selected official setup choices when plugin arguments are provided', async () => {
     await withTempDirectory(async (directory) => {
-      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
-      const projectRoot = join(directory, 'my-agent-ops');
+      const projectRoot = await initRainrailProject(directory, 'my-agent-ops');
 
       const result = runRainrailCli(['setup', 'gh'], { cwd: projectRoot });
 
@@ -361,8 +365,7 @@ describe('Rainrail CLI built-in commands', () => {
 
   it('includes target options in selected setup text preview next action', async () => {
     await withTempDirectory(async (directory) => {
-      expect(runRainrailCli(['new', 'target-project'], { cwd: directory }).exitCode).toBe(0);
-      const projectRoot = join(directory, 'target-project');
+      const projectRoot = await initRainrailProject(directory, 'target-project');
       const configPath = join(projectRoot, 'rainrail.config.json');
 
       const result = runRainrailCli([
@@ -384,8 +387,7 @@ describe('Rainrail CLI built-in commands', () => {
 
   it('orchestrates official plugin install and setup commands in --yes mode', async () => {
     await withTempDirectory(async (directory) => {
-      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
-      const projectRoot = join(directory, 'my-agent-ops');
+      const projectRoot = await initRainrailProject(directory, 'my-agent-ops');
       const calls: Array<{
         command: string;
         args: readonly string[];
@@ -435,8 +437,7 @@ describe('Rainrail CLI built-in commands', () => {
 
   it('uses the bundled official plugin setup route when no command runner is injected', async () => {
     await withTempDirectory(async (directory) => {
-      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
-      const projectRoot = join(directory, 'my-agent-ops');
+      const projectRoot = await initRainrailProject(directory, 'my-agent-ops');
 
       const result = runRainrailCli(['setup', 'github', '--yes'], { cwd: projectRoot });
 
@@ -452,8 +453,7 @@ describe('Rainrail CLI built-in commands', () => {
 
   it('limits setup orchestration to explicitly selected official plugins', async () => {
     await withTempDirectory(async (directory) => {
-      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
-      const projectRoot = join(directory, 'my-agent-ops');
+      const projectRoot = await initRainrailProject(directory, 'my-agent-ops');
       const calls: Array<{ args: readonly string[] }> = [];
 
       const result = runRainrailCli(['--yes', 'setup', 'gh', 'oc'], {
@@ -479,8 +479,7 @@ describe('Rainrail CLI built-in commands', () => {
 
   it('returns setup orchestration steps as JSON for automation', async () => {
     await withTempDirectory(async (directory) => {
-      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
-      const projectRoot = join(directory, 'my-agent-ops');
+      const projectRoot = await initRainrailProject(directory, 'my-agent-ops');
 
       const result = runRainrailCli(['--json', '--yes', 'setup', 'github'], {
         cwd: projectRoot,
@@ -520,8 +519,7 @@ describe('Rainrail CLI built-in commands', () => {
 
   it('returns setup preview as JSON when --json is used without --yes', async () => {
     await withTempDirectory(async (directory) => {
-      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
-      const projectRoot = join(directory, 'my-agent-ops');
+      const projectRoot = await initRainrailProject(directory, 'my-agent-ops');
 
       const result = runRainrailCli(['--json', 'setup', 'gh'], { cwd: projectRoot });
 
@@ -542,8 +540,7 @@ describe('Rainrail CLI built-in commands', () => {
 
   it('includes target options in setup JSON preview nextAction', async () => {
     await withTempDirectory(async (directory) => {
-      expect(runRainrailCli(['new', 'target-project'], { cwd: directory }).exitCode).toBe(0);
-      const projectRoot = join(directory, 'target-project');
+      const projectRoot = await initRainrailProject(directory, 'target-project');
       const configPath = join(projectRoot, 'rainrail.config.json');
 
       const result = runRainrailCli([
@@ -569,8 +566,7 @@ describe('Rainrail CLI built-in commands', () => {
     await withTempDirectory(async (directory) => {
       const spacedParent = join(directory, 'space parent');
       await mkdir(spacedParent);
-      expect(runRainrailCli(['new', 'target-project'], { cwd: spacedParent }).exitCode).toBe(0);
-      const projectRoot = join(spacedParent, 'target-project');
+      const projectRoot = await initRainrailProject(spacedParent, 'target-project');
       const configPath = join(projectRoot, 'rainrail.config.json');
 
       const result = runRainrailCli([
@@ -591,8 +587,7 @@ describe('Rainrail CLI built-in commands', () => {
 
   it('includes target options in setup JSON step commands', async () => {
     await withTempDirectory(async (directory) => {
-      expect(runRainrailCli(['new', 'target-project'], { cwd: directory }).exitCode).toBe(0);
-      const projectRoot = join(directory, 'target-project');
+      const projectRoot = await initRainrailProject(directory, 'target-project');
       const nested = join(projectRoot, 'nested');
       const configPath = join(projectRoot, 'rainrail.config.json');
       await mkdir(nested);
@@ -638,8 +633,7 @@ describe('Rainrail CLI built-in commands', () => {
 
   it('returns setup input errors as JSON when --json is used', async () => {
     await withTempDirectory(async (directory) => {
-      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
-      const projectRoot = join(directory, 'my-agent-ops');
+      const projectRoot = await initRainrailProject(directory, 'my-agent-ops');
 
       const result = runRainrailCli(['--json', '--yes', 'setup', 'typo'], { cwd: projectRoot });
 
@@ -658,8 +652,7 @@ describe('Rainrail CLI built-in commands', () => {
 
   it('resolves relative setup --config before changing into the project root', async () => {
     await withTempDirectory(async (directory) => {
-      expect(runRainrailCli(['new', 'target-project'], { cwd: directory }).exitCode).toBe(0);
-      const projectRoot = join(directory, 'target-project');
+      const projectRoot = await initRainrailProject(directory, 'target-project');
       const nested = join(projectRoot, 'nested');
       await mkdir(nested);
 
@@ -681,8 +674,7 @@ describe('Rainrail CLI built-in commands', () => {
 
   it('keeps successful plugin setup stderr visible in the top-level result', async () => {
     await withTempDirectory(async (directory) => {
-      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
-      const projectRoot = join(directory, 'my-agent-ops');
+      const projectRoot = await initRainrailProject(directory, 'my-agent-ops');
 
       const result = runRainrailCli(['setup', 'github', '--yes'], {
         cwd: projectRoot,
@@ -702,8 +694,7 @@ describe('Rainrail CLI built-in commands', () => {
 
   it('stops setup orchestration at the failed plugin setup step', async () => {
     await withTempDirectory(async (directory) => {
-      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
-      const projectRoot = join(directory, 'my-agent-ops');
+      const projectRoot = await initRainrailProject(directory, 'my-agent-ops');
       const calls: Array<{ args: readonly string[] }> = [];
 
       const result = runRainrailCli(['--yes', 'setup'], {
@@ -896,12 +887,13 @@ describe('Rainrail CLI built-in commands', () => {
 
   it('scaffolds a project-local config, lockfile, and plugin directory', async () => {
     await withTempDirectory(async (directory) => {
-      const result = runRainrailCli(['new', 'my-agent-ops'], { cwd: directory });
       const projectRoot = join(directory, 'my-agent-ops');
+      await mkdir(projectRoot);
+      const result = runRainrailCli(['init'], { cwd: projectRoot });
 
       expect(result).toEqual({
         exitCode: 0,
-        stdout: `Created Rainrail project at ${projectRoot}\n`,
+        stdout: `Initialized Rainrail workspace at ${projectRoot}\n`,
         stderr: '',
       });
       const config = await readFile(join(projectRoot, 'rainrail.config.json'), 'utf8');
@@ -920,13 +912,13 @@ describe('Rainrail CLI built-in commands', () => {
         }, null, 2)}\n`,
       );
       await expect(readFile(join(projectRoot, '.rainrail', 'plugins', '.gitkeep'), 'utf8')).resolves.toBe('');
+      await expect(stat(join(projectRoot, 'my-agent-ops'))).rejects.toThrow();
     });
   });
 
   it('scaffolds a project-local layout through the injected filesystem', async () => {
     await withTempDirectory(async (directory) => {
-      const cwd = join(directory, 'virtual-cwd');
-      const projectRoot = join(cwd, 'my-agent-ops');
+      const projectRoot = join(directory, 'virtual-cwd');
       const directories = new Set<string>();
       const files = new Map<string, string>();
       const statsFor = (path: string) => ({
@@ -941,6 +933,12 @@ describe('Rainrail CLI built-in commands', () => {
           directories.add(String(path));
           return undefined;
         }) as RainrailCliFileSystem['mkdirSync'],
+        readdirSync: ((path) => {
+          if (!directories.has(String(path))) {
+            throw new Error(`missing virtual directory: ${String(path)}`);
+          }
+          return [];
+        }) as RainrailCliFileSystem['readdirSync'],
         readFileSync: ((path) => {
           const content = files.get(String(path));
           if (content === undefined) {
@@ -955,32 +953,33 @@ describe('Rainrail CLI built-in commands', () => {
           files.set(String(path), String(data));
         }) as RainrailCliFileSystem['writeFileSync'],
       };
+      directories.add(projectRoot);
 
-      expect(runRainrailCli(['new', 'my-agent-ops'], {
-        cwd,
+      expect(runRainrailCli(['init'], {
+        cwd: projectRoot,
         fileSystem: virtualFileSystem,
       })).toEqual({
         exitCode: 0,
-        stdout: `Created Rainrail project at ${projectRoot}\n`,
+        stdout: `Initialized Rainrail workspace at ${projectRoot}\n`,
         stderr: '',
       });
 
       expect(directories.has(projectRoot)).toBe(true);
       expect(directories.has(join(projectRoot, '.rainrail'))).toBe(true);
       expect(directories.has(join(projectRoot, '.rainrail', 'plugins'))).toBe(true);
-      expect(files.get(join(projectRoot, 'rainrail.config.json'))).toContain('"name": "my-agent-ops"');
+      expect(files.get(join(projectRoot, 'rainrail.config.json'))).toContain('"name": "virtual-cwd"');
       expect(files.get(join(projectRoot, 'rainrail.lock'))).toContain('"plugins": []');
       expect(files.get(join(projectRoot, '.rainrail', 'plugins', '.gitkeep'))).toBe('');
-      await expect(stat(projectRoot)).rejects.toThrow();
+      await expect(stat(join(projectRoot, 'my-agent-ops'))).rejects.toThrow();
     });
   });
 
   it('treats repeated scaffolding as safe when generated files are unchanged', async () => {
     await withTempDirectory(async (directory) => {
-      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
-      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory })).toEqual({
+      const projectRoot = await initRainrailProject(directory, 'my-agent-ops');
+      expect(runRainrailCli(['init'], { cwd: projectRoot })).toEqual({
         exitCode: 0,
-        stdout: `Rainrail project already exists at ${join(directory, 'my-agent-ops')}\n`,
+        stdout: `Rainrail workspace already initialized at ${projectRoot}\n`,
         stderr: '',
       });
     });
@@ -988,20 +987,53 @@ describe('Rainrail CLI built-in commands', () => {
 
   it('refuses to overwrite changed project-local files during scaffolding', async () => {
     await withTempDirectory(async (directory) => {
-      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
-      await writeFile(join(directory, 'my-agent-ops', 'rainrail.lock'), '{"plugins":["custom"]}\n');
+      const projectRoot = await initRainrailProject(directory, 'my-agent-ops');
+      await writeFile(join(projectRoot, 'rainrail.lock'), '{"plugins":["custom"]}\n');
 
-      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory })).toEqual({
+      expect(runRainrailCli(['init'], { cwd: projectRoot })).toEqual({
         exitCode: 1,
         stdout: '',
-        stderr: `Refusing to overwrite existing file with different content: ${join(directory, 'my-agent-ops', 'rainrail.lock')}\n`,
+        stderr: `Refusing to overwrite existing file with different content: ${join(projectRoot, 'rainrail.lock')}\n`,
       });
+    });
+  });
+
+  it('asks before initializing a non-empty directory and treats yes as confirmation', async () => {
+    await withTempDirectory(async (directory) => {
+      await writeFile(join(directory, 'README.md'), 'existing workspace\n');
+
+      expect(runRainrailCli(['init'], { cwd: directory })).toEqual({
+        exitCode: 0,
+        stdout: '',
+        stderr: 'Current directory is not empty. Initialize Rainrail workspace here? [y/N]\n',
+      });
+      await expect(stat(join(directory, 'rainrail.config.json'))).rejects.toThrow();
+
+      expect(runRainrailCli(['init'], { cwd: directory, stdin: 'yes\n' }).exitCode).toBe(0);
+      await expect(readFile(join(directory, 'rainrail.config.json'), 'utf8')).resolves.toContain(
+        `"name": "${directory.split('/').at(-1)}"`,
+      );
+    });
+  });
+
+  it('skips the non-empty directory prompt when --yes is provided', async () => {
+    await withTempDirectory(async (directory) => {
+      await writeFile(join(directory, 'README.md'), 'existing workspace\n');
+
+      expect(runRainrailCli(['init', '--yes'], { cwd: directory })).toEqual({
+        exitCode: 0,
+        stdout: `Initialized Rainrail workspace at ${directory}\n`,
+        stderr: '',
+      });
+      await expect(readFile(join(directory, 'rainrail.lock'), 'utf8')).resolves.toContain(
+        '"plugins": []',
+      );
     });
   });
 
   it('discovers the Rainrail project root from a nested directory', async () => {
     await withTempDirectory(async (directory) => {
-      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
+      await initRainrailProject(directory, 'my-agent-ops');
       const nested = join(directory, 'my-agent-ops', 'workflows', 'github');
       await mkdir(nested, { recursive: true });
 
@@ -1036,8 +1068,7 @@ describe('Rainrail CLI built-in commands', () => {
 
   it('adds, lists, and removes official plugins from project-local state', async () => {
     await withTempDirectory(async (directory) => {
-      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
-      const projectRoot = join(directory, 'my-agent-ops');
+      const projectRoot = await initRainrailProject(directory, 'my-agent-ops');
 
       expect(runRainrailCli(['plugins', 'add', 'github'], { cwd: projectRoot })).toEqual({
         exitCode: 0,
@@ -1088,10 +1119,8 @@ describe('Rainrail CLI built-in commands', () => {
 
   it('uses --config to choose the project-local plugin state', async () => {
     await withTempDirectory(async (directory) => {
-      expect(runRainrailCli(['new', 'current-project'], { cwd: directory }).exitCode).toBe(0);
-      expect(runRainrailCli(['new', 'target-project'], { cwd: directory }).exitCode).toBe(0);
-      const currentProject = join(directory, 'current-project');
-      const targetProject = join(directory, 'target-project');
+      const currentProject = await initRainrailProject(directory, 'current-project');
+      const targetProject = await initRainrailProject(directory, 'target-project');
 
       expect(runRainrailCli([
         '--config',
@@ -1179,8 +1208,7 @@ describe('Rainrail CLI built-in commands', () => {
 
   it('keeps plugin management idempotent and resolves official aliases', async () => {
     await withTempDirectory(async (directory) => {
-      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
-      const projectRoot = join(directory, 'my-agent-ops');
+      const projectRoot = await initRainrailProject(directory, 'my-agent-ops');
 
       expect(runRainrailCli(['plugins', 'add', 'gh'], { cwd: projectRoot }).stdout).toBe(
         'Added official plugin github@0.1.0\n',
@@ -1212,9 +1240,9 @@ describe('Rainrail CLI built-in commands', () => {
         stderr: 'rainrail plugins requires a Rainrail project. Run it inside a directory with rainrail.config.json.\n',
       });
 
-      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
+      const projectRoot = await initRainrailProject(directory, 'my-agent-ops');
       expect(runRainrailCli(['plugins', 'add', 'https://example.com/plugin.git'], {
-        cwd: join(directory, 'my-agent-ops'),
+        cwd: projectRoot,
       })).toEqual({
         exitCode: 1,
         stdout: '',
@@ -1226,10 +1254,10 @@ describe('Rainrail CLI built-in commands', () => {
 
   it('rejects extra arguments for rainrail plugins list', async () => {
     await withTempDirectory(async (directory) => {
-      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
+      const projectRoot = await initRainrailProject(directory, 'my-agent-ops');
 
       expect(runRainrailCli(['plugins', 'list', 'github'], {
-        cwd: join(directory, 'my-agent-ops'),
+        cwd: projectRoot,
       })).toEqual({
         exitCode: 1,
         stdout: '',
@@ -1240,8 +1268,7 @@ describe('Rainrail CLI built-in commands', () => {
 
   it('returns plugin filesystem failures as CLI results', async () => {
     await withTempDirectory(async (directory) => {
-      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
-      const projectRoot = join(directory, 'my-agent-ops');
+      const projectRoot = await initRainrailProject(directory, 'my-agent-ops');
       await rm(join(projectRoot, '.rainrail', 'plugins'), { recursive: true });
       await writeFile(join(projectRoot, '.rainrail', 'plugins'), 'not a directory\n');
 
@@ -1258,8 +1285,7 @@ describe('Rainrail CLI built-in commands', () => {
 
   it('keeps the plugin manifest when remove cannot update the lockfile', async () => {
     await withTempDirectory(async (directory) => {
-      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
-      const projectRoot = join(directory, 'my-agent-ops');
+      const projectRoot = await initRainrailProject(directory, 'my-agent-ops');
       const lockPath = join(projectRoot, 'rainrail.lock');
       const manifestPath = join(projectRoot, '.rainrail', 'plugins', 'github', 'plugin.json');
       expect(runRainrailCli(['plugins', 'add', 'github'], { cwd: projectRoot }).exitCode).toBe(0);
@@ -1287,8 +1313,7 @@ describe('Rainrail CLI built-in commands', () => {
 
   it('removes the created plugin manifest when add cannot update the lockfile', async () => {
     await withTempDirectory(async (directory) => {
-      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
-      const projectRoot = join(directory, 'my-agent-ops');
+      const projectRoot = await initRainrailProject(directory, 'my-agent-ops');
       const lockPath = join(projectRoot, 'rainrail.lock');
       const pluginPath = join(projectRoot, '.rainrail', 'plugins', 'github');
 
@@ -1314,8 +1339,7 @@ describe('Rainrail CLI built-in commands', () => {
 
   it('preserves pre-existing plugin directory contents when add lockfile update fails', async () => {
     await withTempDirectory(async (directory) => {
-      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
-      const projectRoot = join(directory, 'my-agent-ops');
+      const projectRoot = await initRainrailProject(directory, 'my-agent-ops');
       const lockPath = join(projectRoot, 'rainrail.lock');
       const pluginPath = join(projectRoot, '.rainrail', 'plugins', 'github');
       await mkdir(pluginPath, { recursive: true });
@@ -1343,8 +1367,7 @@ describe('Rainrail CLI built-in commands', () => {
 
   it('restores a pre-existing plugin manifest when add lockfile update fails', async () => {
     await withTempDirectory(async (directory) => {
-      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
-      const projectRoot = join(directory, 'my-agent-ops');
+      const projectRoot = await initRainrailProject(directory, 'my-agent-ops');
       const lockPath = join(projectRoot, 'rainrail.lock');
       const pluginPath = join(projectRoot, '.rainrail', 'plugins', 'github');
       const manifestPath = join(pluginPath, 'plugin.json');
@@ -1372,8 +1395,7 @@ describe('Rainrail CLI built-in commands', () => {
 
   it('rejects symlinked plugin manifest directories before writing plugin state', async () => {
     await withTempDirectory(async (directory) => {
-      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
-      const projectRoot = join(directory, 'my-agent-ops');
+      const projectRoot = await initRainrailProject(directory, 'my-agent-ops');
       const pluginPath = join(projectRoot, '.rainrail', 'plugins', 'github');
       const outsideTarget = join(directory, 'outside-target');
       await mkdir(outsideTarget);
@@ -1390,8 +1412,7 @@ describe('Rainrail CLI built-in commands', () => {
 
   it('rejects symlinked plugin manifest files before writing plugin state', async () => {
     await withTempDirectory(async (directory) => {
-      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
-      const projectRoot = join(directory, 'my-agent-ops');
+      const projectRoot = await initRainrailProject(directory, 'my-agent-ops');
       const pluginPath = join(projectRoot, '.rainrail', 'plugins', 'github');
       const manifestPath = join(pluginPath, 'plugin.json');
       const outsideTarget = join(directory, 'outside-manifest.json');
@@ -1410,8 +1431,7 @@ describe('Rainrail CLI built-in commands', () => {
 
   it('rejects broken symlinked plugin manifest files before writing plugin state', async () => {
     await withTempDirectory(async (directory) => {
-      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
-      const projectRoot = join(directory, 'my-agent-ops');
+      const projectRoot = await initRainrailProject(directory, 'my-agent-ops');
       const pluginPath = join(projectRoot, '.rainrail', 'plugins', 'github');
       const manifestPath = join(pluginPath, 'plugin.json');
       const outsideTarget = join(directory, 'missing-outside-manifest.json');
@@ -1429,8 +1449,7 @@ describe('Rainrail CLI built-in commands', () => {
 
   it('rejects symlinked plugin manifest files before listing plugin state', async () => {
     await withTempDirectory(async (directory) => {
-      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
-      const projectRoot = join(directory, 'my-agent-ops');
+      const projectRoot = await initRainrailProject(directory, 'my-agent-ops');
       const manifestPath = join(projectRoot, '.rainrail', 'plugins', 'github', 'plugin.json');
       const outsideTarget = join(directory, 'outside-list-manifest.json');
       expect(runRainrailCli(['plugins', 'add', 'github'], { cwd: projectRoot }).exitCode).toBe(0);
@@ -1452,8 +1471,7 @@ describe('Rainrail CLI built-in commands', () => {
 
   it('rejects symlinked plugin manifest directories before listing plugin state', async () => {
     await withTempDirectory(async (directory) => {
-      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
-      const projectRoot = join(directory, 'my-agent-ops');
+      const projectRoot = await initRainrailProject(directory, 'my-agent-ops');
       const pluginPath = join(projectRoot, '.rainrail', 'plugins', 'github');
       const outsidePluginPath = join(directory, 'outside-list-plugin');
       expect(runRainrailCli(['plugins', 'add', 'github'], { cwd: projectRoot }).exitCode).toBe(0);
@@ -1476,8 +1494,7 @@ describe('Rainrail CLI built-in commands', () => {
 
   it('rejects symlinked plugin roots before removing plugin state', async () => {
     await withTempDirectory(async (directory) => {
-      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
-      const projectRoot = join(directory, 'my-agent-ops');
+      const projectRoot = await initRainrailProject(directory, 'my-agent-ops');
       const lockPath = join(projectRoot, 'rainrail.lock');
       const pluginRoot = join(projectRoot, '.rainrail', 'plugins');
       const outsideRoot = join(directory, 'outside-plugin-root');
@@ -1500,8 +1517,7 @@ describe('Rainrail CLI built-in commands', () => {
 
   it('rejects symlinked Rainrail state directories before writing plugin state', async () => {
     await withTempDirectory(async (directory) => {
-      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
-      const projectRoot = join(directory, 'my-agent-ops');
+      const projectRoot = await initRainrailProject(directory, 'my-agent-ops');
       const stateDirectory = join(projectRoot, '.rainrail');
       const outsideStateDirectory = join(directory, 'outside-state');
       await rm(stateDirectory, { recursive: true });
@@ -1521,8 +1537,7 @@ describe('Rainrail CLI built-in commands', () => {
 
   it('rejects symlinked lockfiles before writing plugin state', async () => {
     await withTempDirectory(async (directory) => {
-      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
-      const projectRoot = join(directory, 'my-agent-ops');
+      const projectRoot = await initRainrailProject(directory, 'my-agent-ops');
       const lockPath = join(projectRoot, 'rainrail.lock');
       const outsideLockPath = join(directory, 'outside-rainrail.lock');
       await writeFile(outsideLockPath, `${JSON.stringify({
@@ -1544,8 +1559,7 @@ describe('Rainrail CLI built-in commands', () => {
 
   it('restores the lockfile when remove cannot delete the plugin manifest directory', async () => {
     await withTempDirectory(async (directory) => {
-      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
-      const projectRoot = join(directory, 'my-agent-ops');
+      const projectRoot = await initRainrailProject(directory, 'my-agent-ops');
       const lockPath = join(projectRoot, 'rainrail.lock');
       const pluginPath = join(projectRoot, '.rainrail', 'plugins', 'github');
       expect(runRainrailCli(['plugins', 'add', 'github'], { cwd: projectRoot }).exitCode).toBe(0);
@@ -1573,8 +1587,7 @@ describe('Rainrail CLI built-in commands', () => {
 
   it('rejects lockfiles without a string project name before writing changes', async () => {
     await withTempDirectory(async (directory) => {
-      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
-      const projectRoot = join(directory, 'my-agent-ops');
+      const projectRoot = await initRainrailProject(directory, 'my-agent-ops');
       const lockPath = join(projectRoot, 'rainrail.lock');
       await writeFile(lockPath, `${JSON.stringify({ lockfileVersion: 1, plugins: [] }, null, 2)}\n`);
 
@@ -1591,8 +1604,7 @@ describe('Rainrail CLI built-in commands', () => {
 
   it('rejects lockfile plugin names that are not official canonical aliases', async () => {
     await withTempDirectory(async (directory) => {
-      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
-      const projectRoot = join(directory, 'my-agent-ops');
+      const projectRoot = await initRainrailProject(directory, 'my-agent-ops');
       const maliciousPlugin = {
         name: '../escape',
         version: '0.1.0',
@@ -1621,8 +1633,7 @@ describe('Rainrail CLI built-in commands', () => {
 
   it('rejects lockfile plugin entries with invalid versions', async () => {
     await withTempDirectory(async (directory) => {
-      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
-      const projectRoot = join(directory, 'my-agent-ops');
+      const projectRoot = await initRainrailProject(directory, 'my-agent-ops');
       await writeFile(join(projectRoot, 'rainrail.lock'), `${JSON.stringify({
         lockfileVersion: 1,
         project: { name: 'my-agent-ops' },
@@ -1647,8 +1658,7 @@ describe('Rainrail CLI built-in commands', () => {
 
   it('rejects lockfile plugin entries with invalid SemVer prerelease identifiers', async () => {
     await withTempDirectory(async (directory) => {
-      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
-      const projectRoot = join(directory, 'my-agent-ops');
+      const projectRoot = await initRainrailProject(directory, 'my-agent-ops');
       await writeFile(join(projectRoot, 'rainrail.lock'), `${JSON.stringify({
         lockfileVersion: 1,
         project: { name: 'my-agent-ops' },
@@ -1673,8 +1683,7 @@ describe('Rainrail CLI built-in commands', () => {
 
   it('normalizes extra lockfile plugin entry fields before repairing manifests', async () => {
     await withTempDirectory(async (directory) => {
-      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
-      const projectRoot = join(directory, 'my-agent-ops');
+      const projectRoot = await initRainrailProject(directory, 'my-agent-ops');
       const manifestPath = join(projectRoot, '.rainrail', 'plugins', 'github', 'plugin.json');
       await rm(join(projectRoot, '.rainrail', 'plugins', 'github'), { recursive: true, force: true });
       await writeFile(join(projectRoot, 'rainrail.lock'), `${JSON.stringify({
@@ -1707,8 +1716,7 @@ describe('Rainrail CLI built-in commands', () => {
 
   it('rejects duplicate lockfile plugin names', async () => {
     await withTempDirectory(async (directory) => {
-      expect(runRainrailCli(['new', 'my-agent-ops'], { cwd: directory }).exitCode).toBe(0);
-      const projectRoot = join(directory, 'my-agent-ops');
+      const projectRoot = await initRainrailProject(directory, 'my-agent-ops');
       await writeFile(join(projectRoot, 'rainrail.lock'), `${JSON.stringify({
         lockfileVersion: 1,
         project: { name: 'my-agent-ops' },
@@ -1736,13 +1744,18 @@ describe('Rainrail CLI built-in commands', () => {
     });
   });
 
-  it('validates the project name for rainrail new', async () => {
+  it('validates init arguments and the current directory project name', async () => {
     await withTempDirectory(async (directory) => {
-      expect(runRainrailCli(['new'], { cwd: directory }).stderr).toBe(
-        'Usage: rainrail new <projectName>\n',
+      expect(runRainrailCli(['init', 'my-agent-ops'], { cwd: directory }).stderr).toBe(
+        'Usage: rainrail init\n',
       );
-      expect(runRainrailCli(['new', '../ops'], { cwd: directory }).stderr).toBe(
-        'Project name must be a safe directory name.\n',
+      const unsafeProjectRoot = join(directory, 'unsafe project');
+      await mkdir(unsafeProjectRoot);
+      expect(runRainrailCli(['init'], { cwd: unsafeProjectRoot }).stderr).toBe(
+        'Current directory name must be a safe Rainrail project name.\n',
+      );
+      expect(runRainrailCli(['new'], { cwd: directory }).stderr).toContain(
+        'Unknown rainrail command: new',
       );
     });
   });
