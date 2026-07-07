@@ -21,8 +21,10 @@ const publicInstallScript = new URL('../apps/www/public/install.sh', import.meta
 
 describe('product site concepts, guides, and examples', () => {
   it('exposes Concepts, Guides, and Examples from the primary navigation and docs gateway', () => {
+    expect(layout).toContain('site.nav.primary.map');
+    expect(layout).toContain('hrefFor(item.pageId)');
+
     for (const href of ['/concepts', '/guides', '/examples']) {
-      expect(layout).toContain(`href="${href}"`);
       expect(docsPage).toContain(`href: '${href}'`);
     }
   });
