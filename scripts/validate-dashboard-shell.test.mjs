@@ -44,6 +44,19 @@ describe('dashboard app shell', () => {
     expect(dashboardContent).toContain('Rainrail 運用');
   });
 
+  it('renders dashboard language switcher links to equivalent dashboard locale pages', () => {
+    const dashboardLayout = readFileSync(
+      new URL('../apps/www/src/layouts/DashboardLayout.astro', import.meta.url),
+      'utf8',
+    );
+
+    expect(dashboardLayout).toContain('language-switcher');
+    expect(dashboardLayout).toContain('getDashboardHref(targetLocale)');
+    expect(dashboardLayout).toContain('data-locale-choice={targetLocale}');
+    expect(dashboardLayout).toContain('languagePreferenceKey');
+    expect(dashboardLayout).toContain('window.localStorage?.setItem(languagePreferenceKey, locale)');
+  });
+
   it('adds Sources, Queue, and Settings views for operator context', () => {
     for (const tab of ['sources', 'queue', 'settings']) {
       expect(localizedDashboardPage).toContain(`data-dashboard-tab="${tab}"`);

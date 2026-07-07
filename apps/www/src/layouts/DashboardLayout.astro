@@ -20,6 +20,10 @@ const alternates = Object.fromEntries(
       : getDashboardHref(targetLocale),
   ]),
 );
+const localeLabel = (targetLocale: Locale) =>
+  targetLocale === 'ja' ? '日本語' : 'English';
+const languageSwitcherLabel = locale === 'ja' ? '言語切替' : 'Language switcher';
+const languagePreferenceKey = 'rainrail.locale';
 ---
 
 <!doctype html>
@@ -39,7 +43,30 @@ const alternates = Object.fromEntries(
   </head>
   <body>
     <main class="dashboard-page-shell">
+      <div class="dashboard-language-switcher language-switcher" aria-label={languageSwitcherLabel}>
+        {supportedLocales.map((targetLocale) => (
+          <a
+            href={getDashboardHref(targetLocale)}
+            data-locale-choice={targetLocale}
+            aria-current={targetLocale === locale ? 'true' : undefined}
+          >
+            {localeLabel(targetLocale)}
+          </a>
+        ))}
+      </div>
       <slot />
     </main>
+    <script is:inline define:vars={{ languagePreferenceKey }}>
+      document.querySelectorAll('[data-locale-choice]').forEach((link) => {
+        link.addEventListener('click', () => {
+          const locale = link.getAttribute('data-locale-choice');
+          try {
+            window.localStorage?.setItem(languagePreferenceKey, locale);
+          } catch {
+            // Continue navigation even when storage is unavailable.
+          }
+        });
+      });
+    </script>
   </body>
 </html>

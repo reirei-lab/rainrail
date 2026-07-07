@@ -55,6 +55,36 @@ describe('dashboard operational views', () => {
     expect(dashboardApp).toContain('copy.command.confirm');
   });
 
+  it('keeps Japanese dashboard operation labels translated instead of mixed with English UI', () => {
+    const japaneseBlock = dashboardContent.slice(dashboardContent.indexOf('  ja: {'));
+
+    for (const label of [
+      '操作権限',
+      'イベント受信箱フィルター',
+      '一致ワークフロー',
+      'エージェントタスク',
+      '実行中ワークフロー',
+      '人間向け要約',
+      '正規化済み envelope',
+      '操作履歴',
+      'コマンド失敗',
+    ]) {
+      expect(dashboardContent).toContain(label);
+    }
+
+    for (const staleCopy of [
+      "operatorControls: 'Operator controls'",
+      "filtersLabel: 'Event inbox filters'",
+      "workflowMatches: 'Workflow matches'",
+      "agentTasks: 'Agent tasks'",
+      "humanSummary: 'Human summary'",
+      "sanitizedEnvelope: 'Sanitized envelope'",
+      "failed: 'Command failed'",
+    ]) {
+      expect(japaneseBlock).not.toContain(staleCopy);
+    }
+  });
+
   it('names the Overview, Event Inbox, Workflow Runs, and Agent Tasks work surfaces', () => {
     for (const label of ['Overview', 'Event Inbox', 'Workflow Runs', 'Agent Tasks']) {
       expect(dashboardContent).toContain(label);
