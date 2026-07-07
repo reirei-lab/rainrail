@@ -1,5 +1,19 @@
 ---
-import { redirectToDefaultLocale } from '../lib/redirects';
+import { getDefaultLocaleRedirect } from '../lib/redirects';
 
-return redirectToDefaultLocale(Astro, 'docs');
+const redirect = getDefaultLocaleRedirect('docs');
 ---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="refresh" content={`0;url=${redirect.href}`} />
+    <meta name="robots" content="noindex" />
+    <link rel="canonical" href={redirect.href} />
+    <title>{redirect.title}</title>
+  </head>
+  <body>
+    <a href={redirect.href}>{redirect.body}</a>
+  </body>
+</html>

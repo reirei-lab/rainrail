@@ -23,6 +23,15 @@ const i18n = readFileSync(
   new URL('../apps/www/src/lib/i18n.ts', import.meta.url),
   'utf8',
 );
+const indexPage = page('index');
+const sitemapRoute = readFileSync(
+  new URL('../apps/www/src/pages/sitemap.xml.ts', import.meta.url),
+  'utf8',
+);
+const contractsManifest = readFileSync(
+  new URL('../docs/contracts.manifest.json', import.meta.url),
+  'utf8',
+);
 const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
 const rootInstallScript = new URL('../install.sh', import.meta.url);
 const publicInstallScript = new URL('../apps/www/public/install.sh', import.meta.url);
@@ -46,7 +55,10 @@ describe('product site concepts, guides, and examples', () => {
 
   it('keeps navigation, brand links, CTA links, and language switching locale-aware', () => {
     expect(layout).toContain('page.alternates');
+    expect(layout).toContain('page.href');
+    expect(layout).toContain('rel="canonical"');
     expect(layout).toContain('language-switcher');
+    expect(layout).toContain('site.nav.languageSwitcherLabel');
     expect(layout).toContain('hrefFor(item.pageId)');
     expect(localizedRoute).toContain('resolveActionHref(locale, action)');
     expect(localizedRoute).toContain('resolveActionHref(locale, { label: card.title, pageId: card.pageId })');
@@ -58,18 +70,45 @@ describe('product site concepts, guides, and examples', () => {
   it('redirects legacy product URLs to the default English locale', () => {
     for (const route of ['how-it-works', 'concepts', 'guides', 'examples', 'docs']) {
       const routeSource = page(route);
-      expect(routeSource).toContain('redirectToDefaultLocale');
+      expect(routeSource).toContain('getDefaultLocaleRedirect');
+      expect(routeSource).toContain('http-equiv="refresh"');
+      expect(routeSource).not.toContain('Astro.redirect');
     }
   });
 
   it('keeps / as the automatic locale detection entry point', () => {
-    const index = page('index');
+    expect(indexPage).toContain('navigator.languages');
+    expect(indexPage).toContain('find((language)');
+    expect(indexPage).toContain('supportedLocaleHrefs');
+    expect(indexPage).toContain('Rainrail routes development events into agent workflows.');
+    expect(indexPage).toContain("getLocaleHref('ja', 'home')");
+    expect(indexPage).toContain("getLocaleHref('en', 'home')");
+    expect(indexPage).not.toContain('redirectToDefaultLocale');
+    expect(indexPage).not.toContain('Astro.redirect');
+  });
 
-    expect(index).toContain('navigator.languages');
-    expect(index).toContain('getLocaleHref');
-    expect(index).toContain("getLocaleHref('ja', 'home')");
-    expect(index).toContain("getLocaleHref('en', 'home')");
-    expect(index).not.toContain('redirectToDefaultLocale');
+  it('publishes sitemap entries from the localized page model', () => {
+    expect(sitemapRoute).toContain('supportedLocales.flatMap');
+    expect(sitemapRoute).toContain('pageIds.map');
+    expect(sitemapRoute).toContain('getLocaleHref(locale, pageId)');
+    expect(sitemapRoute).toContain('application/xml');
+  });
+
+  it('keeps docs drift manifest pointed at the product content source', () => {
+    /** @type {{ contracts: Array<{ id: string, docs: string[] }> }} */
+    const manifest = JSON.parse(contractsManifest);
+    const coreBoundary = manifest.contracts.find(
+      (contract) => contract.id === 'core-eep-bridge-source-adapter-boundary',
+    );
+
+    if (coreBoundary === undefined) {
+      throw new Error('core-eep-bridge-source-adapter-boundary contract is missing');
+    }
+
+    expect(coreBoundary.docs).toContain('apps/www/src/lib/site-content.ts');
+    expect(coreBoundary.docs).not.toContain('apps/www/src/pages/concepts.astro');
+    expect(coreBoundary.docs).not.toContain('apps/www/src/pages/guides.astro');
+    expect(coreBoundary.docs).not.toContain('apps/www/src/pages/examples.astro');
   });
 
   it('keeps Japanese visible page content separate from English page copy', () => {

@@ -1,8 +1,10 @@
 ---
 import { getLocaleHref } from '../lib/i18n';
 
-const japaneseHref = getLocaleHref('ja', 'home');
-const englishHref = getLocaleHref('en', 'home');
+const supportedLocaleHrefs = {
+  ja: getLocaleHref('ja', 'home'),
+  en: getLocaleHref('en', 'home'),
+};
 ---
 
 <!doctype html>
@@ -12,24 +14,25 @@ const englishHref = getLocaleHref('en', 'home');
     <meta name="viewport" content="width=device-width" />
     <meta name="robots" content="noindex" />
     <title>Rainrail</title>
-    <script is:inline define:vars={{ japaneseHref, englishHref }}>
+    <script is:inline define:vars={{ supportedLocaleHrefs }}>
       const languages = navigator.languages?.length
         ? navigator.languages
         : [navigator.language || 'en'];
-      const prefersJapanese = languages.some((language) =>
-        language.toLowerCase().startsWith('ja'),
-      );
+      const locale = languages
+        .map((language) => language.toLowerCase().split('-')[0])
+        .find((language) => Object.hasOwn(supportedLocaleHrefs, language)) || 'en';
 
-      window.location.replace(prefersJapanese ? japaneseHref : englishHref);
+      window.location.replace(supportedLocaleHrefs[locale]);
     </script>
   </head>
   <body>
     <main>
       <h1>Rainrail</h1>
+      <p>Rainrail routes development events into agent workflows.</p>
       <p>Select a language.</p>
       <ul>
-        <li><a href={japaneseHref}>日本語</a></li>
-        <li><a href={englishHref}>English</a></li>
+        <li><a href={supportedLocaleHrefs.ja}>日本語</a></li>
+        <li><a href={supportedLocaleHrefs.en}>English</a></li>
       </ul>
     </main>
   </body>

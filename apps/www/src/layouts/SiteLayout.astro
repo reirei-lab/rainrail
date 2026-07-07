@@ -25,6 +25,8 @@ const resolvedTitle = title ?? page?.meta.title ?? 'Rainrail';
 const resolvedDescription = description ?? page?.meta.description ?? site.footer;
 const pageTitle =
   resolvedTitle === 'Rainrail' ? resolvedTitle : `${resolvedTitle} - Rainrail`;
+const canonicalHref =
+  page && Astro.site ? new URL(page.href, Astro.site).toString() : page?.href;
 const hrefFor = (targetPageId: PageId) =>
   usesLocalizedRoutes
     ? getLocaleHref(locale, targetPageId)
@@ -40,6 +42,7 @@ const localeLabel = (targetLocale: Locale) =>
     <meta name="viewport" content="width=device-width" />
     <meta name="description" content={resolvedDescription} />
     <meta name="generator" content={Astro.generator} />
+    {canonicalHref && <link rel="canonical" href={canonicalHref} />}
     {
       page &&
         Object.entries(page.alternates).map(([alternateLocale, href]) => (
@@ -65,7 +68,7 @@ const localeLabel = (targetLocale: Locale) =>
           </div>
           {
             page && (
-              <div class="language-switcher" aria-label="Language switcher">
+              <div class="language-switcher" aria-label={site.nav.languageSwitcherLabel}>
                 {supportedLocales.map((targetLocale) => (
                   <a
                     href={page.alternates[targetLocale]}

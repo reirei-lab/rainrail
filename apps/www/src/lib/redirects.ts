@@ -1,6 +1,11 @@
 import { defaultLocale, getLocaleHref, type PageId } from './i18n';
 
-export const redirectToDefaultLocale = (
-  astro: { redirect: (path: string, status?: number) => Response },
-  pageId: PageId,
-): Response => astro.redirect(getLocaleHref(defaultLocale, pageId), 301);
+export const getDefaultLocaleRedirect = (pageId: PageId) => {
+  const href = getLocaleHref(defaultLocale, pageId);
+
+  return {
+    href,
+    title: `Redirecting to: ${href}`,
+    body: `Redirecting to ${href}`,
+  };
+};

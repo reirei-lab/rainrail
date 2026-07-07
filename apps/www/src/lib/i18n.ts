@@ -32,6 +32,7 @@ type SiteMessages = {
     ariaLabel: string;
     brandLabel: string;
     github: string;
+    languageSwitcherLabel: string;
     primary: NavItem[];
   };
   footer: string;
@@ -60,6 +61,7 @@ const messages = {
       ariaLabel: '主要ナビゲーション',
       brandLabel: 'Rainrail ホーム',
       github: 'GitHub',
+      languageSwitcherLabel: '言語切替',
       primary: [
         { label: '仕組み', pageId: 'howItWorks' },
         { label: '概念', pageId: 'concepts' },
@@ -120,6 +122,7 @@ const messages = {
       ariaLabel: 'Primary navigation',
       brandLabel: 'Rainrail home',
       github: 'GitHub',
+      languageSwitcherLabel: 'Language switcher',
       primary: [
         { label: 'How it works', pageId: 'howItWorks' },
         { label: 'Concepts', pageId: 'concepts' },
