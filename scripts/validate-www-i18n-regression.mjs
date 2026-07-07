@@ -5,6 +5,10 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const defaultDistRoot = join(repoRoot, 'apps/www/dist');
 const defaultSiteOrigin = 'https://rainrail.dev';
+const defaultOgLocales = {
+  ja: 'ja_JP',
+  en: 'en_US',
+};
 const i18nSourcePath = join(repoRoot, 'apps/www/src/lib/i18n.ts');
 const pagesRoot = join(repoRoot, 'apps/www/src/pages');
 
@@ -62,10 +66,25 @@ const tagAttributeValue = (html, pattern, attribute) => {
  * @param {string} html
  * @returns {string[]}
  */
+const anchorTags = (html) => [...html.matchAll(/<a\b[^>]*>/gi)].map((match) => match[0]);
+
+/**
+ * @param {string} html
+ * @returns {string[]}
+ */
 const anchorHrefs = (html) =>
-  [...html.matchAll(/<a\b[^>]*\shref=["']([^"']+)["'][^>]*>/gi)]
-    .map((match) => match[1])
+  anchorTags(html)
+    .map((tag) => attributeValue(tag, 'href'))
     .filter((href) => href !== undefined);
+
+/**
+ * @param {string} sitemap
+ * @returns {string[]}
+ */
+const sitemapLocs = (sitemap) =>
+  [...sitemap.matchAll(/<loc>([^<]+)<\/loc>/g)]
+    .map((match) => match[1])
+    .filter((loc) => loc !== undefined);
 
 /**
  * @param {string} value
@@ -109,18 +128,32 @@ const isUnlocalizedInternalUrl = (value, locales, siteOrigin) => {
  *   html: string;
  *   route: string;
  *   path: string;
+ *   locale: string;
  *   locales: string[];
  *   defaultLocale: string;
+ *   ogLocales: Record<string, string>;
  *   siteOrigin: string;
  *   errors: string[];
  * }} options
  */
-const requireMetadata = ({ html, route, path, locales, defaultLocale, siteOrigin, errors }) => {
+const requireMetadata = ({
+  html,
+  route,
+  path,
+  locale,
+  locales,
+  defaultLocale,
+  ogLocales,
+  siteOrigin,
+  errors,
+}) => {
   const expectedUrl = new URL(route, siteOrigin).toString();
   const canonicalPattern =
     /<link\b(?=[^>]*\brel=["']canonical["'])(?=[^>]*\bhref=["'][^"']+["'])[^>]*>/i;
   const ogUrlPattern =
     /<meta\b(?=[^>]*\bproperty=["']og:url["'])(?=[^>]*\bcontent=["'][^"']+["'])[^>]*>/i;
+  const ogLocalePattern =
+    /<meta\b(?=[^>]*\bproperty=["']og:locale["'])(?=[^>]*\bcontent=["'][^"']+["'])[^>]*>/i;
   /** @type {[string, RegExp][]} */
   const requiredPatterns = [
     ['<title>', /<title>[^<]+<\/title>/i],
@@ -129,7 +162,7 @@ const requireMetadata = ({ html, route, path, locales, defaultLocale, siteOrigin
     ['og:title', /<meta\b(?=[^>]*\bproperty=["']og:title["'])(?=[^>]*\bcontent=["'][^"']+["'])[^>]*>/i],
     ['og:description', /<meta\b(?=[^>]*\bproperty=["']og:description["'])(?=[^>]*\bcontent=["'][^"']+["'])[^>]*>/i],
     ['og:url', ogUrlPattern],
-    ['og:locale', /<meta\b(?=[^>]*\bproperty=["']og:locale["'])(?=[^>]*\bcontent=["'][^"']+["'])[^>]*>/i],
+    ['og:locale', ogLocalePattern],
   ];
 
   for (const [label, pattern] of requiredPatterns) {
@@ -146,6 +179,12 @@ const requireMetadata = ({ html, route, path, locales, defaultLocale, siteOrigin
   const ogUrl = tagAttributeValue(html, ogUrlPattern, 'content');
   if (ogUrl && ogUrl !== expectedUrl) {
     errors.push(`og:url for ${route} must be ${expectedUrl}`);
+  }
+
+  const expectedOgLocale = ogLocales[locale];
+  const ogLocale = tagAttributeValue(html, ogLocalePattern, 'content');
+  if (expectedOgLocale && ogLocale && ogLocale !== expectedOgLocale) {
+    errors.push(`og:locale for ${route} must be ${expectedOgLocale}`);
   }
 
   for (const hreflang of [...locales, 'x-default']) {
@@ -165,6 +204,47 @@ const requireMetadata = ({ html, route, path, locales, defaultLocale, siteOrigin
 
     if (actualHref && actualHref !== expectedHref) {
       errors.push(`hreflang ${hreflang} for ${route} must be ${expectedHref}`);
+    }
+  }
+};
+
+/**
+ * @param {{
+ *   html: string;
+ *   route: string;
+ *   path: string;
+ *   locales: string[];
+ *   siteOrigin: string;
+ *   errors: string[];
+ * }} options
+ */
+const requireLanguageSwitcherLinks = ({ html, route, path, locales, siteOrigin, errors }) => {
+  for (const tag of anchorTags(html)) {
+    const targetLocale = attributeValue(tag, 'data-locale-choice');
+    if (!targetLocale || !locales.includes(targetLocale)) {
+      continue;
+    }
+
+    const href = attributeValue(tag, 'href');
+    if (!href) {
+      errors.push(`Language switcher ${targetLocale} for ${route} is missing href`);
+      continue;
+    }
+
+    const expectedHref = routePath(targetLocale, path);
+    let actualPath = href;
+
+    try {
+      const url = new URL(href, siteOrigin);
+      if (url.origin === new URL(siteOrigin).origin) {
+        actualPath = url.pathname;
+      }
+    } catch {
+      // Keep the raw href for comparison and error reporting.
+    }
+
+    if (actualPath !== expectedHref) {
+      errors.push(`Language switcher ${targetLocale} for ${route} must link to ${expectedHref}`);
     }
   }
 };
@@ -210,12 +290,18 @@ const requireRootLanguageEntry = ({ distRoot, locales, errors }) => {
 
 /**
  * @param {string} source
- * @returns {{ locales: string[]; localizedPaths: string[]; defaultLocale: string }}
+ * @returns {{
+ *   locales: string[];
+ *   localizedPaths: string[];
+ *   defaultLocale: string;
+ *   ogLocales: Record<string, string>;
+ * }}
  */
 export const parseWwwI18nSource = (source) => {
   const localesMatch = source.match(/supportedLocales\s*=\s*\[([^\]]+)\]/m);
   const slugsMatch = source.match(/pageSlugs\s*=\s*\{([\s\S]*?)\}\s*as const/m);
   const defaultLocaleMatch = source.match(/defaultLocale\s*=\s*["']([^"']+)["']/m);
+  const ogLocalesMatch = source.match(/ogLocales\s*=\s*\{([\s\S]*?)\}\s*as const/m);
 
   if (!localesMatch || !slugsMatch) {
     throw new Error('Could not read supportedLocales or pageSlugs from i18n.ts');
@@ -229,11 +315,16 @@ export const parseWwwI18nSource = (source) => {
   const localizedPaths = [...slugSource.matchAll(/:\s*["']([^"']*)["']/g)].flatMap(
     (match) => (match[1] !== undefined ? [match[1]] : []),
   );
+  const ogLocales = Object.fromEntries(
+    [...(ogLocalesMatch?.[1] ?? '').matchAll(/([A-Za-z0-9_-]+)\s*:\s*["']([^"']+)["']/g)]
+      .flatMap((match) => (match[1] && match[2] ? [[match[1], match[2]]] : [])),
+  );
 
   return {
     locales,
     localizedPaths: [...localizedPaths, 'dashboard'],
     defaultLocale: defaultLocaleMatch?.[1] ?? locales[0] ?? '',
+    ogLocales,
   };
 };
 
@@ -251,11 +342,11 @@ export const collectPublicPagePaths = (root) => {
    */
   const visit = (directory, segments) => {
     for (const entry of readdirSync(directory, { withFileTypes: true })) {
-      if (entry.name.startsWith('[')) {
+      if (entry.name.startsWith('[') && entry.name !== '[locale]') {
         continue;
       }
 
-      const nextSegments = [...segments, entry.name];
+      const nextSegments = entry.name === '[locale]' ? segments : [...segments, entry.name];
       const fullPath = join(directory, entry.name);
 
       if (entry.isDirectory()) {
@@ -288,6 +379,7 @@ export const collectPublicPagePaths = (root) => {
  *   locales: string[];
  *   localizedPaths: string[];
  *   defaultLocale?: string;
+ *   ogLocales?: Record<string, string>;
  *   publicPagePaths?: string[];
  *   siteOrigin?: string;
  * }} options
@@ -298,6 +390,7 @@ export const validateBuiltWwwI18n = ({
   locales,
   localizedPaths,
   defaultLocale = locales.includes('en') ? 'en' : (locales[0] ?? ''),
+  ogLocales = defaultOgLocales,
   publicPagePaths = [],
   siteOrigin = defaultSiteOrigin,
 }) => {
@@ -322,6 +415,22 @@ export const validateBuiltWwwI18n = ({
     errors.push('Missing sitemap.xml');
   }
 
+  for (const loc of sitemapLocs(sitemap)) {
+    let url;
+    try {
+      url = new URL(loc, siteOrigin);
+    } catch {
+      continue;
+    }
+
+    if (
+      url.origin === new URL(siteOrigin).origin &&
+      !locales.some((locale) => url.pathname === `/${locale}` || url.pathname.startsWith(`/${locale}/`))
+    ) {
+      errors.push(`Sitemap URL ${loc} must be under a supported locale prefix`);
+    }
+  }
+
   for (const path of localizedPaths) {
     for (const locale of locales) {
       const route = routePath(locale, path);
@@ -333,7 +442,18 @@ export const validateBuiltWwwI18n = ({
       }
 
       const html = readFileSync(file, 'utf8');
-      requireMetadata({ html, route, path, locales, defaultLocale, siteOrigin, errors });
+      requireMetadata({
+        html,
+        route,
+        path,
+        locale,
+        locales,
+        defaultLocale,
+        ogLocales,
+        siteOrigin,
+        errors,
+      });
+      requireLanguageSwitcherLinks({ html, route, path, locales, siteOrigin, errors });
 
       for (const href of anchorHrefs(html)) {
         if (isUnlocalizedInternalUrl(href, locales, siteOrigin)) {
@@ -352,7 +472,7 @@ export const validateBuiltWwwI18n = ({
 };
 
 export const validateDefaultBuiltWwwI18n = () => {
-  const { locales, localizedPaths, defaultLocale } = parseWwwI18nSource(
+  const { locales, localizedPaths, defaultLocale, ogLocales } = parseWwwI18nSource(
     readFileSync(i18nSourcePath, 'utf8'),
   );
 
@@ -361,6 +481,7 @@ export const validateDefaultBuiltWwwI18n = () => {
     locales,
     localizedPaths,
     defaultLocale,
+    ogLocales,
     publicPagePaths: collectPublicPagePaths(pagesRoot),
   });
 };

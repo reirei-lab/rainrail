@@ -36,6 +36,8 @@ const pageHtml = ({ locale, path = '', href = `/${locale}/${path}` }) => {
 </head>
 <body>
   <a href="/${locale}/${path}">same locale</a>
+  <a href="/ja/${path}" data-locale-choice="ja">日本語</a>
+  <a href="/en/${path}" data-locale-choice="en">English</a>
   <a href="https://github.com/reirei-lab/rainrail">GitHub</a>
 </body>
 </html>`;
@@ -157,6 +159,22 @@ describe('www i18n regression validator', () => {
     );
   });
 
+  it('reports og:locale values that do not match the route locale', async () => {
+    const distRoot = await writeCompleteDist();
+    writeRoute(
+      distRoot,
+      'ja/how-it-works',
+      pageHtml({ locale: 'ja', path: 'how-it-works' }).replace(
+        'property="og:locale" content="ja_JP"',
+        'property="og:locale" content="en_US"',
+      ),
+    );
+
+    expect(validateBuiltWwwI18n({ distRoot, locales, localizedPaths })).toContain(
+      'og:locale for /ja/how-it-works must be ja_JP',
+    );
+  });
+
   it('reports hreflang hrefs that do not point to the same page in each locale', async () => {
     const distRoot = await writeCompleteDist();
     writeRoute(
@@ -170,6 +188,22 @@ describe('www i18n regression validator', () => {
 
     expect(validateBuiltWwwI18n({ distRoot, locales, localizedPaths })).toContain(
       'hreflang en for /ja/how-it-works must be https://rainrail.dev/en/how-it-works',
+    );
+  });
+
+  it('reports language switcher links that do not point to the same page in each locale', async () => {
+    const distRoot = await writeCompleteDist();
+    writeRoute(
+      distRoot,
+      'ja/how-it-works',
+      pageHtml({ locale: 'ja', path: 'how-it-works' }).replace(
+        'href="/en/how-it-works" data-locale-choice="en"',
+        'href="/en/" data-locale-choice="en"',
+      ),
+    );
+
+    expect(validateBuiltWwwI18n({ distRoot, locales, localizedPaths })).toContain(
+      'Language switcher en for /ja/how-it-works must link to /en/how-it-works',
     );
   });
 
@@ -234,6 +268,25 @@ describe('www i18n regression validator', () => {
 
     expect(validateBuiltWwwI18n({ distRoot, locales, localizedPaths })).toContain(
       'Missing sitemap URL https://rainrail.dev/ja/how-it-works',
+    );
+  });
+
+  it('reports same-origin unlocalized sitemap URLs', async () => {
+    const distRoot = await writeCompleteDist();
+    writeFileSync(
+      join(distRoot, 'sitemap.xml'),
+      `<?xml version="1.0" encoding="UTF-8"?>
+<urlset>
+  <url><loc>https://rainrail.dev/ja/</loc></url>
+  <url><loc>https://rainrail.dev/en/</loc></url>
+  <url><loc>https://rainrail.dev/ja/how-it-works</loc></url>
+  <url><loc>https://rainrail.dev/en/how-it-works</loc></url>
+  <url><loc>https://rainrail.dev/docs</loc></url>
+</urlset>`,
+    );
+
+    expect(validateBuiltWwwI18n({ distRoot, locales, localizedPaths })).toContain(
+      'Sitemap URL https://rainrail.dev/docs must be under a supported locale prefix',
     );
   });
 
@@ -304,6 +357,19 @@ describe('www i18n regression validator', () => {
 
     expect(collectPublicPagePaths(pagesRoot)).toEqual([
       'dashboard',
+      'docs/getting-started',
+      'pricing',
+    ]);
+  });
+
+  it('collects static pages below the locale directory without collecting dynamic locale routes', async () => {
+    const pagesRoot = await mkdtemp(join(tmpdir(), 'rainrail-www-locale-pages-'));
+    mkdirSync(join(pagesRoot, '[locale]/docs'), { recursive: true });
+    writeFileSync(join(pagesRoot, '[locale]/pricing.astro'), 'locale pricing');
+    writeFileSync(join(pagesRoot, '[locale]/docs/getting-started.astro'), 'locale docs');
+    writeFileSync(join(pagesRoot, '[locale]/[...slug].astro'), 'localized dynamic route');
+
+    expect(collectPublicPagePaths(pagesRoot)).toEqual([
       'docs/getting-started',
       'pricing',
     ]);
