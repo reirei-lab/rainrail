@@ -83,7 +83,9 @@ describe('package scripts used by pull request CI', () => {
     expect(sitePackageJson.name).toBe('www');
     expect(sitePackageJson.scripts.lint).toBe('astro check');
     expect(sitePackageJson.scripts.typecheck).toBe('astro check');
-    expect(sitePackageJson.scripts.build).toBe('astro check && astro build');
+    expect(sitePackageJson.scripts.build).toBe(
+      'astro check && astro build && node ../../scripts/validate-www-i18n-regression.mjs',
+    );
   });
 
   it('defines repeatable Cloudflare Pages commands for product site deploys', () => {
