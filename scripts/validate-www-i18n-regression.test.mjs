@@ -4,7 +4,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-import { validateBuiltWwwI18n } from './validate-www-i18n-regression.mjs';
+import {
+  collectPublicPagePaths,
+  validateBuiltWwwI18n,
+} from './validate-www-i18n-regression.mjs';
 
 const locales = ['ja', 'en'];
 const localizedPaths = ['', 'how-it-works'];
@@ -51,6 +54,22 @@ const writeRoute = (root, route, html) => {
 
 const writeCompleteDist = async () => {
   const root = await mkdtemp(join(tmpdir(), 'rainrail-www-i18n-'));
+
+  writeRoute(
+    root,
+    '',
+    `<!doctype html>
+<html lang="en">
+<head>
+  <meta name="robots" content="noindex">
+  <script>window.location.replace('/en/')</script>
+</head>
+<body>
+  <a href="/ja/">日本語</a>
+  <a href="/en/">English</a>
+</body>
+</html>`,
+  );
 
   for (const locale of locales) {
     writeRoute(root, locale, pageHtml({ locale, href: `/${locale}/` }));
@@ -115,6 +134,25 @@ describe('www i18n regression validator', () => {
     );
   });
 
+  it('reports canonical and og:url values that do not match the locale route', async () => {
+    const distRoot = await writeCompleteDist();
+    writeRoute(
+      distRoot,
+      'ja/how-it-works',
+      pageHtml({ locale: 'ja', path: 'how-it-works' }).replaceAll(
+        'https://rainrail.dev/ja/how-it-works',
+        'https://rainrail.dev/en/how-it-works',
+      ),
+    );
+
+    expect(validateBuiltWwwI18n({ distRoot, locales, localizedPaths })).toEqual(
+      expect.arrayContaining([
+        'Canonical URL for /ja/how-it-works must be https://rainrail.dev/ja/how-it-works',
+        'og:url for /ja/how-it-works must be https://rainrail.dev/ja/how-it-works',
+      ]),
+    );
+  });
+
   it('reports same-origin internal links that drop the locale prefix', async () => {
     const distRoot = await writeCompleteDist();
     writeRoute(
@@ -131,12 +169,49 @@ describe('www i18n regression validator', () => {
     );
   });
 
+  it('uses the configured site origin for same-origin internal link checks', async () => {
+    const distRoot = await writeCompleteDist();
+    writeRoute(
+      distRoot,
+      'ja/how-it-works',
+      pageHtml({ locale: 'ja', path: 'how-it-works' }).replace(
+        'href="/ja/how-it-works"',
+        'href="https://preview.example.com/docs"',
+      ),
+    );
+
+    expect(
+      validateBuiltWwwI18n({
+        distRoot,
+        locales,
+        localizedPaths,
+        siteOrigin: 'https://preview.example.com',
+      }),
+    ).toContain(
+      'Locale page /ja/how-it-works links to unlocalized internal URL https://preview.example.com/docs',
+    );
+  });
+
   it('reports missing localized sitemap URLs', async () => {
     const distRoot = await writeCompleteDist();
     writeFileSync(join(distRoot, 'sitemap.xml'), '<urlset></urlset>');
 
     expect(validateBuiltWwwI18n({ distRoot, locales, localizedPaths })).toContain(
       'Missing sitemap URL https://rainrail.dev/ja/how-it-works',
+    );
+  });
+
+  it('reports a broken root language detection entry point', async () => {
+    const distRoot = await writeCompleteDist();
+    writeRoute(distRoot, '', '<!doctype html><html><head></head><body></body></html>');
+
+    expect(validateBuiltWwwI18n({ distRoot, locales, localizedPaths })).toEqual(
+      expect.arrayContaining([
+        'Missing noindex robots meta for /',
+        'Missing language redirect script for /',
+        'Root language entrypoint is missing link to /ja/',
+        'Root language entrypoint is missing link to /en/',
+      ]),
     );
   });
 
@@ -151,5 +226,23 @@ describe('www i18n regression validator', () => {
         publicPagePaths: ['', 'how-it-works', 'docs'],
       }),
     ).toContain('Public page /docs is missing from the localized page collection');
+  });
+
+  it('collects nested directory-style public pages', async () => {
+    const pagesRoot = await mkdtemp(join(tmpdir(), 'rainrail-www-pages-'));
+    mkdirSync(join(pagesRoot, 'pricing'), { recursive: true });
+    mkdirSync(join(pagesRoot, 'docs'), { recursive: true });
+    mkdirSync(join(pagesRoot, '[locale]'), { recursive: true });
+    writeFileSync(join(pagesRoot, 'index.astro'), 'root entry');
+    writeFileSync(join(pagesRoot, 'dashboard.astro'), 'dashboard');
+    writeFileSync(join(pagesRoot, 'pricing/index.astro'), 'pricing');
+    writeFileSync(join(pagesRoot, 'docs/getting-started.astro'), 'nested docs');
+    writeFileSync(join(pagesRoot, '[locale]/[...slug].astro'), 'localized dynamic route');
+
+    expect(collectPublicPagePaths(pagesRoot)).toEqual([
+      'dashboard',
+      'docs/getting-started',
+      'pricing',
+    ]);
   });
 });

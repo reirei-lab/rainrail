@@ -38,6 +38,27 @@ const routeFile = (distRoot, route) => {
 const hasTag = (html, pattern) => pattern.test(html);
 
 /**
+ * @param {string} tag
+ * @param {string} attribute
+ * @returns {string | undefined}
+ */
+const attributeValue = (tag, attribute) => {
+  const pattern = new RegExp(`\\b${attribute}=["']([^"']+)["']`, 'i');
+  return tag.match(pattern)?.[1];
+};
+
+/**
+ * @param {string} html
+ * @param {RegExp} pattern
+ * @param {string} attribute
+ * @returns {string | undefined}
+ */
+const tagAttributeValue = (html, pattern, attribute) => {
+  const tag = html.match(pattern)?.[0];
+  return tag ? attributeValue(tag, attribute) : undefined;
+};
+
+/**
  * @param {string} html
  * @returns {string[]}
  */
@@ -49,9 +70,10 @@ const anchorHrefs = (html) =>
 /**
  * @param {string} value
  * @param {string[]} locales
+ * @param {string} siteOrigin
  * @returns {boolean}
  */
-const isUnlocalizedInternalUrl = (value, locales) => {
+const isUnlocalizedInternalUrl = (value, locales, siteOrigin) => {
   if (
     !value ||
     value.startsWith('#') ||
@@ -64,9 +86,9 @@ const isUnlocalizedInternalUrl = (value, locales) => {
 
   let pathname;
   try {
-    const url = new URL(value, defaultSiteOrigin);
+    const url = new URL(value, siteOrigin);
 
-    if (url.origin !== defaultSiteOrigin) {
+    if (url.origin !== new URL(siteOrigin).origin) {
       return false;
     }
 
@@ -83,17 +105,28 @@ const isUnlocalizedInternalUrl = (value, locales) => {
 };
 
 /**
- * @param {{ html: string; route: string; locales: string[]; errors: string[] }} options
+ * @param {{
+ *   html: string;
+ *   route: string;
+ *   locales: string[];
+ *   siteOrigin: string;
+ *   errors: string[];
+ * }} options
  */
-const requireMetadata = ({ html, route, locales, errors }) => {
+const requireMetadata = ({ html, route, locales, siteOrigin, errors }) => {
+  const expectedUrl = new URL(route, siteOrigin).toString();
+  const canonicalPattern =
+    /<link\b(?=[^>]*\brel=["']canonical["'])(?=[^>]*\bhref=["'][^"']+["'])[^>]*>/i;
+  const ogUrlPattern =
+    /<meta\b(?=[^>]*\bproperty=["']og:url["'])(?=[^>]*\bcontent=["'][^"']+["'])[^>]*>/i;
   /** @type {[string, RegExp][]} */
   const requiredPatterns = [
     ['<title>', /<title>[^<]+<\/title>/i],
     ['meta description', /<meta\b(?=[^>]*\bname=["']description["'])(?=[^>]*\bcontent=["'][^"']+["'])[^>]*>/i],
-    ['canonical link', /<link\b(?=[^>]*\brel=["']canonical["'])(?=[^>]*\bhref=["'][^"']+["'])[^>]*>/i],
+    ['canonical link', canonicalPattern],
     ['og:title', /<meta\b(?=[^>]*\bproperty=["']og:title["'])(?=[^>]*\bcontent=["'][^"']+["'])[^>]*>/i],
     ['og:description', /<meta\b(?=[^>]*\bproperty=["']og:description["'])(?=[^>]*\bcontent=["'][^"']+["'])[^>]*>/i],
-    ['og:url', /<meta\b(?=[^>]*\bproperty=["']og:url["'])(?=[^>]*\bcontent=["'][^"']+["'])[^>]*>/i],
+    ['og:url', ogUrlPattern],
     ['og:locale', /<meta\b(?=[^>]*\bproperty=["']og:locale["'])(?=[^>]*\bcontent=["'][^"']+["'])[^>]*>/i],
   ];
 
@@ -101,6 +134,16 @@ const requireMetadata = ({ html, route, locales, errors }) => {
     if (!hasTag(html, pattern)) {
       errors.push(`Missing ${label} for ${route}`);
     }
+  }
+
+  const canonicalHref = tagAttributeValue(html, canonicalPattern, 'href');
+  if (canonicalHref && canonicalHref !== expectedUrl) {
+    errors.push(`Canonical URL for ${route} must be ${expectedUrl}`);
+  }
+
+  const ogUrl = tagAttributeValue(html, ogUrlPattern, 'content');
+  if (ogUrl && ogUrl !== expectedUrl) {
+    errors.push(`og:url for ${route} must be ${expectedUrl}`);
   }
 
   for (const hreflang of [...locales, 'x-default']) {
@@ -111,6 +154,40 @@ const requireMetadata = ({ html, route, locales, errors }) => {
 
     if (!hasTag(html, pattern)) {
       errors.push(`Missing hreflang ${hreflang} for ${route}`);
+    }
+  }
+};
+
+/**
+ * @param {{ distRoot: string; locales: string[]; errors: string[] }} options
+ */
+const requireRootLanguageEntry = ({ distRoot, locales, errors }) => {
+  const rootFile = routeFile(distRoot, '/');
+
+  if (!existsSync(rootFile) || readFileSync(rootFile, 'utf8').trim() === '') {
+    errors.push('Missing built HTML for /');
+    return;
+  }
+
+  const html = readFileSync(rootFile, 'utf8');
+
+  if (
+    !hasTag(
+      html,
+      /<meta\b(?=[^>]*\bname=["']robots["'])(?=[^>]*\bcontent=["'][^"']*\bnoindex\b[^"']*["'])[^>]*>/i,
+    )
+  ) {
+    errors.push('Missing noindex robots meta for /');
+  }
+
+  if (!/window\.location\.replace\(/.test(html)) {
+    errors.push('Missing language redirect script for /');
+  }
+
+  for (const locale of locales) {
+    const href = `/${locale}/`;
+    if (!html.includes(`href="${href}"`) && !html.includes(`href='${href}'`)) {
+      errors.push(`Root language entrypoint is missing link to ${href}`);
     }
   }
 };
@@ -146,13 +223,46 @@ export const parseWwwI18nSource = (source) => {
  * @param {string} root
  * @returns {string[]}
  */
-export const collectTopLevelPublicPagePaths = (root) =>
-  readdirSync(root, { withFileTypes: true })
-    .filter((entry) => entry.isFile() && entry.name.endsWith('.astro'))
-    .map((entry) => entry.name.replace(/\.astro$/, ''))
-    .filter((page) => !page.startsWith('['))
-    .map((page) => (page === 'index' ? '' : page))
-    .sort();
+export const collectPublicPagePaths = (root) => {
+  /** @type {string[]} */
+  const paths = [];
+
+  /**
+   * @param {string} directory
+   * @param {string[]} segments
+   */
+  const visit = (directory, segments) => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      if (entry.name.startsWith('[')) {
+        continue;
+      }
+
+      const nextSegments = [...segments, entry.name];
+      const fullPath = join(directory, entry.name);
+
+      if (entry.isDirectory()) {
+        visit(fullPath, nextSegments);
+        continue;
+      }
+
+      if (!entry.isFile() || !entry.name.endsWith('.astro')) {
+        continue;
+      }
+
+      const fileSegment = entry.name.replace(/\.astro$/, '');
+      const routeSegments =
+        fileSegment === 'index' ? segments : [...segments, fileSegment];
+
+      if (routeSegments.length > 0) {
+        paths.push(routeSegments.join('/'));
+      }
+    }
+  };
+
+  visit(root, []);
+
+  return paths.sort();
+};
 
 /**
  * @param {{
@@ -171,10 +281,13 @@ export const validateBuiltWwwI18n = ({
   publicPagePaths = [],
   siteOrigin = defaultSiteOrigin,
 }) => {
+  /** @type {string[]} */
   const errors = [];
   const sitemapFile = join(distRoot, 'sitemap.xml');
   const sitemap = existsSync(sitemapFile) ? readFileSync(sitemapFile, 'utf8') : '';
   const localizedPathSet = new Set(localizedPaths);
+
+  requireRootLanguageEntry({ distRoot, locales, errors });
 
   for (const publicPath of publicPagePaths) {
     if (!localizedPathSet.has(publicPath)) {
@@ -200,10 +313,10 @@ export const validateBuiltWwwI18n = ({
       }
 
       const html = readFileSync(file, 'utf8');
-      requireMetadata({ html, route, locales, errors });
+      requireMetadata({ html, route, locales, siteOrigin, errors });
 
       for (const href of anchorHrefs(html)) {
-        if (isUnlocalizedInternalUrl(href, locales)) {
+        if (isUnlocalizedInternalUrl(href, locales, siteOrigin)) {
           errors.push(`Locale page ${route} links to unlocalized internal URL ${href}`);
         }
       }
@@ -227,7 +340,7 @@ export const validateDefaultBuiltWwwI18n = () => {
     distRoot: defaultDistRoot,
     locales,
     localizedPaths,
-    publicPagePaths: collectTopLevelPublicPagePaths(pagesRoot),
+    publicPagePaths: collectPublicPagePaths(pagesRoot),
   });
 };
 
