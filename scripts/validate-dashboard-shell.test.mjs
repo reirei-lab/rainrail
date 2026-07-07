@@ -5,6 +5,14 @@ const dashboardPage = readFileSync(
   new URL('../apps/www/src/pages/dashboard.astro', import.meta.url),
   'utf8',
 );
+const localizedDashboardPage = readFileSync(
+  new URL('../apps/www/src/pages/[locale]/dashboard.astro', import.meta.url),
+  'utf8',
+);
+const dashboardContent = readFileSync(
+  new URL('../apps/www/src/lib/dashboard-content.ts', import.meta.url),
+  'utf8',
+);
 const dashboardClient = readFileSync(
   new URL('../apps/www/src/lib/dashboard-client.ts', import.meta.url),
   'utf8',
@@ -24,19 +32,21 @@ const cloudflarePagesDocs = readFileSync(
 
 describe('dashboard app shell', () => {
   it('places the operational dashboard under a dedicated app shell route', () => {
-    expect(dashboardPage).toContain('Rainrail Operations');
-    expect(dashboardPage).toContain('data-dashboard-app');
-    expect(dashboardPage).toContain('data-state="auth-missing"');
-    expect(dashboardPage).toContain('data-state="loading"');
-    expect(dashboardPage).toContain('data-state="empty"');
-    expect(dashboardPage).toContain('data-state="error"');
-    expect(dashboardPage).toContain('data-stale-indicator');
-    expect(dashboardPage).toContain('data-action-permission="operator"');
+    expect(dashboardPage).toContain("getDefaultLocaleRedirect('dashboard')");
+    expect(localizedDashboardPage).toContain('data-dashboard-app');
+    expect(localizedDashboardPage).toContain('data-state="auth-missing"');
+    expect(localizedDashboardPage).toContain('data-state="loading"');
+    expect(localizedDashboardPage).toContain('data-state="empty"');
+    expect(localizedDashboardPage).toContain('data-state="error"');
+    expect(localizedDashboardPage).toContain('data-stale-indicator');
+    expect(localizedDashboardPage).toContain('data-action-permission="operator"');
+    expect(dashboardContent).toContain('Rainrail Operations');
+    expect(dashboardContent).toContain('Rainrail 運用');
   });
 
   it('adds Sources, Queue, and Settings views for operator context', () => {
     for (const tab of ['sources', 'queue', 'settings']) {
-      expect(dashboardPage).toContain(`data-dashboard-tab="${tab}"`);
+      expect(localizedDashboardPage).toContain(`data-dashboard-tab="${tab}"`);
     }
 
     for (const method of ['sources()', 'queue()', 'settings()']) {
@@ -64,18 +74,18 @@ describe('dashboard app shell', () => {
     ]) {
       expect(dashboardClient).toContain(endpoint);
       expect(dashboardApp).not.toContain(endpoint);
-      expect(dashboardPage).not.toContain(endpoint);
+      expect(localizedDashboardPage).not.toContain(endpoint);
     }
 
     expect(dashboardClient).toContain('class RainrailDashboardApiClient');
     expect(dashboardClient).toContain('authorization: `Bearer ${this.token}`');
     expect(dashboardApp).toContain('new RainrailDashboardApiClient');
-    expect(dashboardPage).toContain('data-api-base-url-input');
-    expect(dashboardPage).toContain('data-api-base-url');
+    expect(localizedDashboardPage).toContain('data-api-base-url-input');
+    expect(localizedDashboardPage).toContain('data-api-base-url');
     expect(dashboardApp).toContain('API_BASE_URL_STORAGE_KEY');
     expect(dashboardApp).toContain('apiBaseUrlInput');
     expect(dashboardApp).toContain('baseUrl: apiBaseUrl');
-    expect(dashboardPage).toContain('PUBLIC_RAINRAIL_OPERATIONAL_API_URL');
+    expect(localizedDashboardPage).toContain('PUBLIC_RAINRAIL_OPERATIONAL_API_URL');
     expect(cloudflarePagesDocs).toContain('PUBLIC_RAINRAIL_OPERATIONAL_API_URL');
     expect(cloudflarePagesDocs).toContain('operational store');
     expect(cloudflarePagesDocs).not.toContain('operational API の Worker base URL');
@@ -85,7 +95,7 @@ describe('dashboard app shell', () => {
     expect(dashboardClient).toContain('pollIntervalMs');
     expect(dashboardClient).toContain('30000');
     expect(dashboardApp).toContain('setInterval');
-    expect(dashboardPage).toContain('data-live-strategy="polling"');
+    expect(localizedDashboardPage).toContain('data-live-strategy="polling"');
   });
 
   it('clears rendered operational data when auth is cleared', () => {

@@ -5,6 +5,14 @@ const dashboardPage = readFileSync(
   new URL('../apps/www/src/pages/dashboard.astro', import.meta.url),
   'utf8',
 );
+const localizedDashboardPage = readFileSync(
+  new URL('../apps/www/src/pages/[locale]/dashboard.astro', import.meta.url),
+  'utf8',
+);
+const dashboardContent = readFileSync(
+  new URL('../apps/www/src/lib/dashboard-content.ts', import.meta.url),
+  'utf8',
+);
 const dashboardApp = readFileSync(
   new URL('../apps/www/src/lib/dashboard-app.ts', import.meta.url),
   'utf8',
@@ -19,12 +27,40 @@ const globalStyles = readFileSync(
 );
 
 describe('dashboard operational views', () => {
-  it('names the Overview, Event Inbox, Workflow Runs, and Agent Tasks work surfaces', () => {
+  it('serves the dashboard through localized /ja/ and /en/ routes', () => {
+    expect(dashboardPage).toContain("getDefaultLocaleRedirect('dashboard')");
+    expect(localizedDashboardPage).toContain('supportedLocales.map');
+    expect(localizedDashboardPage).toContain('getDashboardContent(locale)');
+    expect(localizedDashboardPage).toContain('JSON.stringify(content.app)');
+    expect(localizedDashboardPage).toContain('locale={locale}');
+    expect(dashboardContent).toContain('ja:');
+    expect(dashboardContent).toContain('en:');
+    expect(dashboardContent).toContain('Rainrail Operations');
+    expect(dashboardContent).toContain('Rainrail 運用');
+  });
+
+  it('localizes dashboard shell labels and browser-rendered UI messages', () => {
     for (const label of ['Overview', 'Event Inbox', 'Workflow Runs', 'Agent Tasks']) {
-      expect(dashboardPage).toContain(label);
+      expect(dashboardContent).toContain(label);
+    }
+    for (const label of ['概要', 'イベント受信箱', 'ワークフロー実行', 'エージェントタスク']) {
+      expect(dashboardContent).toContain(label);
     }
 
-    expect(dashboardPage).toContain('data-dashboard-tab="agent-tasks"');
+    expect(localizedDashboardPage).not.toContain('Bearer token required');
+    expect(localizedDashboardPage).not.toContain('Operational API unavailable');
+    expect(dashboardApp).toContain('dashboardCopy');
+    expect(dashboardApp).toContain('copy.status.authMissing');
+    expect(dashboardApp).toContain('copy.detailLabels.humanSummary');
+    expect(dashboardApp).toContain('copy.command.confirm');
+  });
+
+  it('names the Overview, Event Inbox, Workflow Runs, and Agent Tasks work surfaces', () => {
+    for (const label of ['Overview', 'Event Inbox', 'Workflow Runs', 'Agent Tasks']) {
+      expect(dashboardContent).toContain(label);
+    }
+
+    expect(localizedDashboardPage).toContain('data-dashboard-tab="agent-tasks"');
   });
 
   it('renders event inbox filters and delivery/result columns', () => {
@@ -36,7 +72,7 @@ describe('dashboard operational views', () => {
       'Publish result',
       'Workflow matches',
     ]) {
-      expect(dashboardPage).toContain(marker);
+      expect(marker.startsWith('data-') ? localizedDashboardPage : dashboardContent).toContain(marker);
     }
 
     expect(dashboardClient).toContain('filter[name]');
@@ -98,7 +134,7 @@ describe('dashboard operational views', () => {
       'data-agent-action="terminate-all"',
       'data-command-status',
     ]) {
-      expect(dashboardPage).toContain(marker);
+      expect(localizedDashboardPage).toContain(marker);
     }
 
     for (const method of [

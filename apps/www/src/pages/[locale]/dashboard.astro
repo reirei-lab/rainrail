@@ -1,0 +1,140 @@
+---
+import DashboardLayout from '../../layouts/DashboardLayout.astro';
+import { getDashboardContent } from '../../lib/dashboard-content';
+import { supportedLocales, type Locale } from '../../lib/i18n';
+
+export function getStaticPaths() {
+  return supportedLocales.map((locale) => ({
+    params: { locale },
+    props: { locale },
+  }));
+}
+
+type Props = {
+  locale: Locale;
+};
+
+const { locale } = Astro.props as Props;
+const content = getDashboardContent(locale);
+const apiBaseUrl = import.meta.env.PUBLIC_RAINRAIL_OPERATIONAL_API_URL ?? '';
+const dashboardCopy = JSON.stringify(content.app);
+---
+
+<DashboardLayout
+  locale={locale}
+  title={content.meta.title}
+  description={content.meta.description}
+>
+  <section
+    class="dashboard-shell"
+    data-dashboard-app
+    data-dashboard-copy={dashboardCopy}
+    data-api-base-url={apiBaseUrl}
+    data-state="auth-missing"
+    data-live-strategy="polling"
+  >
+    <aside class="dashboard-sidebar" aria-label={content.shell.navLabel}>
+      <a class="dashboard-brand" href={content.shell.brandHref} aria-label={content.shell.brandLabel}>Rainrail</a>
+      <nav>
+        <button type="button" data-dashboard-tab="overview" aria-pressed="true">{content.shell.tabs.overview}</button>
+        <button type="button" data-dashboard-tab="events" aria-pressed="false">{content.shell.tabs.events}</button>
+        <button type="button" data-dashboard-tab="workflow-runs" aria-pressed="false">{content.shell.tabs.workflowRuns}</button>
+        <button type="button" data-dashboard-tab="agent-tasks" aria-pressed="false">{content.shell.tabs.agentTasks}</button>
+        <button type="button" data-dashboard-tab="sources" aria-pressed="false">{content.shell.tabs.sources}</button>
+        <button type="button" data-dashboard-tab="queue" aria-pressed="false">{content.shell.tabs.queue}</button>
+        <button type="button" data-dashboard-tab="settings" aria-pressed="false">{content.shell.tabs.settings}</button>
+      </nav>
+      <label class="dashboard-permission">
+        <input type="checkbox" data-permission-toggle />
+        {content.shell.operatorControls}
+      </label>
+    </aside>
+
+    <div class="dashboard-workspace">
+      <header class="dashboard-topbar">
+        <div>
+          <p class="eyebrow">{content.shell.eyebrow}</p>
+          <h1>{content.shell.heading}</h1>
+        </div>
+        <div class="dashboard-auth">
+          <input data-api-base-url-input type="url" autocomplete="off" placeholder={content.shell.apiBaseUrlPlaceholder} aria-label={content.shell.apiBaseUrlLabel} />
+          <input data-token-input type="password" autocomplete="off" placeholder={content.shell.tokenPlaceholder} aria-label={content.shell.tokenLabel} />
+          <button type="button" class="button secondary" data-token-save>{content.shell.connect}</button>
+          <button type="button" class="button secondary" data-token-clear>{content.shell.clear}</button>
+        </div>
+      </header>
+
+      <div class="dashboard-health">
+        <div>
+          <span>{content.shell.status}</span>
+          <strong data-status-text>{content.shell.states.authMissing}</strong>
+        </div>
+        <button type="button" class="button" data-refresh>{content.shell.refresh}</button>
+        <span class="dashboard-stale" data-stale-indicator hidden>{content.shell.staleData}</span>
+      </div>
+
+      <div class="dashboard-state" data-state="loading">{content.shell.states.loading}</div>
+      <div class="dashboard-state" data-state="empty">{content.shell.states.empty}</div>
+      <div class="dashboard-state" data-state="error">{content.shell.states.unavailable}</div>
+      <div class="dashboard-state" data-state="auth-missing">{content.shell.states.authMissing}</div>
+
+      <section class="dashboard-stats dashboard-overview-grid" data-dashboard-stats aria-label="Operational totals">
+        <div class="dashboard-stat"><span>{content.app.stats.events}</span><strong>0</strong></div>
+        <div class="dashboard-stat"><span>{content.app.stats.activeRuns}</span><strong>0</strong></div>
+        <div class="dashboard-stat"><span>{content.app.stats.agentTasks}</span><strong>0</strong></div>
+        <div class="dashboard-stat"><span>{content.app.stats.retryingHandlers}</span><strong>0</strong></div>
+        <div class="dashboard-stat"><span>{content.app.stats.sources}</span><strong>0</strong></div>
+        <div class="dashboard-stat"><span>{content.app.stats.queue}</span><strong>0</strong></div>
+      </section>
+
+      <section class="dashboard-filterbar" aria-label={content.shell.filtersLabel}>
+        <label>
+          {content.shell.source}
+          <select data-event-source-filter>
+            <option value="">{content.shell.allSources}</option>
+            <option value="github">GitHub</option>
+            <option value="cloudflare">Cloudflare</option>
+            <option value="manual">Manual</option>
+            <option value="system">System</option>
+          </select>
+        </label>
+        <label>
+          {content.shell.eventName}
+          <input data-event-name-filter type="text" autocomplete="off" placeholder="github.issue" />
+        </label>
+        <button type="button" class="button secondary" data-filter-apply>{content.shell.apply}</button>
+        <span>{content.shell.delivery}</span>
+        <span>{content.shell.publishResult}</span>
+        <span>{content.shell.workflowMatches}</span>
+      </section>
+
+      <section class="dashboard-two-pane" aria-label={content.shell.recordsLabel}>
+        <div class="dashboard-list" data-dashboard-list></div>
+        <article class="dashboard-detail" data-dashboard-detail>
+          <div class="dashboard-detail-heading">
+            <span>{content.app.placeholder.ready}</span>
+            <strong>{content.app.placeholder.waiting}</strong>
+          </div>
+          <h2>{content.app.placeholder.selectStream}</h2>
+          <dl>
+            <div><dt>ID</dt><dd>n/a</dd></div>
+            <div><dt>{content.app.placeholder.branch}</dt><dd>n/a</dd></div>
+            <div><dt>{content.app.placeholder.issue}</dt><dd>n/a</dd></div>
+          </dl>
+        </article>
+      </section>
+
+      <section class="dashboard-actions" aria-label={content.shell.actionsLabel}>
+        <button type="button" class="dashboard-action" data-agent-action="resume" data-action-permission="operator" disabled>{content.shell.commandButtons.resume}</button>
+        <button type="button" class="dashboard-action" data-agent-action="reset" data-action-permission="operator" disabled>{content.shell.commandButtons.reset}</button>
+        <button type="button" class="dashboard-action" data-agent-action="terminate" data-action-permission="operator" disabled>{content.shell.commandButtons.terminate}</button>
+        <button type="button" class="dashboard-action danger" data-agent-action="terminate-all" data-action-permission="operator" disabled>{content.shell.commandButtons.terminateAll}</button>
+        <span class="dashboard-command-status" data-command-status aria-live="polite"></span>
+      </section>
+    </div>
+  </section>
+
+  <script>
+    import '../../lib/dashboard-app';
+  </script>
+</DashboardLayout>

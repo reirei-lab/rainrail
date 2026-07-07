@@ -10,6 +10,7 @@ import {
   type DashboardSource,
   type DashboardWorkflowRun,
 } from './dashboard-client';
+import type { DashboardAppCopy } from './dashboard-content';
 
 type DashboardTab = 'overview' | 'events' | 'workflow-runs' | 'agent-tasks' | 'sources' | 'queue' | 'settings';
 type DashboardRow = DashboardEvent | DashboardWorkflowRun | DashboardAgentTask | DashboardSource | DashboardQueueItem | DashboardSetting;
@@ -38,6 +39,7 @@ const localStore = createSafeStorage(() => window.localStorage);
 
 if (root !== null) {
   const appRoot = root;
+  const copy = dashboardCopy(appRoot.dataset.dashboardCopy);
   const tokenInput = root.querySelector<HTMLInputElement>('[data-token-input]');
   const apiBaseUrlInput = root.querySelector<HTMLInputElement>('[data-api-base-url-input]');
   const saveTokenButton = root.querySelector<HTMLButtonElement>('[data-token-save]');
@@ -79,7 +81,7 @@ if (root !== null) {
   resetDashboardData();
 
   if (storedToken === '') {
-    setState('auth-missing', 'Bearer token required');
+    setState('auth-missing', copy.status.authMissing);
   } else {
     client = createDashboardClient(storedToken);
     void refresh();
@@ -93,7 +95,7 @@ if (root !== null) {
       client = undefined;
       stopPolling();
       resetDashboardData();
-      setState('auth-missing', 'Bearer token required');
+      setState('auth-missing', copy.status.authMissing);
       return;
     }
 
@@ -117,7 +119,7 @@ if (root !== null) {
     stopPolling();
     if (tokenInput !== null) tokenInput.value = '';
     resetDashboardData();
-    setState('auth-missing', 'Bearer token required');
+    setState('auth-missing', copy.status.authMissing);
   });
 
   refreshButton?.addEventListener('click', () => {
@@ -156,7 +158,7 @@ if (root !== null) {
 
   async function refresh(options: { quiet?: boolean } = {}): Promise<void> {
     if (client === undefined) {
-      setState('auth-missing', 'Bearer token required');
+      setState('auth-missing', copy.status.authMissing);
       return;
     }
     if (options.quiet && refreshInFlightClient === client) return;
@@ -165,7 +167,7 @@ if (root !== null) {
     const activeRefreshId = ++refreshSequence;
     refreshInFlightClient = activeClient;
 
-    if (!options.quiet) setState('loading', 'Loading operational state');
+    if (!options.quiet) setState('loading', copy.status.loading);
 
     try {
       const nextData = {
@@ -185,14 +187,14 @@ if (root !== null) {
       renderStats(latestData.overview);
       renderCurrentList();
       const hasOperationalData = hasDashboardRecords(latestData);
-      setState(hasOperationalData ? 'ready' : 'empty', hasOperationalData ? 'Live operational state' : 'No operational records yet');
+      setState(hasOperationalData ? 'ready' : 'empty', hasOperationalData ? copy.status.ready : copy.status.empty);
     } catch (error) {
       if (!isCurrentRefresh(activeClient, activeRefreshId)) return;
       const authError = isDashboardAuthError(error);
       if (authError) resetDashboardData();
       const message = authError
-        ? 'Token rejected by operational API'
-        : 'Operational API unavailable';
+        ? copy.status.authRejected
+        : copy.status.unavailable;
       setState('error', message);
     } finally {
       clearRefreshInFlight(activeClient, activeRefreshId);
@@ -224,7 +226,7 @@ if (root !== null) {
     button.innerHTML = `
       <span>${escapeHtml(row.status)}${'latestOutcome' in row && row.latestOutcome !== undefined ? ` / ${escapeHtml(row.latestOutcome)}` : ''}</span>
       <strong>${escapeHtml(rowTitle(row))}</strong>
-      <small>${escapeHtml(rowMeta(row))}</small>
+      <small>${escapeHtml(rowMeta(row, copy))}</small>
     `;
     button.addEventListener('click', () => {
       void renderDetail(row);
@@ -279,14 +281,14 @@ if (root !== null) {
 
     const counts = overview.data.counts;
     stats.replaceChildren(...[
-      statItem('Health', 1),
-      statItem('Events', counts.events ?? 0),
-      statItem('Active runs', counts.activityEvents ?? 0),
-      statItem('Retrying handlers', counts.eventHandlerRetries ?? 0),
-      statItem('Provider status', providerCount(latestData?.events ?? [])),
-      statItem('Agent tasks', counts.agentTasks ?? 0),
-      statItem('Sources', latestData?.sources.length ?? 0),
-      statItem('Queue', latestData?.queue.length ?? 0),
+      statItem(copy.stats.health, 1),
+      statItem(copy.stats.events, counts.events ?? 0),
+      statItem(copy.stats.activeRuns, counts.activityEvents ?? 0),
+      statItem(copy.stats.retryingHandlers, counts.eventHandlerRetries ?? 0),
+      statItem(copy.stats.providerStatus, providerCount(latestData?.events ?? [])),
+      statItem(copy.stats.agentTasks, counts.agentTasks ?? 0),
+      statItem(copy.stats.sources, latestData?.sources.length ?? 0),
+      statItem(copy.stats.queue, latestData?.queue.length ?? 0),
     ]);
   }
 
@@ -294,14 +296,14 @@ if (root !== null) {
     if (stats === null) return;
 
     stats.replaceChildren(
-      statItem('Health', 0),
-      statItem('Events', 0),
-      statItem('Active runs', 0),
-      statItem('Retrying handlers', 0),
-      statItem('Provider status', 0),
-      statItem('Agent tasks', 0),
-      statItem('Sources', 0),
-      statItem('Queue', 0),
+      statItem(copy.stats.health, 0),
+      statItem(copy.stats.events, 0),
+      statItem(copy.stats.activeRuns, 0),
+      statItem(copy.stats.retryingHandlers, 0),
+      statItem(copy.stats.providerStatus, 0),
+      statItem(copy.stats.agentTasks, 0),
+      statItem(copy.stats.sources, 0),
+      statItem(copy.stats.queue, 0),
     );
   }
 
@@ -355,7 +357,7 @@ if (root !== null) {
     if (staleIndicator !== null) staleIndicator.hidden = true;
     renderEmptyStats();
     if (list !== null) list.replaceChildren();
-    renderPlaceholderDetail('Select a stream after connecting.');
+    renderPlaceholderDetail(copy.placeholder.selectStream);
   }
 
   function renderPlaceholderDetail(message: string): void {
@@ -363,14 +365,14 @@ if (root !== null) {
 
     detail.innerHTML = `
       <div class="dashboard-detail-heading">
-        <span>ready</span>
-        <strong>waiting</strong>
+        <span>${escapeHtml(copy.placeholder.ready)}</span>
+        <strong>${escapeHtml(copy.placeholder.waiting)}</strong>
       </div>
       <h2>${escapeHtml(message)}</h2>
       <dl>
         <div><dt>ID</dt><dd>n/a</dd></div>
-        <div><dt>Branch</dt><dd>n/a</dd></div>
-        <div><dt>Issue</dt><dd>n/a</dd></div>
+        <div><dt>${escapeHtml(copy.placeholder.branch)}</dt><dd>n/a</dd></div>
+        <div><dt>${escapeHtml(copy.placeholder.issue)}</dt><dd>n/a</dd></div>
       </dl>
     `;
   }
@@ -427,10 +429,10 @@ if (root !== null) {
   }
 
   function emptyDetailMessage(tab: DashboardTab): string {
-    if (tab === 'sources') return `Waiting for configured source adapters: ${sourceBundleLabels.join(', ')}.`;
-    if (tab === 'queue') return `Waiting for queue records covering ${queueLabels.join(', ')}.`;
-    if (tab === 'settings') return `Waiting for settings metadata covering ${settingsLabels.join(', ')}.`;
-    return 'Select another stream or wait for the next poll.';
+    if (tab === 'sources') return `${copy.empty.sources}: ${sourceBundleLabels.join(', ')}.`;
+    if (tab === 'queue') return `${copy.empty.queue}: ${queueLabels.join(', ')}.`;
+    if (tab === 'settings') return `${copy.empty.settings}: ${settingsLabels.join(', ')}.`;
+    return copy.empty.fallback;
   }
 
   function currentEventFilters(): { sourceType?: string; name?: string } {
@@ -453,11 +455,11 @@ if (root !== null) {
       <h2>${escapeHtml(rowTitle(row))}</h2>
       <dl>
         <div><dt>ID</dt><dd>${escapeHtml(row.id)}</dd></div>
-        <div><dt>Branch</dt><dd>${escapeHtml('branchName' in row ? row.branchName ?? 'n/a' : 'n/a')}</dd></div>
-        <div><dt>Issue</dt><dd>${escapeHtml(formatIssue(row))}</dd></div>
-        <div><dt>Action audit</dt><dd>${escapeHtml(label)}</dd></div>
+        <div><dt>${escapeHtml(copy.detailLabels.branch)}</dt><dd>${escapeHtml('branchName' in row ? row.branchName ?? 'n/a' : 'n/a')}</dd></div>
+        <div><dt>${escapeHtml(copy.detailLabels.issue)}</dt><dd>${escapeHtml(formatIssue(row))}</dd></div>
+        <div><dt>${escapeHtml(copy.detailLabels.actionAudit)}</dt><dd>${escapeHtml(label)}</dd></div>
       </dl>
-      ${renderMetadata(row)}
+      ${renderMetadata(row, copy)}
     `;
   }
 
@@ -477,15 +479,15 @@ if (root !== null) {
       </div>
       <h2>${escapeHtml(stringRecordValue(record.humanSummary) ?? rowTitle(row))}</h2>
       <dl>
-        <div><dt>Human summary</dt><dd>${escapeHtml(stringRecordValue(record.humanSummary) ?? rowTitle(row))}</dd></div>
-        <div><dt>Delivery</dt><dd>${escapeHtml(row.deliveryId ?? stringRecordValue(objectRecord(record.delivery).id) ?? 'n/a')}</dd></div>
-        <div><dt>Raw payload reference</dt><dd>${escapeHtml(stringRecordValue(rawPayload.reference) ?? row.rawPayloadReference ?? 'n/a')}</dd></div>
-        <div><dt>Matched workflows</dt><dd>${escapeHtml(formatActivityList(activityEvents))}</dd></div>
-        <div><dt>Retry schedule</dt><dd>${escapeHtml(formatRetryList(handlerRetries))}</dd></div>
-        <div><dt>Action audit</dt><dd>${escapeHtml(formatActivityList(activityEvents))}</dd></div>
+        <div><dt>${escapeHtml(copy.detailLabels.humanSummary)}</dt><dd>${escapeHtml(stringRecordValue(record.humanSummary) ?? rowTitle(row))}</dd></div>
+        <div><dt>${escapeHtml(copy.detailLabels.delivery)}</dt><dd>${escapeHtml(row.deliveryId ?? stringRecordValue(objectRecord(record.delivery).id) ?? 'n/a')}</dd></div>
+        <div><dt>${escapeHtml(copy.detailLabels.rawPayloadReference)}</dt><dd>${escapeHtml(stringRecordValue(rawPayload.reference) ?? row.rawPayloadReference ?? 'n/a')}</dd></div>
+        <div><dt>${escapeHtml(copy.detailLabels.matchedWorkflows)}</dt><dd>${escapeHtml(formatActivityList(activityEvents))}</dd></div>
+        <div><dt>${escapeHtml(copy.detailLabels.retrySchedule)}</dt><dd>${escapeHtml(formatRetryList(handlerRetries))}</dd></div>
+        <div><dt>${escapeHtml(copy.detailLabels.actionAudit)}</dt><dd>${escapeHtml(formatActivityList(activityEvents))}</dd></div>
       </dl>
-      <section class="dashboard-audit-list" aria-label="Sanitized envelope">
-        <h3>Sanitized envelope</h3>
+      <section class="dashboard-audit-list" aria-label="${escapeHtml(copy.detailLabels.sanitizedEnvelope)}">
+        <h3>${escapeHtml(copy.detailLabels.sanitizedEnvelope)}</h3>
         <pre>${escapeHtml(JSON.stringify(envelope, null, 2))}</pre>
       </section>
     `;
@@ -502,13 +504,13 @@ if (root !== null) {
       </div>
       <h2>${escapeHtml(rowTitle(row))}</h2>
       <dl>
-        <div><dt>Human summary</dt><dd>${escapeHtml(stringRecordValue(record.summary) ?? rowTitle(row))}</dd></div>
-        <div><dt>Source event</dt><dd>${escapeHtml(stringRecordValue(record.sourceEventId) ?? row.sourceEventId ?? 'n/a')}</dd></div>
-        <div><dt>Action audit</dt><dd>${escapeHtml(`${stringRecordValue(record.actionType) ?? 'n/a'} / ${stringRecordValue(record.outcome) ?? row.status}`)}</dd></div>
-        <div><dt>Retry schedule</dt><dd>${escapeHtml(row.status === 'failed' ? 'Check handler retry rows for this source event.' : 'n/a')}</dd></div>
+        <div><dt>${escapeHtml(copy.detailLabels.humanSummary)}</dt><dd>${escapeHtml(stringRecordValue(record.summary) ?? rowTitle(row))}</dd></div>
+        <div><dt>${escapeHtml(copy.detailLabels.sourceEvent)}</dt><dd>${escapeHtml(stringRecordValue(record.sourceEventId) ?? row.sourceEventId ?? 'n/a')}</dd></div>
+        <div><dt>${escapeHtml(copy.detailLabels.actionAudit)}</dt><dd>${escapeHtml(`${stringRecordValue(record.actionType) ?? 'n/a'} / ${stringRecordValue(record.outcome) ?? row.status}`)}</dd></div>
+        <div><dt>${escapeHtml(copy.detailLabels.retrySchedule)}</dt><dd>${escapeHtml(row.status === 'failed' ? 'Check handler retry rows for this source event.' : 'n/a')}</dd></div>
       </dl>
-      <section class="dashboard-audit-list" aria-label="Workflow run record">
-        <h3>Action audit</h3>
+      <section class="dashboard-audit-list" aria-label="${escapeHtml(copy.detailLabels.workflowRunRecord)}">
+        <h3>${escapeHtml(copy.detailLabels.actionAudit)}</h3>
         <pre>${escapeHtml(JSON.stringify(record, null, 2))}</pre>
       </section>
     `;
@@ -532,42 +534,42 @@ if (root !== null) {
         <strong>${escapeHtml(stringRecordValue(record.status) ?? row.status)}</strong>
       </div>
       <h2>${escapeHtml(stringRecordValue(record.title) ?? rowTitle(row))}</h2>
-      <div class="dashboard-detail-tabs" role="tablist" aria-label="Agent task detail tabs">
-        <span>Summary</span>
-        <span>Timeline</span>
-        <span>Codex activity</span>
-        <span>stdout log</span>
-        <span>stderr log</span>
-        <span>JSONL/raw detail</span>
+      <div class="dashboard-detail-tabs" role="tablist" aria-label="${escapeHtml(copy.detailLabels.agentTaskTabs)}">
+        <span>${escapeHtml(copy.detailLabels.summary)}</span>
+        <span>${escapeHtml(copy.detailLabels.timeline)}</span>
+        <span>${escapeHtml(copy.detailLabels.codexActivity)}</span>
+        <span>${escapeHtml(copy.detailLabels.stdoutLog)}</span>
+        <span>${escapeHtml(copy.detailLabels.stderrLog)}</span>
+        <span>${escapeHtml(copy.detailLabels.rawDetail)}</span>
       </div>
       <dl>
-        <div><dt>ID</dt><dd>${escapeHtml(row.id)}</dd></div>
-        <div><dt>Issue</dt><dd>${escapeHtml(formatIssue(row))}</dd></div>
-        <div><dt>Branch</dt><dd>${escapeHtml(stringRecordValue(record.branchName) ?? row.branchName ?? 'n/a')}</dd></div>
-        <div><dt>Agent session</dt><dd>${escapeHtml(stringRecordValue(record.agentSessionId) ?? row.agentSessionId ?? 'n/a')}</dd></div>
-        <div><dt>Runtime pid</dt><dd>${escapeHtml(formatNumberRecordValue(runtime.pid) ?? formatNumberRecordValue(record.pid) ?? 'n/a')}</dd></div>
-        <div><dt>Resume count</dt><dd>${escapeHtml(String(resumeAttempts.length))}</dd></div>
-        <div><dt>Project claim</dt><dd>${escapeHtml(formatProjectClaim(claim, projectClaim, row.warnings?.staleProjectClaim))}</dd></div>
-        <div><dt>Latest resume attempt</dt><dd>${escapeHtml(formatLatestResumeAttempt(latestResumeAttempt))}</dd></div>
+        <div><dt>${escapeHtml(copy.detailLabels.id)}</dt><dd>${escapeHtml(row.id)}</dd></div>
+        <div><dt>${escapeHtml(copy.detailLabels.issue)}</dt><dd>${escapeHtml(formatIssue(row))}</dd></div>
+        <div><dt>${escapeHtml(copy.detailLabels.branch)}</dt><dd>${escapeHtml(stringRecordValue(record.branchName) ?? row.branchName ?? 'n/a')}</dd></div>
+        <div><dt>${escapeHtml(copy.detailLabels.agentSession)}</dt><dd>${escapeHtml(stringRecordValue(record.agentSessionId) ?? row.agentSessionId ?? 'n/a')}</dd></div>
+        <div><dt>${escapeHtml(copy.detailLabels.runtimePid)}</dt><dd>${escapeHtml(formatNumberRecordValue(runtime.pid) ?? formatNumberRecordValue(record.pid) ?? 'n/a')}</dd></div>
+        <div><dt>${escapeHtml(copy.detailLabels.resumeCount)}</dt><dd>${escapeHtml(String(resumeAttempts.length))}</dd></div>
+        <div><dt>${escapeHtml(copy.detailLabels.projectClaim)}</dt><dd>${escapeHtml(formatProjectClaim(claim, projectClaim, row.warnings?.staleProjectClaim))}</dd></div>
+        <div><dt>${escapeHtml(copy.detailLabels.latestResumeAttempt)}</dt><dd>${escapeHtml(formatLatestResumeAttempt(latestResumeAttempt))}</dd></div>
       </dl>
-      <section class="dashboard-audit-list" aria-label="Timeline">
-        <h3>Timeline</h3>
+      <section class="dashboard-audit-list" aria-label="${escapeHtml(copy.detailLabels.timeline)}">
+        <h3>${escapeHtml(copy.detailLabels.timeline)}</h3>
         <pre>${escapeHtml(formatAgentTimeline(record, resumeAttempts))}</pre>
       </section>
-      <section class="dashboard-audit-list" aria-label="Codex activity">
-        <h3>Codex activity</h3>
+      <section class="dashboard-audit-list" aria-label="${escapeHtml(copy.detailLabels.codexActivity)}">
+        <h3>${escapeHtml(copy.detailLabels.codexActivity)}</h3>
         <pre>${escapeHtml(formatCodexActivity(record, latestResumeAttempt))}</pre>
       </section>
-      <section class="dashboard-audit-list" aria-label="stdout log">
-        <h3>stdout log</h3>
+      <section class="dashboard-audit-list" aria-label="${escapeHtml(copy.detailLabels.stdoutLog)}">
+        <h3>${escapeHtml(copy.detailLabels.stdoutLog)}</h3>
         <pre>${escapeHtml(formatAgentLogReference(record, latestResumeAttempt, 'stdout'))}</pre>
       </section>
-      <section class="dashboard-audit-list" aria-label="stderr log">
-        <h3>stderr log</h3>
+      <section class="dashboard-audit-list" aria-label="${escapeHtml(copy.detailLabels.stderrLog)}">
+        <h3>${escapeHtml(copy.detailLabels.stderrLog)}</h3>
         <pre>${escapeHtml(formatAgentLogReference(record, latestResumeAttempt, 'stderr'))}</pre>
       </section>
-      <section class="dashboard-audit-list" aria-label="JSONL/raw detail">
-        <h3>JSONL/raw detail</h3>
+      <section class="dashboard-audit-list" aria-label="${escapeHtml(copy.detailLabels.rawDetail)}">
+        <h3>${escapeHtml(copy.detailLabels.rawDetail)}</h3>
         <pre>${escapeHtml(JSON.stringify(record, null, 2))}</pre>
       </section>
     `;
@@ -575,35 +577,35 @@ if (root !== null) {
 
   async function runAgentAction(action: 'resume' | 'reset' | 'terminate' | 'terminate-all'): Promise<void> {
     if (client === undefined) {
-      setCommandStatus('Connect with an operator token before running commands.');
+      setCommandStatus(copy.command.connectFirst);
       return;
     }
     if (action !== 'terminate-all' && selectedAgentTaskId === undefined) {
-      setCommandStatus('Select an agent task first.');
+      setCommandStatus(copy.command.selectTaskFirst);
       return;
     }
 
     const targetId = action === 'terminate-all' ? 'all running tasks' : selectedAgentTaskId!;
-    setCommandStatus(`Sending ${action} for ${targetId}`);
+    setCommandStatus(`${copy.command.sending} ${action} for ${targetId}`);
     try {
       const response = await sendAgentAction(action);
-      setCommandStatus(formatCommandResponse(response.data.status, response.data.auditId, response.data.auditWarning));
+      setCommandStatus(formatCommandResponse(response.data.status, response.data.auditId, response.data.auditWarning, copy));
       void refresh({ quiet: true });
     } catch (error) {
       if (error instanceof RainrailDashboardApiError && error.code === 'action_confirmation_required') {
         const confirmationToken = confirmationTokenFromError(error);
-        if (confirmationToken !== undefined && window.confirm(`Confirm ${action} for ${targetId}?`)) {
+        if (confirmationToken !== undefined && window.confirm(`${copy.command.confirm} ${action} for ${targetId}?`)) {
           try {
             const confirmed = await sendAgentAction(action, confirmationToken);
-            setCommandStatus(formatCommandResponse(confirmed.data.status, confirmed.data.auditId, confirmed.data.auditWarning));
+            setCommandStatus(formatCommandResponse(confirmed.data.status, confirmed.data.auditId, confirmed.data.auditWarning, copy));
             void refresh({ quiet: true });
           } catch (confirmedError) {
-            setCommandStatus(confirmedError instanceof RainrailDashboardApiError ? `Command failed: ${confirmedError.code}` : 'Command failed');
+            setCommandStatus(confirmedError instanceof RainrailDashboardApiError ? `${copy.command.failed}: ${confirmedError.code}` : copy.command.failed);
           }
           return;
         }
       }
-      setCommandStatus(error instanceof RainrailDashboardApiError ? `Command failed: ${error.code}` : 'Command failed');
+      setCommandStatus(error instanceof RainrailDashboardApiError ? `${copy.command.failed}: ${error.code}` : copy.command.failed);
     }
   }
 
@@ -732,38 +734,38 @@ function rowTitle(row: DashboardRow): string {
   return row.id;
 }
 
-function rowMeta(row: DashboardRow): string {
+function rowMeta(row: DashboardRow, copy: DashboardAppCopy): string {
   if (row.type === 'event') {
     return [
-      row.deliveryId === undefined ? undefined : `Delivery ${row.deliveryId}`,
-      row.latestOutcome === undefined ? undefined : `Publish result ${row.latestOutcome}`,
-      row.workflowRunCount === undefined ? undefined : `Workflow matches ${row.workflowRunCount}`,
-      row.handlerRetryCount === undefined ? undefined : `Retries ${row.handlerRetryCount}`,
+      row.deliveryId === undefined ? undefined : `${copy.rowMeta.delivery} ${row.deliveryId}`,
+      row.latestOutcome === undefined ? undefined : `${copy.rowMeta.publishResult} ${row.latestOutcome}`,
+      row.workflowRunCount === undefined ? undefined : `${copy.rowMeta.workflowMatches} ${row.workflowRunCount}`,
+      row.handlerRetryCount === undefined ? undefined : `${copy.rowMeta.retries} ${row.handlerRetryCount}`,
     ].filter((value): value is string => value !== undefined).join(' | ') || row.id;
   }
   if (row.type === 'workflow-run') {
-    return row.sourceEventId === undefined ? row.id : `Source event ${row.sourceEventId}`;
+    return row.sourceEventId === undefined ? row.id : `${copy.rowMeta.sourceEvent} ${row.sourceEventId}`;
   }
   if (row.type === 'agent-task') {
     return [
       row.issue?.repository !== undefined && row.issue.number !== undefined ? `${row.issue.repository}#${row.issue.number}` : undefined,
       row.branchName,
       row.agentSessionId,
-      row.warnings?.staleProjectClaim ? 'stale project claim' : undefined,
+      row.warnings?.staleProjectClaim ? copy.rowMeta.staleProjectClaim : undefined,
     ].filter((value): value is string => value !== undefined && value !== '').join(' | ') || row.id;
   }
   if (row.type === 'source') {
     return [
       row.sourceType,
       row.transport,
-      row.lastDelivery?.id === undefined ? undefined : `Last delivery ${row.lastDelivery.id}`,
+      row.lastDelivery?.id === undefined ? undefined : `${copy.rowMeta.lastDelivery} ${row.lastDelivery.id}`,
     ].filter((value): value is string => value !== undefined).join(' | ') || row.id;
   }
   if (row.type === 'queue-item') {
     return [
-      row.projectStatus === undefined ? undefined : `Project ${row.projectStatus}`,
-      row.blockedReason === undefined ? undefined : `Blocked ${row.blockedReason}`,
-      row.claimLock?.heldBy === undefined ? undefined : `Claim ${row.claimLock.heldBy}`,
+      row.projectStatus === undefined ? undefined : `${copy.rowMeta.project} ${row.projectStatus}`,
+      row.blockedReason === undefined ? undefined : `${copy.rowMeta.blocked} ${row.blockedReason}`,
+      row.claimLock?.heldBy === undefined ? undefined : `${copy.rowMeta.claim} ${row.claimLock.heldBy}`,
     ].filter((value): value is string => value !== undefined).join(' | ') || row.id;
   }
   if (row.type === 'setting') {
@@ -772,36 +774,36 @@ function rowMeta(row: DashboardRow): string {
   return 'unknown';
 }
 
-function renderMetadata(row: DashboardRow): string {
+function renderMetadata(row: DashboardRow, copy: DashboardAppCopy): string {
   const items: Array<[string, string]> = [];
 
   if (row.type === 'source') {
     items.push(
-      ['Source type', row.sourceType],
-      ['Endpoint', row.endpoint ?? 'n/a'],
-      ['Transport', row.transport ?? 'n/a'],
-      ['Auth', row.auth?.status ?? 'unknown'],
-      ['Last delivery', row.lastDelivery?.receivedAt ?? 'none'],
-      ['Bundle model', sourceBundleLabels.join(', ')],
+      [copy.metadata.sourceType, row.sourceType],
+      [copy.metadata.endpoint, row.endpoint ?? 'n/a'],
+      [copy.metadata.transport, row.transport ?? 'n/a'],
+      [copy.metadata.auth, row.auth?.status ?? 'unknown'],
+      [copy.metadata.lastDelivery, row.lastDelivery?.receivedAt ?? 'none'],
+      [copy.metadata.bundleModel, sourceBundleLabels.join(', ')],
     );
   }
 
   if (row.type === 'queue-item') {
     items.push(
-      ['Project status', row.projectStatus ?? 'unknown'],
-      ['Claim lock', row.claimLock?.projectItemId ?? 'none'],
-      ['Held by', row.claimLock?.heldBy ?? 'n/a'],
-      ['Blocked reason', row.blockedReason ?? 'none'],
-      ['Queue signals', queueLabels.join(', ')],
+      [copy.metadata.projectStatus, row.projectStatus ?? 'unknown'],
+      [copy.metadata.claimLock, row.claimLock?.projectItemId ?? 'none'],
+      [copy.metadata.heldBy, row.claimLock?.heldBy ?? 'n/a'],
+      [copy.metadata.blockedReason, row.blockedReason ?? 'none'],
+      [copy.metadata.queueSignals, queueLabels.join(', ')],
     );
   }
 
   if (row.type === 'setting') {
     items.push(
-      ['Value', row.value],
-      ['Update scope', 'admin'],
-      ['Audit', 'required'],
-      ['Settings model', settingsLabels.join(', ')],
+      [copy.metadata.value, row.value],
+      [copy.metadata.updateScope, 'admin'],
+      [copy.metadata.audit, 'required'],
+      [copy.metadata.settingsModel, settingsLabels.join(', ')],
     );
   }
 
@@ -925,12 +927,125 @@ function confirmationTokenFromError(error: RainrailDashboardApiError): string | 
   return stringRecordValue(data.confirmationToken);
 }
 
-function formatCommandResponse(status: string, auditId: string | undefined, auditWarning: string | undefined): string {
+function formatCommandResponse(
+  status: string,
+  auditId: string | undefined,
+  auditWarning: string | undefined,
+  copy: DashboardAppCopy,
+): string {
   return [
-    `Command ${status}`,
-    auditId === undefined ? undefined : `audit ${auditId}`,
+    `${copy.command.command} ${status}`,
+    auditId === undefined ? undefined : `${copy.command.audit} ${auditId}`,
     auditWarning,
   ].filter((value): value is string => value !== undefined && value !== '').join(' / ');
+}
+
+function dashboardCopy(value: string | undefined): DashboardAppCopy {
+  if (value !== undefined) {
+    try {
+      return JSON.parse(value) as DashboardAppCopy;
+    } catch {
+      // Fall through to the embedded English copy so the dashboard remains usable.
+    }
+  }
+
+  return {
+    status: {
+      authMissing: 'Bearer token required',
+      loading: 'Loading operational state',
+      ready: 'Live operational state',
+      empty: 'No operational records yet',
+      authRejected: 'Token rejected by operational API',
+      unavailable: 'Operational API unavailable',
+    },
+    placeholder: {
+      selectStream: 'Select a stream after connecting.',
+      ready: 'ready',
+      waiting: 'waiting',
+      branch: 'Branch',
+      issue: 'Issue',
+    },
+    empty: {
+      sources: 'Waiting for configured source adapters',
+      queue: 'Waiting for queue records covering',
+      settings: 'Waiting for settings metadata covering',
+      fallback: 'Select another stream or wait for the next poll.',
+    },
+    stats: {
+      health: 'Health',
+      events: 'Events',
+      activeRuns: 'Active runs',
+      retryingHandlers: 'Retrying handlers',
+      providerStatus: 'Provider status',
+      agentTasks: 'Agent tasks',
+      sources: 'Sources',
+      queue: 'Queue',
+    },
+    detailLabels: {
+      id: 'ID',
+      branch: 'Branch',
+      issue: 'Issue',
+      actionAudit: 'Action audit',
+      humanSummary: 'Human summary',
+      delivery: 'Delivery',
+      rawPayloadReference: 'Raw payload reference',
+      matchedWorkflows: 'Matched workflows',
+      retrySchedule: 'Retry schedule',
+      sanitizedEnvelope: 'Sanitized envelope',
+      sourceEvent: 'Source event',
+      workflowRunRecord: 'Workflow run record',
+      agentSession: 'Agent session',
+      runtimePid: 'Runtime pid',
+      resumeCount: 'Resume count',
+      projectClaim: 'Project claim',
+      latestResumeAttempt: 'Latest resume attempt',
+      agentTaskTabs: 'Agent task detail tabs',
+      summary: 'Summary',
+      timeline: 'Timeline',
+      codexActivity: 'Codex activity',
+      stdoutLog: 'stdout log',
+      stderrLog: 'stderr log',
+      rawDetail: 'JSONL/raw detail',
+    },
+    metadata: {
+      sourceType: 'Source type',
+      endpoint: 'Endpoint',
+      transport: 'Transport',
+      auth: 'Auth',
+      lastDelivery: 'Last delivery',
+      bundleModel: 'Bundle model',
+      projectStatus: 'Project status',
+      claimLock: 'Claim lock',
+      heldBy: 'Held by',
+      blockedReason: 'Blocked reason',
+      queueSignals: 'Queue signals',
+      value: 'Value',
+      updateScope: 'Update scope',
+      audit: 'Audit',
+      settingsModel: 'Settings model',
+    },
+    rowMeta: {
+      delivery: 'Delivery',
+      publishResult: 'Publish result',
+      workflowMatches: 'Workflow matches',
+      retries: 'Retries',
+      sourceEvent: 'Source event',
+      staleProjectClaim: 'stale project claim',
+      lastDelivery: 'Last delivery',
+      project: 'Project',
+      blocked: 'Blocked',
+      claim: 'Claim',
+    },
+    command: {
+      connectFirst: 'Connect with an operator token before running commands.',
+      selectTaskFirst: 'Select an agent task first.',
+      sending: 'Sending',
+      confirm: 'Confirm',
+      failed: 'Command failed',
+      command: 'Command',
+      audit: 'audit',
+    },
+  };
 }
 
 function escapeHtml(value: string): string {
