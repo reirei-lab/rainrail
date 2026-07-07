@@ -3013,6 +3013,32 @@ describe('Rainrail CLI built-in commands', () => {
     });
   });
 
+  it('generates dashboard auth for complete setup projects using a custom config path', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'dashboard-auth-custom-config');
+      const defaultConfigPath = join(projectRoot, 'rainrail.config.json');
+      const customConfigPath = join(projectRoot, 'custom.rainrail.json');
+      await writeFile(customConfigPath, `${JSON.stringify({
+        project: { name: 'dashboard-auth-custom-config' },
+        sourceBundles: [],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+      await rm(defaultConfigPath);
+
+      const result = runRainrailCli(['--config', customConfigPath, 'setup', 'github', '--yes'], { cwd: projectRoot });
+      const customConfig = JSON.parse(await readFile(customConfigPath, 'utf8')) as {
+        dashboardAuth?: { readOnlyToken?: string; operatorToken?: string };
+      };
+
+      expect(result.exitCode).toBe(0);
+      expect(customConfig.dashboardAuth?.readOnlyToken).toMatch(/^rr_local_read-only_[A-Za-z0-9_-]+$/u);
+      expect(customConfig.dashboardAuth?.operatorToken).toMatch(/^rr_local_operator_[A-Za-z0-9_-]+$/u);
+      await expect(stat(defaultConfigPath)).rejects.toThrow();
+    });
+  });
+
   it('expands config environment fragments before generating dashboard auth tokens during setup', async () => {
     await withTempDirectory(async (directory) => {
       const projectRoot = await initRainrailProject(directory, 'dashboard-auth-expanded-config');
@@ -3038,6 +3064,38 @@ describe('Rainrail CLI built-in commands', () => {
 
       expect(result.exitCode).toBe(0);
       expect(rawConfig).toContain('"sources": ${RAINRAIL_SOURCES}');
+      expect(config.dashboardAuth?.readOnlyToken).toMatch(/^rr_local_read-only_[A-Za-z0-9_-]+$/u);
+      expect(config.dashboardAuth?.operatorToken).toMatch(/^rr_local_operator_[A-Za-z0-9_-]+$/u);
+    });
+  });
+
+  it('does not require unrelated runtime env fragments when generating dashboard auth tokens during setup', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'dashboard-auth-unset-runtime-fragment');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      await writeFile(configPath, [
+        '{',
+        '  "project": { "name": "dashboard-auth-unset-runtime-fragment" },',
+        '  "sourceBundles": [],',
+        '  "sources": ${RAINRAIL_SOURCES},',
+        '  "taskProviders": ${TASK_PROVIDERS},',
+        '  "runtimeProviders": {}',
+        '}',
+      ].join('\n'));
+
+      const result = runRainrailCli(['setup', 'github', '--yes'], { cwd: projectRoot });
+      const rawConfig = await readFile(configPath, 'utf8');
+      const config = JSON.parse(
+        rawConfig
+          .replace('${RAINRAIL_SOURCES}', '[]')
+          .replace('${TASK_PROVIDERS}', '{}'),
+      ) as {
+        dashboardAuth?: { readOnlyToken?: string; operatorToken?: string };
+      };
+
+      expect(result.exitCode).toBe(0);
+      expect(rawConfig).toContain('"sources": ${RAINRAIL_SOURCES}');
+      expect(rawConfig).toContain('"taskProviders": ${TASK_PROVIDERS}');
       expect(config.dashboardAuth?.readOnlyToken).toMatch(/^rr_local_read-only_[A-Za-z0-9_-]+$/u);
       expect(config.dashboardAuth?.operatorToken).toMatch(/^rr_local_operator_[A-Za-z0-9_-]+$/u);
     });

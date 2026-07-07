@@ -2559,19 +2559,13 @@ function ensureLocalDashboardAuth(
   env: Record<string, string | undefined>,
 ): LocalDashboardAuthSetupResult {
   const raw = fileSystem.readFileSync(configPath, 'utf8');
-  const expanded = expandConfigEnv(raw, env);
-  const value = JSON.parse(expanded) as unknown;
   const rawDashboardAuth = parseRawDashboardAuthObject(raw);
-  if (!isRecord(value)) {
-    throw new Error('config must be an object');
+  if (hasDashboardAuthProperty(raw) && rawDashboardAuth === undefined) {
+    throw new Error('config.dashboardAuth must be an object in rainrail.config.json before setup can add local tokens');
   }
-  const dashboardAuthValue = value.dashboardAuth;
-  if (dashboardAuthValue !== undefined && !isRecord(dashboardAuthValue)) {
-    throw new Error('config.dashboardAuth must be an object');
-  }
-  const dashboardAuth: Record<string, unknown> = dashboardAuthValue === undefined
+  const dashboardAuth = rawDashboardAuth === undefined
     ? {}
-    : { ...dashboardAuthValue };
+    : parseExpandedDashboardAuthObject(raw, env);
   const generatedDashboardAuth: Record<string, string> = {};
   const created: Array<keyof RainrailDashboardAuth> = [];
   for (const key of ['readOnlyToken', 'operatorToken'] as const) {
@@ -2597,6 +2591,22 @@ function ensureLocalDashboardAuth(
     fileSystem.writeFileSync(configPath, formatConfigWithLocalDashboardAuth(raw, generatedDashboardAuth));
   }
   return { created };
+}
+
+function parseExpandedDashboardAuthObject(raw: string, env: Record<string, string | undefined>): Record<string, unknown> {
+  const objectStart = findDashboardAuthObjectStart(raw);
+  if (objectStart === undefined) {
+    throw new Error('config.dashboardAuth must be an object in rainrail.config.json before setup can add local tokens');
+  }
+  const objectEnd = findJsonObjectEnd(raw, objectStart);
+  if (objectEnd === undefined) {
+    throw new Error('config.dashboardAuth must be an object in rainrail.config.json before setup can add local tokens');
+  }
+  const value = JSON.parse(expandConfigEnv(raw.slice(objectStart, objectEnd + 1), env)) as unknown;
+  if (!isRecord(value)) {
+    throw new Error('config.dashboardAuth must be an object');
+  }
+  return { ...value };
 }
 
 function parseRawDashboardAuthObject(raw: string): Record<string, unknown> | undefined {
@@ -2806,9 +2816,27 @@ function validateRainrailProjectForSetup(
   project: RainrailProject,
   fileSystem: RainrailCliFileSystem,
 ): void {
-  if (!isRainrailWorkspaceRoot(project.root, fileSystem)) {
+  if (!isCompleteRainrailProject(project, fileSystem)) {
     throw new Error('rainrail setup requires a complete Rainrail project. Run rainrail init first.');
   }
+}
+
+function isCompleteRainrailProject(
+  project: RainrailProject,
+  fileSystem: RainrailCliFileSystem,
+): boolean {
+  if (
+    !fileSystem.existsSync(project.configPath) ||
+    !isRegularFile(project.configPath, fileSystem) ||
+    !fileSystem.existsSync(project.lockPath) ||
+    !fileSystem.existsSync(project.pluginDirectory) ||
+    lstatPath(project.pluginDirectory, fileSystem)?.isDirectory() !== true
+  ) {
+    return false;
+  }
+
+  readRainrailLockfile(project.lockPath, fileSystem);
+  return true;
 }
 
 function generateLocalDashboardToken(scope: keyof RainrailDashboardAuth): string {
