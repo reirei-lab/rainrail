@@ -28,13 +28,13 @@ describe('CLI release package builder', () => {
     mkdirSync(cli, { recursive: true });
     writeFileSync(join(cli, 'package.json'), JSON.stringify({ version: '2.3.4' }));
 
-    /** @type {Array<[string, string[]]>} */
+    /** @type {Array<[string, string[], { captureStdout?: boolean } | undefined]>} */
     const calls = [];
     const result = packageCliRelease({
       root,
       outDir,
-      spawn: (command, args) => {
-        calls.push([command, args]);
+      spawn: (command, args, options) => {
+        calls.push([command, args, options]);
         if (command === 'npm') {
           const packDestination = args.at(-1);
           if (packDestination === undefined) {
@@ -62,10 +62,10 @@ describe('CLI release package builder', () => {
     expect(result.assetPath).toBe(join(outDir, 'rainrail-cli-v2.3.4.tgz'));
     expect(readFileSync(result.assetPath, 'utf8')).toBe('tgz');
     expect(calls).toEqual([
-      ['pnpm', ['--filter', 'www', 'build']],
-      ['pnpm', ['--filter', '@rainrail/cli', 'build']],
-      ['npm', ['pack', cli, '--pack-destination', outDir]],
-      ['tar', ['-tzf', join(outDir, 'rainrail-cli-v2.3.4.tgz')]],
+      ['pnpm', ['--filter', 'www', 'build'], undefined],
+      ['pnpm', ['--filter', '@rainrail/cli', 'build'], undefined],
+      ['npm', ['pack', cli, '--pack-destination', outDir], undefined],
+      ['tar', ['-tzf', join(outDir, 'rainrail-cli-v2.3.4.tgz')], { captureStdout: true }],
     ]);
   });
 

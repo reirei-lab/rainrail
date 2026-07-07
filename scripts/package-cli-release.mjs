@@ -13,16 +13,18 @@ export function getCliReleaseAssetName(version) {
 
 /**
  * @typedef {{ status: number | null; stdout?: string | Buffer }} ScriptSpawnResult
- * @typedef {(command: string, args: string[]) => ScriptSpawnResult} ScriptSpawn
+ * @typedef {{ captureStdout?: boolean }} ScriptSpawnOptions
+ * @typedef {(command: string, args: string[], options?: ScriptSpawnOptions) => ScriptSpawnResult} ScriptSpawn
  */
 
 /**
  * @param {ScriptSpawn} spawn
  * @param {string} command
  * @param {string[]} args
+ * @param {ScriptSpawnOptions} [options]
  */
-function runChecked(spawn, command, args) {
-  const result = spawn(command, args);
+function runChecked(spawn, command, args, options) {
+  const result = spawn(command, args, options);
   if (result.status !== 0) {
     throw new Error(`${command} ${args.join(' ')} failed with status ${result.status}`);
   }
@@ -34,7 +36,7 @@ function runChecked(spawn, command, args) {
  * @param {string} assetPath
  */
 function validateCliReleaseAsset(spawn, assetPath) {
-  const result = runChecked(spawn, 'tar', ['-tzf', assetPath]);
+  const result = runChecked(spawn, 'tar', ['-tzf', assetPath], { captureStdout: true });
   const entries = String(result.stdout ?? '').split(/\r?\n/u).filter((entry) => entry.length > 0);
   const entrySet = new Set(entries);
   const requiredEntries = [
@@ -66,9 +68,9 @@ function validateCliReleaseAsset(spawn, assetPath) {
 export function packageCliRelease({
   root = fileURLToPath(new URL('..', import.meta.url)),
   outDir = join(root, 'dist', 'release'),
-  spawn = (command, args) => spawnSync(command, args, {
+  spawn = (command, args, options = {}) => spawnSync(command, args, {
     encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'inherit'],
+    stdio: ['ignore', options.captureStdout ? 'pipe' : 'ignore', 'inherit'],
   }),
 } = {}) {
   const cliPackageDir = join(root, 'packages', 'cli');
