@@ -3628,6 +3628,10 @@ const localCoreRoutePaths = new Set([
   '/events',
   '/dashboard',
   '/dashboard/',
+  '/ja/dashboard',
+  '/ja/dashboard/',
+  '/en/dashboard',
+  '/en/dashboard/',
   '/api/state',
   '/api/v1/overview',
   '/api/v1/events',
@@ -4207,7 +4211,7 @@ function localDashboardAssetBody(assetPath: string, options: RainrailStartOption
   if (isLocalDashboardHtmlRoute(pathname)) {
     const sameOriginBody = body.toString('utf8')
       .replace(/\sdata-api-base-url(?:="[^"]*")?/u, ' data-api-base-url=""');
-    if (options.dashboardToken === undefined) {
+    if (!hasAnyDashboardAuthToken(options.dashboardAuth) && options.dashboardToken === undefined) {
       return sameOriginBody.replace('data-auth-required="true"', 'data-auth-required="false"');
     }
     return sameOriginBody;
@@ -4221,7 +4225,7 @@ function localDashboardAssetPath(assetRoot: string, pathname: string): string | 
     return resolve(assetRoot, localeDashboard[1], 'dashboard', 'index.html');
   }
   if (pathname === '/dashboard' || pathname === '/dashboard/') {
-    const localizedDashboard = resolve(assetRoot, 'ja', 'dashboard', 'index.html');
+    const localizedDashboard = resolve(assetRoot, 'en', 'dashboard', 'index.html');
     if (existsSync(localizedDashboard)) {
       return localizedDashboard;
     }
