@@ -213,8 +213,9 @@ describe('Rainrail CLI built-in commands', () => {
       expect(result.stdout).toContain('Event Stream: http://127.0.0.1:8787/events');
       expect(result.stdout).toContain('Dashboard API: http://127.0.0.1:8787/api/v1/overview');
       expect(result.stdout).toContain('Dashboard Auth: not configured');
-      expect(result.stdout).toContain('Run `rainrail setup --yes` to generate local dashboardAuth tokens.');
-      expect(result.stdout).toContain('Or set dashboardAuth.readOnlyToken, dashboardAuth.operatorToken, or dashboardAuth.adminToken in rainrail.config.json.');
+      expect(result.stdout).toContain('Run `rainrail --config');
+      expect(result.stdout).toContain('setup --dashboard-auth-only --yes` to generate local dashboardAuth tokens.');
+      expect(result.stdout).toContain(`Or set dashboardAuth.readOnlyToken, dashboardAuth.operatorToken, or dashboardAuth.adminToken in ${join(projectRoot, 'rainrail.config.json')}.`);
       expect(result.stdout).not.toContain('EEP Bridge');
     });
   });
@@ -267,6 +268,34 @@ describe('Rainrail CLI built-in commands', () => {
         host: 'localhost',
         port: 9001,
       });
+    });
+  });
+
+  it('prints custom config setup guidance when dashboard auth is not configured', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'custom-start-auth-guide');
+      const customConfigPath = join(projectRoot, 'custom.rainrail.json');
+      await writeFile(customConfigPath, `${JSON.stringify({
+        server: {
+          host: '127.0.0.1',
+          port: 9002,
+        },
+        sourceBundles: [],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+
+      const result = runRainrailCli(['--config', customConfigPath, 'start'], {
+        cwd: projectRoot,
+        serverStarter: () => ({ stop: () => undefined }),
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain(`Config: ${customConfigPath}`);
+      expect(result.stdout).toContain(`Run \`rainrail --config ${customConfigPath} setup --dashboard-auth-only --yes\` to generate local dashboardAuth tokens.`);
+      expect(result.stdout).toContain(`Or set dashboardAuth.readOnlyToken, dashboardAuth.operatorToken, or dashboardAuth.adminToken in ${customConfigPath}.`);
+      expect(result.stdout).not.toContain('rainrail.config.json');
     });
   });
 
@@ -3072,6 +3101,34 @@ describe('Rainrail CLI built-in commands', () => {
       expect(second.exitCode).toBe(0);
       expect(second.stdout).not.toContain('Generated dashboardAuth');
       expect(secondConfig.dashboardAuth).toEqual(firstConfig.dashboardAuth);
+    });
+  });
+
+  it('generates only dashboard auth tokens with setup --dashboard-auth-only --yes', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'dashboard-auth-only-setup');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      const calls: unknown[] = [];
+
+      const result = runRainrailCli(['setup', '--dashboard-auth-only', '--yes'], {
+        cwd: projectRoot,
+        commandRunner: (...call) => {
+          calls.push(call);
+          return { status: 0, stdout: 'unexpected plugin setup\n', stderr: '' };
+        },
+      });
+      const config = JSON.parse(await readFile(configPath, 'utf8')) as {
+        dashboardAuth?: { readOnlyToken?: string; operatorToken?: string };
+      };
+      const lockfile = await readFile(join(projectRoot, 'rainrail.lock'), 'utf8');
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+      expect(result.stdout).toBe('Generated dashboardAuth.readOnlyToken and dashboardAuth.operatorToken in rainrail.config.json.\n');
+      expect(config.dashboardAuth?.readOnlyToken).toMatch(/^rr_local_read-only_[A-Za-z0-9_-]+$/u);
+      expect(config.dashboardAuth?.operatorToken).toMatch(/^rr_local_operator_[A-Za-z0-9_-]+$/u);
+      expect(lockfile).toContain('"plugins": []');
+      expect(calls).toEqual([]);
     });
   });
 

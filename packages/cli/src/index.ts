@@ -2206,7 +2206,7 @@ function formatStartOutput(options: RainrailStartOptions): string {
   const localIntakeRows = options.sources.map((source) =>
     `  ${source.name} (${source.sourceType}): ${baseUrl}${source.endpoint}`
   );
-  const dashboardAuthRows = formatDashboardAuthRows(options.dashboardAuth);
+  const dashboardAuthRows = formatDashboardAuthRows(options.dashboardAuth, options.configPath);
   return [
     'Rainrail local harness server starting',
     `Workspace: ${options.root}`,
@@ -2227,7 +2227,7 @@ function formatStartOutput(options: RainrailStartOptions): string {
   ].join('\n');
 }
 
-function formatDashboardAuthRows(auth: RainrailDashboardAuth): readonly string[] {
+function formatDashboardAuthRows(auth: RainrailDashboardAuth, configPath: string): readonly string[] {
   const scopes = [
     auth.readOnlyToken === undefined ? undefined : 'read-only',
     auth.operatorToken === undefined ? undefined : 'operator',
@@ -2240,9 +2240,19 @@ function formatDashboardAuthRows(auth: RainrailDashboardAuth): readonly string[]
 
   return [
     'Dashboard Auth: not configured',
-    'Run `rainrail setup --yes` to generate local dashboardAuth tokens.',
-    'Or set dashboardAuth.readOnlyToken, dashboardAuth.operatorToken, or dashboardAuth.adminToken in rainrail.config.json.',
+    `Run \`${formatDashboardAuthOnlySetupCommand({ config: configPath })}\` to generate local dashboardAuth tokens.`,
+    `Or set dashboardAuth.readOnlyToken, dashboardAuth.operatorToken, or dashboardAuth.adminToken in ${configPath}.`,
   ];
+}
+
+function formatDashboardAuthOnlySetupCommand(options: Pick<SharedOptions, 'config' | 'profile'>): string {
+  return [
+    'rainrail',
+    ...formatForwardedTargetOptions(options),
+    'setup',
+    '--dashboard-auth-only',
+    '--yes',
+  ].map(shellQuoteArgument).join(' ');
 }
 
 function formatUrlHost(host: string): string {
@@ -2494,7 +2504,14 @@ function runSetupCommand(
   }
   const setupOptions = normalizeSetupOptions(cwd, options);
 
-  const selectedPlugins = resolveSetupPlugins(args);
+  const setupArguments = parseSetupCommandArguments(args);
+  if (setupArguments.error !== undefined) {
+    return formatSetupError(options, setupArguments.error);
+  }
+
+  const selectedPlugins = setupArguments.dashboardAuthOnly
+    ? { plugins: [] }
+    : resolveSetupPlugins(setupArguments.pluginArgs);
   if (selectedPlugins.error !== undefined) {
     return formatSetupError(options, selectedPlugins.error);
   }
@@ -2502,12 +2519,33 @@ function runSetupCommand(
 
   if (!options.yes) {
     if (options.json) {
-      return formatSetupPreview(plugins, args.length > 0, setupOptions);
+      if (setupArguments.dashboardAuthOnly) {
+        return {
+          exitCode: 0,
+          stdout: formatJson({
+            command: 'setup',
+            completed: false,
+            plugins: [],
+            steps: [],
+            nextAction: formatDashboardAuthOnlySetupCommand(setupOptions),
+          }),
+          stderr: '',
+        };
+      }
+      return formatSetupPreview(plugins, setupArguments.pluginArgs.length > 0, setupOptions);
+    }
+
+    if (setupArguments.dashboardAuthOnly) {
+      return {
+        exitCode: 0,
+        stdout: `Run \`${formatDashboardAuthOnlySetupCommand(setupOptions)}\` to generate local dashboardAuth tokens without plugin setup.\n`,
+        stderr: '',
+      };
     }
 
     return {
       exitCode: 0,
-      stdout: formatSetupChoices(plugins, args.length > 0, setupOptions),
+      stdout: formatSetupChoices(plugins, setupArguments.pluginArgs.length > 0, setupOptions),
       stderr: '',
     };
   }
@@ -2520,6 +2558,10 @@ function runSetupCommand(
     dashboardAuthResult = ensureLocalDashboardAuth(project.configPath, fileSystem, environment.env ?? process.env);
   } catch (error) {
     return formatSetupError(options, error);
+  }
+
+  if (setupArguments.dashboardAuthOnly) {
+    return formatSetupResult(true, plugins, steps, options, undefined, dashboardAuthResult);
   }
 
   for (const plugin of plugins) {
@@ -2574,6 +2616,33 @@ function runSetupCommand(
   }
 
   return formatSetupResult(true, plugins, steps, options, undefined, dashboardAuthResult);
+}
+
+function parseSetupCommandArguments(args: readonly string[]): {
+  readonly dashboardAuthOnly: boolean;
+  readonly pluginArgs: readonly string[];
+  readonly error?: string;
+} {
+  const pluginArgs: string[] = [];
+  let dashboardAuthOnly = false;
+
+  for (const arg of args) {
+    if (arg === '--dashboard-auth-only') {
+      dashboardAuthOnly = true;
+      continue;
+    }
+    pluginArgs.push(arg);
+  }
+
+  if (dashboardAuthOnly && pluginArgs.length > 0) {
+    return {
+      dashboardAuthOnly,
+      pluginArgs,
+      error: 'rainrail setup --dashboard-auth-only cannot be combined with plugin arguments.',
+    };
+  }
+
+  return { dashboardAuthOnly, pluginArgs };
 }
 
 type LocalDashboardAuthSetupResult = {
