@@ -3775,6 +3775,15 @@ type LocalRainrailServerState = {
   sseClients: Set<ServerResponse>;
 };
 
+type LocalDashboardScope = 'read-only' | 'operator' | 'admin';
+
+type LocalDashboardCommand = {
+  readonly actionType: 'agent_task_resume' | 'agent_task_reset' | 'agent_task_terminate' | 'agent_task_terminate_all';
+  readonly targetType: 'agent_task' | 'agent_tasks';
+  readonly targetId: string;
+  readonly confirmationRequired: boolean;
+};
+
 async function startLocalRainrailServer(options: RainrailStartOptions): Promise<RainrailStartedServer> {
   const state: LocalRainrailServerState = {
     nextEventId: 1,
@@ -3890,7 +3899,7 @@ async function handleLocalRainrailRequest(
 
   const authError = getLocalServerAuthError(request, url.pathname, options);
   if (authError !== undefined) {
-    writeJsonResponse(response, authError.status, { error: authError.code }, request);
+    writeJsonResponse(response, authError.status, authError.body, request);
     return;
   }
 
@@ -4041,7 +4050,134 @@ async function handleLocalRainrailRequest(
     return;
   }
 
+  const localCommand = localDashboardCommandForPath(url.pathname);
+  if (request.method === 'POST' && localCommand !== undefined) {
+    await handleLocalDashboardCommandRequest(request, response, localCommand);
+    return;
+  }
+
   writeJsonResponse(response, 404, { error: 'not_found' }, request);
+}
+
+async function handleLocalDashboardCommandRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  command: LocalDashboardCommand,
+): Promise<void> {
+  const requestId = localRequestId(request);
+  const body = await readLocalJsonObjectBody(request);
+  if (!body.ok) {
+    writeJsonResponse(response, body.status, { error: body.error }, request, {
+      'X-Request-ID': requestId,
+    });
+    return;
+  }
+
+  const confirmationToken = localConfirmationTokenFor(command);
+  if (command.confirmationRequired && body.value.confirmationToken !== confirmationToken) {
+    writeJsonResponse(response, 409, {
+      error: 'action_confirmation_required',
+      data: {
+        action: command.actionType,
+        targetType: command.targetType,
+        targetId: command.targetId,
+        confirmationRequired: true,
+        confirmationToken,
+      },
+    }, request, {
+      'X-Request-ID': requestId,
+    });
+    return;
+  }
+
+  writeJsonResponse(response, 503, { error: 'command_handler_not_configured' }, request, {
+    'X-Request-ID': requestId,
+  });
+}
+
+async function readLocalJsonObjectBody(
+  request: IncomingMessage,
+): Promise<
+  | { readonly ok: true; readonly value: Record<string, unknown> }
+  | { readonly ok: false; readonly error: 'invalid_json_body' | 'request_body_too_large'; readonly status: number }
+> {
+  let body: Buffer;
+  try {
+    body = await readRequestBodyForLocalServer(request, localDefaultMaxRequestBodyBytes);
+  } catch (error) {
+    if (error instanceof LocalRequestBodyTooLargeError) {
+      return { ok: false, error: 'request_body_too_large', status: 413 };
+    }
+    throw error;
+  }
+  if (body.byteLength === 0) {
+    return { ok: true, value: {} };
+  }
+  try {
+    const parsed = JSON.parse(body.toString('utf8')) as unknown;
+    if (!isRecord(parsed)) {
+      return { ok: false, error: 'invalid_json_body', status: 400 };
+    }
+    return { ok: true, value: parsed };
+  } catch {
+    return { ok: false, error: 'invalid_json_body', status: 400 };
+  }
+}
+
+function localDashboardCommandForPath(pathname: string): LocalDashboardCommand | undefined {
+  const agentTaskActionMatch = /^\/api\/v1\/agent-tasks\/([^/]+)\/actions\/(resume|reset|terminate)$/u.exec(pathname);
+  if (agentTaskActionMatch !== null) {
+    const targetId = safeDecodeURIComponent(agentTaskActionMatch[1] ?? '');
+    const action = agentTaskActionMatch[2];
+    if (targetId === undefined || !isLocalAgentTaskCommandAction(action)) {
+      return undefined;
+    }
+    return {
+      actionType: localAgentTaskCommandActionType(action),
+      targetType: 'agent_task',
+      targetId,
+      confirmationRequired: action !== 'resume',
+    };
+  }
+  if (pathname === '/api/v1/agent-tasks/actions/terminate-all') {
+    return {
+      actionType: 'agent_task_terminate_all',
+      targetType: 'agent_tasks',
+      targetId: 'all',
+      confirmationRequired: true,
+    };
+  }
+  return undefined;
+}
+
+function isLocalAgentTaskCommandAction(action: string | undefined): action is 'resume' | 'reset' | 'terminate' {
+  return action === 'resume' || action === 'reset' || action === 'terminate';
+}
+
+function localAgentTaskCommandActionType(
+  action: 'resume' | 'reset' | 'terminate',
+): LocalDashboardCommand['actionType'] {
+  switch (action) {
+    case 'resume':
+      return 'agent_task_resume';
+    case 'reset':
+      return 'agent_task_reset';
+    case 'terminate':
+      return 'agent_task_terminate';
+  }
+}
+
+function localConfirmationTokenFor(command: LocalDashboardCommand): string {
+  return `confirm:${command.actionType}:${command.targetType}:${command.targetId}`;
+}
+
+function localRequestId(request: IncomingMessage): string {
+  const header = request.headers['x-request-id'];
+  const value = Array.isArray(header) ? header[0] : header;
+  if (typeof value === 'string' && /^[\w:./-]{1,128}$/u.test(value)) {
+    return value;
+  }
+  return `req_${randomBytes(16).toString('hex')}`;
 }
 
 async function handleLocalIntakeRequest(
@@ -4428,34 +4564,64 @@ function getLocalServerAuthError(
   request: IncomingMessage,
   pathname: string,
   options: RainrailStartOptions,
-): { readonly status: number; readonly code: string } | undefined {
+): { readonly status: number; readonly body: { readonly error: string; readonly requiredScope?: LocalDashboardScope } } | undefined {
   if (!requiresLocalServerAuth(pathname, options)) {
     return undefined;
   }
   const authorization = request.headers.authorization;
   if (typeof authorization !== 'string' || authorization.length === 0) {
-    return { status: 401, code: 'missing_bearer_token' };
+    return { status: 401, body: { error: 'missing_bearer_token' } };
   }
   const prefix = 'Bearer ';
   if (!authorization.startsWith(prefix)) {
-    return { status: 401, code: 'missing_bearer_token' };
+    return { status: 401, body: { error: 'missing_bearer_token' } };
   }
   const token = authorization.slice(prefix.length);
-  if (!matchesLocalDashboardToken(token, options)) {
-    return { status: 403, code: 'invalid_bearer_token' };
+  const principal = localDashboardPrincipalForToken(token, options);
+  if (principal === undefined) {
+    return { status: 403, body: { error: 'invalid_bearer_token' } };
+  }
+  const requiredScope = requiredLocalDashboardScopeForPath(pathname);
+  if (!localDashboardScopeIncludes(principal.scope, requiredScope)) {
+    return { status: 403, body: { error: 'insufficient_scope', requiredScope } };
   }
   return undefined;
 }
 
-function matchesLocalDashboardToken(token: string, options: RainrailStartOptions): boolean {
-  return [
-    options.dashboardAuth.adminToken,
-    options.dashboardAuth.operatorToken,
-    options.dashboardAuth.readOnlyToken,
-    options.dashboardToken,
-  ].some((configured) =>
-    configured !== undefined && configured.length > 0 && timingSafeStringEqual(token, configured)
-  );
+function requiredLocalDashboardScopeForPath(pathname: string): LocalDashboardScope {
+  return localDashboardCommandForPath(pathname) === undefined ? 'read-only' : 'operator';
+}
+
+function localDashboardPrincipalForToken(
+  token: string,
+  options: RainrailStartOptions,
+): { readonly scope: LocalDashboardScope } | undefined {
+  if (matchesLocalDashboardToken(token, options.dashboardAuth.adminToken)) {
+    return { scope: 'admin' };
+  }
+  if (matchesLocalDashboardToken(token, options.dashboardAuth.operatorToken)) {
+    return { scope: 'operator' };
+  }
+  if (
+    matchesLocalDashboardToken(token, options.dashboardAuth.readOnlyToken) ||
+    matchesLocalDashboardToken(token, options.dashboardToken)
+  ) {
+    return { scope: 'read-only' };
+  }
+  return undefined;
+}
+
+function matchesLocalDashboardToken(token: string, configured: string | undefined): boolean {
+  return configured !== undefined && configured.length > 0 && timingSafeStringEqual(token, configured);
+}
+
+function localDashboardScopeIncludes(actual: LocalDashboardScope, required: LocalDashboardScope): boolean {
+  const rank: Record<LocalDashboardScope, number> = {
+    'read-only': 1,
+    operator: 2,
+    admin: 3,
+  };
+  return rank[actual] >= rank[required];
 }
 
 function validateLocalIntakePayload(
@@ -4737,6 +4903,7 @@ function preflightMethodsForLocalPath(pathname: string, options: RainrailStartOp
   if (pathname === '/api/v1/overview') return ['GET', 'OPTIONS'];
   if (pathname === '/api/v1/events') return ['GET', 'OPTIONS'];
   if (/^\/api\/v1\/events\/[^/]+$/u.test(pathname)) return ['GET', 'OPTIONS'];
+  if (localDashboardCommandForPath(pathname) !== undefined) return ['POST', 'OPTIONS'];
   if (
     pathname === '/api/v1/workflow-runs' ||
     pathname === '/api/v1/agent-tasks' ||
