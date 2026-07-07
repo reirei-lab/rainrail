@@ -21,9 +21,16 @@ import {
 
 async function withTempDirectory(test: (directory: string) => Promise<void>): Promise<void> {
   const directory = await mkdtemp(join(tmpdir(), 'rainrail-cli-'));
+  const originalSseBearerToken = process.env.SSE_BEARER_TOKEN;
+  delete process.env.SSE_BEARER_TOKEN;
   try {
     await test(directory);
   } finally {
+    if (originalSseBearerToken === undefined) {
+      delete process.env.SSE_BEARER_TOKEN;
+    } else {
+      process.env.SSE_BEARER_TOKEN = originalSseBearerToken;
+    }
     await rm(directory, { recursive: true, force: true });
   }
 }
@@ -2541,7 +2548,7 @@ describe('Rainrail CLI built-in commands', () => {
 
       expect(result.exitCode).toBe(1);
       expect(result.stdout).toBe('');
-      expect(result.stderr).toContain('SSE_BEARER_TOKEN is required when rainrail start binds outside localhost');
+      expect(result.stderr).toContain('dashboardAuth.readOnlyToken, dashboardAuth.operatorToken, dashboardAuth.adminToken, or SSE_BEARER_TOKEN is required when rainrail start binds outside localhost');
     });
   });
 
