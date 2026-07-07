@@ -611,9 +611,9 @@ const japanese = {
         },
       ],
       logs: [
-        'matched source adapter github.issue',
-        'normalized payload with contract rainrail.event.v1',
-        'dispatched to runtime provider openclaw',
+        'source adapter github.issue に一致',
+        'payload を rainrail.event.v1 契約で正規化',
+        'runtime provider openclaw へ dispatch',
       ],
     },
     sections: [

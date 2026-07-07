@@ -76,10 +76,15 @@ describe('product site concepts, guides, and examples', () => {
 
     for (const redirect of [
       '/how-it-works /en/how-it-works 301',
+      '/how-it-works/ /en/how-it-works 301',
       '/concepts /en/concepts 301',
+      '/concepts/ /en/concepts 301',
       '/guides /en/guides 301',
+      '/guides/ /en/guides 301',
       '/examples /en/examples 301',
+      '/examples/ /en/examples 301',
       '/docs /en/docs 301',
+      '/docs/ /en/docs 301',
     ]) {
       expect(redirects).toContain(redirect);
     }
@@ -118,6 +123,11 @@ describe('product site concepts, guides, and examples', () => {
       '中立イベント',
       'ポリシーとプラグインルーティング',
       'エージェントワークフロー',
+    ]);
+    expect(japaneseHome.console.logs).toEqual([
+      'source adapter github.issue に一致',
+      'payload を rainrail.event.v1 契約で正規化',
+      'runtime provider openclaw へ dispatch',
     ]);
     expect(japaneseHome.sections.map((section) => section.eyebrow)).toContain(
       '中核ワークフロー',

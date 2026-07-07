@@ -24,6 +24,7 @@ describe('Cloudflare Pages product site deploys', () => {
     expect(docs).toContain('workflow_run');
     expect(docs).toContain('workflow_dispatch');
     expect(docs).toContain('RAINRAIL_PAGES_URL=https://<pages-host> pnpm pages:smoke');
+    expect(docs).toContain('smoke script は `/`, `/en/docs`, `/en/how-it-works` を GET');
   });
 
   it('ships a smoke script that validates product routes without mutating production', () => {
