@@ -109,6 +109,27 @@ export type DashboardAppCopy = {
   detailHints: {
     checkHandlerRetryRows: string;
   };
+  detailFallbacks: {
+    workflow: string;
+    handler: string;
+    unscheduled: string;
+    retryPending: string;
+    stale: string;
+    current: string;
+    resume: string;
+  };
+  timelineLabels: {
+    started: string;
+    updated: string;
+    completed: string;
+    runtime: string;
+    resume: string;
+  };
+  codexActivityLabels: {
+    session: string;
+    latestTrajectorySource: string;
+    events: string;
+  };
   detailLabels: {
     id: string;
     branch: string;
@@ -263,6 +284,27 @@ const englishApp: DashboardAppCopy = {
   detailHints: {
     checkHandlerRetryRows: 'Check handler retry rows for this source event.',
   },
+  detailFallbacks: {
+    workflow: 'workflow',
+    handler: 'handler',
+    unscheduled: 'unscheduled',
+    retryPending: 'retry pending',
+    stale: 'stale',
+    current: 'current',
+    resume: 'resume',
+  },
+  timelineLabels: {
+    started: 'started',
+    updated: 'updated',
+    completed: 'completed',
+    runtime: 'runtime',
+    resume: 'resume',
+  },
+  codexActivityLabels: {
+    session: 'session',
+    latestTrajectorySource: 'latest trajectory source',
+    events: 'events',
+  },
   metadata: {
     sourceType: 'Source type',
     endpoint: 'Endpoint',
@@ -390,6 +432,27 @@ const japaneseApp: DashboardAppCopy = {
   },
   detailHints: {
     checkHandlerRetryRows: 'この入力元イベントの handler retry 行を確認してください。',
+  },
+  detailFallbacks: {
+    workflow: 'ワークフロー',
+    handler: 'ハンドラー',
+    unscheduled: '未予定',
+    retryPending: 'リトライ待ち',
+    stale: '古い状態',
+    current: '現在',
+    resume: '再開',
+  },
+  timelineLabels: {
+    started: '開始',
+    updated: '更新',
+    completed: '完了',
+    runtime: 'ランタイム',
+    resume: '再開',
+  },
+  codexActivityLabels: {
+    session: 'セッション',
+    latestTrajectorySource: '最新 trajectory 参照',
+    events: 'イベント',
   },
   metadata: {
     sourceType: '入力元タイプ',

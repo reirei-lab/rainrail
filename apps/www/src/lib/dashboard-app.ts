@@ -844,7 +844,7 @@ function formatActivityList(activityEvents: Array<Record<string, unknown>>, copy
   if (activityEvents.length === 0) return copy.placeholders.notAvailable;
   return activityEvents
     .map((activity) => [
-      stringRecordValue(activity.summary) ?? stringRecordValue(activity.actionType) ?? 'workflow',
+      stringRecordValue(activity.summary) ?? stringRecordValue(activity.actionType) ?? copy.detailFallbacks.workflow,
       stringRecordValue(activity.outcome) ?? copy.placeholders.unknown,
     ].join(' / '))
     .join('; ');
@@ -854,9 +854,9 @@ function formatRetryList(handlerRetries: Array<Record<string, unknown>>, copy: D
   if (handlerRetries.length === 0) return copy.placeholders.notAvailable;
   return handlerRetries
     .map((retry) => [
-      stringRecordValue(retry.handlerName) ?? 'handler',
-      stringRecordValue(retry.nextRetryAt) ?? 'unscheduled',
-      stringRecordValue(retry.lastError) ?? 'retry pending',
+      stringRecordValue(retry.handlerName) ?? copy.detailFallbacks.handler,
+      stringRecordValue(retry.nextRetryAt) ?? copy.detailFallbacks.unscheduled,
+      stringRecordValue(retry.lastError) ?? copy.detailFallbacks.retryPending,
     ].join(' / '))
     .join('; ');
 }
@@ -868,7 +868,7 @@ function formatProjectClaim(
   copy: DashboardAppCopy,
 ): string {
   const projectItemId = stringRecordValue(claim.projectItemId) ?? stringRecordValue(claim.id) ?? copy.placeholders.notAvailable;
-  const state = stringRecordValue(projectClaim.status) ?? (staleProjectClaim ? 'stale' : 'current');
+  const state = stringRecordValue(projectClaim.status) ?? (staleProjectClaim ? copy.detailFallbacks.stale : copy.detailFallbacks.current);
   const reason = stringRecordValue(projectClaim.reason);
   return [projectItemId, state, reason].filter((value): value is string => value !== undefined && value !== '').join(' / ');
 }
@@ -876,7 +876,7 @@ function formatProjectClaim(
 function formatLatestResumeAttempt(attempt: Record<string, unknown> | undefined, copy: DashboardAppCopy): string {
   if (attempt === undefined) return copy.placeholders.notAvailable;
   return [
-    stringRecordValue(attempt.id) ?? 'resume',
+    stringRecordValue(attempt.id) ?? copy.detailFallbacks.resume,
     stringRecordValue(attempt.status) ?? copy.placeholders.unknown,
     stringRecordValue(attempt.logPath),
   ].filter((value): value is string => value !== undefined && value !== '').join(' / ');
@@ -889,13 +889,13 @@ function formatAgentTimeline(
 ): string {
   const runtime = objectRecord(record.runtime);
   const lines = [
-    `started: ${stringRecordValue(record.startedAt) ?? stringRecordValue(runtime.startedAt) ?? copy.placeholders.notAvailable}`,
-    `updated: ${stringRecordValue(record.updatedAt) ?? copy.placeholders.notAvailable}`,
-    `completed: ${stringRecordValue(record.completedAt) ?? stringRecordValue(runtime.completedAt) ?? copy.placeholders.notAvailable}`,
-    `runtime: ${stringRecordValue(runtime.status) ?? stringRecordValue(record.status) ?? copy.placeholders.notAvailable}`,
+    `${copy.timelineLabels.started}: ${stringRecordValue(record.startedAt) ?? stringRecordValue(runtime.startedAt) ?? copy.placeholders.notAvailable}`,
+    `${copy.timelineLabels.updated}: ${stringRecordValue(record.updatedAt) ?? copy.placeholders.notAvailable}`,
+    `${copy.timelineLabels.completed}: ${stringRecordValue(record.completedAt) ?? stringRecordValue(runtime.completedAt) ?? copy.placeholders.notAvailable}`,
+    `${copy.timelineLabels.runtime}: ${stringRecordValue(runtime.status) ?? stringRecordValue(record.status) ?? copy.placeholders.notAvailable}`,
   ];
   for (const attempt of resumeAttempts) {
-    lines.push(`resume: ${formatLatestResumeAttempt(attempt, copy)}`);
+    lines.push(`${copy.timelineLabels.resume}: ${formatLatestResumeAttempt(attempt, copy)}`);
   }
   return lines.join('\n');
 }
@@ -908,9 +908,9 @@ function formatCodexActivity(
   const session = stringRecordValue(record.agentSessionId) ?? copy.placeholders.notAvailable;
   const trajectoryHint = stringRecordValue(latestResumeAttempt?.logPath) ?? stringRecordValue(record.logPath) ?? copy.placeholders.notAvailable;
   return [
-    `session: ${session}`,
-    `latest trajectory source: ${trajectoryHint}`,
-    `events: ${copy.placeholders.notAvailable}`,
+    `${copy.codexActivityLabels.session}: ${session}`,
+    `${copy.codexActivityLabels.latestTrajectorySource}: ${trajectoryHint}`,
+    `${copy.codexActivityLabels.events}: ${copy.placeholders.notAvailable}`,
   ].join('\n');
 }
 

@@ -96,6 +96,10 @@ describe('dashboard operational views', () => {
       '詳細を利用できません',
       '詳細取得に失敗しました',
       'この入力元イベントの handler retry 行を確認してください。',
+      '未予定',
+      'リトライ待ち',
+      '開始',
+      '最新 trajectory 参照',
       '該当なし',
       '不明',
       'なし',
@@ -111,6 +115,11 @@ describe('dashboard operational views', () => {
     expect(dashboardApp).not.toContain("renderBasicDetail(row, 'Loading detail')");
     expect(dashboardApp).not.toContain("?? 'unknown'");
     expect(dashboardApp).not.toContain("?? 'none'");
+    expect(dashboardApp).not.toContain("?? 'handler'");
+    expect(dashboardApp).not.toContain("?? 'unscheduled'");
+    expect(dashboardApp).not.toContain("?? 'retry pending'");
+    expect(dashboardApp).not.toContain('`started: ${');
+    expect(dashboardApp).not.toContain('`latest trajectory source: ${');
   });
 
   it('formats operator command status and confirmation from localized templates', () => {
