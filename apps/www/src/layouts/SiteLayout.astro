@@ -42,6 +42,7 @@ const hrefFor = (targetPageId: PageId) =>
     : getLegacyHref(targetPageId);
 const localeLabel = (targetLocale: Locale) =>
   targetLocale === 'ja' ? '日本語' : 'English';
+const languagePreferenceKey = 'rainrail.locale';
 ---
 
 <!doctype html>
@@ -81,6 +82,7 @@ const localeLabel = (targetLocale: Locale) =>
                 {supportedLocales.map((targetLocale) => (
                   <a
                     href={page.alternates[targetLocale]}
+                    data-locale-choice={targetLocale}
                     aria-current={targetLocale === locale ? 'true' : undefined}
                   >
                     {localeLabel(targetLocale)}
@@ -98,5 +100,17 @@ const localeLabel = (targetLocale: Locale) =>
         {site.footer}
       </footer>
     </div>
+    <script is:inline define:vars={{ languagePreferenceKey }}>
+      document.querySelectorAll('[data-locale-choice]').forEach((link) => {
+        link.addEventListener('click', () => {
+          const locale = link.getAttribute('data-locale-choice');
+          try {
+            window.localStorage?.setItem(languagePreferenceKey, locale);
+          } catch {
+            // Continue navigation even when storage is unavailable.
+          }
+        });
+      });
+    </script>
   </body>
 </html>
