@@ -3842,6 +3842,12 @@ function localDashboardAssetBody(assetPath: string, options: RainrailStartOption
 }
 
 function localDashboardAssetPath(assetRoot: string, pathname: string): string | undefined {
+  if (pathname === '/dashboard' || pathname === '/dashboard/') {
+    const localizedDashboard = resolve(assetRoot, 'ja', 'dashboard', 'index.html');
+    if (existsSync(localizedDashboard)) {
+      return localizedDashboard;
+    }
+  }
   const relativePath = pathname === '/dashboard' || pathname === '/dashboard/'
     ? 'dashboard/index.html'
     : pathname.slice(1);

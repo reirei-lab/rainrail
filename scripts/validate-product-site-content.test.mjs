@@ -30,6 +30,10 @@ const sitemapRoute = readFileSync(
   new URL('../apps/www/src/pages/sitemap.xml.ts', import.meta.url),
   'utf8',
 );
+const dashboardContent = readFileSync(
+  new URL('../apps/www/src/lib/dashboard-content.ts', import.meta.url),
+  'utf8',
+);
 const contractsManifest = readFileSync(
   new URL('../docs/contracts.manifest.json', import.meta.url),
   'utf8',
@@ -155,6 +159,7 @@ describe('product site concepts, guides, and examples', () => {
   it('publishes sitemap entries from the localized page model', () => {
     expect(sitemapRoute).toContain('supportedLocales.flatMap');
     expect(sitemapRoute).toContain('pageIds.map');
+    expect(sitemapRoute).toContain('getDashboardHref(locale)');
     expect(sitemapRoute).toContain('getLocaleHref(locale, pageId)');
     expect(sitemapRoute).toContain('application/xml');
   });
@@ -195,6 +200,9 @@ describe('product site concepts, guides, and examples', () => {
     for (const pageId of ['concepts', 'guides', 'examples']) {
       expect(siteContent).toContain(`pageId: '${pageId}'`);
     }
+
+    expect(dashboardContent).toContain('Rainrail Operations');
+    expect(dashboardContent).toContain('Rainrail 運用');
   });
 
   it('publishes the initial Concepts content with links back to implementation contracts', () => {

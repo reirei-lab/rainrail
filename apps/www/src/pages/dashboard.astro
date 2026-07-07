@@ -1,123 +1,19 @@
 ---
-import DashboardLayout from '../layouts/DashboardLayout.astro';
+import { getDefaultLocaleRedirect } from '../lib/redirects';
 
-const apiBaseUrl = import.meta.env.PUBLIC_RAINRAIL_OPERATIONAL_API_URL ?? '';
+const redirect = getDefaultLocaleRedirect('dashboard');
 ---
 
-<DashboardLayout
-  title="Rainrail Operations"
-  description="Operational dashboard shell for Rainrail event, workflow, and agent task state."
->
-  <section
-    class="dashboard-shell"
-    data-dashboard-app
-    data-api-base-url={apiBaseUrl}
-    data-auth-required="true"
-    data-state="auth-missing"
-    data-live-strategy="polling"
-  >
-    <aside class="dashboard-sidebar" aria-label="Dashboard navigation">
-      <a class="dashboard-brand" href="/">Rainrail</a>
-      <nav>
-        <button type="button" data-dashboard-tab="overview" aria-pressed="true">Overview</button>
-        <button type="button" data-dashboard-tab="events" aria-pressed="false">Event Inbox</button>
-        <button type="button" data-dashboard-tab="workflow-runs" aria-pressed="false">Workflow Runs</button>
-        <button type="button" data-dashboard-tab="agent-tasks" aria-pressed="false">Agent Tasks</button>
-        <button type="button" data-dashboard-tab="sources" aria-pressed="false">Sources</button>
-        <button type="button" data-dashboard-tab="queue" aria-pressed="false">Queue</button>
-        <button type="button" data-dashboard-tab="settings" aria-pressed="false">Settings</button>
-      </nav>
-      <label class="dashboard-permission">
-        <input type="checkbox" data-permission-toggle />
-        Operator controls
-      </label>
-    </aside>
-
-    <div class="dashboard-workspace">
-      <header class="dashboard-topbar">
-        <div>
-          <p class="eyebrow">Operational API client</p>
-          <h1>Rainrail Operations</h1>
-        </div>
-        <div class="dashboard-auth">
-          <input data-api-base-url-input type="url" autocomplete="off" placeholder="Operational API URL" aria-label="Rainrail Operational API base URL" />
-          <input data-token-input type="password" autocomplete="off" placeholder="Bearer token" aria-label="Operational API bearer token" />
-          <button type="button" class="button secondary" data-token-save>Connect</button>
-          <button type="button" class="button secondary" data-token-clear>Clear</button>
-        </div>
-      </header>
-
-      <div class="dashboard-health">
-        <div>
-          <span>Status</span>
-          <strong data-status-text>Bearer token required</strong>
-        </div>
-        <button type="button" class="button" data-refresh>Refresh</button>
-        <span class="dashboard-stale" data-stale-indicator hidden>Stale data</span>
-      </div>
-
-      <div class="dashboard-state" data-state="loading">Loading operational state</div>
-      <div class="dashboard-state" data-state="empty">No operational records yet</div>
-      <div class="dashboard-state" data-state="error">Operational API unavailable</div>
-      <div class="dashboard-state" data-state="auth-missing">Paste a bearer token to read the dashboard API.</div>
-
-      <section class="dashboard-stats dashboard-overview-grid" data-dashboard-stats aria-label="Operational totals">
-        <div class="dashboard-stat"><span>Events</span><strong>0</strong></div>
-        <div class="dashboard-stat"><span>Workflow runs</span><strong>0</strong></div>
-        <div class="dashboard-stat"><span>Agent tasks</span><strong>0</strong></div>
-        <div class="dashboard-stat"><span>Retries</span><strong>0</strong></div>
-        <div class="dashboard-stat"><span>Sources</span><strong>0</strong></div>
-        <div class="dashboard-stat"><span>Queue</span><strong>0</strong></div>
-      </section>
-
-      <section class="dashboard-filterbar" aria-label="Event inbox filters">
-        <label>
-          Source
-          <select data-event-source-filter>
-            <option value="">All sources</option>
-            <option value="github">GitHub</option>
-            <option value="cloudflare">Cloudflare</option>
-            <option value="manual">Manual</option>
-            <option value="system">System</option>
-          </select>
-        </label>
-        <label>
-          Event name
-          <input data-event-name-filter type="text" autocomplete="off" placeholder="github.issue" />
-        </label>
-        <button type="button" class="button secondary" data-filter-apply>Apply</button>
-        <span>Delivery</span>
-        <span>Publish result</span>
-        <span>Workflow matches</span>
-      </section>
-
-      <section class="dashboard-two-pane" aria-label="Operational records">
-        <div class="dashboard-list" data-dashboard-list></div>
-        <article class="dashboard-detail" data-dashboard-detail>
-          <div class="dashboard-detail-heading">
-            <span>ready</span>
-            <strong>waiting</strong>
-          </div>
-          <h2>Select a stream after connecting.</h2>
-          <dl>
-            <div><dt>ID</dt><dd>n/a</dd></div>
-            <div><dt>Branch</dt><dd>n/a</dd></div>
-            <div><dt>Issue</dt><dd>n/a</dd></div>
-          </dl>
-        </article>
-      </section>
-
-      <section class="dashboard-actions" aria-label="Operator actions">
-        <button type="button" class="dashboard-action" data-agent-action="resume" data-action-permission="operator" disabled>Resume selected</button>
-        <button type="button" class="dashboard-action" data-agent-action="reset" data-action-permission="operator" disabled>Reset claim</button>
-        <button type="button" class="dashboard-action" data-agent-action="terminate" data-action-permission="operator" disabled>Terminate selected</button>
-        <button type="button" class="dashboard-action danger" data-agent-action="terminate-all" data-action-permission="operator" disabled>Terminate all</button>
-        <span class="dashboard-command-status" data-command-status aria-live="polite"></span>
-      </section>
-    </div>
-  </section>
-
-  <script>
-    import '../lib/dashboard-app';
-  </script>
-</DashboardLayout>
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="refresh" content={`0;url=${redirect.href}`} />
+    <meta name="robots" content="noindex" />
+    <link rel="canonical" href={redirect.href} />
+    <title>{redirect.title}</title>
+  </head>
+  <body>
+    <a href={redirect.href}>{redirect.body}</a>
+  </body>
+</html>
