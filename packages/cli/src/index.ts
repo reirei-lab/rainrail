@@ -3809,7 +3809,10 @@ function resolveDashboardAssetRoot(env: Record<string, string | undefined>): str
 }
 
 function isLocalDashboardAssetRoute(pathname: string): boolean {
-  return pathname === '/dashboard' || pathname === '/dashboard/' || pathname.startsWith('/_astro/');
+  return pathname === '/dashboard' ||
+    pathname === '/dashboard/' ||
+    /^\/(?:ja|en)\/dashboard\/?$/u.test(pathname) ||
+    pathname.startsWith('/_astro/');
 }
 
 function writeLocalDashboardAssetResponse(
@@ -3835,13 +3838,22 @@ function writeLocalDashboardAssetResponse(
 
 function localDashboardAssetBody(assetPath: string, options: RainrailStartOptions, pathname: string): Buffer | string {
   const body = readFileSync(assetPath);
-  if ((pathname === '/dashboard' || pathname === '/dashboard/') && options.dashboardToken === undefined) {
-    return body.toString('utf8').replace('data-auth-required="true"', 'data-auth-required="false"');
+  if (isLocalDashboardHtmlRoute(pathname)) {
+    const sameOriginBody = body.toString('utf8')
+      .replace(/\sdata-api-base-url(?:="[^"]*")?/u, ' data-api-base-url=""');
+    if (options.dashboardToken === undefined) {
+      return sameOriginBody.replace('data-auth-required="true"', 'data-auth-required="false"');
+    }
+    return sameOriginBody;
   }
   return body;
 }
 
 function localDashboardAssetPath(assetRoot: string, pathname: string): string | undefined {
+  const localeDashboard = /^\/(ja|en)\/dashboard\/?$/u.exec(pathname);
+  if (localeDashboard?.[1] !== undefined) {
+    return resolve(assetRoot, localeDashboard[1], 'dashboard', 'index.html');
+  }
   if (pathname === '/dashboard' || pathname === '/dashboard/') {
     const localizedDashboard = resolve(assetRoot, 'ja', 'dashboard', 'index.html');
     if (existsSync(localizedDashboard)) {
@@ -3858,12 +3870,21 @@ function localDashboardAssetPath(assetRoot: string, pathname: string): string | 
     return undefined;
   }
   const normalized = normalize(decoded);
+  if (pathname.startsWith('/_astro/') && !normalized.startsWith(`_astro${sep}`)) {
+    return undefined;
+  }
   if (normalized.startsWith('..') || normalized.includes(`${sep}..${sep}`)) {
     return undefined;
   }
   const root = resolve(assetRoot);
   const target = resolve(root, normalized);
   return target === root || target.startsWith(`${root}${sep}`) ? target : undefined;
+}
+
+function isLocalDashboardHtmlRoute(pathname: string): boolean {
+  return pathname === '/dashboard' ||
+    pathname === '/dashboard/' ||
+    /^\/(?:ja|en)\/dashboard\/?$/u.test(pathname);
 }
 
 function localDashboardContentType(pathname: string): string {

@@ -770,7 +770,10 @@ describe('Rainrail CLI built-in commands', () => {
       const projectRoot = await initRainrailProject(directory, 'configured-intake');
       const dashboardAssetRoot = join(directory, 'dashboard-dist');
       await mkdir(join(dashboardAssetRoot, 'dashboard'), { recursive: true });
+      await mkdir(join(dashboardAssetRoot, 'ja', 'dashboard'), { recursive: true });
+      await mkdir(join(dashboardAssetRoot, 'en', 'dashboard'), { recursive: true });
       await mkdir(join(dashboardAssetRoot, '_astro'), { recursive: true });
+      await writeFile(join(dashboardAssetRoot, 'rainrail.config.json'), 'should-not-leak');
       const port = await getFreePort();
       await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
         server: {
@@ -800,7 +803,17 @@ describe('Rainrail CLI built-in commands', () => {
       await writeFile(join(dashboardAssetRoot, 'dashboard', 'index.html'), [
         '<!doctype html>',
         '<html><head><script type="module" src="/_astro/dashboard-app.js"></script></head>',
-        '<body><section data-dashboard-app data-api-base-url="" data-auth-required="true"></section></body></html>',
+        '<body><section data-dashboard-app data-api-base-url="https://ops.example.test" data-auth-required="true"></section></body></html>',
+      ].join(''));
+      await writeFile(join(dashboardAssetRoot, 'ja', 'dashboard', 'index.html'), [
+        '<!doctype html>',
+        '<html><head><script type="module" src="/_astro/dashboard-app.js"></script></head>',
+        '<body><a href="/en/dashboard">English</a><section data-dashboard-app data-api-base-url="https://ops.example.test" data-auth-required="true"></section></body></html>',
+      ].join(''));
+      await writeFile(join(dashboardAssetRoot, 'en', 'dashboard', 'index.html'), [
+        '<!doctype html>',
+        '<html><head><script type="module" src="/_astro/dashboard-app.js"></script></head>',
+        '<body><a href="/ja/dashboard">日本語</a><section data-dashboard-app data-api-base-url="https://ops.example.test" data-auth-required="true"></section></body></html>',
       ].join(''));
       await writeFile(join(dashboardAssetRoot, '_astro', 'dashboard-app.js'), 'console.log("dashboard");\n');
 
@@ -818,12 +831,25 @@ describe('Rainrail CLI built-in commands', () => {
         const dashboardHtml = await dashboard.text();
         expect(dashboardHtml).toContain('data-dashboard-app');
         expect(dashboardHtml).toContain('data-api-base-url=""');
+        expect(dashboardHtml).not.toContain('https://ops.example.test');
         expect(dashboardHtml).toContain('data-auth-required="false"');
         expect(dashboardHtml).toContain('src="/_astro/dashboard-app.js"');
+
+        for (const locale of ['ja', 'en']) {
+          const localizedDashboard = await fetch(`http://127.0.0.1:${port}/${locale}/dashboard`);
+          expect(localizedDashboard.status, locale).toBe(200);
+          const localizedHtml = await localizedDashboard.text();
+          expect(localizedHtml, locale).toContain('data-dashboard-app');
+          expect(localizedHtml, locale).toContain('data-api-base-url=""');
+          expect(localizedHtml, locale).toContain('data-auth-required="false"');
+        }
 
         const dashboardAsset = await fetch(`http://127.0.0.1:${port}/_astro/dashboard-app.js`);
         expect(dashboardAsset.status).toBe(200);
         expect(dashboardAsset.headers.get('content-type')).toContain('text/javascript');
+
+        const traversalAsset = await fetch(`http://127.0.0.1:${port}/_astro/..%2frainrail.config.json`);
+        expect(traversalAsset.status).toBe(404);
 
         const acceptedBody = JSON.stringify({ action: 'opened' });
         const acceptedDelivery = 'delivery-local-1';

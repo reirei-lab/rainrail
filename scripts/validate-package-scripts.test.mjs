@@ -66,6 +66,7 @@ describe('package scripts used by pull request CI', () => {
     );
     expect(copyDashboardAssetsScript).toContain('../apps/www/dist/');
     expect(copyDashboardAssetsScript).toContain('../apps/www/dist/ja/dashboard/');
+    expect(copyDashboardAssetsScript).toContain('../apps/www/dist/en/dashboard/');
     expect(copyDashboardAssetsScript).toContain('../packages/cli/dist/dashboard/');
     expect(cliPackageJson.scripts.test).toBe('vitest run src');
     expect(cliPackageJson.scripts.typecheck).toBe('tsc -p tsconfig.json --noEmit');
