@@ -96,6 +96,11 @@ const writeCompleteDist = async () => {
   <url><loc>https://rainrail.dev/en/how-it-works</loc></url>
 </urlset>`,
   );
+  writeFileSync(
+    join(root, '_redirects'),
+    `/how-it-works /en/how-it-works 301
+/how-it-works/ /en/how-it-works 301`,
+  );
 
   return root;
 };
@@ -175,6 +180,22 @@ describe('www i18n regression validator', () => {
     );
   });
 
+  it('reports html lang values that do not match the route locale', async () => {
+    const distRoot = await writeCompleteDist();
+    writeRoute(
+      distRoot,
+      'ja/how-it-works',
+      pageHtml({ locale: 'ja', path: 'how-it-works' }).replace(
+        '<html lang="ja">',
+        '<html lang="en">',
+      ),
+    );
+
+    expect(validateBuiltWwwI18n({ distRoot, locales, localizedPaths })).toContain(
+      'html lang for /ja/how-it-works must be ja',
+    );
+  });
+
   it('reports hreflang hrefs that do not point to the same page in each locale', async () => {
     const distRoot = await writeCompleteDist();
     writeRoute(
@@ -207,6 +228,38 @@ describe('www i18n regression validator', () => {
     );
   });
 
+  it('reports missing language switcher links for every supported locale', async () => {
+    const distRoot = await writeCompleteDist();
+    writeRoute(
+      distRoot,
+      'ja/how-it-works',
+      pageHtml({ locale: 'ja', path: 'how-it-works' }).replace(
+        '<a href="/en/how-it-works" data-locale-choice="en">English</a>',
+        '',
+      ),
+    );
+
+    expect(validateBuiltWwwI18n({ distRoot, locales, localizedPaths })).toContain(
+      'Missing language switcher en for /ja/how-it-works',
+    );
+  });
+
+  it('does not treat data-href as a language switcher href', async () => {
+    const distRoot = await writeCompleteDist();
+    writeRoute(
+      distRoot,
+      'ja/how-it-works',
+      pageHtml({ locale: 'ja', path: 'how-it-works' }).replace(
+        '<a href="/en/how-it-works" data-locale-choice="en">English</a>',
+        '<a data-locale-choice="en" data-href="/en/how-it-works">English</a>',
+      ),
+    );
+
+    expect(validateBuiltWwwI18n({ distRoot, locales, localizedPaths })).toContain(
+      'Language switcher en for /ja/how-it-works is missing href',
+    );
+  });
+
   it('reports same-origin internal links that drop the locale prefix', async () => {
     const distRoot = await writeCompleteDist();
     writeRoute(
@@ -220,6 +273,22 @@ describe('www i18n regression validator', () => {
 
     expect(validateBuiltWwwI18n({ distRoot, locales, localizedPaths })).toContain(
       'Locale page /ja/how-it-works links to unlocalized internal URL /docs',
+    );
+  });
+
+  it('resolves relative links from the current localized route', async () => {
+    const distRoot = await writeCompleteDist();
+    writeRoute(
+      distRoot,
+      'ja/how-it-works',
+      pageHtml({ locale: 'ja', path: 'how-it-works' }).replace(
+        'href="/ja/how-it-works"',
+        'href="docs"',
+      ),
+    );
+
+    expect(validateBuiltWwwI18n({ distRoot, locales, localizedPaths })).not.toContain(
+      'Locale page /ja/how-it-works links to unlocalized internal URL docs',
     );
   });
 
@@ -331,6 +400,32 @@ describe('www i18n regression validator', () => {
     );
   });
 
+  it('reports root redirect scripts that do not use locale candidates', async () => {
+    const distRoot = await writeCompleteDist();
+    writeRoute(
+      distRoot,
+      '',
+      `<!doctype html>
+<html lang="en">
+<head>
+  <meta name="robots" content="noindex">
+  <script>
+    const supportedLocaleHrefs = {"ja":"/ja/","en":"/en/"};
+    window.location.replace('/en/');
+  </script>
+</head>
+<body>
+  <a href="/ja/">日本語</a>
+  <a href="/en/">English</a>
+</body>
+</html>`,
+    );
+
+    expect(validateBuiltWwwI18n({ distRoot, locales, localizedPaths })).toContain(
+      'Root language redirect script must select from locale candidates',
+    );
+  });
+
   it('reports top-level public pages missing from the localized page collection', async () => {
     const distRoot = await writeCompleteDist();
 
@@ -342,6 +437,25 @@ describe('www i18n regression validator', () => {
         publicPagePaths: ['', 'how-it-works', 'docs'],
       }),
     ).toContain('Public page /docs is missing from the localized page collection');
+  });
+
+  it('reports public pages missing legacy unprefixed 301 redirects', async () => {
+    const distRoot = await writeCompleteDist();
+    writeFileSync(join(distRoot, '_redirects'), '');
+
+    expect(
+      validateBuiltWwwI18n({
+        distRoot,
+        locales,
+        localizedPaths,
+        publicPagePaths: ['how-it-works'],
+      }),
+    ).toEqual(
+      expect.arrayContaining([
+        'Missing legacy redirect /how-it-works -> /en/how-it-works 301',
+        'Missing legacy redirect /how-it-works/ -> /en/how-it-works 301',
+      ]),
+    );
   });
 
   it('collects nested directory-style public pages', async () => {

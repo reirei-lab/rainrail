@@ -42,12 +42,18 @@ const routeFile = (distRoot, route) => {
 const hasTag = (html, pattern) => pattern.test(html);
 
 /**
+ * @param {string} value
+ * @returns {string}
+ */
+const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
  * @param {string} tag
  * @param {string} attribute
  * @returns {string | undefined}
  */
 const attributeValue = (tag, attribute) => {
-  const pattern = new RegExp(`\\b${attribute}=["']([^"']+)["']`, 'i');
+  const pattern = new RegExp(`(?:^|\\s)${escapeRegExp(attribute)}\\s*=\\s*["']([^"']+)["']`, 'i');
   return tag.match(pattern)?.[1];
 };
 
@@ -90,9 +96,10 @@ const sitemapLocs = (sitemap) =>
  * @param {string} value
  * @param {string[]} locales
  * @param {string} siteOrigin
+ * @param {string} baseRoute
  * @returns {boolean}
  */
-const isUnlocalizedInternalUrl = (value, locales, siteOrigin) => {
+const isUnlocalizedInternalUrl = (value, locales, siteOrigin, baseRoute) => {
   if (
     !value ||
     value.startsWith('#') ||
@@ -105,7 +112,7 @@ const isUnlocalizedInternalUrl = (value, locales, siteOrigin) => {
 
   let pathname;
   try {
-    const url = new URL(value, siteOrigin);
+    const url = new URL(value, new URL(baseRoute, siteOrigin));
 
     if (url.origin !== new URL(siteOrigin).origin) {
       return false;
@@ -148,6 +155,7 @@ const requireMetadata = ({
   errors,
 }) => {
   const expectedUrl = new URL(route, siteOrigin).toString();
+  const htmlPattern = /<html\b[^>]*>/i;
   const canonicalPattern =
     /<link\b(?=[^>]*\brel=["']canonical["'])(?=[^>]*\bhref=["'][^"']+["'])[^>]*>/i;
   const ogUrlPattern =
@@ -169,6 +177,11 @@ const requireMetadata = ({
     if (!hasTag(html, pattern)) {
       errors.push(`Missing ${label} for ${route}`);
     }
+  }
+
+  const htmlLang = tagAttributeValue(html, htmlPattern, 'lang');
+  if (htmlLang !== locale) {
+    errors.push(`html lang for ${route} must be ${locale}`);
   }
 
   const canonicalHref = tagAttributeValue(html, canonicalPattern, 'href');
@@ -219,6 +232,8 @@ const requireMetadata = ({
  * }} options
  */
 const requireLanguageSwitcherLinks = ({ html, route, path, locales, siteOrigin, errors }) => {
+  const foundLocales = new Set();
+
   for (const tag of anchorTags(html)) {
     const targetLocale = attributeValue(tag, 'data-locale-choice');
     if (!targetLocale || !locales.includes(targetLocale)) {
@@ -231,6 +246,7 @@ const requireLanguageSwitcherLinks = ({ html, route, path, locales, siteOrigin, 
       continue;
     }
 
+    foundLocales.add(targetLocale);
     const expectedHref = routePath(targetLocale, path);
     let actualPath = href;
 
@@ -245,6 +261,12 @@ const requireLanguageSwitcherLinks = ({ html, route, path, locales, siteOrigin, 
 
     if (actualPath !== expectedHref) {
       errors.push(`Language switcher ${targetLocale} for ${route} must link to ${expectedHref}`);
+    }
+  }
+
+  for (const locale of locales) {
+    if (!foundLocales.has(locale)) {
+      errors.push(`Missing language switcher ${locale} for ${route}`);
     }
   }
 };
@@ -273,6 +295,8 @@ const requireRootLanguageEntry = ({ distRoot, locales, errors }) => {
 
   if (!/window\.location\.replace\(/.test(html)) {
     errors.push('Missing language redirect script for /');
+  } else if (!/window\.location\.replace\(\s*supportedLocaleHrefs\[[^\]]+\]\s*\)/.test(html)) {
+    errors.push('Root language redirect script must select from locale candidates');
   }
 
   for (const locale of locales) {
@@ -284,6 +308,53 @@ const requireRootLanguageEntry = ({ distRoot, locales, errors }) => {
     const candidatePattern = new RegExp(`["']${locale}["']\\s*:\\s*["']${href}["']`);
     if (!candidatePattern.test(html)) {
       errors.push(`Root language redirect candidates are missing ${href}`);
+    }
+  }
+};
+
+/**
+ * @param {string} redirects
+ * @param {string} source
+ * @param {string} target
+ * @returns {boolean}
+ */
+const hasRedirectRule = (redirects, source, target) =>
+  redirects
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .some((line) => {
+      if (!line || line.startsWith('#')) {
+        return false;
+      }
+
+      const [from, to, status] = line.split(/\s+/);
+      return from === source && to === target && status === '301';
+    });
+
+/**
+ * @param {{
+ *   redirects: string;
+ *   publicPagePaths: string[];
+ *   defaultLocale: string;
+ *   errors: string[];
+ * }} options
+ */
+const requireLegacyRedirects = ({ redirects, publicPagePaths, defaultLocale, errors }) => {
+  for (const publicPath of publicPagePaths) {
+    if (!publicPath) {
+      continue;
+    }
+
+    const source = `/${publicPath}`;
+    const sourceWithSlash = `${source}/`;
+    const target = routePath(defaultLocale, publicPath);
+
+    if (!hasRedirectRule(redirects, source, target)) {
+      errors.push(`Missing legacy redirect ${source} -> ${target} 301`);
+    }
+
+    if (!hasRedirectRule(redirects, sourceWithSlash, target)) {
+      errors.push(`Missing legacy redirect ${sourceWithSlash} -> ${target} 301`);
     }
   }
 };
@@ -398,6 +469,8 @@ export const validateBuiltWwwI18n = ({
   const errors = [];
   const sitemapFile = join(distRoot, 'sitemap.xml');
   const sitemap = existsSync(sitemapFile) ? readFileSync(sitemapFile, 'utf8') : '';
+  const redirectsFile = join(distRoot, '_redirects');
+  const redirects = existsSync(redirectsFile) ? readFileSync(redirectsFile, 'utf8') : '';
   const localizedPathSet = new Set(localizedPaths);
 
   requireRootLanguageEntry({ distRoot, locales, errors });
@@ -410,6 +483,7 @@ export const validateBuiltWwwI18n = ({
       );
     }
   }
+  requireLegacyRedirects({ redirects, publicPagePaths, defaultLocale, errors });
 
   if (!sitemap) {
     errors.push('Missing sitemap.xml');
@@ -456,7 +530,7 @@ export const validateBuiltWwwI18n = ({
       requireLanguageSwitcherLinks({ html, route, path, locales, siteOrigin, errors });
 
       for (const href of anchorHrefs(html)) {
-        if (isUnlocalizedInternalUrl(href, locales, siteOrigin)) {
+        if (isUnlocalizedInternalUrl(href, locales, siteOrigin, route)) {
           errors.push(`Locale page ${route} links to unlocalized internal URL ${href}`);
         }
       }
