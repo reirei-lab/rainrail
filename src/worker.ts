@@ -67,7 +67,7 @@ function workerApp(env: RainrailWorkerEnv) {
 }
 
 function workerIntakeAdapters(env: RainrailWorkerEnv, config: RainrailConfig | undefined) {
-  if (config === undefined) {
+  if (config === undefined || config.sourceBundles.length === 0) {
     return createRainrailEepBridgeIntakeAdaptersFromEnv(env);
   }
 

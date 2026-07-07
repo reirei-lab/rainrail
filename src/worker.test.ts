@@ -243,6 +243,38 @@ describe('Rainrail Cloudflare Worker entrypoint', () => {
       rainrailWorker.fetch(new Request('https://worker.local/healthz'), env),
     ).rejects.toThrow('duplicate dashboard token scopes are not allowed');
   });
+
+  it('keeps env-only Worker intake adapters when config only adds dashboard auth', async () => {
+    const env = {
+      ...fakeEnv(),
+      RAINRAIL_CONFIG_JSON: JSON.stringify({
+        dashboardAuth: {
+          readOnlyToken: 'worker-read-token',
+        },
+      }),
+    };
+    const payload = JSON.stringify({
+      action: 'opened',
+      repository: { full_name: 'reirei-lab/rainrail' },
+      issue: {
+        number: 209,
+        html_url: 'https://github.com/reirei-lab/rainrail/issues/209',
+      },
+    });
+
+    const webhook = await rainrailWorker.fetch(new Request('https://worker.local/webhooks/github', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-github-event': 'issues',
+        'x-github-delivery': 'delivery-dashboard-auth-only',
+        'x-hub-signature-256': await createGitHubWebhookSignature('secret', payload),
+      },
+      body: payload,
+    }), env);
+
+    expect(webhook.status).toBe(202);
+  });
 });
 
 function fakeEnv() {

@@ -2669,12 +2669,86 @@ function insertTopLevelDashboardAuth(raw: string, dashboardAuth: Record<string, 
 }
 
 function findDashboardAuthObjectStart(raw: string): number | undefined {
-  const match = /"dashboardAuth"\s*:\s*\{/u.exec(raw);
-  return match === null ? undefined : match.index + match[0].lastIndexOf('{');
+  const valueStart = findTopLevelPropertyValueStart(raw, 'dashboardAuth');
+  if (valueStart === undefined) {
+    return undefined;
+  }
+  return raw[valueStart] === '{' ? valueStart : undefined;
 }
 
 function hasDashboardAuthProperty(raw: string): boolean {
-  return /"dashboardAuth"\s*:/u.test(raw);
+  return findTopLevelPropertyValueStart(raw, 'dashboardAuth') !== undefined;
+}
+
+function findTopLevelPropertyValueStart(raw: string, propertyName: string): number | undefined {
+  const objectStart = raw.indexOf('{');
+  if (objectStart < 0) {
+    return undefined;
+  }
+
+  let depth = 0;
+  for (let index = objectStart; index < raw.length; index += 1) {
+    const char = raw[index];
+    if (char === '"') {
+      const stringEnd = findJsonStringEnd(raw, index);
+      if (stringEnd === undefined) {
+        return undefined;
+      }
+      if (depth === 1) {
+        const name = parseJsonStringLiteral(raw.slice(index, stringEnd + 1));
+        let cursor = skipJsonWhitespace(raw, stringEnd + 1);
+        if (name === propertyName && raw[cursor] === ':') {
+          cursor = skipJsonWhitespace(raw, cursor + 1);
+          return cursor;
+        }
+      }
+      index = stringEnd;
+      continue;
+    }
+    if (char === '{' || char === '[') {
+      depth += 1;
+      continue;
+    }
+    if (char === '}' || char === ']') {
+      depth -= 1;
+      if (depth < 1) {
+        return undefined;
+      }
+    }
+  }
+  return undefined;
+}
+
+function findJsonStringEnd(raw: string, stringStart: number): number | undefined {
+  let escaped = false;
+  for (let index = stringStart + 1; index < raw.length; index += 1) {
+    const char = raw[index];
+    if (escaped) {
+      escaped = false;
+    } else if (char === '\\') {
+      escaped = true;
+    } else if (char === '"') {
+      return index;
+    }
+  }
+  return undefined;
+}
+
+function parseJsonStringLiteral(raw: string): string | undefined {
+  try {
+    const value = JSON.parse(raw) as unknown;
+    return typeof value === 'string' ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function skipJsonWhitespace(raw: string, start: number): number {
+  let index = start;
+  while (/\s/u.test(raw[index] ?? '')) {
+    index += 1;
+  }
+  return index;
 }
 
 function findJsonObjectEnd(raw: string, objectStart: number): number | undefined {

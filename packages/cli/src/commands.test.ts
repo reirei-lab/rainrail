@@ -3075,6 +3075,41 @@ describe('Rainrail CLI built-in commands', () => {
     });
   });
 
+  it('inserts generated dashboard auth at the top level when nested objects use the same key', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'dashboard-auth-top-level-only');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      await writeFile(configPath, [
+        '{',
+        '  "project": { "name": "dashboard-auth-top-level-only" },',
+        '  "sourceBundles": [],',
+        '  "sources": [],',
+        '  "taskProviders": ${TASK_PROVIDERS},',
+        '  "runtimeProviders": {',
+        '    "openclaw": {',
+        '      "dashboardAuth": {}',
+        '    }',
+        '  }',
+        '}',
+      ].join('\n'));
+
+      const result = runRainrailCli(['setup', 'github', '--yes'], {
+        cwd: projectRoot,
+        env: { TASK_PROVIDERS: '{}' },
+      });
+      const rawConfig = await readFile(configPath, 'utf8');
+      const parseableConfig = JSON.parse(rawConfig.replace('${TASK_PROVIDERS}', '{}')) as {
+        dashboardAuth?: { readOnlyToken?: string; operatorToken?: string };
+        runtimeProviders?: { openclaw?: { dashboardAuth?: unknown } };
+      };
+
+      expect(result.exitCode).toBe(0);
+      expect(parseableConfig.dashboardAuth?.readOnlyToken).toMatch(/^rr_local_read-only_[A-Za-z0-9_-]+$/u);
+      expect(parseableConfig.dashboardAuth?.operatorToken).toMatch(/^rr_local_operator_[A-Za-z0-9_-]+$/u);
+      expect(parseableConfig.runtimeProviders?.openclaw?.dashboardAuth).toEqual({});
+    });
+  });
+
   it('does not insert duplicate dashboardAuth when the whole object is an environment fragment', async () => {
     await withTempDirectory(async (directory) => {
       const projectRoot = await initRainrailProject(directory, 'dashboard-auth-object-fragment');
