@@ -111,6 +111,7 @@ describe('local dashboard start documentation', () => {
     );
 
     const localDashboardContract = contractsManifest.contracts.find(
+      /** @param {{ id?: string }} contract */
       (contract) => contract.id === 'local-dashboard-start',
     );
     expect(localDashboardContract.sources).not.toContain('src/node-server.ts');
