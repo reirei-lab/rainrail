@@ -56,6 +56,12 @@ describe('local dashboard start documentation', () => {
       'token rotation UI',
       'multi-user actor management',
       'local operator/admin mutation routes',
+      'https://github.com/reirei-lab/rainrail/issues/228',
+      'https://github.com/reirei-lab/rainrail/issues/229',
+      'https://github.com/reirei-lab/rainrail/issues/230',
+      'https://github.com/reirei-lab/rainrail/issues/231',
+      '`actor`, `client`, and `requestId` attribution',
+      'session login',
     ]) {
       expect(localDashboardDocs).toContain(required);
     }
