@@ -1,36 +1,65 @@
 ---
+import {
+  getLocaleHref,
+  getPageContent,
+  getSiteMessages,
+  type Locale,
+  type PageId,
+} from '../lib/i18n';
 import '../styles/global.css';
 
 interface Props {
-  title: string;
-  description: string;
+  title?: string;
+  description?: string;
+  locale?: Locale;
+  pageId?: PageId;
 }
 
-const { title, description } = Astro.props;
-const pageTitle = title === 'Rainrail' ? title : `${title} - Rainrail`;
+const { locale = 'en', pageId, title, description } = Astro.props;
+const site = getSiteMessages(locale);
+const page = pageId ? getPageContent(locale, pageId) : undefined;
+const usesLocalizedRoutes = Astro.props.locale !== undefined;
+const resolvedTitle = title ?? page?.meta.title ?? 'Rainrail';
+const resolvedDescription = description ?? page?.meta.description ?? site.footer;
+const pageTitle =
+  resolvedTitle === 'Rainrail' ? resolvedTitle : `${resolvedTitle} - Rainrail`;
+const hrefFor = (targetPageId: PageId) =>
+  usesLocalizedRoutes
+    ? getLocaleHref(locale, targetPageId)
+    : targetPageId === 'home'
+      ? '/'
+      : `/${targetPageId === 'howItWorks' ? 'how-it-works' : targetPageId}`;
 ---
 
 <!doctype html>
-<html lang="en">
+<html lang={locale}>
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width" />
-    <meta name="description" content={description} />
+    <meta name="description" content={resolvedDescription} />
     <meta name="generator" content={Astro.generator} />
+    {
+      page &&
+        Object.entries(page.alternates).map(([alternateLocale, href]) => (
+          <link rel="alternate" hreflang={alternateLocale} href={href} />
+        ))
+    }
     <title>{pageTitle}</title>
   </head>
   <body>
     <div class="site-shell">
       <header class="site-header">
-        <nav class="nav" aria-label="Primary navigation">
-          <a class="brand" href="/">Rainrail</a>
+        <nav class="nav" aria-label={site.nav.ariaLabel}>
+          <a class="brand" href={hrefFor('home')} aria-label={site.nav.brandLabel}>
+            Rainrail
+          </a>
           <div class="nav-links">
-            <a href="/how-it-works">How it works</a>
-            <a href="/concepts">Concepts</a>
-            <a href="/guides">Guides</a>
-            <a href="/examples">Examples</a>
-            <a href="/docs">Docs</a>
-            <a href="https://github.com/reirei-lab/rainrail">GitHub</a>
+            {
+              site.nav.primary.map((item) => (
+                <a href={hrefFor(item.pageId)}>{item.label}</a>
+              ))
+            }
+            <a href="https://github.com/reirei-lab/rainrail">{site.nav.github}</a>
           </div>
         </nav>
       </header>
@@ -38,7 +67,7 @@ const pageTitle = title === 'Rainrail' ? title : `${title} - Rainrail`;
         <slot />
       </main>
       <footer class="site-footer">
-        Rainrail routes development events into deterministic agent workflows.
+        {site.footer}
       </footer>
     </div>
   </body>
