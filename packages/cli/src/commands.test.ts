@@ -212,6 +212,9 @@ describe('Rainrail CLI built-in commands', () => {
       expect(result.stdout).toContain('Dashboard: http://127.0.0.1:8787/dashboard');
       expect(result.stdout).toContain('Event Stream: http://127.0.0.1:8787/events');
       expect(result.stdout).toContain('Dashboard API: http://127.0.0.1:8787/api/v1/overview');
+      expect(result.stdout).toContain('Dashboard Auth: not configured');
+      expect(result.stdout).toContain('Run `rainrail setup --yes` to generate local dashboardAuth tokens.');
+      expect(result.stdout).toContain('Or set dashboardAuth.readOnlyToken, dashboardAuth.operatorToken, or dashboardAuth.adminToken in rainrail.config.json.');
       expect(result.stdout).not.toContain('EEP Bridge');
     });
   });
@@ -716,6 +719,10 @@ describe('Rainrail CLI built-in commands', () => {
       });
 
       expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Dashboard Auth: configured scopes: read-only, operator, admin');
+      expect(result.stdout).not.toContain('read-token');
+      expect(result.stdout).not.toContain('operator-token');
+      expect(result.stdout).not.toContain('admin-token');
       expect(startOptions?.dashboardAuth).toEqual({
         readOnlyToken: 'read-token',
         operatorToken: 'operator-token',

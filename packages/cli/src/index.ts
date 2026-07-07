@@ -2206,6 +2206,7 @@ function formatStartOutput(options: RainrailStartOptions): string {
   const localIntakeRows = options.sources.map((source) =>
     `  ${source.name} (${source.sourceType}): ${baseUrl}${source.endpoint}`
   );
+  const dashboardAuthRows = formatDashboardAuthRows(options.dashboardAuth);
   return [
     'Rainrail local harness server starting',
     `Workspace: ${options.root}`,
@@ -2215,6 +2216,7 @@ function formatStartOutput(options: RainrailStartOptions): string {
     `Health: ${baseUrl}/healthz`,
     `Dashboard: ${baseUrl}/dashboard`,
     `Dashboard API: ${baseUrl}/api/v1/overview`,
+    ...dashboardAuthRows,
     `Event Stream: ${baseUrl}/events`,
     ...(localIntakeRows.length === 0 ? [] : [
       'Local intake:',
@@ -2223,6 +2225,24 @@ function formatStartOutput(options: RainrailStartOptions): string {
     'Press Ctrl+C to stop.',
     '',
   ].join('\n');
+}
+
+function formatDashboardAuthRows(auth: RainrailDashboardAuth): readonly string[] {
+  const scopes = [
+    auth.readOnlyToken === undefined ? undefined : 'read-only',
+    auth.operatorToken === undefined ? undefined : 'operator',
+    auth.adminToken === undefined ? undefined : 'admin',
+  ].filter((scope) => scope !== undefined);
+
+  if (scopes.length > 0) {
+    return [`Dashboard Auth: configured scopes: ${scopes.join(', ')}`];
+  }
+
+  return [
+    'Dashboard Auth: not configured',
+    'Run `rainrail setup --yes` to generate local dashboardAuth tokens.',
+    'Or set dashboardAuth.readOnlyToken, dashboardAuth.operatorToken, or dashboardAuth.adminToken in rainrail.config.json.',
+  ];
 }
 
 function formatUrlHost(host: string): string {
