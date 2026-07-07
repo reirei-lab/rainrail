@@ -316,9 +316,10 @@
       "sources": [
         "packages/cli/src/index.ts",
         "src/http-app.ts",
-        "src/node-server.ts",
+        "apps/www/src/pages/[locale]/dashboard.astro",
         "apps/www/src/lib/dashboard-client.ts",
-        "apps/www/src/lib/dashboard-app.ts"
+        "apps/www/src/lib/dashboard-app.ts",
+        "apps/www/src/lib/dashboard-content.ts"
       ],
       "docs": [
         "docs/local-dashboard.md",

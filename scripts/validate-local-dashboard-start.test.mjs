@@ -30,10 +30,15 @@ describe('local dashboard start documentation', () => {
       'Dashboard API: http://127.0.0.1:8787/api/v1/overview',
       'dashboardAuth.readOnlyToken',
       'dashboardAuth.operatorToken',
+      'legacy `SSE_BEARER_TOKEN` remains accepted',
       'Authorization: Bearer',
     ]) {
       expect(localDashboardDocs).toContain(required);
     }
+
+    expect(localDashboardDocs).not.toContain(
+      'dashboard token when no explicit `dashboardAuth.readOnlyToken` is present',
+    );
   });
 
   it('keeps dashboard auth failure guidance and MVP exclusions explicit', () => {
@@ -45,13 +50,19 @@ describe('local dashboard start documentation', () => {
       'read-only',
       'operator',
       'admin',
+      'serves read-only dashboard collections today',
       'cookie/session login',
       'scoped SSE token',
       'token rotation UI',
       'multi-user actor management',
+      'local operator/admin mutation routes',
     ]) {
       expect(localDashboardDocs).toContain(required);
     }
+
+    expect(localDashboardDocs).not.toContain(
+      'run operator actions such as agent task resume, reset, and terminate commands',
+    );
   });
 
   it('keeps local operations separate from the Cloudflare Pages product site', () => {
@@ -76,6 +87,14 @@ describe('local dashboard start documentation', () => {
       expect.arrayContaining([
         expect.objectContaining({
           id: 'local-dashboard-start',
+          sources: expect.arrayContaining([
+            'packages/cli/src/index.ts',
+            'src/http-app.ts',
+            'apps/www/src/pages/[locale]/dashboard.astro',
+            'apps/www/src/lib/dashboard-client.ts',
+            'apps/www/src/lib/dashboard-app.ts',
+            'apps/www/src/lib/dashboard-content.ts',
+          ]),
           docs: expect.arrayContaining([
             'docs/local-dashboard.md',
             'README.md',
@@ -90,5 +109,10 @@ describe('local dashboard start documentation', () => {
         }),
       ]),
     );
+
+    const localDashboardContract = contractsManifest.contracts.find(
+      (contract) => contract.id === 'local-dashboard-start',
+    );
+    expect(localDashboardContract.sources).not.toContain('src/node-server.ts');
   });
 });

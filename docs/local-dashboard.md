@@ -47,19 +47,23 @@ does not need a separate API base URL.
 
 ## Auth scopes
 
-`dashboardAuth` supports three scopes:
+`dashboardAuth` supports three scopes. The local `rainrail start` startup flow
+serves read-only dashboard collections today; operator/admin mutation routes
+are still outside the local startup MVP.
 
 - `readOnlyToken`: can read overview, event, workflow, task, source, queue, and
   settings resources.
-- `operatorToken`: can read data and run operator actions such as agent task
-  resume, reset, and terminate commands.
-- `adminToken`: can read data, run operator actions, and run admin settings
-  mutations.
+- `operatorToken`: reserved for local operator actions when those routes are
+  wired into the local startup server.
+- `adminToken`: reserved for local admin mutations when those routes are wired
+  into the local startup server.
 
-For local compatibility, `SSE_BEARER_TOKEN` is still accepted as a read-only
-dashboard token when no explicit `dashboardAuth.readOnlyToken` is present. New
-projects should prefer `dashboardAuth` because it can distinguish read-only,
-operator, and admin behavior.
+For local compatibility, a legacy `SSE_BEARER_TOKEN` remains accepted as a
+read-only dashboard token even when `dashboardAuth.readOnlyToken` is also
+configured. Updating only `dashboardAuth.readOnlyToken` does not disable an
+environment-provided `SSE_BEARER_TOKEN`; unset or rotate that environment value
+too when you want to revoke it. New projects should prefer `dashboardAuth`
+because it can distinguish read-only, operator, and admin behavior.
 
 When `rainrail start` binds outside localhost, one of
 `dashboardAuth.readOnlyToken`, `dashboardAuth.operatorToken`,
@@ -76,8 +80,8 @@ If the dashboard stays in an auth error state, check the API response:
   match the configured local dashboard auth tokens. Re-run
   `rainrail setup --dashboard-auth-only --yes` or copy the current token from
   `rainrail.config.json`.
-- HTTP `403` on an action route with a valid read-only token means the route
-  needs `operator` or `admin` scope.
+- HTTP `404` or an unavailable-action state for a local operator/admin command
+  means the route is not part of the current `rainrail start` local server yet.
 
 Do not put real tokens in screenshots, issue comments, docs, or copied logs.
 
@@ -103,6 +107,7 @@ out of scope for the current startup flow:
 - scoped SSE token separate from dashboard API auth
 - token rotation UI
 - multi-user actor management
+- local operator/admin mutation routes
 - hosted multi-tenant operations
 
 Those follow-up auth and operator UX items are tracked separately from this
@@ -117,7 +122,7 @@ The documented flow is protected by focused regression coverage:
   guidance.
 - `scripts/validate-dashboard-shell.test.mjs` covers same-origin dashboard
   client behavior and Pages API URL injection.
-- `src/dashboard-api.test.ts` covers read-only, operator, and admin API
-  authorization behavior.
+- `src/dashboard-api.test.ts` covers shared HTTP app read-only, operator, and
+  admin API authorization behavior.
 - `scripts/validate-local-dashboard-start.test.mjs` keeps this guide linked to
   those implementation checks.
