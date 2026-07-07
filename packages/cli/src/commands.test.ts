@@ -902,6 +902,7 @@ describe('Rainrail CLI built-in commands', () => {
         const dashboard = await fetch(`http://127.0.0.1:${port}/dashboard`);
         expect(dashboard.status).toBe(200);
         expect(dashboard.headers.get('content-type')).toContain('text/html');
+        expect(dashboard.headers.get('cache-control')).toBe('no-cache');
         const dashboardHtml = await dashboard.text();
         expect(dashboardHtml).toContain('data-dashboard-app');
         expect(dashboardHtml).toContain('data-api-base-url=""');
@@ -923,6 +924,11 @@ describe('Rainrail CLI built-in commands', () => {
         const dashboardAsset = await fetch(`http://127.0.0.1:${port}/_astro/dashboard-app.js`);
         expect(dashboardAsset.status).toBe(200);
         expect(dashboardAsset.headers.get('content-type')).toContain('text/javascript');
+        expect(dashboardAsset.headers.get('cache-control')).toBe('public, max-age=31536000, immutable');
+
+        const missingAsset = await fetch(`http://127.0.0.1:${port}/_astro/missing-dashboard-app.js`);
+        expect(missingAsset.status).toBe(404);
+        await expect(missingAsset.json()).resolves.toEqual({ error: 'not_found' });
 
         const traversalAsset = await fetch(`http://127.0.0.1:${port}/_astro/..%2frainrail.config.json`);
         expect(traversalAsset.status).toBe(404);
@@ -1002,6 +1008,16 @@ describe('Rainrail CLI built-in commands', () => {
         const filtered = await fetch(`http://127.0.0.1:${port}/api/v1/events?filter[name]=github.issue`);
         await expect(filtered.json()).resolves.toMatchObject({
           data: [{ id: 'local-event-000001', name: 'github.issue' }],
+        });
+
+        const apiRoutePrecedence = await fetch(`http://127.0.0.1:${port}/api/v1/events/local-event-000001`);
+        expect(apiRoutePrecedence.status).toBe(200);
+        expect(apiRoutePrecedence.headers.get('content-type')).toContain('application/json');
+        await expect(apiRoutePrecedence.json()).resolves.toMatchObject({
+          data: {
+            id: 'local-event-000001',
+            compact: { id: 'local-event-000001', name: 'github.issue' },
+          },
         });
       } finally {
         await closeTestServer(result);
