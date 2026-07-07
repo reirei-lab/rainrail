@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import http, { type IncomingMessage, type OutgoingHttpHeaders, type ServerResponse } from 'node:http';
 import {
   existsSync,
@@ -128,6 +128,7 @@ export type RainrailStartOptions = {
   readonly configPath: string;
   readonly allowedHosts: readonly string[];
   readonly dashboardToken?: string;
+  readonly dashboardAuth: RainrailDashboardAuth;
   readonly sources: readonly RainrailLocalSource[];
 };
 
@@ -148,6 +149,12 @@ export type RainrailLocalSource = {
   readonly authConfigured: boolean;
   readonly webhookSecret?: string;
   readonly maxBodyBytes?: number;
+};
+
+export type RainrailDashboardAuth = {
+  readonly readOnlyToken?: string;
+  readonly operatorToken?: string;
+  readonly adminToken?: string;
 };
 
 export type RainrailCliEnvironment = {
@@ -1457,6 +1464,7 @@ type StartConfig = {
     readonly port?: number;
     readonly allowedHosts?: readonly string[];
   };
+  readonly dashboardAuth: RainrailDashboardAuth;
   readonly sources: readonly RainrailLocalSource[];
 };
 
@@ -1691,8 +1699,46 @@ function readStartConfig(
   }
 
   const server = parseStartConfigServer(value.server);
+  const dashboardAuth = parseStartDashboardAuth(value.dashboardAuth);
   const sources = parseStartConfigSources(value, markerValue, env);
-  return server === undefined ? { sources } : { server, sources };
+  return server === undefined ? { dashboardAuth, sources } : { server, dashboardAuth, sources };
+}
+
+function parseStartDashboardAuth(value: unknown): RainrailDashboardAuth {
+  if (value === undefined) {
+    return {};
+  }
+  if (!isRecord(value)) {
+    throw new Error('config.dashboardAuth must be an object');
+  }
+  const auth: { readOnlyToken?: string; operatorToken?: string; adminToken?: string } = {};
+  const readOnlyToken = parseOptionalLocalToken(value.readOnlyToken, 'config.dashboardAuth.readOnlyToken');
+  const operatorToken = parseOptionalLocalToken(value.operatorToken, 'config.dashboardAuth.operatorToken');
+  const adminToken = parseOptionalLocalToken(value.adminToken, 'config.dashboardAuth.adminToken');
+  if (readOnlyToken !== undefined) auth.readOnlyToken = readOnlyToken;
+  if (operatorToken !== undefined) auth.operatorToken = operatorToken;
+  if (adminToken !== undefined) auth.adminToken = adminToken;
+  assertUniqueLocalDashboardAuthTokens(auth);
+  return auth;
+}
+
+function parseOptionalLocalToken(value: unknown, path: string): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  return parseLocalNonEmptyString(value, path);
+}
+
+function assertUniqueLocalDashboardAuthTokens(auth: RainrailDashboardAuth): void {
+  const seen = new Map<string, string>();
+  for (const [key, token] of Object.entries(auth)) {
+    if (token === undefined) continue;
+    const previous = seen.get(token);
+    if (previous !== undefined) {
+      throw new Error(`config.dashboardAuth.${key} must not duplicate config.dashboardAuth.${previous}`);
+    }
+    seen.set(token, key);
+  }
 }
 
 function parseStartConfigServer(value: unknown): StartConfig['server'] {
@@ -2088,8 +2134,9 @@ function resolveStartOptions(
   const dashboardToken = env.SSE_BEARER_TOKEN === undefined || env.SSE_BEARER_TOKEN.length === 0
     ? undefined
     : env.SSE_BEARER_TOKEN;
-  if (!isLocalBindHost(host) && (dashboardToken === undefined || dashboardToken.length === 0)) {
-    return { error: 'SSE_BEARER_TOKEN is required when rainrail start binds outside localhost' };
+  const dashboardAuth = mergeDashboardAuth(config.dashboardAuth, dashboardToken);
+  if (!isLocalBindHost(host) && !hasAnyDashboardAuthToken(dashboardAuth)) {
+    return { error: 'dashboardAuth.readOnlyToken, dashboardAuth.operatorToken, dashboardAuth.adminToken, or SSE_BEARER_TOKEN is required when rainrail start binds outside localhost' };
   }
 
   return {
@@ -2100,9 +2147,21 @@ function resolveStartOptions(
       configPath: project.configPath,
       allowedHosts: envAllowedHosts ?? config.server?.allowedHosts ?? [],
       sources: config.sources,
+      dashboardAuth,
       ...(dashboardToken === undefined ? {} : { dashboardToken }),
     },
   };
+}
+
+function mergeDashboardAuth(configAuth: RainrailDashboardAuth, eventsBearerToken: string | undefined): RainrailDashboardAuth {
+  return {
+    ...configAuth,
+    ...(configAuth.readOnlyToken === undefined && eventsBearerToken !== undefined ? { readOnlyToken: eventsBearerToken } : {}),
+  };
+}
+
+function hasAnyDashboardAuthToken(auth: RainrailDashboardAuth): boolean {
+  return [auth.readOnlyToken, auth.operatorToken, auth.adminToken].some((token) => token !== undefined && token.length > 0);
 }
 
 function isLocalBindHost(host: string): boolean {
@@ -2420,6 +2479,12 @@ function runSetupCommand(
 
   const invocation = createRainrailCommandInvocation(environment.currentBinPath ?? process.argv[1]);
   const steps: SetupStepResult[] = [];
+  let dashboardAuthResult: LocalDashboardAuthSetupResult;
+  try {
+    dashboardAuthResult = ensureLocalDashboardAuth(project.configPath, fileSystem);
+  } catch (error) {
+    return formatSetupError(options, error);
+  }
 
   for (const plugin of plugins) {
     const installResult = runPluginsCommand(['add', plugin.alias], setupOptions, {
@@ -2472,7 +2537,54 @@ function runSetupCommand(
     }
   }
 
-  return formatSetupResult(true, plugins, steps, options);
+  return formatSetupResult(true, plugins, steps, options, undefined, dashboardAuthResult);
+}
+
+type LocalDashboardAuthSetupResult = {
+  readonly created: readonly (keyof RainrailDashboardAuth)[];
+};
+
+function ensureLocalDashboardAuth(
+  configPath: string,
+  fileSystem: RainrailCliFileSystem,
+): LocalDashboardAuthSetupResult {
+  const raw = fileSystem.readFileSync(configPath, 'utf8');
+  const value = JSON.parse(raw) as unknown;
+  if (!isRecord(value)) {
+    throw new Error('config must be an object');
+  }
+  const dashboardAuthValue = value.dashboardAuth;
+  if (dashboardAuthValue !== undefined && !isRecord(dashboardAuthValue)) {
+    throw new Error('config.dashboardAuth must be an object');
+  }
+  const dashboardAuth: Record<string, unknown> = dashboardAuthValue === undefined
+    ? {}
+    : { ...dashboardAuthValue };
+  const created: Array<keyof RainrailDashboardAuth> = [];
+  for (const key of ['readOnlyToken', 'operatorToken'] as const) {
+    if (dashboardAuth[key] === undefined) {
+      dashboardAuth[key] = generateLocalDashboardToken(key);
+      created.push(key);
+      continue;
+    }
+    parseLocalNonEmptyString(dashboardAuth[key], `config.dashboardAuth.${key}`);
+  }
+  if (dashboardAuth.adminToken !== undefined) {
+    parseLocalNonEmptyString(dashboardAuth.adminToken, 'config.dashboardAuth.adminToken');
+  }
+  assertUniqueLocalDashboardAuthTokens(dashboardAuth as RainrailDashboardAuth);
+  if (created.length > 0) {
+    fileSystem.writeFileSync(configPath, `${JSON.stringify({
+      ...value,
+      dashboardAuth,
+    }, null, 2)}\n`);
+  }
+  return { created };
+}
+
+function generateLocalDashboardToken(scope: keyof RainrailDashboardAuth): string {
+  const label = scope.replace(/Token$/u, '').replace(/[A-Z]/gu, (letter) => `-${letter.toLowerCase()}`);
+  return `rr_local_${label}_${randomBytes(24).toString('base64url')}`;
 }
 
 function formatSetupError(options: SharedOptions, error: unknown): RainrailCliResult {
@@ -2692,6 +2804,7 @@ function formatSetupResult(
   steps: readonly SetupStepResult[],
   options: SharedOptions,
   failedStep?: SetupStepResult,
+  dashboardAuthResult?: LocalDashboardAuthSetupResult,
 ): RainrailCliResult {
   if (options.json) {
     const jsonResult: SetupJsonResult = {
@@ -2707,7 +2820,10 @@ function formatSetupResult(
     };
   }
 
-  const stdout = steps.map((step) => step.stdout).join('');
+  const dashboardAuthOutput = dashboardAuthResult === undefined || dashboardAuthResult.created.length === 0
+    ? ''
+    : `Generated dashboardAuth.${dashboardAuthResult.created.join(' and dashboardAuth.')} in rainrail.config.json.\n`;
+  const stdout = `${dashboardAuthOutput}${steps.map((step) => step.stdout).join('')}`;
   const stderr = steps.map((step) => step.stderr).join('');
   if (failedStep !== undefined) {
     return {
@@ -3220,6 +3336,7 @@ function formatRainrailConfig(projectName: string): string {
       host: '127.0.0.1',
       port: 8787,
     },
+    dashboardAuth: {},
     sourceBundles: [],
     sources: [],
     taskProviders: {},
@@ -3742,7 +3859,7 @@ function localSettingsRows(options: RainrailStartOptions): readonly LocalSetting
     { id: 'auto-start', type: 'setting', status: 'read-only', label: 'Auto-start', value: 'not configured' },
     { id: 'retry-policy', type: 'setting', status: 'read-only', label: 'Retry policy', value: '0 retries pending' },
     { id: 'operational-snapshot-limit', type: 'setting', status: 'read-only', label: 'Operational snapshot limit', value: `${localEventHistoryLimit} events` },
-    { id: 'dashboard-auth', type: 'setting', status: 'read-only', label: 'Dashboard auth', value: options.dashboardToken === undefined ? 'not configured' : 'bearer token configured' },
+    { id: 'dashboard-auth', type: 'setting', status: 'read-only', label: 'Dashboard auth', value: hasAnyDashboardAuthToken(options.dashboardAuth) ? 'bearer token configured' : 'not configured' },
     { id: 'runtime', type: 'setting', status: 'read-only', label: 'Runtime', value: 'node' },
   ];
 }
@@ -3816,7 +3933,7 @@ function normalizeHostName(host: string): string {
 }
 
 function requiresLocalServerAuth(pathname: string, options: RainrailStartOptions): boolean {
-  return options.dashboardToken !== undefined &&
+  return hasAnyDashboardAuthToken(options.dashboardAuth) &&
     (pathname === '/events' || pathname.startsWith('/api/'));
 }
 
@@ -3832,10 +3949,21 @@ function getLocalServerAuthError(
   if (typeof authorization !== 'string' || authorization.length === 0) {
     return { status: 401, code: 'missing_bearer_token' };
   }
-  if (!timingSafeStringEqual(authorization, `Bearer ${options.dashboardToken}`)) {
+  const prefix = 'Bearer ';
+  if (!authorization.startsWith(prefix)) {
+    return { status: 401, code: 'missing_bearer_token' };
+  }
+  const token = authorization.slice(prefix.length);
+  if (!matchesLocalDashboardToken(token, options.dashboardAuth)) {
     return { status: 403, code: 'invalid_bearer_token' };
   }
   return undefined;
+}
+
+function matchesLocalDashboardToken(token: string, auth: RainrailDashboardAuth): boolean {
+  return [auth.adminToken, auth.operatorToken, auth.readOnlyToken].some((configured) =>
+    configured !== undefined && configured.length > 0 && timingSafeStringEqual(token, configured)
+  );
 }
 
 function validateLocalIntakePayload(

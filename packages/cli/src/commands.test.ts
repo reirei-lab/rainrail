@@ -673,6 +673,40 @@ describe('Rainrail CLI built-in commands', () => {
       expect(startOptions).toMatchObject({
         host: '0.0.0.0',
         port: 9999,
+        dashboardAuth: { readOnlyToken: 'events-token' },
+      });
+    });
+  });
+
+  it('passes configured dashboardAuth into rainrail start options', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'configured-dashboard-auth');
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        dashboardAuth: {
+          readOnlyToken: 'read-token',
+          operatorToken: 'operator-token',
+          adminToken: 'admin-token',
+        },
+        sourceBundles: [],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+      let startOptions: RainrailStartOptions | undefined;
+
+      const result = runRainrailCli(['start'], {
+        cwd: projectRoot,
+        serverStarter: (options) => {
+          startOptions = options;
+          return { stop: () => undefined };
+        },
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(startOptions?.dashboardAuth).toEqual({
+        readOnlyToken: 'read-token',
+        operatorToken: 'operator-token',
+        adminToken: 'admin-token',
       });
     });
   });
@@ -2783,6 +2817,7 @@ describe('Rainrail CLI built-in commands', () => {
 
       expect(result.exitCode).toBe(0);
       expect(result.stderr).toBe('');
+      expect(result.stdout).toContain('Generated dashboardAuth.readOnlyToken and dashboardAuth.operatorToken in rainrail.config.json');
       expect(result.stdout).toContain('Added official plugin github@0.1.0');
       expect(result.stdout).toContain('plugin github setup --yes complete');
       expect(result.stdout).toContain('Added official plugin cloudflare@0.1.0');
@@ -2822,10 +2857,35 @@ describe('Rainrail CLI built-in commands', () => {
       expect(result).toEqual({
         exitCode: 0,
         stdout:
+          'Generated dashboardAuth.readOnlyToken and dashboardAuth.operatorToken in rainrail.config.json.\n' +
           'Added official plugin github@0.1.0\n' +
           'Official plugin github setup completed. No bundled setup actions are registered yet.\n',
         stderr: '',
       });
+    });
+  });
+
+  it('generates stable local dashboard auth tokens during setup --yes', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'dashboard-auth-setup');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+
+      const first = runRainrailCli(['setup', 'github', '--yes'], { cwd: projectRoot });
+      const firstConfig = JSON.parse(await readFile(configPath, 'utf8')) as {
+        dashboardAuth?: { readOnlyToken?: string; operatorToken?: string };
+      };
+      const second = runRainrailCli(['setup', 'github', '--yes'], { cwd: projectRoot });
+      const secondConfig = JSON.parse(await readFile(configPath, 'utf8')) as {
+        dashboardAuth?: { readOnlyToken?: string; operatorToken?: string };
+      };
+
+      expect(first.exitCode).toBe(0);
+      expect(first.stdout).toContain('Generated dashboardAuth.readOnlyToken and dashboardAuth.operatorToken');
+      expect(firstConfig.dashboardAuth?.readOnlyToken).toMatch(/^rr_local_read-only_[A-Za-z0-9_-]+$/u);
+      expect(firstConfig.dashboardAuth?.operatorToken).toMatch(/^rr_local_operator_[A-Za-z0-9_-]+$/u);
+      expect(second.exitCode).toBe(0);
+      expect(second.stdout).not.toContain('Generated dashboardAuth');
+      expect(secondConfig.dashboardAuth).toEqual(firstConfig.dashboardAuth);
     });
   });
 
@@ -3644,6 +3704,7 @@ describe('Rainrail CLI built-in commands', () => {
           host: '127.0.0.1',
           port: 8787,
         },
+        dashboardAuth: {},
         sourceBundles: [],
         sources: [],
         taskProviders: {},
