@@ -8,7 +8,9 @@ the project; generated plugin state is not global.
 
 - `rainrail.config.json`: the project config marker and minimal config scaffold.
   It is valid JSON so the existing `loadConfig()` / `parseConfigJson()` path can
-  read a newly scaffolded project without a TypeScript config loader.
+  read a newly scaffolded project without a TypeScript config loader. The
+  scaffold includes an empty top-level `dashboardAuth` object for local
+  dashboard bearer tokens.
 - `rainrail.lock`: a deterministic lockfile with `lockfileVersion: 1`, the
   project name, and a `plugins` array. Installed official plugins are recorded
   as `{ name, version, resolvedSource }`; for example
@@ -81,7 +83,12 @@ selected setup command, while an unfiltered preview lists every official
 bundled plugin.
 
 `rainrail setup --yes [officialPluginName...]` orchestrates each selected
-plugin in order:
+plugin in order. Before plugin setup starts, the core CLI ensures local
+dashboard auth exists in `rainrail.config.json`: missing
+`dashboardAuth.readOnlyToken` and `dashboardAuth.operatorToken` values are
+generated once, then preserved on later setup runs. The generated token values
+are written only to the config file; text output reports the fields that were
+created without printing the secrets.
 
 1. Install the plugin with the project-local equivalent of
    `rainrail plugins add <canonicalAlias>`.
