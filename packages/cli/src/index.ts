@@ -2508,7 +2508,7 @@ function runSetupCommand(
     );
     steps.push(installStep);
     if (installResult.exitCode !== 0) {
-      return formatSetupResult(false, plugins, steps, options, installStep);
+      return formatSetupResult(false, plugins, steps, options, installStep, dashboardAuthResult);
     }
 
     const setupArgs = [
@@ -2542,7 +2542,7 @@ function runSetupCommand(
     );
     steps.push(setupStep);
     if (pluginSetupResult.exitCode !== 0) {
-      return formatSetupResult(false, plugins, steps, options, setupStep);
+      return formatSetupResult(false, plugins, steps, options, setupStep, dashboardAuthResult);
     }
   }
 
@@ -2571,10 +2571,13 @@ function ensureLocalDashboardAuth(
   const dashboardAuth: Record<string, unknown> = dashboardAuthValue === undefined
     ? {}
     : { ...dashboardAuthValue };
+  const generatedDashboardAuth: Record<string, string> = {};
   const created: Array<keyof RainrailDashboardAuth> = [];
   for (const key of ['readOnlyToken', 'operatorToken'] as const) {
     if (dashboardAuth[key] === undefined) {
-      dashboardAuth[key] = generateLocalDashboardToken(key);
+      const token = generateLocalDashboardToken(key);
+      dashboardAuth[key] = token;
+      generatedDashboardAuth[key] = token;
       created.push(key);
       continue;
     }
@@ -2585,34 +2588,35 @@ function ensureLocalDashboardAuth(
   }
   assertUniqueLocalDashboardAuthTokens(dashboardAuth as RainrailDashboardAuth);
   if (created.length > 0) {
-    fileSystem.writeFileSync(configPath, formatConfigWithLocalDashboardAuth(raw, value, dashboardAuth));
+    fileSystem.writeFileSync(configPath, formatConfigWithLocalDashboardAuth(raw, generatedDashboardAuth));
   }
   return { created };
 }
 
 function formatConfigWithLocalDashboardAuth(
   raw: string,
-  expandedValue: Record<string, unknown>,
-  dashboardAuth: Record<string, unknown>,
+  generatedDashboardAuth: Record<string, string>,
 ): string {
   try {
     const rawValue = JSON.parse(raw) as unknown;
     if (isRecord(rawValue)) {
+      const rawDashboardAuth = isRecord(rawValue.dashboardAuth) ? rawValue.dashboardAuth : {};
       return `${JSON.stringify({
         ...rawValue,
-        dashboardAuth,
+        dashboardAuth: {
+          ...rawDashboardAuth,
+          ...generatedDashboardAuth,
+        },
       }, null, 2)}\n`;
     }
   } catch {
-    if (expandedValue.dashboardAuth === undefined) {
-      return insertTopLevelDashboardAuth(raw, dashboardAuth);
+    const dashboardAuthObjectStart = findDashboardAuthObjectStart(raw);
+    if (dashboardAuthObjectStart !== undefined) {
+      return insertObjectEntries(raw, dashboardAuthObjectStart, generatedDashboardAuth, '    ');
     }
   }
 
-  return `${JSON.stringify({
-    ...expandedValue,
-    dashboardAuth,
-  }, null, 2)}\n`;
+  return insertTopLevelDashboardAuth(raw, generatedDashboardAuth);
 }
 
 function insertTopLevelDashboardAuth(raw: string, dashboardAuth: Record<string, unknown>): string {
@@ -2625,6 +2629,28 @@ function insertTopLevelDashboardAuth(raw: string, dashboardAuth: Record<string, 
   const rest = newline.length === 0 ? afterStart : afterStart.slice(newline.length);
   const property = `"dashboardAuth": ${JSON.stringify(dashboardAuth, null, 2).replaceAll('\n', `${newline}  `)}`;
   return `${raw.slice(0, objectStart + 1)}${newline}  ${property},${newline}${rest}`;
+}
+
+function findDashboardAuthObjectStart(raw: string): number | undefined {
+  const match = /"dashboardAuth"\s*:\s*\{/u.exec(raw);
+  return match === null ? undefined : match.index + match[0].lastIndexOf('{');
+}
+
+function insertObjectEntries(
+  raw: string,
+  objectStart: number,
+  entries: Record<string, string>,
+  indent: string,
+): string {
+  const afterStart = raw.slice(objectStart + 1);
+  const newline = afterStart.startsWith('\r\n') ? '\r\n' : afterStart.startsWith('\n') ? '\n' : '';
+  const rest = newline.length === 0 ? afterStart : afterStart.slice(newline.length);
+  const entriesText = Object.entries(entries)
+    .map(([key, value]) => `${indent}"${key}": ${JSON.stringify(value)}`)
+    .join(`,${newline}`);
+  const hasExistingEntries = !rest.trimStart().startsWith('}');
+  const suffix = hasExistingEntries ? `,${newline}` : newline;
+  return `${raw.slice(0, objectStart + 1)}${newline}${entriesText}${suffix}${rest}`;
 }
 
 function validateRainrailProjectForSetup(

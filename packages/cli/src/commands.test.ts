@@ -2935,6 +2935,34 @@ describe('Rainrail CLI built-in commands', () => {
     });
   });
 
+  it('preserves dashboard auth environment references when generating missing setup tokens', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'dashboard-auth-env-reference');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      await writeFile(configPath, `${JSON.stringify({
+        project: { name: 'dashboard-auth-env-reference' },
+        dashboardAuth: {
+          readOnlyToken: '${DASHBOARD_READ_TOKEN}',
+        },
+        sourceBundles: [],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+
+      const result = runRainrailCli(['setup', 'github', '--yes'], {
+        cwd: projectRoot,
+        env: { DASHBOARD_READ_TOKEN: 'actual-read-secret' },
+      });
+      const rawConfig = await readFile(configPath, 'utf8');
+
+      expect(result.exitCode).toBe(0);
+      expect(rawConfig).toContain('"readOnlyToken": "${DASHBOARD_READ_TOKEN}"');
+      expect(rawConfig).not.toContain('actual-read-secret');
+      expect(rawConfig).toMatch(/"operatorToken": "rr_local_operator_[A-Za-z0-9_-]+"/u);
+    });
+  });
+
   it('validates project-local state before writing dashboard auth tokens during setup', async () => {
     await withTempDirectory(async (directory) => {
       const configPath = join(directory, 'rainrail.config.json');
@@ -2982,6 +3010,38 @@ describe('Rainrail CLI built-in commands', () => {
       expect(rawConfig).toContain('"sources": ${RAINRAIL_SOURCES}');
       expect(config.dashboardAuth?.readOnlyToken).toMatch(/^rr_local_read-only_[A-Za-z0-9_-]+$/u);
       expect(config.dashboardAuth?.operatorToken).toMatch(/^rr_local_operator_[A-Za-z0-9_-]+$/u);
+    });
+  });
+
+  it('preserves env fragments when dashboardAuth already exists during setup token generation', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'dashboard-auth-existing-fragment');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      await writeFile(configPath, [
+        '{',
+        '  "project": { "name": "dashboard-auth-existing-fragment" },',
+        '  "dashboardAuth": {},',
+        '  "sourceBundles": [],',
+        '  "sources": [],',
+        '  "taskProviders": ${TASK_PROVIDERS},',
+        '  "runtimeProviders": {}',
+        '}',
+      ].join('\n'));
+
+      const result = runRainrailCli(['setup', 'github', '--yes'], {
+        cwd: projectRoot,
+        env: { TASK_PROVIDERS: '{"github":{"token":"actual-provider-secret"}}' },
+      });
+      const rawConfig = await readFile(configPath, 'utf8');
+      const parseableConfig = JSON.parse(rawConfig.replace('${TASK_PROVIDERS}', '{}')) as {
+        dashboardAuth?: { readOnlyToken?: string; operatorToken?: string };
+      };
+
+      expect(result.exitCode).toBe(0);
+      expect(rawConfig).toContain('"taskProviders": ${TASK_PROVIDERS}');
+      expect(rawConfig).not.toContain('actual-provider-secret');
+      expect(parseableConfig.dashboardAuth?.readOnlyToken).toMatch(/^rr_local_read-only_[A-Za-z0-9_-]+$/u);
+      expect(parseableConfig.dashboardAuth?.operatorToken).toMatch(/^rr_local_operator_[A-Za-z0-9_-]+$/u);
     });
   });
 
@@ -3243,6 +3303,7 @@ describe('Rainrail CLI built-in commands', () => {
       });
 
       expect(result.exitCode).toBe(2);
+      expect(result.stdout).toContain('Generated dashboardAuth.readOnlyToken and dashboardAuth.operatorToken');
       expect(result.stdout).toContain('Added official plugin github@0.1.0');
       expect(result.stdout).toContain('Added official plugin cloudflare@0.1.0');
       expect(result.stderr).toBe(
