@@ -10,7 +10,7 @@ import {
   pageIds,
   supportedLocales,
   translate,
-} from '../apps/www/src/lib/i18n.ts';
+} from '../apps/www/src/lib/i18n.js';
 
 const i18nSpec = readFileSync(
   new URL('../docs/www-i18n-foundation.md', import.meta.url),
