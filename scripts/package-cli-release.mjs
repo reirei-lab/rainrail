@@ -57,6 +57,7 @@ export function packageCliRelease({
     }
   }
 
+  runChecked(spawn, 'pnpm', ['--filter', 'www', 'build']);
   runChecked(spawn, 'pnpm', ['--filter', '@rainrail/cli', 'build']);
   runChecked(spawn, 'npm', ['pack', cliPackageDir, '--pack-destination', outDir]);
   renameSync(npmPackPath, assetPath);

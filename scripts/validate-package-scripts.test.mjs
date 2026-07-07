@@ -23,12 +23,16 @@ const cliTsconfig = JSON.parse(
 const cliBuildTsconfig = JSON.parse(
   readFileSync(new URL('../packages/cli/tsconfig.build.json', import.meta.url), 'utf8'),
 );
+const copyDashboardAssetsScript = readFileSync(
+  new URL('./copy-dashboard-assets.mjs', import.meta.url),
+  'utf8',
+);
 
 describe('package scripts used by pull request CI', () => {
   it('builds repository scripts, the CLI package, and the product site from the root command', () => {
     expect(packageJson.scripts['build:scripts']).toBe('node scripts/check-scripts.mjs');
     expect(packageJson.scripts.build).toBe(
-      'pnpm run build:scripts && pnpm --filter @rainrail/cli build && pnpm --filter www build',
+      'pnpm run build:scripts && pnpm --filter www build && pnpm --filter @rainrail/cli build',
     );
   });
 
@@ -58,8 +62,12 @@ describe('package scripts used by pull request CI', () => {
     expect(cliPackageJson.name).toBe('@rainrail/cli');
     expect(cliPackageJson.bin.rainrail).toBe('./dist/bin/rainrail.js');
     expect(cliPackageJson.scripts.build).toBe(
-      'tsc -p tsconfig.build.json && chmod +x dist/bin/rainrail.js',
+      'tsc -p tsconfig.build.json && node ../../scripts/copy-dashboard-assets.mjs && chmod +x dist/bin/rainrail.js',
     );
+    expect(copyDashboardAssetsScript).toContain('../apps/www/dist/');
+    expect(copyDashboardAssetsScript).toContain('../apps/www/dist/ja/dashboard/');
+    expect(copyDashboardAssetsScript).toContain('../apps/www/dist/en/dashboard/');
+    expect(copyDashboardAssetsScript).toContain('../packages/cli/dist/dashboard/');
     expect(cliPackageJson.scripts.test).toBe('vitest run src');
     expect(cliPackageJson.scripts.typecheck).toBe('tsc -p tsconfig.json --noEmit');
   });
