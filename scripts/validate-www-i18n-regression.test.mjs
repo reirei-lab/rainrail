@@ -145,6 +145,44 @@ describe('www i18n regression validator', () => {
     );
   });
 
+  it('does not treat data-content as real metadata content', async () => {
+    const distRoot = await writeCompleteDist();
+    writeRoute(
+      distRoot,
+      'en/how-it-works',
+      `<!doctype html>
+<html lang="en">
+<head>
+  <title>How it works - Rainrail</title>
+  <meta name="description" data-content="description">
+  <link rel="canonical" href="https://rainrail.dev/en/how-it-works">
+  <meta property="og:title" data-content="How it works - Rainrail">
+  <meta property="og:description" data-content="description">
+  <meta property="og:url" data-content="https://rainrail.dev/en/how-it-works">
+  <meta property="og:locale" data-content="en_US">
+  <link rel="alternate" hreflang="ja" href="https://rainrail.dev/ja/how-it-works">
+  <link rel="alternate" hreflang="en" href="https://rainrail.dev/en/how-it-works">
+  <link rel="alternate" hreflang="x-default" href="https://rainrail.dev/en/how-it-works">
+</head>
+<body>
+  <a href="/en/how-it-works">same locale</a>
+  <a href="/ja/how-it-works" data-locale-choice="ja">日本語</a>
+  <a href="/en/how-it-works" data-locale-choice="en">English</a>
+</body>
+</html>`,
+    );
+
+    expect(validateBuiltWwwI18n({ distRoot, locales, localizedPaths })).toEqual(
+      expect.arrayContaining([
+        'Missing meta description for /en/how-it-works',
+        'Missing og:title for /en/how-it-works',
+        'Missing og:description for /en/how-it-works',
+        'Missing og:url for /en/how-it-works',
+        'Missing og:locale for /en/how-it-works',
+      ]),
+    );
+  });
+
   it('reports canonical and og:url values that do not match the locale route', async () => {
     const distRoot = await writeCompleteDist();
     writeRoute(

@@ -48,6 +48,22 @@ const hasTag = (html, pattern) => pattern.test(html);
 const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /**
+ * @param {string} attribute
+ * @param {string} valuePattern
+ * @returns {string}
+ */
+const attributeLookahead = (attribute, valuePattern = '[^"\']+') =>
+  `(?=[^>]*\\s${escapeRegExp(attribute)}\\s*=\\s*["']${valuePattern}["'])`;
+
+/**
+ * @param {string} tagName
+ * @param {string[]} attributeLookaheads
+ * @returns {RegExp}
+ */
+const tagPattern = (tagName, attributeLookaheads) =>
+  new RegExp(`<${tagName}\\b${attributeLookaheads.join('')}[^>]*>`, 'i');
+
+/**
  * @param {string} tag
  * @param {string} attribute
  * @returns {string | undefined}
@@ -156,19 +172,34 @@ const requireMetadata = ({
 }) => {
   const expectedUrl = new URL(route, siteOrigin).toString();
   const htmlPattern = /<html\b[^>]*>/i;
-  const canonicalPattern =
-    /<link\b(?=[^>]*\brel=["']canonical["'])(?=[^>]*\bhref=["'][^"']+["'])[^>]*>/i;
-  const ogUrlPattern =
-    /<meta\b(?=[^>]*\bproperty=["']og:url["'])(?=[^>]*\bcontent=["'][^"']+["'])[^>]*>/i;
-  const ogLocalePattern =
-    /<meta\b(?=[^>]*\bproperty=["']og:locale["'])(?=[^>]*\bcontent=["'][^"']+["'])[^>]*>/i;
+  const canonicalPattern = tagPattern('link', [
+    attributeLookahead('rel', 'canonical'),
+    attributeLookahead('href'),
+  ]);
+  const ogUrlPattern = tagPattern('meta', [
+    attributeLookahead('property', 'og:url'),
+    attributeLookahead('content'),
+  ]);
+  const ogLocalePattern = tagPattern('meta', [
+    attributeLookahead('property', 'og:locale'),
+    attributeLookahead('content'),
+  ]);
   /** @type {[string, RegExp][]} */
   const requiredPatterns = [
     ['<title>', /<title>[^<]+<\/title>/i],
-    ['meta description', /<meta\b(?=[^>]*\bname=["']description["'])(?=[^>]*\bcontent=["'][^"']+["'])[^>]*>/i],
+    ['meta description', tagPattern('meta', [
+      attributeLookahead('name', 'description'),
+      attributeLookahead('content'),
+    ])],
     ['canonical link', canonicalPattern],
-    ['og:title', /<meta\b(?=[^>]*\bproperty=["']og:title["'])(?=[^>]*\bcontent=["'][^"']+["'])[^>]*>/i],
-    ['og:description', /<meta\b(?=[^>]*\bproperty=["']og:description["'])(?=[^>]*\bcontent=["'][^"']+["'])[^>]*>/i],
+    ['og:title', tagPattern('meta', [
+      attributeLookahead('property', 'og:title'),
+      attributeLookahead('content'),
+    ])],
+    ['og:description', tagPattern('meta', [
+      attributeLookahead('property', 'og:description'),
+      attributeLookahead('content'),
+    ])],
     ['og:url', ogUrlPattern],
     ['og:locale', ogLocalePattern],
   ];
@@ -201,10 +232,11 @@ const requireMetadata = ({
   }
 
   for (const hreflang of [...locales, 'x-default']) {
-    const pattern = new RegExp(
-      `<link\\b(?=[^>]*\\brel=["']alternate["'])(?=[^>]*\\bhreflang=["']${hreflang}["'])(?=[^>]*\\bhref=["'][^"']+["'])[^>]*>`,
-      'i',
-    );
+    const pattern = tagPattern('link', [
+      attributeLookahead('rel', 'alternate'),
+      attributeLookahead('hreflang', escapeRegExp(hreflang)),
+      attributeLookahead('href'),
+    ]);
 
     if (!hasTag(html, pattern)) {
       errors.push(`Missing hreflang ${hreflang} for ${route}`);
@@ -287,7 +319,10 @@ const requireRootLanguageEntry = ({ distRoot, locales, errors }) => {
   if (
     !hasTag(
       html,
-      /<meta\b(?=[^>]*\bname=["']robots["'])(?=[^>]*\bcontent=["'][^"']*\bnoindex\b[^"']*["'])[^>]*>/i,
+      tagPattern('meta', [
+        attributeLookahead('name', 'robots'),
+        attributeLookahead('content', '[^"\']*\\bnoindex\\b[^"\']*'),
+      ]),
     )
   ) {
     errors.push('Missing noindex robots meta for /');
