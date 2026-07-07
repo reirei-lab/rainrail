@@ -71,6 +71,7 @@ if (root !== null) {
 
   const storedToken = sessionStore.get(TOKEN_STORAGE_KEY) ?? '';
   const storedApiBaseUrl = sessionStore.get(API_BASE_URL_STORAGE_KEY) ?? appRoot.dataset.apiBaseUrl ?? '';
+  const authRequired = appRoot.dataset.authRequired !== 'false';
   const operatorEnabled = localStore.get(OPERATOR_STORAGE_KEY) === '1';
   if (tokenInput !== null) tokenInput.value = storedToken;
   if (apiBaseUrlInput !== null) apiBaseUrlInput.value = storedApiBaseUrl;
@@ -78,26 +79,39 @@ if (root !== null) {
   setOperatorActionsEnabled(operatorEnabled);
   resetDashboardData();
 
-  if (storedToken === '') {
+  if (storedToken === '' && authRequired) {
     setState('auth-missing', copy.status.authMissing);
   } else {
-    client = createDashboardClient(storedToken);
+    client = createDashboardClient(storedToken, storedApiBaseUrl);
     void refresh();
     startPolling(client);
   }
 
   saveTokenButton?.addEventListener('click', () => {
     const token = tokenInput?.value.trim() ?? '';
+    const apiBaseUrl = normalizeApiBaseUrl(apiBaseUrlInput?.value ?? appRoot.dataset.apiBaseUrl ?? '');
     if (token === '') {
       sessionStore.remove(TOKEN_STORAGE_KEY);
-      client = undefined;
-      stopPolling();
-      resetDashboardData();
-      setState('auth-missing', copy.status.authMissing);
+      if (apiBaseUrl === '') {
+        sessionStore.remove(API_BASE_URL_STORAGE_KEY);
+      } else {
+        sessionStore.set(API_BASE_URL_STORAGE_KEY, apiBaseUrl);
+      }
+      if (apiBaseUrlInput !== null) apiBaseUrlInput.value = apiBaseUrl;
+      if (authRequired) {
+        client = undefined;
+        stopPolling();
+        resetDashboardData();
+        setState('auth-missing', copy.status.authMissing);
+      } else {
+        client = createDashboardClient('', apiBaseUrl);
+        resetDashboardData();
+        void refresh();
+        startPolling(client);
+      }
       return;
     }
 
-    const apiBaseUrl = normalizeApiBaseUrl(apiBaseUrlInput?.value ?? appRoot.dataset.apiBaseUrl ?? '');
     sessionStore.set(TOKEN_STORAGE_KEY, token);
     if (apiBaseUrl === '') {
       sessionStore.remove(API_BASE_URL_STORAGE_KEY);
@@ -113,11 +127,19 @@ if (root !== null) {
 
   clearTokenButton?.addEventListener('click', () => {
     sessionStore.remove(TOKEN_STORAGE_KEY);
-    client = undefined;
-    stopPolling();
     if (tokenInput !== null) tokenInput.value = '';
-    resetDashboardData();
-    setState('auth-missing', copy.status.authMissing);
+    const apiBaseUrl = normalizeApiBaseUrl(apiBaseUrlInput?.value ?? appRoot.dataset.apiBaseUrl ?? '');
+    if (authRequired) {
+      client = undefined;
+      stopPolling();
+      resetDashboardData();
+      setState('auth-missing', copy.status.authMissing);
+    } else {
+      client = createDashboardClient('', apiBaseUrl);
+      resetDashboardData();
+      void refresh();
+      startPolling(client);
+    }
   });
 
   refreshButton?.addEventListener('click', () => {

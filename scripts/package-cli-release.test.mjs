@@ -49,6 +49,7 @@ describe('CLI release package builder', () => {
     expect(result.assetPath).toBe(join(outDir, 'rainrail-cli-v2.3.4.tgz'));
     expect(readFileSync(result.assetPath, 'utf8')).toBe('tgz');
     expect(calls).toEqual([
+      ['pnpm', ['--filter', 'www', 'build']],
       ['pnpm', ['--filter', '@rainrail/cli', 'build']],
       ['npm', ['pack', cli, '--pack-destination', outDir]],
     ]);
