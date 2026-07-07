@@ -4,7 +4,7 @@ import {
   createRainrailEepBridgeIntakeAdaptersFromEnv,
   type RainrailEepBridgeBundleEnv,
 } from './eep-bridge-bundle.js';
-import { parseConfigJson } from './config.js';
+import { parseConfigJson, type RainrailConfig } from './config.js';
 import { createRainrailHttpApp } from './http-app.js';
 
 export interface RainrailWorkerEnv extends RainrailEepBridgeBundleEnv {
@@ -55,24 +55,34 @@ export default {
 };
 
 function workerApp(env: RainrailWorkerEnv) {
+  const config = workerConfig(env);
   return createRainrailHttpApp({
     room: bridgeRoom(env),
     publishToken: env.RAINRAIL_PUBLISH_TOKEN,
     ...(env.SSE_BEARER_TOKEN === undefined ? {} : { eventsBearerToken: env.SSE_BEARER_TOKEN }),
+    ...(config === undefined ? {} : { dashboardAuth: config.dashboardAuth }),
     runtime: 'cloudflare-workers',
-    intakeAdapters: workerIntakeAdapters(env),
+    intakeAdapters: workerIntakeAdapters(env, config),
   });
 }
 
-function workerIntakeAdapters(env: RainrailWorkerEnv) {
-  if (env.RAINRAIL_CONFIG_JSON === undefined || env.RAINRAIL_CONFIG_JSON.length === 0) {
+function workerIntakeAdapters(env: RainrailWorkerEnv, config: RainrailConfig | undefined) {
+  if (config === undefined) {
     return createRainrailEepBridgeIntakeAdaptersFromEnv(env);
   }
 
   return createRainrailEepBridgeIntakeAdaptersFromConfig({
-    config: parseConfigJson(env.RAINRAIL_CONFIG_JSON, stringEnv(env)),
+    config,
     env,
   });
+}
+
+function workerConfig(env: RainrailWorkerEnv): RainrailConfig | undefined {
+  if (env.RAINRAIL_CONFIG_JSON === undefined || env.RAINRAIL_CONFIG_JSON.length === 0) {
+    return undefined;
+  }
+
+  return parseConfigJson(env.RAINRAIL_CONFIG_JSON, stringEnv(env));
 }
 
 function stringEnv(env: RainrailWorkerEnv): Record<string, string | undefined> {

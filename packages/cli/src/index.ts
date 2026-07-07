@@ -1732,7 +1732,7 @@ function parseOptionalLocalToken(value: unknown, path: string): string | undefin
 function assertUniqueLocalDashboardAuthTokens(auth: RainrailDashboardAuth): void {
   const seen = new Map<string, string>();
   for (const [key, token] of Object.entries(auth)) {
-    if (token === undefined) continue;
+    if (token === undefined || token.length === 0) continue;
     const previous = seen.get(token);
     if (previous !== undefined) {
       throw new Error(`config.dashboardAuth.${key} must not duplicate config.dashboardAuth.${previous}`);
@@ -2561,6 +2561,7 @@ function ensureLocalDashboardAuth(
   const raw = fileSystem.readFileSync(configPath, 'utf8');
   const expanded = expandConfigEnv(raw, env);
   const value = JSON.parse(expanded) as unknown;
+  const rawDashboardAuth = parseRawDashboardAuthObject(raw);
   if (!isRecord(value)) {
     throw new Error('config must be an object');
   }
@@ -2581,16 +2582,49 @@ function ensureLocalDashboardAuth(
       created.push(key);
       continue;
     }
+    if (isUnresolvedDashboardAuthEnvReference(dashboardAuth[key], rawDashboardAuth?.[key])) {
+      continue;
+    }
     parseLocalNonEmptyString(dashboardAuth[key], `config.dashboardAuth.${key}`);
   }
   if (dashboardAuth.adminToken !== undefined) {
-    parseLocalNonEmptyString(dashboardAuth.adminToken, 'config.dashboardAuth.adminToken');
+    if (!isUnresolvedDashboardAuthEnvReference(dashboardAuth.adminToken, rawDashboardAuth?.adminToken)) {
+      parseLocalNonEmptyString(dashboardAuth.adminToken, 'config.dashboardAuth.adminToken');
+    }
   }
   assertUniqueLocalDashboardAuthTokens(dashboardAuth as RainrailDashboardAuth);
   if (created.length > 0) {
     fileSystem.writeFileSync(configPath, formatConfigWithLocalDashboardAuth(raw, generatedDashboardAuth));
   }
   return { created };
+}
+
+function parseRawDashboardAuthObject(raw: string): Record<string, unknown> | undefined {
+  try {
+    const value = JSON.parse(raw) as unknown;
+    return isRecord(value) && isRecord(value.dashboardAuth) ? value.dashboardAuth : undefined;
+  } catch {
+    const objectStart = findDashboardAuthObjectStart(raw);
+    if (objectStart === undefined) {
+      return undefined;
+    }
+    const objectEnd = findJsonObjectEnd(raw, objectStart);
+    if (objectEnd === undefined) {
+      return undefined;
+    }
+    try {
+      const value = JSON.parse(raw.slice(objectStart, objectEnd + 1)) as unknown;
+      return isRecord(value) ? value : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+}
+
+function isUnresolvedDashboardAuthEnvReference(expandedValue: unknown, rawValue: unknown): boolean {
+  return expandedValue === '' &&
+    typeof rawValue === 'string' &&
+    /^\$\{[A-Z0-9_]+\}$/u.test(rawValue);
 }
 
 function formatConfigWithLocalDashboardAuth(
@@ -2614,6 +2648,9 @@ function formatConfigWithLocalDashboardAuth(
     if (dashboardAuthObjectStart !== undefined) {
       return insertObjectEntries(raw, dashboardAuthObjectStart, generatedDashboardAuth, '    ');
     }
+    if (hasDashboardAuthProperty(raw)) {
+      throw new Error('config.dashboardAuth must be an object in rainrail.config.json before setup can add local tokens');
+    }
   }
 
   return insertTopLevelDashboardAuth(raw, generatedDashboardAuth);
@@ -2634,6 +2671,44 @@ function insertTopLevelDashboardAuth(raw: string, dashboardAuth: Record<string, 
 function findDashboardAuthObjectStart(raw: string): number | undefined {
   const match = /"dashboardAuth"\s*:\s*\{/u.exec(raw);
   return match === null ? undefined : match.index + match[0].lastIndexOf('{');
+}
+
+function hasDashboardAuthProperty(raw: string): boolean {
+  return /"dashboardAuth"\s*:/u.test(raw);
+}
+
+function findJsonObjectEnd(raw: string, objectStart: number): number | undefined {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = objectStart; index < raw.length; index += 1) {
+    const char = raw[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === '\\') {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+    if (char === '{') {
+      depth += 1;
+      continue;
+    }
+    if (char === '}') {
+      depth -= 1;
+      if (depth === 0) {
+        return index;
+      }
+    }
+  }
+  return undefined;
 }
 
 function insertObjectEntries(

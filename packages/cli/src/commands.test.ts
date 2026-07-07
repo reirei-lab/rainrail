@@ -2963,6 +2963,36 @@ describe('Rainrail CLI built-in commands', () => {
     });
   });
 
+  it('preserves unresolved dashboard auth environment references while generating missing setup tokens', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'dashboard-auth-unresolved-env-reference');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      await writeFile(configPath, [
+        '{',
+        '  "project": { "name": "dashboard-auth-unresolved-env-reference" },',
+        '  "dashboardAuth": {',
+        '    "readOnlyToken": "${DASHBOARD_READ_TOKEN}"',
+        '  },',
+        '  "sourceBundles": [],',
+        '  "sources": [],',
+        '  "taskProviders": ${TASK_PROVIDERS},',
+        '  "runtimeProviders": {}',
+        '}',
+      ].join('\n'));
+
+      const result = runRainrailCli(['setup', 'github', '--yes'], {
+        cwd: projectRoot,
+        env: { TASK_PROVIDERS: '{}' },
+      });
+      const rawConfig = await readFile(configPath, 'utf8');
+
+      expect(result.exitCode).toBe(0);
+      expect(rawConfig).toContain('"readOnlyToken": "${DASHBOARD_READ_TOKEN}"');
+      expect(rawConfig).toContain('"taskProviders": ${TASK_PROVIDERS}');
+      expect(rawConfig).toMatch(/"operatorToken": "rr_local_operator_[A-Za-z0-9_-]+"/u);
+    });
+  });
+
   it('validates project-local state before writing dashboard auth tokens during setup', async () => {
     await withTempDirectory(async (directory) => {
       const configPath = join(directory, 'rainrail.config.json');
@@ -3042,6 +3072,36 @@ describe('Rainrail CLI built-in commands', () => {
       expect(rawConfig).not.toContain('actual-provider-secret');
       expect(parseableConfig.dashboardAuth?.readOnlyToken).toMatch(/^rr_local_read-only_[A-Za-z0-9_-]+$/u);
       expect(parseableConfig.dashboardAuth?.operatorToken).toMatch(/^rr_local_operator_[A-Za-z0-9_-]+$/u);
+    });
+  });
+
+  it('does not insert duplicate dashboardAuth when the whole object is an environment fragment', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'dashboard-auth-object-fragment');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      const originalConfig = [
+        '{',
+        '  "project": { "name": "dashboard-auth-object-fragment" },',
+        '  "dashboardAuth": ${DASHBOARD_AUTH},',
+        '  "sourceBundles": [],',
+        '  "sources": [],',
+        '  "taskProviders": {},',
+        '  "runtimeProviders": {}',
+        '}',
+      ].join('\n');
+      await writeFile(configPath, originalConfig);
+
+      const result = runRainrailCli(['setup', 'github', '--yes'], {
+        cwd: projectRoot,
+        env: { DASHBOARD_AUTH: '{"readOnlyToken":"fragment-read-token"}' },
+      });
+      const rawConfig = await readFile(configPath, 'utf8');
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('config.dashboardAuth must be an object in rainrail.config.json');
+      expect(rawConfig).toBe(originalConfig);
+      expect(rawConfig.match(/"dashboardAuth"/gu)).toHaveLength(1);
+      expect(rawConfig).not.toContain('rr_local_operator');
     });
   });
 

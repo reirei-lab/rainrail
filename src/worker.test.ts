@@ -211,6 +211,38 @@ describe('Rainrail Cloudflare Worker entrypoint', () => {
 
     expect(chunk).toContain('id: github-configured-webhook:delivery-worker-config:github.issue\n');
   });
+
+  it('passes dashboard auth from Rainrail config JSON into the Worker HTTP app', async () => {
+    const env = {
+      ...fakeEnv(),
+      RAINRAIL_CONFIG_JSON: JSON.stringify({
+        dashboardAuth: {
+          operatorToken: '${RAINRAIL_DASHBOARD_OPERATOR_TOKEN}',
+        },
+        sourceBundles: [
+          {
+            type: 'eep-bridge',
+            name: 'worker-dashboard-auth',
+            sources: [
+              {
+                type: 'github-webhook',
+                name: 'worker-dashboard-github',
+                sourceType: 'github',
+                provider: 'github',
+                runtime: 'openclaw',
+                webhookSecret: 'GITHUB_WEBHOOK_SECRET',
+              },
+            ],
+          },
+        ],
+      }),
+      RAINRAIL_DASHBOARD_OPERATOR_TOKEN: 'events-token',
+    };
+
+    await expect(
+      rainrailWorker.fetch(new Request('https://worker.local/healthz'), env),
+    ).rejects.toThrow('duplicate dashboard token scopes are not allowed');
+  });
 });
 
 function fakeEnv() {
