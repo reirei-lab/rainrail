@@ -35,8 +35,10 @@ footer、alternate URL の検証を同じ変更で更新する。
 
 ## ルーティング方針
 
-`/` は自動 locale detection entry point として扱う。ブラウザの
+`/` は自動 locale detection entry point として扱う。保存済みの手動選択
+`rainrail.locale` があれば最優先する。保存済み選択がない場合はブラウザの
 `navigator.languages` を優先順に走査し、最初に対応した locale へ遷移する。
+どちらでも判定できない場合の fallback locale は `en` とする。
 JavaScript を実行しない smoke / fetch クライアント向けに、fallback HTML には
 Rainrail の短い説明と明示的な言語リンクを残す。
 
@@ -47,3 +49,5 @@ legacy unprefixed product URL は `/en/` へ 301 redirect する。Cloudflare Pa
 
 明示的な locale URL は user-controlled な安定ページとして扱う。`/ja/...` や
 `/en/...` は自動判定結果によって別 locale へ redirect しない。
+language switcher から明示的に locale を選んだ場合だけ、次回 `/` 訪問時の
+自動判定に使う locale として保存する。
