@@ -13,7 +13,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, extname, join, normalize, parse, resolve, sep } from 'node:path';
+import { basename, dirname, extname, join, normalize, parse, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   OFFICIAL_PLUGIN_CATALOG,
@@ -2554,7 +2554,9 @@ function runSetupCommand(
   const steps: SetupStepResult[] = [];
   let dashboardAuthResult: LocalDashboardAuthSetupResult;
   try {
-    validateRainrailProjectForSetup(project, fileSystem);
+    if (!setupArguments.dashboardAuthOnly) {
+      validateRainrailProjectForSetup(project, fileSystem);
+    }
     dashboardAuthResult = ensureLocalDashboardAuth(project.configPath, fileSystem, environment.env ?? process.env);
   } catch (error) {
     return formatSetupError(options, error);
@@ -2647,6 +2649,7 @@ function parseSetupCommandArguments(args: readonly string[]): {
 
 type LocalDashboardAuthSetupResult = {
   readonly created: readonly (keyof RainrailDashboardAuth)[];
+  readonly configPath: string;
 };
 
 function ensureLocalDashboardAuth(
@@ -2686,7 +2689,7 @@ function ensureLocalDashboardAuth(
   if (created.length > 0) {
     fileSystem.writeFileSync(configPath, formatConfigWithLocalDashboardAuth(raw, generatedDashboardAuth));
   }
-  return { created };
+  return { created, configPath };
 }
 
 function parseExpandedDashboardAuthObject(raw: string, env: Record<string, string | undefined>): Record<string, unknown> {
@@ -3175,7 +3178,7 @@ function formatSetupResult(
 
   const dashboardAuthOutput = dashboardAuthResult === undefined || dashboardAuthResult.created.length === 0
     ? ''
-    : `Generated dashboardAuth.${dashboardAuthResult.created.join(' and dashboardAuth.')} in rainrail.config.json.\n`;
+    : `Generated dashboardAuth.${dashboardAuthResult.created.join(' and dashboardAuth.')} in ${basename(dashboardAuthResult.configPath)}.\n`;
   const stdout = `${dashboardAuthOutput}${steps.map((step) => step.stdout).join('')}`;
   const stderr = steps.map((step) => step.stderr).join('');
   if (failedStep !== undefined) {

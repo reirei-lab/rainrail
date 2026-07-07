@@ -3132,6 +3132,33 @@ describe('Rainrail CLI built-in commands', () => {
     });
   });
 
+  it('generates dashboard auth only for config-only workspaces', async () => {
+    await withTempDirectory(async (directory) => {
+      const configPath = join(directory, 'custom.rainrail.json');
+      await writeFile(configPath, `${JSON.stringify({
+        sourceBundles: [],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+
+      const result = runRainrailCli(['--config', configPath, 'setup', '--dashboard-auth-only', '--yes'], {
+        cwd: directory,
+      });
+      const config = JSON.parse(await readFile(configPath, 'utf8')) as {
+        dashboardAuth?: { readOnlyToken?: string; operatorToken?: string };
+      };
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+      expect(result.stdout).toBe('Generated dashboardAuth.readOnlyToken and dashboardAuth.operatorToken in custom.rainrail.json.\n');
+      expect(config.dashboardAuth?.readOnlyToken).toMatch(/^rr_local_read-only_[A-Za-z0-9_-]+$/u);
+      expect(config.dashboardAuth?.operatorToken).toMatch(/^rr_local_operator_[A-Za-z0-9_-]+$/u);
+      await expect(stat(join(directory, 'rainrail.lock'))).rejects.toThrow();
+      await expect(stat(join(directory, '.rainrail', 'plugins'))).rejects.toThrow();
+    });
+  });
+
   it('preserves dashboard auth environment references when generating missing setup tokens', async () => {
     await withTempDirectory(async (directory) => {
       const projectRoot = await initRainrailProject(directory, 'dashboard-auth-env-reference');
