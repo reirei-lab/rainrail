@@ -82,6 +82,11 @@ describe('parseConfig', () => {
         host: '127.0.0.1',
         port: 8787,
       },
+      dashboardAuth: {
+        readOnlyToken: 'read-token',
+        operatorToken: 'operator-token',
+        adminToken: 'admin-token',
+      },
     });
 
     expect(config.sourceBundles).toEqual([
@@ -143,6 +148,11 @@ describe('parseConfig', () => {
       port: 8787,
       allowedHosts: [],
     });
+    expect(config.dashboardAuth).toEqual({
+      readOnlyToken: 'read-token',
+      operatorToken: 'operator-token',
+      adminToken: 'admin-token',
+    });
   });
 
   it('merges default task and runtime providers when provider sections are omitted', () => {
@@ -152,6 +162,7 @@ describe('parseConfig', () => {
         port: 8787,
         allowedHosts: [],
       },
+      dashboardAuth: {},
       sourceBundles: [],
       sources: [],
       taskProviders: {
@@ -181,6 +192,19 @@ describe('parseConfig', () => {
       port: 9999,
       allowedHosts: [],
     });
+  });
+
+  it.each([
+    ['string', 'config.dashboardAuth must be an object'],
+    [{ readOnlyToken: '' }, 'config.dashboardAuth.readOnlyToken must be a non-empty string'],
+    [{ operatorToken: 42 }, 'config.dashboardAuth.operatorToken must be a non-empty string'],
+    [{ adminToken: false }, 'config.dashboardAuth.adminToken must be a non-empty string'],
+    [
+      { readOnlyToken: 'same-token', operatorToken: 'same-token' },
+      'config.dashboardAuth.operatorToken must not duplicate config.dashboardAuth.readOnlyToken',
+    ],
+  ])('rejects invalid dashboardAuth config %# with a config path', (dashboardAuth, message) => {
+    expectConfigError({ dashboardAuth }, message);
   });
 
   it.each([

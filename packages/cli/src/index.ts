@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import http, { type IncomingMessage, type OutgoingHttpHeaders, type ServerResponse } from 'node:http';
 import {
   existsSync,
@@ -128,6 +128,7 @@ export type RainrailStartOptions = {
   readonly configPath: string;
   readonly allowedHosts: readonly string[];
   readonly dashboardToken?: string;
+  readonly dashboardAuth: RainrailDashboardAuth;
   readonly sources: readonly RainrailLocalSource[];
 };
 
@@ -148,6 +149,12 @@ export type RainrailLocalSource = {
   readonly authConfigured: boolean;
   readonly webhookSecret?: string;
   readonly maxBodyBytes?: number;
+};
+
+export type RainrailDashboardAuth = {
+  readonly readOnlyToken?: string;
+  readonly operatorToken?: string;
+  readonly adminToken?: string;
 };
 
 export type RainrailCliEnvironment = {
@@ -1457,6 +1464,7 @@ type StartConfig = {
     readonly port?: number;
     readonly allowedHosts?: readonly string[];
   };
+  readonly dashboardAuth: RainrailDashboardAuth;
   readonly sources: readonly RainrailLocalSource[];
 };
 
@@ -1691,8 +1699,46 @@ function readStartConfig(
   }
 
   const server = parseStartConfigServer(value.server);
+  const dashboardAuth = parseStartDashboardAuth(value.dashboardAuth);
   const sources = parseStartConfigSources(value, markerValue, env);
-  return server === undefined ? { sources } : { server, sources };
+  return server === undefined ? { dashboardAuth, sources } : { server, dashboardAuth, sources };
+}
+
+function parseStartDashboardAuth(value: unknown): RainrailDashboardAuth {
+  if (value === undefined) {
+    return {};
+  }
+  if (!isRecord(value)) {
+    throw new Error('config.dashboardAuth must be an object');
+  }
+  const auth: { readOnlyToken?: string; operatorToken?: string; adminToken?: string } = {};
+  const readOnlyToken = parseOptionalLocalToken(value.readOnlyToken, 'config.dashboardAuth.readOnlyToken');
+  const operatorToken = parseOptionalLocalToken(value.operatorToken, 'config.dashboardAuth.operatorToken');
+  const adminToken = parseOptionalLocalToken(value.adminToken, 'config.dashboardAuth.adminToken');
+  if (readOnlyToken !== undefined) auth.readOnlyToken = readOnlyToken;
+  if (operatorToken !== undefined) auth.operatorToken = operatorToken;
+  if (adminToken !== undefined) auth.adminToken = adminToken;
+  assertUniqueLocalDashboardAuthTokens(auth);
+  return auth;
+}
+
+function parseOptionalLocalToken(value: unknown, path: string): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  return parseLocalNonEmptyString(value, path);
+}
+
+function assertUniqueLocalDashboardAuthTokens(auth: RainrailDashboardAuth): void {
+  const seen = new Map<string, string>();
+  for (const [key, token] of Object.entries(auth)) {
+    if (token === undefined || token.length === 0) continue;
+    const previous = seen.get(token);
+    if (previous !== undefined) {
+      throw new Error(`config.dashboardAuth.${key} must not duplicate config.dashboardAuth.${previous}`);
+    }
+    seen.set(token, key);
+  }
 }
 
 function parseStartConfigServer(value: unknown): StartConfig['server'] {
@@ -2088,8 +2134,9 @@ function resolveStartOptions(
   const dashboardToken = env.SSE_BEARER_TOKEN === undefined || env.SSE_BEARER_TOKEN.length === 0
     ? undefined
     : env.SSE_BEARER_TOKEN;
-  if (!isLocalBindHost(host) && (dashboardToken === undefined || dashboardToken.length === 0)) {
-    return { error: 'SSE_BEARER_TOKEN is required when rainrail start binds outside localhost' };
+  const dashboardAuth = mergeDashboardAuth(config.dashboardAuth, dashboardToken);
+  if (!isLocalBindHost(host) && !hasAnyDashboardAuthToken(dashboardAuth) && dashboardToken === undefined) {
+    return { error: 'dashboardAuth.readOnlyToken, dashboardAuth.operatorToken, dashboardAuth.adminToken, or SSE_BEARER_TOKEN is required when rainrail start binds outside localhost' };
   }
 
   return {
@@ -2100,9 +2147,21 @@ function resolveStartOptions(
       configPath: project.configPath,
       allowedHosts: envAllowedHosts ?? config.server?.allowedHosts ?? [],
       sources: config.sources,
+      dashboardAuth,
       ...(dashboardToken === undefined ? {} : { dashboardToken }),
     },
   };
+}
+
+function mergeDashboardAuth(configAuth: RainrailDashboardAuth, eventsBearerToken: string | undefined): RainrailDashboardAuth {
+  return {
+    ...configAuth,
+    ...(configAuth.readOnlyToken === undefined && eventsBearerToken !== undefined ? { readOnlyToken: eventsBearerToken } : {}),
+  };
+}
+
+function hasAnyDashboardAuthToken(auth: RainrailDashboardAuth): boolean {
+  return [auth.readOnlyToken, auth.operatorToken, auth.adminToken].some((token) => token !== undefined && token.length > 0);
 }
 
 function isLocalBindHost(host: string): boolean {
@@ -2428,6 +2487,13 @@ function runSetupCommand(
 
   const invocation = createRainrailCommandInvocation(environment.currentBinPath ?? process.argv[1]);
   const steps: SetupStepResult[] = [];
+  let dashboardAuthResult: LocalDashboardAuthSetupResult;
+  try {
+    validateRainrailProjectForSetup(project, fileSystem);
+    dashboardAuthResult = ensureLocalDashboardAuth(project.configPath, fileSystem, environment.env ?? process.env);
+  } catch (error) {
+    return formatSetupError(options, error);
+  }
 
   for (const plugin of plugins) {
     const installResult = runPluginsCommand(['add', plugin.alias], setupOptions, {
@@ -2442,7 +2508,7 @@ function runSetupCommand(
     );
     steps.push(installStep);
     if (installResult.exitCode !== 0) {
-      return formatSetupResult(false, plugins, steps, options, installStep);
+      return formatSetupResult(false, plugins, steps, options, installStep, dashboardAuthResult);
     }
 
     const setupArgs = [
@@ -2476,11 +2542,306 @@ function runSetupCommand(
     );
     steps.push(setupStep);
     if (pluginSetupResult.exitCode !== 0) {
-      return formatSetupResult(false, plugins, steps, options, setupStep);
+      return formatSetupResult(false, plugins, steps, options, setupStep, dashboardAuthResult);
     }
   }
 
-  return formatSetupResult(true, plugins, steps, options);
+  return formatSetupResult(true, plugins, steps, options, undefined, dashboardAuthResult);
+}
+
+type LocalDashboardAuthSetupResult = {
+  readonly created: readonly (keyof RainrailDashboardAuth)[];
+};
+
+function ensureLocalDashboardAuth(
+  configPath: string,
+  fileSystem: RainrailCliFileSystem,
+  env: Record<string, string | undefined>,
+): LocalDashboardAuthSetupResult {
+  const raw = fileSystem.readFileSync(configPath, 'utf8');
+  const rawDashboardAuth = parseRawDashboardAuthObject(raw);
+  if (hasDashboardAuthProperty(raw) && rawDashboardAuth === undefined) {
+    throw new Error('config.dashboardAuth must be an object in rainrail.config.json before setup can add local tokens');
+  }
+  const dashboardAuth = rawDashboardAuth === undefined
+    ? {}
+    : parseExpandedDashboardAuthObject(raw, env);
+  const generatedDashboardAuth: Record<string, string> = {};
+  const created: Array<keyof RainrailDashboardAuth> = [];
+  for (const key of ['readOnlyToken', 'operatorToken'] as const) {
+    if (dashboardAuth[key] === undefined) {
+      const token = generateLocalDashboardToken(key);
+      dashboardAuth[key] = token;
+      generatedDashboardAuth[key] = token;
+      created.push(key);
+      continue;
+    }
+    if (isUnresolvedDashboardAuthEnvReference(dashboardAuth[key], rawDashboardAuth?.[key])) {
+      continue;
+    }
+    parseLocalNonEmptyString(dashboardAuth[key], `config.dashboardAuth.${key}`);
+  }
+  if (dashboardAuth.adminToken !== undefined) {
+    if (!isUnresolvedDashboardAuthEnvReference(dashboardAuth.adminToken, rawDashboardAuth?.adminToken)) {
+      parseLocalNonEmptyString(dashboardAuth.adminToken, 'config.dashboardAuth.adminToken');
+    }
+  }
+  assertUniqueLocalDashboardAuthTokens(dashboardAuth as RainrailDashboardAuth);
+  if (created.length > 0) {
+    fileSystem.writeFileSync(configPath, formatConfigWithLocalDashboardAuth(raw, generatedDashboardAuth));
+  }
+  return { created };
+}
+
+function parseExpandedDashboardAuthObject(raw: string, env: Record<string, string | undefined>): Record<string, unknown> {
+  const objectStart = findDashboardAuthObjectStart(raw);
+  if (objectStart === undefined) {
+    throw new Error('config.dashboardAuth must be an object in rainrail.config.json before setup can add local tokens');
+  }
+  const objectEnd = findJsonObjectEnd(raw, objectStart);
+  if (objectEnd === undefined) {
+    throw new Error('config.dashboardAuth must be an object in rainrail.config.json before setup can add local tokens');
+  }
+  const value = JSON.parse(expandConfigEnv(raw.slice(objectStart, objectEnd + 1), env)) as unknown;
+  if (!isRecord(value)) {
+    throw new Error('config.dashboardAuth must be an object');
+  }
+  return { ...value };
+}
+
+function parseRawDashboardAuthObject(raw: string): Record<string, unknown> | undefined {
+  try {
+    const value = JSON.parse(raw) as unknown;
+    return isRecord(value) && isRecord(value.dashboardAuth) ? value.dashboardAuth : undefined;
+  } catch {
+    const objectStart = findDashboardAuthObjectStart(raw);
+    if (objectStart === undefined) {
+      return undefined;
+    }
+    const objectEnd = findJsonObjectEnd(raw, objectStart);
+    if (objectEnd === undefined) {
+      return undefined;
+    }
+    try {
+      const value = JSON.parse(raw.slice(objectStart, objectEnd + 1)) as unknown;
+      return isRecord(value) ? value : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+}
+
+function isUnresolvedDashboardAuthEnvReference(expandedValue: unknown, rawValue: unknown): boolean {
+  return expandedValue === '' &&
+    typeof rawValue === 'string' &&
+    /^\$\{[A-Z0-9_]+\}$/u.test(rawValue);
+}
+
+function formatConfigWithLocalDashboardAuth(
+  raw: string,
+  generatedDashboardAuth: Record<string, string>,
+): string {
+  try {
+    const rawValue = JSON.parse(raw) as unknown;
+    if (isRecord(rawValue)) {
+      const rawDashboardAuth = isRecord(rawValue.dashboardAuth) ? rawValue.dashboardAuth : {};
+      return `${JSON.stringify({
+        ...rawValue,
+        dashboardAuth: {
+          ...rawDashboardAuth,
+          ...generatedDashboardAuth,
+        },
+      }, null, 2)}\n`;
+    }
+  } catch {
+    const dashboardAuthObjectStart = findDashboardAuthObjectStart(raw);
+    if (dashboardAuthObjectStart !== undefined) {
+      return insertObjectEntries(raw, dashboardAuthObjectStart, generatedDashboardAuth, '    ');
+    }
+    if (hasDashboardAuthProperty(raw)) {
+      throw new Error('config.dashboardAuth must be an object in rainrail.config.json before setup can add local tokens');
+    }
+  }
+
+  return insertTopLevelDashboardAuth(raw, generatedDashboardAuth);
+}
+
+function insertTopLevelDashboardAuth(raw: string, dashboardAuth: Record<string, unknown>): string {
+  const objectStart = raw.indexOf('{');
+  if (objectStart < 0) {
+    throw new Error('config must be an object');
+  }
+  const afterStart = raw.slice(objectStart + 1);
+  const newline = afterStart.startsWith('\r\n') ? '\r\n' : afterStart.startsWith('\n') ? '\n' : '';
+  const rest = newline.length === 0 ? afterStart : afterStart.slice(newline.length);
+  const property = `"dashboardAuth": ${JSON.stringify(dashboardAuth, null, 2).replaceAll('\n', `${newline}  `)}`;
+  return `${raw.slice(0, objectStart + 1)}${newline}  ${property},${newline}${rest}`;
+}
+
+function findDashboardAuthObjectStart(raw: string): number | undefined {
+  const valueStart = findTopLevelPropertyValueStart(raw, 'dashboardAuth');
+  if (valueStart === undefined) {
+    return undefined;
+  }
+  return raw[valueStart] === '{' ? valueStart : undefined;
+}
+
+function hasDashboardAuthProperty(raw: string): boolean {
+  return findTopLevelPropertyValueStart(raw, 'dashboardAuth') !== undefined;
+}
+
+function findTopLevelPropertyValueStart(raw: string, propertyName: string): number | undefined {
+  const objectStart = raw.indexOf('{');
+  if (objectStart < 0) {
+    return undefined;
+  }
+
+  let depth = 0;
+  for (let index = objectStart; index < raw.length; index += 1) {
+    const char = raw[index];
+    if (char === '"') {
+      const stringEnd = findJsonStringEnd(raw, index);
+      if (stringEnd === undefined) {
+        return undefined;
+      }
+      if (depth === 1) {
+        const name = parseJsonStringLiteral(raw.slice(index, stringEnd + 1));
+        let cursor = skipJsonWhitespace(raw, stringEnd + 1);
+        if (name === propertyName && raw[cursor] === ':') {
+          cursor = skipJsonWhitespace(raw, cursor + 1);
+          return cursor;
+        }
+      }
+      index = stringEnd;
+      continue;
+    }
+    if (char === '{' || char === '[') {
+      depth += 1;
+      continue;
+    }
+    if (char === '}' || char === ']') {
+      depth -= 1;
+      if (depth < 1) {
+        return undefined;
+      }
+    }
+  }
+  return undefined;
+}
+
+function findJsonStringEnd(raw: string, stringStart: number): number | undefined {
+  let escaped = false;
+  for (let index = stringStart + 1; index < raw.length; index += 1) {
+    const char = raw[index];
+    if (escaped) {
+      escaped = false;
+    } else if (char === '\\') {
+      escaped = true;
+    } else if (char === '"') {
+      return index;
+    }
+  }
+  return undefined;
+}
+
+function parseJsonStringLiteral(raw: string): string | undefined {
+  try {
+    const value = JSON.parse(raw) as unknown;
+    return typeof value === 'string' ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function skipJsonWhitespace(raw: string, start: number): number {
+  let index = start;
+  while (/\s/u.test(raw[index] ?? '')) {
+    index += 1;
+  }
+  return index;
+}
+
+function findJsonObjectEnd(raw: string, objectStart: number): number | undefined {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = objectStart; index < raw.length; index += 1) {
+    const char = raw[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === '\\') {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+    if (char === '{') {
+      depth += 1;
+      continue;
+    }
+    if (char === '}') {
+      depth -= 1;
+      if (depth === 0) {
+        return index;
+      }
+    }
+  }
+  return undefined;
+}
+
+function insertObjectEntries(
+  raw: string,
+  objectStart: number,
+  entries: Record<string, string>,
+  indent: string,
+): string {
+  const afterStart = raw.slice(objectStart + 1);
+  const newline = afterStart.startsWith('\r\n') ? '\r\n' : afterStart.startsWith('\n') ? '\n' : '';
+  const rest = newline.length === 0 ? afterStart : afterStart.slice(newline.length);
+  const entriesText = Object.entries(entries)
+    .map(([key, value]) => `${indent}"${key}": ${JSON.stringify(value)}`)
+    .join(`,${newline}`);
+  const hasExistingEntries = !rest.trimStart().startsWith('}');
+  const suffix = hasExistingEntries ? `,${newline}` : newline;
+  return `${raw.slice(0, objectStart + 1)}${newline}${entriesText}${suffix}${rest}`;
+}
+
+function validateRainrailProjectForSetup(
+  project: RainrailProject,
+  fileSystem: RainrailCliFileSystem,
+): void {
+  if (!isCompleteRainrailProject(project, fileSystem)) {
+    throw new Error('rainrail setup requires a complete Rainrail project. Run rainrail init first.');
+  }
+}
+
+function isCompleteRainrailProject(
+  project: RainrailProject,
+  fileSystem: RainrailCliFileSystem,
+): boolean {
+  if (
+    !fileSystem.existsSync(project.configPath) ||
+    !isRegularFile(project.configPath, fileSystem) ||
+    !fileSystem.existsSync(project.lockPath) ||
+    !fileSystem.existsSync(project.pluginDirectory) ||
+    lstatPath(project.pluginDirectory, fileSystem)?.isDirectory() !== true
+  ) {
+    return false;
+  }
+
+  readRainrailLockfile(project.lockPath, fileSystem);
+  return true;
+}
+
+function generateLocalDashboardToken(scope: keyof RainrailDashboardAuth): string {
+  const label = scope.replace(/Token$/u, '').replace(/[A-Z]/gu, (letter) => `-${letter.toLowerCase()}`);
+  return `rr_local_${label}_${randomBytes(24).toString('base64url')}`;
 }
 
 function formatSetupError(options: SharedOptions, error: unknown): RainrailCliResult {
@@ -2700,6 +3061,7 @@ function formatSetupResult(
   steps: readonly SetupStepResult[],
   options: SharedOptions,
   failedStep?: SetupStepResult,
+  dashboardAuthResult?: LocalDashboardAuthSetupResult,
 ): RainrailCliResult {
   if (options.json) {
     const jsonResult: SetupJsonResult = {
@@ -2715,7 +3077,10 @@ function formatSetupResult(
     };
   }
 
-  const stdout = steps.map((step) => step.stdout).join('');
+  const dashboardAuthOutput = dashboardAuthResult === undefined || dashboardAuthResult.created.length === 0
+    ? ''
+    : `Generated dashboardAuth.${dashboardAuthResult.created.join(' and dashboardAuth.')} in rainrail.config.json.\n`;
+  const stdout = `${dashboardAuthOutput}${steps.map((step) => step.stdout).join('')}`;
   const stderr = steps.map((step) => step.stderr).join('');
   if (failedStep !== undefined) {
     return {
@@ -3228,6 +3593,7 @@ function formatRainrailConfig(projectName: string): string {
       host: '127.0.0.1',
       port: 8787,
     },
+    dashboardAuth: {},
     sourceBundles: [],
     sources: [],
     taskProviders: {},
@@ -3750,7 +4116,7 @@ function localSettingsRows(options: RainrailStartOptions): readonly LocalSetting
     { id: 'auto-start', type: 'setting', status: 'read-only', label: 'Auto-start', value: 'not configured' },
     { id: 'retry-policy', type: 'setting', status: 'read-only', label: 'Retry policy', value: '0 retries pending' },
     { id: 'operational-snapshot-limit', type: 'setting', status: 'read-only', label: 'Operational snapshot limit', value: `${localEventHistoryLimit} events` },
-    { id: 'dashboard-auth', type: 'setting', status: 'read-only', label: 'Dashboard auth', value: options.dashboardToken === undefined ? 'not configured' : 'bearer token configured' },
+    { id: 'dashboard-auth', type: 'setting', status: 'read-only', label: 'Dashboard auth', value: hasAnyDashboardAuthToken(options.dashboardAuth) ? 'bearer token configured' : 'not configured' },
     { id: 'runtime', type: 'setting', status: 'read-only', label: 'Runtime', value: 'node' },
   ];
 }
@@ -3824,7 +4190,7 @@ function normalizeHostName(host: string): string {
 }
 
 function requiresLocalServerAuth(pathname: string, options: RainrailStartOptions): boolean {
-  return options.dashboardToken !== undefined &&
+  return (hasAnyDashboardAuthToken(options.dashboardAuth) || options.dashboardToken !== undefined) &&
     (pathname === '/events' || pathname.startsWith('/api/'));
 }
 
@@ -3840,10 +4206,26 @@ function getLocalServerAuthError(
   if (typeof authorization !== 'string' || authorization.length === 0) {
     return { status: 401, code: 'missing_bearer_token' };
   }
-  if (!timingSafeStringEqual(authorization, `Bearer ${options.dashboardToken}`)) {
+  const prefix = 'Bearer ';
+  if (!authorization.startsWith(prefix)) {
+    return { status: 401, code: 'missing_bearer_token' };
+  }
+  const token = authorization.slice(prefix.length);
+  if (!matchesLocalDashboardToken(token, options)) {
     return { status: 403, code: 'invalid_bearer_token' };
   }
   return undefined;
+}
+
+function matchesLocalDashboardToken(token: string, options: RainrailStartOptions): boolean {
+  return [
+    options.dashboardAuth.adminToken,
+    options.dashboardAuth.operatorToken,
+    options.dashboardAuth.readOnlyToken,
+    options.dashboardToken,
+  ].some((configured) =>
+    configured !== undefined && configured.length > 0 && timingSafeStringEqual(token, configured)
+  );
 }
 
 function validateLocalIntakePayload(

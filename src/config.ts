@@ -1,5 +1,6 @@
 import type { GitHubAuthConfig } from './github-auth.js';
 import type { RainrailEventSourceType } from './events.js';
+import type { RainrailDashboardAuthOptions } from './http-app.js';
 import { isCoreRoutePath } from './intake-adapter.js';
 
 export type SourceBundleType = 'eep-bridge';
@@ -55,6 +56,7 @@ export interface RainrailServerConfig {
 
 export interface RainrailConfig {
   server: RainrailServerConfig;
+  dashboardAuth: RainrailDashboardAuthOptions;
   sourceBundles: SourceBundleConfig[];
   sources: SourceProviderConfig[];
   taskProviders: TaskProviderConfig;
@@ -96,11 +98,43 @@ export function parseConfig(value: unknown): RainrailConfig {
 
   return {
     server: parseServer(value.server),
+    dashboardAuth: parseDashboardAuth(value.dashboardAuth),
     sourceBundles: parseSourceBundles(value.sourceBundles),
     sources: parseSources(value.sources),
     taskProviders: parseTaskProviders(value.taskProviders),
     runtimeProviders: parseRuntimeProviders(value.runtimeProviders),
   };
+}
+
+function parseDashboardAuth(value: unknown): RainrailDashboardAuthOptions {
+  if (value === undefined) {
+    return {};
+  }
+  if (!isRecord(value)) {
+    throw new Error('config.dashboardAuth must be an object');
+  }
+
+  const auth: RainrailDashboardAuthOptions = {};
+  const readOnlyToken = parseOptionalString(value.readOnlyToken, 'config.dashboardAuth.readOnlyToken');
+  const operatorToken = parseOptionalString(value.operatorToken, 'config.dashboardAuth.operatorToken');
+  const adminToken = parseOptionalString(value.adminToken, 'config.dashboardAuth.adminToken');
+  if (readOnlyToken !== undefined) auth.readOnlyToken = readOnlyToken;
+  if (operatorToken !== undefined) auth.operatorToken = operatorToken;
+  if (adminToken !== undefined) auth.adminToken = adminToken;
+  assertUniqueDashboardAuthTokens(auth);
+  return auth;
+}
+
+function assertUniqueDashboardAuthTokens(auth: RainrailDashboardAuthOptions): void {
+  const seen = new Map<string, string>();
+  for (const [key, token] of Object.entries(auth)) {
+    if (token === undefined) continue;
+    const previous = seen.get(token);
+    if (previous !== undefined) {
+      throw new Error(`config.dashboardAuth.${key} must not duplicate config.dashboardAuth.${previous}`);
+    }
+    seen.set(token, key);
+  }
 }
 
 function parseServer(value: unknown): RainrailServerConfig {

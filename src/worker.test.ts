@@ -211,6 +211,86 @@ describe('Rainrail Cloudflare Worker entrypoint', () => {
 
     expect(chunk).toContain('id: github-configured-webhook:delivery-worker-config:github.issue\n');
   });
+
+  it('passes dashboard auth from Rainrail config JSON into the Worker HTTP app', async () => {
+    const env = {
+      ...fakeEnv(),
+      RAINRAIL_CONFIG_JSON: JSON.stringify({
+        dashboardAuth: {
+          operatorToken: '${RAINRAIL_DASHBOARD_OPERATOR_TOKEN}',
+        },
+        sourceBundles: [
+          {
+            type: 'eep-bridge',
+            name: 'worker-dashboard-auth',
+            sources: [
+              {
+                type: 'github-webhook',
+                name: 'worker-dashboard-github',
+                sourceType: 'github',
+                provider: 'github',
+                runtime: 'openclaw',
+                webhookSecret: 'GITHUB_WEBHOOK_SECRET',
+              },
+            ],
+          },
+        ],
+      }),
+      RAINRAIL_DASHBOARD_OPERATOR_TOKEN: 'events-token',
+    };
+
+    await expect(
+      rainrailWorker.fetch(new Request('https://worker.local/healthz'), env),
+    ).rejects.toThrow('duplicate dashboard token scopes are not allowed');
+  });
+
+  it('keeps env-only Worker intake adapters when config only adds dashboard auth', async () => {
+    const env = {
+      ...fakeEnv(),
+      RAINRAIL_CONFIG_JSON: JSON.stringify({
+        dashboardAuth: {
+          readOnlyToken: 'worker-read-token',
+        },
+      }),
+    };
+    const payload = JSON.stringify({
+      action: 'opened',
+      repository: { full_name: 'reirei-lab/rainrail' },
+      issue: {
+        number: 209,
+        html_url: 'https://github.com/reirei-lab/rainrail/issues/209',
+      },
+    });
+
+    const webhook = await rainrailWorker.fetch(new Request('https://worker.local/webhooks/github', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-github-event': 'issues',
+        'x-github-delivery': 'delivery-dashboard-auth-only',
+        'x-hub-signature-256': await createGitHubWebhookSignature('secret', payload),
+      },
+      body: payload,
+    }), env);
+
+    expect(webhook.status).toBe(202);
+  });
+
+  it('keeps explicit empty sourceBundles as an invalid Worker intake config', async () => {
+    const env = {
+      ...fakeEnv(),
+      RAINRAIL_CONFIG_JSON: JSON.stringify({
+        dashboardAuth: {
+          readOnlyToken: 'worker-read-token',
+        },
+        sourceBundles: [],
+      }),
+    };
+
+    await expect(
+      rainrailWorker.fetch(new Request('https://worker.local/healthz'), env),
+    ).rejects.toThrow('config.sourceBundles must include an eep-bridge bundle');
+  });
 });
 
 function fakeEnv() {
