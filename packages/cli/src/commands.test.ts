@@ -909,6 +909,75 @@ describe('Rainrail CLI built-in commands', () => {
     });
   });
 
+  it('returns local rainrail start command dry-run previews without confirmation or handler dispatch', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'local-operator-dry-run');
+      const port = await getFreePort();
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        server: { host: '127.0.0.1', port },
+        dashboardAuth: {
+          operatorToken: 'operator-token',
+        },
+        sourceBundles: [],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+
+      const result = await runRainrailCliAsync(['start'], { cwd: projectRoot });
+      try {
+        expect(result.exitCode).toBe(0);
+
+        const resumePreview = await fetch(`http://127.0.0.1:${port}/api/v1/agent-tasks/task-1/actions/resume`, {
+          method: 'POST',
+          headers: {
+            Authorization: 'Bearer operator-token',
+            'Content-Type': 'application/json',
+            'X-Request-ID': 'request-resume-dry-run',
+          },
+          body: JSON.stringify({ dryRun: true }),
+        });
+        expect(resumePreview.status).toBe(200);
+        expect(resumePreview.headers.get('x-request-id')).toBe('request-resume-dry-run');
+        await expect(resumePreview.json()).resolves.toEqual({
+          data: {
+            action: 'agent_task_resume',
+            targetType: 'agent_task',
+            targetId: 'task-1',
+            status: 'preview',
+            dryRun: true,
+            confirmationRequired: false,
+          },
+        });
+
+        const terminateAllPreview = await fetch(`http://127.0.0.1:${port}/api/v1/agent-tasks/actions/terminate-all`, {
+          method: 'POST',
+          headers: {
+            Authorization: 'Bearer operator-token',
+            'Content-Type': 'application/json',
+            'X-Request-ID': 'request-terminate-all-dry-run',
+          },
+          body: JSON.stringify({ dryRun: true }),
+        });
+        expect(terminateAllPreview.status).toBe(200);
+        expect(terminateAllPreview.headers.get('x-request-id')).toBe('request-terminate-all-dry-run');
+        await expect(terminateAllPreview.json()).resolves.toEqual({
+          data: {
+            action: 'agent_task_terminate_all',
+            targetType: 'agent_tasks',
+            targetId: 'all',
+            status: 'preview',
+            dryRun: true,
+            confirmationRequired: true,
+            confirmationToken: 'confirm:agent_task_terminate_all:agent_tasks:all',
+          },
+        });
+      } finally {
+        await closeTestServer(result);
+      }
+    });
+  });
+
   it('lets --host and --port override start environment and config', async () => {
     await withTempDirectory(async (directory) => {
       const projectRoot = await initRainrailProject(directory, 'flag-server');

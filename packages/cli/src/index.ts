@@ -4074,16 +4074,24 @@ async function handleLocalDashboardCommandRequest(
   }
 
   const confirmationToken = localConfirmationTokenFor(command);
+  const preview = localCommandPreview(command, confirmationToken);
+  if (body.value.dryRun === true) {
+    writeJsonResponse(response, 200, {
+      data: {
+        ...preview,
+        status: 'preview',
+        dryRun: true,
+      },
+    }, request, {
+      'X-Request-ID': requestId,
+    });
+    return;
+  }
+
   if (command.confirmationRequired && body.value.confirmationToken !== confirmationToken) {
     writeJsonResponse(response, 409, {
       error: 'action_confirmation_required',
-      data: {
-        action: command.actionType,
-        targetType: command.targetType,
-        targetId: command.targetId,
-        confirmationRequired: true,
-        confirmationToken,
-      },
+      data: preview,
     }, request, {
       'X-Request-ID': requestId,
     });
@@ -4169,6 +4177,25 @@ function localAgentTaskCommandActionType(
 
 function localConfirmationTokenFor(command: LocalDashboardCommand): string {
   return `confirm:${command.actionType}:${command.targetType}:${command.targetId}`;
+}
+
+function localCommandPreview(
+  command: LocalDashboardCommand,
+  confirmationToken: string,
+): {
+  readonly action: LocalDashboardCommand['actionType'];
+  readonly targetType: LocalDashboardCommand['targetType'];
+  readonly targetId: string;
+  readonly confirmationRequired: boolean;
+  readonly confirmationToken?: string;
+} {
+  return {
+    action: command.actionType,
+    targetType: command.targetType,
+    targetId: command.targetId,
+    confirmationRequired: command.confirmationRequired,
+    ...(command.confirmationRequired ? { confirmationToken } : {}),
+  };
 }
 
 function localRequestId(request: IncomingMessage): string {

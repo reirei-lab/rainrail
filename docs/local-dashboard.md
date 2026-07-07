@@ -57,8 +57,9 @@ operational API.
 - `operatorToken`: includes read-only access and can call local agent-task
   command routes such as resume, reset, terminate, and terminate-all. The
   current local startup server does not attach a runtime command handler, so
-  confirmed dispatch returns `503 { "error": "command_handler_not_configured" }`
-  until a handler-backed local runtime is added.
+  `dryRun: true` returns a `200` preview, while confirmed dispatch returns
+  `503 { "error": "command_handler_not_configured" }` until a handler-backed
+  local runtime is added.
 - `adminToken`: includes operator access. Local admin settings mutations remain
   post-MVP.
 

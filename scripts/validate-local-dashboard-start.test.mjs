@@ -51,6 +51,7 @@ describe('local dashboard start documentation', () => {
       'operator',
       'admin',
       'serves read-only dashboard collections and wires the dashboard agent-task',
+      '`dryRun: true` returns a `200` preview',
       'command_handler_not_configured',
       'insufficient_scope',
       'action_confirmation_required',
