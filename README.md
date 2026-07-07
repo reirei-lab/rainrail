@@ -40,6 +40,10 @@ Run a minimal first-use smoke test in a disposable directory:
 stream, and any configured local intake endpoints. It does not start or manage
 the Cloudflare Worker EEP Bridge; Worker deployment and always-on ingress live
 under the Cloudflare Worker operations docs.
+For the browser dashboard setup flow, token generation, local URL, auth failure
+guidance, and the boundary between the local operational dashboard and the
+Cloudflare Pages product/docs site, see
+[docs/local-dashboard.md](docs/local-dashboard.md).
 
 Check the installed CLI version and whether a newer GitHub Release is available:
 

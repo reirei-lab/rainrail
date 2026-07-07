@@ -311,6 +311,30 @@
       "publicExportKinds": {}
     },
     {
+      "id": "local-dashboard-start",
+      "title": "Local dashboard startup flow",
+      "sources": [
+        "packages/cli/src/index.ts",
+        "src/http-app.ts",
+        "src/node-server.ts",
+        "apps/www/src/lib/dashboard-client.ts",
+        "apps/www/src/lib/dashboard-app.ts"
+      ],
+      "docs": [
+        "docs/local-dashboard.md",
+        "README.md",
+        "docs/README.md"
+      ],
+      "tests": [
+        "scripts/validate-local-dashboard-start.test.mjs",
+        "scripts/validate-dashboard-shell.test.mjs",
+        "packages/cli/src/commands.test.ts",
+        "src/dashboard-api.test.ts"
+      ],
+      "publicExports": [],
+      "publicExportKinds": {}
+    },
+    {
       "id": "core-eep-bridge-source-adapter-boundary",
       "title": "Core, EEP Bridge bundle, Source adapter, and transport boundary",
       "sources": [

@@ -43,6 +43,9 @@ you are implementing or reviewing Rainrail behavior.
 - [CLI update check and version commands](cli-update-and-version.md): user and
   implementation-facing behavior for `rainrail version`, `rainrail update
   check`, cache handling, and automatic update notices.
+- [Local dashboard startup](local-dashboard.md): `rainrail start` local
+  dashboard URL, token setup, auth failure guidance, Pages boundary, and MVP
+  exclusions.
 - [Cloudflare Worker operations](cloudflare-worker.md): Worker deploy, secrets,
   local dev, and production smoke checks.
 - [Cloudflare Pages operations](cloudflare-pages.md): product site preview and
