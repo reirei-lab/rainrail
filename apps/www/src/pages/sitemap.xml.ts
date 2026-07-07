@@ -1,4 +1,4 @@
-import { getDashboardHref } from '../lib/dashboard-content';
+import { getDashboardHref } from '../lib/dashboard-content.js';
 import {
   defaultLocale,
   getLocaleHref,
@@ -6,7 +6,7 @@ import {
   supportedLocales,
   type Hreflang,
   type Locale,
-} from '../lib/i18n';
+} from '../lib/i18n.js';
 
 const fallbackSite = 'https://rainrail.dev';
 
