@@ -36,6 +36,11 @@ Run a minimal first-use smoke test in a disposable directory:
     rainrail openclaw help
     rainrail openclaw session test help
 
+`rainrail start` starts the local harness server for the dashboard API, event
+stream, and any configured local intake endpoints. It does not start or manage
+the Cloudflare Worker EEP Bridge; Worker deployment and always-on ingress live
+under the Cloudflare Worker operations docs.
+
 Check the installed CLI version and whether a newer GitHub Release is available:
 
     rainrail version

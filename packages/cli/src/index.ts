@@ -252,7 +252,7 @@ export const BUILT_IN_COMMANDS: readonly BuiltInCommand[] = [
   {
     name: 'start',
     kind: 'built-in',
-    summary: 'Start the local Rainrail server in the foreground.',
+    summary: 'Start the local Rainrail harness server in the foreground.',
     implemented: true,
   },
   {
@@ -2137,15 +2137,23 @@ function parseStartConfigPort(value: unknown, label: string): number | { readonl
 
 function formatStartOutput(options: RainrailStartOptions): string {
   const baseUrl = `http://${formatUrlHost(options.host)}:${options.port}`;
+  const localIntakeRows = options.sources.map((source) =>
+    `  ${source.name} (${source.sourceType}): ${baseUrl}${source.endpoint}`
+  );
   return [
-    'Rainrail local server starting',
+    'Rainrail local harness server starting',
     `Workspace: ${options.root}`,
     `Config: ${options.configPath}`,
     `Host: ${options.host}`,
     `Port: ${options.port}`,
     `Health: ${baseUrl}/healthz`,
-    `Events: ${baseUrl}/events`,
+    'Dashboard: local harness control plane',
     `Dashboard API: ${baseUrl}/api/v1/overview`,
+    `Event Stream: ${baseUrl}/events`,
+    ...(localIntakeRows.length === 0 ? [] : [
+      'Local intake:',
+      ...localIntakeRows,
+    ]),
     'Press Ctrl+C to stop.',
     '',
   ].join('\n');
