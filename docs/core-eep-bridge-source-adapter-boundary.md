@@ -107,6 +107,13 @@ subscriber lifecycle、dispatcher 起動順序は Core または transport/core 
 Transport は HTTP/Fetch/Node/Worker の入出力を Core API へ接続する薄い adapter である。
 `createRainrailHttpApp`、`createRainrailNodeServer`、Worker entrypoint は、この境界に属する。
 
+CLI の `rainrail start` は local harness server を foreground で起動するための入口であり、
+Dashboard API、Event Stream、設定済み local intake endpoint、operational state を扱う。
+Cloudflare Worker として常駐する EEP Bridge の起動、deploy、secret 管理、tail/webhook の
+always-on intake は `rainrail start` の責務ではない。local harness が webhook 形式の
+intake endpoint を公開する場合も、それは operator-visible には local intake として扱い、
+Worker EEP Bridge の起動表示や運用状態と混同しない。
+
 - `Authorization` や publish token のような Core endpoint auth は transport/core adapter で検証する。
 - `GET /events`、`GET /healthz`、dashboard API の request/response 形式を扱う。
 - dashboard API v1 は operational store snapshot と intake adapter metadata から Overview、

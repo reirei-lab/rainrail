@@ -162,6 +162,7 @@ describe('Rainrail CLI built-in commands', () => {
     for (const command of BUILT_IN_COMMANDS) {
       expect(result.stdout).toContain(`  ${command.name}`);
     }
+    expect(result.stdout).toContain('Start the local Rainrail harness server in the foreground.');
     expect(result.stdout).toContain('Official plugin aliases:');
     expect(result.stdout).toContain('  github');
     expect(result.stdout).toContain('  cloudflare');
@@ -203,13 +204,15 @@ describe('Rainrail CLI built-in commands', () => {
         root: projectRoot,
         configPath: join(projectRoot, 'rainrail.config.json'),
       });
-      expect(result.stdout).toContain('Rainrail local server starting');
+      expect(result.stdout).toContain('Rainrail local harness server starting');
       expect(result.stdout).toContain('Host: 127.0.0.1');
       expect(result.stdout).toContain('Port: 8787');
       expect(result.stdout).toContain(`Config: ${join(projectRoot, 'rainrail.config.json')}`);
       expect(result.stdout).toContain('Health: http://127.0.0.1:8787/healthz');
-      expect(result.stdout).toContain('Events: http://127.0.0.1:8787/events');
+      expect(result.stdout).toContain('Dashboard: local harness control plane');
+      expect(result.stdout).toContain('Event Stream: http://127.0.0.1:8787/events');
       expect(result.stdout).toContain('Dashboard API: http://127.0.0.1:8787/api/v1/overview');
+      expect(result.stdout).not.toContain('EEP Bridge');
     });
   });
 
@@ -311,6 +314,9 @@ describe('Rainrail CLI built-in commands', () => {
       });
 
       expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Local intake:');
+      expect(result.stdout).toContain('  github-local (github): http://127.0.0.1:8787/webhooks/github');
+      expect(result.stdout).not.toContain('EEP Bridge');
       expect(startOptions?.sources).toMatchObject([{
         endpoint: '/webhooks/github',
         name: 'github-local',
