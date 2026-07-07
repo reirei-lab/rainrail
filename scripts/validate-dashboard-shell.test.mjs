@@ -81,6 +81,16 @@ describe('dashboard app shell', () => {
     expect(cloudflarePagesDocs).not.toContain('operational API の Worker base URL');
   });
 
+  it('defaults the dashboard API client to same-origin unless Pages injects an explicit API URL', () => {
+    expect(dashboardPage).toContain("const apiBaseUrl = import.meta.env.PUBLIC_RAINRAIL_OPERATIONAL_API_URL ?? '';");
+    expect(dashboardPage).toContain('data-api-base-url={apiBaseUrl}');
+    expect(dashboardClient).toContain("this.baseUrl = options.baseUrl ?? '';");
+    expect(dashboardClient).toContain('fetch(`${this.baseUrl}${path}`');
+    expect(dashboardApp).toContain('client = createDashboardClient(storedToken, storedApiBaseUrl);');
+    expect(dashboardClient).not.toContain('http://127.0.0.1:8787');
+    expect(dashboardClient).not.toContain('localhost:8787');
+  });
+
   it('documents polling as the MVP live update strategy in code and UI affordances', () => {
     expect(dashboardClient).toContain('pollIntervalMs');
     expect(dashboardClient).toContain('30000');

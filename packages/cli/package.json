@@ -14,7 +14,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && chmod +x dist/bin/rainrail.js",
+    "build": "tsc -p tsconfig.build.json && node ../../scripts/copy-dashboard-assets.mjs && chmod +x dist/bin/rainrail.js",
     "test": "vitest run src",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },

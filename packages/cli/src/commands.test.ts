@@ -202,7 +202,7 @@ describe('Rainrail CLI built-in commands', () => {
       expect(result.stdout).toContain('Port: 8787');
       expect(result.stdout).toContain(`Config: ${join(projectRoot, 'rainrail.config.json')}`);
       expect(result.stdout).toContain('Health: http://127.0.0.1:8787/healthz');
-      expect(result.stdout).toContain('Dashboard: local harness control plane');
+      expect(result.stdout).toContain('Dashboard: http://127.0.0.1:8787/dashboard');
       expect(result.stdout).toContain('Event Stream: http://127.0.0.1:8787/events');
       expect(result.stdout).toContain('Dashboard API: http://127.0.0.1:8787/api/v1/overview');
       expect(result.stdout).not.toContain('EEP Bridge');
@@ -768,6 +768,9 @@ describe('Rainrail CLI built-in commands', () => {
   it('serves configured intake routes and dashboard v1 collections from rainrail start', async () => {
     await withTempDirectory(async (directory) => {
       const projectRoot = await initRainrailProject(directory, 'configured-intake');
+      const dashboardAssetRoot = join(directory, 'dashboard-dist');
+      await mkdir(join(dashboardAssetRoot, 'dashboard'), { recursive: true });
+      await mkdir(join(dashboardAssetRoot, '_astro'), { recursive: true });
       const port = await getFreePort();
       await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
         server: {
@@ -794,10 +797,32 @@ describe('Rainrail CLI built-in commands', () => {
         taskProviders: {},
         runtimeProviders: {},
       }, null, 2)}\n`);
+      await writeFile(join(dashboardAssetRoot, 'dashboard', 'index.html'), [
+        '<!doctype html>',
+        '<html><head><script type="module" src="/_astro/dashboard-app.js"></script></head>',
+        '<body><section data-dashboard-app data-api-base-url=""></section></body></html>',
+      ].join(''));
+      await writeFile(join(dashboardAssetRoot, '_astro', 'dashboard-app.js'), 'console.log("dashboard");\n');
 
-      const result = await runRainrailCliAsync(['start'], { cwd: projectRoot });
+      const result = await runRainrailCliAsync(['start'], {
+        cwd: projectRoot,
+        env: { RAINRAIL_DASHBOARD_DIST_DIR: dashboardAssetRoot },
+      });
       try {
         expect(result.exitCode).toBe(0);
+        expect(result.stdout).toContain(`Dashboard: http://127.0.0.1:${port}/dashboard`);
+
+        const dashboard = await fetch(`http://127.0.0.1:${port}/dashboard`);
+        expect(dashboard.status).toBe(200);
+        expect(dashboard.headers.get('content-type')).toContain('text/html');
+        const dashboardHtml = await dashboard.text();
+        expect(dashboardHtml).toContain('data-dashboard-app');
+        expect(dashboardHtml).toContain('data-api-base-url=""');
+        expect(dashboardHtml).toContain('src="/_astro/dashboard-app.js"');
+
+        const dashboardAsset = await fetch(`http://127.0.0.1:${port}/_astro/dashboard-app.js`);
+        expect(dashboardAsset.status).toBe(200);
+        expect(dashboardAsset.headers.get('content-type')).toContain('text/javascript');
 
         const acceptedBody = JSON.stringify({ action: 'opened' });
         const acceptedDelivery = 'delivery-local-1';

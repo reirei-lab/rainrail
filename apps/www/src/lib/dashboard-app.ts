@@ -81,7 +81,7 @@ if (root !== null) {
   if (storedToken === '') {
     setState('auth-missing', 'Bearer token required');
   } else {
-    client = createDashboardClient(storedToken);
+    client = createDashboardClient(storedToken, storedApiBaseUrl);
     void refresh();
     startPolling(client);
   }

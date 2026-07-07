@@ -13,7 +13,8 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join, normalize, parse, resolve, sep } from 'node:path';
+import { dirname, extname, join, normalize, parse, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   OFFICIAL_PLUGIN_CATALOG,
   formatOfficialPluginCommandHelp,
@@ -128,6 +129,7 @@ export type RainrailStartOptions = {
   readonly configPath: string;
   readonly allowedHosts: readonly string[];
   readonly dashboardToken?: string;
+  readonly dashboardAssetRoot?: string;
   readonly sources: readonly RainrailLocalSource[];
 };
 
@@ -235,6 +237,9 @@ const defaultRainrailCliFileSystem: RainrailCliFileSystem = {
   statSync,
   writeFileSync,
 };
+const moduleDirectory = dirname(fileURLToPath(import.meta.url));
+const bundledDashboardAssetRoot = join(moduleDirectory, 'dashboard');
+const workspaceDashboardAssetRoot = resolve(moduleDirectory, '..', '..', '..', 'apps', 'www', 'dist');
 
 export const BUILT_IN_COMMANDS: readonly BuiltInCommand[] = [
   {
@@ -2091,6 +2096,7 @@ function resolveStartOptions(
   if (!isLocalBindHost(host) && (dashboardToken === undefined || dashboardToken.length === 0)) {
     return { error: 'SSE_BEARER_TOKEN is required when rainrail start binds outside localhost' };
   }
+  const dashboardAssetRoot = resolveDashboardAssetRoot(env);
 
   return {
     options: {
@@ -2099,6 +2105,7 @@ function resolveStartOptions(
       root: project.root,
       configPath: project.configPath,
       allowedHosts: envAllowedHosts ?? config.server?.allowedHosts ?? [],
+      ...(dashboardAssetRoot === undefined ? {} : { dashboardAssetRoot }),
       sources: config.sources,
       ...(dashboardToken === undefined ? {} : { dashboardToken }),
     },
@@ -2147,7 +2154,7 @@ function formatStartOutput(options: RainrailStartOptions): string {
     `Host: ${options.host}`,
     `Port: ${options.port}`,
     `Health: ${baseUrl}/healthz`,
-    'Dashboard: local harness control plane',
+    `Dashboard: ${baseUrl}/dashboard`,
     `Dashboard API: ${baseUrl}/api/v1/overview`,
     `Event Stream: ${baseUrl}/events`,
     ...(localIntakeRows.length === 0 ? [] : [
@@ -3410,6 +3417,12 @@ async function handleLocalRainrailRequest(
     return;
   }
 
+  if (request.method === 'GET' && isLocalDashboardAssetRoute(url.pathname)) {
+    if (writeLocalDashboardAssetResponse(response, options, url.pathname)) {
+      return;
+    }
+  }
+
   const authError = getLocalServerAuthError(request, url.pathname, options);
   if (authError !== undefined) {
     writeJsonResponse(response, authError.status, { error: authError.code }, request);
@@ -3776,6 +3789,89 @@ function validateLocalCollectionQuery(
     return { error: 'unsupported_sort', sort };
   }
   return undefined;
+}
+
+function resolveDashboardAssetRoot(env: Record<string, string | undefined>): string | undefined {
+  const configured = env.RAINRAIL_DASHBOARD_DIST_DIR;
+  if (configured !== undefined && configured.length > 0 && existsSync(configured) && statSync(configured).isDirectory()) {
+    return configured;
+  }
+  if (existsSync(bundledDashboardAssetRoot) && statSync(bundledDashboardAssetRoot).isDirectory()) {
+    return bundledDashboardAssetRoot;
+  }
+  if (existsSync(workspaceDashboardAssetRoot) && statSync(workspaceDashboardAssetRoot).isDirectory()) {
+    return workspaceDashboardAssetRoot;
+  }
+  return undefined;
+}
+
+function isLocalDashboardAssetRoute(pathname: string): boolean {
+  return pathname === '/dashboard' || pathname === '/dashboard/' || pathname.startsWith('/_astro/');
+}
+
+function writeLocalDashboardAssetResponse(
+  response: ServerResponse,
+  options: RainrailStartOptions,
+  pathname: string,
+): boolean {
+  const assetRoot = options.dashboardAssetRoot;
+  if (assetRoot === undefined) {
+    return false;
+  }
+  const assetPath = localDashboardAssetPath(assetRoot, pathname);
+  if (assetPath === undefined || !existsSync(assetPath) || !statSync(assetPath).isFile()) {
+    return false;
+  }
+  response.writeHead(200, {
+    'Content-Type': localDashboardContentType(assetPath),
+    'Cache-Control': pathname.startsWith('/_astro/') ? 'public, max-age=31536000, immutable' : 'no-cache',
+  });
+  response.end(readFileSync(assetPath));
+  return true;
+}
+
+function localDashboardAssetPath(assetRoot: string, pathname: string): string | undefined {
+  const relativePath = pathname === '/dashboard' || pathname === '/dashboard/'
+    ? 'dashboard/index.html'
+    : pathname.slice(1);
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(relativePath);
+  } catch {
+    return undefined;
+  }
+  const normalized = normalize(decoded);
+  if (normalized.startsWith('..') || normalized.includes(`${sep}..${sep}`)) {
+    return undefined;
+  }
+  const root = resolve(assetRoot);
+  const target = resolve(root, normalized);
+  return target === root || target.startsWith(`${root}${sep}`) ? target : undefined;
+}
+
+function localDashboardContentType(pathname: string): string {
+  switch (extname(pathname)) {
+    case '.html':
+      return 'text/html; charset=utf-8';
+    case '.js':
+    case '.mjs':
+      return 'text/javascript; charset=utf-8';
+    case '.css':
+      return 'text/css; charset=utf-8';
+    case '.json':
+      return 'application/json; charset=utf-8';
+    case '.svg':
+      return 'image/svg+xml';
+    case '.png':
+      return 'image/png';
+    case '.jpg':
+    case '.jpeg':
+      return 'image/jpeg';
+    case '.webp':
+      return 'image/webp';
+    default:
+      return 'application/octet-stream';
+  }
 }
 
 function parseLocalRequestUrl(request: IncomingMessage, options: RainrailStartOptions): URL | undefined {
