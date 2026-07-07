@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 const agents = readFileSync(new URL('../AGENTS.md', import.meta.url), 'utf8');
 const docsAgents = readFileSync(new URL('../docs/AGENTS.md', import.meta.url), 'utf8');
+const wwwAgents = readFileSync(new URL('../apps/www/AGENTS.md', import.meta.url), 'utf8');
 const githubAgents = readFileSync(new URL('../.github/AGENTS.md', import.meta.url), 'utf8');
 const scriptsAgents = readFileSync(new URL('../scripts/AGENTS.md', import.meta.url), 'utf8');
 const dispatcherAgents = readFileSync(new URL('../src/dispatcher/AGENTS.md', import.meta.url), 'utf8');
@@ -142,6 +143,36 @@ describe('docs, CI, and drift scoped agent rules', () => {
     expect(scriptsAgents).toContain('comment text');
     expect(scriptsAgents).toContain('Node runtime');
     expect(scriptsAgents).toContain('package scripts');
+  });
+});
+
+describe('www scoped agent rules', () => {
+  it('documents the initial localization contract for the product site', () => {
+    expect(wwwAgents).toContain('ja');
+    expect(wwwAgents).toContain('en');
+    expect(wwwAgents).toContain('/ja/');
+    expect(wwwAgents).toContain('/en/');
+    expect(wwwAgents).toContain('automatic language detection');
+    expect(wwwAgents).toContain('must not redirect users away');
+    expect(wwwAgents).toContain('explicit locale page');
+  });
+
+  it('documents translation coverage for copy, navigation, metadata, OGP, and sitemap entries', () => {
+    expect(wwwAgents).toContain('body copy');
+    expect(wwwAgents).toContain('navigation');
+    expect(wwwAgents).toContain('CTA');
+    expect(wwwAgents).toContain('meta title');
+    expect(wwwAgents).toContain('meta description');
+    expect(wwwAgents).toContain('OGP');
+    expect(wwwAgents).toContain('sitemap');
+  });
+
+  it('documents translation review checks for new or changed pages', () => {
+    expect(wwwAgents).toContain('Both locales');
+    expect(wwwAgents).toContain('hreflang');
+    expect(wwwAgents).toContain('reciprocal');
+    expect(wwwAgents).toContain('language switcher');
+    expect(wwwAgents).toContain('sitemap');
   });
 });
 
