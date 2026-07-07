@@ -97,7 +97,7 @@ const isUnlocalizedInternalUrl = (value, locales, siteOrigin) => {
     return false;
   }
 
-  if (pathname === '/' || pathname === '/sitemap.xml' || pathname === '/install.sh') {
+  if (pathname === '/sitemap.xml' || pathname === '/install.sh') {
     return false;
   }
 
@@ -108,12 +108,14 @@ const isUnlocalizedInternalUrl = (value, locales, siteOrigin) => {
  * @param {{
  *   html: string;
  *   route: string;
+ *   path: string;
  *   locales: string[];
+ *   defaultLocale: string;
  *   siteOrigin: string;
  *   errors: string[];
  * }} options
  */
-const requireMetadata = ({ html, route, locales, siteOrigin, errors }) => {
+const requireMetadata = ({ html, route, path, locales, defaultLocale, siteOrigin, errors }) => {
   const expectedUrl = new URL(route, siteOrigin).toString();
   const canonicalPattern =
     /<link\b(?=[^>]*\brel=["']canonical["'])(?=[^>]*\bhref=["'][^"']+["'])[^>]*>/i;
@@ -154,6 +156,15 @@ const requireMetadata = ({ html, route, locales, siteOrigin, errors }) => {
 
     if (!hasTag(html, pattern)) {
       errors.push(`Missing hreflang ${hreflang} for ${route}`);
+      continue;
+    }
+
+    const expectedLocale = hreflang === 'x-default' ? defaultLocale : hreflang;
+    const expectedHref = new URL(routePath(expectedLocale, path), siteOrigin).toString();
+    const actualHref = tagAttributeValue(html, pattern, 'href');
+
+    if (actualHref && actualHref !== expectedHref) {
+      errors.push(`hreflang ${hreflang} for ${route} must be ${expectedHref}`);
     }
   }
 };
@@ -189,16 +200,22 @@ const requireRootLanguageEntry = ({ distRoot, locales, errors }) => {
     if (!html.includes(`href="${href}"`) && !html.includes(`href='${href}'`)) {
       errors.push(`Root language entrypoint is missing link to ${href}`);
     }
+
+    const candidatePattern = new RegExp(`["']${locale}["']\\s*:\\s*["']${href}["']`);
+    if (!candidatePattern.test(html)) {
+      errors.push(`Root language redirect candidates are missing ${href}`);
+    }
   }
 };
 
 /**
  * @param {string} source
- * @returns {{ locales: string[]; localizedPaths: string[] }}
+ * @returns {{ locales: string[]; localizedPaths: string[]; defaultLocale: string }}
  */
 export const parseWwwI18nSource = (source) => {
   const localesMatch = source.match(/supportedLocales\s*=\s*\[([^\]]+)\]/m);
   const slugsMatch = source.match(/pageSlugs\s*=\s*\{([\s\S]*?)\}\s*as const/m);
+  const defaultLocaleMatch = source.match(/defaultLocale\s*=\s*["']([^"']+)["']/m);
 
   if (!localesMatch || !slugsMatch) {
     throw new Error('Could not read supportedLocales or pageSlugs from i18n.ts');
@@ -216,6 +233,7 @@ export const parseWwwI18nSource = (source) => {
   return {
     locales,
     localizedPaths: [...localizedPaths, 'dashboard'],
+    defaultLocale: defaultLocaleMatch?.[1] ?? locales[0] ?? '',
   };
 };
 
@@ -269,6 +287,7 @@ export const collectPublicPagePaths = (root) => {
  *   distRoot: string;
  *   locales: string[];
  *   localizedPaths: string[];
+ *   defaultLocale?: string;
  *   publicPagePaths?: string[];
  *   siteOrigin?: string;
  * }} options
@@ -278,6 +297,7 @@ export const validateBuiltWwwI18n = ({
   distRoot,
   locales,
   localizedPaths,
+  defaultLocale = locales.includes('en') ? 'en' : (locales[0] ?? ''),
   publicPagePaths = [],
   siteOrigin = defaultSiteOrigin,
 }) => {
@@ -313,7 +333,7 @@ export const validateBuiltWwwI18n = ({
       }
 
       const html = readFileSync(file, 'utf8');
-      requireMetadata({ html, route, locales, siteOrigin, errors });
+      requireMetadata({ html, route, path, locales, defaultLocale, siteOrigin, errors });
 
       for (const href of anchorHrefs(html)) {
         if (isUnlocalizedInternalUrl(href, locales, siteOrigin)) {
@@ -332,7 +352,7 @@ export const validateBuiltWwwI18n = ({
 };
 
 export const validateDefaultBuiltWwwI18n = () => {
-  const { locales, localizedPaths } = parseWwwI18nSource(
+  const { locales, localizedPaths, defaultLocale } = parseWwwI18nSource(
     readFileSync(i18nSourcePath, 'utf8'),
   );
 
@@ -340,6 +360,7 @@ export const validateDefaultBuiltWwwI18n = () => {
     distRoot: defaultDistRoot,
     locales,
     localizedPaths,
+    defaultLocale,
     publicPagePaths: collectPublicPagePaths(pagesRoot),
   });
 };

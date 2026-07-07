@@ -62,7 +62,11 @@ const writeCompleteDist = async () => {
 <html lang="en">
 <head>
   <meta name="robots" content="noindex">
-  <script>window.location.replace('/en/')</script>
+  <script>
+    const supportedLocaleHrefs = {"ja":"/ja/","en":"/en/"};
+    const locale = "en";
+    window.location.replace(supportedLocaleHrefs[locale]);
+  </script>
 </head>
 <body>
   <a href="/ja/">日本語</a>
@@ -153,6 +157,22 @@ describe('www i18n regression validator', () => {
     );
   });
 
+  it('reports hreflang hrefs that do not point to the same page in each locale', async () => {
+    const distRoot = await writeCompleteDist();
+    writeRoute(
+      distRoot,
+      'ja/how-it-works',
+      pageHtml({ locale: 'ja', path: 'how-it-works' }).replace(
+        'hreflang="en" href="https://rainrail.dev/en/how-it-works"',
+        'hreflang="en" href="https://rainrail.dev/en/docs"',
+      ),
+    );
+
+    expect(validateBuiltWwwI18n({ distRoot, locales, localizedPaths })).toContain(
+      'hreflang en for /ja/how-it-works must be https://rainrail.dev/en/how-it-works',
+    );
+  });
+
   it('reports same-origin internal links that drop the locale prefix', async () => {
     const distRoot = await writeCompleteDist();
     writeRoute(
@@ -166,6 +186,22 @@ describe('www i18n regression validator', () => {
 
     expect(validateBuiltWwwI18n({ distRoot, locales, localizedPaths })).toContain(
       'Locale page /ja/how-it-works links to unlocalized internal URL /docs',
+    );
+  });
+
+  it('reports localized page links back to the automatic root entrypoint', async () => {
+    const distRoot = await writeCompleteDist();
+    writeRoute(
+      distRoot,
+      'ja/how-it-works',
+      pageHtml({ locale: 'ja', path: 'how-it-works' }).replace(
+        'href="/ja/how-it-works"',
+        'href="/"',
+      ),
+    );
+
+    expect(validateBuiltWwwI18n({ distRoot, locales, localizedPaths })).toContain(
+      'Locale page /ja/how-it-works links to unlocalized internal URL /',
     );
   });
 
@@ -212,6 +248,33 @@ describe('www i18n regression validator', () => {
         'Root language entrypoint is missing link to /ja/',
         'Root language entrypoint is missing link to /en/',
       ]),
+    );
+  });
+
+  it('reports root redirect scripts that do not include every supported locale target', async () => {
+    const distRoot = await writeCompleteDist();
+    writeRoute(
+      distRoot,
+      '',
+      `<!doctype html>
+<html lang="en">
+<head>
+  <meta name="robots" content="noindex">
+  <script>
+    const supportedLocaleHrefs = {"en":"/en/"};
+    const locale = "en";
+    window.location.replace(supportedLocaleHrefs[locale]);
+  </script>
+</head>
+<body>
+  <a href="/ja/">日本語</a>
+  <a href="/en/">English</a>
+</body>
+</html>`,
+    );
+
+    expect(validateBuiltWwwI18n({ distRoot, locales, localizedPaths })).toContain(
+      'Root language redirect candidates are missing /ja/',
     );
   });
 
