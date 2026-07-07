@@ -105,11 +105,23 @@ describe('product site concepts, guides, and examples', () => {
     expect(indexPage).toContain('navigator.languages');
     expect(indexPage).toContain('find((language)');
     expect(indexPage).toContain('supportedLocaleHrefs');
+    expect(indexPage).toContain('languagePreferenceKey');
+    expect(indexPage).toContain("window.localStorage?.getItem(languagePreferenceKey)");
+    expect(indexPage.indexOf('getStoredLocale()')).toBeLessThan(
+      indexPage.indexOf('getPreferredBrowserLocale(languages)'),
+    );
     expect(indexPage).toContain('Rainrail routes development events into agent workflows.');
     expect(indexPage).toContain("getLocaleHref('ja', 'home')");
     expect(indexPage).toContain("getLocaleHref('en', 'home')");
     expect(indexPage).not.toContain('redirectToDefaultLocale');
     expect(indexPage).not.toContain('Astro.redirect');
+  });
+
+  it('persists manual language switcher choices for the next automatic entry visit', () => {
+    expect(layout).toContain('languagePreferenceKey');
+    expect(layout).toContain('data-locale-choice={targetLocale}');
+    expect(layout).toContain("window.localStorage?.setItem(languagePreferenceKey, locale)");
+    expect(layout).not.toContain('window.location.replace');
   });
 
   it('localizes Japanese home visible labels and assistive labels', () => {
