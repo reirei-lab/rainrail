@@ -54,15 +54,15 @@ const actionHref = (action: Parameters<typeof resolveActionHref>[1]) =>
             <p class="eyebrow">{content.eyebrow}</p>
             <h1>{content.headline}</h1>
             <p class="lede">{content.lede}</p>
-            <div class="actions" aria-label="Primary actions">
+            <div class="actions" aria-label={content.primaryActionsLabel}>
               {content.actions.map((action) => (
                 <a class={buttonClass(action.variant)} href={actionHref(action)}>
                   {action.label}
                 </a>
               ))}
             </div>
-            <dl class="hero-facts" aria-label="Rainrail operating model">
-              {content.facts.map((fact) => (
+            <dl class="hero-facts" aria-label={content.facts.ariaLabel}>
+              {content.facts.items.map((fact) => (
                 <div>
                   <dt>{fact.label}</dt>
                   <dd>{fact.value}</dd>
@@ -88,7 +88,7 @@ const actionHref = (action: Parameters<typeof resolveActionHref>[1]) =>
                 <span>{event.body}</span>
               </div>
             ))}
-            <div class="console-log" aria-label="Routing decisions">
+            <div class="console-log" aria-label={content.console.decisionsLabel}>
               {content.console.logs.map((log) => (
                 <span>{log}</span>
               ))}

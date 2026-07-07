@@ -1,4 +1,4 @@
-import { getLocaleHref, type Locale, type PageId } from './i18n';
+import { getLocaleHref, type Locale, type PageId } from './i18n.js';
 
 type LinkAction = {
   label: string;
@@ -20,10 +20,15 @@ type HomeContent = {
   eyebrow: string;
   headline: string;
   lede: string;
+  primaryActionsLabel: string;
   actions: LinkAction[];
-  facts: { label: string; value: string }[];
+  facts: {
+    ariaLabel: string;
+    items: { label: string; value: string }[];
+  };
   console: {
     ariaLabel: string;
+    decisionsLabel: string;
     topline: string;
     status: string;
     events: { className: string; label: string; title: string; body: string }[];
@@ -73,18 +78,23 @@ const english = {
     headline: 'Rainrail routes development events into agent workflows.',
     lede:
       'Turn issues, pull requests, project queues, webhook deliveries, and operational signals into deterministic agent tasks with stable contracts between every source, plugin, and runtime.',
+    primaryActionsLabel: 'Primary actions',
     actions: [
       { label: 'Start with the workflow', pageId: 'howItWorks' },
       { label: 'Inspect the contracts', pageId: 'docs', variant: 'secondary' },
       { label: 'Open GitHub repo', href: repo, variant: 'secondary' },
     ],
-    facts: [
-      { label: 'Sources', value: 'GitHub, Cloudflare tail, project queues' },
-      { label: 'Boundary', value: 'Neutral Rainrail event envelope' },
-      { label: 'Output', value: 'Agent workflow with audit context' },
-    ],
+    facts: {
+      ariaLabel: 'Rainrail operating model',
+      items: [
+        { label: 'Sources', value: 'GitHub, Cloudflare tail, project queues' },
+        { label: 'Boundary', value: 'Neutral Rainrail event envelope' },
+        { label: 'Output', value: 'Agent workflow with audit context' },
+      ],
+    },
     console: {
       ariaLabel: 'Rainrail routing console',
+      decisionsLabel: 'Routing decisions',
       topline: 'rainrail/router',
       status: 'live route preview',
       events: [
@@ -555,42 +565,47 @@ const japanese = {
     headline: 'Rainrail は開発イベントをエージェントワークフローへ届けます。',
     lede:
       'issue、pull request、Project queue、webhook delivery、運用シグナルを、source・plugin・runtime の安定した契約で決定的な agent task に変換します。',
+    primaryActionsLabel: '主要アクション',
     actions: [
       { label: 'ワークフローを見る', pageId: 'howItWorks' },
       { label: '契約を確認する', pageId: 'docs', variant: 'secondary' },
       { label: 'GitHub repo を開く', href: repo, variant: 'secondary' },
     ],
-    facts: [
-      { label: 'Sources', value: 'GitHub、Cloudflare tail、Project queue' },
-      { label: 'Boundary', value: '中立な Rainrail event envelope' },
-      { label: 'Output', value: '監査文脈つきの agent workflow' },
-    ],
+    facts: {
+      ariaLabel: 'Rainrail の運用モデル',
+      items: [
+        { label: '入力元', value: 'GitHub、Cloudflare tail、Project queue' },
+        { label: '境界', value: '中立な Rainrail event envelope' },
+        { label: '出力', value: '監査文脈つきの agent workflow' },
+      ],
+    },
     console: {
       ariaLabel: 'Rainrail ルーティングコンソール',
+      decisionsLabel: 'ルーティング判断',
       topline: 'rainrail/router',
       status: 'live route preview',
       events: [
         {
           className: 'source',
-          label: 'Development event',
+          label: '開発イベント',
           title: 'issue.opened',
           body: 'repo: reirei-lab/rainrail',
         },
         {
           className: 'envelope',
-          label: 'Neutral event',
+          label: '中立イベント',
           title: 'rainrail.event.v1',
           body: 'source, actor, payload, trace',
         },
         {
           className: 'policy',
-          label: 'Policy and plugin routing',
+          label: 'ポリシーとプラグインルーティング',
           title: 'workflow: product-site',
           body: 'dedupe, assign, observe',
         },
         {
           className: 'workflow',
-          label: 'Agent workflow',
+          label: 'エージェントワークフロー',
           title: 'codex.issue.implementation',
           body: 'branch, tests, PR, result callback',
         },
@@ -624,7 +639,7 @@ const japanese = {
         ],
       },
       {
-        eyebrow: 'Core workflow',
+        eyebrow: '中核ワークフロー',
         heading: 'Repository signal から再現可能な agent run へ。',
         steps: [
           {
@@ -650,7 +665,7 @@ const japanese = {
         ],
       },
       {
-        eyebrow: 'Plugin model',
+        eyebrow: 'プラグインモデル',
         heading: '理解できる小ささで integration を保つ。',
         columns: [
           {
@@ -671,7 +686,7 @@ const japanese = {
         ],
       },
       {
-        eyebrow: 'Initial content',
+        eyebrow: '初期コンテンツ',
         heading: '語彙を読み、運用経路をたどる。',
         items: [
           {
@@ -700,25 +715,25 @@ const japanese = {
       heading:
         'イベント駆動の自動化に必要なのが、もうひとつの一回限りの webhook handler ではなく契約なら、Rainrail を使います。',
       actions: [
-        { label: 'Event path を追う', pageId: 'howItWorks' },
-        { label: 'Engineering docs', href: `${docsBase}/README.md`, variant: 'secondary' },
+        { label: 'イベント経路を追う', pageId: 'howItWorks' },
+        { label: '技術ドキュメント', href: `${docsBase}/README.md`, variant: 'secondary' },
         {
-          label: 'Runtime contract',
+          label: 'ランタイム契約',
           href: `${docsBase}/plugin-runtime-contract.md`,
           variant: 'secondary',
         },
-        { label: 'Issues', href: `${repo}/issues`, variant: 'secondary' },
+        { label: 'Issue を見る', href: `${repo}/issues`, variant: 'secondary' },
       ],
     },
   },
   howItWorks: {
     kind: 'secondary',
-    eyebrow: 'Architecture overview',
+    eyebrow: 'アーキテクチャ概要',
     headline: 'Provider event から agent execution までを一本の route にする。',
     lede:
       'Rainrail は event ingestion と workflow selection を分け、各 adapter を小さく、testable に、責任範囲の見える形に保ちます。',
     panel: {
-      ariaLabel: 'Plugin runtime stages',
+      ariaLabel: 'プラグイン実行ステージ',
       flow: [
         {
           title: 'Source plugin',
@@ -744,20 +759,20 @@ const japanese = {
         body:
           'Product site は architecture を要約します。payload shape、plugin API signature、retry behavior、runtime semantics は repository docs に置き、実装判断の source of truth をひとつに保ちます。',
         actions: [
-          { label: 'Plugin runtime contract', href: `${docsBase}/plugin-runtime-contract.md` },
-          { label: 'End-to-end example', pageId: 'examples', variant: 'secondary' },
+          { label: 'プラグイン実行契約', href: `${docsBase}/plugin-runtime-contract.md` },
+          { label: 'End-to-end の例', pageId: 'examples', variant: 'secondary' },
         ],
       },
     ],
   },
   concepts: {
     kind: 'secondary',
-    eyebrow: 'Concepts',
+    eyebrow: '概念',
     headline: 'Provider event を agent workflow に流すための語彙。',
     lede:
       'Rainrail は source system、workflow decision、agent runtime を別々の contract に分け、自動化が大きくなっても adapter が一回限りの script へ崩れないようにします。',
     panel: {
-      ariaLabel: 'Concept stack',
+      ariaLabel: '概念スタック',
       flow: [
         { title: 'Source bundle', body: 'GitHub、Cloudflare、manual、chat の入口を束ねます。' },
         { title: 'Source plugin', body: '各 input を event envelope に正規化します。' },
@@ -815,20 +830,20 @@ const japanese = {
         body:
           'このページは product-facing な地図です。正確な payload field、plugin API signature、capability gate、Bridge room replay behavior は engineering docs に残します。',
         actions: [
-          { label: 'Plugin runtime contract', href: `${docsBase}/plugin-runtime-contract.md` },
-          { label: 'Event delivery', href: `${docsBase}/event-delivery.md`, variant: 'secondary' },
+          { label: 'プラグイン実行契約', href: `${docsBase}/plugin-runtime-contract.md` },
+          { label: 'イベント配送', href: `${docsBase}/event-delivery.md`, variant: 'secondary' },
         ],
       },
     ],
   },
   guides: {
     kind: 'secondary',
-    eyebrow: 'Guides',
+    eyebrow: 'ガイド',
     headline: 'Rainrail が運用する最初の workflow から始める。',
     lede:
       'これらの guide は最初の operational path を高いレベルで説明し、実装作業が従うべき repository contract へリンクします。',
     panel: {
-      ariaLabel: 'Guide categories',
+      ariaLabel: 'ガイドカテゴリ',
       title: '最初の workflow',
       body: 'Issue intake、manual/chat input、review follow-up、Cloudflare reporting。',
     },
@@ -837,32 +852,32 @@ const japanese = {
         heading: '初期 guides',
         items: [
           {
-            title: 'GitHub issue automation',
+            title: 'GitHub issue 自動化',
             body:
               'GitHub issue event から始め、正規化し、Project queue から work を選び、短い lock を取り、branch と session metadata つきで agent run を dispatch します。',
             href: `${docsBase}/task-queue-project-issues.md`,
-            linkText: 'Project issue selection',
+            linkText: 'Project issue 選択',
           },
           {
-            title: 'Manual and chat intake',
+            title: 'Manual / chat intake',
             body:
               'operator が入力した manual prompt や web chat message を first-party source event として publish し、legacy EEP Bridge bundle を通さず Core intake と replay を使います。',
             href: `${docsBase}/plugin-runtime-contract.md`,
-            linkText: 'Manual source contract',
+            linkText: 'Manual source 契約',
           },
           {
             title: 'PR review loop',
             body:
               'pull request と review event を neutral workflow input として受け取り、review follow-up を issue automation と同じ task / runtime provider boundary に流します。',
             href: `${docsBase}/plugin-runtime-contract.md`,
-            linkText: 'Workflow plugin contract',
+            linkText: 'Workflow plugin 契約',
           },
           {
             title: 'Cloudflare event reporting',
             body:
               'Worker bridge を deploy し、必要な secret を登録し、Cloudflare tail や error event を publish し、operational credential を commit せず health を smoke test します。',
             href: `${docsBase}/cloudflare-worker.md`,
-            linkText: 'Cloudflare Worker operations',
+            linkText: 'Cloudflare Worker 運用',
           },
         ],
       },
@@ -875,12 +890,12 @@ const japanese = {
   },
   examples: {
     kind: 'secondary',
-    eyebrow: 'Examples',
+    eyebrow: '例',
     headline: 'GitHub issue から Project queue、agent PR、review、merge まで。',
     lede:
       'この最初の end-to-end example は、work item から観測可能な agent workflow までの意図した経路を、provider detail を Rainrail contract の後ろに保ったまま示します。',
     panel: {
-      ariaLabel: 'End-to-end example summary',
+      ariaLabel: 'End-to-end 例の要約',
       title: 'GitHub -> Project -> agent -> PR -> review -> merge',
       body: 'source bundle、queue、runtime、review event をまたぐ traceable な workflow です。',
     },
@@ -894,7 +909,7 @@ const japanese = {
               '選ばれた issue は provider event になり、workflow code に raw GitHub payload を直接渡す代わりに Rainrail が正規化します。',
           },
           {
-            title: '1b. Manual or chat message',
+            title: '1b. Manual / chat message',
             body:
               'operator prompt や web chat message も独自の source adapter から入り、同じ neutral envelope shape を publish できます。',
           },
@@ -930,9 +945,9 @@ const japanese = {
         body:
           'Example は意図的に implementation-neutral にしています。正確な event envelope、Project queue claim semantics、runtime capability gate は engineering specs に記録します。',
         actions: [
-          { label: 'Plugin runtime contract', href: `${docsBase}/plugin-runtime-contract.md` },
+          { label: 'プラグイン実行契約', href: `${docsBase}/plugin-runtime-contract.md` },
           {
-            label: 'Project issue selection',
+            label: 'Project issue 選択',
             href: `${docsBase}/task-queue-project-issues.md`,
             variant: 'secondary',
           },
@@ -942,7 +957,7 @@ const japanese = {
   },
   docs: {
     kind: 'secondary',
-    eyebrow: 'Documentation gateway',
+    eyebrow: 'ドキュメント入口',
     headline: '概要から始めて、contract へ進む。',
     lede:
       'Rainrail は product narrative をこの site に、長く残す engineering decision を repository docs に分けて置きます。',
@@ -951,51 +966,51 @@ const japanese = {
         heading: 'ここから始める',
         items: [
           {
-            title: 'Concepts',
+            title: '概念',
             pageId: 'concepts',
             body:
               'event、source plugin、workflow plugin、provider、bridge room delivery の product-facing な語彙集です。',
           },
           {
-            title: 'Guides',
+            title: 'ガイド',
             pageId: 'guides',
             body:
               'GitHub issue automation、PR review follow-up、Cloudflare event reporting の初期運用ガイドです。',
           },
           {
-            title: 'Examples',
+            title: '例',
             pageId: 'examples',
             body:
               'GitHub issue から Project queue、agent PR、review、merge までの end-to-end path です。',
           },
           {
-            title: 'Plugin runtime contract',
+            title: 'プラグイン実行契約',
             href: `${docsBase}/plugin-runtime-contract.md`,
             body: 'Source plugin、workflow plugin、runtime provider の境界。',
           },
           {
-            title: 'Engineering docs index',
+            title: '技術ドキュメント一覧',
             href: `${docsBase}/README.md`,
             body:
               'contract、operation、deployment note、example、coverage reference への GitHub 上の入口です。',
           },
           {
-            title: 'GitHub webhook normalization',
+            title: 'GitHub webhook 正規化',
             href: `${docsBase}/github-webhook-normalization.md`,
             body: 'GitHub webhook payload が neutral Rainrail event になる流れ。',
           },
           {
-            title: 'Cloudflare Worker operations',
+            title: 'Cloudflare Worker 運用',
             href: `${docsBase}/cloudflare-worker.md`,
             body: 'deploy、required secrets、local development、production smoke testing。',
           },
           {
-            title: 'Cloudflare Pages operations',
+            title: 'Cloudflare Pages 運用',
             href: `${docsBase}/cloudflare-pages.md`,
             body: 'preview deploy、production deploy、required secrets、product site smoke testing。',
           },
           {
-            title: 'Product site information architecture',
+            title: 'プロダクトサイト情報設計',
             href: `${docsBase}/product-site-information-architecture.md`,
             body: 'public product content と engineering docs の境界。',
           },
@@ -1019,7 +1034,7 @@ const japanese = {
           'curl -fsSL https://rainrail.dev/install.sh | bash -s -- --add-to-shell --yes\nexec $SHELL\nrainrail help',
       },
       {
-        heading: 'First-use smoke test',
+        heading: '初回 smoke test',
         body:
           '使い捨て directory で最小の first-use smoke test を実行します。各 plugin の command details は rainrail <plugin> help を使います。',
         code:
@@ -1029,10 +1044,10 @@ const japanese = {
   },
 } satisfies LocaleContent;
 
-export const productContent = {
+export const productContent: Record<Locale, LocaleContent> = {
   en: english,
   ja: japanese,
-} as const satisfies Record<Locale, LocaleContent>;
+};
 
 export const getProductPageContent = (
   locale: Locale,

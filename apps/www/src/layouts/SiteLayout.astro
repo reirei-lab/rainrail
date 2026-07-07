@@ -27,6 +27,15 @@ const pageTitle =
   resolvedTitle === 'Rainrail' ? resolvedTitle : `${resolvedTitle} - Rainrail`;
 const canonicalHref =
   page && Astro.site ? new URL(page.href, Astro.site).toString() : page?.href;
+const absolutePageAlternates =
+  page && Astro.site
+    ? Object.fromEntries(
+        Object.entries(page.alternates).map(([alternateLocale, href]) => [
+          alternateLocale,
+          new URL(href, Astro.site).toString(),
+        ]),
+      )
+    : page?.alternates;
 const hrefFor = (targetPageId: PageId) =>
   usesLocalizedRoutes
     ? getLocaleHref(locale, targetPageId)
@@ -44,8 +53,8 @@ const localeLabel = (targetLocale: Locale) =>
     <meta name="generator" content={Astro.generator} />
     {canonicalHref && <link rel="canonical" href={canonicalHref} />}
     {
-      page &&
-        Object.entries(page.alternates).map(([alternateLocale, href]) => (
+      absolutePageAlternates &&
+        Object.entries(absolutePageAlternates).map(([alternateLocale, href]) => (
           <link rel="alternate" hreflang={alternateLocale} href={href} />
         ))
     }

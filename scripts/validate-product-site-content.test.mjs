@@ -1,6 +1,8 @@
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
+import { getProductPageContent } from '../apps/www/src/lib/site-content.js';
+
 /**
  * @param {string} name
  */
@@ -35,6 +37,7 @@ const contractsManifest = readFileSync(
 const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
 const rootInstallScript = new URL('../install.sh', import.meta.url);
 const publicInstallScript = new URL('../apps/www/public/install.sh', import.meta.url);
+const publicRedirects = new URL('../apps/www/public/_redirects', import.meta.url);
 
 describe('product site concepts, guides, and examples', () => {
   it('serves every product page under both /ja/ and /en/ locale routes', () => {
@@ -57,6 +60,7 @@ describe('product site concepts, guides, and examples', () => {
     expect(layout).toContain('page.alternates');
     expect(layout).toContain('page.href');
     expect(layout).toContain('rel="canonical"');
+    expect(layout).toContain('absolutePageAlternates');
     expect(layout).toContain('language-switcher');
     expect(layout).toContain('site.nav.languageSwitcherLabel');
     expect(layout).toContain('hrefFor(item.pageId)');
@@ -68,6 +72,18 @@ describe('product site concepts, guides, and examples', () => {
   });
 
   it('redirects legacy product URLs to the default English locale', () => {
+    const redirects = readFileSync(publicRedirects, 'utf8');
+
+    for (const redirect of [
+      '/how-it-works /en/how-it-works 301',
+      '/concepts /en/concepts 301',
+      '/guides /en/guides 301',
+      '/examples /en/examples 301',
+      '/docs /en/docs 301',
+    ]) {
+      expect(redirects).toContain(redirect);
+    }
+
     for (const route of ['how-it-works', 'concepts', 'guides', 'examples', 'docs']) {
       const routeSource = page(route);
       expect(routeSource).toContain('getDefaultLocaleRedirect');
@@ -85,6 +101,33 @@ describe('product site concepts, guides, and examples', () => {
     expect(indexPage).toContain("getLocaleHref('en', 'home')");
     expect(indexPage).not.toContain('redirectToDefaultLocale');
     expect(indexPage).not.toContain('Astro.redirect');
+  });
+
+  it('localizes Japanese home visible labels and assistive labels', () => {
+    const japaneseHome = getProductPageContent('ja', 'home');
+
+    if (japaneseHome.kind !== 'home') {
+      throw new Error('Japanese home content must use the home renderer');
+    }
+
+    expect(japaneseHome.primaryActionsLabel).toBe('主要アクション');
+    expect(japaneseHome.facts.ariaLabel).toBe('Rainrail の運用モデル');
+    expect(japaneseHome.console.decisionsLabel).toBe('ルーティング判断');
+    expect(japaneseHome.console.events.map((event) => event.label)).toEqual([
+      '開発イベント',
+      '中立イベント',
+      'ポリシーとプラグインルーティング',
+      'エージェントワークフロー',
+    ]);
+    expect(japaneseHome.sections.map((section) => section.eyebrow)).toContain(
+      '中核ワークフロー',
+    );
+    expect(japaneseHome.cta.actions.map((action) => action.label)).toEqual([
+      'イベント経路を追う',
+      '技術ドキュメント',
+      'ランタイム契約',
+      'Issue を見る',
+    ]);
   });
 
   it('publishes sitemap entries from the localized page model', () => {
