@@ -3260,6 +3260,8 @@ const localCorsHeaders = {
 const localCoreRoutePaths = new Set([
   '/healthz',
   '/events',
+  '/dashboard',
+  '/dashboard/',
   '/api/state',
   '/api/v1/overview',
   '/api/v1/events',
@@ -3270,6 +3272,7 @@ const localCoreRoutePaths = new Set([
   '/api/v1/settings',
 ]);
 const localCoreRoutePrefixes = [
+  '/_astro/',
   '/api/events/',
   '/api/v1/events/',
   '/api/v1/workflow-runs/',
@@ -3826,8 +3829,16 @@ function writeLocalDashboardAssetResponse(
     'Content-Type': localDashboardContentType(assetPath),
     'Cache-Control': pathname.startsWith('/_astro/') ? 'public, max-age=31536000, immutable' : 'no-cache',
   });
-  response.end(readFileSync(assetPath));
+  response.end(localDashboardAssetBody(assetPath, options, pathname));
   return true;
+}
+
+function localDashboardAssetBody(assetPath: string, options: RainrailStartOptions, pathname: string): Buffer | string {
+  const body = readFileSync(assetPath);
+  if ((pathname === '/dashboard' || pathname === '/dashboard/') && options.dashboardToken === undefined) {
+    return body.toString('utf8').replace('data-auth-required="true"', 'data-auth-required="false"');
+  }
+  return body;
 }
 
 function localDashboardAssetPath(assetRoot: string, pathname: string): string | undefined {

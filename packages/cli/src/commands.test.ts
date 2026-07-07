@@ -800,7 +800,7 @@ describe('Rainrail CLI built-in commands', () => {
       await writeFile(join(dashboardAssetRoot, 'dashboard', 'index.html'), [
         '<!doctype html>',
         '<html><head><script type="module" src="/_astro/dashboard-app.js"></script></head>',
-        '<body><section data-dashboard-app data-api-base-url=""></section></body></html>',
+        '<body><section data-dashboard-app data-api-base-url="" data-auth-required="true"></section></body></html>',
       ].join(''));
       await writeFile(join(dashboardAssetRoot, '_astro', 'dashboard-app.js'), 'console.log("dashboard");\n');
 
@@ -818,6 +818,7 @@ describe('Rainrail CLI built-in commands', () => {
         const dashboardHtml = await dashboard.text();
         expect(dashboardHtml).toContain('data-dashboard-app');
         expect(dashboardHtml).toContain('data-api-base-url=""');
+        expect(dashboardHtml).toContain('data-auth-required="false"');
         expect(dashboardHtml).toContain('src="/_astro/dashboard-app.js"');
 
         const dashboardAsset = await fetch(`http://127.0.0.1:${port}/_astro/dashboard-app.js`);
@@ -1836,6 +1837,33 @@ describe('Rainrail CLI built-in commands', () => {
       });
       expect(coreEndpoint.exitCode).toBe(1);
       expect(coreEndpoint.stderr).toContain('config endpoint must not use a Rainrail core route');
+
+      for (const endpoint of ['/dashboard', '/_astro/dashboard-app.js']) {
+        await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+          sourceBundles: [{
+            type: 'eep-bridge',
+            name: 'local',
+            sources: [{
+              type: 'github-webhook',
+              name: 'github-local',
+              sourceType: 'github',
+              provider: 'github',
+              webhookSecret: 'secret',
+              endpoint,
+            }],
+          }],
+          sources: [],
+          taskProviders: {},
+          runtimeProviders: {},
+        }, null, 2)}\n`);
+
+        const dashboardEndpoint = runRainrailCli(['start'], {
+          cwd: projectRoot,
+          serverStarter: () => ({ stop: () => undefined }),
+        });
+        expect(dashboardEndpoint.exitCode).toBe(1);
+        expect(dashboardEndpoint.stderr, endpoint).toContain('config endpoint must not use a Rainrail core route');
+      }
 
       await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
         sourceBundles: [{

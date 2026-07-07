@@ -84,8 +84,11 @@ describe('dashboard app shell', () => {
   it('defaults the dashboard API client to same-origin unless Pages injects an explicit API URL', () => {
     expect(dashboardPage).toContain("const apiBaseUrl = import.meta.env.PUBLIC_RAINRAIL_OPERATIONAL_API_URL ?? '';");
     expect(dashboardPage).toContain('data-api-base-url={apiBaseUrl}');
+    expect(dashboardPage).toContain('data-auth-required="true"');
     expect(dashboardClient).toContain("this.baseUrl = options.baseUrl ?? '';");
     expect(dashboardClient).toContain('fetch(`${this.baseUrl}${path}`');
+    expect(dashboardApp).toContain("const authRequired = appRoot.dataset.authRequired !== 'false';");
+    expect(dashboardApp).toContain("if (storedToken === '' && authRequired)");
     expect(dashboardApp).toContain('client = createDashboardClient(storedToken, storedApiBaseUrl);');
     expect(dashboardClient).not.toContain('http://127.0.0.1:8787');
     expect(dashboardClient).not.toContain('localhost:8787');
