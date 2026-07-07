@@ -793,6 +793,191 @@ describe('Rainrail CLI built-in commands', () => {
     });
   });
 
+  it('gates local rainrail start agent task command routes with operator scope', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'local-operator-commands');
+      const port = await getFreePort();
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        server: { host: '127.0.0.1', port },
+        dashboardAuth: {
+          readOnlyToken: 'read-token',
+          operatorToken: 'operator-token',
+          adminToken: 'admin-token',
+        },
+        sourceBundles: [],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+
+      const result = await runRainrailCliAsync(['start'], { cwd: projectRoot });
+      try {
+        expect(result.exitCode).toBe(0);
+
+        const readOnlyResponse = await fetch(`http://127.0.0.1:${port}/api/v1/agent-tasks/task-1/actions/resume`, {
+          method: 'POST',
+          headers: {
+            Authorization: 'Bearer read-token',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({}),
+        });
+        expect(readOnlyResponse.status).toBe(403);
+        await expect(readOnlyResponse.json()).resolves.toEqual({
+          error: 'insufficient_scope',
+          requiredScope: 'operator',
+        });
+
+        for (const token of ['operator-token', 'admin-token']) {
+          const response = await fetch(`http://127.0.0.1:${port}/api/v1/agent-tasks/task-1/actions/resume`, {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${token}`,
+              'Content-Type': 'application/json',
+              'X-Request-ID': `request-${token}`,
+            },
+            body: JSON.stringify({}),
+          });
+          expect(response.status, token).toBe(503);
+          expect(response.headers.get('x-request-id')).toBe(`request-${token}`);
+          await expect(response.json(), token).resolves.toEqual({ error: 'command_handler_not_configured' });
+        }
+      } finally {
+        await closeTestServer(result);
+      }
+    });
+  });
+
+  it('requires confirmation for local rainrail start destructive agent task commands before reporting unavailable dispatch', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'local-operator-confirmation');
+      const port = await getFreePort();
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        server: { host: '127.0.0.1', port },
+        dashboardAuth: {
+          operatorToken: 'operator-token',
+        },
+        sourceBundles: [],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+
+      const result = await runRainrailCliAsync(['start'], { cwd: projectRoot });
+      try {
+        expect(result.exitCode).toBe(0);
+
+        const preview = await fetch(`http://127.0.0.1:${port}/api/v1/agent-tasks/actions/terminate-all`, {
+          method: 'POST',
+          headers: {
+            Authorization: 'Bearer operator-token',
+            'Content-Type': 'application/json',
+            'X-Request-ID': 'request-terminate-all-preview',
+          },
+          body: JSON.stringify({}),
+        });
+        expect(preview.status).toBe(409);
+        expect(preview.headers.get('x-request-id')).toBe('request-terminate-all-preview');
+        await expect(preview.json()).resolves.toEqual({
+          error: 'action_confirmation_required',
+          data: {
+            action: 'agent_task_terminate_all',
+            targetType: 'agent_tasks',
+            targetId: 'all',
+            confirmationRequired: true,
+            confirmationToken: 'confirm:agent_task_terminate_all:agent_tasks:all',
+          },
+        });
+
+        const confirmed = await fetch(`http://127.0.0.1:${port}/api/v1/agent-tasks/actions/terminate-all`, {
+          method: 'POST',
+          headers: {
+            Authorization: 'Bearer operator-token',
+            'Content-Type': 'application/json',
+            'X-Request-ID': 'request-terminate-all-confirmed',
+          },
+          body: JSON.stringify({
+            confirmationToken: 'confirm:agent_task_terminate_all:agent_tasks:all',
+          }),
+        });
+        expect(confirmed.status).toBe(503);
+        expect(confirmed.headers.get('x-request-id')).toBe('request-terminate-all-confirmed');
+        await expect(confirmed.json()).resolves.toEqual({ error: 'command_handler_not_configured' });
+      } finally {
+        await closeTestServer(result);
+      }
+    });
+  });
+
+  it('returns local rainrail start command dry-run previews without confirmation or handler dispatch', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'local-operator-dry-run');
+      const port = await getFreePort();
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        server: { host: '127.0.0.1', port },
+        dashboardAuth: {
+          operatorToken: 'operator-token',
+        },
+        sourceBundles: [],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+
+      const result = await runRainrailCliAsync(['start'], { cwd: projectRoot });
+      try {
+        expect(result.exitCode).toBe(0);
+
+        const resumePreview = await fetch(`http://127.0.0.1:${port}/api/v1/agent-tasks/task-1/actions/resume`, {
+          method: 'POST',
+          headers: {
+            Authorization: 'Bearer operator-token',
+            'Content-Type': 'application/json',
+            'X-Request-ID': 'request-resume-dry-run',
+          },
+          body: JSON.stringify({ dryRun: true }),
+        });
+        expect(resumePreview.status).toBe(200);
+        expect(resumePreview.headers.get('x-request-id')).toBe('request-resume-dry-run');
+        await expect(resumePreview.json()).resolves.toEqual({
+          data: {
+            action: 'agent_task_resume',
+            targetType: 'agent_task',
+            targetId: 'task-1',
+            status: 'preview',
+            dryRun: true,
+            confirmationRequired: false,
+          },
+        });
+
+        const terminateAllPreview = await fetch(`http://127.0.0.1:${port}/api/v1/agent-tasks/actions/terminate-all`, {
+          method: 'POST',
+          headers: {
+            Authorization: 'Bearer operator-token',
+            'Content-Type': 'application/json',
+            'X-Request-ID': 'request-terminate-all-dry-run',
+          },
+          body: JSON.stringify({ dryRun: true }),
+        });
+        expect(terminateAllPreview.status).toBe(200);
+        expect(terminateAllPreview.headers.get('x-request-id')).toBe('request-terminate-all-dry-run');
+        await expect(terminateAllPreview.json()).resolves.toEqual({
+          data: {
+            action: 'agent_task_terminate_all',
+            targetType: 'agent_tasks',
+            targetId: 'all',
+            status: 'preview',
+            dryRun: true,
+            confirmationRequired: true,
+            confirmationToken: 'confirm:agent_task_terminate_all:agent_tasks:all',
+          },
+        });
+      } finally {
+        await closeTestServer(result);
+      }
+    });
+  });
+
   it('lets --host and --port override start environment and config', async () => {
     await withTempDirectory(async (directory) => {
       const projectRoot = await initRainrailProject(directory, 'flag-server');

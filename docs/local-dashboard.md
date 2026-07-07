@@ -48,15 +48,20 @@ does not need a separate API base URL.
 ## Auth scopes
 
 `dashboardAuth` supports three scopes. The local `rainrail start` startup flow
-serves read-only dashboard collections today; operator/admin mutation routes
-are still outside the local startup MVP.
+serves read-only dashboard collections and wires the dashboard agent-task
+command routes with the same bearer-token scope checks used by the shared
+operational API.
 
 - `readOnlyToken`: can read overview, event, workflow, task, source, queue, and
-  settings resources.
-- `operatorToken`: reserved for local operator actions when those routes are
-  wired into the local startup server.
-- `adminToken`: reserved for local admin mutations when those routes are wired
-  into the local startup server.
+  settings resources. It cannot call command mutation routes.
+- `operatorToken`: includes read-only access and can call local agent-task
+  command routes such as resume, reset, terminate, and terminate-all. The
+  current local startup server does not attach a runtime command handler, so
+  `dryRun: true` returns a `200` preview, while confirmed dispatch returns
+  `503 { "error": "command_handler_not_configured" }` until a handler-backed
+  local runtime is added.
+- `adminToken`: includes operator access. Local admin settings mutations remain
+  post-MVP.
 
 For local compatibility, a legacy `SSE_BEARER_TOKEN` remains accepted as a
 read-only dashboard token even when `dashboardAuth.readOnlyToken` is also
@@ -80,8 +85,16 @@ If the dashboard stays in an auth error state, check the API response:
   match the configured local dashboard auth tokens. Re-run
   `rainrail setup --dashboard-auth-only --yes` or copy the current token from
   `rainrail.config.json`.
-- HTTP `404` or an unavailable-action state for a local operator/admin command
-  means the route is not part of the current `rainrail start` local server yet.
+- HTTP `403` with `insufficient_scope` means a read-only token tried to call an
+  operator/admin route. Use `dashboardAuth.operatorToken` or `adminToken` for
+  agent-task commands.
+- HTTP `409` with `action_confirmation_required` means a destructive local
+  command such as reset, terminate, or terminate-all needs the returned
+  confirmation token to be sent back after user confirmation.
+- HTTP `503` with `command_handler_not_configured` means the local route,
+  token scope, and confirmation contract are valid, but the current
+  `rainrail start` server has no command handler attached to execute the
+  operator action.
 
 Do not put real tokens in screenshots, issue comments, docs, or copied logs.
 
@@ -107,7 +120,7 @@ out of scope for the current startup flow:
 - scoped SSE token separate from dashboard API auth
 - token rotation UI
 - multi-user actor management
-- local operator/admin mutation routes
+- handler-backed local runtime execution for operator/admin mutations
 - hosted multi-tenant operations
 
 Those follow-up auth and operator UX items are tracked separately from this
