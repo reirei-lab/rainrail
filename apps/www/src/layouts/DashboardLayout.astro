@@ -1,7 +1,7 @@
 ---
 import '../styles/global.css';
 import { getDashboardHref } from '../lib/dashboard-content';
-import { supportedLocales, type Locale } from '../lib/i18n';
+import { defaultLocale, getOgLocale, supportedLocales, type Locale } from '../lib/i18n';
 
 interface Props {
   title: string;
@@ -10,15 +10,22 @@ interface Props {
 }
 
 const { title, description, locale } = Astro.props;
+const pageTitle = `${title} - Rainrail`;
+const ogLocale = getOgLocale(locale);
 const canonicalHref =
   Astro.site ? new URL(getDashboardHref(locale), Astro.site).toString() : getDashboardHref(locale);
+const hreflangs = [...supportedLocales, 'x-default'] as const;
 const alternates = Object.fromEntries(
-  supportedLocales.map((targetLocale) => [
-    targetLocale,
-    Astro.site
-      ? new URL(getDashboardHref(targetLocale), Astro.site).toString()
-      : getDashboardHref(targetLocale),
-  ]),
+  hreflangs.map((hreflang) => {
+    const targetLocale: Locale = hreflang === 'x-default' ? defaultLocale : hreflang;
+
+    return [
+      hreflang,
+      Astro.site
+        ? new URL(getDashboardHref(targetLocale), Astro.site).toString()
+        : getDashboardHref(targetLocale),
+    ];
+  }),
 );
 const localeLabel = (targetLocale: Locale) =>
   targetLocale === 'ja' ? '日本語' : 'English';
@@ -34,12 +41,27 @@ const languagePreferenceKey = 'rainrail.locale';
     <meta name="description" content={description} />
     <meta name="generator" content={Astro.generator} />
     <link rel="canonical" href={canonicalHref} />
+    <meta property="og:url" content={canonicalHref} />
+    <meta property="og:title" content={pageTitle} />
+    <meta property="og:description" content={description} />
+    <meta property="og:locale" content={ogLocale} />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content={pageTitle} />
+    <meta name="twitter:description" content={description} />
     {
-      Object.entries(alternates).map(([alternateLocale, href]) => (
-        <link rel="alternate" hreflang={alternateLocale} href={href} />
+      supportedLocales.map((alternateLocale) => (
+        <link rel="alternate" hreflang={alternateLocale} href={alternates[alternateLocale]} />
       ))
     }
-    <title>{title} - Rainrail</title>
+    <link rel="alternate" hreflang="x-default" href={alternates['x-default']} />
+    {
+      supportedLocales
+        .filter((alternateLocale) => alternateLocale !== locale)
+        .map((alternateLocale) => (
+          <meta property="og:locale:alternate" content={getOgLocale(alternateLocale)} />
+        ))
+    }
+    <title>{pageTitle}</title>
   </head>
   <body>
     <main class="dashboard-page-shell">
