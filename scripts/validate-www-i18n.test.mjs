@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   assertSupportedLocale,
+  defaultLocale,
   getLocaleHref,
   getPageContent,
   getSiteMessages,
@@ -11,9 +12,14 @@ import {
   supportedLocales,
   translate,
 } from '../apps/www/src/lib/i18n.js';
+import { GET as getSitemap } from '../apps/www/src/pages/sitemap.xml.js';
 
 const i18nSpec = readFileSync(
   new URL('../docs/www-i18n-foundation.md', import.meta.url),
+  'utf8',
+);
+const layout = readFileSync(
+  new URL('../apps/www/src/layouts/SiteLayout.astro', import.meta.url),
   'utf8',
 );
 
@@ -49,7 +55,74 @@ describe('www locale-aware i18n foundation', () => {
         expect(page.alternates).toEqual({
           ja: getLocaleHref('ja', pageId),
           en: getLocaleHref('en', pageId),
+          'x-default': getLocaleHref(defaultLocale, pageId),
         });
+      }
+    }
+  });
+
+  it('defines reciprocal hreflang alternates including x-default for every public page', () => {
+    expect(defaultLocale).toBe('en');
+
+    for (const locale of supportedLocales) {
+      for (const pageId of pageIds) {
+        const page = getPageContent(locale, pageId);
+        expect(page.alternates).toEqual({
+          ja: getLocaleHref('ja', pageId),
+          en: getLocaleHref('en', pageId),
+          'x-default': getLocaleHref(defaultLocale, pageId),
+        });
+      }
+    }
+  });
+
+  it('renders locale-aware OGP, Twitter, canonical, and hreflang metadata', () => {
+    for (const snippet of [
+      '<meta property="og:title" content={pageTitle} />',
+      '<meta property="og:description" content={resolvedDescription} />',
+      '<meta property="og:url" content={canonicalHref} />',
+      '<meta property="og:locale" content={ogLocale} />',
+      '<meta name="twitter:card" content="summary" />',
+      '<meta name="twitter:title" content={pageTitle} />',
+      '<meta name="twitter:description" content={resolvedDescription} />',
+      'hreflang="x-default"',
+    ]) {
+      expect(layout).toContain(snippet);
+    }
+  });
+
+  it('renders dashboard locale-aware OGP, Twitter, canonical, and hreflang metadata', () => {
+    const dashboardLayout = readFileSync(
+      new URL('../apps/www/src/layouts/DashboardLayout.astro', import.meta.url),
+      'utf8',
+    );
+
+    for (const snippet of [
+      '<meta property="og:title" content={pageTitle} />',
+      '<meta property="og:description" content={description} />',
+      '<meta property="og:url" content={canonicalHref} />',
+      '<meta property="og:locale" content={ogLocale} />',
+      '<meta name="twitter:card" content="summary" />',
+      '<meta name="twitter:title" content={pageTitle} />',
+      '<meta name="twitter:description" content={description} />',
+      'hreflang="x-default"',
+    ]) {
+      expect(dashboardLayout).toContain(snippet);
+    }
+  });
+
+  it('publishes sitemap alternates with reciprocal locale and x-default URLs', async () => {
+    const response = getSitemap({ site: new URL('https://rainrail.dev') });
+    const sitemap = await response.text();
+
+    for (const pageId of pageIds) {
+      for (const locale of supportedLocales) {
+        expect(sitemap).toContain(
+          `<loc>https://rainrail.dev${getLocaleHref(locale, pageId)}</loc>`,
+        );
+        expect(sitemap).toContain(
+          `hreflang="x-default" href="https://rainrail.dev${getLocaleHref(defaultLocale, pageId)}"`,
+        );
       }
     }
   });

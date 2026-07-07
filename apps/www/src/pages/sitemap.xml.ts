@@ -1,5 +1,12 @@
-import { getDashboardHref } from '../lib/dashboard-content';
-import { getLocaleHref, pageIds, supportedLocales } from '../lib/i18n';
+import { getDashboardHref } from '../lib/dashboard-content.js';
+import {
+  defaultLocale,
+  getLocaleHref,
+  pageIds,
+  supportedLocales,
+  type Hreflang,
+  type Locale,
+} from '../lib/i18n.js';
 
 const fallbackSite = 'https://rainrail.dev';
 
@@ -13,6 +20,9 @@ const escapeXml = (value: string): string =>
 
 export function GET({ site }: { site?: URL }) {
   const baseUrl = site ?? new URL(fallbackSite);
+  const hreflangs = [...supportedLocales, 'x-default'] as const satisfies readonly Hreflang[];
+  const defaultLocaleHref = (alternateHref: (locale: Locale) => string): string =>
+    alternateHref(defaultLocale);
   const localizedPages = supportedLocales.flatMap((locale) =>
     pageIds.map((pageId) => ({
       locale,
@@ -28,10 +38,14 @@ export function GET({ site }: { site?: URL }) {
   }));
   const entries = [...localizedPages, ...localizedDashboards].map((entry) => {
       const loc = new URL(entry.href, baseUrl).toString();
-      const alternates = supportedLocales
-        .map((alternateLocale) => {
-          const href = new URL(entry.alternateHref(alternateLocale), baseUrl).toString();
-          return `<xhtml:link rel="alternate" hreflang="${alternateLocale}" href="${escapeXml(href)}" />`;
+      const alternates = hreflangs
+        .map((hreflang) => {
+          const alternatePath =
+            hreflang === 'x-default'
+              ? defaultLocaleHref(entry.alternateHref)
+              : entry.alternateHref(hreflang);
+          const href = new URL(alternatePath, baseUrl).toString();
+          return `<xhtml:link rel="alternate" hreflang="${hreflang}" href="${escapeXml(href)}" />`;
         })
         .join('');
 

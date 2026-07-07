@@ -2,6 +2,7 @@
 import {
   getLegacyHref,
   getLocaleHref,
+  getOgLocale,
   getPageContent,
   getSiteMessages,
   supportedLocales,
@@ -25,6 +26,7 @@ const resolvedTitle = title ?? page?.meta.title ?? 'Rainrail';
 const resolvedDescription = description ?? page?.meta.description ?? site.footer;
 const pageTitle =
   resolvedTitle === 'Rainrail' ? resolvedTitle : `${resolvedTitle} - Rainrail`;
+const ogLocale = getOgLocale(locale);
 const canonicalHref =
   page && Astro.site ? new URL(page.href, Astro.site).toString() : page?.href;
 const absolutePageAlternates =
@@ -53,11 +55,39 @@ const languagePreferenceKey = 'rainrail.locale';
     <meta name="description" content={resolvedDescription} />
     <meta name="generator" content={Astro.generator} />
     {canonicalHref && <link rel="canonical" href={canonicalHref} />}
+    {canonicalHref && <meta property="og:url" content={canonicalHref} />}
+    <meta property="og:title" content={pageTitle} />
+    <meta property="og:description" content={resolvedDescription} />
+    <meta property="og:locale" content={ogLocale} />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content={pageTitle} />
+    <meta name="twitter:description" content={resolvedDescription} />
     {
       absolutePageAlternates &&
-        Object.entries(absolutePageAlternates).map(([alternateLocale, href]) => (
-          <link rel="alternate" hreflang={alternateLocale} href={href} />
+        supportedLocales.map((alternateLocale) => (
+          <link
+            rel="alternate"
+            hreflang={alternateLocale}
+            href={absolutePageAlternates[alternateLocale]}
+          />
         ))
+    }
+    {
+      absolutePageAlternates && (
+        <link
+          rel="alternate"
+          hreflang="x-default"
+          href={absolutePageAlternates['x-default']}
+        />
+      )
+    }
+    {
+      absolutePageAlternates &&
+        supportedLocales
+          .filter((alternateLocale) => alternateLocale !== locale)
+          .map((alternateLocale) => (
+            <meta property="og:locale:alternate" content={getOgLocale(alternateLocale)} />
+          ))
     }
     <title>{pageTitle}</title>
   </head>
