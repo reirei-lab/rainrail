@@ -43,7 +43,9 @@ export type LocalizedPage = PageContent & {
   alternates: Record<Locale, string>;
 };
 
-const pageSlugs = {
+export const defaultLocale = 'en' satisfies Locale;
+
+export const pageSlugs = {
   home: '',
   howItWorks: 'how-it-works',
   concepts: 'concepts',
@@ -186,6 +188,22 @@ export const assertSupportedLocale = (locale: string): asserts locale is Locale 
 export const getLocaleHref = (locale: Locale, pageId: PageId): string => {
   const slug = pageSlugs[pageId];
   return slug === '' ? `/${locale}/` : `/${locale}/${slug}`;
+};
+
+export const getLegacyHref = (pageId: PageId): string => {
+  const slug = pageSlugs[pageId];
+  return slug === '' ? '/' : `/${slug}`;
+};
+
+export const getPageIdBySlug = (slug = ''): PageId | undefined =>
+  pageIds.find((pageId) => pageSlugs[pageId] === slug);
+
+export const getPageBySlug = (
+  locale: Locale,
+  slug = '',
+): LocalizedPage | undefined => {
+  const pageId = getPageIdBySlug(slug);
+  return pageId ? getPageContent(locale, pageId) : undefined;
 };
 
 export const getSiteMessages = (locale: Locale): SiteMessages => messages[locale];

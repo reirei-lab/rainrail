@@ -1,0 +1,255 @@
+---
+import SiteLayout from '../../layouts/SiteLayout.astro';
+import {
+  getPageBySlug,
+  pageIds,
+  pageSlugs,
+  supportedLocales,
+  type Locale,
+  type PageId,
+} from '../../lib/i18n';
+import { getProductPageContent, resolveActionHref } from '../../lib/site-content';
+
+export function getStaticPaths() {
+  return supportedLocales.flatMap((locale) =>
+    pageIds.map((pageId) => ({
+      params: {
+        locale,
+        slug: pageSlugs[pageId] || undefined,
+      },
+      props: {
+        locale,
+        pageId,
+      },
+    })),
+  );
+}
+
+type Props = {
+  locale: Locale;
+  pageId: PageId;
+};
+
+const { locale, pageId } = Astro.props as Props;
+const slug = Astro.params.slug ?? '';
+const page = getPageBySlug(locale, slug);
+
+if (!page) {
+  throw new Error(`Missing localized page for ${locale}/${slug}`);
+}
+
+const content = getProductPageContent(locale, pageId);
+const buttonClass = (variant?: 'primary' | 'secondary') =>
+  variant === 'secondary' ? 'button secondary' : 'button';
+const actionHref = (action: Parameters<typeof resolveActionHref>[1]) =>
+  resolveActionHref(locale, action);
+---
+
+<SiteLayout locale={locale} pageId={pageId}>
+  {
+    content.kind === 'home' ? (
+      <>
+        <section class="product-hero">
+          <div class="hero-copy">
+            <p class="eyebrow">{content.eyebrow}</p>
+            <h1>{content.headline}</h1>
+            <p class="lede">{content.lede}</p>
+            <div class="actions" aria-label="Primary actions">
+              {content.actions.map((action) => (
+                <a class={buttonClass(action.variant)} href={actionHref(action)}>
+                  {action.label}
+                </a>
+              ))}
+            </div>
+            <dl class="hero-facts" aria-label="Rainrail operating model">
+              {content.facts.map((fact) => (
+                <div>
+                  <dt>{fact.label}</dt>
+                  <dd>{fact.value}</dd>
+                </div>
+              ))}
+            </dl>
+          </div>
+
+          <div class="routing-console" aria-label={content.console.ariaLabel}>
+            <div class="console-topline">
+              <span>{content.console.topline}</span>
+              <strong>{content.console.status}</strong>
+            </div>
+            <div class="route-rail" aria-hidden="true">
+              <span></span>
+              <span></span>
+              <span></span>
+            </div>
+            {content.console.events.map((event) => (
+              <div class={`event-card ${event.className}`}>
+                <p>{event.label}</p>
+                <strong>{event.title}</strong>
+                <span>{event.body}</span>
+              </div>
+            ))}
+            <div class="console-log" aria-label="Routing decisions">
+              {content.console.logs.map((log) => (
+                <span>{log}</span>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        {content.sections.map((section) => (
+          <section
+            class:list={[
+              'section',
+              section.steps && 'workflow-section',
+              section.columns && 'plugin-section',
+              section.items && section.eyebrow.startsWith('Why') && 'value-section',
+            ]}
+          >
+            <div class="section-heading">
+              <p class="eyebrow">{section.eyebrow}</p>
+              <h2>{section.heading}</h2>
+            </div>
+            {section.items && (
+              <div class="grid value-grid">
+                {section.items.map((card) => (
+                  <div class="item">
+                    <h3>
+                      {card.pageId ? (
+                        <a href={resolveActionHref(locale, { label: card.title, pageId: card.pageId })}>
+                          {card.title}
+                        </a>
+                      ) : (
+                        card.title
+                      )}
+                    </h3>
+                    <p>{card.body}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+            {section.steps && (
+              <div class="workflow-steps">
+                {section.steps.map((step, index) => (
+                  <div class="workflow-step">
+                    <span>{String(index + 1).padStart(2, '0')}</span>
+                    <h3>{step.title}</h3>
+                    <p>{step.body}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+            {section.columns && (
+              <div class="plugin-model">
+                {section.columns.map((column) => (
+                  <div class="plugin-column">
+                    <h3>{column.title}</h3>
+                    <p>{column.body}</p>
+                    {column.linkText?.split('|').map((item) => (
+                      <span>{item}</span>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        ))}
+
+        <section class="section cta-section" aria-labelledby="cta-heading">
+          <div>
+            <p class="eyebrow">{content.cta.eyebrow}</p>
+            <h2 id="cta-heading">{content.cta.heading}</h2>
+          </div>
+          <div class="cta-actions">
+            {content.cta.actions.map((action) => (
+              <a class={buttonClass(action.variant)} href={actionHref(action)}>
+                {action.label}
+              </a>
+            ))}
+          </div>
+        </section>
+      </>
+    ) : (
+      <>
+        <section class="hero">
+          <div>
+            <p class="eyebrow">{content.eyebrow}</p>
+            <h1>{content.headline}</h1>
+            <p class="lede">{content.lede}</p>
+          </div>
+          {content.panel && (
+            <div
+              class:list={[
+                'panel',
+                content.panel.flow ? 'event-flow' : 'guide-panel',
+                pageId === 'examples' && 'example-summary',
+              ]}
+              aria-label={content.panel.ariaLabel}
+            >
+              {content.panel.flow ? (
+                content.panel.flow.map((step) => (
+                  <div class="flow-step">
+                    <strong>{step.title}</strong>
+                    <span>{step.body}</span>
+                  </div>
+                ))
+              ) : (
+                <>
+                  {content.panel.title && <strong>{content.panel.title}</strong>}
+                  {content.panel.body && <span>{content.panel.body}</span>}
+                </>
+              )}
+            </div>
+          )}
+        </section>
+
+        {content.sections.map((section) => (
+          <section class="section">
+            <h2>{section.heading}</h2>
+            {section.body && <p>{section.body}</p>}
+            {section.code && (
+              <pre><code>{section.code}</code></pre>
+            )}
+            {section.items && (
+              <div class:list={['doc-list', pageId === 'concepts' && 'grid concept-grid']}>
+                {section.items.map((item) => (
+                  <article class:list={[pageId === 'concepts' ? 'item concept-item' : 'doc-link']}>
+                    <h3>
+                      {item.href || item.pageId ? (
+                        <a href={item.pageId ? resolveActionHref(locale, { label: item.title, pageId: item.pageId }) : item.href}>
+                          {item.title}
+                        </a>
+                      ) : (
+                        item.title
+                      )}
+                    </h3>
+                    <p>{item.body}</p>
+                    {item.href && item.linkText && <a href={item.href}>{item.linkText}</a>}
+                  </article>
+                ))}
+              </div>
+            )}
+            {section.timeline && (
+              <div class="timeline">
+                {section.timeline.map((step) => (
+                  <article class="timeline-step">
+                    <h3>{step.title}</h3>
+                    <p>{step.body}</p>
+                  </article>
+                ))}
+              </div>
+            )}
+            {section.actions && (
+              <div class="actions">
+                {section.actions.map((action) => (
+                  <a class={buttonClass(action.variant)} href={actionHref(action)}>
+                    {action.label}
+                  </a>
+                ))}
+              </div>
+            )}
+          </section>
+        ))}
+      </>
+    )
+  }
+</SiteLayout>

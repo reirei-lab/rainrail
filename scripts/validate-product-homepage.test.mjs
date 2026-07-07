@@ -1,8 +1,12 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
-const homepage = readFileSync(
-  new URL('../apps/www/src/pages/index.astro', import.meta.url),
+const siteContent = readFileSync(
+  new URL('../apps/www/src/lib/site-content.ts', import.meta.url),
+  'utf8',
+);
+const localizedRoute = readFileSync(
+  new URL('../apps/www/src/pages/[locale]/[...slug].astro', import.meta.url),
   'utf8',
 );
 const globalStyles = readFileSync(
@@ -12,11 +16,12 @@ const globalStyles = readFileSync(
 
 describe('product homepage', () => {
   it('states Rainrail positioning and conversion paths in the first viewport', () => {
-    expect(homepage).toContain('Rainrail');
-    expect(homepage).toContain('development events');
-    expect(homepage).toContain('agent workflows');
-    expect(homepage).toContain('Start with the workflow');
-    expect(homepage).toContain('Inspect the contracts');
+    expect(siteContent).toContain('Rainrail');
+    expect(siteContent).toContain('development events');
+    expect(siteContent).toContain('agent workflows');
+    expect(siteContent).toContain('Start with the workflow');
+    expect(siteContent).toContain('Inspect the contracts');
+    expect(localizedRoute).toContain("content.kind === 'home'");
   });
 
   it('shows the core source to runtime workflow as both copy and visual stages', () => {
@@ -26,13 +31,12 @@ describe('product homepage', () => {
       'Policy and plugin routing',
       'Agent workflow',
     ]) {
-      expect(homepage).toContain(stage);
+      expect(siteContent).toContain(stage);
     }
 
-    expect(homepage).toContain('aria-label="Rainrail routing console"');
-    expect(homepage).toContain('class="route-rail"');
-    expect(homepage).toContain('class="event-card source"');
-    expect(homepage).toContain('class="event-card workflow"');
+    expect(localizedRoute).toContain('aria-label={content.console.ariaLabel}');
+    expect(localizedRoute).toContain('class="route-rail"');
+    expect(localizedRoute).toContain('class={`event-card ${event.className}`}');
   });
 
   it('communicates the developer automation value proposition without SaaS filler', () => {
@@ -42,11 +46,11 @@ describe('product homepage', () => {
       'Plugins own the routing logic',
       'Operators can audit every handoff',
     ]) {
-      expect(homepage).toContain(phrase);
+      expect(siteContent).toContain(phrase);
     }
 
-    expect(homepage).not.toMatch(/unlock.*potential/i);
-    expect(homepage).not.toMatch(/supercharge/i);
+    expect(siteContent).not.toMatch(/unlock.*potential/i);
+    expect(siteContent).not.toMatch(/supercharge/i);
   });
 
   it('keeps the homepage responsive and visually structured', () => {

@@ -74,6 +74,33 @@ a {
   font-size: 0.94rem;
 }
 
+.language-switcher {
+  display: inline-flex;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+}
+
+.language-switcher a {
+  min-width: 72px;
+  padding: 5px 10px;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 720;
+  text-align: center;
+  text-decoration: none;
+}
+
+.language-switcher a + a {
+  border-left: 1px solid var(--line);
+}
+
+.language-switcher a[aria-current="true"] {
+  background: var(--accent-strong);
+  color: white;
+}
+
 .main {
   width: min(1120px, calc(100% - 32px));
   margin: 0 auto;
@@ -1032,6 +1059,10 @@ h3 {
 
   .nav-links {
     justify-content: flex-start;
+  }
+
+  .language-switcher {
+    align-self: flex-start;
   }
 
   .product-hero,
