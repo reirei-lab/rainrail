@@ -111,7 +111,20 @@ out of scope for the current startup flow:
 - hosted multi-tenant operations
 
 Those follow-up auth and operator UX items are tracked separately from this
-startup guide.
+startup guide. The current split is:
+
+- [#228](https://github.com/reirei-lab/rainrail/issues/228): evaluate whether
+  `/events` should accept scoped dashboard auth tokens, while preserving SSE as
+  a refresh hint rather than authoritative state.
+- [#229](https://github.com/reirei-lab/rainrail/issues/229): design local
+  token rotation UX and keep operator/admin tokens out of stdout, dashboard
+  settings, logs, and docs examples.
+- [#230](https://github.com/reirei-lab/rainrail/issues/230): add stable
+  `actor`, `client`, and `requestId` attribution to command audit rows before
+  broadening operator/admin actions.
+- [#231](https://github.com/reirei-lab/rainrail/issues/231): decide whether the
+  local bearer-token field should remain the UX or evolve into a session login
+  flow for hosted or multi-user operation.
 
 ## Validation
 
