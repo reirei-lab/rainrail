@@ -12,19 +12,48 @@ export function getCliReleaseAssetName(version) {
 }
 
 /**
- * @typedef {{ status: number | null }} ScriptSpawnResult
- * @typedef {(command: string, args: string[]) => ScriptSpawnResult} ScriptSpawn
+ * @typedef {{ status: number | null; stdout?: string | Buffer }} ScriptSpawnResult
+ * @typedef {{ captureStdout?: boolean }} ScriptSpawnOptions
+ * @typedef {(command: string, args: string[], options?: ScriptSpawnOptions) => ScriptSpawnResult} ScriptSpawn
  */
 
 /**
  * @param {ScriptSpawn} spawn
  * @param {string} command
  * @param {string[]} args
+ * @param {ScriptSpawnOptions} [options]
  */
-function runChecked(spawn, command, args) {
-  const result = spawn(command, args);
+function runChecked(spawn, command, args, options) {
+  const result = spawn(command, args, options);
   if (result.status !== 0) {
     throw new Error(`${command} ${args.join(' ')} failed with status ${result.status}`);
+  }
+  return result;
+}
+
+/**
+ * @param {ScriptSpawn} spawn
+ * @param {string} assetPath
+ */
+function validateCliReleaseAsset(spawn, assetPath) {
+  const result = runChecked(spawn, 'tar', ['-tzf', assetPath], { captureStdout: true });
+  const entries = String(result.stdout ?? '').split(/\r?\n/u).filter((entry) => entry.length > 0);
+  const entrySet = new Set(entries);
+  const requiredEntries = [
+    'package/dist/dashboard/dashboard/index.html',
+    'package/dist/dashboard/ja/dashboard/index.html',
+    'package/dist/dashboard/en/dashboard/index.html',
+  ];
+  const missing = requiredEntries.filter((entry) => !entrySet.has(entry));
+  const hasAstroAsset = entries.some((entry) =>
+    entry.startsWith('package/dist/dashboard/_astro/') && !entry.endsWith('/'));
+
+  if (missing.length > 0 || !hasAstroAsset) {
+    throw new Error([
+      'CLI release package is missing dashboard assets:',
+      ...missing,
+      ...(hasAstroAsset ? [] : ['package/dist/dashboard/_astro/*']),
+    ].join(' '));
   }
 }
 
@@ -39,7 +68,10 @@ function runChecked(spawn, command, args) {
 export function packageCliRelease({
   root = fileURLToPath(new URL('..', import.meta.url)),
   outDir = join(root, 'dist', 'release'),
-  spawn = (command, args) => spawnSync(command, args, { stdio: ['ignore', 'ignore', 'inherit'] }),
+  spawn = (command, args, options = {}) => spawnSync(command, args, {
+    encoding: 'utf8',
+    stdio: ['ignore', options.captureStdout ? 'pipe' : 'ignore', 'inherit'],
+  }),
 } = {}) {
   const cliPackageDir = join(root, 'packages', 'cli');
   const cliPackageJson = JSON.parse(
@@ -61,6 +93,7 @@ export function packageCliRelease({
   runChecked(spawn, 'pnpm', ['--filter', '@rainrail/cli', 'build']);
   runChecked(spawn, 'npm', ['pack', cliPackageDir, '--pack-destination', outDir]);
   renameSync(npmPackPath, assetPath);
+  validateCliReleaseAsset(spawn, assetPath);
 
   return {
     assetName,

@@ -28,19 +28,32 @@ describe('CLI release package builder', () => {
     mkdirSync(cli, { recursive: true });
     writeFileSync(join(cli, 'package.json'), JSON.stringify({ version: '2.3.4' }));
 
-    /** @type {Array<[string, string[]]>} */
+    /** @type {Array<[string, string[], { captureStdout?: boolean } | undefined]>} */
     const calls = [];
     const result = packageCliRelease({
       root,
       outDir,
-      spawn: (command, args) => {
-        calls.push([command, args]);
+      spawn: (command, args, options) => {
+        calls.push([command, args, options]);
         if (command === 'npm') {
           const packDestination = args.at(-1);
           if (packDestination === undefined) {
             throw new Error('missing npm pack destination');
           }
           writeFileSync(join(packDestination, 'rainrail-cli-2.3.4.tgz'), 'tgz');
+        }
+        if (command === 'tar') {
+          return {
+            status: 0,
+            stdout: [
+              'package/dist/index.js',
+              'package/dist/bin/rainrail.js',
+              'package/dist/dashboard/dashboard/index.html',
+              'package/dist/dashboard/ja/dashboard/index.html',
+              'package/dist/dashboard/en/dashboard/index.html',
+              'package/dist/dashboard/_astro/dashboard-app.js',
+            ].join('\n'),
+          };
         }
         return { status: 0, stdout: '', stderr: '' };
       },
@@ -49,9 +62,43 @@ describe('CLI release package builder', () => {
     expect(result.assetPath).toBe(join(outDir, 'rainrail-cli-v2.3.4.tgz'));
     expect(readFileSync(result.assetPath, 'utf8')).toBe('tgz');
     expect(calls).toEqual([
-      ['pnpm', ['--filter', 'www', 'build']],
-      ['pnpm', ['--filter', '@rainrail/cli', 'build']],
-      ['npm', ['pack', cli, '--pack-destination', outDir]],
+      ['pnpm', ['--filter', 'www', 'build'], undefined],
+      ['pnpm', ['--filter', '@rainrail/cli', 'build'], undefined],
+      ['npm', ['pack', cli, '--pack-destination', outDir], undefined],
+      ['tar', ['-tzf', join(outDir, 'rainrail-cli-v2.3.4.tgz')], { captureStdout: true }],
     ]);
+  });
+
+  it('fails release packaging when the tarball is missing dashboard artifacts', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rainrail-release-pack-'));
+    const cli = join(root, 'packages', 'cli');
+    const outDir = join(root, 'dist', 'release');
+    mkdirSync(cli, { recursive: true });
+    writeFileSync(join(cli, 'package.json'), JSON.stringify({ version: '2.3.4' }));
+
+    expect(() => packageCliRelease({
+      root,
+      outDir,
+      spawn: (command, args) => {
+        if (command === 'npm') {
+          const packDestination = args.at(-1);
+          if (packDestination === undefined) {
+            throw new Error('missing npm pack destination');
+          }
+          writeFileSync(join(packDestination, 'rainrail-cli-2.3.4.tgz'), 'tgz');
+        }
+        if (command === 'tar') {
+          return {
+            status: 0,
+            stdout: [
+              'package/dist/index.js',
+              'package/dist/bin/rainrail.js',
+              'package/dist/dashboard/en/dashboard/index.html',
+            ].join('\n'),
+          };
+        }
+        return { status: 0, stdout: '', stderr: '' };
+      },
+    })).toThrow(/missing dashboard assets/i);
   });
 });
