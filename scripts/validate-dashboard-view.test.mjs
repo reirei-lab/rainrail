@@ -85,6 +85,50 @@ describe('dashboard operational views', () => {
     }
   });
 
+  it('localizes dashboard dynamic helper copy and placeholders', () => {
+    for (const marker of [
+      'sourceBundles',
+      'queueSignals',
+      'settingsSignals',
+      '次の issue',
+      '最大並列数',
+      '詳細を読み込み中',
+      '詳細を利用できません',
+      '詳細取得に失敗しました',
+      'この入力元イベントの handler retry 行を確認してください。',
+      '該当なし',
+      '不明',
+      'なし',
+    ]) {
+      expect(dashboardContent).toContain(marker);
+    }
+
+    expect(dashboardApp).toContain('copy.empty.sourceBundles.join');
+    expect(dashboardApp).toContain('copy.detailStates.loading');
+    expect(dashboardApp).toContain('copy.detailHints.checkHandlerRetryRows');
+    expect(dashboardApp).toContain('copy.placeholders.notAvailable');
+    expect(dashboardApp).not.toContain("'Check handler retry rows for this source event.'");
+    expect(dashboardApp).not.toContain("renderBasicDetail(row, 'Loading detail')");
+    expect(dashboardApp).not.toContain("?? 'unknown'");
+    expect(dashboardApp).not.toContain("?? 'none'");
+  });
+
+  it('formats operator command status and confirmation from localized templates', () => {
+    for (const marker of [
+      'formatCommandTemplate',
+      'copy.command.actions[action]',
+      'copy.command.targets.allRunningTasks',
+      'sendingTemplate',
+      'confirmTemplate',
+      '一括対象の実行中タスク',
+    ]) {
+      expect(dashboardApp + dashboardContent).toContain(marker);
+    }
+
+    expect(dashboardApp).not.toContain(' for ${targetId}');
+    expect(dashboardApp).not.toContain("'all running tasks'");
+  });
+
   it('names the Overview, Event Inbox, Workflow Runs, and Agent Tasks work surfaces', () => {
     for (const label of ['Overview', 'Event Inbox', 'Workflow Runs', 'Agent Tasks']) {
       expect(dashboardContent).toContain(label);
@@ -111,6 +155,19 @@ describe('dashboard operational views', () => {
     expect(dashboardApp).toContain('latestOutcome');
   });
 
+  it('localizes dashboard assistive labels and source filter option labels', () => {
+    expect(localizedDashboardPage).toContain('aria-label={content.shell.statsLabel}');
+    expect(localizedDashboardPage).toContain('content.shell.sourceOptions.manual');
+    expect(localizedDashboardPage).toContain('content.shell.sourceOptions.system');
+    expect(dashboardContent).toContain('運用集計');
+    expect(dashboardContent).toContain('手動');
+    expect(dashboardContent).toContain('システム');
+    expect(localizedDashboardPage).not.toContain('Operational totals');
+    expect(localizedDashboardPage).not.toContain('>Manual<');
+    expect(localizedDashboardPage).not.toContain('>System<');
+    expect(localizedDashboardPage).not.toContain('<dd>n/a</dd>');
+  });
+
   it('loads detail records for human summaries, sanitized envelopes, matched workflows, and audit', () => {
     expect(dashboardApp).toContain('eventDetail(row.id)');
     expect(dashboardApp).toContain('workflowRunDetail(row.id)');
@@ -127,7 +184,7 @@ describe('dashboard operational views', () => {
       'Action audit',
       'Retry schedule',
     ]) {
-      expect(dashboardApp).toContain(label);
+      expect(dashboardContent).toContain(label);
     }
 
     expect(dashboardApp).not.toContain('JSON.stringify(record.envelope.payload');
@@ -145,7 +202,7 @@ describe('dashboard operational views', () => {
       'Resume count',
       'Project claim',
     ]) {
-      expect(dashboardApp).toContain(label);
+      expect(dashboardContent).toContain(label);
     }
 
     expect(dashboardApp).toContain('renderAgentTaskDetail');

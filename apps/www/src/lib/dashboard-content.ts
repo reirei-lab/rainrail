@@ -20,10 +20,17 @@ export type DashboardContent = {
     status: string;
     refresh: string;
     staleData: string;
+    statsLabel: string;
     operatorControls: string;
     filtersLabel: string;
     source: string;
     allSources: string;
+    sourceOptions: {
+      github: string;
+      cloudflare: string;
+      manual: string;
+      system: string;
+    };
     eventName: string;
     apply: string;
     delivery: string;
@@ -67,11 +74,21 @@ export type DashboardAppCopy = {
     branch: string;
     issue: string;
   };
+  placeholders: {
+    notAvailable: string;
+    unknown: string;
+    none: string;
+    admin: string;
+    required: string;
+  };
   empty: {
     sources: string;
     queue: string;
     settings: string;
     fallback: string;
+    sourceBundles: string[];
+    queueSignals: string[];
+    settingsSignals: string[];
   };
   stats: {
     health: string;
@@ -82,6 +99,15 @@ export type DashboardAppCopy = {
     agentTasks: string;
     sources: string;
     queue: string;
+  };
+  detailStates: {
+    loading: string;
+    unavailable: string;
+    requestFailed: string;
+    summary: string;
+  };
+  detailHints: {
+    checkHandlerRetryRows: string;
   };
   detailLabels: {
     id: string;
@@ -141,11 +167,20 @@ export type DashboardAppCopy = {
   command: {
     connectFirst: string;
     selectTaskFirst: string;
-    sending: string;
-    confirm: string;
     failed: string;
     command: string;
     audit: string;
+    sendingTemplate: string;
+    confirmTemplate: string;
+    actions: {
+      resume: string;
+      reset: string;
+      terminate: string;
+      'terminate-all': string;
+    };
+    targets: {
+      allRunningTasks: string;
+    };
   };
 };
 
@@ -167,11 +202,21 @@ const englishApp: DashboardAppCopy = {
     branch: 'Branch',
     issue: 'Issue',
   },
+  placeholders: {
+    notAvailable: 'n/a',
+    unknown: 'unknown',
+    none: 'none',
+    admin: 'admin',
+    required: 'required',
+  },
   empty: {
     sources: 'Waiting for configured source adapters',
     queue: 'Waiting for queue records covering',
     settings: 'Waiting for settings metadata covering',
     fallback: 'Select another stream or wait for the next poll.',
+    sourceBundles: ['EEP Bridge', 'GitHub webhook', 'Cloudflare tail', 'manual/chat'],
+    queueSignals: ['upcoming issue', 'blocked reason', 'in-progress count', 'claim lock', 'Project status'],
+    settingsSignals: ['max concurrency', 'auto-start', 'retry policy', 'operational snapshot limit', 'dashboard auth'],
   },
   stats: {
     health: 'Health',
@@ -209,6 +254,15 @@ const englishApp: DashboardAppCopy = {
     stderrLog: 'stderr log',
     rawDetail: 'JSONL/raw detail',
   },
+  detailStates: {
+    loading: 'Loading detail',
+    unavailable: 'Detail unavailable',
+    requestFailed: 'Detail request failed',
+    summary: 'summary',
+  },
+  detailHints: {
+    checkHandlerRetryRows: 'Check handler retry rows for this source event.',
+  },
   metadata: {
     sourceType: 'Source type',
     endpoint: 'Endpoint',
@@ -241,13 +295,24 @@ const englishApp: DashboardAppCopy = {
   command: {
     connectFirst: 'Connect with an operator token before running commands.',
     selectTaskFirst: 'Select an agent task first.',
-    sending: 'Sending',
-    confirm: 'Confirm',
     failed: 'Command failed',
     command: 'Command',
     audit: 'audit',
+    sendingTemplate: 'Sending {action} for {target}',
+    confirmTemplate: 'Confirm {action} for {target}?',
+    actions: {
+      resume: 'resume',
+      reset: 'reset',
+      terminate: 'terminate',
+      'terminate-all': 'terminate all',
+    },
+    targets: {
+      allRunningTasks: 'all running tasks',
+    },
   },
 };
+
+export const fallbackDashboardAppCopy: DashboardAppCopy = englishApp;
 
 const japaneseApp: DashboardAppCopy = {
   status: {
@@ -265,11 +330,21 @@ const japaneseApp: DashboardAppCopy = {
     branch: 'ブランチ',
     issue: 'Issue',
   },
+  placeholders: {
+    notAvailable: '該当なし',
+    unknown: '不明',
+    none: 'なし',
+    admin: '管理者',
+    required: '必須',
+  },
   empty: {
     sources: '設定済み入力元アダプターを待っています',
     queue: 'キューレコードを待っています',
     settings: '設定メタデータを待っています',
     fallback: '別のストリームを選ぶか、次のポーリングを待ってください。',
+    sourceBundles: ['EEP Bridge', 'GitHub webhook', 'Cloudflare tail', '手動 / チャット'],
+    queueSignals: ['次の issue', 'ブロック理由', '進行中件数', '取得ロック', 'Project 状態'],
+    settingsSignals: ['最大並列数', '自動開始', 'リトライ方針', '運用 snapshot 上限', 'dashboard 認証'],
   },
   stats: {
     health: '稼働状況',
@@ -307,6 +382,15 @@ const japaneseApp: DashboardAppCopy = {
     stderrLog: 'stderr log',
     rawDetail: 'JSONL / 生データ詳細',
   },
+  detailStates: {
+    loading: '詳細を読み込み中',
+    unavailable: '詳細を利用できません',
+    requestFailed: '詳細取得に失敗しました',
+    summary: '要約',
+  },
+  detailHints: {
+    checkHandlerRetryRows: 'この入力元イベントの handler retry 行を確認してください。',
+  },
   metadata: {
     sourceType: '入力元タイプ',
     endpoint: 'エンドポイント',
@@ -339,11 +423,20 @@ const japaneseApp: DashboardAppCopy = {
   command: {
     connectFirst: '操作用トークンで接続してからコマンドを実行してください。',
     selectTaskFirst: '先にエージェントタスクを選択してください。',
-    sending: '送信中',
-    confirm: '確認',
     failed: 'コマンド失敗',
     command: 'コマンド',
     audit: '監査',
+    sendingTemplate: '{target} に {action} を送信中',
+    confirmTemplate: '{target} に {action} を実行しますか？',
+    actions: {
+      resume: '再開',
+      reset: 'claim リセット',
+      terminate: '終了',
+      'terminate-all': '一括終了',
+    },
+    targets: {
+      allRunningTasks: '一括対象の実行中タスク',
+    },
   },
 };
 
@@ -368,10 +461,17 @@ const dashboardContent = {
       status: 'Status',
       refresh: 'Refresh',
       staleData: 'Stale data',
+      statsLabel: 'Operational totals',
       operatorControls: 'Operator controls',
       filtersLabel: 'Event inbox filters',
       source: 'Source',
       allSources: 'All sources',
+      sourceOptions: {
+        github: 'GitHub',
+        cloudflare: 'Cloudflare',
+        manual: 'Manual',
+        system: 'System',
+      },
       eventName: 'Event name',
       apply: 'Apply',
       delivery: 'Delivery',
@@ -418,10 +518,17 @@ const dashboardContent = {
       status: '状態',
       refresh: '更新',
       staleData: '古いデータ',
+      statsLabel: '運用集計',
       operatorControls: '操作権限',
       filtersLabel: 'イベント受信箱フィルター',
       source: '入力元',
       allSources: 'すべての入力元',
+      sourceOptions: {
+        github: 'GitHub',
+        cloudflare: 'Cloudflare',
+        manual: '手動',
+        system: 'システム',
+      },
       eventName: 'イベント名',
       apply: '適用',
       delivery: '配送',

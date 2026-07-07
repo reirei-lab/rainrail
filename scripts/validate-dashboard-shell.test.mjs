@@ -70,9 +70,12 @@ describe('dashboard app shell', () => {
     expect(dashboardApp).toContain('sources: (await activeClient.sources()).data');
     expect(dashboardApp).toContain('queue: (await activeClient.queue()).data');
     expect(dashboardApp).toContain('settings: (await activeClient.settings()).data');
-    expect(dashboardApp).toContain("const sourceBundleLabels = ['EEP Bridge', 'GitHub webhook', 'Cloudflare tail', 'manual/chat']");
-    expect(dashboardApp).toContain("const queueLabels = ['upcoming issue', 'blocked reason', 'in-progress count', 'claim lock', 'Project status']");
-    expect(dashboardApp).toContain("const settingsLabels = ['max concurrency', 'auto-start', 'retry policy', 'operational snapshot limit', 'dashboard auth']");
+    expect(dashboardContent).toContain("sourceBundles: ['EEP Bridge', 'GitHub webhook', 'Cloudflare tail'");
+    expect(dashboardContent).toContain("queueSignals: ['upcoming issue', 'blocked reason', 'in-progress count'");
+    expect(dashboardContent).toContain("settingsSignals: ['max concurrency', 'auto-start', 'retry policy'");
+    expect(dashboardApp).not.toContain('const sourceBundleLabels');
+    expect(dashboardApp).not.toContain('const queueLabels');
+    expect(dashboardApp).not.toContain('const settingsLabels');
   });
 
   it('keeps UI code behind an operational API client instead of hard-coded fetch URLs', () => {

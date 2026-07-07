@@ -78,7 +78,7 @@ const dashboardCopy = JSON.stringify(content.app);
       <div class="dashboard-state" data-state="error">{content.shell.states.unavailable}</div>
       <div class="dashboard-state" data-state="auth-missing">{content.shell.states.authMissing}</div>
 
-      <section class="dashboard-stats dashboard-overview-grid" data-dashboard-stats aria-label="Operational totals">
+      <section class="dashboard-stats dashboard-overview-grid" data-dashboard-stats aria-label={content.shell.statsLabel}>
         <div class="dashboard-stat"><span>{content.app.stats.events}</span><strong>0</strong></div>
         <div class="dashboard-stat"><span>{content.app.stats.activeRuns}</span><strong>0</strong></div>
         <div class="dashboard-stat"><span>{content.app.stats.agentTasks}</span><strong>0</strong></div>
@@ -92,10 +92,10 @@ const dashboardCopy = JSON.stringify(content.app);
           {content.shell.source}
           <select data-event-source-filter>
             <option value="">{content.shell.allSources}</option>
-            <option value="github">GitHub</option>
-            <option value="cloudflare">Cloudflare</option>
-            <option value="manual">Manual</option>
-            <option value="system">System</option>
+            <option value="github">{content.shell.sourceOptions.github}</option>
+            <option value="cloudflare">{content.shell.sourceOptions.cloudflare}</option>
+            <option value="manual">{content.shell.sourceOptions.manual}</option>
+            <option value="system">{content.shell.sourceOptions.system}</option>
           </select>
         </label>
         <label>
@@ -117,9 +117,9 @@ const dashboardCopy = JSON.stringify(content.app);
           </div>
           <h2>{content.app.placeholder.selectStream}</h2>
           <dl>
-            <div><dt>ID</dt><dd>n/a</dd></div>
-            <div><dt>{content.app.placeholder.branch}</dt><dd>n/a</dd></div>
-            <div><dt>{content.app.placeholder.issue}</dt><dd>n/a</dd></div>
+            <div><dt>ID</dt><dd>{content.app.placeholders.notAvailable}</dd></div>
+            <div><dt>{content.app.placeholder.branch}</dt><dd>{content.app.placeholders.notAvailable}</dd></div>
+            <div><dt>{content.app.placeholder.issue}</dt><dd>{content.app.placeholders.notAvailable}</dd></div>
           </dl>
         </article>
       </section>
