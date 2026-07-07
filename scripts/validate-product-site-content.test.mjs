@@ -1,6 +1,8 @@
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
+import { getProductPageContent } from '../apps/www/src/lib/site-content.js';
+
 /**
  * @param {string} name
  */
@@ -14,24 +16,176 @@ const layout = readFileSync(
   new URL('../apps/www/src/layouts/SiteLayout.astro', import.meta.url),
   'utf8',
 );
-const docsPage = page('docs');
+const localizedRoute = page('[locale]/[...slug]');
+const siteContent = readFileSync(
+  new URL('../apps/www/src/lib/site-content.ts', import.meta.url),
+  'utf8',
+);
+const i18n = readFileSync(
+  new URL('../apps/www/src/lib/i18n.ts', import.meta.url),
+  'utf8',
+);
+const indexPage = page('index');
+const sitemapRoute = readFileSync(
+  new URL('../apps/www/src/pages/sitemap.xml.ts', import.meta.url),
+  'utf8',
+);
+const contractsManifest = readFileSync(
+  new URL('../docs/contracts.manifest.json', import.meta.url),
+  'utf8',
+);
 const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
 const rootInstallScript = new URL('../install.sh', import.meta.url);
 const publicInstallScript = new URL('../apps/www/public/install.sh', import.meta.url);
+const publicRedirects = new URL('../apps/www/public/_redirects', import.meta.url);
 
 describe('product site concepts, guides, and examples', () => {
+  it('serves every product page under both /ja/ and /en/ locale routes', () => {
+    expect(localizedRoute).toContain('getStaticPaths');
+    expect(localizedRoute).toContain('supportedLocales.flatMap');
+    expect(localizedRoute).toContain('pageIds.map');
+    expect(localizedRoute).toContain('getPageBySlug(locale, slug)');
+
+    for (const locale of ['ja', 'en']) {
+      expect(i18n).toContain(`'${locale}'`);
+    }
+    for (const slug of ['how-it-works', 'concepts', 'guides', 'examples', 'docs']) {
+      expect(i18n).toContain(`'${slug}'`);
+    }
+    expect(i18n).toContain('`/${locale}/`');
+    expect(i18n).toContain('`/${locale}/${slug}`');
+  });
+
+  it('keeps navigation, brand links, CTA links, and language switching locale-aware', () => {
+    expect(layout).toContain('page.alternates');
+    expect(layout).toContain('page.href');
+    expect(layout).toContain('rel="canonical"');
+    expect(layout).toContain('absolutePageAlternates');
+    expect(layout).toContain('language-switcher');
+    expect(layout).toContain('site.nav.languageSwitcherLabel');
+    expect(layout).toContain('hrefFor(item.pageId)');
+    expect(localizedRoute).toContain('resolveActionHref(locale, action)');
+    expect(localizedRoute).toContain('resolveActionHref(locale, { label: card.title, pageId: card.pageId })');
+    expect(layout).not.toContain("href=\"/how-it-works\"");
+    expect(layout).not.toContain("href=\"/docs\"");
+    expect(layout).not.toContain("href=\"/concepts\"");
+  });
+
+  it('redirects legacy product URLs to the default English locale', () => {
+    const redirects = readFileSync(publicRedirects, 'utf8');
+
+    for (const redirect of [
+      '/how-it-works /en/how-it-works 301',
+      '/how-it-works/ /en/how-it-works 301',
+      '/concepts /en/concepts 301',
+      '/concepts/ /en/concepts 301',
+      '/guides /en/guides 301',
+      '/guides/ /en/guides 301',
+      '/examples /en/examples 301',
+      '/examples/ /en/examples 301',
+      '/docs /en/docs 301',
+      '/docs/ /en/docs 301',
+    ]) {
+      expect(redirects).toContain(redirect);
+    }
+
+    for (const route of ['how-it-works', 'concepts', 'guides', 'examples', 'docs']) {
+      const routeSource = page(route);
+      expect(routeSource).toContain('getDefaultLocaleRedirect');
+      expect(routeSource).toContain('http-equiv="refresh"');
+      expect(routeSource).not.toContain('Astro.redirect');
+    }
+  });
+
+  it('keeps / as the automatic locale detection entry point', () => {
+    expect(indexPage).toContain('navigator.languages');
+    expect(indexPage).toContain('find((language)');
+    expect(indexPage).toContain('supportedLocaleHrefs');
+    expect(indexPage).toContain('Rainrail routes development events into agent workflows.');
+    expect(indexPage).toContain("getLocaleHref('ja', 'home')");
+    expect(indexPage).toContain("getLocaleHref('en', 'home')");
+    expect(indexPage).not.toContain('redirectToDefaultLocale');
+    expect(indexPage).not.toContain('Astro.redirect');
+  });
+
+  it('localizes Japanese home visible labels and assistive labels', () => {
+    const japaneseHome = getProductPageContent('ja', 'home');
+
+    if (japaneseHome.kind !== 'home') {
+      throw new Error('Japanese home content must use the home renderer');
+    }
+
+    expect(japaneseHome.primaryActionsLabel).toBe('主要アクション');
+    expect(japaneseHome.facts.ariaLabel).toBe('Rainrail の運用モデル');
+    expect(japaneseHome.console.decisionsLabel).toBe('ルーティング判断');
+    expect(japaneseHome.console.events.map((event) => event.label)).toEqual([
+      '開発イベント',
+      '中立イベント',
+      'ポリシーとプラグインルーティング',
+      'エージェントワークフロー',
+    ]);
+    expect(japaneseHome.console.logs).toEqual([
+      'source adapter github.issue に一致',
+      'payload を rainrail.event.v1 契約で正規化',
+      'runtime provider openclaw へ dispatch',
+    ]);
+    expect(japaneseHome.sections.map((section) => section.eyebrow)).toContain(
+      '中核ワークフロー',
+    );
+    expect(japaneseHome.cta.actions.map((action) => action.label)).toEqual([
+      'イベント経路を追う',
+      '技術ドキュメント',
+      'ランタイム契約',
+      'Issue を見る',
+    ]);
+  });
+
+  it('publishes sitemap entries from the localized page model', () => {
+    expect(sitemapRoute).toContain('supportedLocales.flatMap');
+    expect(sitemapRoute).toContain('pageIds.map');
+    expect(sitemapRoute).toContain('getLocaleHref(locale, pageId)');
+    expect(sitemapRoute).toContain('application/xml');
+  });
+
+  it('keeps docs drift manifest pointed at the product content source', () => {
+    /** @type {{ contracts: Array<{ id: string, docs: string[] }> }} */
+    const manifest = JSON.parse(contractsManifest);
+    const coreBoundary = manifest.contracts.find(
+      (contract) => contract.id === 'core-eep-bridge-source-adapter-boundary',
+    );
+
+    if (coreBoundary === undefined) {
+      throw new Error('core-eep-bridge-source-adapter-boundary contract is missing');
+    }
+
+    expect(coreBoundary.docs).toContain('apps/www/src/lib/site-content.ts');
+    expect(coreBoundary.docs).not.toContain('apps/www/src/pages/concepts.astro');
+    expect(coreBoundary.docs).not.toContain('apps/www/src/pages/guides.astro');
+    expect(coreBoundary.docs).not.toContain('apps/www/src/pages/examples.astro');
+  });
+
+  it('keeps Japanese visible page content separate from English page copy', () => {
+    expect(siteContent).not.toContain('...english.howItWorks');
+    expect(siteContent).not.toContain('...english.concepts');
+    expect(siteContent).not.toContain('...english.guides');
+    expect(siteContent).not.toContain('...english.examples');
+    expect(siteContent).not.toContain('...english.docs');
+    expect(siteContent).not.toContain('english.concepts.sections[0]');
+    expect(siteContent).not.toContain('english.guides.sections[0]');
+    expect(siteContent).not.toContain('english.examples.sections[0]');
+    expect(siteContent).not.toContain('english.docs.sections[0]');
+  });
+
   it('exposes Concepts, Guides, and Examples from the primary navigation and docs gateway', () => {
     expect(layout).toContain('site.nav.primary.map');
     expect(layout).toContain('hrefFor(item.pageId)');
 
-    for (const href of ['/concepts', '/guides', '/examples']) {
-      expect(docsPage).toContain(`href: '${href}'`);
+    for (const pageId of ['concepts', 'guides', 'examples']) {
+      expect(siteContent).toContain(`pageId: '${pageId}'`);
     }
   });
 
   it('publishes the initial Concepts content with links back to implementation contracts', () => {
-    const concepts = page('concepts');
-
     for (const term of [
       'RainrailEventEnvelope',
       'Source plugin',
@@ -40,31 +194,29 @@ describe('product site concepts, guides, and examples', () => {
       'Runtime provider',
       'Bridge room',
     ]) {
-      expect(concepts).toContain(term);
+      expect(siteContent).toContain(term);
     }
 
-    expect(concepts).toContain('docs/plugin-runtime-contract.md');
-    expect(concepts).toContain('docs/event-delivery.md');
+    expect(siteContent).toContain('plugin-runtime-contract.md');
+    expect(siteContent).toContain('event-delivery.md');
   });
 
   it('publishes the initial Guides content for the first operational workflows', () => {
-    const guides = page('guides');
-
     for (const guide of [
       'GitHub issue automation',
       'Manual and chat intake',
       'PR review loop',
       'Cloudflare event reporting',
     ]) {
-      expect(guides).toContain(guide);
+      expect(siteContent).toContain(guide);
     }
 
-    expect(guides).toContain('docs/task-queue-project-issues.md');
-    expect(guides).toContain('docs/cloudflare-worker.md');
+    expect(siteContent).toContain('task-queue-project-issues.md');
+    expect(siteContent).toContain('cloudflare-worker.md');
   });
 
   it('keeps CLI setup docs minimal and points command details at rainrail help', () => {
-    expect(docsPage).toContain('CLI quick start');
+    expect(siteContent).toContain('CLI quick start');
     expect(readme).toContain('## Getting Started');
 
     for (const command of [
@@ -81,7 +233,7 @@ describe('product site concepts, guides, and examples', () => {
       'rainrail openclaw session test help',
       'rainrail <plugin> help',
     ]) {
-      expect(docsPage).toContain(command);
+      expect(siteContent).toContain(command);
     }
 
     for (const command of [
@@ -101,12 +253,12 @@ describe('product site concepts, guides, and examples', () => {
     }
 
     expect(readme).toContain('Node.js 20 or newer');
-    expect(docsPage).not.toContain('less install.sh');
-    expect(docsPage).not.toContain('bash install.sh');
-    expect(docsPage).not.toContain('Usage: rainrail github');
-    expect(docsPage).not.toContain('Usage: rainrail cloudflare');
-    expect(docsPage).not.toContain('Usage: rainrail openclaw');
-    expect(docsPage).not.toContain('webhook add');
+    expect(siteContent).not.toContain('less install.sh');
+    expect(siteContent).not.toContain('bash install.sh');
+    expect(siteContent).not.toContain('Usage: rainrail github');
+    expect(siteContent).not.toContain('Usage: rainrail cloudflare');
+    expect(siteContent).not.toContain('Usage: rainrail openclaw');
+    expect(siteContent).not.toContain('webhook add');
   });
 
   it('publishes the root installer through the product site public assets', () => {
@@ -115,8 +267,6 @@ describe('product site concepts, guides, and examples', () => {
   });
 
   it('publishes an end-to-end example from GitHub issue to merge', () => {
-    const examples = page('examples');
-
     for (const step of [
       'GitHub issue',
       'Manual or chat message',
@@ -126,21 +276,18 @@ describe('product site concepts, guides, and examples', () => {
       'review',
       'merge',
     ]) {
-      expect(examples).toContain(step);
+      expect(siteContent).toContain(step);
     }
   });
 
   it('links product readers back to repository work surfaces and engineering contracts', () => {
-    const homepage = page('index');
-
     for (const target of [
       'https://github.com/reirei-lab/rainrail',
-      'https://github.com/reirei-lab/rainrail/issues',
-      'https://github.com/reirei-lab/rainrail/blob/main/docs/plugin-runtime-contract.md',
-      'https://github.com/reirei-lab/rainrail/blob/main/docs/README.md',
+      '/issues',
+      'plugin-runtime-contract.md',
+      'README.md',
     ]) {
-      expect(homepage).toContain(target);
-      expect(docsPage).toContain(target);
+      expect(siteContent).toContain(target);
     }
   });
 });

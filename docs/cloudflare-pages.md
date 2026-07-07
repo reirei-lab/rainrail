@@ -76,4 +76,4 @@ deploy 後は公開 URL を指定して product site の主要 route が HTML �
 RAINRAIL_PAGES_URL=https://<pages-host> pnpm pages:smoke
 ```
 
-smoke script は `/`, `/docs`, `/how-it-works` を GET し、`text/html` と route 固有の hero 文言を確認する。
+smoke script は `/`, `/en/docs`, `/en/how-it-works` を GET し、`text/html` と route 固有の hero 文言を確認する。

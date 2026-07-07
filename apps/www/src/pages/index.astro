@@ -1,209 +1,39 @@
 ---
-import SiteLayout from '../layouts/SiteLayout.astro';
+import { getLocaleHref } from '../lib/i18n';
+
+const supportedLocaleHrefs = {
+  ja: getLocaleHref('ja', 'home'),
+  en: getLocaleHref('en', 'home'),
+};
 ---
 
-<SiteLayout
-  title="Rainrail"
-  description="Rainrail routes development events into deterministic agent workflows."
->
-  <section class="product-hero">
-    <div class="hero-copy">
-      <p class="eyebrow">Developer event routing for agent operations</p>
-      <h1>Rainrail routes development events into agent workflows.</h1>
-      <p class="lede">
-        Turn issues, pull requests, project queues, webhook deliveries, and
-        operational signals into deterministic agent tasks with stable contracts
-        between every source, plugin, and runtime.
-      </p>
-      <div class="actions" aria-label="Primary actions">
-        <a class="button" href="/how-it-works">Start with the workflow</a>
-        <a class="button secondary" href="/docs">Inspect the contracts</a>
-        <a class="button secondary" href="https://github.com/reirei-lab/rainrail">Open GitHub repo</a>
-      </div>
-      <dl class="hero-facts" aria-label="Rainrail operating model">
-        <div>
-          <dt>Sources</dt>
-          <dd>GitHub, Cloudflare tail, project queues</dd>
-        </div>
-        <div>
-          <dt>Boundary</dt>
-          <dd>Neutral Rainrail event envelope</dd>
-        </div>
-        <div>
-          <dt>Output</dt>
-          <dd>Agent workflow with audit context</dd>
-        </div>
-      </dl>
-    </div>
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width" />
+    <meta name="robots" content="noindex" />
+    <title>Rainrail</title>
+    <script is:inline define:vars={{ supportedLocaleHrefs }}>
+      const languages = navigator.languages?.length
+        ? navigator.languages
+        : [navigator.language || 'en'];
+      const locale = languages
+        .map((language) => language.toLowerCase().split('-')[0])
+        .find((language) => Object.hasOwn(supportedLocaleHrefs, language)) || 'en';
 
-    <div class="routing-console" aria-label="Rainrail routing console">
-      <div class="console-topline">
-        <span>rainrail/router</span>
-        <strong>live route preview</strong>
-      </div>
-      <div class="route-rail" aria-hidden="true">
-        <span></span>
-        <span></span>
-        <span></span>
-      </div>
-      <div class="event-card source">
-        <p>Development event</p>
-        <strong>issue.opened</strong>
-        <span>repo: reirei-lab/rainrail</span>
-      </div>
-      <div class="event-card envelope">
-        <p>Neutral event</p>
-        <strong>rainrail.event.v1</strong>
-        <span>source, actor, payload, trace</span>
-      </div>
-      <div class="event-card policy">
-        <p>Policy and plugin routing</p>
-        <strong>workflow: product-site</strong>
-        <span>dedupe, assign, observe</span>
-      </div>
-      <div class="event-card workflow">
-        <p>Agent workflow</p>
-        <strong>codex.issue.implementation</strong>
-        <span>branch, tests, PR, result callback</span>
-      </div>
-      <div class="console-log" aria-label="Routing decisions">
-        <span>matched source adapter github.issue</span>
-        <span>normalized payload with contract rainrail.event.v1</span>
-        <span>dispatched to runtime provider openclaw</span>
-      </div>
-    </div>
-  </section>
-
-  <section class="section value-section" aria-labelledby="value-heading">
-    <div class="section-heading">
-      <p class="eyebrow">Why teams put Rainrail in the middle</p>
-      <h2 id="value-heading">Automation stays understandable when the routing is explicit.</h2>
-    </div>
-    <div class="grid value-grid">
-      <div class="item">
-        <h3>Webhook storms become ordered work</h3>
-        <p>
-          Incoming events are normalized before they reach an agent, so retries,
-          duplicate deliveries, and project queue changes are handled as routing
-          decisions instead of improvised scripts.
-        </p>
-      </div>
-      <div class="item">
-        <h3>Contracts stay stable</h3>
-        <p>
-          Source payloads can evolve while workflow plugins keep receiving a
-          predictable event envelope with the context they need to act.
-        </p>
-      </div>
-      <div class="item">
-        <h3>Operators can audit every handoff</h3>
-        <p>
-          Dispatch reasons, assignment choices, and runtime inputs are designed
-          to be visible enough for reviews, incident follow-up, and local replay.
-        </p>
-      </div>
-    </div>
-  </section>
-
-  <section class="section workflow-section" aria-labelledby="workflow-heading">
-    <div class="section-heading">
-      <p class="eyebrow">Core workflow</p>
-      <h2 id="workflow-heading">From repository signal to repeatable agent run.</h2>
-    </div>
-    <div class="workflow-steps">
-      <div class="workflow-step">
-        <span>01</span>
-        <h3>Source adapters capture events</h3>
-        <p>GitHub issues, pull requests, project queues, and runtime telemetry enter through source-specific adapters.</p>
-      </div>
-      <div class="workflow-step">
-        <span>02</span>
-        <h3>Rainrail normalizes the envelope</h3>
-        <p>Provider details are preserved behind a stable event contract with traceable actor, source, and payload context.</p>
-      </div>
-      <div class="workflow-step">
-        <span>03</span>
-        <h3>Plugins own the routing logic</h3>
-        <p>Workflow plugins match events, apply policy, and choose the runtime without hard-coding every source to every agent.</p>
-      </div>
-      <div class="workflow-step">
-        <span>04</span>
-        <h3>Runtimes receive deterministic work</h3>
-        <p>Agents start with explicit instructions, branch context, observable execution state, and a completion path.</p>
-      </div>
-    </div>
-  </section>
-
-  <section class="section plugin-section" aria-labelledby="plugin-heading">
-    <div class="section-heading">
-      <p class="eyebrow">Plugin model</p>
-      <h2 id="plugin-heading">Keep integrations small enough to reason about.</h2>
-    </div>
-    <div class="plugin-model">
-      <div class="plugin-column">
-        <h3>Source plugins</h3>
-        <p>Translate provider-specific signals into Rainrail events.</p>
-        <span>GitHub issue</span>
-        <span>Cloudflare tail</span>
-        <span>Project queue</span>
-      </div>
-      <div class="plugin-column">
-        <h3>Workflow plugins</h3>
-        <p>Decide what should happen and why.</p>
-        <span>triage</span>
-        <span>implementation</span>
-        <span>review follow-up</span>
-      </div>
-      <div class="plugin-column">
-        <h3>Runtime providers</h3>
-        <p>Start agents with reproducible input and reporting.</p>
-        <span>OpenClaw</span>
-        <span>Codex</span>
-        <span>local runner</span>
-      </div>
-    </div>
-  </section>
-
-  <section class="section" aria-labelledby="content-heading">
-    <div class="section-heading">
-      <p class="eyebrow">Initial content</p>
-      <h2 id="content-heading">Read the vocabulary, then trace the operating paths.</h2>
-    </div>
-    <div class="grid">
-      <div class="item">
-        <h3><a href="/concepts">Concepts</a></h3>
-        <p>
-          Learn the event envelope, source plugin, workflow plugin, provider,
-          and bridge room vocabulary before reading implementation contracts.
-        </p>
-      </div>
-      <div class="item">
-        <h3><a href="/guides">Guides</a></h3>
-        <p>
-          Follow the first GitHub issue automation, PR review loop, and
-          Cloudflare event reporting paths at an operator level.
-        </p>
-      </div>
-      <div class="item">
-        <h3><a href="/examples">Examples</a></h3>
-        <p>
-          Trace the GitHub issue to Project queue to agent PR to review and
-          merge workflow end to end.
-        </p>
-      </div>
-    </div>
-  </section>
-
-  <section class="section cta-section" aria-labelledby="cta-heading">
-    <div>
-      <p class="eyebrow">Build the route before the agent runs</p>
-      <h2 id="cta-heading">Use Rainrail when event-driven automation needs contracts, not another one-off webhook handler.</h2>
-    </div>
-    <div class="cta-actions">
-      <a class="button" href="/how-it-works">Follow the event path</a>
-      <a class="button secondary" href="https://github.com/reirei-lab/rainrail/blob/main/docs/README.md">Engineering docs</a>
-      <a class="button secondary" href="https://github.com/reirei-lab/rainrail/blob/main/docs/plugin-runtime-contract.md">Runtime contract</a>
-      <a class="button secondary" href="https://github.com/reirei-lab/rainrail/issues">Issues</a>
-    </div>
-  </section>
-</SiteLayout>
+      window.location.replace(supportedLocaleHrefs[locale]);
+    </script>
+  </head>
+  <body>
+    <main>
+      <h1>Rainrail</h1>
+      <p>Rainrail routes development events into agent workflows.</p>
+      <p>Select a language.</p>
+      <ul>
+        <li><a href={supportedLocaleHrefs.ja}>日本語</a></li>
+        <li><a href={supportedLocaleHrefs.en}>English</a></li>
+      </ul>
+    </main>
+  </body>
+</html>

@@ -1,7 +1,7 @@
 # www i18n foundation
 
-Rainrail の Astro プロダクトサイトは、後続の明示的な locale ルーティング
-実装に向けて `apps/www/src/lib/i18n.ts` を i18n 基盤の入口にする。
+Rainrail の Astro プロダクトサイトは、`apps/www/src/lib/i18n.ts` を i18n
+基盤の入口にする。product pages は `/ja/` / `/en/` の明示 URL で公開する。
 
 ## 対象 locale
 
@@ -20,19 +20,30 @@ footer、alternate URL の検証を同じ変更で更新する。
 - localized href
 - locale alternates
 
-後続の `/ja/` / `/en/` ルーティング実装では、このページモデルから canonical
-URL、`hreflang`、言語スイッチャーを生成する。
+`/ja/` / `/en/` ルーティングでは、canonical URL と `hreflang` alternate は同じ page model から生成する。
+`hreflang` は検索エンジン
+向けに absolute URL とし、sitemap も同じ page model から各 locale URL を列挙する。
 
 ## エラー方針
 
 未対応 locale は自動 fallback しない。`assertSupportedLocale` で明示的に拒否し、
-呼び出し側が 404、リダイレクト、または自動判定入口 `/` の処理を選ぶ。
+呼び出し側が 404、HTTP redirect、または自動 locale detection entry point `/`
+の処理を選ぶ。
 
 存在しない翻訳キーは例外にする。空文字や英語 fallback を黙って表示すると、
 翻訳漏れが production まで残りやすいため。
 
-## 既存ルートとの互換性
+## ルーティング方針
 
-この基盤追加では既存の unprefixed ページを `/en/` へ移動しない。
-`SiteLayout` は `locale` が明示されたときだけ localized href を出し、既存ページは
-現行の `/docs` などのリンクを維持する。明示的な locale ルートは別 issue で追加する。
+`/` は自動 locale detection entry point として扱う。ブラウザの
+`navigator.languages` を優先順に走査し、最初に対応した locale へ遷移する。
+JavaScript を実行しない smoke / fetch クライアント向けに、fallback HTML には
+Rainrail の短い説明と明示的な言語リンクを残す。
+
+legacy unprefixed product URL は `/en/` へ 301 redirect する。Cloudflare Pages では
+`apps/www/public/_redirects` で `/docs`、`/how-it-works`、`/concepts`、`/guides`、
+`/examples` を対応する `/en/...` に送る。Astro の静的ビルドでは `Astro.redirect`
+を使わない。
+
+明示的な locale URL は user-controlled な安定ページとして扱う。`/ja/...` や
+`/en/...` は自動判定結果によって別 locale へ redirect しない。

@@ -75,7 +75,10 @@ describe('www locale-aware i18n foundation', () => {
       'サポート locale は `ja` / `en`',
       '未対応 locale は自動 fallback しない',
       '存在しない翻訳キーは例外',
-      '`/ja/` / `/en/` ルーティング',
+      'product pages は `/ja/` / `/en/` の明示 URL で公開する',
+      '`/` は自動 locale detection entry point',
+      'legacy unprefixed product URL は `/en/` へ 301 redirect',
+      'canonical URL と `hreflang` alternate は同じ page model から生成する',
     ]) {
       expect(i18nSpec).toContain(phrase);
     }

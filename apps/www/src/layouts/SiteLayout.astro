@@ -1,8 +1,10 @@
 ---
 import {
+  getLegacyHref,
   getLocaleHref,
   getPageContent,
   getSiteMessages,
+  supportedLocales,
   type Locale,
   type PageId,
 } from '../lib/i18n';
@@ -23,12 +25,23 @@ const resolvedTitle = title ?? page?.meta.title ?? 'Rainrail';
 const resolvedDescription = description ?? page?.meta.description ?? site.footer;
 const pageTitle =
   resolvedTitle === 'Rainrail' ? resolvedTitle : `${resolvedTitle} - Rainrail`;
+const canonicalHref =
+  page && Astro.site ? new URL(page.href, Astro.site).toString() : page?.href;
+const absolutePageAlternates =
+  page && Astro.site
+    ? Object.fromEntries(
+        Object.entries(page.alternates).map(([alternateLocale, href]) => [
+          alternateLocale,
+          new URL(href, Astro.site).toString(),
+        ]),
+      )
+    : page?.alternates;
 const hrefFor = (targetPageId: PageId) =>
   usesLocalizedRoutes
     ? getLocaleHref(locale, targetPageId)
-    : targetPageId === 'home'
-      ? '/'
-      : `/${targetPageId === 'howItWorks' ? 'how-it-works' : targetPageId}`;
+    : getLegacyHref(targetPageId);
+const localeLabel = (targetLocale: Locale) =>
+  targetLocale === 'ja' ? '日本語' : 'English';
 ---
 
 <!doctype html>
@@ -38,9 +51,10 @@ const hrefFor = (targetPageId: PageId) =>
     <meta name="viewport" content="width=device-width" />
     <meta name="description" content={resolvedDescription} />
     <meta name="generator" content={Astro.generator} />
+    {canonicalHref && <link rel="canonical" href={canonicalHref} />}
     {
-      page &&
-        Object.entries(page.alternates).map(([alternateLocale, href]) => (
+      absolutePageAlternates &&
+        Object.entries(absolutePageAlternates).map(([alternateLocale, href]) => (
           <link rel="alternate" hreflang={alternateLocale} href={href} />
         ))
     }
@@ -61,6 +75,20 @@ const hrefFor = (targetPageId: PageId) =>
             }
             <a href="https://github.com/reirei-lab/rainrail">{site.nav.github}</a>
           </div>
+          {
+            page && (
+              <div class="language-switcher" aria-label={site.nav.languageSwitcherLabel}>
+                {supportedLocales.map((targetLocale) => (
+                  <a
+                    href={page.alternates[targetLocale]}
+                    aria-current={targetLocale === locale ? 'true' : undefined}
+                  >
+                    {localeLabel(targetLocale)}
+                  </a>
+                ))}
+              </div>
+            )
+          }
         </nav>
       </header>
       <main class="main">

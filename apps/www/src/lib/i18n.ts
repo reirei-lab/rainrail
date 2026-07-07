@@ -32,6 +32,7 @@ type SiteMessages = {
     ariaLabel: string;
     brandLabel: string;
     github: string;
+    languageSwitcherLabel: string;
     primary: NavItem[];
   };
   footer: string;
@@ -43,7 +44,9 @@ export type LocalizedPage = PageContent & {
   alternates: Record<Locale, string>;
 };
 
-const pageSlugs = {
+export const defaultLocale = 'en' satisfies Locale;
+
+export const pageSlugs = {
   home: '',
   howItWorks: 'how-it-works',
   concepts: 'concepts',
@@ -58,6 +61,7 @@ const messages = {
       ariaLabel: '主要ナビゲーション',
       brandLabel: 'Rainrail ホーム',
       github: 'GitHub',
+      languageSwitcherLabel: '言語切替',
       primary: [
         { label: '仕組み', pageId: 'howItWorks' },
         { label: '概念', pageId: 'concepts' },
@@ -118,6 +122,7 @@ const messages = {
       ariaLabel: 'Primary navigation',
       brandLabel: 'Rainrail home',
       github: 'GitHub',
+      languageSwitcherLabel: 'Language switcher',
       primary: [
         { label: 'How it works', pageId: 'howItWorks' },
         { label: 'Concepts', pageId: 'concepts' },
@@ -186,6 +191,22 @@ export const assertSupportedLocale = (locale: string): asserts locale is Locale 
 export const getLocaleHref = (locale: Locale, pageId: PageId): string => {
   const slug = pageSlugs[pageId];
   return slug === '' ? `/${locale}/` : `/${locale}/${slug}`;
+};
+
+export const getLegacyHref = (pageId: PageId): string => {
+  const slug = pageSlugs[pageId];
+  return slug === '' ? '/' : `/${slug}`;
+};
+
+export const getPageIdBySlug = (slug = ''): PageId | undefined =>
+  pageIds.find((pageId) => pageSlugs[pageId] === slug);
+
+export const getPageBySlug = (
+  locale: Locale,
+  slug = '',
+): LocalizedPage | undefined => {
+  const pageId = getPageIdBySlug(slug);
+  return pageId ? getPageContent(locale, pageId) : undefined;
 };
 
 export const getSiteMessages = (locale: Locale): SiteMessages => messages[locale];

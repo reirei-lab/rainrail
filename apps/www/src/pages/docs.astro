@@ -1,131 +1,19 @@
 ---
-import SiteLayout from '../layouts/SiteLayout.astro';
+import { getDefaultLocaleRedirect } from '../lib/redirects';
 
-const docs = [
-  {
-    title: 'Concepts',
-    href: '/concepts',
-    description:
-      'Product-facing vocabulary for events, source plugins, workflow plugins, providers, and bridge room delivery.',
-  },
-  {
-    title: 'Guides',
-    href: '/guides',
-    description:
-      'Initial operating guides for GitHub issue automation, PR review follow-up, and Cloudflare event reporting.',
-  },
-  {
-    title: 'Examples',
-    href: '/examples',
-    description:
-      'An end-to-end GitHub issue to Project queue to agent PR to review and merge path.',
-  },
-  {
-    title: 'Plugin runtime contract',
-    href: 'https://github.com/reirei-lab/rainrail/blob/main/docs/plugin-runtime-contract.md',
-    description:
-      'Source plugin, workflow plugin, and runtime provider boundaries.',
-  },
-  {
-    title: 'Engineering docs index',
-    href: 'https://github.com/reirei-lab/rainrail/blob/main/docs/README.md',
-    description:
-      'GitHub landing page for contracts, operations, deployment notes, examples, and coverage references.',
-  },
-  {
-    title: 'GitHub webhook normalization',
-    href: 'https://github.com/reirei-lab/rainrail/blob/main/docs/github-webhook-normalization.md',
-    description:
-      'How GitHub webhook payloads become neutral Rainrail events.',
-  },
-  {
-    title: 'Cloudflare Worker operations',
-    href: 'https://github.com/reirei-lab/rainrail/blob/main/docs/cloudflare-worker.md',
-    description:
-      'Deploy, required secrets, local development, and production smoke testing.',
-  },
-  {
-    title: 'Cloudflare Pages operations',
-    href: 'https://github.com/reirei-lab/rainrail/blob/main/docs/cloudflare-pages.md',
-    description:
-      'Preview deploys, production deploys, required secrets, and product site smoke testing.',
-  },
-  {
-    title: 'Product site information architecture',
-    href: 'https://github.com/reirei-lab/rainrail/blob/main/docs/product-site-information-architecture.md',
-    description:
-      'The boundary between public product content and engineering docs.',
-  },
-  {
-    title: 'GitHub repository',
-    href: 'https://github.com/reirei-lab/rainrail',
-    description:
-      'Source code, pull requests, workflows, and repository history.',
-  },
-  {
-    title: 'Issue tracker',
-    href: 'https://github.com/reirei-lab/rainrail/issues',
-    description:
-      'Open implementation work, bugs, follow-up tasks, and product site improvements.',
-  },
-];
+const redirect = getDefaultLocaleRedirect('docs');
 ---
 
-<SiteLayout
-  title="Docs"
-  description="Rainrail documentation entry points for implementers and operators."
->
-  <section class="hero">
-    <div>
-      <p class="eyebrow">Documentation gateway</p>
-      <h1>Start with the overview, then jump into the contracts.</h1>
-      <p class="lede">
-        Rainrail keeps product narrative in this site and durable engineering
-        decisions in repository docs.
-      </p>
-    </div>
-  </section>
-
-  <section class="section">
-    <h2>Start here</h2>
-    <div class="doc-list">
-      {
-        docs.map((doc) => (
-          <article class="doc-link">
-            <h3><a href={doc.href}>{doc.title}</a></h3>
-            <p>{doc.description}</p>
-          </article>
-        ))
-      }
-    </div>
-  </section>
-
-  <section class="section">
-    <h2>CLI quick start</h2>
-    <p>
-      Install the Rainrail CLI with Node.js 20 or newer available on your
-      machine.
-    </p>
-    <pre><code>curl -fsSL https://rainrail.dev/install.sh | bash -s -- --add-to-shell --yes
-exec $SHELL
-rainrail help</code></pre>
-    <p>
-      The installer places the CLI under <code>~/.rainrail/bin</code> and can
-      add that directory to your shell profile. Use <code>rainrail help</code>
-      for built-in commands and official plugin aliases.
-    </p>
-    <p>Run a minimal first-use smoke test in a disposable directory:</p>
-    <pre><code>mkdir -p ~/rainrail-sandbox
-cd ~/rainrail-sandbox
-mkdir my-agent-ops
-cd my-agent-ops
-rainrail init
-cat rainrail.config.json
-rainrail openclaw help
-rainrail openclaw session test help</code></pre>
-    <p>
-      Use <code>{'rainrail <plugin> help'}</code> for each plugin's command
-      details.
-    </p>
-  </section>
-</SiteLayout>
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="refresh" content={`0;url=${redirect.href}`} />
+    <meta name="robots" content="noindex" />
+    <link rel="canonical" href={redirect.href} />
+    <title>{redirect.title}</title>
+  </head>
+  <body>
+    <a href={redirect.href}>{redirect.body}</a>
+  </body>
+</html>

@@ -3,11 +3,11 @@ const pagesUrl = requiredEnv('RAINRAIL_PAGES_URL').replace(/\/+$/u, '');
 const routes = [
   { path: '/', expectedText: 'Rainrail routes development events into agent workflows.' },
   {
-    path: '/docs',
+    path: '/en/docs',
     expectedText: 'Start with the overview, then jump into the contracts.',
   },
   {
-    path: '/how-it-works',
+    path: '/en/how-it-works',
     expectedText: 'One route from provider events to agent execution.',
   },
 ];
