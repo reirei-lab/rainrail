@@ -2135,7 +2135,7 @@ function resolveStartOptions(
     ? undefined
     : env.SSE_BEARER_TOKEN;
   const dashboardAuth = mergeDashboardAuth(config.dashboardAuth, dashboardToken);
-  if (!isLocalBindHost(host) && !hasAnyDashboardAuthToken(dashboardAuth)) {
+  if (!isLocalBindHost(host) && !hasAnyDashboardAuthToken(dashboardAuth) && dashboardToken === undefined) {
     return { error: 'dashboardAuth.readOnlyToken, dashboardAuth.operatorToken, dashboardAuth.adminToken, or SSE_BEARER_TOKEN is required when rainrail start binds outside localhost' };
   }
 
@@ -2481,7 +2481,8 @@ function runSetupCommand(
   const steps: SetupStepResult[] = [];
   let dashboardAuthResult: LocalDashboardAuthSetupResult;
   try {
-    dashboardAuthResult = ensureLocalDashboardAuth(project.configPath, fileSystem);
+    validateRainrailProjectForSetup(project, fileSystem);
+    dashboardAuthResult = ensureLocalDashboardAuth(project.configPath, fileSystem, environment.env ?? process.env);
   } catch (error) {
     return formatSetupError(options, error);
   }
@@ -2547,9 +2548,11 @@ type LocalDashboardAuthSetupResult = {
 function ensureLocalDashboardAuth(
   configPath: string,
   fileSystem: RainrailCliFileSystem,
+  env: Record<string, string | undefined>,
 ): LocalDashboardAuthSetupResult {
   const raw = fileSystem.readFileSync(configPath, 'utf8');
-  const value = JSON.parse(raw) as unknown;
+  const expanded = expandConfigEnv(raw, env);
+  const value = JSON.parse(expanded) as unknown;
   if (!isRecord(value)) {
     throw new Error('config must be an object');
   }
@@ -2574,12 +2577,55 @@ function ensureLocalDashboardAuth(
   }
   assertUniqueLocalDashboardAuthTokens(dashboardAuth as RainrailDashboardAuth);
   if (created.length > 0) {
-    fileSystem.writeFileSync(configPath, `${JSON.stringify({
-      ...value,
-      dashboardAuth,
-    }, null, 2)}\n`);
+    fileSystem.writeFileSync(configPath, formatConfigWithLocalDashboardAuth(raw, value, dashboardAuth));
   }
   return { created };
+}
+
+function formatConfigWithLocalDashboardAuth(
+  raw: string,
+  expandedValue: Record<string, unknown>,
+  dashboardAuth: Record<string, unknown>,
+): string {
+  try {
+    const rawValue = JSON.parse(raw) as unknown;
+    if (isRecord(rawValue)) {
+      return `${JSON.stringify({
+        ...rawValue,
+        dashboardAuth,
+      }, null, 2)}\n`;
+    }
+  } catch {
+    if (expandedValue.dashboardAuth === undefined) {
+      return insertTopLevelDashboardAuth(raw, dashboardAuth);
+    }
+  }
+
+  return `${JSON.stringify({
+    ...expandedValue,
+    dashboardAuth,
+  }, null, 2)}\n`;
+}
+
+function insertTopLevelDashboardAuth(raw: string, dashboardAuth: Record<string, unknown>): string {
+  const objectStart = raw.indexOf('{');
+  if (objectStart < 0) {
+    throw new Error('config must be an object');
+  }
+  const afterStart = raw.slice(objectStart + 1);
+  const newline = afterStart.startsWith('\r\n') ? '\r\n' : afterStart.startsWith('\n') ? '\n' : '';
+  const rest = newline.length === 0 ? afterStart : afterStart.slice(newline.length);
+  const property = `"dashboardAuth": ${JSON.stringify(dashboardAuth, null, 2).replaceAll('\n', `${newline}  `)}`;
+  return `${raw.slice(0, objectStart + 1)}${newline}  ${property},${newline}${rest}`;
+}
+
+function validateRainrailProjectForSetup(
+  project: RainrailProject,
+  fileSystem: RainrailCliFileSystem,
+): void {
+  if (!isRainrailWorkspaceRoot(project.root, fileSystem)) {
+    throw new Error('rainrail setup requires a complete Rainrail project. Run rainrail init first.');
+  }
 }
 
 function generateLocalDashboardToken(scope: keyof RainrailDashboardAuth): string {
@@ -3933,7 +3979,7 @@ function normalizeHostName(host: string): string {
 }
 
 function requiresLocalServerAuth(pathname: string, options: RainrailStartOptions): boolean {
-  return hasAnyDashboardAuthToken(options.dashboardAuth) &&
+  return (hasAnyDashboardAuthToken(options.dashboardAuth) || options.dashboardToken !== undefined) &&
     (pathname === '/events' || pathname.startsWith('/api/'));
 }
 
@@ -3954,14 +4000,19 @@ function getLocalServerAuthError(
     return { status: 401, code: 'missing_bearer_token' };
   }
   const token = authorization.slice(prefix.length);
-  if (!matchesLocalDashboardToken(token, options.dashboardAuth)) {
+  if (!matchesLocalDashboardToken(token, options)) {
     return { status: 403, code: 'invalid_bearer_token' };
   }
   return undefined;
 }
 
-function matchesLocalDashboardToken(token: string, auth: RainrailDashboardAuth): boolean {
-  return [auth.adminToken, auth.operatorToken, auth.readOnlyToken].some((configured) =>
+function matchesLocalDashboardToken(token: string, options: RainrailStartOptions): boolean {
+  return [
+    options.dashboardAuth.adminToken,
+    options.dashboardAuth.operatorToken,
+    options.dashboardAuth.readOnlyToken,
+    options.dashboardToken,
+  ].some((configured) =>
     configured !== undefined && configured.length > 0 && timingSafeStringEqual(token, configured)
   );
 }

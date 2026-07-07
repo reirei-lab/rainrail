@@ -718,6 +718,39 @@ describe('Rainrail CLI built-in commands', () => {
     });
   });
 
+  it('keeps SSE_BEARER_TOKEN valid when dashboardAuth.readOnlyToken is configured', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'dashboard-auth-compat');
+      const port = await getFreePort();
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        server: { host: '127.0.0.1', port },
+        dashboardAuth: {
+          readOnlyToken: 'configured-read-token',
+        },
+        sourceBundles: [],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+
+      const result = await runRainrailCliAsync(['start'], {
+        cwd: projectRoot,
+        env: { SSE_BEARER_TOKEN: 'legacy-events-token' },
+      });
+      try {
+        expect(result.exitCode).toBe(0);
+        for (const token of ['configured-read-token', 'legacy-events-token']) {
+          const response = await fetch(`http://127.0.0.1:${port}/api/v1/overview`, {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          expect(response.status, token).toBe(200);
+        }
+      } finally {
+        await closeTestServer(result);
+      }
+    });
+  });
+
   it('lets --host and --port override start environment and config', async () => {
     await withTempDirectory(async (directory) => {
       const projectRoot = await initRainrailProject(directory, 'flag-server');
@@ -2893,6 +2926,56 @@ describe('Rainrail CLI built-in commands', () => {
       expect(second.exitCode).toBe(0);
       expect(second.stdout).not.toContain('Generated dashboardAuth');
       expect(secondConfig.dashboardAuth).toEqual(firstConfig.dashboardAuth);
+    });
+  });
+
+  it('validates project-local state before writing dashboard auth tokens during setup', async () => {
+    await withTempDirectory(async (directory) => {
+      const configPath = join(directory, 'rainrail.config.json');
+      await writeFile(configPath, `${JSON.stringify({
+        project: { name: 'not-a-complete-project' },
+        sourceBundles: [],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+
+      const result = runRainrailCli(['--config', configPath, 'setup', 'github', '--yes'], { cwd: directory });
+      const config = JSON.parse(await readFile(configPath, 'utf8')) as { dashboardAuth?: unknown };
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('rainrail setup requires a complete Rainrail project');
+      expect(config.dashboardAuth).toBeUndefined();
+    });
+  });
+
+  it('expands config environment fragments before generating dashboard auth tokens during setup', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'dashboard-auth-expanded-config');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      await writeFile(configPath, [
+        '{',
+        '  "project": { "name": "dashboard-auth-expanded-config" },',
+        '  "sourceBundles": [],',
+        '  "sources": ${RAINRAIL_SOURCES},',
+        '  "taskProviders": {},',
+        '  "runtimeProviders": {}',
+        '}',
+      ].join('\n'));
+
+      const result = runRainrailCli(['setup', 'github', '--yes'], {
+        cwd: projectRoot,
+        env: { RAINRAIL_SOURCES: '[]' },
+      });
+      const rawConfig = await readFile(configPath, 'utf8');
+      const config = JSON.parse(rawConfig.replace('${RAINRAIL_SOURCES}', '[]')) as {
+        dashboardAuth?: { readOnlyToken?: string; operatorToken?: string };
+      };
+
+      expect(result.exitCode).toBe(0);
+      expect(rawConfig).toContain('"sources": ${RAINRAIL_SOURCES}');
+      expect(config.dashboardAuth?.readOnlyToken).toMatch(/^rr_local_read-only_[A-Za-z0-9_-]+$/u);
+      expect(config.dashboardAuth?.operatorToken).toMatch(/^rr_local_operator_[A-Za-z0-9_-]+$/u);
     });
   });
 
