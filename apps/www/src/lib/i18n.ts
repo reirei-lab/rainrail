@@ -1,6 +1,7 @@
 export const supportedLocales = ['ja', 'en'] as const;
 
 export type Locale = (typeof supportedLocales)[number];
+export type Hreflang = Locale | 'x-default';
 
 export const pageIds = [
   'home',
@@ -41,7 +42,7 @@ type SiteMessages = {
 
 export type LocalizedPage = PageContent & {
   href: string;
-  alternates: Record<Locale, string>;
+  alternates: Record<Hreflang, string>;
 };
 
 export const defaultLocale = 'en' satisfies Locale;
@@ -217,8 +218,16 @@ export const getPageContent = (locale: Locale, pageId: PageId): LocalizedPage =>
   alternates: {
     ja: getLocaleHref('ja', pageId),
     en: getLocaleHref('en', pageId),
+    'x-default': getLocaleHref(defaultLocale, pageId),
   },
 });
+
+export const ogLocales = {
+  ja: 'ja_JP',
+  en: 'en_US',
+} as const satisfies Record<Locale, string>;
+
+export const getOgLocale = (locale: Locale): string => ogLocales[locale];
 
 export const translate = (locale: Locale, key: string): string => {
   const value = key.split('.').reduce<unknown>((current, segment) => {
