@@ -275,6 +275,22 @@ describe('Rainrail Cloudflare Worker entrypoint', () => {
 
     expect(webhook.status).toBe(202);
   });
+
+  it('keeps explicit empty sourceBundles as an invalid Worker intake config', async () => {
+    const env = {
+      ...fakeEnv(),
+      RAINRAIL_CONFIG_JSON: JSON.stringify({
+        dashboardAuth: {
+          readOnlyToken: 'worker-read-token',
+        },
+        sourceBundles: [],
+      }),
+    };
+
+    await expect(
+      rainrailWorker.fetch(new Request('https://worker.local/healthz'), env),
+    ).rejects.toThrow('config.sourceBundles must include an eep-bridge bundle');
+  });
 });
 
 function fakeEnv() {
