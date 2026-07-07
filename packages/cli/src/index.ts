@@ -13,7 +13,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, extname, join, normalize, parse, resolve, sep } from 'node:path';
+import { basename, dirname, extname, join, normalize, parse, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   OFFICIAL_PLUGIN_CATALOG,
@@ -2206,6 +2206,7 @@ function formatStartOutput(options: RainrailStartOptions): string {
   const localIntakeRows = options.sources.map((source) =>
     `  ${source.name} (${source.sourceType}): ${baseUrl}${source.endpoint}`
   );
+  const dashboardAuthRows = formatDashboardAuthRows(options.dashboardAuth, options.configPath);
   return [
     'Rainrail local harness server starting',
     `Workspace: ${options.root}`,
@@ -2215,6 +2216,7 @@ function formatStartOutput(options: RainrailStartOptions): string {
     `Health: ${baseUrl}/healthz`,
     `Dashboard: ${baseUrl}/dashboard`,
     `Dashboard API: ${baseUrl}/api/v1/overview`,
+    ...dashboardAuthRows,
     `Event Stream: ${baseUrl}/events`,
     ...(localIntakeRows.length === 0 ? [] : [
       'Local intake:',
@@ -2223,6 +2225,34 @@ function formatStartOutput(options: RainrailStartOptions): string {
     'Press Ctrl+C to stop.',
     '',
   ].join('\n');
+}
+
+function formatDashboardAuthRows(auth: RainrailDashboardAuth, configPath: string): readonly string[] {
+  const scopes = [
+    auth.readOnlyToken === undefined ? undefined : 'read-only',
+    auth.operatorToken === undefined ? undefined : 'operator',
+    auth.adminToken === undefined ? undefined : 'admin',
+  ].filter((scope) => scope !== undefined);
+
+  if (scopes.length > 0) {
+    return [`Dashboard Auth: configured scopes: ${scopes.join(', ')}`];
+  }
+
+  return [
+    'Dashboard Auth: not configured',
+    `Run \`${formatDashboardAuthOnlySetupCommand({ config: configPath })}\` to generate local dashboardAuth tokens.`,
+    `Or set dashboardAuth.readOnlyToken, dashboardAuth.operatorToken, or dashboardAuth.adminToken in ${configPath}.`,
+  ];
+}
+
+function formatDashboardAuthOnlySetupCommand(options: Pick<SharedOptions, 'config' | 'profile'>): string {
+  return [
+    'rainrail',
+    ...formatForwardedTargetOptions(options),
+    'setup',
+    '--dashboard-auth-only',
+    '--yes',
+  ].map(shellQuoteArgument).join(' ');
 }
 
 function formatUrlHost(host: string): string {
@@ -2474,7 +2504,14 @@ function runSetupCommand(
   }
   const setupOptions = normalizeSetupOptions(cwd, options);
 
-  const selectedPlugins = resolveSetupPlugins(args);
+  const setupArguments = parseSetupCommandArguments(args);
+  if (setupArguments.error !== undefined) {
+    return formatSetupError(options, setupArguments.error);
+  }
+
+  const selectedPlugins = setupArguments.dashboardAuthOnly
+    ? { plugins: [] }
+    : resolveSetupPlugins(setupArguments.pluginArgs);
   if (selectedPlugins.error !== undefined) {
     return formatSetupError(options, selectedPlugins.error);
   }
@@ -2482,12 +2519,33 @@ function runSetupCommand(
 
   if (!options.yes) {
     if (options.json) {
-      return formatSetupPreview(plugins, args.length > 0, setupOptions);
+      if (setupArguments.dashboardAuthOnly) {
+        return {
+          exitCode: 0,
+          stdout: formatJson({
+            command: 'setup',
+            completed: false,
+            plugins: [],
+            steps: [],
+            nextAction: formatDashboardAuthOnlySetupCommand(setupOptions),
+          }),
+          stderr: '',
+        };
+      }
+      return formatSetupPreview(plugins, setupArguments.pluginArgs.length > 0, setupOptions);
+    }
+
+    if (setupArguments.dashboardAuthOnly) {
+      return {
+        exitCode: 0,
+        stdout: `Run \`${formatDashboardAuthOnlySetupCommand(setupOptions)}\` to generate local dashboardAuth tokens without plugin setup.\n`,
+        stderr: '',
+      };
     }
 
     return {
       exitCode: 0,
-      stdout: formatSetupChoices(plugins, args.length > 0, setupOptions),
+      stdout: formatSetupChoices(plugins, setupArguments.pluginArgs.length > 0, setupOptions),
       stderr: '',
     };
   }
@@ -2496,10 +2554,16 @@ function runSetupCommand(
   const steps: SetupStepResult[] = [];
   let dashboardAuthResult: LocalDashboardAuthSetupResult;
   try {
-    validateRainrailProjectForSetup(project, fileSystem);
+    if (!setupArguments.dashboardAuthOnly) {
+      validateRainrailProjectForSetup(project, fileSystem);
+    }
     dashboardAuthResult = ensureLocalDashboardAuth(project.configPath, fileSystem, environment.env ?? process.env);
   } catch (error) {
     return formatSetupError(options, error);
+  }
+
+  if (setupArguments.dashboardAuthOnly) {
+    return formatSetupResult(true, plugins, steps, options, undefined, dashboardAuthResult);
   }
 
   for (const plugin of plugins) {
@@ -2556,8 +2620,36 @@ function runSetupCommand(
   return formatSetupResult(true, plugins, steps, options, undefined, dashboardAuthResult);
 }
 
+function parseSetupCommandArguments(args: readonly string[]): {
+  readonly dashboardAuthOnly: boolean;
+  readonly pluginArgs: readonly string[];
+  readonly error?: string;
+} {
+  const pluginArgs: string[] = [];
+  let dashboardAuthOnly = false;
+
+  for (const arg of args) {
+    if (arg === '--dashboard-auth-only') {
+      dashboardAuthOnly = true;
+      continue;
+    }
+    pluginArgs.push(arg);
+  }
+
+  if (dashboardAuthOnly && pluginArgs.length > 0) {
+    return {
+      dashboardAuthOnly,
+      pluginArgs,
+      error: 'rainrail setup --dashboard-auth-only cannot be combined with plugin arguments.',
+    };
+  }
+
+  return { dashboardAuthOnly, pluginArgs };
+}
+
 type LocalDashboardAuthSetupResult = {
   readonly created: readonly (keyof RainrailDashboardAuth)[];
+  readonly configPath: string;
 };
 
 function ensureLocalDashboardAuth(
@@ -2597,7 +2689,7 @@ function ensureLocalDashboardAuth(
   if (created.length > 0) {
     fileSystem.writeFileSync(configPath, formatConfigWithLocalDashboardAuth(raw, generatedDashboardAuth));
   }
-  return { created };
+  return { created, configPath };
 }
 
 function parseExpandedDashboardAuthObject(raw: string, env: Record<string, string | undefined>): Record<string, unknown> {
@@ -3086,7 +3178,7 @@ function formatSetupResult(
 
   const dashboardAuthOutput = dashboardAuthResult === undefined || dashboardAuthResult.created.length === 0
     ? ''
-    : `Generated dashboardAuth.${dashboardAuthResult.created.join(' and dashboardAuth.')} in rainrail.config.json.\n`;
+    : `Generated dashboardAuth.${dashboardAuthResult.created.join(' and dashboardAuth.')} in ${basename(dashboardAuthResult.configPath)}.\n`;
   const stdout = `${dashboardAuthOutput}${steps.map((step) => step.stdout).join('')}`;
   const stderr = steps.map((step) => step.stderr).join('');
   if (failedStep !== undefined) {
