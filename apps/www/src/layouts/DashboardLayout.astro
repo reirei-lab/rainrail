@@ -1,26 +1,72 @@
 ---
 import '../styles/global.css';
+import { getDashboardHref } from '../lib/dashboard-content';
+import { supportedLocales, type Locale } from '../lib/i18n';
 
 interface Props {
   title: string;
   description: string;
+  locale: Locale;
 }
 
-const { title, description } = Astro.props;
+const { title, description, locale } = Astro.props;
+const canonicalHref =
+  Astro.site ? new URL(getDashboardHref(locale), Astro.site).toString() : getDashboardHref(locale);
+const alternates = Object.fromEntries(
+  supportedLocales.map((targetLocale) => [
+    targetLocale,
+    Astro.site
+      ? new URL(getDashboardHref(targetLocale), Astro.site).toString()
+      : getDashboardHref(targetLocale),
+  ]),
+);
+const localeLabel = (targetLocale: Locale) =>
+  targetLocale === 'ja' ? '日本語' : 'English';
+const languageSwitcherLabel = locale === 'ja' ? '言語切替' : 'Language switcher';
+const languagePreferenceKey = 'rainrail.locale';
 ---
 
 <!doctype html>
-<html lang="en">
+<html lang={locale}>
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width" />
     <meta name="description" content={description} />
     <meta name="generator" content={Astro.generator} />
+    <link rel="canonical" href={canonicalHref} />
+    {
+      Object.entries(alternates).map(([alternateLocale, href]) => (
+        <link rel="alternate" hreflang={alternateLocale} href={href} />
+      ))
+    }
     <title>{title} - Rainrail</title>
   </head>
   <body>
     <main class="dashboard-page-shell">
+      <div class="dashboard-language-switcher language-switcher" aria-label={languageSwitcherLabel}>
+        {supportedLocales.map((targetLocale) => (
+          <a
+            href={getDashboardHref(targetLocale)}
+            data-locale-choice={targetLocale}
+            aria-current={targetLocale === locale ? 'true' : undefined}
+          >
+            {localeLabel(targetLocale)}
+          </a>
+        ))}
+      </div>
       <slot />
     </main>
+    <script is:inline define:vars={{ languagePreferenceKey }}>
+      document.querySelectorAll('[data-locale-choice]').forEach((link) => {
+        link.addEventListener('click', () => {
+          const locale = link.getAttribute('data-locale-choice');
+          try {
+            window.localStorage?.setItem(languagePreferenceKey, locale);
+          } catch {
+            // Continue navigation even when storage is unavailable.
+          }
+        });
+      });
+    </script>
   </body>
 </html>
