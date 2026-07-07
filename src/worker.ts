@@ -4,7 +4,7 @@ import {
   createRainrailEepBridgeIntakeAdaptersFromEnv,
   type RainrailEepBridgeBundleEnv,
 } from './eep-bridge-bundle.js';
-import { parseConfigJson } from './config.js';
+import { parseConfigJson, type RainrailConfig } from './config.js';
 import { createRainrailHttpApp } from './http-app.js';
 
 export interface RainrailWorkerEnv extends RainrailEepBridgeBundleEnv {
@@ -54,25 +54,113 @@ export default {
   },
 };
 
+interface WorkerParsedConfig {
+  readonly config: RainrailConfig;
+  readonly configuresSourceBundles: boolean;
+}
+
 function workerApp(env: RainrailWorkerEnv) {
+  const parsedConfig = workerConfig(env);
   return createRainrailHttpApp({
     room: bridgeRoom(env),
     publishToken: env.RAINRAIL_PUBLISH_TOKEN,
     ...(env.SSE_BEARER_TOKEN === undefined ? {} : { eventsBearerToken: env.SSE_BEARER_TOKEN }),
+    ...(parsedConfig === undefined ? {} : { dashboardAuth: parsedConfig.config.dashboardAuth }),
     runtime: 'cloudflare-workers',
-    intakeAdapters: workerIntakeAdapters(env),
+    intakeAdapters: workerIntakeAdapters(env, parsedConfig),
   });
 }
 
-function workerIntakeAdapters(env: RainrailWorkerEnv) {
-  if (env.RAINRAIL_CONFIG_JSON === undefined || env.RAINRAIL_CONFIG_JSON.length === 0) {
+function workerIntakeAdapters(env: RainrailWorkerEnv, parsedConfig: WorkerParsedConfig | undefined) {
+  if (parsedConfig === undefined || !parsedConfig.configuresSourceBundles) {
     return createRainrailEepBridgeIntakeAdaptersFromEnv(env);
   }
 
   return createRainrailEepBridgeIntakeAdaptersFromConfig({
-    config: parseConfigJson(env.RAINRAIL_CONFIG_JSON, stringEnv(env)),
+    config: parsedConfig.config,
     env,
   });
+}
+
+function workerConfig(env: RainrailWorkerEnv): WorkerParsedConfig | undefined {
+  if (env.RAINRAIL_CONFIG_JSON === undefined || env.RAINRAIL_CONFIG_JSON.length === 0) {
+    return undefined;
+  }
+
+  return {
+    config: parseConfigJson(env.RAINRAIL_CONFIG_JSON, stringEnv(env)),
+    configuresSourceBundles: hasTopLevelJsonProperty(env.RAINRAIL_CONFIG_JSON, 'sourceBundles'),
+  };
+}
+
+function hasTopLevelJsonProperty(raw: string, propertyName: string): boolean {
+  const objectStart = raw.indexOf('{');
+  if (objectStart < 0) {
+    return false;
+  }
+
+  let depth = 0;
+  for (let index = objectStart; index < raw.length; index += 1) {
+    const char = raw[index];
+    if (char === '"') {
+      const stringEnd = findJsonStringEnd(raw, index);
+      if (stringEnd === undefined) {
+        return false;
+      }
+      if (depth === 1) {
+        const name = parseJsonStringLiteral(raw.slice(index, stringEnd + 1));
+        const cursor = skipJsonWhitespace(raw, stringEnd + 1);
+        if (name === propertyName && raw[cursor] === ':') {
+          return true;
+        }
+      }
+      index = stringEnd;
+      continue;
+    }
+    if (char === '{' || char === '[') {
+      depth += 1;
+      continue;
+    }
+    if (char === '}' || char === ']') {
+      depth -= 1;
+      if (depth < 1) {
+        return false;
+      }
+    }
+  }
+  return false;
+}
+
+function findJsonStringEnd(raw: string, stringStart: number): number | undefined {
+  let escaped = false;
+  for (let index = stringStart + 1; index < raw.length; index += 1) {
+    const char = raw[index];
+    if (escaped) {
+      escaped = false;
+    } else if (char === '\\') {
+      escaped = true;
+    } else if (char === '"') {
+      return index;
+    }
+  }
+  return undefined;
+}
+
+function parseJsonStringLiteral(raw: string): string | undefined {
+  try {
+    const value = JSON.parse(raw) as unknown;
+    return typeof value === 'string' ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function skipJsonWhitespace(raw: string, start: number): number {
+  let index = start;
+  while (/\s/u.test(raw[index] ?? '')) {
+    index += 1;
+  }
+  return index;
 }
 
 function stringEnv(env: RainrailWorkerEnv): Record<string, string | undefined> {
