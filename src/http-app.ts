@@ -1256,7 +1256,7 @@ async function handleDashboardCommandRequest(
   if (targetError !== undefined) return targetError;
 
   const requestId = sanitizeAuditHeaderValue(request.headers.get('x-request-id')) ?? generatedRequestId();
-  const client = sanitizeAuditHeaderValue(request.headers.get('x-rainrail-client'));
+  const client = sanitizeAuditHeaderValue(request.headers.get('x-rainrail-client')) ?? auth.principal.client ?? 'unknown';
   const body = await readJsonObjectBody(request, options.dashboardCommandMaxBodyBytes ?? DEFAULT_MAX_REQUEST_BODY_BYTES);
   if (!body.ok) return commandResponse({ error: body.error }, requestId, body.status);
 
@@ -1444,7 +1444,7 @@ async function handleDashboardCommandRequest(
 }
 
 type DashboardScopedAuthResult =
-  | { ok: true; principal: { actor: string; scope: RainrailDashboardScope } }
+  | { ok: true; principal: { actor: string; scope: RainrailDashboardScope; client?: string } }
   | { ok: false; response: Response };
 
 function verifyDashboardScopedRequest(
@@ -1482,7 +1482,7 @@ function verifyDashboardScopedRequest(
 function principalForDashboardToken(
   token: string,
   options: RainrailHttpAppOptions,
-): { actor: string; scope: RainrailDashboardScope } | undefined {
+): { actor: string; scope: RainrailDashboardScope; client?: string } | undefined {
   if (matchesToken(token, options.dashboardAuth?.adminToken)) {
     return { actor: 'admin', scope: 'admin' };
   }
