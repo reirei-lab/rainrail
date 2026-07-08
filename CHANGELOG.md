@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.4.0](https://github.com/reirei-lab/rainrail/compare/release/0.3.0...release/0.4.0) (2026-07-08)
+
+
+### Features
+
+* add dashboard auth config tokens ([#217](https://github.com/reirei-lab/rainrail/issues/217)) ([d82cd49](https://github.com/reirei-lab/rainrail/commit/d82cd49381ffd1963c9fd1ecb6c2a7159025c390))
+* add local dashboard token rotation ([#237](https://github.com/reirei-lab/rainrail/issues/237)) ([990072f](https://github.com/reirei-lab/rainrail/commit/990072f3e9854747fbee0f47b3ce6be0fbe166d1))
+* add www i18n foundation ([#205](https://github.com/reirei-lab/rainrail/issues/205)) ([74db09b](https://github.com/reirei-lab/rainrail/commit/74db09ba51e84fb2a702f8bfaaeddf1424a4bb7b))
+* allow scoped dashboard auth for events ([#238](https://github.com/reirei-lab/rainrail/issues/238)) ([c1364d5](https://github.com/reirei-lab/rainrail/commit/c1364d5bc6350aba6636fd91ae8bff0877b8a245))
+* serve dashboard app from rainrail start ([#221](https://github.com/reirei-lab/rainrail/issues/221)) ([96d62ec](https://github.com/reirei-lab/rainrail/commit/96d62ec1c837a5979575b0b039b5366890fe7cd7))
+* show dashboard auth guidance on rainrail start ([#226](https://github.com/reirei-lab/rainrail/issues/226)) ([ed64020](https://github.com/reirei-lab/rainrail/commit/ed640202136bcf48659fac4716d2ea8d923a3fd9))
+* wire local dashboard command routes ([#235](https://github.com/reirei-lab/rainrail/issues/235)) ([ce15e97](https://github.com/reirei-lab/rainrail/commit/ce15e9700f4b41d0a55949587ff7a25799dd099a))
+* **www:** add localized SEO metadata ([#222](https://github.com/reirei-lab/rainrail/issues/222)) ([574c12a](https://github.com/reirei-lab/rainrail/commit/574c12aa0c433b04903c3523e69ff7ed6d600b7c))
+* **www:** localize dashboard page copy ([#219](https://github.com/reirei-lab/rainrail/issues/219)) ([7edc274](https://github.com/reirei-lab/rainrail/commit/7edc274aa32d037e03cf630089a8f342eb2cb8b8))
+* **www:** persist locale selection for root routing ([#218](https://github.com/reirei-lab/rainrail/issues/218)) ([f3fbf13](https://github.com/reirei-lab/rainrail/commit/f3fbf13710f89afa265739d3c47573ffccd2ce32))
+* **www:** serve product site by locale ([#207](https://github.com/reirei-lab/rainrail/issues/207)) ([fe92381](https://github.com/reirei-lab/rainrail/commit/fe92381d3ecc3615e4fad20dcc217f6081182673))
+
+
+### Bug Fixes
+
+* add dashboard command client fallback audit ([#234](https://github.com/reirei-lab/rainrail/issues/234)) ([a987a78](https://github.com/reirei-lab/rainrail/commit/a987a789cb4bc51f5d782ec2a3c81cf5b50c208a))
+* clarify local start output ([#220](https://github.com/reirei-lab/rainrail/issues/220)) ([f0d35ca](https://github.com/reirei-lab/rainrail/commit/f0d35ca68ba861130e476271c274d1c8559eaf14))
+
 ## [0.3.0](https://github.com/reirei-lab/rainrail/compare/release/0.2.1...release/0.3.0) (2026-07-05)
 
 

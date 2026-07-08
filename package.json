@@ -1,6 +1,6 @@
 {
   "name": "rainrail",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "description": "Agent-ready development event routing and workflow orchestration suite.",
   "type": "module",
