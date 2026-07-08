@@ -63,6 +63,16 @@ jobs:
           path: apps/www/dist
           if-no-files-found: error
 
+      - name: Upload Cloudflare Docs Pages preview artifact
+        if: >-
+          github.event.pull_request.head.repo.full_name == github.repository &&
+          !github.event.pull_request.draft
+        uses: actions/upload-artifact@v4
+        with:
+          name: rainrail-docs-dist
+          path: apps/docs/dist
+          if-no-files-found: error
+
   cloudflare-deployability:
     name: Cloudflare deployability
     needs: validate
