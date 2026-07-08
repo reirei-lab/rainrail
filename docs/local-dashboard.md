@@ -48,15 +48,20 @@ does not need a separate API base URL.
 ## Auth scopes
 
 `dashboardAuth` supports three scopes. The local `rainrail start` startup flow
-serves read-only dashboard collections today; operator/admin mutation routes
-are still outside the local startup MVP.
+serves read-only dashboard collections and wires the dashboard agent-task
+command routes with the same bearer-token scope checks used by the shared
+operational API.
 
 - `readOnlyToken`: can read overview, event, workflow, task, source, queue, and
-  settings resources.
-- `operatorToken`: reserved for local operator actions when those routes are
-  wired into the local startup server.
-- `adminToken`: reserved for local admin mutations when those routes are wired
-  into the local startup server.
+  settings resources. It cannot call command mutation routes.
+- `operatorToken`: includes read-only access and can call local agent-task
+  command routes such as resume, reset, terminate, and terminate-all. The
+  current local startup server does not attach a runtime command handler, so
+  `dryRun: true` returns a `200` preview, while confirmed dispatch returns
+  `503 { "error": "command_handler_not_configured" }` until a handler-backed
+  local runtime is added.
+- `adminToken`: includes operator access. Local admin settings mutations remain
+  post-MVP.
 
 For local compatibility, a legacy `SSE_BEARER_TOKEN` remains accepted as a
 read-only dashboard token even when `dashboardAuth.readOnlyToken` is also
@@ -80,10 +85,53 @@ If the dashboard stays in an auth error state, check the API response:
   match the configured local dashboard auth tokens. Re-run
   `rainrail setup --dashboard-auth-only --yes` or copy the current token from
   `rainrail.config.json`.
-- HTTP `404` or an unavailable-action state for a local operator/admin command
-  means the route is not part of the current `rainrail start` local server yet.
+- HTTP `403` with `insufficient_scope` means a read-only token tried to call an
+  operator/admin route. Use `dashboardAuth.operatorToken` or `adminToken` for
+  agent-task commands.
+- HTTP `409` with `action_confirmation_required` means a destructive local
+  command such as reset, terminate, or terminate-all needs the returned
+  confirmation token to be sent back after user confirmation.
+- HTTP `503` with `command_handler_not_configured` means the local route,
+  token scope, and confirmation contract are valid, but the current
+  `rainrail start` server has no command handler attached to execute the
+  operator action.
 
 Do not put real tokens in screenshots, issue comments, docs, or copied logs.
+
+## Auth mode decision
+
+Local MVP decision: keep the bearer-token field as the operator UX.
+This resolves [#231](https://github.com/reirei-lab/rainrail/issues/231) for the
+local dashboard MVP. When no dashboard auth token is configured and
+`rainrail start` is bound to localhost, the supported local no-auth mode
+remains available. For the recommended operator setup, and for any non-local
+bind where auth is required, configured `dashboardAuth` bearer tokens give the
+current dashboard an explicit copy/paste credential, stable API behavior, and
+no browser cookie dependency. This also matches the shared operational API
+contract, where `Authorization: Bearer <token>` carries the read-only,
+operator, or admin scope used by both dashboard reads and command routes.
+
+Do not add cookie/session login to `rainrail start` until Rainrail has a hosted
+or multi-user dashboard mode. A session login would add CSRF protection,
+logout, session expiration, cookie scope, and token storage responsibilities
+without improving the single-operator local startup flow. Local bearer tokens
+remain easier to rotate by editing `rainrail.config.json`, easier to diagnose
+through the existing stable JSON auth errors, and less likely to blur the
+boundary between local operator UX and hosted/multi-user UX.
+
+If Rainrail later ships a hosted or multi-user dashboard, design it as a
+separate auth mode rather than replacing the local startup flow in place. That
+design should add tests for:
+
+- CSRF rejection on every session-authenticated mutation route.
+- Logout clearing the server session and browser cookie.
+- Session expiration returning a stable auth error without accepting stale
+  cookies.
+- Cookie scope using `HttpOnly`, `Secure` outside localhost, `SameSite`, path,
+  and domain settings that do not leak to unrelated apps.
+- Token storage keeping operator/admin bearer tokens server-side or otherwise
+  unavailable to dashboard JavaScript.
+- Scope checks preserving the current read-only, operator, and admin behavior.
 
 ## Local dashboard and Pages boundary
 
@@ -107,10 +155,10 @@ out of scope for the current startup flow:
 - scoped SSE token separate from dashboard API auth
 - token rotation UI
 - multi-user actor management
-- local operator/admin mutation routes
+- handler-backed local runtime execution for operator/admin mutations
 - hosted multi-tenant operations
 
-Those follow-up auth and operator UX items are tracked separately from this
+Remaining follow-up auth and operator UX items are tracked separately from this
 startup guide. The current split is:
 
 - [#228](https://github.com/reirei-lab/rainrail/issues/228): evaluate whether
@@ -122,9 +170,6 @@ startup guide. The current split is:
 - [#230](https://github.com/reirei-lab/rainrail/issues/230): add stable
   `actor`, `client`, and `requestId` attribution to command audit rows before
   broadening operator/admin actions.
-- [#231](https://github.com/reirei-lab/rainrail/issues/231): decide whether the
-  local bearer-token field should remain the UX or evolve into a session login
-  flow for hosted or multi-user operation.
 
 ## Validation
 

@@ -50,24 +50,46 @@ describe('local dashboard start documentation', () => {
       'read-only',
       'operator',
       'admin',
-      'serves read-only dashboard collections today',
+      'serves read-only dashboard collections and wires the dashboard agent-task',
+      '`dryRun: true` returns a `200` preview',
+      'command_handler_not_configured',
+      'insufficient_scope',
+      'action_confirmation_required',
       'cookie/session login',
       'scoped SSE token',
       'token rotation UI',
       'multi-user actor management',
-      'local operator/admin mutation routes',
+      'handler-backed local runtime execution for operator/admin mutations',
       'https://github.com/reirei-lab/rainrail/issues/228',
       'https://github.com/reirei-lab/rainrail/issues/229',
       'https://github.com/reirei-lab/rainrail/issues/230',
       'https://github.com/reirei-lab/rainrail/issues/231',
       '`actor`, `client`, and `requestId` attribution',
       'session login',
+      '## Auth mode decision',
+      'Local MVP decision: keep the bearer-token field as the operator UX.',
+      'This resolves [#231](https://github.com/reirei-lab/rainrail/issues/231)',
+      'When no dashboard auth token is configured and',
+      '`rainrail start` is bound to localhost',
+      'the supported local no-auth mode',
+      'remains available.',
+      'Do not add cookie/session login to `rainrail start` until Rainrail has a hosted',
+      'or multi-user dashboard mode.',
+      'CSRF',
+      'logout',
+      'session expiration',
+      'cookie scope',
+      'token storage',
+      'hosted/multi-user UX',
     ]) {
       expect(localDashboardDocs).toContain(required);
     }
 
     expect(localDashboardDocs).not.toContain(
       'run operator actions such as agent task resume, reset, and terminate commands',
+    );
+    expect(localDashboardDocs).not.toContain(
+      'decide whether the\n  local bearer-token field should remain the UX or evolve into a session login',
     );
   });
 
