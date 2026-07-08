@@ -2245,12 +2245,16 @@ function formatDashboardAuthRows(auth: RainrailDashboardAuth, configPath: string
   ];
 }
 
-function formatDashboardAuthOnlySetupCommand(options: Pick<SharedOptions, 'config' | 'profile'>): string {
+function formatDashboardAuthOnlySetupCommand(
+  options: Pick<SharedOptions, 'config' | 'profile'>,
+  rotate = false,
+): string {
   return [
     'rainrail',
     ...formatForwardedTargetOptions(options),
     'setup',
     '--dashboard-auth-only',
+    ...(rotate ? ['--rotate'] : []),
     '--yes',
   ].map(shellQuoteArgument).join(' ');
 }
@@ -2527,7 +2531,7 @@ function runSetupCommand(
             completed: false,
             plugins: [],
             steps: [],
-            nextAction: formatDashboardAuthOnlySetupCommand(setupOptions),
+            nextAction: formatDashboardAuthOnlySetupCommand(setupOptions, setupArguments.rotateDashboardAuth),
           }),
           stderr: '',
         };
@@ -2536,9 +2540,10 @@ function runSetupCommand(
     }
 
     if (setupArguments.dashboardAuthOnly) {
+      const action = setupArguments.rotateDashboardAuth ? 'rotate local dashboardAuth tokens' : 'generate local dashboardAuth tokens';
       return {
         exitCode: 0,
-        stdout: `Run \`${formatDashboardAuthOnlySetupCommand(setupOptions)}\` to generate local dashboardAuth tokens without plugin setup.\n`,
+        stdout: `Run \`${formatDashboardAuthOnlySetupCommand(setupOptions, setupArguments.rotateDashboardAuth)}\` to ${action} without plugin setup.\n`,
         stderr: '',
       };
     }
@@ -2557,7 +2562,12 @@ function runSetupCommand(
     if (!setupArguments.dashboardAuthOnly) {
       validateRainrailProjectForSetup(project, fileSystem);
     }
-    dashboardAuthResult = ensureLocalDashboardAuth(project.configPath, fileSystem, environment.env ?? process.env);
+    dashboardAuthResult = ensureLocalDashboardAuth(
+      project.configPath,
+      fileSystem,
+      environment.env ?? process.env,
+      { rotate: setupArguments.rotateDashboardAuth },
+    );
   } catch (error) {
     return formatSetupError(options, error);
   }
@@ -2622,33 +2632,50 @@ function runSetupCommand(
 
 function parseSetupCommandArguments(args: readonly string[]): {
   readonly dashboardAuthOnly: boolean;
+  readonly rotateDashboardAuth: boolean;
   readonly pluginArgs: readonly string[];
   readonly error?: string;
 } {
   const pluginArgs: string[] = [];
   let dashboardAuthOnly = false;
+  let rotateDashboardAuth = false;
 
   for (const arg of args) {
     if (arg === '--dashboard-auth-only') {
       dashboardAuthOnly = true;
       continue;
     }
+    if (arg === '--rotate') {
+      rotateDashboardAuth = true;
+      continue;
+    }
     pluginArgs.push(arg);
+  }
+
+  if (rotateDashboardAuth && !dashboardAuthOnly) {
+    return {
+      dashboardAuthOnly,
+      rotateDashboardAuth,
+      pluginArgs,
+      error: 'rainrail setup --rotate must be combined with --dashboard-auth-only.',
+    };
   }
 
   if (dashboardAuthOnly && pluginArgs.length > 0) {
     return {
       dashboardAuthOnly,
+      rotateDashboardAuth,
       pluginArgs,
       error: 'rainrail setup --dashboard-auth-only cannot be combined with plugin arguments.',
     };
   }
 
-  return { dashboardAuthOnly, pluginArgs };
+  return { dashboardAuthOnly, rotateDashboardAuth, pluginArgs };
 }
 
 type LocalDashboardAuthSetupResult = {
   readonly created: readonly (keyof RainrailDashboardAuth)[];
+  readonly rotated: readonly (keyof RainrailDashboardAuth)[];
   readonly configPath: string;
 };
 
@@ -2656,6 +2683,7 @@ function ensureLocalDashboardAuth(
   configPath: string,
   fileSystem: RainrailCliFileSystem,
   env: Record<string, string | undefined>,
+  options: { readonly rotate?: boolean } = {},
 ): LocalDashboardAuthSetupResult {
   const raw = fileSystem.readFileSync(configPath, 'utf8');
   const rawDashboardAuth = parseRawDashboardAuthObject(raw);
@@ -2667,6 +2695,7 @@ function ensureLocalDashboardAuth(
     : parseExpandedDashboardAuthObject(raw, env);
   const generatedDashboardAuth: Record<string, string> = {};
   const created: Array<keyof RainrailDashboardAuth> = [];
+  const rotated: Array<keyof RainrailDashboardAuth> = [];
   for (const key of ['readOnlyToken', 'operatorToken'] as const) {
     if (dashboardAuth[key] === undefined) {
       const token = generateLocalDashboardToken(key);
@@ -2675,21 +2704,37 @@ function ensureLocalDashboardAuth(
       created.push(key);
       continue;
     }
-    if (isUnresolvedDashboardAuthEnvReference(dashboardAuth[key], rawDashboardAuth?.[key])) {
+    const rawValue = rawDashboardAuth?.[key];
+    const rawValueIsEnvReference = isDashboardAuthEnvReference(rawValue);
+    if (dashboardAuth[key] === '' && rawValueIsEnvReference) {
       continue;
     }
     parseLocalNonEmptyString(dashboardAuth[key], `config.dashboardAuth.${key}`);
+    if (options.rotate === true && !rawValueIsEnvReference) {
+      const token = generateLocalDashboardToken(key);
+      dashboardAuth[key] = token;
+      generatedDashboardAuth[key] = token;
+      rotated.push(key);
+    }
   }
   if (dashboardAuth.adminToken !== undefined) {
-    if (!isUnresolvedDashboardAuthEnvReference(dashboardAuth.adminToken, rawDashboardAuth?.adminToken)) {
+    const rawAdminToken = rawDashboardAuth?.adminToken;
+    const rawAdminTokenIsEnvReference = isDashboardAuthEnvReference(rawAdminToken);
+    if (!(dashboardAuth.adminToken === '' && rawAdminTokenIsEnvReference)) {
       parseLocalNonEmptyString(dashboardAuth.adminToken, 'config.dashboardAuth.adminToken');
+      if (options.rotate === true && !rawAdminTokenIsEnvReference) {
+        const token = generateLocalDashboardToken('adminToken');
+        dashboardAuth.adminToken = token;
+        generatedDashboardAuth.adminToken = token;
+        rotated.push('adminToken');
+      }
     }
   }
   assertUniqueLocalDashboardAuthTokens(dashboardAuth as RainrailDashboardAuth);
-  if (created.length > 0) {
+  if (created.length > 0 || rotated.length > 0) {
     fileSystem.writeFileSync(configPath, formatConfigWithLocalDashboardAuth(raw, generatedDashboardAuth));
   }
-  return { created, configPath };
+  return { created, rotated, configPath };
 }
 
 function parseExpandedDashboardAuthObject(raw: string, env: Record<string, string | undefined>): Record<string, unknown> {
@@ -2730,10 +2775,8 @@ function parseRawDashboardAuthObject(raw: string): Record<string, unknown> | und
   }
 }
 
-function isUnresolvedDashboardAuthEnvReference(expandedValue: unknown, rawValue: unknown): boolean {
-  return expandedValue === '' &&
-    typeof rawValue === 'string' &&
-    /^\$\{[A-Z0-9_]+\}$/u.test(rawValue);
+function isDashboardAuthEnvReference(value: unknown): boolean {
+  return typeof value === 'string' && /^\$\{[A-Z0-9_]+\}$/u.test(value);
 }
 
 function formatConfigWithLocalDashboardAuth(
@@ -2755,6 +2798,14 @@ function formatConfigWithLocalDashboardAuth(
   } catch {
     const dashboardAuthObjectStart = findDashboardAuthObjectStart(raw);
     if (dashboardAuthObjectStart !== undefined) {
+      const dashboardAuthObjectEnd = findJsonObjectEnd(raw, dashboardAuthObjectStart);
+      const rawDashboardAuth = parseRawDashboardAuthObject(raw);
+      if (dashboardAuthObjectEnd !== undefined && rawDashboardAuth !== undefined) {
+        return replaceJsonObjectValue(raw, dashboardAuthObjectStart, dashboardAuthObjectEnd, {
+          ...rawDashboardAuth,
+          ...generatedDashboardAuth,
+        });
+      }
       return insertObjectEntries(raw, dashboardAuthObjectStart, generatedDashboardAuth, '    ');
     }
     if (hasDashboardAuthProperty(raw)) {
@@ -2775,6 +2826,26 @@ function insertTopLevelDashboardAuth(raw: string, dashboardAuth: Record<string, 
   const rest = newline.length === 0 ? afterStart : afterStart.slice(newline.length);
   const property = `"dashboardAuth": ${JSON.stringify(dashboardAuth, null, 2).replaceAll('\n', `${newline}  `)}`;
   return `${raw.slice(0, objectStart + 1)}${newline}  ${property},${newline}${rest}`;
+}
+
+function replaceJsonObjectValue(
+  raw: string,
+  objectStart: number,
+  objectEnd: number,
+  value: Record<string, unknown>,
+): string {
+  const indent = findLineIndent(raw, objectStart);
+  const formatted = JSON.stringify(value, null, 2)
+    .split('\n')
+    .map((line, index) => index === 0 ? line : `${indent}${line}`)
+    .join('\n');
+  return `${raw.slice(0, objectStart)}${formatted}${raw.slice(objectEnd + 1)}`;
+}
+
+function findLineIndent(raw: string, index: number): string {
+  const lineStart = raw.lastIndexOf('\n', index - 1) + 1;
+  const linePrefix = raw.slice(lineStart, index);
+  return linePrefix.match(/^\s*/u)?.[0] ?? '';
 }
 
 function findDashboardAuthObjectStart(raw: string): number | undefined {
@@ -3176,9 +3247,9 @@ function formatSetupResult(
     };
   }
 
-  const dashboardAuthOutput = dashboardAuthResult === undefined || dashboardAuthResult.created.length === 0
+  const dashboardAuthOutput = dashboardAuthResult === undefined
     ? ''
-    : `Generated dashboardAuth.${dashboardAuthResult.created.join(' and dashboardAuth.')} in ${basename(dashboardAuthResult.configPath)}.\n`;
+    : formatDashboardAuthSetupOutput(dashboardAuthResult);
   const stdout = `${dashboardAuthOutput}${steps.map((step) => step.stdout).join('')}`;
   const stderr = steps.map((step) => step.stderr).join('');
   if (failedStep !== undefined) {
@@ -3194,6 +3265,24 @@ function formatSetupResult(
     stdout,
     stderr,
   };
+}
+
+function formatDashboardAuthSetupOutput(result: LocalDashboardAuthSetupResult): string {
+  const rotatedOutput = result.rotated.length === 0
+    ? ''
+    : `Rotated ${formatDashboardAuthKeyList(result.rotated)} in ${basename(result.configPath)}.\n`;
+  const createdOutput = result.created.length === 0
+    ? ''
+    : `Generated ${formatDashboardAuthKeyList(result.created)} in ${basename(result.configPath)}.\n`;
+  return `${rotatedOutput}${createdOutput}`;
+}
+
+function formatDashboardAuthKeyList(keys: readonly (keyof RainrailDashboardAuth)[]): string {
+  const labels = keys.map((key) => `dashboardAuth.${key}`);
+  if (labels.length <= 2) {
+    return labels.join(' and ');
+  }
+  return `${labels.slice(0, -1).join(', ')}, and ${labels[labels.length - 1]}`;
 }
 
 function runPluginsCommand(

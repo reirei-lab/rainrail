@@ -25,11 +25,13 @@ describe('local dashboard start documentation', () => {
       '# Local dashboard startup',
       'rainrail init',
       'rainrail setup --dashboard-auth-only --yes',
+      'rainrail setup --dashboard-auth-only --rotate --yes',
       'rainrail start',
       'Dashboard: http://127.0.0.1:8787/dashboard',
       'Dashboard API: http://127.0.0.1:8787/api/v1/overview',
       'dashboardAuth.readOnlyToken',
       'dashboardAuth.operatorToken',
+      'dashboardAuth.adminToken',
       'legacy `SSE_BEARER_TOKEN` remains accepted',
       'Authorization: Bearer',
     ]) {
@@ -57,11 +59,9 @@ describe('local dashboard start documentation', () => {
       'action_confirmation_required',
       'cookie/session login',
       'scoped SSE token',
-      'token rotation UI',
       'multi-user actor management',
       'handler-backed local runtime execution for operator/admin mutations',
       'https://github.com/reirei-lab/rainrail/issues/228',
-      'https://github.com/reirei-lab/rainrail/issues/229',
       'https://github.com/reirei-lab/rainrail/issues/230',
       'https://github.com/reirei-lab/rainrail/issues/231',
       '`actor`, `client`, and `requestId` attribution',
@@ -91,6 +91,26 @@ describe('local dashboard start documentation', () => {
     expect(localDashboardDocs).not.toContain(
       'decide whether the\n  local bearer-token field should remain the UX or evolve into a session login',
     );
+  });
+
+  it('documents local dashboard token rotation without exposing token examples', () => {
+    for (const required of [
+      '## Token rotation',
+      'replaces concrete `dashboardAuth.readOnlyToken`,',
+      '`dashboardAuth.operatorToken`, and existing `dashboardAuth.adminToken` values',
+      'without printing old or new token values',
+      'Environment',
+      'references such as `${DASHBOARD_OPERATOR_TOKEN}` are preserved',
+      'restart `rainrail start`',
+      'Rotation is a revoke-by-replacement workflow',
+      'If `SSE_BEARER_TOKEN` is set, rotate or unset it at the same time.',
+      'dashboard settings continue to report only whether bearer auth is',
+    ]) {
+      expect(localDashboardDocs).toContain(required);
+    }
+
+    expect(localDashboardDocs).not.toContain('old-operator-token');
+    expect(localDashboardDocs).not.toContain('rr_local_operator_abc');
   });
 
   it('keeps local operations separate from the Cloudflare Pages product site', () => {
