@@ -41,23 +41,50 @@ describe('Starlight documentation app', () => {
     const root = mkdtempSync(join(tmpdir(), 'rainrail-docs-routes-'));
     mkdirSync(join(root, 'apps/docs/src/content/docs/quickstart'), { recursive: true });
     mkdirSync(join(root, 'apps/docs/src/content/docs/operations'), { recursive: true });
+    mkdirSync(join(root, 'apps/www/src/lib'), { recursive: true });
 
     writeFileSync(
       join(root, 'apps/docs/astro.config.mjs'),
       [
+        'export default {',
+        'integrations: [starlight({',
         "sidebar: [",
+        "  // { items: [{ label: 'Old page', slug: 'old-page' }] },",
         "  { items: [{ label: 'Quickstart', slug: 'quickstart' }] },",
         "  { items: [{ label: 'Operations', slug: 'operations' }] },",
-        ']',
+        '],',
+        "redirects: [{ slug: 'not-sidebar' }],",
+        '})],',
+        '};',
         '',
       ].join('\n'),
     );
     writeFileSync(
       join(root, 'apps/docs/src/content/docs/index.md'),
-      '[Quickstart](/quickstart/) and [Operations](/operations/)\n',
+      [
+        '---',
+        'hero:',
+        '  actions:',
+        '    - text: Start here',
+        '      link: /quickstart/',
+        '---',
+        '[Quickstart](/quickstart/) and [Operations](/operations/)',
+        '',
+      ].join('\n'),
     );
     writeFileSync(join(root, 'apps/docs/src/content/docs/quickstart/index.md'), 'Start.\n');
     writeFileSync(join(root, 'apps/docs/src/content/docs/operations/index.md'), 'Operate.\n');
+    writeFileSync(
+      join(root, 'apps/www/src/lib/site-content.ts'),
+      [
+        "const publicDocsBase = 'https://docs.rainrail.dev';",
+        'export const links = [',
+        '  `${publicDocsBase}/quickstart/`,',
+        '  `${publicDocsBase}/operations/`,',
+        '];',
+        '',
+      ].join('\n'),
+    );
 
     expect(validateDocsRoutes(root)).toEqual([]);
 
@@ -70,8 +97,37 @@ describe('Starlight documentation app', () => {
     );
 
     writeFileSync(
+      join(root, 'apps/docs/src/content/docs/index.md'),
+      [
+        '---',
+        'hero:',
+        '  actions:',
+        '    - text: Missing',
+        '      link: /missing-cta/',
+        '---',
+        '[Quickstart](/quickstart/)',
+        '',
+      ].join('\n'),
+    );
+    expect(validateDocsRoutes(root)).toContain(
+      'apps/docs/src/content/docs/index.md frontmatter links to missing docs route /missing-cta/',
+    );
+
+    writeFileSync(
+      join(root, 'apps/www/src/lib/site-content.ts'),
+      [
+        "const publicDocsBase = 'https://docs.rainrail.dev';",
+        'export const links = [`${publicDocsBase}/missing-product-link/`];',
+        '',
+      ].join('\n'),
+    );
+    expect(validateDocsRoutes(root)).toContain(
+      'apps/www/src/lib/site-content.ts links to missing public docs route /missing-product-link/',
+    );
+
+    writeFileSync(
       join(root, 'apps/docs/astro.config.mjs'),
-      "sidebar: [{ items: [{ label: 'Missing', slug: 'missing' }] }]\n",
+      "export default { integrations: [starlight({ sidebar: [{ items: [{ label: 'Missing', slug: 'missing' }] }] })] };\n",
     );
     expect(validateDocsRoutes(root)).toContain(
       'apps/docs/astro.config.mjs sidebar slug missing has no docs route',
