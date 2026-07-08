@@ -120,6 +120,7 @@ describe('Cloudflare Pages docs site deploys', () => {
 
     const smokeScript = readFileSync(new URL('./smoke-cloudflare-docs.mjs', import.meta.url), 'utf8');
     expect(smokeScript).toContain('RAINRAIL_DOCS_URL');
+    expect(smokeScript).toContain('https://docs.rainrail.dev');
     expect(smokeScript).toContain("path: '/'");
     expect(smokeScript).toContain("path: '/quickstart/'");
     expect(smokeScript).toContain("path: '/operations/'");

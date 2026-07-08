@@ -33,8 +33,9 @@ describe('pull request CI workflow', () => {
     expect(workflow).toContain('pnpm install --frozen-lockfile');
   });
 
-  it('runs typecheck, test, and build as separate labeled steps', () => {
+  it('runs typecheck, docs checks, test, and build as separate labeled steps', () => {
     expect(workflow).toMatch(/^ {6}- name: Run typecheck\n {8}run: pnpm typecheck$/m);
+    expect(workflow).toMatch(/^ {6}- name: Run docs checks\n {8}run: pnpm docs:check\n {8}env:\n {10}DOCS_DRIFT_CHANGED_FROM: origin\/\$\{\{ github\.base_ref \}\}$/m);
     expect(workflow).toMatch(/^ {6}- name: Run tests\n {8}run: pnpm test$/m);
     expect(workflow).toMatch(/^ {6}- name: Run build\n {8}env:\n {10}PUBLIC_RAINRAIL_OPERATIONAL_API_URL: \$\{\{ vars\.RAINRAIL_OPERATIONAL_API_URL \}\}\n {8}run: pnpm build$/m);
   });

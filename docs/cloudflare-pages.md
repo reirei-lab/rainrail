@@ -117,3 +117,14 @@ RAINRAIL_DOCS_URL=https://<docs-pages-host> pnpm docs:smoke
 ```
 
 docs smoke script は `/`, `/quickstart/`, `/operations/` を HEAD し、`text/html` を確認する。
+`RAINRAIL_DOCS_URL` を指定しない場合は `https://docs.rainrail.dev` を確認する。
+
+## Release 前 checklist
+
+release 前、または Cloudflare Pages domain activation 後に public docs route を確認する場合は、
+少なくとも次を実行する。
+
+- `pnpm docs:check`: engineering docs drift、public docs sidebar route、内部 navigation link、docs app typecheck を確認する。
+- `pnpm docs:build`: `apps/docs/dist` が build できることを確認する。
+- `pnpm docs:smoke`: `https://docs.rainrail.dev` の `/`, `/quickstart/`, `/operations/` が HTML を返すことを確認する。
+- `RAINRAIL_PAGES_URL=https://rainrail.dev pnpm pages:smoke`: product site から docs gateway への主要 route を確認する。

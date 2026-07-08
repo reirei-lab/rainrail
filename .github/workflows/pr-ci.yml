@@ -40,7 +40,7 @@ jobs:
       - name: Run typecheck
         run: pnpm typecheck
 
-      - name: Run docs drift checks
+      - name: Run docs checks
         run: pnpm docs:check
         env:
           DOCS_DRIFT_CHANGED_FROM: origin/${{ github.base_ref }}
