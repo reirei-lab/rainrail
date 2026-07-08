@@ -18,7 +18,11 @@ export default defineConfig({
       sidebar: [
         {
           label: 'Quickstart',
-          items: [{ label: 'Overview', slug: 'quickstart' }],
+          items: [
+            { label: 'Overview', slug: 'quickstart' },
+            { label: 'Getting Started', slug: 'quickstart/getting-started' },
+            { label: 'Development', slug: 'quickstart/development' },
+          ],
         },
         {
           label: 'Concepts',
