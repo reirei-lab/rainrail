@@ -1,4 +1,3 @@
-import { rainrailEventsAuthErrorResponse, verifyRainrailEventsBearerToken } from './events-auth.js';
 import type { RainrailEventEnvelope } from './events.js';
 import {
   DEFAULT_MAX_REQUEST_BODY_BYTES,
@@ -160,8 +159,8 @@ async function routeRainrailHttpRequest(
   if (url.pathname === '/events') {
     if (request.method !== 'GET') return methodNotAllowedResponse(['GET', 'OPTIONS']);
 
-    const auth = verifyRainrailEventsBearerToken(request, options.eventsBearerToken);
-    if (!auth.ok) return rainrailEventsAuthErrorResponse(auth);
+    const auth = verifyDashboardScopedRequest(request, options, 'read-only');
+    if (!auth.ok) return auth.response;
 
     return options.room.fetch(new Request(`${INTERNAL_ROOM_ORIGIN}/events`, {
       headers: bridgeAuthorizationHeaders(request, options.publishToken),

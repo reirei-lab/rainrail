@@ -292,6 +292,29 @@ describe('Rainrail HTTP app', () => {
     await reader.cancel();
   });
 
+  it('accepts scoped dashboard tokens and legacy events bearer token for event streams', async () => {
+    const app = createTestApp(fakeState(), {
+      eventsBearerToken: 'events-token',
+      dashboardAuth: {
+        readOnlyToken: 'read-only-token',
+        operatorToken: 'operator-token',
+        adminToken: 'admin-token',
+      },
+    });
+
+    for (const token of ['read-only-token', 'operator-token', 'admin-token', 'events-token']) {
+      const events = await app.fetch(new Request('https://rainrail.local/events', {
+        headers: { authorization: `Bearer ${token}` },
+      }));
+      expect(events.status).toBe(200);
+      expect(events.headers.get('Content-Type')).toBe('text/event-stream');
+
+      const reader = getReaderOrThrow(events);
+      await expect(readNext(reader)).resolves.toBe(': connected\n\n');
+      await reader.cancel();
+    }
+  });
+
   it('requires event stream auth configuration instead of opening events publicly', async () => {
     const app = createTestApp(fakeState());
 
@@ -397,7 +420,12 @@ describe('Rainrail HTTP app', () => {
 
 function createTestApp(
   storage: ReturnType<typeof fakeState>,
-  options: { eventsBearerToken?: string; maxWebhookBodyBytes?: number; intakeAdapters?: RainrailIntakeAdapter[] } = {},
+  options: {
+    eventsBearerToken?: string;
+    dashboardAuth?: Parameters<typeof createRainrailHttpApp>[0]['dashboardAuth'];
+    maxWebhookBodyBytes?: number;
+    intakeAdapters?: RainrailIntakeAdapter[];
+  } = {},
 ) {
   const room = new RainrailBridgeRoom(storage, {
     publishToken: TEST_PUBLISH_TOKEN,
@@ -409,6 +437,7 @@ function createTestApp(
     publishToken: TEST_PUBLISH_TOKEN,
     runtime: 'test-runtime',
     ...(options.eventsBearerToken === undefined ? {} : { eventsBearerToken: options.eventsBearerToken }),
+    ...(options.dashboardAuth === undefined ? {} : { dashboardAuth: options.dashboardAuth }),
     intakeAdapters: options.intakeAdapters ?? [
       createGitHubWebhookIntakeAdapter({
         secret: 'secret',
