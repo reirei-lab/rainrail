@@ -1,18 +1,28 @@
 ---
 title: Operations
-description: Placeholder operations section for Rainrail deployment and maintenance.
+description: Deploy, smoke-check, and operate Rainrail surfaces.
 ---
 
-This section will document repeatable operational procedures.
+Operations pages cover repeatable procedures for production-like Rainrail
+surfaces. Secrets and account-specific values are always represented by names or
+example values, never committed values.
 
-## Cloudflare Pages
+## Deployment surfaces
+
+- [Cloudflare Worker](/operations/cloudflare-worker/) runs the event intake and
+  bridge runtime.
+- [Cloudflare Pages](/operations/cloudflare-pages/) publishes product and docs
+  static sites.
+- [Task queue](/operations/task-queue/) covers Project issue selection, claims,
+  and release semantics.
+
+## Docs deploy
 
 The docs site builds to `apps/docs/dist` and deploys to the Cloudflare Pages
 project `rainrail-docs`.
 
-## Planned topics
-
-- Preview and production deploys.
-- Smoke checks for docs.rainrail.dev.
-- Incident notes for failed routes or failed builds.
-- Release and rollback procedures.
+```sh
+pnpm docs:build
+pnpm docs:deploy:preview
+pnpm docs:deploy:production
+```

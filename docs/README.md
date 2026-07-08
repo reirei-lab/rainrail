@@ -3,12 +3,15 @@
 Rainrail has two documentation surfaces:
 
 - Product overview: [rainrail.dev](https://rainrail.dev)
+- Public developer docs: [docs.rainrail.dev](https://docs.rainrail.dev)
 - Product docs gateway: [rainrail.dev/docs](https://rainrail.dev/docs)
 
 This `docs/` directory is the engineering source of truth for contracts,
 normalization rules, operations, deploy procedures, and repository coverage.
-Use the product site when you need the narrative path. Use these files when
-you are implementing or reviewing Rainrail behavior.
+Use `docs.rainrail.dev` when you need external developer navigation and
+introductory IA. Use these files when you are implementing or reviewing
+Rainrail behavior. `rainrail.dev/docs` remains a product-site gateway that links
+to the public docs IA and to selected GitHub-only engineering notes.
 
 ## Contracts and event delivery
 

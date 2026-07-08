@@ -70,6 +70,7 @@ type LocaleContent = Record<PageId, ProductPageContent>;
 
 const repo = 'https://github.com/reirei-lab/rainrail';
 const docsBase = `${repo}/blob/main/docs`;
+const publicDocsBase = 'https://docs.rainrail.dev';
 
 const english = {
   home: {
@@ -229,10 +230,10 @@ const english = {
         'Use Rainrail when event-driven automation needs contracts, not another one-off webhook handler.',
       actions: [
         { label: 'Follow the event path', pageId: 'howItWorks' },
-        { label: 'Engineering docs', href: `${docsBase}/README.md`, variant: 'secondary' },
+        { label: 'Engineering docs', href: `${publicDocsBase}/`, variant: 'secondary' },
         {
           label: 'Runtime contract',
-          href: `${docsBase}/plugin-runtime-contract.md`,
+          href: `${publicDocsBase}/reference/plugin-runtime/`,
           variant: 'secondary',
         },
         { label: 'Issues', href: `${repo}/issues`, variant: 'secondary' },
@@ -272,7 +273,7 @@ const english = {
         body:
           'The product site summarizes the architecture. Payload shapes, plugin API signatures, retry behavior, and runtime semantics remain in the repository documentation so implementation decisions have a single source of truth.',
         actions: [
-          { label: 'Plugin runtime contract', href: `${docsBase}/plugin-runtime-contract.md` },
+          { label: 'Plugin runtime contract', href: `${publicDocsBase}/reference/plugin-runtime/` },
           { label: 'End-to-end example', pageId: 'examples', variant: 'secondary' },
         ],
       },
@@ -343,8 +344,8 @@ const english = {
         body:
           'This page is a product-facing map. The exact payload fields, plugin API signatures, capability gates, and Bridge room replay behavior stay in the engineering docs.',
         actions: [
-          { label: 'Plugin runtime contract', href: `${docsBase}/plugin-runtime-contract.md` },
-          { label: 'Event delivery', href: `${docsBase}/event-delivery.md`, variant: 'secondary' },
+          { label: 'Plugin runtime contract', href: `${publicDocsBase}/reference/plugin-runtime/` },
+          { label: 'Event delivery', href: `${publicDocsBase}/concepts/event-delivery/`, variant: 'secondary' },
         ],
       },
     ],
@@ -368,28 +369,28 @@ const english = {
             title: 'GitHub issue automation',
             body:
               'Start from a GitHub issue event, normalize it, select work from the Project queue, claim it with a short-lived lock, and dispatch an agent run with branch and session metadata.',
-            href: `${docsBase}/task-queue-project-issues.md`,
+            href: `${publicDocsBase}/operations/task-queue/`,
             linkText: 'Project issue selection',
           },
           {
             title: 'Manual and chat intake',
             body:
               'Publish operator-entered manual prompts or web chat messages as first-party source events that use Core intake and replay without going through the legacy EEP Bridge bundle.',
-            href: `${docsBase}/plugin-runtime-contract.md`,
+            href: `${publicDocsBase}/reference/plugin-runtime/`,
             linkText: 'Manual source contract',
           },
           {
             title: 'PR review loop',
             body:
               'Use pull request and review events as neutral workflow inputs, then route review follow-up into the same task and runtime provider boundaries used for issue automation.',
-            href: `${docsBase}/plugin-runtime-contract.md`,
+            href: `${publicDocsBase}/reference/plugin-runtime/`,
             linkText: 'Workflow plugin contract',
           },
           {
             title: 'Cloudflare event reporting',
             body:
               'Deploy the Worker bridge, register required secrets, publish Cloudflare tail or error events, and smoke test health without committing operational credentials.',
-            href: `${docsBase}/cloudflare-worker.md`,
+            href: `${publicDocsBase}/operations/cloudflare-worker/`,
             linkText: 'Cloudflare Worker operations',
           },
         ],
@@ -458,10 +459,10 @@ const english = {
         body:
           'The example intentionally stays implementation-neutral. The exact event envelope, Project queue claim semantics, and runtime capability gates are documented in the engineering specs.',
         actions: [
-          { label: 'Plugin runtime contract', href: `${docsBase}/plugin-runtime-contract.md` },
+          { label: 'Plugin runtime contract', href: `${publicDocsBase}/reference/plugin-runtime/` },
           {
             label: 'Project issue selection',
-            href: `${docsBase}/task-queue-project-issues.md`,
+            href: `${publicDocsBase}/operations/task-queue/`,
             variant: 'secondary',
           },
         ],
@@ -498,35 +499,36 @@ const english = {
           },
           {
             title: 'Plugin runtime contract',
-            href: `${docsBase}/plugin-runtime-contract.md`,
+            href: `${publicDocsBase}/reference/plugin-runtime/`,
             body: 'Source plugin, workflow plugin, and runtime provider boundaries.',
           },
           {
             title: 'Engineering docs index',
-            href: `${docsBase}/README.md`,
+            href: `${publicDocsBase}/`,
             body:
-              'GitHub landing page for contracts, operations, deployment notes, examples, and coverage references.',
+              'Public developer docs for contracts, operations, deployment notes, and examples.',
           },
           {
             title: 'GitHub webhook normalization',
-            href: `${docsBase}/github-webhook-normalization.md`,
+            href: `${publicDocsBase}/reference/github-webhook-normalization/`,
             body: 'How GitHub webhook payloads become neutral Rainrail events.',
           },
           {
             title: 'Cloudflare Worker operations',
-            href: `${docsBase}/cloudflare-worker.md`,
+            href: `${publicDocsBase}/operations/cloudflare-worker/`,
             body: 'Deploy, required secrets, local development, and production smoke testing.',
           },
           {
             title: 'Cloudflare Pages operations',
-            href: `${docsBase}/cloudflare-pages.md`,
+            href: `${publicDocsBase}/operations/cloudflare-pages/`,
             body:
               'Preview deploys, production deploys, required secrets, and product site smoke testing.',
           },
           {
-            title: 'Product site information architecture',
+            title: 'GitHub-only engineering notes',
             href: `${docsBase}/product-site-information-architecture.md`,
-            body: 'The boundary between public product content and engineering docs.',
+            body:
+              'Internal source specs such as product-site IA stay in GitHub and are not part of public docs navigation.',
           },
           {
             title: 'GitHub repository',
@@ -716,10 +718,10 @@ const japanese = {
         'イベント駆動の自動化に必要なのが、もうひとつの一回限りの webhook handler ではなく契約なら、Rainrail を使います。',
       actions: [
         { label: 'イベント経路を追う', pageId: 'howItWorks' },
-        { label: '技術ドキュメント', href: `${docsBase}/README.md`, variant: 'secondary' },
+        { label: '技術ドキュメント', href: `${publicDocsBase}/`, variant: 'secondary' },
         {
           label: 'ランタイム契約',
-          href: `${docsBase}/plugin-runtime-contract.md`,
+          href: `${publicDocsBase}/reference/plugin-runtime/`,
           variant: 'secondary',
         },
         { label: 'Issue を見る', href: `${repo}/issues`, variant: 'secondary' },
@@ -759,7 +761,7 @@ const japanese = {
         body:
           'Product site は architecture を要約します。payload shape、plugin API signature、retry behavior、runtime semantics は repository docs に置き、実装判断の source of truth をひとつに保ちます。',
         actions: [
-          { label: 'プラグイン実行契約', href: `${docsBase}/plugin-runtime-contract.md` },
+          { label: 'プラグイン実行契約', href: `${publicDocsBase}/reference/plugin-runtime/` },
           { label: 'End-to-end の例', pageId: 'examples', variant: 'secondary' },
         ],
       },
@@ -830,8 +832,8 @@ const japanese = {
         body:
           'このページは product-facing な地図です。正確な payload field、plugin API signature、capability gate、Bridge room replay behavior は engineering docs に残します。',
         actions: [
-          { label: 'プラグイン実行契約', href: `${docsBase}/plugin-runtime-contract.md` },
-          { label: 'イベント配送', href: `${docsBase}/event-delivery.md`, variant: 'secondary' },
+          { label: 'プラグイン実行契約', href: `${publicDocsBase}/reference/plugin-runtime/` },
+          { label: 'イベント配送', href: `${publicDocsBase}/concepts/event-delivery/`, variant: 'secondary' },
         ],
       },
     ],
@@ -855,28 +857,28 @@ const japanese = {
             title: 'GitHub issue 自動化',
             body:
               'GitHub issue event から始め、正規化し、Project queue から work を選び、短い lock を取り、branch と session metadata つきで agent run を dispatch します。',
-            href: `${docsBase}/task-queue-project-issues.md`,
+            href: `${publicDocsBase}/operations/task-queue/`,
             linkText: 'Project issue 選択',
           },
           {
             title: 'Manual / chat intake',
             body:
               'operator が入力した manual prompt や web chat message を first-party source event として publish し、legacy EEP Bridge bundle を通さず Core intake と replay を使います。',
-            href: `${docsBase}/plugin-runtime-contract.md`,
+            href: `${publicDocsBase}/reference/plugin-runtime/`,
             linkText: 'Manual source 契約',
           },
           {
             title: 'PR review loop',
             body:
               'pull request と review event を neutral workflow input として受け取り、review follow-up を issue automation と同じ task / runtime provider boundary に流します。',
-            href: `${docsBase}/plugin-runtime-contract.md`,
+            href: `${publicDocsBase}/reference/plugin-runtime/`,
             linkText: 'Workflow plugin 契約',
           },
           {
             title: 'Cloudflare event reporting',
             body:
               'Worker bridge を deploy し、必要な secret を登録し、Cloudflare tail や error event を publish し、operational credential を commit せず health を smoke test します。',
-            href: `${docsBase}/cloudflare-worker.md`,
+            href: `${publicDocsBase}/operations/cloudflare-worker/`,
             linkText: 'Cloudflare Worker 運用',
           },
         ],
@@ -945,10 +947,10 @@ const japanese = {
         body:
           'Example は意図的に implementation-neutral にしています。正確な event envelope、Project queue claim semantics、runtime capability gate は engineering specs に記録します。',
         actions: [
-          { label: 'プラグイン実行契約', href: `${docsBase}/plugin-runtime-contract.md` },
+          { label: 'プラグイン実行契約', href: `${publicDocsBase}/reference/plugin-runtime/` },
           {
             label: 'Project issue 選択',
-            href: `${docsBase}/task-queue-project-issues.md`,
+            href: `${publicDocsBase}/operations/task-queue/`,
             variant: 'secondary',
           },
         ],
@@ -985,34 +987,35 @@ const japanese = {
           },
           {
             title: 'プラグイン実行契約',
-            href: `${docsBase}/plugin-runtime-contract.md`,
+            href: `${publicDocsBase}/reference/plugin-runtime/`,
             body: 'Source plugin、workflow plugin、runtime provider の境界。',
           },
           {
             title: '技術ドキュメント一覧',
-            href: `${docsBase}/README.md`,
+            href: `${publicDocsBase}/`,
             body:
-              'contract、operation、deployment note、example、coverage reference への GitHub 上の入口です。',
+              'contract、operation、deployment note、example への public developer docs 入口です。',
           },
           {
             title: 'GitHub webhook 正規化',
-            href: `${docsBase}/github-webhook-normalization.md`,
+            href: `${publicDocsBase}/reference/github-webhook-normalization/`,
             body: 'GitHub webhook payload が neutral Rainrail event になる流れ。',
           },
           {
             title: 'Cloudflare Worker 運用',
-            href: `${docsBase}/cloudflare-worker.md`,
+            href: `${publicDocsBase}/operations/cloudflare-worker/`,
             body: 'deploy、required secrets、local development、production smoke testing。',
           },
           {
             title: 'Cloudflare Pages 運用',
-            href: `${docsBase}/cloudflare-pages.md`,
+            href: `${publicDocsBase}/operations/cloudflare-pages/`,
             body: 'preview deploy、production deploy、required secrets、product site smoke testing。',
           },
           {
-            title: 'プロダクトサイト情報設計',
+            title: 'GitHub-only engineering notes',
             href: `${docsBase}/product-site-information-architecture.md`,
-            body: 'public product content と engineering docs の境界。',
+            body:
+              'product-site IA などの内部 source spec は GitHub に残し、public docs navigation には含めません。',
           },
           {
             title: 'GitHub repository',
