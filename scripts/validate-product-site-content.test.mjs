@@ -205,7 +205,7 @@ describe('product site concepts, guides, and examples', () => {
     expect(dashboardContent).toContain('Rainrail 運用');
   });
 
-  it('publishes the initial Concepts content with links back to implementation contracts', () => {
+  it('publishes the initial Concepts content with links to public docs contract pages', () => {
     for (const term of [
       'RainrailEventEnvelope',
       'Source plugin',
@@ -217,8 +217,8 @@ describe('product site concepts, guides, and examples', () => {
       expect(siteContent).toContain(term);
     }
 
-    expect(siteContent).toContain('plugin-runtime-contract.md');
-    expect(siteContent).toContain('event-delivery.md');
+    expect(siteContent).toContain('`${publicDocsBase}/reference/plugin-runtime/`');
+    expect(siteContent).toContain('`${publicDocsBase}/concepts/event-delivery/`');
   });
 
   it('publishes the initial Guides content for the first operational workflows', () => {
@@ -231,8 +231,8 @@ describe('product site concepts, guides, and examples', () => {
       expect(siteContent).toContain(guide);
     }
 
-    expect(siteContent).toContain('task-queue-project-issues.md');
-    expect(siteContent).toContain('cloudflare-worker.md');
+    expect(siteContent).toContain('`${publicDocsBase}/operations/task-queue/`');
+    expect(siteContent).toContain('`${publicDocsBase}/operations/cloudflare-worker/`');
   });
 
   it('keeps CLI setup docs minimal and points command details at rainrail help', () => {
@@ -300,12 +300,12 @@ describe('product site concepts, guides, and examples', () => {
     }
   });
 
-  it('links product readers back to repository work surfaces and engineering contracts', () => {
+  it('links product readers to repository work surfaces and public docs contracts', () => {
     for (const target of [
       'https://github.com/reirei-lab/rainrail',
       '/issues',
-      'plugin-runtime-contract.md',
-      'README.md',
+      '`${publicDocsBase}/reference/plugin-runtime/`',
+      '`${publicDocsBase}/`',
     ]) {
       expect(siteContent).toContain(target);
     }

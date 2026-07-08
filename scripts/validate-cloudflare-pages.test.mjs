@@ -12,12 +12,17 @@ describe('Cloudflare Pages product site deploys', () => {
   it('documents the Wrangler Pages project, build output, secrets, and smoke command', () => {
     expect(docs).toContain('rainrail-www');
     expect(docs).toContain('apps/www/dist');
+    expect(docs).toContain('rainrail-docs');
+    expect(docs).toContain('apps/docs/dist');
     expect(docs).toContain('CLOUDFLARE_ACCOUNT_ID');
     expect(docs).toContain('CLOUDFLARE_API_TOKEN');
     expect(docs).toContain('PUBLIC_RAINRAIL_OPERATIONAL_API_URL');
     expect(docs).toContain('operational store');
     expect(docs).toContain('pnpm pages:deploy:preview');
     expect(docs).toContain('pnpm pages:deploy:production');
+    expect(docs).toContain('pnpm docs:deploy:preview');
+    expect(docs).toContain('pnpm docs:deploy:production');
+    expect(docs).toContain('production workflow は docs.rainrail.dev を rainrail.dev より先に deploy');
     expect(docs).toContain('GitHub Actions は secrets が未設定の場合でも build または artifact download まで実行し');
     expect(docs).toContain('PR workflow では Cloudflare secrets を扱わない');
     expect(docs).toContain('artifact がない workflow_run は preview deploy を skip する');
@@ -73,11 +78,19 @@ describe('Cloudflare Pages product site deploys', () => {
     expect(workflow).toContain("if: github.ref_name == 'main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')");
     expect(workflow).toContain('group: cloudflare-pages-production-main');
     expect(workflow).toContain('pnpm pages:build');
+    expect(workflow).toContain('pnpm docs:build');
+    expect(workflow.indexOf('pnpm docs:build')).toBeLessThan(workflow.indexOf('pnpm pages:build'));
+    expect(workflow).toContain('pnpm exec wrangler pages deploy apps/docs/dist --project-name rainrail-docs --branch main');
     expect(workflow).toContain('pnpm exec wrangler pages deploy apps/www/dist --project-name rainrail-www --branch main');
+    expect(
+      workflow.indexOf('pnpm exec wrangler pages deploy apps/docs/dist --project-name rainrail-docs --branch main'),
+    ).toBeLessThan(
+      workflow.indexOf('pnpm exec wrangler pages deploy apps/www/dist --project-name rainrail-www --branch main'),
+    );
   });
 
   it('passes the operational API URL into static Pages builds before artifact deploys', () => {
     expect(workflow).toContain('PUBLIC_RAINRAIL_OPERATIONAL_API_URL: ${{ vars.RAINRAIL_OPERATIONAL_API_URL }}');
-    expect(workflow).toMatch(/^ {6}- name: Build Cloudflare Pages production\n {8}env:\n {10}PUBLIC_RAINRAIL_OPERATIONAL_API_URL: \$\{\{ vars\.RAINRAIL_OPERATIONAL_API_URL \}\}\n {8}run: pnpm pages:build$/m);
+    expect(workflow).toMatch(/^ {6}- name: Build Rainrail product site production\n {8}env:\n {10}PUBLIC_RAINRAIL_OPERATIONAL_API_URL: \$\{\{ vars\.RAINRAIL_OPERATIONAL_API_URL \}\}\n {8}run: pnpm pages:build$/m);
   });
 });
