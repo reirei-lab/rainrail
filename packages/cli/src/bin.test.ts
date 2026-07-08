@@ -136,6 +136,8 @@ describe('rainrail binary entrypoint', () => {
     ['--help'],
     ['version'],
     ['update', 'check'],
+    ['dispatch', 'help'],
+    ['dispatch', '--help'],
     ['github', 'help'],
     ['github', 'webhook', 'add', 'help'],
     ['plugin', 'github', 'help'],

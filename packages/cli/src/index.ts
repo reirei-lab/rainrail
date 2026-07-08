@@ -360,6 +360,16 @@ export function parseRainrailArguments(argv: readonly string[]): ParsedRainrailA
       break;
     }
 
+    if (commandName === 'dispatch' && isDispatchInputModeOption(arg)) {
+      commandArgs.push(arg);
+      const value = argv[index + 1];
+      if (value !== undefined) {
+        commandArgs.push(value);
+        index += 1;
+      }
+      continue;
+    }
+
     if (arg === '--json') {
       parsedOptions.json = true;
       continue;
@@ -432,6 +442,10 @@ export function parseRainrailArguments(argv: readonly string[]): ParsedRainrailA
     options: parsedOptions,
     errors,
   };
+}
+
+function isDispatchInputModeOption(arg: string): boolean {
+  return arg === '--message' || arg === '--envelope-json';
 }
 
 export function formatHelp(): string {
@@ -898,6 +912,10 @@ function shouldStartUpdateNoticeCheck(
     return false;
   }
 
+  if (parsed.commandName === 'dispatch' && isDispatchHelpRequestForNotice(parsed.commandArgs)) {
+    return false;
+  }
+
   const pluginAliasResolver = environment.pluginAliasResolver ?? defaultPluginAliasResolver;
   if (parsed.commandName === 'plugin') {
     const pluginName = parsed.commandArgs[0];
@@ -908,6 +926,10 @@ function shouldStartUpdateNoticeCheck(
 
   const plugin = pluginAliasResolver(parsed.commandName);
   return plugin === undefined || !isPluginHelpRequestForNotice(plugin, parsed.commandArgs);
+}
+
+function isDispatchHelpRequestForNotice(args: readonly string[]): boolean {
+  return args.length === 1 && (args[0] === 'help' || args[0] === '--help');
 }
 
 function isPluginHelpRequestForNotice(
