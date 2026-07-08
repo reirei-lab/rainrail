@@ -44,6 +44,10 @@ describe('package scripts used by pull request CI', () => {
     expect(packageJson.scripts.typecheck).toBe(
       'tsc --noEmit && pnpm --filter @rainrail/cli typecheck',
     );
+    expect(packageJson.scripts['docs:check']).toContain(
+      'node scripts/check-docs-routes.mjs',
+    );
+    expect(packageJson.scripts['docs:check']).toContain('pnpm docs:typecheck');
     expect(tsconfig.compilerOptions.allowJs).toBe(true);
     expect(tsconfig.compilerOptions.checkJs).toBe(true);
     expect(tsconfig.include).toContain('scripts/**/*.mjs');

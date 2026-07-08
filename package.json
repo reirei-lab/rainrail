@@ -12,7 +12,7 @@
     "cf:deploy:check": "node scripts/check-cloudflare-deployability.mjs",
     "cf:dev": "wrangler dev --local",
     "cf:smoke": "node scripts/smoke-cloudflare-worker.mjs",
-    "docs:check": "node scripts/check-docs-drift.mjs && tsc -p tsconfig.docs.json",
+    "docs:check": "node scripts/check-docs-drift.mjs && node scripts/check-docs-routes.mjs && tsc -p tsconfig.docs.json && pnpm docs:typecheck",
     "docs:dev": "pnpm --filter @rainrail/docs dev",
     "docs:build": "pnpm --filter @rainrail/docs build",
     "docs:typecheck": "pnpm --filter @rainrail/docs typecheck",

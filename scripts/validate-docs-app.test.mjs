@@ -1,5 +1,8 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { validateDocsRoutes } from './check-docs-routes.mjs';
 
 const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 const docsPackageJson = JSON.parse(
@@ -34,6 +37,47 @@ const readDocsIndex = (section) =>
   );
 
 describe('Starlight documentation app', () => {
+  it('validates public docs sidebar routes and internal navigation links', () => {
+    const root = mkdtempSync(join(tmpdir(), 'rainrail-docs-routes-'));
+    mkdirSync(join(root, 'apps/docs/src/content/docs/quickstart'), { recursive: true });
+    mkdirSync(join(root, 'apps/docs/src/content/docs/operations'), { recursive: true });
+
+    writeFileSync(
+      join(root, 'apps/docs/astro.config.mjs'),
+      [
+        "sidebar: [",
+        "  { items: [{ label: 'Quickstart', slug: 'quickstart' }] },",
+        "  { items: [{ label: 'Operations', slug: 'operations' }] },",
+        ']',
+        '',
+      ].join('\n'),
+    );
+    writeFileSync(
+      join(root, 'apps/docs/src/content/docs/index.md'),
+      '[Quickstart](/quickstart/) and [Operations](/operations/)\n',
+    );
+    writeFileSync(join(root, 'apps/docs/src/content/docs/quickstart/index.md'), 'Start.\n');
+    writeFileSync(join(root, 'apps/docs/src/content/docs/operations/index.md'), 'Operate.\n');
+
+    expect(validateDocsRoutes(root)).toEqual([]);
+
+    writeFileSync(
+      join(root, 'apps/docs/src/content/docs/index.md'),
+      '[Missing](/missing/)\n',
+    );
+    expect(validateDocsRoutes(root)).toContain(
+      'apps/docs/src/content/docs/index.md links to missing docs route /missing/',
+    );
+
+    writeFileSync(
+      join(root, 'apps/docs/astro.config.mjs'),
+      "sidebar: [{ items: [{ label: 'Missing', slug: 'missing' }] }]\n",
+    );
+    expect(validateDocsRoutes(root)).toContain(
+      'apps/docs/astro.config.mjs sidebar slug missing has no docs route',
+    );
+  });
+
   it('defines a workspace app for docs.rainrail.dev builds', () => {
     expect(docsPackageJson.name).toBe('@rainrail/docs');
     expect(docsPackageJson.scripts.dev).toBe('astro dev');
@@ -70,6 +114,9 @@ describe('Starlight documentation app', () => {
 
   it('adds root scripts that build and deploy the docs Pages project independently from www', () => {
     expect(packageJson.scripts['docs:dev']).toBe('pnpm --filter @rainrail/docs dev');
+    expect(packageJson.scripts['docs:check']).toBe(
+      'node scripts/check-docs-drift.mjs && node scripts/check-docs-routes.mjs && tsc -p tsconfig.docs.json && pnpm docs:typecheck',
+    );
     expect(packageJson.scripts['docs:build']).toBe('pnpm --filter @rainrail/docs build');
     expect(packageJson.scripts['docs:typecheck']).toBe(
       'pnpm --filter @rainrail/docs typecheck',

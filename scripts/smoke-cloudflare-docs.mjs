@@ -1,4 +1,7 @@
-const docsUrl = requiredEnv('RAINRAIL_DOCS_URL').replace(/\/+$/u, '');
+const docsUrl = (process.env.RAINRAIL_DOCS_URL ?? 'https://docs.rainrail.dev').replace(
+  /\/+$/u,
+  '',
+);
 
 const routes = [
   { path: '/' },
@@ -11,19 +14,6 @@ for (const route of routes) {
 }
 
 console.log(`Cloudflare Docs Pages smoke passed for ${docsUrl}`);
-
-/**
- * @param {string} name
- * @returns {string}
- */
-function requiredEnv(name) {
-  const value = process.env[name];
-  if (value === undefined || value.length === 0) {
-    throw new Error(`${name} must be set`);
-  }
-
-  return value;
-}
 
 /**
  * @param {string} path

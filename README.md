@@ -101,6 +101,7 @@ caches pnpm dependencies from `pnpm-lock.yaml`, and runs these checks as
 separate steps so failures identify the command that failed:
 
 - `pnpm typecheck`
+- `pnpm docs:check`
 - `pnpm test`
 - `pnpm build`
 
