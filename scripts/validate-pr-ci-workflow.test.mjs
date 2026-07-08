@@ -45,4 +45,11 @@ describe('pull request CI workflow', () => {
     expect(workflow).toContain('path: apps/www/dist');
     expect(workflow).toContain('github.event.pull_request.head.repo.full_name == github.repository');
   });
+
+  it('uploads the docs site build artifact for trusted preview deploys without secrets', () => {
+    expect(workflow).toContain('name: rainrail-docs-dist');
+    expect(workflow).toContain('path: apps/docs/dist');
+    expect(workflow).toMatch(/name: rainrail-docs-dist[\s\S]*if-no-files-found: error/u);
+    expect(workflow).toContain('!github.event.pull_request.draft');
+  });
 });

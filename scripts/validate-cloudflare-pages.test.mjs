@@ -6,6 +6,10 @@ const workflow = readFileSync(
   new URL('../.github/workflows/cloudflare-pages.yml', import.meta.url),
   'utf8',
 );
+const docsWorkflow = readFileSync(
+  new URL('../.github/workflows/cloudflare-docs-pages.yml', import.meta.url),
+  'utf8',
+);
 const docs = readFileSync(new URL('../docs/cloudflare-pages.md', import.meta.url), 'utf8');
 
 describe('Cloudflare Pages product site deploys', () => {
@@ -79,5 +83,60 @@ describe('Cloudflare Pages product site deploys', () => {
   it('passes the operational API URL into static Pages builds before artifact deploys', () => {
     expect(workflow).toContain('PUBLIC_RAINRAIL_OPERATIONAL_API_URL: ${{ vars.RAINRAIL_OPERATIONAL_API_URL }}');
     expect(workflow).toMatch(/^ {6}- name: Build Cloudflare Pages production\n {8}env:\n {10}PUBLIC_RAINRAIL_OPERATIONAL_API_URL: \$\{\{ vars\.RAINRAIL_OPERATIONAL_API_URL \}\}\n {8}run: pnpm pages:build$/m);
+  });
+});
+
+describe('Cloudflare Pages docs site deploys', () => {
+  it('documents the docs Pages project, build output, commands, and smoke command', () => {
+    expect(docs).toContain('rainrail-docs');
+    expect(docs).toContain('apps/docs/dist');
+    expect(docs).toContain('pnpm docs:deploy:preview');
+    expect(docs).toContain('pnpm docs:deploy:production');
+    expect(docs).toContain('RAINRAIL_DOCS_BRANCH');
+    expect(docs).toContain('RAINRAIL_DOCS_URL=https://<docs-pages-host> pnpm docs:smoke');
+    expect(docs).toContain('docs smoke script は `/`, `/quickstart/`, `/operations/` を HEAD');
+    expect(docs).toContain('rainrail-docs-dist');
+    expect(docs).toContain('`.github/workflows/cloudflare-docs-pages.yml`');
+  });
+
+  it('ships a smoke script that validates docs routes without mutating production', () => {
+    expect(packageJson.scripts['docs:smoke']).toBe(
+      'node scripts/smoke-cloudflare-docs.mjs',
+    );
+    expect(existsSync(new URL('./smoke-cloudflare-docs.mjs', import.meta.url))).toBe(true);
+
+    const smokeScript = readFileSync(new URL('./smoke-cloudflare-docs.mjs', import.meta.url), 'utf8');
+    expect(smokeScript).toContain('RAINRAIL_DOCS_URL');
+    expect(smokeScript).toContain("path: '/'");
+    expect(smokeScript).toContain("path: '/quickstart/'");
+    expect(smokeScript).toContain("path: '/operations/'");
+    expect(smokeScript).toContain('method:');
+    expect(smokeScript).toContain("'HEAD'");
+  });
+
+  it('deploys docs pull request previews from a trusted workflow_run artifact', () => {
+    expect(docsWorkflow).toMatch(/^name: Cloudflare Docs Pages Deploy$/m);
+    expect(docsWorkflow).not.toMatch(/^ {2}pull_request:/m);
+    expect(docsWorkflow).toMatch(/^ {2}workflow_run:\n {4}workflows:\n {6}- Pull Request CI/m);
+    expect(docsWorkflow).toMatch(/^permissions:\n {2}contents: read\n {2}actions: read$/m);
+    expect(docsWorkflow).not.toContain('deployments: write');
+    expect(docsWorkflow).toContain("github.event.workflow_run.event == 'pull_request'");
+    expect(docsWorkflow).toContain("github.event.workflow_run.conclusion == 'success'");
+    expect(docsWorkflow).toContain("github.event.workflow_run.pull_requests[0].head.repo.full_name == github.repository");
+    expect(docsWorkflow).toContain('group: cloudflare-docs-pages-preview-${{ github.event.workflow_run.pull_requests[0].head.ref }}');
+    expect(docsWorkflow).toContain('ref: main');
+    expect(docsWorkflow).toContain('persist-credentials: false');
+    expect(docsWorkflow).toContain('id: docs-artifact');
+    expect(docsWorkflow).toContain('gh run download "${{ github.event.workflow_run.id }}" --name rainrail-docs-dist --dir apps/docs/dist');
+    expect(docsWorkflow).toContain("if: steps.docs-artifact.outputs.found == 'true'");
+    expect(docsWorkflow).toContain('pnpm exec wrangler pages deploy apps/docs/dist --project-name rainrail-docs --branch "${RAINRAIL_DOCS_BRANCH}"');
+  });
+
+  it('deploys docs production only from main push or main workflow_dispatch', () => {
+    expect(docsWorkflow).toMatch(/^ {2}push:\n {4}branches:\n {6}- main$/m);
+    expect(docsWorkflow).toContain("if: github.ref_name == 'main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')");
+    expect(docsWorkflow).toContain('group: cloudflare-docs-pages-production-main');
+    expect(docsWorkflow).toContain('pnpm docs:build');
+    expect(docsWorkflow).toContain('pnpm exec wrangler pages deploy apps/docs/dist --project-name rainrail-docs --branch main');
   });
 });

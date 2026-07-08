@@ -49,7 +49,7 @@ describe('Starlight documentation app', () => {
       'pnpm --filter @rainrail/docs typecheck',
     );
     expect(packageJson.scripts['docs:deploy:preview']).toBe(
-      'pnpm docs:build && wrangler pages deploy apps/docs/dist --project-name rainrail-docs --branch "${RAINRAIL_PAGES_BRANCH:-preview}"',
+      'pnpm docs:build && wrangler pages deploy apps/docs/dist --project-name rainrail-docs --branch "${RAINRAIL_DOCS_BRANCH:-preview}"',
     );
     expect(packageJson.scripts['docs:deploy:production']).toBe(
       'pnpm docs:build && wrangler pages deploy apps/docs/dist --project-name rainrail-docs --branch main',
@@ -57,6 +57,7 @@ describe('Starlight documentation app', () => {
     expect(cloudflarePagesDocs).toContain('docs.rainrail.dev');
     expect(cloudflarePagesDocs).toContain('rainrail-docs');
     expect(cloudflarePagesDocs).toContain('apps/docs/dist');
+    expect(cloudflarePagesDocs).toContain('RAINRAIL_DOCS_BRANCH');
     expect(cloudflarePagesDocs).toContain('pnpm docs:deploy:preview');
     expect(cloudflarePagesDocs).toContain('pnpm docs:deploy:production');
   });

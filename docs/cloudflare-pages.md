@@ -25,8 +25,8 @@ GitHub Actions は secrets が未設定の場合でも build または artifact 
 deploy だけを skip する。これにより preview / production の buildability は PR 上で確認できる。
 実際に Cloudflare Pages へ公開するには、上記 2 つの secrets を repository に設定する。
 PR workflow では Cloudflare secrets を扱わない。pull request 側では `apps/www/dist` artifact
-だけを作り、default branch の trusted `workflow_run` が repository の trusted dependency から
-Wrangler を起動して preview deploy する。
+と `apps/docs/dist` artifact だけを作り、default branch の trusted `workflow_run` が repository
+の trusted dependency から Wrangler を起動して preview deploy する。
 
 deploy workflow は Cloudflare Pages branch ごとに直列化し、新しい run が始まったら同じ branch
 向けの古い run を cancel する。
@@ -39,6 +39,11 @@ pull request preview は `.github/workflows/pr-ci.yml` が作った `rainrail-pa
 `CLOUDFLARE_ACCOUNT_ID` と `CLOUDFLARE_API_TOKEN` が設定されている場合だけ Wrangler deploy を実行し、
 未設定の場合は artifact download までを検証して job を成功させる。
 draft PR や artifact がない workflow_run は preview deploy を skip する。
+
+docs preview は `.github/workflows/pr-ci.yml` が作った `rainrail-docs-dist` artifact を、
+`.github/workflows/cloudflare-docs-pages.yml` の trusted `workflow_run` が `rainrail-docs` に deploy
+する。product site と同じく同一 repository の non-draft PR だけを対象にし、Cloudflare secrets が
+未設定の場合は artifact download までを検証して deploy だけを skip する。
 
 手動で preview deploy を再現する場合:
 
@@ -82,9 +87,14 @@ pnpm docs:deploy:preview
 pnpm docs:deploy:production
 ```
 
-`docs:deploy:preview` は `wrangler pages deploy apps/docs/dist --project-name rainrail-docs --branch "${RAINRAIL_PAGES_BRANCH:-preview}"`
+`docs:deploy:preview` は `wrangler pages deploy apps/docs/dist --project-name rainrail-docs --branch "${RAINRAIL_DOCS_BRANCH:-preview}"`
 を実行する。`docs:deploy:production` は同じ output directory を `rainrail-docs` project の
 `main` branch として deploy する。
+
+GitHub Actions では `.github/workflows/cloudflare-docs-pages.yml` が `rainrail-docs` 専用 deploy を
+担当する。`main` への push と `workflow_dispatch` は `pnpm docs:build` の後に production deploy
+を行う。PR preview は `rainrail-docs-dist` artifact を deploy するため、PR workflow 側では
+Cloudflare secrets を読み込まない。
 
 ## Smoke
 
@@ -95,3 +105,11 @@ RAINRAIL_PAGES_URL=https://<pages-host> pnpm pages:smoke
 ```
 
 smoke script は `/`, `/en/docs`, `/en/how-it-works` を GET し、`text/html` と route 固有の hero 文言を確認する。
+
+docs site は `HEAD` request で主要 route が HTML を返すことを確認する。
+
+```sh
+RAINRAIL_DOCS_URL=https://<docs-pages-host> pnpm docs:smoke
+```
+
+docs smoke script は `/`, `/quickstart/`, `/operations/` を HEAD し、`text/html` を確認する。
