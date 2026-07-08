@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/reirei-lab/rainrail/compare/release/0.4.0...release/0.4.1) (2026-07-08)
+
+
+### Bug Fixes
+
+* route product docs links to docs site ([#255](https://github.com/reirei-lab/rainrail/issues/255)) ([925fea2](https://github.com/reirei-lab/rainrail/commit/925fea2bc0962d8d87ae89caa63c3ee6bbb46937))
+
 ## [0.4.0](https://github.com/reirei-lab/rainrail/compare/release/0.3.0...release/0.4.0) (2026-07-08)
 
 
