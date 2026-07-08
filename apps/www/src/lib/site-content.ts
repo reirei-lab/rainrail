@@ -82,7 +82,7 @@ const english = {
     primaryActionsLabel: 'Primary actions',
     actions: [
       { label: 'Start with the workflow', pageId: 'howItWorks' },
-      { label: 'Inspect the contracts', pageId: 'docs', variant: 'secondary' },
+      { label: 'Open developer docs', href: `${publicDocsBase}/`, variant: 'secondary' },
       { label: 'Open GitHub repo', href: repo, variant: 'secondary' },
     ],
     facts: {
@@ -474,7 +474,7 @@ const english = {
     eyebrow: 'Documentation gateway',
     headline: 'Start with the overview, then jump into the contracts.',
     lede:
-      'Rainrail keeps product narrative in this site and durable engineering decisions in repository docs.',
+      'Rainrail keeps product narrative in this site and durable engineering decisions in the self-hosted developer docs.',
     sections: [
       {
         heading: 'Start here',
@@ -570,7 +570,7 @@ const japanese = {
     primaryActionsLabel: '主要アクション',
     actions: [
       { label: 'ワークフローを見る', pageId: 'howItWorks' },
-      { label: '契約を確認する', pageId: 'docs', variant: 'secondary' },
+      { label: '技術ドキュメントを開く', href: `${publicDocsBase}/`, variant: 'secondary' },
       { label: 'GitHub repo を開く', href: repo, variant: 'secondary' },
     ],
     facts: {
@@ -962,7 +962,7 @@ const japanese = {
     eyebrow: 'ドキュメント入口',
     headline: '概要から始めて、contract へ進む。',
     lede:
-      'Rainrail は product narrative をこの site に、長く残す engineering decision を repository docs に分けて置きます。',
+      'Rainrail は product narrative をこの site に、長く残す engineering decision を self-hosted developer docs に分けて置きます。',
     sections: [
       {
         heading: 'ここから始める',

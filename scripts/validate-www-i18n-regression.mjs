@@ -11,6 +11,10 @@ const defaultOgLocales = {
 };
 const i18nSourcePath = join(repoRoot, 'apps/www/src/lib/i18n.ts');
 const pagesRoot = join(repoRoot, 'apps/www/src/pages');
+/** @type {Record<string, string>} */
+const legacyRedirectTargets = {
+  docs: 'https://docs.rainrail.dev/',
+};
 
 /**
  * @param {string} locale
@@ -382,7 +386,7 @@ const requireLegacyRedirects = ({ redirects, publicPagePaths, defaultLocale, err
 
     const source = `/${publicPath}`;
     const sourceWithSlash = `${source}/`;
-    const target = routePath(defaultLocale, publicPath);
+    const target = legacyRedirectTargets[publicPath] ?? routePath(defaultLocale, publicPath);
 
     if (!hasRedirectRule(redirects, source, target)) {
       errors.push(`Missing legacy redirect ${source} -> ${target} 301`);

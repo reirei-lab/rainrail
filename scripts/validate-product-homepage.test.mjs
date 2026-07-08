@@ -20,7 +20,7 @@ describe('product homepage', () => {
     expect(siteContent).toContain('development events');
     expect(siteContent).toContain('agent workflows');
     expect(siteContent).toContain('Start with the workflow');
-    expect(siteContent).toContain('Inspect the contracts');
+    expect(siteContent).toContain('Open developer docs');
     expect(localizedRoute).toContain("content.kind === 'home'");
   });
 
