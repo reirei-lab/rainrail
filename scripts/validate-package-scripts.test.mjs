@@ -29,10 +29,10 @@ const copyDashboardAssetsScript = readFileSync(
 );
 
 describe('package scripts used by pull request CI', () => {
-  it('builds repository scripts, the CLI package, and the product site from the root command', () => {
+  it('builds repository scripts, the product site, docs site, and CLI package from the root command', () => {
     expect(packageJson.scripts['build:scripts']).toBe('node scripts/check-scripts.mjs');
     expect(packageJson.scripts.build).toBe(
-      'pnpm run build:scripts && pnpm --filter www build && pnpm --filter @rainrail/cli build',
+      'pnpm run build:scripts && pnpm --filter www build && pnpm docs:build && pnpm --filter @rainrail/cli build',
     );
   });
 
