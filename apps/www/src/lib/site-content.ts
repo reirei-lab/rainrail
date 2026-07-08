@@ -75,7 +75,7 @@ const english = {
   home: {
     kind: 'home',
     eyebrow: 'Developer event routing for agent operations',
-    headline: 'Rainrail routes development events into agent workflows.',
+    headline: 'Build your own loop.',
     lede:
       'Turn issues, pull requests, project queues, webhook deliveries, and operational signals into deterministic agent tasks with stable contracts between every source, plugin, and runtime.',
     primaryActionsLabel: 'Primary actions',
@@ -562,7 +562,7 @@ const japanese = {
   home: {
     kind: 'home',
     eyebrow: 'エージェント運用のための開発イベントルーティング',
-    headline: 'Rainrail は開発イベントをエージェントワークフローへ届けます。',
+    headline: 'Build your own loop.',
     lede:
       'issue、pull request、Project queue、webhook delivery、運用シグナルを、source・plugin・runtime の安定した契約で決定的な agent task に変換します。',
     primaryActionsLabel: '主要アクション',
