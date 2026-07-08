@@ -125,6 +125,11 @@ Worker EEP Bridge の起動表示や運用状態と混同しない。
   delivery id、workflow/audit summary、sanitized envelope、operator-visible metadata だけを返し、
   provider raw payload body、webhook secret、bearer token、normalized `payload` 本体を
   transport response に漏らさない。
+- Command action audit attribution is a transport/core-adapter responsibility.
+  scoped dashboard token から stable actor id を決め、`X-Rainrail-Client` がない command caller は
+  deterministic な `unknown` client として扱い、`X-Request-ID` または生成 request id と同じ値を
+  command handler input、command result、command activity metadata、response header に揃える。
+  bearer token、confirmation token、secret-like field は audit payload に保存する前に redaction する。
 - `POST /publish` は `RainrailBridgeRoom.fetch()` の room-internal endpoint として扱う。
   The public `createRainrailHttpApp` surface does not expose a generic `POST /publish` route.
   public app から provider event を受ける場合は `/webhooks/github` や Worker `tail()` を
