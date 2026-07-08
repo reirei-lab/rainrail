@@ -18,6 +18,21 @@ const docsIndex = readFileSync(
   'utf8',
 );
 
+/**
+ * @param {string} slug
+ */
+const readDocsPage = (slug) =>
+  readFileSync(new URL(`../apps/docs/src/content/docs/${slug}.md`, import.meta.url), 'utf8');
+
+/**
+ * @param {string} section
+ */
+const readDocsIndex = (section) =>
+  readFileSync(
+    new URL(`../apps/docs/src/content/docs/${section}/index.md`, import.meta.url),
+    'utf8',
+  );
+
 describe('Starlight documentation app', () => {
   it('defines a workspace app for docs.rainrail.dev builds', () => {
     expect(docsPackageJson.name).toBe('@rainrail/docs');
@@ -39,6 +54,17 @@ describe('Starlight documentation app', () => {
     expect(docsAstroConfig).toContain("label: 'Guides'");
     expect(docsAstroConfig).toContain("label: 'Reference'");
     expect(docsAstroConfig).toContain("label: 'Operations'");
+    expect(docsAstroConfig).toContain("label: 'Examples'");
+    for (const slug of [
+      'concepts/event-model',
+      'concepts/runtime-boundaries',
+      'guides/source-adapter',
+      'reference/plugin-runtime',
+      'operations/cloudflare-worker',
+      'examples/plugin-runtime',
+    ]) {
+      expect(docsAstroConfig).toContain(`slug: '${slug}'`);
+    }
     expect(docsAstroConfig).not.toContain('disableSearch');
   });
 
@@ -62,18 +88,63 @@ describe('Starlight documentation app', () => {
     expect(cloudflarePagesDocs).toContain('pnpm docs:deploy:production');
   });
 
-  it('ships landing, section, and placeholder pages for the initial docs structure', () => {
+  it('ships landing and section pages for the external developer docs IA', () => {
     expect(docsIndex).toContain('Start here');
     expect(docsIndex).toContain('/quickstart/');
     expect(docsIndex).toContain('/concepts/');
     expect(docsIndex).toContain('/guides/');
     expect(docsIndex).toContain('/reference/');
     expect(docsIndex).toContain('/operations/');
+    expect(docsIndex).toContain('/examples/plugin-runtime/');
+    expect(docsIndex).toContain('source spec');
+    expect(docsIndex).toContain('GitHub-only engineering notes');
 
-    for (const section of ['quickstart', 'concepts', 'guides', 'reference', 'operations']) {
+    const sectionIndexes = ['quickstart', 'concepts', 'guides', 'reference', 'operations'];
+
+    for (const section of sectionIndexes) {
       expect(
         existsSync(new URL(`../apps/docs/src/content/docs/${section}/index.md`, import.meta.url)),
       ).toBe(true);
+      expect(readDocsIndex(section)).not.toMatch(/placeholder/i);
     }
+
+    const requiredPages = [
+      'concepts/event-model',
+      'concepts/runtime-boundaries',
+      'concepts/event-delivery',
+      'concepts/operational-state',
+      'guides/source-adapter',
+      'guides/workflow-plugin',
+      'guides/local-delivery',
+      'reference/plugin-runtime',
+      'reference/github-webhook-normalization',
+      'reference/operational-api-v1',
+      'reference/contracts-manifest',
+      'operations/cloudflare-worker',
+      'operations/cloudflare-pages',
+      'operations/task-queue',
+      'examples/plugin-runtime',
+    ];
+
+    for (const slug of requiredPages) {
+      expect(existsSync(new URL(`../apps/docs/src/content/docs/${slug}.md`, import.meta.url))).toBe(
+        true,
+      );
+      expect(readDocsPage(slug)).toContain('Source spec');
+    }
+  });
+
+  it('keeps rainrail.dev/docs as a gateway to docs.rainrail.dev instead of repo-only docs', () => {
+    const productSiteContent = readFileSync(
+      new URL('../apps/www/src/lib/site-content.ts', import.meta.url),
+      'utf8',
+    );
+
+    expect(productSiteContent).toContain("const publicDocsBase = 'https://docs.rainrail.dev'");
+    expect(productSiteContent).toContain('`${publicDocsBase}/reference/plugin-runtime/`');
+    expect(productSiteContent).toContain('`${publicDocsBase}/operations/cloudflare-worker/`');
+    expect(productSiteContent).toContain('`${publicDocsBase}/operations/cloudflare-pages/`');
+    expect(productSiteContent).toContain('GitHub-only engineering notes');
+    expect(productSiteContent).toContain('`${docsBase}/product-site-information-architecture.md`');
   });
 });

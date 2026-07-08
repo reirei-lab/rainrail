@@ -109,7 +109,10 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build Cloudflare Pages production
+      - name: Build Rainrail docs production
+        run: pnpm docs:build
+
+      - name: Build Rainrail product site production
         env:
           PUBLIC_RAINRAIL_OPERATIONAL_API_URL: ${{ vars.RAINRAIL_OPERATIONAL_API_URL }}
         run: pnpm pages:build
@@ -124,4 +127,5 @@ jobs:
             exit 0
           fi
 
+          pnpm exec wrangler pages deploy apps/docs/dist --project-name rainrail-docs --branch main
           pnpm exec wrangler pages deploy apps/www/dist --project-name rainrail-www --branch main

@@ -1,13 +1,17 @@
 ---
 title: Guides
-description: Placeholder guides section for common Rainrail tasks.
+description: Task-focused paths for extending Rainrail without breaking contracts.
 ---
 
-This section will hold task-focused guides for implementers and operators.
+Use guides when you know what you are trying to change and need the path through
+the repository boundaries.
 
-## Planned topics
+## Implementation paths
 
-- Add a new source adapter.
-- Add or change a workflow plugin.
-- Run a local event delivery scenario.
-- Extend dashboard and CLI behavior without breaking contracts.
+- [Add a source adapter](/guides/source-adapter/) for new provider input.
+- [Add a workflow plugin](/guides/workflow-plugin/) for new routing behavior.
+- [Run local delivery](/guides/local-delivery/) for publish and stream checks.
+
+Before changing a public payload, export, route, retry rule, or assignment
+policy, also read the related [Reference](/reference/) page and update the source
+spec if the contract changes.
