@@ -87,8 +87,8 @@ describe('product site concepts, guides, and examples', () => {
       '/guides/ /en/guides 301',
       '/examples /en/examples 301',
       '/examples/ /en/examples 301',
-      '/docs /en/docs 301',
-      '/docs/ /en/docs 301',
+      '/docs https://docs.rainrail.dev/ 301',
+      '/docs/ https://docs.rainrail.dev/ 301',
     ]) {
       expect(redirects).toContain(redirect);
     }
@@ -196,6 +196,8 @@ describe('product site concepts, guides, and examples', () => {
   it('exposes Concepts, Guides, and Examples from the primary navigation and docs gateway', () => {
     expect(layout).toContain('site.nav.primary.map');
     expect(layout).toContain('hrefFor(item.pageId)');
+    expect(layout).toContain('item.href ?? hrefFor(item.pageId)');
+    expect(i18n).toContain("href: 'https://docs.rainrail.dev/'");
 
     for (const pageId of ['concepts', 'guides', 'examples']) {
       expect(siteContent).toContain(`pageId: '${pageId}'`);
@@ -203,6 +205,23 @@ describe('product site concepts, guides, and examples', () => {
 
     expect(dashboardContent).toContain('Rainrail Operations');
     expect(dashboardContent).toContain('Rainrail 運用');
+  });
+
+  it('points primary product navigation and home CTAs to the self-hosted docs site', () => {
+    const englishHome = getProductPageContent('en', 'home');
+    const japaneseHome = getProductPageContent('ja', 'home');
+
+    if (englishHome.kind !== 'home' || japaneseHome.kind !== 'home') {
+      throw new Error('Localized home content must use the home renderer');
+    }
+
+    expect(i18n).toContain("href: 'https://docs.rainrail.dev/'");
+    expect(englishHome.actions).toContainEqual(
+      expect.objectContaining({ label: 'Open developer docs', href: 'https://docs.rainrail.dev/' }),
+    );
+    expect(japaneseHome.actions).toContainEqual(
+      expect.objectContaining({ label: '技術ドキュメントを開く', href: 'https://docs.rainrail.dev/' }),
+    );
   });
 
   it('publishes the initial Concepts content with links to public docs contract pages', () => {

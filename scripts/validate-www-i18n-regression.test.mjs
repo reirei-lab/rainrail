@@ -496,6 +496,39 @@ describe('www i18n regression validator', () => {
     );
   });
 
+  it('accepts the docs legacy route as an external public docs redirect', async () => {
+    const distRoot = await writeCompleteDist();
+    for (const locale of locales) {
+      writeRoute(distRoot, `${locale}/docs`, pageHtml({ locale, path: 'docs' }));
+    }
+    writeFileSync(
+      join(distRoot, 'sitemap.xml'),
+      `<?xml version="1.0" encoding="UTF-8"?>
+<urlset>
+  <url><loc>https://rainrail.dev/ja/</loc></url>
+  <url><loc>https://rainrail.dev/en/</loc></url>
+  <url><loc>https://rainrail.dev/ja/how-it-works</loc></url>
+  <url><loc>https://rainrail.dev/en/how-it-works</loc></url>
+  <url><loc>https://rainrail.dev/ja/docs</loc></url>
+  <url><loc>https://rainrail.dev/en/docs</loc></url>
+</urlset>`,
+    );
+    writeFileSync(
+      join(distRoot, '_redirects'),
+      `/docs https://docs.rainrail.dev/ 301
+/docs/ https://docs.rainrail.dev/ 301`,
+    );
+
+    expect(
+      validateBuiltWwwI18n({
+        distRoot,
+        locales,
+        localizedPaths: [...localizedPaths, 'docs'],
+        publicPagePaths: ['docs'],
+      }),
+    ).toEqual([]);
+  });
+
   it('collects nested directory-style public pages', async () => {
     const pagesRoot = await mkdtemp(join(tmpdir(), 'rainrail-www-pages-'));
     mkdirSync(join(pagesRoot, 'pricing'), { recursive: true });

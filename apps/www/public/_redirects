@@ -6,7 +6,7 @@
 /guides/ /en/guides 301
 /examples /en/examples 301
 /examples/ /en/examples 301
-/docs /en/docs 301
-/docs/ /en/docs 301
+/docs https://docs.rainrail.dev/ 301
+/docs/ https://docs.rainrail.dev/ 301
 /dashboard /en/dashboard 301
 /dashboard/ /en/dashboard 301

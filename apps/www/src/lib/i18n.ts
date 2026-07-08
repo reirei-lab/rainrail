@@ -19,10 +19,17 @@ type LocalizedText = {
   description: string;
 };
 
-type NavItem = {
-  label: string;
-  pageId: Exclude<PageId, 'home'>;
-};
+type NavItem =
+  | {
+      label: string;
+      pageId: Exclude<PageId, 'home'>;
+      href?: never;
+    }
+  | {
+      label: string;
+      href: string;
+      pageId?: never;
+    };
 
 type PageContent = {
   meta: LocalizedText;
@@ -68,7 +75,7 @@ const messages = {
         { label: '概念', pageId: 'concepts' },
         { label: 'ガイド', pageId: 'guides' },
         { label: '例', pageId: 'examples' },
-        { label: 'ドキュメント', pageId: 'docs' },
+        { label: 'ドキュメント', href: 'https://docs.rainrail.dev/' },
       ],
     },
     footer:
@@ -129,7 +136,7 @@ const messages = {
         { label: 'Concepts', pageId: 'concepts' },
         { label: 'Guides', pageId: 'guides' },
         { label: 'Examples', pageId: 'examples' },
-        { label: 'Docs', pageId: 'docs' },
+        { label: 'Docs', href: 'https://docs.rainrail.dev/' },
       ],
     },
     footer: 'Rainrail routes development events into deterministic agent workflows.',
