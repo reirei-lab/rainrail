@@ -2482,6 +2482,61 @@ describe('Rainrail dashboard API', () => {
     operationalStore.close();
   });
 
+  it('records a deterministic client fallback when command callers omit client attribution', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:00:00.000Z'),
+    });
+    const commandHandler = vi.fn(async () => ({ resumed: true }));
+    const app = createRainrailHttpApp({
+      room: new RainrailBridgeRoom(fakeState(), { publishToken: 'publish-token' }),
+      publishToken: 'publish-token',
+      operationalStore,
+      dashboardAuth: {
+        operatorToken: 'operator-token',
+      },
+      commandHandler,
+    });
+    operationalStore.recordAgentTask({
+      id: 'agent_task_missing_client',
+      title: 'Command audit attribution',
+      branchName: 'agent/missing-client',
+      status: 'stopped',
+    });
+
+    const response = await app.fetch(new Request('https://rainrail.local/api/v1/agent-tasks/agent_task_missing_client/actions/resume', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer operator-token',
+        'content-type': 'application/json',
+        'x-request-id': 'request-missing-client',
+      },
+      body: JSON.stringify({}),
+    }));
+
+    expect(response.status).toBe(202);
+    expect(commandHandler).toHaveBeenCalledWith(expect.objectContaining({
+      actor: 'operator',
+      client: 'unknown',
+      requestId: 'request-missing-client',
+    }));
+    expect(operationalStore.snapshot()).toMatchObject({
+      activityEvents: [{
+        metadata: {
+          actor: 'operator',
+          client: 'unknown',
+          requestId: 'request-missing-client',
+        },
+      }],
+      commandResults: [
+        { status: 'accepted', actor: 'operator', client: 'unknown', requestId: 'request-missing-client' },
+        { status: 'dispatching', actor: 'operator', client: 'unknown', requestId: 'request-missing-client' },
+      ],
+    });
+    operationalStore.close();
+  });
+
   it('does not persist secrets exposed through command result toJSON hooks', async () => {
     const operationalStore = new RainrailOperationalStore({
       databasePath: ':memory:',
