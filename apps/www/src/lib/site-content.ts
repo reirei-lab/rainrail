@@ -77,7 +77,7 @@ const english = {
     eyebrow: 'Developer event routing for agent operations',
     headline: 'Build your own loop.',
     lede:
-      'Turn issues, pull requests, project queues, webhook deliveries, and operational signals into deterministic agent tasks with stable contracts between every source, plugin, and runtime.',
+      'Turn events from external services into loops run by your own code. Rainrail receives, shapes, and connects inputs to your scripts and agents.',
     primaryActionsLabel: 'Primary actions',
     actions: [
       { label: 'Start with the workflow', pageId: 'howItWorks' },
@@ -564,7 +564,7 @@ const japanese = {
     eyebrow: 'エージェント運用のための開発イベントルーティング',
     headline: 'Build your own loop.',
     lede:
-      'issue、pull request、Project queue、webhook delivery、運用シグナルを、source・plugin・runtime の安定した契約で決定的な agent task に変換します。',
+      '外部サービスのイベントを、あなたのコードで動くループへ。Rainrail は入力を受け取り、整え、スクリプトやエージェントにつなぎます。',
     primaryActionsLabel: '主要アクション',
     actions: [
       { label: 'ワークフローを見る', pageId: 'howItWorks' },
