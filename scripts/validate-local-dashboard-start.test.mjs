@@ -66,12 +66,30 @@ describe('local dashboard start documentation', () => {
       'https://github.com/reirei-lab/rainrail/issues/231',
       '`actor`, `client`, and `requestId` attribution',
       'session login',
+      '## Auth mode decision',
+      'Local MVP decision: keep the bearer-token field as the operator UX.',
+      'This resolves [#231](https://github.com/reirei-lab/rainrail/issues/231)',
+      'When no dashboard auth token is configured and',
+      '`rainrail start` is bound to localhost',
+      'the supported local no-auth mode',
+      'remains available.',
+      'Do not add cookie/session login to `rainrail start` until Rainrail has a hosted',
+      'or multi-user dashboard mode.',
+      'CSRF',
+      'logout',
+      'session expiration',
+      'cookie scope',
+      'token storage',
+      'hosted/multi-user UX',
     ]) {
       expect(localDashboardDocs).toContain(required);
     }
 
     expect(localDashboardDocs).not.toContain(
       'run operator actions such as agent task resume, reset, and terminate commands',
+    );
+    expect(localDashboardDocs).not.toContain(
+      'decide whether the\n  local bearer-token field should remain the UX or evolve into a session login',
     );
   });
 
