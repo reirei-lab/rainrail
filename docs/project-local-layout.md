@@ -149,9 +149,10 @@ used by tests and future embedding code:
 
 - Types: `BuiltInCommandName`, `BuiltInCommand`, `SharedOptions`,
   `ParsedRainrailArguments`, `RainrailCliResult`, `RainrailCliEnvironment`,
-  `CommandRunnerResult`, `CommandRunnerOptions`, `CommandRunner`,
-  `ReleaseFetchResult`, `ReleaseFetcher`, `AsyncReleaseFetcherOptions`,
-  `AsyncReleaseFetcher`, `RainrailCliEntrypointIO`,
+  `RainrailDispatchMode`, `RainrailDispatchRequest`,
+  `RainrailDispatchRunner`, `CommandRunnerResult`, `CommandRunnerOptions`,
+  `CommandRunner`, `ReleaseFetchResult`, `ReleaseFetcher`,
+  `AsyncReleaseFetcherOptions`, `AsyncReleaseFetcher`, `RainrailCliEntrypointIO`,
   `RainrailCliEntrypointEnvironment`, `RainrailCliFileSystem`,
   `PluginAliasResolver`, `RainrailProject`, `RainrailLockPlugin`, and
   `RainrailLockfile`.
@@ -168,6 +169,16 @@ background request on timeout so normal commands are not delayed by slow update
 checks. Built-in help plus official plugin help routes such as `rainrail github
 help`, `rainrail github webhook add help`, and their canonical
 `rainrail plugin ... help` equivalents do not start the update notice check.
+
+`rainrail dispatch` is a command skeleton for future input-mode implementations.
+Embedded callers can pass `RainrailCliEnvironment.dispatchRunner` to receive a
+`RainrailDispatchRequest`. Its `mode` is the `RainrailDispatchMode`
+discriminant, currently `message` for `--message <text>` and `envelope-json`
+for `--envelope-json <json>`. Its `input` preserves the raw input string for
+that mode, including values that look like CLI options, and its `options`
+contains the shared `config`, `profile`, and `json` selections parsed before
+the dispatch command. `RainrailDispatchRunner` returns the same
+`RainrailCliResult` shape as other embedded command runners.
 
 ## Plugin command resolution
 
