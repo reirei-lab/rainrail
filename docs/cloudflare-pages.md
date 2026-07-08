@@ -4,6 +4,10 @@ Rainrail product site は `apps/www` の Astro static site を Cloudflare Pages 
 Pages project は Worker project と衝突しないように `rainrail-www` とし、build output は
 `apps/www/dist` を使う。
 
+Rainrail documentation site は `apps/docs` の Astro Starlight static site を別 project
+`rainrail-docs` に deploy する。build output は `apps/docs/dist` を使い、production routing
+の変更は別 issue で扱う。
+
 ## Secrets
 
 GitHub Actions と手元の Wrangler deploy には Cloudflare API credential が必要。値は repository
@@ -67,6 +71,20 @@ pnpm pages:deploy:production
 
 この command は `pnpm --filter www build` の後に
 `wrangler pages deploy apps/www/dist --project-name rainrail-www --branch main` を実行する。
+
+## Docs Deploy
+
+docs.rainrail.dev 用の Starlight docs app は product site と独立して build / deploy する。
+
+```sh
+pnpm docs:build
+pnpm docs:deploy:preview
+pnpm docs:deploy:production
+```
+
+`docs:deploy:preview` は `wrangler pages deploy apps/docs/dist --project-name rainrail-docs --branch "${RAINRAIL_PAGES_BRANCH:-preview}"`
+を実行する。`docs:deploy:production` は同じ output directory を `rainrail-docs` project の
+`main` branch として deploy する。
 
 ## Smoke
 
