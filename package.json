@@ -6,7 +6,7 @@
   "type": "module",
   "packageManager": "pnpm@10.12.1",
   "scripts": {
-    "build": "pnpm run build:scripts && pnpm --filter www build && pnpm --filter @rainrail/cli build",
+    "build": "pnpm run build:scripts && pnpm --filter www build && pnpm docs:build && pnpm --filter @rainrail/cli build",
     "build:scripts": "node scripts/check-scripts.mjs",
     "cf:deploy": "node scripts/validate-cloudflare-secrets.mjs && wrangler deploy",
     "cf:deploy:check": "node scripts/check-cloudflare-deployability.mjs",

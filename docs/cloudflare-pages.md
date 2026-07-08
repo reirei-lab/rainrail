@@ -5,8 +5,7 @@ Pages project は Worker project と衝突しないように `rainrail-www` と�
 `apps/www/dist` を使う。
 
 Rainrail documentation site は `apps/docs` の Astro Starlight static site を別 project
-`rainrail-docs` に deploy する。build output は `apps/docs/dist` を使い、production routing
-の変更は別 issue で扱う。
+`rainrail-docs` に deploy する。build output は `apps/docs/dist` を使う。
 
 ## Secrets
 
@@ -55,7 +54,9 @@ PR ごとの preview deployment を分ける。手動実行では未指定なら
 ## Production Deploy
 
 `main` への push は `.github/workflows/cloudflare-pages.yml` の `Deploy production` job で
-production deploy する。Cloudflare Pages project 側の production branch も `main` に揃える。
+production deploy する。production workflow は docs.rainrail.dev を rainrail.dev より先に deploy
+し、product site が docs.rainrail.dev の深いリンクを公開した時点で docs app 側の該当 route も
+同じ run で公開済みになるようにする。Cloudflare Pages project 側の production branch も `main` に揃える。
 `workflow_dispatch` で `main` から手動実行した場合も production deploy path を使う。feature branch
 から手動実行しても production deploy しない。preview と同じく、secrets が未設定の場合は build
 のみ実行し、deploy は skip する。
@@ -66,10 +67,13 @@ production deploy する。Cloudflare Pages project 側の production branch も
 pnpm install --frozen-lockfile
 pnpm typecheck
 pnpm test
+pnpm docs:deploy:production
 pnpm pages:deploy:production
 ```
 
-この command は `pnpm --filter www build` の後に
+`docs:deploy:production` は `pnpm --filter @rainrail/docs build` の後に
+`wrangler pages deploy apps/docs/dist --project-name rainrail-docs --branch main` を実行する。
+`pages:deploy:production` は `pnpm --filter www build` の後に
 `wrangler pages deploy apps/www/dist --project-name rainrail-www --branch main` を実行する。
 
 ## Docs Deploy
