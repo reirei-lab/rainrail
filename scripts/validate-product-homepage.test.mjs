@@ -17,9 +17,9 @@ const globalStyles = readFileSync(
 describe('product homepage', () => {
   it('states Rainrail positioning and conversion paths in the first viewport', () => {
     expect(siteContent).toContain('Rainrail');
-    expect(siteContent).toContain('development events');
-    expect(siteContent).toContain('agent workflows');
-    expect(siteContent).toContain('Start with the workflow');
+    expect(siteContent).toContain('Build your own loop.');
+    expect(siteContent).toContain('external services');
+    expect(siteContent).toContain('scripts and agents');
     expect(siteContent).toContain('Inspect the contracts');
     expect(localizedRoute).toContain("content.kind === 'home'");
   });

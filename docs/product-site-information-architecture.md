@@ -12,7 +12,6 @@ product site として扱う。実装がまだ無い間も、次の sitemap を�
 | Route | Purpose | Primary audience | Source of truth |
 | --- | --- | --- | --- |
 | `/` | Rainrail が何を解決するか、どのイベントをどの agent workflow に流すかを短く示す。 | 初見の evaluator | `README.md` の product summary と公開可能な examples |
-| `/how-it-works` | Source plugin、neutral event、workflow plugin、runtime provider の流れを図解する。 | 導入検討者、technical lead | `docs/plugin-runtime-contract.md` |
 | `/use-cases` | issue triage、PR follow-up、Cloudflare tail alert、project queue dispatch などの代表 workflow を説明する。 | team lead、operator | `examples/` と issue-driven workflow docs |
 | `/docs` | engineering docs への入口。product site では概要とリンクだけを置き、contract 本文は複製しない。 | implementer、operator | `docs/` |
 | `/security` | webhook secrets、SSE token、runner trust boundary、public/private payload の扱いを説明する。 | security reviewer、operator | `docs/cloudflare-worker.md` と AGENTS.md security rules |
@@ -58,9 +57,6 @@ Product site の本文は「なぜ使うか」「どんな workflow が作れる
    - Rainrail の一文説明
    - event source から agent workflow までの最短 diagram
    - README と GitHub issue workflow への CTA
-1. `/how-it-works`:
-   - Source plugin -> neutral event -> workflow plugin -> runtime provider の流れ
-   - `docs/plugin-runtime-contract.md` への deep link
 1. `/docs`:
    - `docs/` のカテゴリ別 index
    - contract、provider、ops の読み分け
@@ -75,5 +71,5 @@ Product site の本文は「なぜ使うか」「どんな workflow が作れる
    - breaking contract change が増えたら dedicated page にする
 
 この順序は「初見で価値を理解する」「実装者が contract に辿り着く」「運用者が安全に
-deploy する」を先に満たすためのもの。site implementation issue は、まず `/`、
-`/how-it-works`、`/docs` の 3 ページを MVP として切る。
+deploy する」を先に満たすためのもの。site implementation issue は、まず `/` と
+`/docs` を MVP として切り、詳細な仕組み説明は `/concepts` や repository docs へ寄せる。

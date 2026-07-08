@@ -43,7 +43,7 @@ JavaScript を実行しない smoke / fetch クライアント向けに、fallba
 Rainrail の短い説明と明示的な言語リンクを残す。
 
 legacy unprefixed product URL は `/en/` へ 301 redirect する。Cloudflare Pages では
-`apps/www/public/_redirects` で `/docs`、`/how-it-works`、`/concepts`、`/guides`、
+`apps/www/public/_redirects` で `/docs`、`/concepts`、`/guides`、
 `/examples` を対応する `/en/...` に送る。Astro の静的ビルドでは `Astro.redirect`
 を使わない。
 

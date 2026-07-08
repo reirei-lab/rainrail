@@ -53,7 +53,7 @@ describe('product site concepts, guides, and examples', () => {
     for (const locale of ['ja', 'en']) {
       expect(i18n).toContain(`'${locale}'`);
     }
-    for (const slug of ['how-it-works', 'concepts', 'guides', 'examples', 'docs']) {
+    for (const slug of ['concepts', 'guides', 'examples', 'docs']) {
       expect(i18n).toContain(`'${slug}'`);
     }
     expect(i18n).toContain('`/${locale}/`');
@@ -79,8 +79,6 @@ describe('product site concepts, guides, and examples', () => {
     const redirects = readFileSync(publicRedirects, 'utf8');
 
     for (const redirect of [
-      '/how-it-works /en/how-it-works 301',
-      '/how-it-works/ /en/how-it-works 301',
       '/concepts /en/concepts 301',
       '/concepts/ /en/concepts 301',
       '/guides /en/guides 301',
@@ -93,7 +91,7 @@ describe('product site concepts, guides, and examples', () => {
       expect(redirects).toContain(redirect);
     }
 
-    for (const route of ['how-it-works', 'concepts', 'guides', 'examples', 'docs']) {
+    for (const route of ['concepts', 'guides', 'examples', 'docs']) {
       const routeSource = page(route);
       expect(routeSource).toContain('getDefaultLocaleRedirect');
       expect(routeSource).toContain('http-equiv="refresh"');
@@ -149,7 +147,6 @@ describe('product site concepts, guides, and examples', () => {
       '中核ワークフロー',
     );
     expect(japaneseHome.cta.actions.map((action) => action.label)).toEqual([
-      'イベント経路を追う',
       '技術ドキュメント',
       'ランタイム契約',
       'Issue を見る',
@@ -182,7 +179,6 @@ describe('product site concepts, guides, and examples', () => {
   });
 
   it('keeps Japanese visible page content separate from English page copy', () => {
-    expect(siteContent).not.toContain('...english.howItWorks');
     expect(siteContent).not.toContain('...english.concepts');
     expect(siteContent).not.toContain('...english.guides');
     expect(siteContent).not.toContain('...english.examples');

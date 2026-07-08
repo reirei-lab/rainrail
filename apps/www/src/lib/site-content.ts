@@ -80,7 +80,6 @@ const english = {
       'Turn events from external services into loops run by your own code. Rainrail receives, shapes, and connects inputs to your scripts and agents.',
     primaryActionsLabel: 'Primary actions',
     actions: [
-      { label: 'Start with the workflow', pageId: 'howItWorks' },
       { label: 'Inspect the contracts', pageId: 'docs', variant: 'secondary' },
       { label: 'Open GitHub repo', href: repo, variant: 'secondary' },
     ],
@@ -228,7 +227,6 @@ const english = {
       heading:
         'Use Rainrail when event-driven automation needs contracts, not another one-off webhook handler.',
       actions: [
-        { label: 'Follow the event path', pageId: 'howItWorks' },
         { label: 'Engineering docs', href: `${docsBase}/README.md`, variant: 'secondary' },
         {
           label: 'Runtime contract',
@@ -238,45 +236,6 @@ const english = {
         { label: 'Issues', href: `${repo}/issues`, variant: 'secondary' },
       ],
     },
-  },
-  howItWorks: {
-    kind: 'secondary',
-    eyebrow: 'Architecture overview',
-    headline: 'One route from provider events to agent execution.',
-    lede:
-      'Rainrail separates event ingestion from workflow selection so each adapter can stay small, testable, and accountable.',
-    panel: {
-      ariaLabel: 'Plugin runtime stages',
-      flow: [
-        {
-          title: 'Source plugin',
-          body: 'Accepts provider input and normalizes it.',
-        },
-        {
-          title: 'RainrailEventEnvelope',
-          body: 'Captures event kind, source, identity, and safe metadata.',
-        },
-        {
-          title: 'Workflow plugin',
-          body: 'Maps neutral events to task-specific agent instructions.',
-        },
-        {
-          title: 'Runtime provider',
-          body: 'Starts or resumes the agent workflow with deterministic inputs.',
-        },
-      ],
-    },
-    sections: [
-      {
-        heading: 'Implementation contracts stay in engineering docs',
-        body:
-          'The product site summarizes the architecture. Payload shapes, plugin API signatures, retry behavior, and runtime semantics remain in the repository documentation so implementation decisions have a single source of truth.',
-        actions: [
-          { label: 'Plugin runtime contract', href: `${docsBase}/plugin-runtime-contract.md` },
-          { label: 'End-to-end example', pageId: 'examples', variant: 'secondary' },
-        ],
-      },
-    ],
   },
   concepts: {
     kind: 'secondary',
@@ -567,7 +526,6 @@ const japanese = {
       '外部サービスのイベントを、あなたのコードで動くループへ。Rainrail は入力を受け取り、整え、スクリプトやエージェントにつなぎます。',
     primaryActionsLabel: '主要アクション',
     actions: [
-      { label: 'ワークフローを見る', pageId: 'howItWorks' },
       { label: '契約を確認する', pageId: 'docs', variant: 'secondary' },
       { label: 'GitHub repo を開く', href: repo, variant: 'secondary' },
     ],
@@ -715,7 +673,6 @@ const japanese = {
       heading:
         'イベント駆動の自動化に必要なのが、もうひとつの一回限りの webhook handler ではなく契約なら、Rainrail を使います。',
       actions: [
-        { label: 'イベント経路を追う', pageId: 'howItWorks' },
         { label: '技術ドキュメント', href: `${docsBase}/README.md`, variant: 'secondary' },
         {
           label: 'ランタイム契約',
@@ -725,45 +682,6 @@ const japanese = {
         { label: 'Issue を見る', href: `${repo}/issues`, variant: 'secondary' },
       ],
     },
-  },
-  howItWorks: {
-    kind: 'secondary',
-    eyebrow: 'アーキテクチャ概要',
-    headline: 'Provider event から agent execution までを一本の route にする。',
-    lede:
-      'Rainrail は event ingestion と workflow selection を分け、各 adapter を小さく、testable に、責任範囲の見える形に保ちます。',
-    panel: {
-      ariaLabel: 'プラグイン実行ステージ',
-      flow: [
-        {
-          title: 'Source plugin',
-          body: 'provider input を受け取り、Rainrail の event envelope へ正規化します。',
-        },
-        {
-          title: 'RainrailEventEnvelope',
-          body: 'event kind、source、identity、安全に扱える metadata を保持します。',
-        },
-        {
-          title: 'Workflow plugin',
-          body: 'neutral event を task-specific な agent instruction に対応づけます。',
-        },
-        {
-          title: 'Runtime provider',
-          body: '決定的な input と一緒に agent workflow を開始または再開します。',
-        },
-      ],
-    },
-    sections: [
-      {
-        heading: '実装契約は engineering docs に残す',
-        body:
-          'Product site は architecture を要約します。payload shape、plugin API signature、retry behavior、runtime semantics は repository docs に置き、実装判断の source of truth をひとつに保ちます。',
-        actions: [
-          { label: 'プラグイン実行契約', href: `${docsBase}/plugin-runtime-contract.md` },
-          { label: 'End-to-end の例', pageId: 'examples', variant: 'secondary' },
-        ],
-      },
-    ],
   },
   concepts: {
     kind: 'secondary',
