@@ -27,8 +27,18 @@ rainrail start
 `rainrail setup --dashboard-auth-only --yes` writes local-only
 `dashboardAuth.readOnlyToken` and `dashboardAuth.operatorToken` values into
 `rainrail.config.json` when they are missing. Existing values are preserved.
-Keep these values private and rotate them by editing the config or generating a
-fresh local project config.
+Keep these values private. To rotate concrete local values in place, run:
+
+```sh
+rainrail setup --dashboard-auth-only --rotate --yes
+```
+
+Rotation replaces concrete `dashboardAuth.readOnlyToken`,
+`dashboardAuth.operatorToken`, and existing `dashboardAuth.adminToken` values in
+`rainrail.config.json` without printing old or new token values. Environment
+references such as `${DASHBOARD_OPERATOR_TOKEN}` are preserved instead of being
+expanded into the config or command output; rotate the backing environment
+secret in the system that owns it.
 
 `rainrail start` prints the local endpoints it is serving. With the default
 host and port, expect:
@@ -98,6 +108,31 @@ If the dashboard stays in an auth error state, check the API response:
 
 Do not put real tokens in screenshots, issue comments, docs, or copied logs.
 
+## Token rotation
+
+Use `rainrail setup --dashboard-auth-only --rotate --yes` when a local
+dashboard token may have been copied into a shell history, screenshot, shared
+terminal, or stale browser profile. The command only changes local
+`rainrail.config.json`; restart `rainrail start` so the local server reads the
+new values, then update any browser or script that was sending the old bearer
+token.
+
+Rotation is a revoke-by-replacement workflow:
+
+- Concrete `dashboardAuth.readOnlyToken` and `dashboardAuth.operatorToken`
+  values are always regenerated.
+- A concrete `dashboardAuth.adminToken` is regenerated when it already exists.
+  The setup command does not create a new admin token by default.
+- `${ENV_VAR}` dashboard auth references are left as references. Rotate the
+  referenced secret where it is defined, then restart `rainrail start`.
+- If `SSE_BEARER_TOKEN` is set, rotate or unset it at the same time. Otherwise
+  the old environment-provided read-only token remains valid even after
+  `dashboardAuth.readOnlyToken` changes.
+
+The CLI output lists only the affected config keys. It must not print token
+values, and dashboard settings continue to report only whether bearer auth is
+configured.
+
 ## Auth mode decision
 
 Local MVP decision: keep the bearer-token field as the operator UX.
@@ -153,7 +188,6 @@ out of scope for the current startup flow:
 
 - cookie/session login
 - scoped SSE token separate from dashboard API auth
-- token rotation UI
 - multi-user actor management
 - handler-backed local runtime execution for operator/admin mutations
 - hosted multi-tenant operations
@@ -164,9 +198,6 @@ startup guide. The current split is:
 - [#228](https://github.com/reirei-lab/rainrail/issues/228): evaluate whether
   `/events` should accept scoped dashboard auth tokens, while preserving SSE as
   a refresh hint rather than authoritative state.
-- [#229](https://github.com/reirei-lab/rainrail/issues/229): design local
-  token rotation UX and keep operator/admin tokens out of stdout, dashboard
-  settings, logs, and docs examples.
 - [#230](https://github.com/reirei-lab/rainrail/issues/230): add stable
   `actor`, `client`, and `requestId` attribution to command audit rows before
   broadening operator/admin actions.

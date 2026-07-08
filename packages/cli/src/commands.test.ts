@@ -3344,6 +3344,93 @@ describe('Rainrail CLI built-in commands', () => {
     });
   });
 
+  it('rotates local dashboard auth tokens without printing old or new values', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'dashboard-auth-rotate');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      await writeFile(configPath, `${JSON.stringify({
+        project: { name: 'dashboard-auth-rotate' },
+        dashboardAuth: {
+          readOnlyToken: 'old-read-token',
+          operatorToken: 'old-operator-token',
+          adminToken: 'old-admin-token',
+        },
+        sourceBundles: [],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+
+      const result = runRainrailCli(['setup', '--dashboard-auth-only', '--rotate', '--yes'], {
+        cwd: projectRoot,
+      });
+      const rawConfig = await readFile(configPath, 'utf8');
+      const config = JSON.parse(rawConfig) as {
+        dashboardAuth?: { readOnlyToken?: string; operatorToken?: string; adminToken?: string };
+      };
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+      expect(result.stdout).toBe(
+        'Rotated dashboardAuth.readOnlyToken, dashboardAuth.operatorToken, and dashboardAuth.adminToken in rainrail.config.json.\n',
+      );
+      expect(config.dashboardAuth?.readOnlyToken).toMatch(/^rr_local_read-only_[A-Za-z0-9_-]+$/u);
+      expect(config.dashboardAuth?.operatorToken).toMatch(/^rr_local_operator_[A-Za-z0-9_-]+$/u);
+      expect(config.dashboardAuth?.adminToken).toMatch(/^rr_local_admin_[A-Za-z0-9_-]+$/u);
+      for (const secret of ['old-read-token', 'old-operator-token', 'old-admin-token']) {
+        expect(result.stdout).not.toContain(secret);
+        expect(result.stderr).not.toContain(secret);
+        expect(rawConfig).not.toContain(secret);
+      }
+    });
+  });
+
+  it('keeps dashboard auth environment references when rotating concrete local tokens', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'dashboard-auth-rotate-env');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      await writeFile(configPath, `${JSON.stringify({
+        project: { name: 'dashboard-auth-rotate-env' },
+        dashboardAuth: {
+          readOnlyToken: '${DASHBOARD_READ_TOKEN}',
+          operatorToken: 'old-operator-token',
+          adminToken: '${DASHBOARD_ADMIN_TOKEN}',
+        },
+        sourceBundles: [],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+
+      const result = runRainrailCli(['setup', '--dashboard-auth-only', '--rotate', '--yes'], {
+        cwd: projectRoot,
+        env: {
+          DASHBOARD_READ_TOKEN: 'expanded-read-secret',
+          DASHBOARD_ADMIN_TOKEN: 'expanded-admin-secret',
+        },
+      });
+      const rawConfig = await readFile(configPath, 'utf8');
+      const config = JSON.parse(rawConfig) as {
+        dashboardAuth?: { readOnlyToken?: string; operatorToken?: string; adminToken?: string };
+      };
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+      expect(result.stdout).toBe(
+        'Rotated dashboardAuth.operatorToken in rainrail.config.json.\n',
+      );
+      expect(config.dashboardAuth?.readOnlyToken).toBe('${DASHBOARD_READ_TOKEN}');
+      expect(config.dashboardAuth?.operatorToken).toMatch(/^rr_local_operator_[A-Za-z0-9_-]+$/u);
+      expect(config.dashboardAuth?.adminToken).toBe('${DASHBOARD_ADMIN_TOKEN}');
+      expect(result.stdout).not.toContain('old-operator-token');
+      expect(result.stdout).not.toContain('expanded-read-secret');
+      expect(result.stdout).not.toContain('expanded-admin-secret');
+      expect(rawConfig).not.toContain('old-operator-token');
+      expect(rawConfig).not.toContain('expanded-read-secret');
+      expect(rawConfig).not.toContain('expanded-admin-secret');
+    });
+  });
+
   it('preserves dashboard auth environment references when generating missing setup tokens', async () => {
     await withTempDirectory(async (directory) => {
       const projectRoot = await initRainrailProject(directory, 'dashboard-auth-env-reference');
