@@ -227,6 +227,34 @@ describe('Rainrail CLI built-in commands', () => {
     ]);
   });
 
+  it('allows message-only dispatch input that starts with option syntax', () => {
+    const dispatched: unknown[] = [];
+
+    const result = runRainrailCli(['dispatch', '--message', '--review this'], {
+      dispatchRunner: (request) => {
+        dispatched.push(request);
+        return {
+          exitCode: 0,
+          stdout: 'accepted message\n',
+          stderr: '',
+        };
+      },
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(dispatched).toEqual([
+      {
+        mode: 'message',
+        input: '--review this',
+        options: {
+          config: undefined,
+          profile: undefined,
+          json: false,
+        },
+      },
+    ]);
+  });
+
   it('routes envelope-json dispatch input into the shared dispatch boundary without validating fields yet', () => {
     const dispatched: unknown[] = [];
 

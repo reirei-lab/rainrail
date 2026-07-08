@@ -2398,7 +2398,7 @@ function parseDispatchArguments(
 
     if (arg === '--message' || arg === '--envelope-json') {
       const value = args[index + 1];
-      if (value === undefined || value.startsWith('--')) {
+      if (value === undefined) {
         errors.push(`Missing value for ${arg}.`);
         continue;
       }
