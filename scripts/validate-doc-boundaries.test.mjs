@@ -94,6 +94,7 @@ describe('product site information architecture', () => {
       'Source adapter output is not limited to the durable replay allowlist',
       'The public `createRainrailHttpApp` surface does not expose a generic `POST /publish` route',
       'Manual input and web chat are source adapters, not EEP Bridge responsibilities',
+      'Command action audit attribution is a transport/core-adapter responsibility',
     ]) {
       expect(coreBridgeBoundary).toContain(entry);
     }
