@@ -104,6 +104,8 @@ storage / replay / workflow 起動や subscriber 枠消費の副作用を作ら�
 受け付ける。missing bearer は `missing_bearer_token` の 401、token 不一致は
 `invalid_bearer_token` の 403、サーバ側未設定は `events_auth_not_configured` の 503
 として扱う。
+`verifyRainrailEventsBearerToken()` は legacy events bearer token だけを検証する
+互換 helper として public export に残す。新しい HTTP entrypoint は scoped verifier を使う。
 HTTP entrypoint の公開入口は Fetch adapter の `createRainrailHttpApp` と Node adapter の
 `createRainrailNodeServer`。
 Dashboard command API を組み込む caller 向けには、scoped token の `RainrailDashboardScope`、
