@@ -1,19 +1,19 @@
 :root {
   color-scheme: light;
-  --background: #f6f7f4;
-  --background-strong: #e7ebe4;
+  --background: #f6f8fa;
+  --background-strong: #eaeef2;
   --surface: #ffffff;
-  --surface-muted: #eef1eb;
-  --ink: #111827;
-  --text: #18201d;
-  --muted: #5d6862;
-  --line: #d8ded4;
-  --accent: #0f766e;
-  --accent-strong: #134e4a;
-  --signal: #b45309;
-  --blueprint: #23395d;
-  --danger: #8f3d37;
-  --shadow: 0 22px 70px rgb(24 32 29 / 10%);
+  --surface-muted: #f1f5f9;
+  --ink: #0f172a;
+  --text: #1f2937;
+  --muted: #64748b;
+  --line: #d0d7de;
+  --accent: #0969da;
+  --accent-strong: #0550ae;
+  --signal: #9a6700;
+  --blueprint: #475569;
+  --danger: #b42318;
+  --shadow: 0 22px 70px rgb(15 23 42 / 10%);
   font-family:
     Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
     sans-serif;
@@ -248,11 +248,11 @@ h3 {
   position: relative;
   display: grid;
   gap: 14px;
-  border: 1px solid #c7d0c3;
+  border: 1px solid #cbd5e1;
   border-radius: 8px;
   padding: 18px;
   background:
-    linear-gradient(180deg, rgb(255 255 255 / 92%), rgb(247 249 245 / 95%)),
+    linear-gradient(180deg, rgb(255 255 255 / 92%), rgb(248 250 252 / 95%)),
     var(--surface);
   box-shadow: var(--shadow);
   overflow: hidden;
@@ -357,17 +357,17 @@ h3 {
 
 .event-card.workflow {
   border-left: 4px solid var(--danger);
-  background: #fbfcfa;
+  background: #f8fafc;
 }
 
 .console-log {
   display: grid;
   gap: 6px;
-  border: 1px solid #222c26;
+  border: 1px solid #1e293b;
   border-radius: 7px;
   padding: 12px;
-  background: #18201d;
-  color: #dce8dd;
+  background: #0f172a;
+  color: #dbeafe;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 0.78rem;
   overflow-wrap: anywhere;
@@ -375,7 +375,7 @@ h3 {
 
 .console-log span::before {
   content: "> ";
-  color: #f4b56b;
+  color: #f59e0b;
 }
 
 .event-flow {
@@ -599,7 +599,7 @@ h3 {
   gap: 22px;
   border-right: 1px solid var(--line);
   padding: 20px 14px;
-  background: #eef1eb;
+  background: #f1f5f9;
 }
 
 .dashboard-brand {
@@ -713,7 +713,7 @@ h3 {
   border: 1px solid var(--line);
   border-radius: 6px;
   padding: 12px 14px;
-  background: #fbfcfa;
+  background: #f8fafc;
   color: var(--muted);
 }
 
@@ -786,7 +786,7 @@ h3 {
   border: 1px solid var(--line);
   border-radius: 6px;
   padding: 9px 10px;
-  background: #f8faf6;
+  background: #f8fafc;
   color: var(--muted);
   font-size: 0.78rem;
   font-weight: 720;
@@ -807,7 +807,7 @@ h3 {
   display: grid;
   align-content: start;
   border-right: 1px solid var(--line);
-  background: #f8faf6;
+  background: #f8fafc;
 }
 
 .dashboard-row {
@@ -914,8 +914,8 @@ h3 {
   border: 1px solid var(--line);
   border-radius: 6px;
   padding: 12px;
-  background: #18201d;
-  color: #dce8dd;
+  background: #0f172a;
+  color: #dbeafe;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 0.78rem;
   line-height: 1.5;
@@ -934,7 +934,7 @@ h3 {
   border: 1px solid var(--line);
   border-radius: 6px;
   padding: 6px 9px;
-  background: #f8faf6;
+  background: #f8fafc;
   color: var(--muted);
   font-size: 0.75rem;
   font-weight: 720;
