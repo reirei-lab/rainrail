@@ -42,6 +42,7 @@ export type BuiltInCommandName =
   | 'init'
   | 'setup'
   | 'start'
+  | 'dispatch'
   | 'doctor'
   | 'plugins'
   | 'plugin'
@@ -77,6 +78,22 @@ export type RainrailCliResult = {
   readonly stderr: string;
   readonly server?: RainrailStartedServer;
 };
+
+export type RainrailDispatchMode = 'message' | 'envelope-json';
+
+export type RainrailDispatchRequest = {
+  readonly mode: RainrailDispatchMode;
+  readonly input: string;
+  readonly options: {
+    readonly config?: string | undefined;
+    readonly profile?: string | undefined;
+    readonly json: boolean;
+  };
+};
+
+export type RainrailDispatchRunner = (
+  request: RainrailDispatchRequest,
+) => RainrailCliResult;
 
 export type CommandRunnerResult = {
   readonly status: number | null;
@@ -164,6 +181,7 @@ export type RainrailCliEnvironment = {
   readonly cwd?: string;
   readonly commandRunner?: CommandRunner;
   readonly currentVersion?: string;
+  readonly dispatchRunner?: RainrailDispatchRunner;
   readonly currentBinPath?: string;
   readonly env?: Record<string, string | undefined>;
   readonly fileSystem?: Partial<RainrailCliFileSystem>;
@@ -268,6 +286,12 @@ export const BUILT_IN_COMMANDS: readonly BuiltInCommand[] = [
     implemented: true,
   },
   {
+    name: 'dispatch',
+    kind: 'built-in',
+    summary: 'Dispatch an event into a Rainrail workflow.',
+    implemented: true,
+  },
+  {
     name: 'doctor',
     kind: 'built-in',
     summary: 'Check local Rainrail configuration and environment health.',
@@ -334,6 +358,16 @@ export function parseRainrailArguments(argv: readonly string[]): ParsedRainrailA
     if (arg === '--') {
       commandArgs.push(...argv.slice(index + 1));
       break;
+    }
+
+    if (commandName === 'dispatch' && isDispatchInputModeOption(arg)) {
+      commandArgs.push(arg);
+      const value = argv[index + 1];
+      if (value !== undefined) {
+        commandArgs.push(value);
+        index += 1;
+      }
+      continue;
     }
 
     if (arg === '--json') {
@@ -408,6 +442,10 @@ export function parseRainrailArguments(argv: readonly string[]): ParsedRainrailA
     options: parsedOptions,
     errors,
   };
+}
+
+function isDispatchInputModeOption(arg: string): boolean {
+  return arg === '--message' || arg === '--envelope-json';
 }
 
 export function formatHelp(): string {
@@ -874,6 +912,10 @@ function shouldStartUpdateNoticeCheck(
     return false;
   }
 
+  if (parsed.commandName === 'dispatch' && isDispatchHelpRequestForNotice(parsed.commandArgs)) {
+    return false;
+  }
+
   const pluginAliasResolver = environment.pluginAliasResolver ?? defaultPluginAliasResolver;
   if (parsed.commandName === 'plugin') {
     const pluginName = parsed.commandArgs[0];
@@ -884,6 +926,10 @@ function shouldStartUpdateNoticeCheck(
 
   const plugin = pluginAliasResolver(parsed.commandName);
   return plugin === undefined || !isPluginHelpRequestForNotice(plugin, parsed.commandArgs);
+}
+
+function isDispatchHelpRequestForNotice(args: readonly string[]): boolean {
+  return args.length === 1 && (args[0] === 'help' || args[0] === '--help');
 }
 
 function isPluginHelpRequestForNotice(
@@ -1406,6 +1452,10 @@ export function runRainrailCli(
 
   if (command.name === 'start') {
     return runStartCommand(parsed.commandArgs, parsed.options, environment);
+  }
+
+  if (command.name === 'dispatch') {
+    return runDispatchCommand(parsed.commandArgs, parsed.options, environment);
   }
 
   if (command.name === 'plugins') {
@@ -2289,6 +2339,154 @@ function getRainrailCliPackageVersion(): string {
   }
 
   return packageJson.version;
+}
+
+type ParsedDispatchArguments = {
+  readonly request?: RainrailDispatchRequest | undefined;
+  readonly errors: readonly string[];
+  readonly help: boolean;
+};
+
+const dispatchUsage = 'Usage: rainrail dispatch (--message <text> | --envelope-json <json>)';
+
+function runDispatchCommand(
+  args: readonly string[],
+  options: SharedOptions,
+  environment: RainrailCliEnvironment,
+): RainrailCliResult {
+  const parsed = parseDispatchArguments(args, options);
+  if (parsed.help) {
+    return {
+      exitCode: 0,
+      stdout: formatDispatchHelp(),
+      stderr: '',
+    };
+  }
+
+  if (parsed.errors.length > 0 || parsed.request === undefined) {
+    return {
+      exitCode: 1,
+      stdout: '',
+      stderr: `${parsed.errors.length > 0 ? parsed.errors.join('\n') : dispatchUsage}\n`,
+    };
+  }
+
+  return runDispatchRequest(parsed.request, environment.dispatchRunner);
+}
+
+function runDispatchRequest(
+  request: RainrailDispatchRequest,
+  dispatchRunner: RainrailDispatchRunner | undefined,
+): RainrailCliResult {
+  if (dispatchRunner === undefined) {
+    return {
+      exitCode: 2,
+      stdout: '',
+      stderr: 'rainrail dispatch requires a dispatch runner, which is not implemented yet.\n',
+    };
+  }
+
+  return dispatchRunner(request);
+}
+
+function parseDispatchArguments(
+  args: readonly string[],
+  options: SharedOptions,
+): ParsedDispatchArguments {
+  if (args.length === 1 && (args[0] === 'help' || args[0] === '--help')) {
+    return { errors: [], help: true };
+  }
+
+  const errors: string[] = [];
+  let mode: RainrailDispatchMode | undefined;
+  let input: string | undefined;
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === undefined) {
+      continue;
+    }
+
+    const parsedInlineMode = parseInlineDispatchMode(arg);
+    if (parsedInlineMode !== undefined) {
+      if (mode !== undefined) {
+        errors.push('Choose only one dispatch input mode.');
+        continue;
+      }
+      mode = parsedInlineMode.mode;
+      input = parsedInlineMode.input;
+      continue;
+    }
+
+    if (arg === '--message' || arg === '--envelope-json') {
+      const value = args[index + 1];
+      if (value === undefined) {
+        errors.push(`Missing value for ${arg}.`);
+        continue;
+      }
+      if (mode !== undefined) {
+        errors.push('Choose only one dispatch input mode.');
+        index += 1;
+        continue;
+      }
+      mode = arg === '--message' ? 'message' : 'envelope-json';
+      input = value;
+      index += 1;
+      continue;
+    }
+
+    if (arg.startsWith('--')) {
+      errors.push(`Unknown rainrail dispatch option: ${arg}.`);
+      continue;
+    }
+
+    errors.push(`Unexpected rainrail dispatch argument: ${arg}.`);
+  }
+
+  if (errors.length === 0 && (mode === undefined || input === undefined)) {
+    return { errors: [dispatchUsage], help: false };
+  }
+
+  return {
+    errors,
+    help: false,
+    request: mode === undefined || input === undefined
+      ? undefined
+      : {
+          mode,
+          input,
+          options: {
+            config: options.config,
+            profile: options.profile,
+            json: options.json,
+          },
+        },
+  };
+}
+
+function parseInlineDispatchMode(
+  arg: string,
+): { readonly mode: RainrailDispatchMode; readonly input: string } | undefined {
+  if (arg.startsWith('--message=')) {
+    return { mode: 'message', input: arg.slice('--message='.length) };
+  }
+
+  if (arg.startsWith('--envelope-json=')) {
+    return { mode: 'envelope-json', input: arg.slice('--envelope-json='.length) };
+  }
+
+  return undefined;
+}
+
+function formatDispatchHelp(): string {
+  return [
+    dispatchUsage,
+    '',
+    'Input modes:',
+    '  --message <text>        Dispatch a message-only input payload.',
+    '  --envelope-json <json>  Dispatch a complete Rainrail event envelope JSON string.',
+    '',
+  ].join('\n');
 }
 
 function runInitCommand(
