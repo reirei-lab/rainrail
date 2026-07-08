@@ -2798,6 +2798,14 @@ function formatConfigWithLocalDashboardAuth(
   } catch {
     const dashboardAuthObjectStart = findDashboardAuthObjectStart(raw);
     if (dashboardAuthObjectStart !== undefined) {
+      const dashboardAuthObjectEnd = findJsonObjectEnd(raw, dashboardAuthObjectStart);
+      const rawDashboardAuth = parseRawDashboardAuthObject(raw);
+      if (dashboardAuthObjectEnd !== undefined && rawDashboardAuth !== undefined) {
+        return replaceJsonObjectValue(raw, dashboardAuthObjectStart, dashboardAuthObjectEnd, {
+          ...rawDashboardAuth,
+          ...generatedDashboardAuth,
+        });
+      }
       return insertObjectEntries(raw, dashboardAuthObjectStart, generatedDashboardAuth, '    ');
     }
     if (hasDashboardAuthProperty(raw)) {
@@ -2818,6 +2826,26 @@ function insertTopLevelDashboardAuth(raw: string, dashboardAuth: Record<string, 
   const rest = newline.length === 0 ? afterStart : afterStart.slice(newline.length);
   const property = `"dashboardAuth": ${JSON.stringify(dashboardAuth, null, 2).replaceAll('\n', `${newline}  `)}`;
   return `${raw.slice(0, objectStart + 1)}${newline}  ${property},${newline}${rest}`;
+}
+
+function replaceJsonObjectValue(
+  raw: string,
+  objectStart: number,
+  objectEnd: number,
+  value: Record<string, unknown>,
+): string {
+  const indent = findLineIndent(raw, objectStart);
+  const formatted = JSON.stringify(value, null, 2)
+    .split('\n')
+    .map((line, index) => index === 0 ? line : `${indent}${line}`)
+    .join('\n');
+  return `${raw.slice(0, objectStart)}${formatted}${raw.slice(objectEnd + 1)}`;
+}
+
+function findLineIndent(raw: string, index: number): string {
+  const lineStart = raw.lastIndexOf('\n', index - 1) + 1;
+  const linePrefix = raw.slice(lineStart, index);
+  return linePrefix.match(/^\s*/u)?.[0] ?? '';
 }
 
 function findDashboardAuthObjectStart(raw: string): number | undefined {

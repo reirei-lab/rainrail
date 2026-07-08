@@ -3431,6 +3431,48 @@ describe('Rainrail CLI built-in commands', () => {
     });
   });
 
+  it('replaces existing dashboard auth keys when rotating config files with top-level env fragments', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'dashboard-auth-rotate-fragmented-config');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      await writeFile(configPath, [
+        '{',
+        '  "project": { "name": "dashboard-auth-rotate-fragmented-config" },',
+        '  "dashboardAuth": {',
+        '    "readOnlyToken": "old-read-token",',
+        '    "operatorToken": "old-operator-token"',
+        '  },',
+        '  "sourceBundles": [],',
+        '  "sources": ${RAINRAIL_SOURCES},',
+        '  "taskProviders": {},',
+        '  "runtimeProviders": {}',
+        '}',
+      ].join('\n'));
+
+      const result = runRainrailCli(['setup', '--dashboard-auth-only', '--rotate', '--yes'], {
+        cwd: projectRoot,
+        env: { RAINRAIL_SOURCES: '[]' },
+      });
+      const rawConfig = await readFile(configPath, 'utf8');
+      const parseableConfig = JSON.parse(rawConfig.replace('${RAINRAIL_SOURCES}', '[]')) as {
+        dashboardAuth?: { readOnlyToken?: string; operatorToken?: string };
+      };
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+      expect(result.stdout).toBe(
+        'Rotated dashboardAuth.readOnlyToken and dashboardAuth.operatorToken in rainrail.config.json.\n',
+      );
+      expect(rawConfig).toContain('"sources": ${RAINRAIL_SOURCES}');
+      expect(rawConfig.match(/"readOnlyToken"/gu)).toHaveLength(1);
+      expect(rawConfig.match(/"operatorToken"/gu)).toHaveLength(1);
+      expect(rawConfig).not.toContain('old-read-token');
+      expect(rawConfig).not.toContain('old-operator-token');
+      expect(parseableConfig.dashboardAuth?.readOnlyToken).toMatch(/^rr_local_read-only_[A-Za-z0-9_-]+$/u);
+      expect(parseableConfig.dashboardAuth?.operatorToken).toMatch(/^rr_local_operator_[A-Za-z0-9_-]+$/u);
+    });
+  });
+
   it('preserves dashboard auth environment references when generating missing setup tokens', async () => {
     await withTempDirectory(async (directory) => {
       const projectRoot = await initRainrailProject(directory, 'dashboard-auth-env-reference');
