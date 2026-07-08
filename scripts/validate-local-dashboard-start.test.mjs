@@ -66,6 +66,16 @@ describe('local dashboard start documentation', () => {
       'https://github.com/reirei-lab/rainrail/issues/231',
       '`actor`, `client`, and `requestId` attribution',
       'session login',
+      '## Auth mode decision',
+      'Local MVP decision: keep the bearer-token field as the operator UX.',
+      'Do not add cookie/session login to `rainrail start` until Rainrail has a hosted',
+      'or multi-user dashboard mode.',
+      'CSRF',
+      'logout',
+      'session expiration',
+      'cookie scope',
+      'token storage',
+      'hosted/multi-user UX',
     ]) {
       expect(localDashboardDocs).toContain(required);
     }

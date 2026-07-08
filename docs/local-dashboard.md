@@ -98,6 +98,38 @@ If the dashboard stays in an auth error state, check the API response:
 
 Do not put real tokens in screenshots, issue comments, docs, or copied logs.
 
+## Auth mode decision
+
+Local MVP decision: keep the bearer-token field as the operator UX.
+`rainrail start` is a same-origin local operator surface, so requiring a
+configured `dashboardAuth` bearer token gives the current dashboard an explicit
+copy/paste credential, stable API behavior, and no browser cookie dependency.
+It also matches the shared operational API contract, where
+`Authorization: Bearer <token>` carries the read-only, operator, or admin scope
+used by both dashboard reads and command routes.
+
+Do not add cookie/session login to `rainrail start` until Rainrail has a hosted
+or multi-user dashboard mode. A session login would add CSRF protection,
+logout, session expiration, cookie scope, and token storage responsibilities
+without improving the single-operator local startup flow. Local bearer tokens
+remain easier to rotate by editing `rainrail.config.json`, easier to diagnose
+through the existing stable JSON auth errors, and less likely to blur the
+boundary between local operator UX and hosted/multi-user UX.
+
+If Rainrail later ships a hosted or multi-user dashboard, design it as a
+separate auth mode rather than replacing the local startup flow in place. That
+design should add tests for:
+
+- CSRF rejection on every session-authenticated mutation route.
+- Logout clearing the server session and browser cookie.
+- Session expiration returning a stable auth error without accepting stale
+  cookies.
+- Cookie scope using `HttpOnly`, `Secure` outside localhost, `SameSite`, path,
+  and domain settings that do not leak to unrelated apps.
+- Token storage keeping operator/admin bearer tokens server-side or otherwise
+  unavailable to dashboard JavaScript.
+- Scope checks preserving the current read-only, operator, and admin behavior.
+
 ## Local dashboard and Pages boundary
 
 The local dashboard defaults to same origin fetches such as
