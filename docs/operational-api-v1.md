@@ -174,14 +174,15 @@ endpoint を再取得し、SSE と push notification は latency と wake-up の
 | Channel | Role | Client behavior |
 | --- | --- | --- |
 | Polling | Authoritative refresh path。list/detail cache を `/api/v1` response で更新する。 | Foreground 中は 15-30 秒間隔を既定にし、operator action 後は対象 detail と関連 list を即時再取得する。 |
-| SSE | Foreground session の low-latency hint。event body を authoritative state として保存しない。 | 現行 `/events` は `SSE_BEARER_TOKEN` 用の別 bearer token が必要。`Last-Event-ID` を送って reconnect し、named event listener で受け取った event id/source/subject から該当 collection を再取得する。 |
+| SSE | Foreground session の low-latency hint。event body を authoritative state として保存しない。 | `/events` は `read-only` 以上の scoped dashboard token と legacy `SSE_BEARER_TOKEN` / `eventsBearerToken` を受け付ける。`Last-Event-ID` を送って reconnect し、named event listener で受け取った event id/source/subject から該当 collection を再取得する。 |
 | Push notification | Background wake-up と user visible alert。秘密情報や raw payload は含めない。 | notification tap で対象 detail を fetch する。payload は `notificationHint`、resource type/id、redacted summary だけにする。 |
 
 SSE message は operational API response と同じ schema ではなく、更新があったことを知らせる hint とする。
 Mobile は OS background 制約により SSE 常時接続を期待しない。foreground では SSE が使える場合だけ
 polling interval を延ばしてよいが、SSE disconnect、tab/app sleep、network change の後は polling に戻す。
-SSE の scoped dashboard token 対応は未実装であり、`read-only` / `operator` / `admin` token を
-`/events` に流用できる契約にはしない。
+`/events` は dashboard API と同じ scoped verifier を使い、`read-only`、`operator`、`admin`
+token をすべて購読用に認める。legacy `SSE_BEARER_TOKEN` / `eventsBearerToken` は互換期間中の
+`read-only` 相当 token として残すが、新規 dashboard/mobile client は scoped dashboard token を使う。
 SSE frame は `event: ${event.name}` を使うため、browser-compatible client は default `onmessage` だけではなく、
 `github.issue` など必要な event name の named event listener を登録する。
 

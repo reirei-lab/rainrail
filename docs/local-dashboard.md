@@ -161,9 +161,10 @@ out of scope for the current startup flow:
 Remaining follow-up auth and operator UX items are tracked separately from this
 startup guide. The current split is:
 
-- [#228](https://github.com/reirei-lab/rainrail/issues/228): evaluate whether
-  `/events` should accept scoped dashboard auth tokens, while preserving SSE as
-  a refresh hint rather than authoritative state.
+- [#228](https://github.com/reirei-lab/rainrail/issues/228): resolved by
+  accepting `read-only`, `operator`, and `admin` dashboard tokens for
+  `/events`, while preserving legacy `SSE_BEARER_TOKEN` compatibility and SSE
+  as a refresh hint rather than authoritative state.
 - [#229](https://github.com/reirei-lab/rainrail/issues/229): design local
   token rotation UX and keep operator/admin tokens out of stdout, dashboard
   settings, logs, and docs examples.
