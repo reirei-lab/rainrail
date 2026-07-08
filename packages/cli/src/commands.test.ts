@@ -83,6 +83,7 @@ describe('Rainrail CLI built-in commands', () => {
       'init',
       'setup',
       'start',
+      'dispatch',
       'doctor',
       'plugins',
       'plugin',
@@ -163,10 +164,95 @@ describe('Rainrail CLI built-in commands', () => {
       expect(result.stdout).toContain(`  ${command.name}`);
     }
     expect(result.stdout).toContain('Start the local Rainrail harness server in the foreground.');
+    expect(result.stdout).toContain('Dispatch an event into a Rainrail workflow.');
     expect(result.stdout).toContain('Official plugin aliases:');
     expect(result.stdout).toContain('  github');
     expect(result.stdout).toContain('  cloudflare');
     expect(result.stdout).toContain('  openclaw');
+  });
+
+  it('prints dispatch command help', () => {
+    const result = runRainrailCli(['dispatch', 'help']);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe('');
+    expect(result.stdout).toContain('Usage: rainrail dispatch (--message <text> | --envelope-json <json>)');
+    expect(result.stdout).toContain('--message <text>');
+    expect(result.stdout).toContain('--envelope-json <json>');
+  });
+
+  it('requires exactly one dispatch input mode', () => {
+    expect(runRainrailCli(['dispatch'])).toMatchObject({
+      exitCode: 1,
+      stdout: '',
+      stderr: 'Usage: rainrail dispatch (--message <text> | --envelope-json <json>)\n',
+    });
+
+    expect(runRainrailCli(['dispatch', '--message', 'hello', '--envelope-json', '{}'])).toMatchObject({
+      exitCode: 1,
+      stdout: '',
+      stderr: 'Choose only one dispatch input mode.\n',
+    });
+  });
+
+  it('routes message-only dispatch input into the shared dispatch boundary', () => {
+    const dispatched: unknown[] = [];
+
+    const result = runRainrailCli(['dispatch', '--message', 'hello world'], {
+      dispatchRunner: (request) => {
+        dispatched.push(request);
+        return {
+          exitCode: 0,
+          stdout: 'accepted message\n',
+          stderr: '',
+        };
+      },
+    });
+
+    expect(result).toEqual({
+      exitCode: 0,
+      stdout: 'accepted message\n',
+      stderr: '',
+    });
+    expect(dispatched).toEqual([
+      {
+        mode: 'message',
+        input: 'hello world',
+        options: {
+          config: undefined,
+          profile: undefined,
+          json: false,
+        },
+      },
+    ]);
+  });
+
+  it('routes envelope-json dispatch input into the shared dispatch boundary without validating fields yet', () => {
+    const dispatched: unknown[] = [];
+
+    const result = runRainrailCli(['--config', 'rainrail.config.json', 'dispatch', '--envelope-json', '{"type":"manual"}'], {
+      dispatchRunner: (request) => {
+        dispatched.push(request);
+        return {
+          exitCode: 0,
+          stdout: 'accepted envelope\n',
+          stderr: '',
+        };
+      },
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(dispatched).toEqual([
+      {
+        mode: 'envelope-json',
+        input: '{"type":"manual"}',
+        options: {
+          config: 'rainrail.config.json',
+          profile: undefined,
+          json: false,
+        },
+      },
+    ]);
   });
 
   it('prints the CLI package version from rainrail version', async () => {
