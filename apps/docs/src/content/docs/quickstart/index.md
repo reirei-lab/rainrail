@@ -1,54 +1,28 @@
 ---
 title: Quickstart
-description: Get from a fresh clone to local Rainrail checks and docs preview.
+description: Choose the right first path for using or contributing to Rainrail.
 ---
 
-This path is for developers evaluating or contributing to Rainrail. It keeps the
-first run focused on repository checks, docs preview, and the local surfaces that
-prove the event routing contracts still build.
+Rainrail has two first-run paths. Use the user setup path when you want to
+install the CLI, initialize a local workspace, and try the operational surfaces.
+Use the development path when you want to contribute to Rainrail itself.
 
-## 1. Install the workspace
+## Getting Started
 
-```sh
-pnpm install --frozen-lockfile
-```
+Set up Rainrail as a user. This path starts from the public installer and walks
+through the first local workspace setup.
 
-Rainrail is a TypeScript monorepo. Root scripts orchestrate the CLI package, the
-product site, the docs site, and repository validation checks.
+[Start the user setup](/quickstart/getting-started/)
 
-## 2. Run the baseline checks
+## Development
 
-```sh
-pnpm test
-pnpm typecheck
-pnpm docs:check
-```
+Set up the Rainrail repository for contributor work. This path starts from a
+fresh clone and focuses on workspace checks, docs preview, and deployable build
+output.
 
-`docs:check` verifies Markdown links, contract drift, and docs TypeScript
-examples. Run focused tests while developing, then run the full baseline before
-opening a pull request.
+[Start the contributor setup](/quickstart/development/)
 
-## 3. Preview public docs
-
-```sh
-pnpm docs:dev
-```
-
-The public docs app is a Starlight site for `https://docs.rainrail.dev`. Use it
-for external developer navigation. The repository `docs/` directory remains the
-source spec library for detailed contract decisions.
-
-## 4. Build deployable output
-
-```sh
-pnpm docs:build
-pnpm build
-```
-
-`docs:build` emits `apps/docs/dist` for the `rainrail-docs` Cloudflare Pages
-project. `pnpm build` verifies the broader workspace.
-
-## Next steps
+## After the first run
 
 - Read [Event model](/concepts/event-model/) before changing payload shapes.
 - Use [Add a source adapter](/guides/source-adapter/) when connecting a new
