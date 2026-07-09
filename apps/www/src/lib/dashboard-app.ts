@@ -74,7 +74,7 @@ if (root !== null) {
   const storedApiBaseUrl = sessionStore.get(API_BASE_URL_STORAGE_KEY) ?? appRoot.dataset.apiBaseUrl ?? '';
   const demoMode = new URLSearchParams(window.location.search).get('demo') === '1';
   const authRequired = !demoMode && appRoot.dataset.authRequired !== 'false';
-  const operatorEnabled = demoMode || localStore.get(OPERATOR_STORAGE_KEY) === '1';
+  const operatorEnabled = isOperatorModeEnabled();
   if (tokenInput !== null) tokenInput.value = storedToken;
   if (apiBaseUrlInput !== null) apiBaseUrlInput.value = storedApiBaseUrl;
   if (permissionToggle !== null) permissionToggle.checked = operatorEnabled;
@@ -427,6 +427,10 @@ if (root !== null) {
     }
   }
 
+  function isOperatorModeEnabled(): boolean {
+    return demoMode || localStore.get(OPERATOR_STORAGE_KEY) === '1';
+  }
+
   function isCurrentRefresh(activeClient: RainrailDashboardApiClient, activeRefreshId: number): boolean {
     if (client !== activeClient) return false;
     return refreshSequence === activeRefreshId;
@@ -447,7 +451,7 @@ if (root !== null) {
   function clearSelectedDetail(): void {
     selectedDetailRowId = undefined;
     selectedAgentTaskId = undefined;
-    setOperatorActionsEnabled(localStore.get(OPERATOR_STORAGE_KEY) === '1');
+    setOperatorActionsEnabled(isOperatorModeEnabled());
     detailRequestSequence += 1;
   }
 
@@ -468,7 +472,7 @@ if (root !== null) {
   function renderBasicDetail(row: DashboardRow, label: string): void {
     if (detail === null) return;
     selectedAgentTaskId = row.type === 'agent-task' ? row.id : undefined;
-    setOperatorActionsEnabled(localStore.get(OPERATOR_STORAGE_KEY) === '1');
+    setOperatorActionsEnabled(isOperatorModeEnabled());
 
     detail.innerHTML = `
       <div class="dashboard-detail-heading">
@@ -543,7 +547,7 @@ if (root !== null) {
     if (detail === null) return;
 
     selectedAgentTaskId = row.id;
-    setOperatorActionsEnabled(localStore.get(OPERATOR_STORAGE_KEY) === '1');
+    setOperatorActionsEnabled(isOperatorModeEnabled());
     const record = objectRecord(loaded.data.record);
     const runtime = objectRecord(record.runtime);
     const resumeAttempts = arrayRecord(record.resumeAttempts);

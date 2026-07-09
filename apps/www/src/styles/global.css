@@ -657,7 +657,11 @@ h3 {
   font-size: 2rem;
 }
 
-.dashboard-demo-badge {
+.dashboard-demo-badge[hidden] {
+  display: none;
+}
+
+.dashboard-demo-badge:not([hidden]) {
   display: inline-flex;
   align-items: center;
   margin-top: 8px;

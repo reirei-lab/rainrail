@@ -6468,7 +6468,7 @@ async function handleLocalRainrailRequest(
 
   if (request.method === 'GET' && url.pathname === '/api/v1/queue') {
     if (options.demoMode && state.eventStore?.listAgentTasks !== undefined) {
-      writeValidatedLocalCollectionResponse(response, localDemoQueueRows(state.eventStore.listAgentTasks()), url, request, (row) => row.id, [], {
+      writeValidatedLocalCollectionResponse(response, filterLocalDemoQueueRows(localDemoQueueRows(state.eventStore.listAgentTasks()), url), url, request, (row) => row.id, ['filter[status]'], {
         summary: localDemoQueueSummary(state.eventStore.listAgentTasks()),
       });
       return;
@@ -7005,6 +7005,14 @@ function localDemoQueueSummary(tasks: readonly LocalOperationalAgentTask[]) {
   };
 }
 
+function filterLocalDemoQueueRows<TRow extends { readonly status?: string }>(
+  rows: readonly TRow[],
+  url: URL,
+): readonly TRow[] {
+  const statusFilter = url.searchParams.get('filter[status]');
+  return rows.filter((row) => matchesOptionalLocalFilter(row.status, statusFilter));
+}
+
 function isLocalIssueReference(value: unknown): value is { readonly repository?: string; readonly number?: number } {
   return isRecord(value)
     && (typeof value.repository === 'string' || value.repository === undefined)
@@ -7337,7 +7345,12 @@ function getLocalServerAuthError(
   options: RainrailStartOptions,
 ): { readonly status: number; readonly body: { readonly error: string; readonly requiredScope?: LocalDashboardScope } } | undefined {
   const pathname = url.pathname;
-  if (options.demoMode === true && url.searchParams.get('demo') === '1' && isLocalDashboardDemoPath(pathname)) {
+  if (
+    options.demoMode === true
+    && isLocalBindHost(options.host)
+    && url.searchParams.get('demo') === '1'
+    && isLocalDashboardDemoPath(pathname)
+  ) {
     return undefined;
   }
   if (!requiresLocalServerAuth(pathname, options)) {

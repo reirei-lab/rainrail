@@ -56,7 +56,7 @@ const dashboardCopy = JSON.stringify(content.app);
         <div>
           <p class="eyebrow">{content.shell.eyebrow}</p>
           <h1>{content.shell.heading}</h1>
-          <span class="dashboard-demo-badge" data-demo-indicator hidden>Demo mode</span>
+          <span class="dashboard-demo-badge" data-demo-indicator hidden>{content.shell.demoModeBadge}</span>
         </div>
         <div class="dashboard-auth">
           <input data-api-base-url-input type="url" autocomplete="off" placeholder={content.shell.apiBaseUrlPlaceholder} aria-label={content.shell.apiBaseUrlLabel} />

@@ -2736,6 +2736,15 @@ describe('Rainrail CLI built-in commands', () => {
         const protectedOverview = await fetch(`http://127.0.0.1:${port}/api/v1/overview`);
         expect(protectedOverview.status).toBe(401);
 
+        const blockedQueue = await fetch(`http://127.0.0.1:${port}/api/v1/queue?demo=1&filter[status]=blocked`);
+        expect(blockedQueue.status).toBe(200);
+        await expect(blockedQueue.json()).resolves.toMatchObject({
+          data: [expect.objectContaining({
+            id: 'agent_task_demo_failed_stale_claim',
+            status: 'blocked',
+          })],
+        });
+
         const demoCommand = await fetch(`http://127.0.0.1:${port}/api/v1/agent-tasks/agent_task_demo_failed_stale_claim/actions/resume?demo=1`, {
           method: 'POST',
           headers: {
@@ -2756,6 +2765,47 @@ describe('Rainrail CLI built-in commands', () => {
             auditId: 'demo-request-demo-resume',
             result: { demoOnly: true },
           },
+        });
+      } finally {
+        await closeTestServer(result);
+      }
+    });
+  });
+
+  it('keeps dashboard demo mode authenticated when local start binds outside localhost', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'seeded-dashboard-demo-external-bind');
+      const port = await getFreePort('0.0.0.0');
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        server: { host: '0.0.0.0', port },
+        dashboardAuth: {
+          readOnlyToken: 'read-token',
+        },
+        sourceBundles: [],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+      const databasePath = join(projectRoot, '.tmp', 'dashboard-demo.sqlite');
+      const seed = spawnSync(process.execPath, [dashboardDemoSeedScript.pathname, '--database', databasePath], {
+        encoding: 'utf8',
+      });
+      expect(seed.status).toBe(0);
+
+      const result = await runRainrailCliAsync(['start', '--demo'], { cwd: projectRoot });
+      try {
+        expect(result.exitCode).toBe(0);
+
+        const unauthenticated = await fetch(`http://127.0.0.1:${port}/api/v1/overview?demo=1`);
+        expect(unauthenticated.status).toBe(401);
+        await expect(unauthenticated.json()).resolves.toEqual({ error: 'missing_bearer_token' });
+
+        const authenticated = await fetch(`http://127.0.0.1:${port}/api/v1/overview?demo=1`, {
+          headers: { Authorization: 'Bearer read-token' },
+        });
+        expect(authenticated.status).toBe(200);
+        await expect(authenticated.json()).resolves.toMatchObject({
+          data: { counts: { events: 3 } },
         });
       } finally {
         await closeTestServer(result);

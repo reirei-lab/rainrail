@@ -122,10 +122,13 @@ describe('dashboard app shell', () => {
 
   it('supports explicit local dashboard demo mode without a bearer token', () => {
     expect(localizedDashboardPage).toContain('data-demo-indicator');
-    expect(localizedDashboardPage).toContain('Demo mode');
+    expect(localizedDashboardPage).toContain('content.shell.demoModeBadge');
+    expect(dashboardContent).toContain("demoModeBadge: 'Demo mode'");
+    expect(dashboardContent).toContain("demoModeBadge: 'デモモード'");
     expect(dashboardApp).toContain("new URLSearchParams(window.location.search).get('demo') === '1'");
     expect(dashboardApp).toContain("const authRequired = !demoMode && appRoot.dataset.authRequired !== 'false';");
     expect(dashboardApp).toContain('demoIndicator.hidden = !demoMode');
+    expect(dashboardApp).toContain('isOperatorModeEnabled');
     expect(dashboardClient).toContain('demoMode?: boolean');
     expect(dashboardClient).toContain('pathWithDemoMode(path)');
     expect(dashboardClient).toContain('demo=1');
