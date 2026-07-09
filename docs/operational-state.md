@@ -17,7 +17,7 @@ consumer は `OperationalStore` の method と stable record/input/snapshot type
 
 store は `StoredOperationalEvent`、`StoredActivityEvent`、`StoredAgentTask`、
 `StoredEventHandlerRetry` を永続化し、`StoredCommandResult`、
-`OperationalStoreSnapshot` として recent state と counts を返す。snapshot は
+`StoredDashboardLayout`、`OperationalStoreSnapshot` として recent state と counts を返す。snapshot は
 `SnapshotOptions` で skipped activity の表示を制御でき、warnings は
 `OperationalStoreWarnings` と `StoredStaleProjectClaimWarning` に分けて返す。
 event/activity の list API は `ListOperationalStoreEventsOptions` と

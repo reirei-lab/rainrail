@@ -215,6 +215,79 @@ describe('Rainrail dashboard API', () => {
     operationalStore.close();
   });
 
+  it('allows browser preflight for saving dashboard layouts', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+    });
+    const app = createTestApp({
+      dashboardAuth: { operatorToken: 'operator-token' },
+      operationalStore,
+    });
+
+    const response = await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/layout', {
+      method: 'OPTIONS',
+    }));
+
+    expect(response.status).toBe(204);
+    expect(response.headers.get('access-control-allow-methods')).toContain('PUT');
+    operationalStore.close();
+  });
+
+  it('protects card catalog reads even when no operational store is configured', async () => {
+    const app = createTestApp({
+      dashboardAuth: { readOnlyToken: 'read-token' },
+    });
+
+    const unauthorized = await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/cards'));
+    expect(unauthorized.status).toBe(401);
+    await expect(unauthorized.json()).resolves.toEqual({ error: 'missing_bearer_token' });
+
+    const authorized = await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/cards', {
+      headers: { authorization: 'Bearer read-token' },
+    }));
+    expect(authorized.status).toBe(200);
+    await expect(authorized.json()).resolves.toMatchObject({ data: expect.any(Array) });
+  });
+
+  it('rejects non-string dashboard layout ids and card ids before persistence', async () => {
+    const registry = createDashboardCardRegistry();
+    registry.register(recentEventsCard);
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+    });
+    const app = createTestApp({
+      dashboardAuth: { operatorToken: 'operator-token' },
+      operationalStore,
+      dashboardCardRegistry: registry,
+      dashboardCardCatalog: { availableCapabilities: ['dashboard:read'] },
+    });
+
+    const invalidId = await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/layout', {
+      method: 'PUT',
+      headers: { authorization: 'Bearer operator-token', 'content-type': 'application/json' },
+      body: JSON.stringify({
+        items: [{ id: {}, cardId: 'core.recentEvents', x: 0, y: 0, columns: 4, rows: 2 }],
+      }),
+    }));
+    expect(invalidId.status).toBe(400);
+    await expect(invalidId.json()).resolves.toEqual({ error: 'invalid_dashboard_layout_item' });
+
+    const invalidCardId = await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/layout', {
+      method: 'PUT',
+      headers: { authorization: 'Bearer operator-token', 'content-type': 'application/json' },
+      body: JSON.stringify({
+        items: [{ id: 'recent-events', cardId: {}, x: 0, y: 0, columns: 4, rows: 2 }],
+      }),
+    }));
+    expect(invalidCardId.status).toBe(400);
+    await expect(invalidCardId.json()).resolves.toEqual({ error: 'invalid_dashboard_layout_item' });
+
+    expect(operationalStore.getDashboardLayout()).toBeUndefined();
+    operationalStore.close();
+  });
+
   it('serves split v1 overview, events, workflow runs, and agent tasks without requiring the snapshot shape', async () => {
     const operationalStore = new RainrailOperationalStore({
       databasePath: ':memory:',

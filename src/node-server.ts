@@ -146,7 +146,7 @@ async function toFetchRequest(
       );
     } else if (
       shouldStreamRainrailHttpRequestBody(url.pathname, method, appOptions)
-      || isDashboardCommandRoute(url.pathname, method)
+      || isDashboardBodyRoute(url.pathname, method)
     ) {
       init.body = Readable.toWeb(request) as ReadableStream;
       Object.assign(init, { duplex: 'half' });
@@ -166,6 +166,11 @@ function isDashboardCommandRoute(pathname: string, method: string): boolean {
     && (/^\/api\/v1\/agent-tasks\/(?:[^/]+\/actions\/(?:resume|reset|terminate)|actions\/terminate-all)$/.test(pathname)
       || pathname === '/api/v1/queue/actions/assign-next'
       || pathname === '/api/v1/settings/actions/update');
+}
+
+function isDashboardBodyRoute(pathname: string, method: string): boolean {
+  return isDashboardCommandRoute(pathname, method)
+    || (method.toUpperCase() === 'PUT' && pathname === '/api/v1/dashboard/layout');
 }
 
 function isStatusCodeError(error: unknown): error is { statusCode: number } {
