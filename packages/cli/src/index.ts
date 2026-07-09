@@ -6351,6 +6351,25 @@ async function handleLocalRainrailRequest(
     return;
   }
 
+  const workflowRunDetailMatch = /^\/api\/v1\/workflow-runs\/([^/]+)$/u.exec(url.pathname);
+  if (request.method === 'GET' && workflowRunDetailMatch !== null) {
+    const workflowRunId = safeDecodeURIComponent(workflowRunDetailMatch[1] ?? '');
+    if (workflowRunId === undefined) {
+      writeJsonResponse(response, 400, { error: 'invalid_workflow_run_id' }, request);
+      return;
+    }
+    const activity = state.eventStore?.listActivityEvents?.()
+      .find((item) => item.id === workflowRunId && isLocalWorkflowRunActivity(item));
+    if (activity === undefined) {
+      writeJsonResponse(response, 404, { error: 'workflow_run_not_found' }, request);
+      return;
+    }
+    writeJsonResponse(response, 200, {
+      data: localWorkflowRunDetail(activity),
+    }, request);
+    return;
+  }
+
   if (request.method === 'GET' && url.pathname === '/api/v1/agent-tasks') {
     const queryError = validateLocalCollectionQuery(url, ['filter[status]']);
     if (queryError !== undefined) {
@@ -6373,6 +6392,25 @@ async function handleLocalRainrailRequest(
     if (!writeValidatedLocalCollectionResponse(response, localEmptyCollectionRows, url, request, (row) => row.id, ['filter[status]'])) {
       return;
     }
+    return;
+  }
+
+  const agentTaskDetailMatch = /^\/api\/v1\/agent-tasks\/([^/]+)$/u.exec(url.pathname);
+  if (request.method === 'GET' && agentTaskDetailMatch !== null) {
+    const taskId = safeDecodeURIComponent(agentTaskDetailMatch[1] ?? '');
+    if (taskId === undefined) {
+      writeJsonResponse(response, 400, { error: 'invalid_agent_task_id' }, request);
+      return;
+    }
+    const task = state.eventStore?.listAgentTasks?.().find((item) => item.id === taskId);
+    if (task === undefined) {
+      writeJsonResponse(response, 404, { error: 'agent_task_not_found' }, request);
+      return;
+    }
+    const staleTaskIds = new Set((state.eventStore?.staleProjectClaimWarnings?.() ?? []).map((warning) => warning.taskId));
+    writeJsonResponse(response, 200, {
+      data: localAgentTaskDetail(task, staleTaskIds),
+    }, request);
     return;
   }
 
@@ -6836,6 +6874,15 @@ function localActivityToWorkflowRunRow(activity: LocalOperationalActivityEvent) 
   };
 }
 
+function localWorkflowRunDetail(activity: LocalOperationalActivityEvent) {
+  return {
+    id: activity.id,
+    type: 'workflow-run',
+    compact: localActivityToWorkflowRunRow(activity),
+    record: activity,
+  };
+}
+
 function isLocalWorkflowRunActivity(activity: LocalOperationalActivityEvent): boolean {
   return activity.category !== 'command';
 }
@@ -6853,6 +6900,15 @@ function localAgentTaskToCompactRow(task: LocalOperationalAgentTask, staleTaskId
     updatedAt: task.updatedAt,
     ...(task.completedAt === undefined ? {} : { completedAt: task.completedAt }),
     warnings: { staleProjectClaim: staleTaskIds.has(task.id) },
+  };
+}
+
+function localAgentTaskDetail(task: LocalOperationalAgentTask, staleTaskIds: ReadonlySet<string> = new Set()) {
+  return {
+    id: task.id,
+    type: 'agent-task',
+    compact: localAgentTaskToCompactRow(task, staleTaskIds),
+    record: task,
   };
 }
 
@@ -6974,11 +7030,12 @@ type LocalSettingRow = {
 };
 
 function localSettingsRows(options: RainrailStartOptions): readonly LocalSettingRow[] {
+  const operationalSnapshotLimit = options.operationalStoreConfig?.eventLimit ?? localEventHistoryLimit;
   return [
     { id: 'max-concurrency', type: 'setting', status: 'read-only', label: 'Max concurrency', value: '1 task' },
     { id: 'auto-start', type: 'setting', status: 'read-only', label: 'Auto-start', value: 'not configured' },
     { id: 'retry-policy', type: 'setting', status: 'read-only', label: 'Retry policy', value: '0 retries pending' },
-    { id: 'operational-snapshot-limit', type: 'setting', status: 'read-only', label: 'Operational snapshot limit', value: `${localEventHistoryLimit} events` },
+    { id: 'operational-snapshot-limit', type: 'setting', status: 'read-only', label: 'Operational snapshot limit', value: `${operationalSnapshotLimit} events` },
     { id: 'dashboard-auth', type: 'setting', status: 'read-only', label: 'Dashboard auth', value: hasAnyDashboardAuthToken(options.dashboardAuth) ? 'bearer token configured' : 'not configured' },
     { id: 'runtime', type: 'setting', status: 'read-only', label: 'Runtime', value: 'node' },
   ];

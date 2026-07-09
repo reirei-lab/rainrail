@@ -2534,6 +2534,23 @@ describe('Rainrail CLI built-in commands', () => {
         });
         expect(JSON.stringify(taskPayload)).not.toContain('/api/v1/agent-tasks/agent_task_shared_sqlite');
 
+        const taskDetail = await fetch(`http://127.0.0.1:${port}/api/v1/agent-tasks/agent_task_shared_sqlite`);
+        expect(taskDetail.status).toBe(200);
+        await expect(taskDetail.json()).resolves.toMatchObject({
+          data: {
+            id: 'agent_task_shared_sqlite',
+            type: 'agent-task',
+            compact: {
+              id: 'agent_task_shared_sqlite',
+              warnings: { staleProjectClaim: true },
+            },
+            record: {
+              id: 'agent_task_shared_sqlite',
+              status: 'failed',
+            },
+          },
+        });
+
         const invalidTasks = await fetch(`http://127.0.0.1:${port}/api/v1/agent-tasks?filter[unknown]=x`);
         expect(invalidTasks.status).toBe(400);
         await expect(invalidTasks.json()).resolves.toEqual({ error: 'unsupported_filter', filter: 'filter[unknown]' });
@@ -2548,6 +2565,33 @@ describe('Rainrail CLI built-in commands', () => {
           data: [{ id: 'act_shared_sqlite', summary: 'shared workflow dispatched' }],
         });
         expect(JSON.stringify(workflowPayload)).not.toContain('/api/v1/workflow-runs/act_shared_sqlite');
+
+        const workflowDetail = await fetch(`http://127.0.0.1:${port}/api/v1/workflow-runs/act_shared_sqlite`);
+        expect(workflowDetail.status).toBe(200);
+        await expect(workflowDetail.json()).resolves.toMatchObject({
+          data: {
+            id: 'act_shared_sqlite',
+            type: 'workflow-run',
+            compact: {
+              id: 'act_shared_sqlite',
+              summary: 'shared workflow dispatched',
+            },
+            record: {
+              id: 'act_shared_sqlite',
+              outcome: 'success',
+            },
+          },
+        });
+
+        const missingWorkflowDetail = await fetch(`http://127.0.0.1:${port}/api/v1/workflow-runs/missing`);
+        expect(missingWorkflowDetail.status).toBe(404);
+        await expect(missingWorkflowDetail.json()).resolves.toEqual({ error: 'workflow_run_not_found' });
+
+        const settings = await fetch(`http://127.0.0.1:${port}/api/v1/settings`);
+        const settingsPayload = await settings.json() as { data: Array<{ id: string; value: string }> };
+        expect(settingsPayload.data.find((row) => row.id === 'operational-snapshot-limit')).toMatchObject({
+          value: '10 events',
+        });
 
         const detail = await fetch(`http://127.0.0.1:${port}/api/v1/events/github-webhook%3Adelivery-existing%3Agithub.issue`);
         await expect(detail.json()).resolves.toMatchObject({
