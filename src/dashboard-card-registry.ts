@@ -163,6 +163,15 @@ function availabilityFor(
   }
 
   if (entryResolutionFailure !== undefined) {
+    if (missingCapabilities.length > 0) {
+      return {
+        status: 'unavailable',
+        reason: 'entry_resolution_failed',
+        missingCapabilities,
+        message: `${entryResolutionFailure} and required capabilities are missing: ${missingCapabilities.join(', ')}`,
+      };
+    }
+
     return {
       status: 'unavailable',
       reason: 'entry_resolution_failed',
@@ -202,15 +211,24 @@ function missingRequiredCapabilities(
   availableCapabilities: readonly RuntimeCapabilityName[] | undefined,
 ): RuntimeCapabilityName[] {
   const required = definition.requiredCapabilities ?? [];
-  if (required.length === 0 || availableCapabilities === undefined) {
+  if (required.length === 0) {
     return [];
   }
+
+  if (availableCapabilities === undefined) return [...required];
 
   const available = new Set(availableCapabilities);
   return required.filter((capability) => !available.has(capability));
 }
 
 function validateDefinition(definition: DashboardCardDefinition): void {
+  if (!isPlainObject(definition)) {
+    throw new DashboardCardRegistryError(
+      'Dashboard card definition must be a plain object',
+      'invalid_definition',
+    );
+  }
+
   if (!isNonEmptyString(definition.id)) {
     throw new DashboardCardRegistryError(
       'Dashboard card id must be a non-empty string',
@@ -255,6 +273,8 @@ function validateEntry(definition: DashboardCardDefinition): void {
     }
   } else if (definition.entry?.type === 'plugin') {
     if (isNonEmptyString(definition.entry.pluginName) && isNonEmptyString(definition.entry.cardName)) {
+      validatePluginEntryIdentifier(definition, 'pluginName', definition.entry.pluginName);
+      validatePluginEntryIdentifier(definition, 'cardName', definition.entry.cardName);
       const expectedId = `plugin:${definition.entry.pluginName}.${definition.entry.cardName}`;
       if (definition.id !== expectedId) {
         throw new DashboardCardRegistryError(
@@ -274,6 +294,20 @@ function validateEntry(definition: DashboardCardDefinition): void {
   );
 }
 
+function validatePluginEntryIdentifier(
+  definition: DashboardCardDefinition,
+  field: 'pluginName' | 'cardName',
+  value: string,
+): void {
+  if (value.includes('.') || value.includes(':')) {
+    throw new DashboardCardRegistryError(
+      `Dashboard card "${definition.id}" ${field} must not contain "." or ":"`,
+      'invalid_entry',
+      definition.id,
+    );
+  }
+}
+
 function validateRequiredCapabilities(definition: DashboardCardDefinition): void {
   const { requiredCapabilities } = definition;
   if (requiredCapabilities === undefined) return;
@@ -288,9 +322,30 @@ function validateRequiredCapabilities(definition: DashboardCardDefinition): void
 }
 
 function validateProvider(provider: DashboardCardProvider): void {
+  if (!isPlainObject(provider)) {
+    throw new DashboardCardRegistryError(
+      'Dashboard card provider must be a plain object',
+      'invalid_provider',
+    );
+  }
+
   if (!isNonEmptyString(provider.name)) {
     throw new DashboardCardRegistryError(
       'Dashboard card provider name must be a non-empty string',
+      'invalid_provider',
+    );
+  }
+
+  if (provider.kind !== 'dashboard-card-provider') {
+    throw new DashboardCardRegistryError(
+      'Dashboard card provider kind must be "dashboard-card-provider"',
+      'invalid_provider',
+    );
+  }
+
+  if (!Array.isArray(provider.cards)) {
+    throw new DashboardCardRegistryError(
+      'Dashboard card provider cards must be an array',
       'invalid_provider',
     );
   }
@@ -334,7 +389,7 @@ function validateSettingsSchema(definition: DashboardCardDefinition): void {
     );
   }
 
-  if (!isJsonSerializable(settingsSchema)) {
+  if (!isJsonSerializable(settingsSchema, new WeakSet())) {
     throw new DashboardCardRegistryError(
       `Dashboard card "${definition.id}" settingsSchema must contain only JSON-serializable values`,
       'invalid_definition',
@@ -481,7 +536,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return prototype === Object.prototype || prototype === null;
 }
 
-function isJsonSerializable(value: unknown): boolean {
+function isJsonSerializable(value: unknown, ancestors: WeakSet<object>): boolean {
   if (value === null) return true;
 
   const valueType = typeof value;
@@ -489,11 +544,18 @@ function isJsonSerializable(value: unknown): boolean {
   if (valueType === 'number') return Number.isFinite(value);
   if (valueType !== 'object') return false;
 
+  const objectValue = value as object;
+  if (ancestors.has(objectValue)) return false;
+  ancestors.add(objectValue);
+  let serializable: boolean;
   if (Array.isArray(value)) {
-    return value.every(isJsonSerializable);
+    serializable = value.every((item) => isJsonSerializable(item, ancestors));
+  } else if (!isPlainObject(value)) {
+    serializable = false;
+  } else {
+    serializable = Object.values(value).every((item) => isJsonSerializable(item, ancestors));
   }
+  ancestors.delete(objectValue);
 
-  if (!isPlainObject(value)) return false;
-
-  return Object.values(value).every(isJsonSerializable);
+  return serializable;
 }

@@ -75,6 +75,10 @@ describe('dashboard card registry contract', () => {
   it('rejects definitions with required fields missing at runtime boundaries', () => {
     const registry = createDashboardCardRegistry();
 
+    expect(() => registry.register(null as unknown as DashboardCardDefinition)).toThrow(
+      /Dashboard card definition must be a plain object/u,
+    );
+
     expect(() => registry.register({
       title: 'Broken card',
       entry: { type: 'core', name: 'broken' },
@@ -108,6 +112,8 @@ describe('dashboard card registry contract', () => {
 
   it('rejects invalid settings schema at registration time', () => {
     const registry = createDashboardCardRegistry();
+    const circularSchema: Record<string, unknown> = { type: 'object', properties: {} };
+    circularSchema.properties = { self: circularSchema };
 
     expect(() => registry.register({
       ...pluginQueueCard,
@@ -122,6 +128,11 @@ describe('dashboard card registry contract', () => {
     expect(() => registry.register({
       ...pluginQueueCard,
       settingsSchema: { type: 'object', properties: { repository: undefined } },
+    } as unknown as DashboardCardDefinition)).toThrow(/settingsSchema must contain only JSON-serializable values/u);
+
+    expect(() => registry.register({
+      ...pluginQueueCard,
+      settingsSchema: circularSchema,
     } as unknown as DashboardCardDefinition)).toThrow(/settingsSchema must contain only JSON-serializable values/u);
   });
 
@@ -189,6 +200,42 @@ describe('dashboard card registry contract', () => {
     })).toThrow(/Provider "other" cannot register plugin card "plugin:github.queue"/u);
   });
 
+  it('rejects ambiguous plugin and card names containing id delimiters', () => {
+    const registry = createDashboardCardRegistry();
+
+    expect(() => registry.register({
+      ...pluginQueueCard,
+      id: 'plugin:docs.issueSummary.queue',
+      entry: { type: 'plugin', pluginName: 'docs.issueSummary', cardName: 'queue' },
+    })).toThrow(/pluginName must not contain "." or ":"/u);
+
+    expect(() => registry.register({
+      ...pluginQueueCard,
+      id: 'plugin:github.issue.queue',
+      entry: { type: 'plugin', pluginName: 'github', cardName: 'issue.queue' },
+    })).toThrow(/cardName must not contain "." or ":"/u);
+  });
+
+  it('rejects provider objects with invalid kind or cards shape', () => {
+    const registry = createDashboardCardRegistry();
+
+    expect(() => registry.registerProvider({
+      name: 'github',
+      kind: 'workflow-plugin',
+      cards: [pluginQueueCard],
+    } as unknown as Parameters<typeof registry.registerProvider>[0])).toThrow(
+      /Dashboard card provider kind must be "dashboard-card-provider"/u,
+    );
+
+    expect(() => registry.registerProvider({
+      name: 'github',
+      kind: 'dashboard-card-provider',
+      cards: pluginQueueCard,
+    } as unknown as Parameters<typeof registry.registerProvider>[0])).toThrow(
+      /Dashboard card provider cards must be an array/u,
+    );
+  });
+
   it('rejects core cards from plugin providers', () => {
     const registry = createDashboardCardRegistry();
 
@@ -240,6 +287,23 @@ describe('dashboard card registry contract', () => {
     }]);
   });
 
+  it('treats all required capabilities as missing when no capability snapshot is supplied', () => {
+    const registry = createDashboardCardRegistry();
+    registry.register(pluginQueueCard);
+
+    expect(registry.list({
+      enabledPlugins: ['github'],
+    })).toEqual([{
+      definition: pluginQueueCard,
+      availability: {
+        status: 'unavailable',
+        reason: 'missing_capability',
+        missingCapabilities: ['dashboard:read', 'github:read'],
+        message: 'Required capabilities are missing: dashboard:read, github:read',
+      },
+    }]);
+  });
+
   it('marks plugin cards unavailable when enabled plugins are not supplied', () => {
     const registry = createDashboardCardRegistry();
     registry.register(pluginQueueCard);
@@ -272,6 +336,27 @@ describe('dashboard card registry contract', () => {
         status: 'unavailable',
         reason: 'entry_resolution_failed',
         message: 'Plugin card module did not export the requested card entry',
+      },
+    }]);
+  });
+
+  it('preserves missing capabilities when entry resolution also fails', () => {
+    const registry = createDashboardCardRegistry();
+    registry.register(pluginQueueCard);
+
+    expect(registry.list({
+      availableCapabilities: ['dashboard:read'],
+      enabledPlugins: ['github'],
+      entryResolutionFailures: {
+        'plugin:github.queue': 'Plugin card module did not export the requested card entry',
+      },
+    })).toEqual([{
+      definition: pluginQueueCard,
+      availability: {
+        status: 'unavailable',
+        reason: 'entry_resolution_failed',
+        missingCapabilities: ['github:read'],
+        message: 'Plugin card module did not export the requested card entry and required capabilities are missing: github:read',
       },
     }]);
   });
