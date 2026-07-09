@@ -289,6 +289,10 @@ Dashboard card は Core built-in card と plugin contribution を同じ catalog 
 `plugin:<pluginName>.<cardName>` のように plugin 名を含める。registry は id 衝突を
 登録時に拒否するため、dashboard layout の `DashboardLayoutItem.cardId` は
 Core/plugin の区別を意識せず同じ id 空間を参照できる。
+Core card の id は `core.${entry.name}`、plugin card の id は
+`plugin:${entry.pluginName}.${entry.cardName}` と完全一致させる。registry はこの
+namespace 不一致を登録時に拒否し、catalog consumer が id から Core/plugin と owner を
+安定して判定できるようにする。
 
 `DashboardCardDefinition.entry` は `{ type: "core", name }` または
 `{ type: "plugin", pluginName, cardName }` のどちらかに分ける。Core entry は
@@ -299,12 +303,20 @@ Rainrail 本体が解決し、plugin entry は enabled plugin catalog で plugin
 `entry_resolution_failed` の reason と operator 向け message を保持する。
 entry 解決を実行する caller は、解決できなかった card id と理由を
 `DashboardCardListOptions.entryResolutionFailures` に渡して catalog 上へ反映する。
+plugin card の availability 評価では `DashboardCardListOptions.enabledPlugins` が未指定なら
+plugin 有効性は未確認として扱い、`invalid_plugin` で unavailable にする。
+`registerProvider()` で plugin contribution を受ける場合、plugin entry の `pluginName` は
+`DashboardCardProvider.name` と一致しなければならない。別 provider の namespace を
+先取りする card は登録時に拒否する。
 
 `requiredCapabilities` は dashboard 表示や provider 読み取りに必要な read-only
 capability を宣言する。registry の `list()` は caller が渡した
 `availableCapabilities` と `enabledPlugins` で availability を評価し、不足 capability は
 `missingCapabilities` として返す。危険操作の capability gate は Workflow plugin の
 `context.actions` に残し、Dashboard card は action 実行経路を持たない。
+`requiredCapabilities` は任意だが、指定する場合は非空文字列の配列だけを許可する。
+JS/JSON 経由の plugin が別 shape を渡した場合は登録時に `DashboardCardRegistryError` で
+拒否し、catalog 生成中に TypeError を漏らさない。
 
 `category` は dashboard 側の grouping 用の安定文字列とする。`size.default` は必須で、
 `size.min` / `size.max` は任意の制約として扱う。columns/rows は正の整数だけを許可し、
@@ -313,6 +325,9 @@ min/default/max の大小関係が壊れた definition は登録時に
 compatible な operator settings metadata で、secret value や provider credential は
 含めない。Card-specific rendering payload は別 API で解決し、registry contract は
 definition と layout metadata だけを持つ。
+registry は登録時に検証済み definition を clone/freeze し、plugin 側が元 object を後から
+mutate しても Map key、entry namespace、capability、size、entry resolution failure の照合が
+変わらないようにする。
 
 ## Workflow plugin
 

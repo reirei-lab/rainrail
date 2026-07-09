@@ -72,6 +72,7 @@ export type DashboardCardRegistryErrorCode =
   | 'duplicate_id'
   | 'invalid_definition'
   | 'invalid_entry'
+  | 'invalid_provider'
   | 'invalid_size';
 
 export class DashboardCardRegistryError extends Error {
@@ -112,13 +113,14 @@ export function createDashboardCardRegistry(): DashboardCardRegistry {
       );
     }
 
-    cards.set(definition.id, definition);
+    cards.set(definition.id, freezeDefinition(cloneDefinition(definition)));
   };
 
   return {
     register,
     registerProvider(provider) {
       for (const card of provider.cards) {
+        validateProviderCard(provider, card);
         register(card);
       }
     },
@@ -138,8 +140,7 @@ function availabilityFor(
   const missingCapabilities = missingRequiredCapabilities(definition, options.availableCapabilities);
   const entryResolutionFailure = options.entryResolutionFailures?.[definition.id];
   const invalidPlugin = definition.entry.type === 'plugin'
-    && options.enabledPlugins !== undefined
-    && !options.enabledPlugins.includes(definition.entry.pluginName);
+    && (options.enabledPlugins === undefined || !options.enabledPlugins.includes(definition.entry.pluginName));
 
   if (entryResolutionFailure === undefined && !invalidPlugin && missingCapabilities.length === 0) {
     return { status: 'available' };
@@ -218,19 +219,70 @@ function validateDefinition(definition: DashboardCardDefinition): void {
   }
 
   validateEntry(definition);
+  validateRequiredCapabilities(definition);
   validateSize(definition);
 }
 
 function validateEntry(definition: DashboardCardDefinition): void {
   if (definition.entry?.type === 'core') {
-    if (isNonEmptyString(definition.entry.name)) return;
+    if (isNonEmptyString(definition.entry.name)) {
+      const expectedId = `core.${definition.entry.name}`;
+      if (definition.id !== expectedId) {
+        throw new DashboardCardRegistryError(
+          `Dashboard card "${definition.id}" id must match core entry namespace "${expectedId}"`,
+          'invalid_entry',
+          definition.id,
+        );
+      }
+      return;
+    }
   } else if (definition.entry?.type === 'plugin') {
-    if (isNonEmptyString(definition.entry.pluginName) && isNonEmptyString(definition.entry.cardName)) return;
+    if (isNonEmptyString(definition.entry.pluginName) && isNonEmptyString(definition.entry.cardName)) {
+      const expectedId = `plugin:${definition.entry.pluginName}.${definition.entry.cardName}`;
+      if (definition.id !== expectedId) {
+        throw new DashboardCardRegistryError(
+          `Dashboard card "${definition.id}" id must match plugin entry namespace "${expectedId}"`,
+          'invalid_entry',
+          definition.id,
+        );
+      }
+      return;
+    }
   }
 
   throw new DashboardCardRegistryError(
     `Dashboard card "${definition.id}" entry must be a valid core or plugin entry`,
     'invalid_entry',
+    definition.id,
+  );
+}
+
+function validateRequiredCapabilities(definition: DashboardCardDefinition): void {
+  const { requiredCapabilities } = definition;
+  if (requiredCapabilities === undefined) return;
+
+  if (!Array.isArray(requiredCapabilities) || requiredCapabilities.some((capability) => !isNonEmptyString(capability))) {
+    throw new DashboardCardRegistryError(
+      `Dashboard card "${definition.id}" requiredCapabilities must be an array of non-empty strings`,
+      'invalid_definition',
+      definition.id,
+    );
+  }
+}
+
+function validateProviderCard(provider: DashboardCardProvider, definition: DashboardCardDefinition): void {
+  if (!isNonEmptyString(provider.name)) {
+    throw new DashboardCardRegistryError(
+      'Dashboard card provider name must be a non-empty string',
+      'invalid_provider',
+    );
+  }
+
+  if (definition.entry?.type !== 'plugin' || definition.entry.pluginName === provider.name) return;
+
+  throw new DashboardCardRegistryError(
+    `Provider "${provider.name}" cannot register plugin card "${definition.id}" for plugin "${definition.entry.pluginName}"`,
+    'invalid_provider',
     definition.id,
   );
 }
@@ -308,4 +360,56 @@ function isNonEmptyString(value: unknown): value is string {
 
 function isPositiveInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isInteger(value) && value > 0;
+}
+
+function cloneDefinition(definition: DashboardCardDefinition): DashboardCardDefinition {
+  return {
+    id: definition.id,
+    title: definition.title,
+    ...(definition.description === undefined ? {} : { description: definition.description }),
+    entry: cloneEntry(definition.entry),
+    category: definition.category,
+    ...(definition.requiredCapabilities === undefined
+      ? {}
+      : { requiredCapabilities: [...definition.requiredCapabilities] }),
+    size: {
+      default: { ...definition.size.default },
+      ...(definition.size.min === undefined ? {} : { min: { ...definition.size.min } }),
+      ...(definition.size.max === undefined ? {} : { max: { ...definition.size.max } }),
+    },
+    ...(definition.settingsSchema === undefined
+      ? {}
+      : { settingsSchema: structuredClone(definition.settingsSchema) }),
+  };
+}
+
+function cloneEntry(entry: DashboardCardEntry): DashboardCardEntry {
+  if (entry.type === 'core') {
+    return { type: 'core', name: entry.name };
+  }
+
+  return { type: 'plugin', pluginName: entry.pluginName, cardName: entry.cardName };
+}
+
+function freezeDefinition(definition: DashboardCardDefinition): DashboardCardDefinition {
+  Object.freeze(definition.entry);
+  if (definition.requiredCapabilities !== undefined) Object.freeze(definition.requiredCapabilities);
+  Object.freeze(definition.size.default);
+  if (definition.size.min !== undefined) Object.freeze(definition.size.min);
+  if (definition.size.max !== undefined) Object.freeze(definition.size.max);
+  Object.freeze(definition.size);
+  if (definition.settingsSchema !== undefined) deepFreeze(definition.settingsSchema);
+  return Object.freeze(definition);
+}
+
+function deepFreeze<T>(value: T): T {
+  if (typeof value !== 'object' || value === null || Object.isFrozen(value)) {
+    return value;
+  }
+
+  for (const propertyValue of Object.values(value)) {
+    deepFreeze(propertyValue);
+  }
+
+  return Object.freeze(value);
 }

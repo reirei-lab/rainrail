@@ -83,17 +83,91 @@ describe('dashboard card registry contract', () => {
     } as unknown as DashboardCardDefinition)).toThrow(/Dashboard card id must be a non-empty string/u);
   });
 
+  it('rejects ids that do not match the entry namespace', () => {
+    const registry = createDashboardCardRegistry();
+
+    expect(() => registry.register({
+      ...pluginQueueCard,
+      id: 'core.fake',
+    })).toThrow(/id must match plugin entry namespace "plugin:github.queue"/u);
+
+    expect(() => registry.register({
+      ...recentEventsCard,
+      id: 'core.events',
+    })).toThrow(/id must match core entry namespace "core.recentEvents"/u);
+  });
+
+  it('rejects non-array required capabilities at registration time', () => {
+    const registry = createDashboardCardRegistry();
+
+    expect(() => registry.register({
+      ...pluginQueueCard,
+      requiredCapabilities: 'github:read',
+    } as unknown as DashboardCardDefinition)).toThrow(/requiredCapabilities must be an array of non-empty strings/u);
+  });
+
   it('rejects invalid size constraints', () => {
     const registry = createDashboardCardRegistry();
 
     expect(() => registry.register({
       ...recentEventsCard,
       id: 'core.badSize',
+      entry: { type: 'core', name: 'badSize' },
       size: {
         default: { columns: 1, rows: 2 },
         min: { columns: 2, rows: 1 },
       },
     })).toThrow(/default columns must be greater than or equal to min columns/u);
+  });
+
+  it('isolates registered definitions from caller-side mutation', () => {
+    const registry = createDashboardCardRegistry();
+    const mutableDefinition = {
+      ...pluginQueueCard,
+      entry: { ...pluginQueueCard.entry },
+      requiredCapabilities: [...pluginQueueCard.requiredCapabilities!],
+      size: {
+        default: { ...pluginQueueCard.size.default },
+        min: { ...pluginQueueCard.size.min! },
+        max: { ...pluginQueueCard.size.max! },
+      },
+    };
+
+    registry.register(mutableDefinition);
+    mutableDefinition.id = 'plugin:github.changed';
+    if (mutableDefinition.entry.type === 'plugin') {
+      mutableDefinition.entry.pluginName = 'other';
+    }
+    mutableDefinition.requiredCapabilities.push('other:read');
+    mutableDefinition.size.default.columns = 99;
+
+    const [entry] = registry.list({
+      availableCapabilities: ['dashboard:read', 'github:read'],
+      enabledPlugins: ['github'],
+    });
+
+    expect(entry).toMatchObject({
+      definition: {
+        id: 'plugin:github.queue',
+        entry: { type: 'plugin', pluginName: 'github', cardName: 'queue' },
+        requiredCapabilities: ['dashboard:read', 'github:read'],
+        size: { default: { columns: 3, rows: 2 } },
+      },
+      availability: { status: 'available' },
+    });
+    expect(Object.isFrozen(entry!.definition)).toBe(true);
+    expect(Object.isFrozen(entry!.definition.entry)).toBe(true);
+    expect(Object.isFrozen(entry!.definition.size.default)).toBe(true);
+  });
+
+  it('rejects plugin provider cards outside the provider namespace', () => {
+    const registry = createDashboardCardRegistry();
+
+    expect(() => registry.registerProvider({
+      name: 'other',
+      kind: 'dashboard-card-provider',
+      cards: [pluginQueueCard],
+    })).toThrow(/Provider "other" cannot register plugin card "plugin:github.queue"/u);
   });
 
   it('marks unavailable plugin cards and missing capabilities without dropping them from the catalog', () => {
@@ -110,6 +184,22 @@ describe('dashboard card registry contract', () => {
         reason: 'invalid_plugin',
         missingCapabilities: ['github:read'],
         message: 'Plugin "github" is not enabled and required capabilities are missing: github:read',
+      },
+    }]);
+  });
+
+  it('marks plugin cards unavailable when enabled plugins are not supplied', () => {
+    const registry = createDashboardCardRegistry();
+    registry.register(pluginQueueCard);
+
+    expect(registry.list({
+      availableCapabilities: ['dashboard:read', 'github:read'],
+    })).toEqual([{
+      definition: pluginQueueCard,
+      availability: {
+        status: 'unavailable',
+        reason: 'invalid_plugin',
+        message: 'Plugin "github" is not enabled',
       },
     }]);
   });
