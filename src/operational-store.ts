@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 
 import type { RainrailEventEnvelope } from './events.js';
 import type { RuntimeAgentResumeAttempt, RuntimeRunStatus } from './runtime-provider.js';
@@ -587,7 +588,870 @@ export class JsonFileOperationalStore implements OperationalStore {
   }
 }
 
-export { JsonFileOperationalStore as RainrailOperationalStore };
+export class SqliteOperationalStore implements OperationalStore {
+  readonly #database: DatabaseSync;
+  readonly #eventLimit: number;
+  readonly #now: () => Date;
+  #closed = false;
+
+  constructor(options: RainrailOperationalStoreOptions) {
+    this.#eventLimit = expectPositiveInteger(options.eventLimit, 'eventLimit');
+    this.#now = options.now ?? (() => new Date());
+    if (options.databasePath !== ':memory:') {
+      mkdirSync(dirname(options.databasePath), { recursive: true });
+    }
+    this.#database = new DatabaseSync(options.databasePath);
+    this.#database.exec('PRAGMA foreign_keys = ON');
+    this.#database.exec('PRAGMA journal_mode = WAL');
+    this.#migrate();
+  }
+
+  close(): void {
+    if (this.#closed) return;
+    this.#database.close();
+    this.#closed = true;
+  }
+
+  recordEvent<TPayload>(event: RainrailEventEnvelope<TPayload>): StoredOperationalEvent<TPayload> {
+    this.#assertOpen();
+    const stored = eventToStoredOperationalEvent(event);
+    const sanitizedEnvelope = eventEnvelopeWithoutRawPayload(stored.envelope);
+    this.#database.prepare(`
+      INSERT INTO operational_events (
+        id, name, source_json, delivery_json, subject_json, occurred_at, received_at,
+        payload_json, raw_payload_reference_json, links_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        name = excluded.name,
+        source_json = excluded.source_json,
+        delivery_json = excluded.delivery_json,
+        subject_json = excluded.subject_json,
+        occurred_at = excluded.occurred_at,
+        received_at = excluded.received_at,
+        payload_json = excluded.payload_json,
+        raw_payload_reference_json = excluded.raw_payload_reference_json,
+        links_json = excluded.links_json
+    `).run(
+      stored.id,
+      stored.name,
+      toJsonText(stored.source),
+      toJsonText(stored.delivery),
+      toJsonText(stored.subject),
+      stored.occurredAt,
+      stored.receivedAt,
+      toJsonText(sanitizedEnvelope.payload),
+      toJsonText(sanitizedEnvelope.rawPayload),
+      toNullableJsonText(sanitizedEnvelope.links),
+    );
+
+    return this.getEvent(stored.id) as StoredOperationalEvent<TPayload>;
+  }
+
+  getEvent(id: string): StoredOperationalEvent | undefined {
+    this.#assertOpen();
+    const row = this.#database.prepare('SELECT * FROM operational_events WHERE id = ?').get(id);
+    return row === undefined ? undefined : operationalEventFromRow(row);
+  }
+
+  eventLimit(): number {
+    this.#assertOpen();
+    return this.#eventLimit;
+  }
+
+  listEvents(options: ListOperationalStoreEventsOptions = {}): StoredOperationalEvent[] {
+    this.#assertOpen();
+    const limit = options.limit;
+    const rows = limit === undefined
+      ? this.#database.prepare('SELECT * FROM operational_events ORDER BY received_at DESC, id DESC').all()
+      : this.#database.prepare('SELECT * FROM operational_events ORDER BY received_at DESC, id DESC LIMIT ?').all(limit);
+    return rows.map(operationalEventFromRow);
+  }
+
+  recordActivityEvent(input: RecordActivityEventInput): StoredActivityEvent {
+    this.#assertOpen();
+    const id = input.id ?? this.#nextId('activity', 'act');
+    const activity: StoredActivityEvent = {
+      id,
+      ...(input.sourceEventId === undefined ? {} : { sourceEventId: input.sourceEventId }),
+      ...(input.sourceEventName === undefined ? {} : { sourceEventName: input.sourceEventName }),
+      category: input.category,
+      targetType: input.targetType,
+      ...(input.targetId === undefined ? {} : { targetId: input.targetId }),
+      ...(input.targetUrl === undefined ? {} : { targetUrl: input.targetUrl }),
+      actionType: input.actionType,
+      outcome: input.outcome,
+      summary: input.summary,
+      ...(input.metadata === undefined ? {} : { metadata: jsonClone(input.metadata) }),
+      createdAt: this.#now().toISOString(),
+    };
+    this.#database.prepare(`
+      INSERT INTO activity_events (
+        id, source_event_id, source_event_name, category, target_type, target_id, target_url,
+        action_type, outcome, summary, metadata_json, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        source_event_id = excluded.source_event_id,
+        source_event_name = excluded.source_event_name,
+        category = excluded.category,
+        target_type = excluded.target_type,
+        target_id = excluded.target_id,
+        target_url = excluded.target_url,
+        action_type = excluded.action_type,
+        outcome = excluded.outcome,
+        summary = excluded.summary,
+        metadata_json = excluded.metadata_json,
+        created_at = excluded.created_at
+    `).run(
+      activity.id,
+      activity.sourceEventId ?? null,
+      activity.sourceEventName ?? null,
+      activity.category,
+      activity.targetType,
+      activity.targetId ?? null,
+      activity.targetUrl ?? null,
+      activity.actionType,
+      activity.outcome,
+      activity.summary,
+      toNullableJsonText(activity.metadata),
+      activity.createdAt,
+    );
+    return jsonClone(activity);
+  }
+
+  getActivityEvent(id: string): StoredActivityEvent | undefined {
+    this.#assertOpen();
+    const row = this.#database.prepare('SELECT * FROM activity_events WHERE id = ?').get(id);
+    return row === undefined ? undefined : activityEventFromRow(row);
+  }
+
+  listActivityEvents(options: ListOperationalStoreActivityEventsOptions = {}): StoredActivityEvent[] {
+    this.#assertOpen();
+    const where = options.hideSkippedActivityEvents === true ? 'WHERE outcome <> ?' : '';
+    const limit = options.limit;
+    const query = `SELECT * FROM activity_events ${where} ORDER BY created_at DESC, id DESC${limit === undefined ? '' : ' LIMIT ?'}`;
+    const values: Array<string | number | null> = [
+      ...(options.hideSkippedActivityEvents === true ? ['skipped'] : []),
+      ...(limit === undefined ? [] : [limit]),
+    ];
+    return this.#database.prepare(query).all(...values).map(activityEventFromRow);
+  }
+
+  recordCommandResult(input: RecordCommandResultInput): StoredCommandResult {
+    this.#assertOpen();
+    const id = input.id ?? this.#nextId('command', 'cmd');
+    const commandResult: StoredCommandResult = {
+      id,
+      actionType: input.actionType,
+      targetType: input.targetType,
+      targetId: input.targetId,
+      status: input.status,
+      actor: input.actor,
+      ...(input.client === undefined ? {} : { client: input.client }),
+      requestId: input.requestId,
+      dryRun: input.dryRun,
+      ...(input.result === undefined ? {} : { result: jsonClone(input.result) }),
+      ...(input.error === undefined ? {} : { error: input.error }),
+      ...(input.metadata === undefined ? {} : { metadata: jsonClone(input.metadata) }),
+      createdAt: this.#now().toISOString(),
+    };
+    this.#database.prepare(`
+      INSERT INTO command_results (
+        id, action_type, target_type, target_id, status, actor, client, request_id,
+        dry_run, result_json, error, metadata_json, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        action_type = excluded.action_type,
+        target_type = excluded.target_type,
+        target_id = excluded.target_id,
+        status = excluded.status,
+        actor = excluded.actor,
+        client = excluded.client,
+        request_id = excluded.request_id,
+        dry_run = excluded.dry_run,
+        result_json = excluded.result_json,
+        error = excluded.error,
+        metadata_json = excluded.metadata_json,
+        created_at = excluded.created_at
+    `).run(
+      commandResult.id,
+      commandResult.actionType,
+      commandResult.targetType,
+      commandResult.targetId,
+      commandResult.status,
+      commandResult.actor,
+      commandResult.client ?? null,
+      commandResult.requestId,
+      commandResult.dryRun ? 1 : 0,
+      toNullableJsonText(commandResult.result),
+      commandResult.error ?? null,
+      toNullableJsonText(commandResult.metadata),
+      commandResult.createdAt,
+    );
+    return jsonClone(commandResult);
+  }
+
+  recordAgentTask(input: RecordAgentTaskInput): StoredAgentTask {
+    this.#assertOpen();
+    const now = this.#now().toISOString();
+    const existing = this.getAgentTask(input.id);
+    const startedAt = input.startedAt ?? existing?.startedAt ?? now;
+    const status = input.status ?? existing?.status ?? 'running';
+    const agentSessionId = input.agentSessionId ?? existing?.agentSessionId;
+    const issue = input.issue ?? existing?.issue;
+    const claim = input.claim ?? existing?.claim;
+    const logPath = input.logPath ?? existing?.logPath;
+    const stderrLogPath = input.stderrLogPath ?? existing?.stderrLogPath;
+    const pid = input.pid ?? existing?.pid;
+    const resumeAttempts = input.resumeAttempts ?? existing?.resumeAttempts;
+    const result = input.result ?? existing?.result;
+    const completedAt = input.completedAt ?? existing?.completedAt;
+    const projectClaim = input.projectClaim ?? carryForwardProjectClaim(existing, {
+      agentSessionId,
+      branchName: input.branchName,
+      claim,
+      status,
+    });
+    const task = agentTaskWithRuntime({
+      id: input.id,
+      title: input.title,
+      ...(agentSessionId === undefined ? {} : { agentSessionId }),
+      branchName: input.branchName,
+      status,
+      ...(issue === undefined ? {} : { issue: jsonClone(issue) }),
+      ...(claim === undefined ? {} : { claim: jsonClone(claim) }),
+      ...(logPath === undefined ? {} : { logPath }),
+      ...(stderrLogPath === undefined ? {} : { stderrLogPath }),
+      ...(pid === undefined ? {} : { pid }),
+      ...(resumeAttempts === undefined ? {} : { resumeAttempts: jsonClone(resumeAttempts) }),
+      ...(projectClaim === undefined ? {} : { projectClaim: jsonClone(projectClaim) }),
+      ...(result === undefined ? {} : { result }),
+      startedAt,
+      ...(completedAt === undefined ? {} : { completedAt }),
+      updatedAt: now,
+    });
+    this.#database.prepare(`
+      INSERT INTO agent_tasks (
+        id, title, agent_session_id, branch_name, status, issue_json, claim_json, log_path,
+        stderr_log_path, pid, resume_attempts_json, project_claim_json, result, started_at,
+        completed_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        title = excluded.title,
+        agent_session_id = excluded.agent_session_id,
+        branch_name = excluded.branch_name,
+        status = excluded.status,
+        issue_json = excluded.issue_json,
+        claim_json = excluded.claim_json,
+        log_path = excluded.log_path,
+        stderr_log_path = excluded.stderr_log_path,
+        pid = excluded.pid,
+        resume_attempts_json = excluded.resume_attempts_json,
+        project_claim_json = excluded.project_claim_json,
+        result = excluded.result,
+        started_at = excluded.started_at,
+        completed_at = excluded.completed_at,
+        updated_at = excluded.updated_at
+    `).run(
+      task.id,
+      task.title,
+      task.agentSessionId ?? null,
+      task.branchName,
+      task.status,
+      toNullableJsonText(task.issue),
+      toNullableJsonText(task.claim),
+      task.logPath ?? null,
+      task.stderrLogPath ?? null,
+      task.pid ?? null,
+      toNullableJsonText(task.resumeAttempts),
+      toNullableJsonText(task.projectClaim),
+      task.result ?? null,
+      task.startedAt,
+      task.completedAt ?? null,
+      task.updatedAt,
+    );
+    return jsonClone(task);
+  }
+
+  getAgentTask(id: string): StoredAgentTask | undefined {
+    this.#assertOpen();
+    const row = this.#database.prepare('SELECT * FROM agent_tasks WHERE id = ?').get(id);
+    return row === undefined ? undefined : agentTaskFromRow(row);
+  }
+
+  getAgentTaskByBranchName(branchName: string): StoredAgentTask | undefined {
+    this.#assertOpen();
+    const row = this.#database.prepare('SELECT * FROM agent_tasks WHERE branch_name = ? ORDER BY updated_at DESC, id DESC LIMIT 1').get(branchName);
+    return row === undefined ? undefined : agentTaskFromRow(row);
+  }
+
+  listAgentTasks(): StoredAgentTask[] {
+    this.#assertOpen();
+    return this.#database.prepare('SELECT * FROM agent_tasks ORDER BY updated_at DESC, id DESC').all().map(agentTaskFromRow);
+  }
+
+  updateAgentTaskStatus(input: UpdateAgentTaskStatusInput): StoredAgentTask | undefined {
+    const existing = this.getAgentTask(input.id);
+    if (existing === undefined) return undefined;
+
+    return this.recordAgentTask({
+      id: existing.id,
+      title: existing.title,
+      ...(existing.agentSessionId === undefined ? {} : { agentSessionId: existing.agentSessionId }),
+      branchName: existing.branchName,
+      status: input.status,
+      ...(existing.issue === undefined ? {} : { issue: existing.issue }),
+      ...(existing.claim === undefined ? {} : { claim: existing.claim }),
+      ...(existing.logPath === undefined ? {} : { logPath: existing.logPath }),
+      ...(existing.stderrLogPath === undefined ? {} : { stderrLogPath: existing.stderrLogPath }),
+      ...(existing.pid === undefined ? {} : { pid: existing.pid }),
+      ...(existing.resumeAttempts === undefined ? {} : { resumeAttempts: existing.resumeAttempts }),
+      ...(existing.projectClaim === undefined ? {} : { projectClaim: existing.projectClaim }),
+      ...((input.result ?? existing.result) === undefined ? {} : { result: input.result ?? existing.result }),
+      startedAt: existing.startedAt,
+      ...((input.completedAt ?? existing.completedAt) === undefined
+        ? {}
+        : { completedAt: input.completedAt ?? existing.completedAt }),
+    });
+  }
+
+  updateAgentTaskProjectClaim(input: UpdateAgentTaskProjectClaimInput): StoredAgentTask | undefined {
+    const existing = this.getAgentTask(input.id);
+    if (existing === undefined) return undefined;
+
+    return this.recordAgentTask({
+      id: existing.id,
+      title: existing.title,
+      ...(existing.agentSessionId === undefined ? {} : { agentSessionId: existing.agentSessionId }),
+      branchName: existing.branchName,
+      status: existing.status,
+      ...(existing.issue === undefined ? {} : { issue: existing.issue }),
+      ...(existing.claim === undefined ? {} : { claim: existing.claim }),
+      ...(existing.logPath === undefined ? {} : { logPath: existing.logPath }),
+      ...(existing.stderrLogPath === undefined ? {} : { stderrLogPath: existing.stderrLogPath }),
+      ...(existing.pid === undefined ? {} : { pid: existing.pid }),
+      ...(existing.resumeAttempts === undefined ? {} : { resumeAttempts: existing.resumeAttempts }),
+      projectClaim: {
+        status: input.status,
+        reason: input.reason,
+        updatedAt: input.updatedAt ?? this.#now().toISOString(),
+        ...(input.error === undefined ? {} : { error: input.error }),
+      },
+      ...(existing.result === undefined ? {} : { result: existing.result }),
+      startedAt: existing.startedAt,
+      ...(existing.completedAt === undefined ? {} : { completedAt: existing.completedAt }),
+    });
+  }
+
+  recordEventHandlerRetry(input: RecordEventHandlerRetryInput): StoredEventHandlerRetry {
+    this.#assertOpen();
+    const existing = this.getEventHandlerRetry(input.eventId, input.handlerName);
+    const retry: StoredEventHandlerRetry = {
+      eventId: input.eventId,
+      handlerName: input.handlerName,
+      attempts: input.attempts ?? (existing?.attempts ?? 0) + 1,
+      nextRetryAt: input.nextRetryAt,
+      lastError: input.lastError,
+      updatedAt: this.#now().toISOString(),
+    };
+    this.#database.prepare(`
+      INSERT INTO event_handler_retries (
+        event_id, handler_name, attempts, next_retry_at, last_error, updated_at, claimed_until_at
+      ) VALUES (?, ?, ?, ?, ?, ?, NULL)
+      ON CONFLICT(event_id, handler_name) DO UPDATE SET
+        attempts = excluded.attempts,
+        next_retry_at = excluded.next_retry_at,
+        last_error = excluded.last_error,
+        updated_at = excluded.updated_at,
+        claimed_until_at = NULL
+    `).run(retry.eventId, retry.handlerName, retry.attempts, retry.nextRetryAt, retry.lastError, retry.updatedAt);
+    return jsonClone(retry);
+  }
+
+  getEventHandlerRetry(eventId: string, handlerName: string): StoredEventHandlerRetry | undefined {
+    this.#assertOpen();
+    const row = this.#database.prepare('SELECT * FROM event_handler_retries WHERE event_id = ? AND handler_name = ?').get(eventId, handlerName);
+    return row === undefined ? undefined : eventHandlerRetryFromRow(row);
+  }
+
+  claimEventHandlerRetry(retry: StoredEventHandlerRetry, claimedUntilAt: string, now: string): boolean {
+    this.#assertOpen();
+    const result = this.#database.prepare(`
+      UPDATE event_handler_retries
+      SET updated_at = ?, claimed_until_at = ?
+      WHERE event_id = ?
+        AND handler_name = ?
+        AND attempts = ?
+        AND next_retry_at = ?
+        AND last_error = ?
+        AND updated_at = ?
+        AND (claimed_until_at = ? OR (claimed_until_at IS NULL AND ? IS NULL))
+        AND (claimed_until_at IS NULL OR claimed_until_at <= ?)
+    `).run(
+      now,
+      claimedUntilAt,
+      retry.eventId,
+      retry.handlerName,
+      retry.attempts,
+      retry.nextRetryAt,
+      retry.lastError,
+      retry.updatedAt,
+      retry.claimedUntilAt ?? null,
+      retry.claimedUntilAt ?? null,
+      now,
+    );
+    return result.changes === 1;
+  }
+
+  listDueEventHandlerRetries(now: string, limit?: number): StoredEventHandlerRetry[] {
+    this.#assertOpen();
+    const rows = limit === undefined
+      ? this.#database.prepare(`
+        SELECT * FROM event_handler_retries
+        WHERE next_retry_at <= ? AND (claimed_until_at IS NULL OR claimed_until_at <= ?)
+        ORDER BY next_retry_at ASC, handler_name ASC
+      `).all(now, now)
+      : this.#database.prepare(`
+        SELECT * FROM event_handler_retries
+        WHERE next_retry_at <= ? AND (claimed_until_at IS NULL OR claimed_until_at <= ?)
+        ORDER BY next_retry_at ASC, handler_name ASC
+        LIMIT ?
+      `).all(now, now, limit);
+    return rows.map(eventHandlerRetryFromRow);
+  }
+
+  listEventHandlerRetries(): StoredEventHandlerRetry[] {
+    this.#assertOpen();
+    return this.#database.prepare('SELECT * FROM event_handler_retries ORDER BY next_retry_at ASC, handler_name ASC')
+      .all()
+      .map(eventHandlerRetryFromRow);
+  }
+
+  clearEventHandlerRetry(eventId: string, handlerName: string): void {
+    this.#assertOpen();
+    this.#database.prepare('DELETE FROM event_handler_retries WHERE event_id = ? AND handler_name = ?').run(eventId, handlerName);
+  }
+
+  clearClaimedEventHandlerRetry(retry: StoredEventHandlerRetry): boolean {
+    this.#assertOpen();
+    const result = this.#database.prepare(`
+      DELETE FROM event_handler_retries
+      WHERE event_id = ?
+        AND handler_name = ?
+        AND attempts = ?
+        AND next_retry_at = ?
+        AND last_error = ?
+        AND updated_at = ?
+        AND (claimed_until_at = ? OR (claimed_until_at IS NULL AND ? IS NULL))
+    `).run(
+      retry.eventId,
+      retry.handlerName,
+      retry.attempts,
+      retry.nextRetryAt,
+      retry.lastError,
+      retry.updatedAt,
+      retry.claimedUntilAt ?? null,
+      retry.claimedUntilAt ?? null,
+    );
+    return result.changes === 1;
+  }
+
+  rescheduleClaimedEventHandlerRetry(
+    retry: StoredEventHandlerRetry,
+    input: RecordEventHandlerRetryInput,
+  ): StoredEventHandlerRetry | undefined {
+    this.#assertOpen();
+    const updatedAt = this.#now().toISOString();
+    const attempts = input.attempts ?? retry.attempts + 1;
+    const result = this.#database.prepare(`
+      UPDATE event_handler_retries
+      SET event_id = ?, handler_name = ?, attempts = ?, next_retry_at = ?, last_error = ?, updated_at = ?, claimed_until_at = NULL
+      WHERE event_id = ?
+        AND handler_name = ?
+        AND attempts = ?
+        AND next_retry_at = ?
+        AND last_error = ?
+        AND updated_at = ?
+        AND (claimed_until_at = ? OR (claimed_until_at IS NULL AND ? IS NULL))
+    `).run(
+      input.eventId,
+      input.handlerName,
+      attempts,
+      input.nextRetryAt,
+      input.lastError,
+      updatedAt,
+      retry.eventId,
+      retry.handlerName,
+      retry.attempts,
+      retry.nextRetryAt,
+      retry.lastError,
+      retry.updatedAt,
+      retry.claimedUntilAt ?? null,
+      retry.claimedUntilAt ?? null,
+    );
+    if (result.changes !== 1) return undefined;
+    return this.getEventHandlerRetry(input.eventId, input.handlerName);
+  }
+
+  snapshot(options: SnapshotOptions = {}): OperationalStoreSnapshot {
+    this.#assertOpen();
+    const activityEvents = this.listActivityEvents({
+      ...(options.hideSkippedActivityEvents === undefined ? {} : { hideSkippedActivityEvents: options.hideSkippedActivityEvents }),
+      limit: this.#eventLimit,
+    });
+    const events = this.listEvents({ limit: this.#eventLimit });
+    const commandResults = this.#database.prepare('SELECT * FROM command_results ORDER BY created_at DESC, id DESC LIMIT ?')
+      .all(this.#eventLimit)
+      .map(commandResultFromRow);
+
+    return {
+      events,
+      activityEvents,
+      agentTasks: this.listAgentTasks(),
+      commandResults,
+      eventHandlerRetries: this.listEventHandlerRetries(),
+      warnings: {
+        staleProjectClaims: staleProjectClaimWarnings(this.listAgentTasks()),
+      },
+      counts: {
+        events: this.#count('operational_events'),
+        activityEvents: this.#count('activity_events'),
+        agentTasks: this.#count('agent_tasks'),
+        commandResults: this.#count('command_results'),
+        eventHandlerRetries: this.#count('event_handler_retries'),
+      },
+    };
+  }
+
+  #nextId(name: string, prefix: string): string {
+    this.#database.exec('BEGIN IMMEDIATE');
+    try {
+      const row = this.#database.prepare('SELECT value FROM operational_sequences WHERE name = ?').get(name);
+      const value = (row === undefined ? 0 : requiredNumber(row, 'value')) + 1;
+      this.#database.prepare(`
+        INSERT INTO operational_sequences (name, value) VALUES (?, ?)
+        ON CONFLICT(name) DO UPDATE SET value = excluded.value
+      `).run(name, value);
+      this.#database.exec('COMMIT');
+      return `${prefix}_${String(value).padStart(6, '0')}`;
+    } catch (error) {
+      this.#database.exec('ROLLBACK');
+      throw error;
+    }
+  }
+
+  #count(tableName: string): number {
+    const row = this.#database.prepare(`SELECT count(*) AS count FROM ${tableName}`).get();
+    const value = rowValue(row, 'count');
+    return typeof value === 'number' ? value : Number(value);
+  }
+
+  #migrate(): void {
+    this.#database.exec(`
+      CREATE TABLE IF NOT EXISTS operational_events (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        source_json TEXT NOT NULL,
+        delivery_json TEXT NOT NULL,
+        subject_json TEXT NOT NULL,
+        occurred_at TEXT NOT NULL,
+        received_at TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        raw_payload_reference_json TEXT NOT NULL,
+        links_json TEXT
+      );
+      CREATE INDEX IF NOT EXISTS operational_events_received_at_idx
+        ON operational_events (received_at DESC, id DESC);
+
+      CREATE TABLE IF NOT EXISTS activity_events (
+        id TEXT PRIMARY KEY,
+        source_event_id TEXT,
+        source_event_name TEXT,
+        category TEXT NOT NULL,
+        target_type TEXT NOT NULL,
+        target_id TEXT,
+        target_url TEXT,
+        action_type TEXT NOT NULL,
+        outcome TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        metadata_json TEXT,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS activity_events_created_at_idx
+        ON activity_events (created_at DESC, id DESC);
+
+      CREATE TABLE IF NOT EXISTS command_results (
+        id TEXT PRIMARY KEY,
+        action_type TEXT NOT NULL,
+        target_type TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        actor TEXT NOT NULL,
+        client TEXT,
+        request_id TEXT NOT NULL,
+        dry_run INTEGER NOT NULL,
+        result_json TEXT,
+        error TEXT,
+        metadata_json TEXT,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS command_results_created_at_idx
+        ON command_results (created_at DESC, id DESC);
+
+      CREATE TABLE IF NOT EXISTS agent_tasks (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        agent_session_id TEXT,
+        branch_name TEXT NOT NULL,
+        status TEXT NOT NULL,
+        issue_json TEXT,
+        claim_json TEXT,
+        log_path TEXT,
+        stderr_log_path TEXT,
+        pid INTEGER,
+        resume_attempts_json TEXT,
+        project_claim_json TEXT,
+        result TEXT,
+        started_at TEXT NOT NULL,
+        completed_at TEXT,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS agent_tasks_updated_at_idx
+        ON agent_tasks (updated_at DESC, id DESC);
+      CREATE INDEX IF NOT EXISTS agent_tasks_branch_name_idx
+        ON agent_tasks (branch_name);
+
+      CREATE TABLE IF NOT EXISTS event_handler_retries (
+        event_id TEXT NOT NULL,
+        handler_name TEXT NOT NULL,
+        attempts INTEGER NOT NULL,
+        next_retry_at TEXT NOT NULL,
+        last_error TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        claimed_until_at TEXT,
+        PRIMARY KEY (event_id, handler_name)
+      );
+      CREATE INDEX IF NOT EXISTS event_handler_retries_schedule_idx
+        ON event_handler_retries (next_retry_at ASC, handler_name ASC);
+
+      CREATE TABLE IF NOT EXISTS operational_sequences (
+        name TEXT PRIMARY KEY,
+        value INTEGER NOT NULL
+      );
+    `);
+    this.#addColumnIfMissing(
+      'operational_events',
+      'raw_payload_reference_json',
+      `TEXT NOT NULL DEFAULT '${toJsonText(redactedRawPayloadReference()).replaceAll("'", "''")}'`,
+    );
+  }
+
+  #assertOpen(): void {
+    if (this.#closed) {
+      throw new Error('operational store is closed');
+    }
+  }
+
+  #addColumnIfMissing(tableName: string, columnName: string, definition: string): void {
+    const rows = this.#database.prepare(`PRAGMA table_info(${tableName})`).all();
+    if (rows.some((row) => rowValue(row, 'name') === columnName)) return;
+    this.#database.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
+  }
+}
+
+export { SqliteOperationalStore as RainrailOperationalStore };
+
+function operationalEventFromRow(row: unknown): StoredOperationalEvent {
+  const source = fromJsonText<RainrailEventEnvelope['source']>(requiredString(row, 'source_json'));
+  const delivery = fromJsonText<RainrailEventEnvelope['delivery']>(requiredString(row, 'delivery_json'));
+  const subject = fromJsonText<RainrailEventEnvelope['subject']>(requiredString(row, 'subject_json'));
+  const payload = fromJsonText<unknown>(requiredString(row, 'payload_json'));
+  const rawPayload = fromJsonText<RainrailEventEnvelope['rawPayload']>(requiredString(row, 'raw_payload_reference_json'));
+  const links = fromNullableJsonText<Record<string, string>>(nullableString(row, 'links_json'));
+  const envelope = {
+    id: requiredString(row, 'id'),
+    schemaVersion: 'rainrail.event.v1',
+    source,
+    name: requiredString(row, 'name'),
+    delivery,
+    occurredAt: requiredString(row, 'occurred_at'),
+    subject,
+    payload,
+    rawPayload,
+    ...(links === undefined ? {} : { links }),
+  } satisfies RainrailEventEnvelope;
+  return {
+    id: envelope.id,
+    name: envelope.name,
+    source,
+    delivery,
+    subject,
+    occurredAt: envelope.occurredAt,
+    receivedAt: requiredString(row, 'received_at'),
+    envelope,
+  };
+}
+
+function activityEventFromRow(row: unknown): StoredActivityEvent {
+  const sourceEventId = nullableString(row, 'source_event_id');
+  const sourceEventName = nullableString(row, 'source_event_name');
+  const targetId = nullableString(row, 'target_id');
+  const targetUrl = nullableString(row, 'target_url');
+  const metadataJson = nullableString(row, 'metadata_json');
+  return {
+    id: requiredString(row, 'id'),
+    ...(sourceEventId === undefined ? {} : { sourceEventId }),
+    ...(sourceEventName === undefined ? {} : { sourceEventName }),
+    category: requiredString(row, 'category'),
+    targetType: requiredString(row, 'target_type'),
+    ...(targetId === undefined ? {} : { targetId }),
+    ...(targetUrl === undefined ? {} : { targetUrl }),
+    actionType: requiredString(row, 'action_type'),
+    outcome: requiredString(row, 'outcome') as StoredActivityEvent['outcome'],
+    summary: requiredString(row, 'summary'),
+    ...(metadataJson === undefined
+      ? {}
+      : { metadata: fromJsonText<Record<string, unknown>>(metadataJson) }),
+    createdAt: requiredString(row, 'created_at'),
+  };
+}
+
+function commandResultFromRow(row: unknown): StoredCommandResult {
+  const client = nullableString(row, 'client');
+  const resultJson = nullableString(row, 'result_json');
+  const error = nullableString(row, 'error');
+  const metadataJson = nullableString(row, 'metadata_json');
+  return {
+    id: requiredString(row, 'id'),
+    actionType: requiredString(row, 'action_type'),
+    targetType: requiredString(row, 'target_type'),
+    targetId: requiredString(row, 'target_id'),
+    status: requiredString(row, 'status') as StoredCommandResult['status'],
+    actor: requiredString(row, 'actor'),
+    ...(client === undefined ? {} : { client }),
+    requestId: requiredString(row, 'request_id'),
+    dryRun: Boolean(requiredNumber(row, 'dry_run')),
+    ...(resultJson === undefined ? {} : { result: fromJsonText<unknown>(resultJson) }),
+    ...(error === undefined ? {} : { error }),
+    ...(metadataJson === undefined
+      ? {}
+      : { metadata: fromJsonText<Record<string, unknown>>(metadataJson) }),
+    createdAt: requiredString(row, 'created_at'),
+  };
+}
+
+function agentTaskFromRow(row: unknown): StoredAgentTask {
+  const agentSessionId = nullableString(row, 'agent_session_id');
+  const issueJson = nullableString(row, 'issue_json');
+  const claimJson = nullableString(row, 'claim_json');
+  const logPath = nullableString(row, 'log_path');
+  const stderrLogPath = nullableString(row, 'stderr_log_path');
+  const pid = nullableNumber(row, 'pid');
+  const resumeAttemptsJson = nullableString(row, 'resume_attempts_json');
+  const projectClaimJson = nullableString(row, 'project_claim_json');
+  const result = nullableString(row, 'result');
+  const completedAt = nullableString(row, 'completed_at');
+  return agentTaskWithRuntime({
+    id: requiredString(row, 'id'),
+    title: requiredString(row, 'title'),
+    ...(agentSessionId === undefined ? {} : { agentSessionId }),
+    branchName: requiredString(row, 'branch_name'),
+    status: requiredString(row, 'status') as StoredAgentTask['status'],
+    ...(issueJson === undefined ? {} : { issue: fromJsonText<unknown>(issueJson) }),
+    ...(claimJson === undefined ? {} : { claim: fromJsonText<unknown>(claimJson) }),
+    ...(logPath === undefined ? {} : { logPath }),
+    ...(stderrLogPath === undefined ? {} : { stderrLogPath }),
+    ...(pid === undefined ? {} : { pid }),
+    ...(resumeAttemptsJson === undefined
+      ? {}
+      : { resumeAttempts: fromJsonText<RuntimeAgentResumeAttempt[]>(resumeAttemptsJson) }),
+    ...(projectClaimJson === undefined
+      ? {}
+      : { projectClaim: fromJsonText<StoredAgentTaskProjectClaimState>(projectClaimJson) }),
+    ...(result === undefined ? {} : { result }),
+    startedAt: requiredString(row, 'started_at'),
+    ...(completedAt === undefined ? {} : { completedAt }),
+    updatedAt: requiredString(row, 'updated_at'),
+  });
+}
+
+function eventHandlerRetryFromRow(row: unknown): StoredEventHandlerRetry {
+  const claimedUntilAt = nullableString(row, 'claimed_until_at');
+  return {
+    eventId: requiredString(row, 'event_id'),
+    handlerName: requiredString(row, 'handler_name'),
+    attempts: requiredNumber(row, 'attempts'),
+    nextRetryAt: requiredString(row, 'next_retry_at'),
+    lastError: requiredString(row, 'last_error'),
+    updatedAt: requiredString(row, 'updated_at'),
+    ...(claimedUntilAt === undefined ? {} : { claimedUntilAt }),
+  };
+}
+
+function eventEnvelopeWithoutRawPayload<TPayload>(event: RainrailEventEnvelope<TPayload>): RainrailEventEnvelope<TPayload> {
+  const rawPayload = event.rawPayload.kind === 'external-reference'
+    ? jsonClone(event.rawPayload)
+    : redactedRawPayloadReference();
+  return {
+    ...jsonClone(event),
+    rawPayload,
+  };
+}
+
+function redactedRawPayloadReference(): RainrailEventEnvelope['rawPayload'] {
+  return {
+    kind: 'inline-redacted',
+    reference: 'rainrail://redacted/raw-payload',
+  };
+}
+
+function toJsonText(value: unknown): string {
+  return JSON.stringify(value);
+}
+
+function toNullableJsonText(value: unknown): string | null {
+  return value === undefined ? null : JSON.stringify(value);
+}
+
+function fromJsonText<T>(value: string): T {
+  return JSON.parse(value) as T;
+}
+
+function fromNullableJsonText<T>(value: string | undefined): T | undefined {
+  return value === undefined ? undefined : fromJsonText<T>(value);
+}
+
+function rowValue(row: unknown, key: string): unknown {
+  if (typeof row !== 'object' || row === null || !(key in row)) {
+    throw new Error(`SQLite row is missing ${key}`);
+  }
+  return (row as Record<string, unknown>)[key];
+}
+
+function requiredString(row: unknown, key: string): string {
+  const value = rowValue(row, key);
+  if (typeof value !== 'string') throw new Error(`SQLite row ${key} must be a string`);
+  return value;
+}
+
+function nullableString(row: unknown, key: string): string | undefined {
+  const value = rowValue(row, key);
+  if (value === null) return undefined;
+  if (typeof value !== 'string') throw new Error(`SQLite row ${key} must be a string or null`);
+  return value;
+}
+
+function requiredNumber(row: unknown, key: string): number {
+  const value = rowValue(row, key);
+  if (typeof value !== 'number') throw new Error(`SQLite row ${key} must be a number`);
+  return value;
+}
+
+function nullableNumber(row: unknown, key: string): number | undefined {
+  const value = rowValue(row, key);
+  if (value === null) return undefined;
+  if (typeof value !== 'number') throw new Error(`SQLite row ${key} must be a number or null`);
+  return value;
+}
 
 function loadStoreData(databasePath: string): OperationalStoreData {
   if (databasePath === ':memory:') return emptyStoreData();
