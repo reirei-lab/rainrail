@@ -4,6 +4,9 @@ Operational API v1 は Web dashboard と将来の mobile app が同じ contract 
 provider-neutral API surface とする。既存の `GET /api/state` は store snapshot をそのまま
 返す transitional API であり、v1 は UI が `RainrailOperationalStore` の内部形に直接
 依存しないように compact row、detail record、action scope を明示する。
+local Node runtime の既定 store は SQLite-backed `RainrailOperationalStore` だが、v1 response は
+`OperationalStore` contract から作る projection であり、SQLite table layout や JSON column の形を
+public API として公開しない。
 
 ## Goals
 
@@ -84,6 +87,8 @@ event detail record の `envelope` は dashboard-safe な sanitized projection �
 `payload` 本体は含めない。raw provider payload は `rawPayload.reference` だけを表示用に返し、
 secret-like metadata、operator token、log の全文は v1 detail でも返さない。必要な場合は別の
 scoped download API を設計する。
+SQLite-backed store でも保存するのは安全化済み raw payload reference だけであり、inline raw payload
+や provider secret を復元できる値は persistence layer に残さない。
 
 ```json
 {
