@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import http, { type IncomingMessage, type OutgoingHttpHeaders, type ServerResponse } from 'node:http';
 import {
   existsSync,
@@ -81,15 +81,69 @@ export type RainrailCliResult = {
 
 export type RainrailDispatchMode = 'message' | 'envelope-json';
 
-export type RainrailDispatchRequest = {
-  readonly mode: RainrailDispatchMode;
-  readonly input: string;
-  readonly options: {
-    readonly config?: string | undefined;
-    readonly profile?: string | undefined;
-    readonly json: boolean;
+export type RainrailDispatchManualMessagePayload = {
+  readonly provider: 'rainrail';
+  readonly channel: 'manual';
+  readonly action: 'message';
+  readonly conversation: {
+    readonly id: string;
+  };
+  readonly message: {
+    readonly text: string;
+  };
+  readonly actor: {
+    readonly id: string;
+    readonly displayName: string;
+    readonly type: 'cli';
   };
 };
+
+export type RainrailDispatchEventEnvelope = {
+  readonly id: string;
+  readonly schemaVersion: 'rainrail.event.v1';
+  readonly source: {
+    readonly type: 'manual';
+    readonly name: 'cli';
+  };
+  readonly name: 'rainrail.manual.message';
+  readonly delivery: {
+    readonly id: string;
+    readonly receivedAt: string;
+  };
+  readonly occurredAt: string;
+  readonly subject: {
+    readonly type: 'conversation';
+    readonly id: string;
+  };
+  readonly payload: RainrailDispatchManualMessagePayload;
+  readonly rawPayload: {
+    readonly kind: 'inline-redacted';
+    readonly reference: string;
+    readonly contentType: 'text/plain';
+    readonly sha256: string;
+  };
+};
+
+export type RainrailDispatchRequest =
+  | {
+      readonly mode: 'message';
+      readonly input: string;
+      readonly event: RainrailDispatchEventEnvelope;
+      readonly options: {
+        readonly config?: string | undefined;
+        readonly profile?: string | undefined;
+        readonly json: boolean;
+      };
+    }
+  | {
+      readonly mode: 'envelope-json';
+      readonly input: string;
+      readonly options: {
+        readonly config?: string | undefined;
+        readonly profile?: string | undefined;
+        readonly json: boolean;
+      };
+    };
 
 export type RainrailDispatchRunner = (
   request: RainrailDispatchRequest,
@@ -2347,14 +2401,19 @@ type ParsedDispatchArguments = {
   readonly help: boolean;
 };
 
-const dispatchUsage = 'Usage: rainrail dispatch (--message <text> | --envelope-json <json>)';
+const dispatchUsage = 'Usage: rainrail dispatch <message> | --stdin | --message <text> | --envelope-json <json>';
+const dispatchCliConversationId = 'cli-manual';
+const dispatchCliSourceName = 'cli';
+const maxDispatchManualMessageTextLength = 8_000;
+const maxDispatchStdinMessageBytes = 65_536;
+let dispatchDeliverySequence = 0;
 
 function runDispatchCommand(
   args: readonly string[],
   options: SharedOptions,
   environment: RainrailCliEnvironment,
 ): RainrailCliResult {
-  const parsed = parseDispatchArguments(args, options);
+  const parsed = parseDispatchArguments(args, options, environment);
   if (parsed.help) {
     return {
       exitCode: 0,
@@ -2392,6 +2451,7 @@ function runDispatchRequest(
 function parseDispatchArguments(
   args: readonly string[],
   options: SharedOptions,
+  environment: RainrailCliEnvironment,
 ): ParsedDispatchArguments {
   if (args.length === 1 && (args[0] === 'help' || args[0] === '--help')) {
     return { errors: [], help: true };
@@ -2400,6 +2460,8 @@ function parseDispatchArguments(
   const errors: string[] = [];
   let mode: RainrailDispatchMode | undefined;
   let input: string | undefined;
+  let shouldReadStdin = false;
+  const positionalParts: string[] = [];
 
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
@@ -2418,13 +2480,23 @@ function parseDispatchArguments(
       continue;
     }
 
+    if (arg === '--stdin') {
+      if (mode !== undefined || positionalParts.length > 0) {
+        errors.push('Choose only one dispatch input mode.');
+        continue;
+      }
+      mode = 'message';
+      shouldReadStdin = true;
+      continue;
+    }
+
     if (arg === '--message' || arg === '--envelope-json') {
       const value = args[index + 1];
       if (value === undefined) {
         errors.push(`Missing value for ${arg}.`);
         continue;
       }
-      if (mode !== undefined) {
+      if (mode !== undefined || positionalParts.length > 0) {
         errors.push('Choose only one dispatch input mode.');
         index += 1;
         continue;
@@ -2440,27 +2512,38 @@ function parseDispatchArguments(
       continue;
     }
 
-    errors.push(`Unexpected rainrail dispatch argument: ${arg}.`);
+    if (mode !== undefined && (mode !== 'message' || input !== undefined || shouldReadStdin)) {
+      errors.push(`Unexpected rainrail dispatch argument: ${arg}.`);
+      continue;
+    }
+    mode = 'message';
+    positionalParts.push(arg);
+  }
+
+  if (errors.length === 0 && shouldReadStdin) {
+    const stdinInput = readDispatchStdin(environment);
+    if ('error' in stdinInput) {
+      return { errors: [stdinInput.error], help: false };
+    }
+    input = stdinInput.input;
+  } else if (input === undefined && positionalParts.length > 0) {
+    input = positionalParts.join(' ');
+  }
+
+  if (errors.length === 0 && mode === 'message' && input !== undefined && input.trim().length === 0) {
+    return { errors: ['Message must not be empty.'], help: false };
   }
 
   if (errors.length === 0 && (mode === undefined || input === undefined)) {
     return { errors: [dispatchUsage], help: false };
   }
 
+  const request = createDispatchRequest(mode, input, options, environment);
+
   return {
     errors,
     help: false,
-    request: mode === undefined || input === undefined
-      ? undefined
-      : {
-          mode,
-          input,
-          options: {
-            config: options.config,
-            profile: options.profile,
-            json: options.json,
-          },
-        },
+    request,
   };
 }
 
@@ -2483,10 +2566,259 @@ function formatDispatchHelp(): string {
     dispatchUsage,
     '',
     'Input modes:',
+    '  <message>               Dispatch a message-only input as a manual Rainrail event.',
+    '  --stdin                 Read the message from standard input.',
     '  --message <text>        Dispatch a message-only input payload.',
     '  --envelope-json <json>  Dispatch a complete Rainrail event envelope JSON string.',
     '',
   ].join('\n');
+}
+
+function createDispatchRequest(
+  mode: RainrailDispatchMode | undefined,
+  input: string | undefined,
+  options: SharedOptions,
+  environment: RainrailCliEnvironment,
+): RainrailDispatchRequest | undefined {
+  if (mode === undefined || input === undefined) {
+    return undefined;
+  }
+
+  const requestOptions = {
+    config: options.config,
+    profile: options.profile,
+    json: options.json,
+  };
+
+  if (mode === 'envelope-json') {
+    return {
+      mode,
+      input,
+      options: requestOptions,
+    };
+  }
+
+  return {
+    mode,
+    input,
+    event: createDispatchManualMessageEvent(input, environment.now?.() ?? new Date()),
+    options: requestOptions,
+  };
+}
+
+function createDispatchManualMessageEvent(
+  message: string,
+  receivedAt: Date,
+): RainrailDispatchEventEnvelope {
+  const occurredAt = receivedAt.toISOString();
+  const redactedMessage = redactDispatchManualMessageText(message);
+  const messageSha256 = sha256Hex(message);
+  dispatchDeliverySequence += 1;
+  const sequence = dispatchDeliverySequence.toString(36);
+  const entropy = randomBytes(8).toString('hex');
+  const deliveryId = `cli-${sha256Hex(`${occurredAt}\n${message}`).slice(0, 16)}-${sequence}-${entropy}`;
+
+  return {
+    id: `${dispatchCliSourceName}:${deliveryId}:rainrail.manual.message`,
+    schemaVersion: 'rainrail.event.v1',
+    source: {
+      type: 'manual',
+      name: dispatchCliSourceName,
+    },
+    name: 'rainrail.manual.message',
+    delivery: {
+      id: deliveryId,
+      receivedAt: occurredAt,
+    },
+    occurredAt,
+    subject: {
+      type: 'conversation',
+      id: dispatchCliConversationId,
+    },
+    payload: {
+      provider: 'rainrail',
+      channel: 'manual',
+      action: 'message',
+      conversation: {
+        id: dispatchCliConversationId,
+      },
+      message: {
+        text: redactedMessage,
+      },
+      actor: {
+        id: 'rainrail-cli',
+        displayName: 'Rainrail CLI',
+        type: 'cli',
+      },
+    },
+    rawPayload: {
+      kind: 'inline-redacted',
+      reference: `manual://deliveries/${deliveryId}`,
+      contentType: 'text/plain',
+      sha256: messageSha256,
+    },
+  };
+}
+
+function readDispatchStdin(environment: RainrailCliEnvironment):
+  | { readonly input: string }
+  | { readonly error: string } {
+  if (environment.stdin !== undefined) {
+    return dispatchStdinInputResult(environment.stdin);
+  }
+
+  if (environment.stdinReader !== undefined) {
+    return dispatchStdinInputResult(environment.stdinReader());
+  }
+
+  if (process.stdin.isTTY) {
+    return { input: '' };
+  }
+
+  return readStdinAllSync();
+}
+
+function dispatchStdinInputResult(input: string):
+  | { readonly input: string }
+  | { readonly error: string } {
+  return Buffer.byteLength(input, 'utf8') > maxDispatchStdinMessageBytes
+    ? { error: formatDispatchStdinTooLargeError() }
+    : { input };
+}
+
+function readStdinAllSync():
+  | { readonly input: string }
+  | { readonly error: string } {
+  const chunks: Buffer[] = [];
+  const buffer = Buffer.alloc(4096);
+  let bytesTotal = 0;
+
+  while (true) {
+    const bytesRead = readSync(0, buffer, 0, buffer.length, null);
+    if (bytesRead === 0) {
+      break;
+    }
+    bytesTotal += bytesRead;
+    if (bytesTotal > maxDispatchStdinMessageBytes) {
+      return { error: formatDispatchStdinTooLargeError() };
+    }
+    chunks.push(Buffer.from(buffer.subarray(0, bytesRead)));
+  }
+
+  return { input: Buffer.concat(chunks).toString('utf8') };
+}
+
+function formatDispatchStdinTooLargeError(): string {
+  return `Message from stdin must not exceed ${maxDispatchStdinMessageBytes} bytes.`;
+}
+
+function sha256Hex(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+function redactDispatchManualMessageText(value: string): string {
+  return redactDispatchManualSecretStructuredValues(value)
+    .replace(/\b[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s"'<>`/@]*@[^\s"'<>`,;)]+/giu, () => '[redacted-url]')
+    .replace(/\b[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s"'<>`,;)]+/giu, (url) => sanitizeDispatchManualTextUrl(url))
+    .replace(/(^|\r?\n)([ \t]*)(authorization|proxy-authorization|cookie|set-cookie)\s*:\s*[^\r\n]*/giu, '$1$2$3: [redacted]')
+    .replace(/(^|[.?&{\s"'<>`,;\[(])(["']?)([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification|session)[A-Za-z0-9_.-]*)\2\s*=\s*(["'])(?:\\.|(?!\4)[^\\])*\4/giu, '$1$2$3$2=[redacted]')
+    .replace(/(^|[.?&{\s"'<>`,;\[(])(["']?)([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification|session)[A-Za-z0-9_.-]*)\2\s*=\s*([^&\s"'<>`,;)]+)/giu, '$1$2$3$2=[redacted]')
+    .replace(/(["'])([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification|session)[A-Za-z0-9_.-]*)\1(\s*:\s*)(["'])(?:\\.|(?!\4)[^\\])*\4/giu, '$1$2$1$3$4[redacted]$4')
+    .replace(/(^|[{\s"'<>`,;\[(])(["']?)([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification|session)[A-Za-z0-9_.-]*)\2(\s*:\s*)(["'])(?:\\.|(?!\5)[^\\])*\5/giu, '$1$2$3$2$4$5[redacted]$5')
+    .replace(/(^|[{\s"'<>`,;\[(])(["']?)([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification|session)[A-Za-z0-9_.-]*)\2(\s*:\s*)(?!["']|\[redacted\])([^,\s\r\n}\]]+)/giu, '$1$2$3$2$4[redacted]')
+    .replace(/\b(Bearer)\s+[A-Za-z0-9._~+/=-]+/giu, '$1 [redacted]')
+    .replace(/\b(?:github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9_]{20,})\b/gu, '[redacted-token]')
+    .trim()
+    .slice(0, maxDispatchManualMessageTextLength);
+}
+
+function redactDispatchManualSecretStructuredValues(value: string): string {
+  const keyPattern = /(^|[{\s"'<>`,;\[(])(["']?)([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification|session)[A-Za-z0-9_.-]*)\2(\s*[:=]\s*)([\[{])/giu;
+  let redacted = '';
+  let cursor = 0;
+  for (const match of value.matchAll(keyPattern)) {
+    const matchText = match[0];
+    const matchIndex = match.index;
+    if (matchIndex < cursor) continue;
+    const valueStart = matchIndex + matchText.length - 1;
+    const valueEnd = findDispatchManualBalancedStructuredValueEnd(value, valueStart);
+    redacted += value.slice(cursor, matchIndex);
+    redacted += `${match[1] ?? ''}${match[2] ?? ''}${match[3] ?? ''}${match[2] ?? ''}${match[4] ?? ''}[redacted]`;
+    if (valueEnd === undefined) {
+      const newlineIndex = value.indexOf('\n', valueStart);
+      cursor = newlineIndex === -1 ? value.length : newlineIndex;
+    } else {
+      cursor = valueEnd + 1;
+    }
+  }
+  return redacted + value.slice(cursor);
+}
+
+function findDispatchManualBalancedStructuredValueEnd(value: string, valueStart: number): number | undefined {
+  const stack: string[] = [];
+  let quote: string | undefined;
+  let escaped = false;
+  for (let index = valueStart; index < value.length; index += 1) {
+    const char = value[index];
+    if (quote !== undefined) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === '\\') {
+        escaped = true;
+      } else if (char === quote) {
+        quote = undefined;
+      }
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+    } else if (char === '[') {
+      stack.push(']');
+    } else if (char === '{') {
+      stack.push('}');
+    } else if (char === ']') {
+      if (stack.at(-1) !== ']') return undefined;
+      stack.pop();
+      if (stack.length === 0) return index;
+    } else if (char === '}') {
+      if (stack.at(-1) !== '}') return undefined;
+      stack.pop();
+      if (stack.length === 0) return index;
+    }
+  }
+  return undefined;
+}
+
+function sanitizeDispatchManualTextUrl(value: string): string {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'https:') return '[redacted-url]';
+    url.username = '';
+    url.password = '';
+    url.pathname = sanitizeDispatchManualUrlPathname(url.pathname);
+    url.search = '';
+    url.hash = '';
+    return url.toString().slice(0, maxDispatchManualMessageTextLength);
+  } catch {
+    return '[redacted-url]';
+  }
+}
+
+function sanitizeDispatchManualUrlPathname(pathname: string): string {
+  const segments = pathname.split('/');
+  return segments.map((segment, index) => {
+    if (segment.length === 0) return segment;
+    const previous = segments[index - 1]?.toLowerCase() ?? '';
+    if (/^(token|secret|password|code|reset|magic-link|invite|session|auth|verify|verification)$/iu.test(previous)) {
+      return '[redacted]';
+    }
+    if (/^(token|secret|password|code|reset)$/iu.test(segment)) {
+      return '[redacted]';
+    }
+    return /^[A-Za-z0-9_-]{16,}$/u.test(segment) && /[A-Za-z]/u.test(segment) && /\d/u.test(segment)
+      ? '[redacted]'
+      : segment;
+  }).join('/') || '/';
 }
 
 function runInitCommand(
