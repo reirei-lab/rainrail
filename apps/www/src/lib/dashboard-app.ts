@@ -215,7 +215,10 @@ if (root !== null) {
     renderCardSettingsForm();
   });
 
-  cardSettingsForm?.addEventListener('input', () => {
+  cardSettingsForm?.addEventListener('input', (event) => {
+    if (event.target instanceof HTMLInputElement && event.target.dataset.cardSetting !== undefined) {
+      event.target.dataset.cardSettingChanged = 'true';
+    }
     cardSettingsDirty = true;
   });
 
@@ -767,19 +770,20 @@ if (root !== null) {
       return;
     }
 
+    let renderedFieldCount = 0;
     for (const [name, schemaValue] of propertyEntries) {
       const schema = objectRecord(schemaValue);
+      const currentValue = selectedLayoutItem.config?.[name];
+      const inputType = cardSettingInputType(schema, currentValue);
+      if (inputType === undefined) continue;
+
       const label = document.createElement('label');
       label.textContent = name;
       const input = document.createElement('input');
       input.dataset.cardSetting = name;
+      input.dataset.cardSettingChanged = 'false';
       input.autocomplete = 'off';
-      input.type = schema.type === 'number' || schema.type === 'integer'
-        ? 'number'
-        : schema.type === 'boolean'
-          ? 'checkbox'
-          : 'text';
-      const currentValue = selectedLayoutItem.config?.[name];
+      input.type = inputType;
       if (input.type === 'checkbox') {
         input.checked = currentValue === true;
       } else if (currentValue !== undefined) {
@@ -787,6 +791,10 @@ if (root !== null) {
       }
       label.append(input);
       cardSettingsForm.append(label);
+      renderedFieldCount += 1;
+    }
+    if (renderedFieldCount === 0) {
+      cardSettingsForm.textContent = copy.cardSettings.noFields;
     }
     cardSettingsDirty = false;
   }
@@ -807,6 +815,7 @@ if (root !== null) {
     try {
       await client.saveDashboardLayoutItemConfig(selectedLayoutItem.id, config);
       cardSettingsDirty = false;
+      markCardSettingsFormClean(cardSettingsForm);
       setCardSettingsStatus(copy.cardSettings.saved);
       void refresh({ quiet: true });
     } catch (error) {
@@ -819,6 +828,7 @@ if (root !== null) {
     for (const input of Array.from(form.querySelectorAll<HTMLInputElement>('[data-card-setting]'))) {
       const name = input.dataset.cardSetting;
       if (name === undefined || name === '') continue;
+      if (input.dataset.cardSettingChanged !== 'true') continue;
       if (input.type === 'checkbox') {
         config[name] = input.checked;
       } else if (input.type === 'number') {
@@ -840,9 +850,36 @@ if (root !== null) {
     };
   }
 
+  function markCardSettingsFormClean(form: HTMLElement): void {
+    for (const input of Array.from(form.querySelectorAll<HTMLInputElement>('[data-card-setting]'))) {
+      input.dataset.cardSettingChanged = 'false';
+    }
+  }
+
   function setCardSettingsStatus(message: string): void {
     if (cardSettingsStatus !== null) cardSettingsStatus.textContent = message;
   }
+}
+
+type CardSettingInputType = 'checkbox' | 'number' | 'text';
+
+function cardSettingInputType(schema: Record<string, unknown>, currentValue: unknown): CardSettingInputType | undefined {
+  const schemaType = schema.type;
+  if (schemaType === 'boolean') {
+    return currentValue === undefined || typeof currentValue === 'boolean' ? 'checkbox' : undefined;
+  }
+  if (schemaType === 'number' || schemaType === 'integer') {
+    return currentValue === undefined || typeof currentValue === 'number' ? 'number' : undefined;
+  }
+  if (schemaType === 'string') {
+    return currentValue === undefined || typeof currentValue === 'string' ? 'text' : undefined;
+  }
+  if (schemaType !== undefined) return undefined;
+
+  if (typeof currentValue === 'boolean') return 'checkbox';
+  if (typeof currentValue === 'number') return 'number';
+  if (typeof currentValue === 'string') return 'text';
+  return undefined;
 }
 
 interface SafeStorage {

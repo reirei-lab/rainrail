@@ -5265,7 +5265,7 @@ function formatRainrailLock(projectName: string): string {
 }
 
 const localCorsHeaders = {
-  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Methods': 'GET, POST, PATCH, OPTIONS',
   'Access-Control-Allow-Headers': 'Authorization, Content-Type, Last-Event-ID, X-GitHub-Delivery, X-GitHub-Event, X-Hub-Signature-256, X-Rainrail-Client, X-Rainrail-Publish-Token, X-Request-ID',
   'Access-Control-Expose-Headers': 'X-Request-ID',
   'Access-Control-Max-Age': '86400',
@@ -5288,6 +5288,8 @@ const localCoreRoutePaths = new Set([
   '/api/v1/sources',
   '/api/v1/queue',
   '/api/v1/settings',
+  '/api/v1/dashboard/cards',
+  '/api/v1/dashboard/layout',
 ]);
 const localCoreRoutePrefixes = [
   '/_astro/',
@@ -5298,7 +5300,66 @@ const localCoreRoutePrefixes = [
   '/api/v1/sources/',
   '/api/v1/queue/',
   '/api/v1/settings/',
+  '/api/v1/dashboard/layout/items/',
 ] as const;
+
+type LocalDashboardLayoutItem = {
+  readonly id: string;
+  readonly cardId: string;
+  readonly x: number;
+  readonly y: number;
+  readonly columns: number;
+  readonly rows: number;
+  readonly config?: Record<string, unknown>;
+};
+
+type LocalDashboardCardDefinition = {
+  readonly id: string;
+  readonly title: string;
+  readonly description: string;
+  readonly entry: { readonly type: 'core'; readonly name: string };
+  readonly category: string;
+  readonly requiredCapabilities: readonly ['dashboard:read'];
+  readonly size: {
+    readonly default: { readonly columns: number; readonly rows: number };
+    readonly min: { readonly columns: number; readonly rows: number };
+    readonly max: { readonly columns: number; readonly rows: number };
+  };
+  readonly settingsSchema: {
+    readonly type: 'object';
+    readonly properties: Record<string, unknown>;
+    readonly additionalProperties: false;
+  };
+};
+
+const localDashboardSettingsSchema = {
+  type: 'object',
+  properties: {
+    density: { type: 'string' },
+  },
+  additionalProperties: false,
+} as const;
+
+const localDashboardCardDefinitions: readonly LocalDashboardCardDefinition[] = [
+  {
+    id: 'core.operationalTotals',
+    title: 'Operational totals',
+    description: 'Current event, workflow, agent task, retry, source, and queue totals.',
+    entry: { type: 'core', name: 'operationalTotals' },
+    category: 'operations',
+    requiredCapabilities: ['dashboard:read'],
+    size: {
+      default: { columns: 8, rows: 2 },
+      min: { columns: 4, rows: 1 },
+      max: { columns: 12, rows: 3 },
+    },
+    settingsSchema: localDashboardSettingsSchema,
+  },
+];
+
+const localDefaultDashboardLayout: readonly LocalDashboardLayoutItem[] = [
+  { id: 'operational-totals', cardId: 'core.operationalTotals', x: 0, y: 0, columns: 8, rows: 2 },
+];
 
 type LocalRainrailEvent = {
   readonly id: string;
@@ -5429,6 +5490,7 @@ type LocalRainrailServerState = {
   events: LocalRainrailEvent[];
   sseClients: Set<ServerResponse>;
   eventStore?: LocalRainrailEventStore;
+  dashboardLayout: LocalDashboardLayoutItem[];
 };
 
 type LocalRainrailEventStore = {
@@ -5470,6 +5532,7 @@ async function startLocalRainrailServer(options: RainrailStartOptions): Promise<
     nextEventId: eventStore?.nextEventId?.() ?? nextLocalEventId(restoredEvents),
     events: [...restoredEvents],
     sseClients: new Set(),
+    dashboardLayout: localCloneDashboardLayout(localDefaultDashboardLayout),
     ...(eventStore === undefined ? {} : { eventStore }),
   };
   const server = http.createServer((request, response) => {
@@ -6497,6 +6560,27 @@ async function handleLocalRainrailRequest(
     return;
   }
 
+  if (request.method === 'GET' && url.pathname === '/api/v1/dashboard/cards') {
+    writeJsonResponse(response, 200, { data: localDashboardCards() }, request);
+    return;
+  }
+
+  if (request.method === 'GET' && url.pathname === '/api/v1/dashboard/layout') {
+    writeJsonResponse(response, 200, { data: localDashboardLayout(state) }, request);
+    return;
+  }
+
+  const localDashboardLayoutConfigMatch = /^\/api\/v1\/dashboard\/layout\/items\/([^/]+)\/config$/u.exec(url.pathname);
+  if (request.method === 'PATCH' && localDashboardLayoutConfigMatch !== null) {
+    const itemId = safeDecodeURIComponent(localDashboardLayoutConfigMatch[1] ?? '');
+    if (itemId === undefined) {
+      writeJsonResponse(response, 400, { error: 'invalid_dashboard_layout_item_id' }, request);
+      return;
+    }
+    await handleLocalDashboardLayoutItemConfigRequest(request, response, state, itemId);
+    return;
+  }
+
   const localCommand = localDashboardCommandForPath(url.pathname);
   if (request.method === 'POST' && localCommand !== undefined) {
     await handleLocalDashboardCommandRequest(request, response, localCommand, options.demoMode === true && url.searchParams.get('demo') === '1');
@@ -6504,6 +6588,45 @@ async function handleLocalRainrailRequest(
   }
 
   writeJsonResponse(response, 404, { error: 'not_found' }, request);
+}
+
+async function handleLocalDashboardLayoutItemConfigRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  state: LocalRainrailServerState,
+  itemId: string,
+): Promise<void> {
+  const requestId = localRequestId(request);
+  const body = await readLocalJsonObjectBody(request);
+  if (!body.ok) {
+    writeJsonResponse(response, body.status, { error: body.error }, request, {
+      'X-Request-ID': requestId,
+    });
+    return;
+  }
+
+  const config = body.value.config;
+  if (!isRecord(config) || !isJsonSerializableLocalValue(config)) {
+    writeJsonResponse(response, 400, { error: 'invalid_dashboard_card_config', itemId }, request, {
+      'X-Request-ID': requestId,
+    });
+    return;
+  }
+
+  const itemIndex = state.dashboardLayout.findIndex((item) => item.id === itemId);
+  if (itemIndex < 0) {
+    writeJsonResponse(response, 404, { error: 'unknown_dashboard_layout_item', itemId }, request, {
+      'X-Request-ID': requestId,
+    });
+    return;
+  }
+
+  state.dashboardLayout = state.dashboardLayout.map((item, index) => index === itemIndex
+    ? { ...item, config: localCloneRecord(config) }
+    : item);
+  writeJsonResponse(response, 200, { data: localDashboardLayout(state) }, request, {
+    'X-Request-ID': requestId,
+  });
 }
 
 async function handleLocalDashboardCommandRequest(
@@ -7148,6 +7271,51 @@ function localSettingsRows(options: RainrailStartOptions): readonly LocalSetting
   ];
 }
 
+function localDashboardCards(): readonly unknown[] {
+  return localDashboardCardDefinitions.map((definition) => ({
+    definition,
+    availability: { status: 'available' },
+  }));
+}
+
+function localDashboardLayout(state: LocalRainrailServerState): {
+  readonly id: 'core.defaultLayout';
+  readonly source: 'default';
+  readonly updatedAt: string;
+  readonly items: readonly LocalDashboardLayoutItem[];
+} {
+  return {
+    id: 'core.defaultLayout',
+    source: 'default',
+    updatedAt: new Date(0).toISOString(),
+    items: localCloneDashboardLayout(state.dashboardLayout),
+  };
+}
+
+function localCloneDashboardLayout(items: readonly LocalDashboardLayoutItem[]): LocalDashboardLayoutItem[] {
+  return items.map((item) => ({
+    ...item,
+    ...(item.config === undefined ? {} : { config: localCloneRecord(item.config) }),
+  }));
+}
+
+function localCloneRecord(value: Record<string, unknown>): Record<string, unknown> {
+  return JSON.parse(JSON.stringify(value)) as Record<string, unknown>;
+}
+
+function isJsonSerializableLocalValue(value: unknown): boolean {
+  try {
+    JSON.stringify(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isLocalDashboardLayoutItemConfigPath(pathname: string): boolean {
+  return /^\/api\/v1\/dashboard\/layout\/items\/[^/]+\/config$/u.test(pathname);
+}
+
 function matchesOptionalLocalFilter(value: string | undefined, filter: string | null): boolean {
   return filter === null || filter.length === 0 || value === filter;
 }
@@ -7389,6 +7557,7 @@ function isLocalRequestHost(request: IncomingMessage): boolean {
 }
 
 function requiredLocalDashboardScopeForPath(pathname: string): LocalDashboardScope {
+  if (isLocalDashboardLayoutItemConfigPath(pathname)) return 'operator';
   return localDashboardCommandForPath(pathname) === undefined ? 'read-only' : 'operator';
 }
 
@@ -7705,13 +7874,16 @@ function preflightMethodsForLocalPath(pathname: string, options: RainrailStartOp
   if (/^\/api\/v1\/events\/[^/]+$/u.test(pathname)) return ['GET', 'OPTIONS'];
   if (/^\/api\/v1\/workflow-runs\/[^/]+$/u.test(pathname)) return ['GET', 'OPTIONS'];
   if (/^\/api\/v1\/agent-tasks\/[^/]+$/u.test(pathname)) return ['GET', 'OPTIONS'];
+  if (isLocalDashboardLayoutItemConfigPath(pathname)) return ['PATCH', 'OPTIONS'];
   if (localDashboardCommandForPath(pathname) !== undefined) return ['POST', 'OPTIONS'];
   if (
     pathname === '/api/v1/workflow-runs' ||
     pathname === '/api/v1/agent-tasks' ||
     pathname === '/api/v1/sources' ||
     pathname === '/api/v1/queue' ||
-    pathname === '/api/v1/settings'
+    pathname === '/api/v1/settings' ||
+    pathname === '/api/v1/dashboard/cards' ||
+    pathname === '/api/v1/dashboard/layout'
   ) {
     return ['GET', 'OPTIONS'];
   }
