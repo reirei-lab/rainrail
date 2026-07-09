@@ -202,7 +202,7 @@ describe('Rainrail CLI built-in commands', () => {
       stderr: 'Usage: rainrail dispatch <message> | --stdin | --message <text> | --json <file> | --json --stdin | --envelope-json <json>\n',
     });
 
-    expect(runRainrailCli(['dispatch', '--message', 'hello', '--json', 'event.json'])).toMatchObject({
+    expect(runRainrailCli(['dispatch', '--message', 'hello', '--envelope-json', '{}'])).toMatchObject({
       exitCode: 1,
       stdout: '',
       stderr: 'Choose only one dispatch input mode.\n',
@@ -516,6 +516,34 @@ describe('Rainrail CLI built-in commands', () => {
           config: undefined,
           profile: undefined,
           json: false,
+        },
+      },
+    ]);
+  });
+
+  it('preserves the shared JSON output option after a dispatch message input mode', () => {
+    const dispatched: unknown[] = [];
+
+    const result = runRainrailCli(['dispatch', '--message', 'hello', '--json'], {
+      dispatchRunner: (request) => {
+        dispatched.push(request);
+        return {
+          exitCode: 0,
+          stdout: '{"accepted":true}\n',
+          stderr: '',
+        };
+      },
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(dispatched).toMatchObject([
+      {
+        mode: 'message',
+        input: 'hello',
+        options: {
+          config: undefined,
+          profile: undefined,
+          json: true,
         },
       },
     ]);
@@ -878,6 +906,48 @@ describe('Rainrail CLI built-in commands', () => {
         return {
           exitCode: 0,
           stdout: 'accepted repository id envelope\n',
+          stderr: '',
+        };
+      },
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(dispatched).toEqual([
+      expect.objectContaining({
+        mode: 'envelope-json',
+        input: JSON.stringify(envelope),
+      }),
+    ]);
+  });
+
+  it('accepts GitHub pull request review URL fragments in dispatch envelope URLs', () => {
+    const dispatched: unknown[] = [];
+    const envelope = {
+      id: 'github-webhook:delivery-review:github.pull_request_review',
+      schemaVersion: 'rainrail.event.v1',
+      source: {
+        type: 'github',
+        name: 'github-webhook',
+        repository: 'reirei-lab/rainrail',
+      },
+      name: 'github.pull_request_review',
+      delivery: { id: 'delivery-review', receivedAt: '2026-07-09T00:00:00.000Z' },
+      occurredAt: '2026-07-09T00:00:00.000Z',
+      subject: {
+        type: 'review',
+        id: '123',
+        url: 'https://github.com/reirei-lab/rainrail/pull/39#pullrequestreview-123',
+      },
+      payload: { provider: 'github', action: 'submitted' },
+      rawPayload: { kind: 'external-reference', reference: 'github://deliveries/delivery-review' },
+    };
+
+    const result = runRainrailCli(['dispatch', '--envelope-json', JSON.stringify(envelope)], {
+      dispatchRunner: (request) => {
+        dispatched.push(request);
+        return {
+          exitCode: 0,
+          stdout: 'accepted review envelope\n',
           stderr: '',
         };
       },

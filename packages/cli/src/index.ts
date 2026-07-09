@@ -414,7 +414,7 @@ export function parseRainrailArguments(argv: readonly string[]): ParsedRainrailA
       break;
     }
 
-    if (commandName === 'dispatch' && isDispatchInputModeOption(arg)) {
+    if (commandName === 'dispatch' && isDispatchInputModeOption(arg, commandArgs)) {
       commandArgs.push(arg);
       const value = argv[index + 1];
       if (value !== undefined) {
@@ -498,8 +498,33 @@ export function parseRainrailArguments(argv: readonly string[]): ParsedRainrailA
   };
 }
 
-function isDispatchInputModeOption(arg: string): boolean {
-  return arg === '--message' || arg === '--json' || arg === '--envelope-json';
+function isDispatchInputModeOption(arg: string, commandArgs: readonly string[]): boolean {
+  if (arg === '--message' || arg === '--envelope-json') {
+    return true;
+  }
+  if (arg !== '--json') {
+    return false;
+  }
+  return !hasDispatchInputMode(commandArgs);
+}
+
+function hasDispatchInputMode(commandArgs: readonly string[]): boolean {
+  return commandArgs.some((arg, index) => {
+    if (
+      arg === '--message'
+      || arg === '--envelope-json'
+      || arg === '--stdin'
+      || arg.startsWith('--message=')
+      || arg.startsWith('--json=')
+      || arg.startsWith('--envelope-json=')
+    ) {
+      return true;
+    }
+    if (arg === '--json') {
+      return true;
+    }
+    return index === 0 && !arg.startsWith('--');
+  });
 }
 
 export function formatHelp(): string {
@@ -3141,12 +3166,13 @@ function isAllowedDispatchEventUrl(value: string): boolean {
   } catch {
     return false;
   }
-  if (url.username !== '' || url.password !== '' || url.search !== '' || url.hash !== '') {
+  if (url.username !== '' || url.password !== '' || url.search !== '') {
     return false;
   }
   if (url.protocol === 'github:' || url.protocol === 'cloudflare:' || url.protocol === 'manual:' || url.protocol === 'chat:') {
     return url.hostname === 'deliveries'
       && url.port.length === 0
+      && url.hash.length === 0
       && dispatchSafeDeliveryReferenceIdPattern.test(url.pathname.slice(1))
       && !url.pathname.slice(1).includes('/');
   }
