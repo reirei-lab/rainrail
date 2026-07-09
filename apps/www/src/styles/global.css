@@ -827,6 +827,7 @@ h3 {
 .dashboard-layout-grid {
   display: grid;
   grid-template-columns: repeat(12, minmax(0, 1fr));
+  grid-auto-rows: 88px;
   gap: 10px;
   align-items: stretch;
   border-bottom: 1px solid var(--line);
@@ -835,10 +836,13 @@ h3 {
 }
 
 .dashboard-layout-card {
+  --dashboard-card-column-start: 1;
+  --dashboard-card-row-start: 1;
   --dashboard-card-columns: 4;
   --dashboard-card-rows: 2;
   display: grid;
-  grid-column: span var(--dashboard-card-columns);
+  grid-column: var(--dashboard-card-column-start) / span var(--dashboard-card-columns);
+  grid-row: var(--dashboard-card-row-start) / span var(--dashboard-card-rows);
   grid-template-rows: auto minmax(0, 1fr) auto;
   min-width: 0;
   min-height: calc(var(--dashboard-card-rows) * 88px);
@@ -1238,6 +1242,7 @@ h3 {
   .dashboard-layout-card {
     --dashboard-card-columns: 1;
     grid-column: 1 / -1;
+    grid-row: auto;
   }
 
   .dashboard-stats {

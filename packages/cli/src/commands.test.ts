@@ -2344,6 +2344,55 @@ describe('Rainrail CLI built-in commands', () => {
           },
         });
 
+        const layoutSavePreflight = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout`, {
+          method: 'OPTIONS',
+        });
+        expect(layoutSavePreflight.status).toBe(204);
+        expect(layoutSavePreflight.headers.get('access-control-allow-methods')).toBe('GET, PUT, OPTIONS');
+
+        const layoutSave = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout`, {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json', 'x-request-id': 'request-local-layout-save' },
+          body: JSON.stringify({
+            items: [{
+              id: 'operational-totals',
+              cardId: 'core.operationalTotals',
+              x: 0,
+              y: 0,
+              columns: 8,
+              rows: 2,
+              config: { density: 'compact' },
+            }],
+          }),
+        });
+        expect(layoutSave.status).toBe(200);
+        expect(layoutSave.headers.get('x-request-id')).toBe('request-local-layout-save');
+        await expect(layoutSave.json()).resolves.toMatchObject({
+          data: {
+            id: 'user.dashboardLayout',
+            source: 'user',
+            updatedAt: expect.not.stringMatching(/^1970-01-01/u),
+            items: [{ id: 'operational-totals', config: { density: 'compact' } }],
+          },
+        });
+
+        const invalidLayoutSave = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout`, {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            items: [{
+              id: 'operational-totals',
+              cardId: 'core.unknown',
+              x: 0,
+              y: 0,
+              columns: 8,
+              rows: 2,
+            }],
+          }),
+        });
+        expect(invalidLayoutSave.status).toBe(400);
+        await expect(invalidLayoutSave.json()).resolves.toEqual({ error: 'unknown_dashboard_card', cardId: 'core.unknown' });
+
         const layoutConfigPreflight = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout/items/operational-totals/config`, {
           method: 'OPTIONS',
         });

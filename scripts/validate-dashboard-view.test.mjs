@@ -327,16 +327,26 @@ describe('dashboard operational views', () => {
       'renderCardPicker()',
       'saveDashboardLayoutItems',
       'draggable = true',
+      'dragend',
+      'application/x-rainrail-dashboard-layout-item',
+      'hasDashboardLayoutDragPayload',
       'data-layout-item-id',
       'data-dashboard-card-id',
       'data-dashboard-card-menu',
       'data-dashboard-card-resize',
+      'data-action-permission',
       'removeDashboardLayoutItem',
       'moveDashboardLayoutItem',
       'resizeDashboardLayoutItem',
       'createDashboardLayoutItem',
       'unknownDashboardCard',
       'cardAvailabilityLabel',
+      'dashboardLayoutSaving',
+      'isOperatorModeEnabled()',
+      'hasUnavailableDashboardCards',
+      'layoutSaveWouldDropHiddenCards',
+      'dashboardLayoutItemsOverlap',
+      'dashboardLayoutItemBounds',
     ]) {
       expect(dashboardApp).toContain(marker);
     }
@@ -345,11 +355,15 @@ describe('dashboard operational views', () => {
     expect(dashboardClient).toContain('size: {');
     expect(dashboardApp).toContain('category / provider / plugin');
     expect(dashboardApp).toContain('activeClient.saveDashboardLayout(items)');
+    expect(dashboardApp).not.toContain('setDashboardLayoutStatus(copy.cardLayout.saved);');
     expect(dashboardContent).toContain('Card picker');
     expect(dashboardContent).toContain('カードピッカー');
+    expect(dashboardContent).toContain('Hidden cards may be omitted');
     expect(globalStyles).toContain('.dashboard-layout-grid');
     expect(globalStyles).toContain('grid-template-columns: repeat(12, minmax(0, 1fr))');
-    expect(globalStyles).toContain('grid-column: span var(--dashboard-card-columns)');
+    expect(globalStyles).toContain('grid-auto-rows: 88px');
+    expect(globalStyles).toContain('grid-column: var(--dashboard-card-column-start) / span var(--dashboard-card-columns)');
+    expect(globalStyles).toContain('grid-row: var(--dashboard-card-row-start) / span var(--dashboard-card-rows)');
     expect(globalStyles).toContain('min-height: calc(var(--dashboard-card-rows) * 88px)');
     expect(globalStyles).toContain('.dashboard-card-picker-list');
     expect(globalStyles).toContain('@media (max-width: 900px)');

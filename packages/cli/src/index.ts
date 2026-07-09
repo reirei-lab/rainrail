@@ -5265,7 +5265,7 @@ function formatRainrailLock(projectName: string): string {
 }
 
 const localCorsHeaders = {
-  'Access-Control-Allow-Methods': 'GET, POST, PATCH, OPTIONS',
+  'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, OPTIONS',
   'Access-Control-Allow-Headers': 'Authorization, Content-Type, Last-Event-ID, X-GitHub-Delivery, X-GitHub-Event, X-Hub-Signature-256, X-Rainrail-Client, X-Rainrail-Publish-Token, X-Request-ID',
   'Access-Control-Expose-Headers': 'X-Request-ID',
   'Access-Control-Max-Age': '86400',
@@ -6650,6 +6650,10 @@ async function handleLocalRainrailRequest(
     writeJsonResponse(response, 200, { data: localDashboardLayout(state) }, request);
     return;
   }
+  if (request.method === 'PUT' && url.pathname === '/api/v1/dashboard/layout') {
+    await handleLocalDashboardLayoutUpdateRequest(request, response, state);
+    return;
+  }
 
   const localDashboardLayoutConfigMatch = /^\/api\/v1\/dashboard\/layout\/items\/([^/]+)\/config$/u.exec(url.pathname);
   if (request.method === 'PATCH' && localDashboardLayoutConfigMatch !== null) {
@@ -6713,6 +6717,36 @@ async function handleLocalDashboardLayoutItemConfigRequest(
     : item);
   const saved = state.eventStore?.saveDashboardLayout?.(nextDashboardLayout);
   state.dashboardLayout = localCloneDashboardLayout(saved?.items ?? nextDashboardLayout);
+  state.dashboardLayoutUpdatedAt = saved?.updatedAt ?? new Date().toISOString();
+  writeJsonResponse(response, 200, { data: localDashboardLayout(state) }, request, {
+    'X-Request-ID': requestId,
+  });
+}
+
+async function handleLocalDashboardLayoutUpdateRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  state: LocalRainrailServerState,
+): Promise<void> {
+  const requestId = localRequestId(request);
+  const body = await readLocalJsonObjectBody(request);
+  if (!body.ok) {
+    writeJsonResponse(response, body.status, { error: body.error }, request, {
+      'X-Request-ID': requestId,
+    });
+    return;
+  }
+
+  const parsed = parseLocalDashboardLayoutUpdateItems(body.value.items);
+  if (!parsed.ok) {
+    writeJsonResponse(response, parsed.status, parsed.body, request, {
+      'X-Request-ID': requestId,
+    });
+    return;
+  }
+
+  const saved = state.eventStore?.saveDashboardLayout?.(parsed.items);
+  state.dashboardLayout = localCloneDashboardLayout(saved?.items ?? parsed.items);
   state.dashboardLayoutUpdatedAt = saved?.updatedAt ?? new Date().toISOString();
   writeJsonResponse(response, 200, { data: localDashboardLayout(state) }, request, {
     'X-Request-ID': requestId,
@@ -7368,6 +7402,83 @@ function localDashboardCards(): readonly unknown[] {
   }));
 }
 
+type LocalDashboardLayoutParseResult =
+  | { readonly ok: true; readonly items: readonly LocalDashboardLayoutItem[] }
+  | { readonly ok: false; readonly status: number; readonly body: Record<string, unknown> };
+
+function parseLocalDashboardLayoutUpdateItems(value: unknown): LocalDashboardLayoutParseResult {
+  if (!Array.isArray(value)) {
+    return { ok: false, status: 400, body: { error: 'invalid_dashboard_layout_items' } };
+  }
+
+  const cardDefinitions = new Map(localDashboardCardDefinitions.map((definition) => [definition.id, definition]));
+  const itemIds = new Set<string>();
+  const items: LocalDashboardLayoutItem[] = [];
+  for (const valueItem of value) {
+    if (!isRecord(valueItem)) {
+      return { ok: false, status: 400, body: { error: 'invalid_dashboard_layout_item' } };
+    }
+    const id = valueItem.id;
+    const cardId = valueItem.cardId;
+    if (typeof id !== 'string' || id.length === 0 || typeof cardId !== 'string' || cardId.length === 0) {
+      return { ok: false, status: 400, body: { error: 'invalid_dashboard_layout_item' } };
+    }
+    if (itemIds.has(id)) {
+      return { ok: false, status: 400, body: { error: 'duplicate_dashboard_layout_item', itemId: id } };
+    }
+    itemIds.add(id);
+
+    const definition = cardDefinitions.get(cardId);
+    if (definition === undefined) {
+      return { ok: false, status: 400, body: { error: 'unknown_dashboard_card', cardId } };
+    }
+
+    const x = localDashboardGridInteger(valueItem.x);
+    const y = localDashboardGridInteger(valueItem.y);
+    const columns = localDashboardGridInteger(valueItem.columns);
+    const rows = localDashboardGridInteger(valueItem.rows);
+    if (x === undefined || y === undefined || columns === undefined || rows === undefined) {
+      return { ok: false, status: 400, body: { error: 'invalid_dashboard_layout_item' } };
+    }
+    const { min, max } = definition.size;
+    if (
+      columns < min.columns ||
+      rows < min.rows ||
+      columns > max.columns ||
+      rows > max.rows ||
+      x + columns > 12
+    ) {
+      return { ok: false, status: 400, body: { error: 'invalid_dashboard_layout_item' } };
+    }
+
+    const config = valueItem.config;
+    if (config !== undefined) {
+      if (!isRecord(config) || !isJsonSerializableLocalValue(config)) {
+        return { ok: false, status: 400, body: { error: 'invalid_dashboard_card_config', itemId: id } };
+      }
+      if (hasSensitiveLocalDashboardConfigKey(config)) {
+        return { ok: false, status: 400, body: { error: 'sensitive_dashboard_card_config', itemId: id } };
+      }
+    }
+
+    items.push({
+      id,
+      cardId,
+      x,
+      y,
+      columns,
+      rows,
+      ...(config === undefined ? {} : { config: localCloneRecord(config) }),
+    });
+  }
+
+  return { ok: true, items };
+}
+
+function localDashboardGridInteger(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : undefined;
+}
+
 function localDashboardLayout(state: LocalRainrailServerState): {
   readonly id: 'core.defaultLayout' | 'user.dashboardLayout';
   readonly source: 'default' | 'user';
@@ -7699,7 +7810,7 @@ function getLocalServerAuthError(
   if (principal === undefined) {
     return { status: 403, body: { error: 'invalid_bearer_token' } };
   }
-  const requiredScope = requiredLocalDashboardScopeForPath(pathname);
+  const requiredScope = requiredLocalDashboardScopeForPath(pathname, request.method);
   if (!localDashboardScopeIncludes(principal.scope, requiredScope)) {
     return { status: 403, body: { error: 'insufficient_scope', requiredScope } };
   }
@@ -7717,8 +7828,9 @@ function isLocalRequestHost(request: IncomingMessage): boolean {
   return hostName === 'localhost' || hostName === '127.0.0.1' || hostName === '::1';
 }
 
-function requiredLocalDashboardScopeForPath(pathname: string): LocalDashboardScope {
+function requiredLocalDashboardScopeForPath(pathname: string, method = 'GET'): LocalDashboardScope {
   if (isLocalDashboardLayoutItemConfigPath(pathname)) return 'operator';
+  if (pathname === '/api/v1/dashboard/layout' && method.toUpperCase() === 'PUT') return 'operator';
   return localDashboardCommandForPath(pathname) === undefined ? 'read-only' : 'operator';
 }
 
@@ -8036,6 +8148,7 @@ function preflightMethodsForLocalPath(pathname: string, options: RainrailStartOp
   if (/^\/api\/v1\/workflow-runs\/[^/]+$/u.test(pathname)) return ['GET', 'OPTIONS'];
   if (/^\/api\/v1\/agent-tasks\/[^/]+$/u.test(pathname)) return ['GET', 'OPTIONS'];
   if (isLocalDashboardLayoutItemConfigPath(pathname)) return ['PATCH', 'OPTIONS'];
+  if (pathname === '/api/v1/dashboard/layout') return ['GET', 'PUT', 'OPTIONS'];
   if (localDashboardCommandForPath(pathname) !== undefined) return ['POST', 'OPTIONS'];
   if (
     pathname === '/api/v1/workflow-runs' ||
@@ -8043,8 +8156,7 @@ function preflightMethodsForLocalPath(pathname: string, options: RainrailStartOp
     pathname === '/api/v1/sources' ||
     pathname === '/api/v1/queue' ||
     pathname === '/api/v1/settings' ||
-    pathname === '/api/v1/dashboard/cards' ||
-    pathname === '/api/v1/dashboard/layout'
+    pathname === '/api/v1/dashboard/cards'
   ) {
     return ['GET', 'OPTIONS'];
   }
