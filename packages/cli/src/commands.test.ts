@@ -77,6 +77,16 @@ function githubWebhookHeaders(
   };
 }
 
+function manualDispatchPayload(conversationId: string, text = 'hello'): Record<string, unknown> {
+  return {
+    provider: 'rainrail',
+    channel: 'manual',
+    action: 'message',
+    conversation: { id: conversationId },
+    message: { id: `message-${conversationId}`, text },
+  };
+}
+
 describe('Rainrail CLI built-in commands', () => {
   it('defines the command table without provider or runtime specific handlers', () => {
     expect(BUILT_IN_COMMANDS.map((command) => command.name)).toEqual([
@@ -176,10 +186,12 @@ describe('Rainrail CLI built-in commands', () => {
 
     expect(result.exitCode).toBe(0);
     expect(result.stderr).toBe('');
-    expect(result.stdout).toContain('Usage: rainrail dispatch <message> | --stdin | --message <text> | --envelope-json <json>');
+    expect(result.stdout).toContain('Usage: rainrail dispatch <message> | --stdin | --message <text> | --json <file> | --json --stdin | --envelope-json <json>');
     expect(result.stdout).toContain('<message>');
     expect(result.stdout).toContain('--stdin');
     expect(result.stdout).toContain('--message <text>');
+    expect(result.stdout).toContain('--json <file>');
+    expect(result.stdout).toContain('--json --stdin');
     expect(result.stdout).toContain('--envelope-json <json>');
   });
 
@@ -187,7 +199,7 @@ describe('Rainrail CLI built-in commands', () => {
     expect(runRainrailCli(['dispatch'])).toMatchObject({
       exitCode: 1,
       stdout: '',
-      stderr: 'Usage: rainrail dispatch <message> | --stdin | --message <text> | --envelope-json <json>\n',
+      stderr: 'Usage: rainrail dispatch <message> | --stdin | --message <text> | --json <file> | --json --stdin | --envelope-json <json>\n',
     });
 
     expect(runRainrailCli(['dispatch', '--message', 'hello', '--envelope-json', '{}'])).toMatchObject({
@@ -509,6 +521,34 @@ describe('Rainrail CLI built-in commands', () => {
     ]);
   });
 
+  it('preserves the shared JSON output option after a dispatch message input mode', () => {
+    const dispatched: unknown[] = [];
+
+    const result = runRainrailCli(['dispatch', '--message', 'hello', '--json'], {
+      dispatchRunner: (request) => {
+        dispatched.push(request);
+        return {
+          exitCode: 0,
+          stdout: '{"accepted":true}\n',
+          stderr: '',
+        };
+      },
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(dispatched).toMatchObject([
+      {
+        mode: 'message',
+        input: 'hello',
+        options: {
+          config: undefined,
+          profile: undefined,
+          json: true,
+        },
+      },
+    ]);
+  });
+
   it('rejects empty dispatch messages before dispatching', () => {
     const dispatched: unknown[] = [];
 
@@ -545,10 +585,21 @@ describe('Rainrail CLI built-in commands', () => {
     expect(dispatched).toEqual([]);
   });
 
-  it('routes envelope-json dispatch input into the shared dispatch boundary without validating fields yet', () => {
+  it('routes validated envelope-json dispatch input into the shared dispatch boundary', () => {
     const dispatched: unknown[] = [];
+    const envelopeJson = `{
+  "id":"manual-source:delivery-inline:rainrail.manual.message",
+  "schemaVersion":"rainrail.event.v1",
+  "source":{"type":"manual","name":"manual-source"},
+  "name":"rainrail.manual.message",
+  "delivery":{"id":"delivery-inline","receivedAt":"2026-07-09T00:00:00.000Z"},
+  "occurredAt":"2026-07-09T00:00:00.000Z",
+  "subject":{"type":"conversation","id":"thread-inline"},
+  "payload":{"provider":"rainrail","channel":"manual","action":"message","conversation":{"id":"thread-inline"},"message":{"id":"message-thread-inline","text":"hello inline"},"numericId":9007199254740993},
+  "rawPayload":{"kind":"inline-redacted","reference":"manual://deliveries/delivery-inline"}
+}`;
 
-    const result = runRainrailCli(['--config', 'rainrail.config.json', 'dispatch', '--envelope-json', '{"type":"manual"}'], {
+    const result = runRainrailCli(['--config', 'rainrail.config.json', 'dispatch', '--envelope-json', envelopeJson], {
       dispatchRunner: (request) => {
         dispatched.push(request);
         return {
@@ -563,7 +614,7 @@ describe('Rainrail CLI built-in commands', () => {
     expect(dispatched).toEqual([
       {
         mode: 'envelope-json',
-        input: '{"type":"manual"}',
+        input: envelopeJson,
         options: {
           config: 'rainrail.config.json',
           profile: undefined,
@@ -571,6 +622,433 @@ describe('Rainrail CLI built-in commands', () => {
         },
       },
     ]);
+    expect(JSON.stringify(dispatched)).toContain('9007199254740993');
+  });
+
+  it('dispatches a complete Rainrail event envelope from a JSON file', async () => {
+    await withTempDirectory(async (directory) => {
+      const eventPath = join(directory, 'event.json');
+      const envelope = {
+        id: 'manual-source:delivery-file:rainrail.manual.message',
+        schemaVersion: 'rainrail.event.v1',
+        source: { type: 'manual', name: 'manual-source' },
+        name: 'rainrail.manual.message',
+        delivery: { id: 'delivery-file', receivedAt: '2026-07-09T00:00:00.000Z' },
+        occurredAt: '2026-07-09T00:00:00.000Z',
+        subject: { type: 'conversation', id: 'thread-file' },
+        payload: manualDispatchPayload('thread-file', 'hello file'),
+        rawPayload: { kind: 'inline-redacted', reference: 'manual://deliveries/delivery-file' },
+      };
+      await writeFile(eventPath, JSON.stringify(envelope), 'utf8');
+      const dispatched: unknown[] = [];
+
+      const result = runRainrailCli(['dispatch', '--json', eventPath], {
+        dispatchRunner: (request) => {
+          dispatched.push(request);
+          return {
+            exitCode: 0,
+            stdout: 'accepted file envelope\n',
+            stderr: '',
+          };
+        },
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(dispatched).toEqual([
+        expect.objectContaining({
+          mode: 'envelope-json',
+          input: JSON.stringify(envelope),
+        }),
+      ]);
+    });
+  });
+
+  it('dispatches an accepted Rainrail event envelope input from stdin with defaults', () => {
+    const dispatched: unknown[] = [];
+    const envelopeInput = {
+      source: { type: 'manual', name: 'manual-source' },
+      name: 'rainrail.manual.message',
+      delivery: { id: 'delivery-stdin', receivedAt: '2026-07-09T00:00:00.000Z' },
+      occurredAt: '2026-07-09T00:00:00.000Z',
+      subject: { type: 'conversation', id: 'thread-stdin' },
+      payload: manualDispatchPayload('thread-stdin', 'hello stdin'),
+      rawPayload: { kind: 'inline-redacted', reference: 'manual://deliveries/delivery-stdin' },
+    };
+
+    const result = runRainrailCli(['dispatch', '--json', '--stdin'], {
+      stdinReader: () => JSON.stringify(envelopeInput),
+      dispatchRunner: (request) => {
+        dispatched.push(request);
+        return {
+          exitCode: 0,
+          stdout: 'accepted stdin envelope\n',
+          stderr: '',
+        };
+      },
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(dispatched).toEqual([
+      expect.objectContaining({
+        mode: 'envelope-json',
+        input: `{"id":"manual-source:delivery-stdin:rainrail.manual.message","schemaVersion":"rainrail.event.v1",${JSON.stringify(envelopeInput).slice(1)}`,
+      }),
+    ]);
+  });
+
+  it('returns a clear error for invalid dispatch JSON', async () => {
+    await withTempDirectory(async (directory) => {
+      const eventPath = join(directory, 'event.json');
+      await writeFile(eventPath, '{"source":', 'utf8');
+
+      expect(runRainrailCli(['dispatch', '--json', eventPath], {
+        dispatchRunner: () => ({ exitCode: 0, stdout: 'unexpected\n', stderr: '' }),
+      })).toMatchObject({
+        exitCode: 1,
+        stdout: '',
+        stderr: expect.stringContaining('Invalid JSON for rainrail dispatch envelope:'),
+      });
+    });
+  });
+
+  it('resolves dispatch JSON files relative to the CLI environment cwd', async () => {
+    await withTempDirectory(async (directory) => {
+      const envelope = {
+        id: 'manual-source:delivery-cwd:rainrail.manual.message',
+        schemaVersion: 'rainrail.event.v1',
+        source: { type: 'manual', name: 'manual-source' },
+        name: 'rainrail.manual.message',
+        delivery: { id: 'delivery-cwd', receivedAt: '2026-07-09T00:00:00.000Z' },
+        occurredAt: '2026-07-09T00:00:00.000Z',
+        subject: { type: 'conversation', id: 'thread-cwd' },
+        payload: manualDispatchPayload('thread-cwd', 'hello from cwd'),
+        rawPayload: { kind: 'inline-redacted', reference: 'manual://deliveries/delivery-cwd' },
+      };
+      await writeFile(join(directory, 'event.json'), JSON.stringify(envelope), 'utf8');
+      const dispatched: unknown[] = [];
+
+      const result = runRainrailCli(['dispatch', '--json', 'event.json'], {
+        cwd: directory,
+        dispatchRunner: (request) => {
+          dispatched.push(request);
+          return {
+            exitCode: 0,
+            stdout: 'accepted cwd envelope\n',
+            stderr: '',
+          };
+        },
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(dispatched).toEqual([
+        expect.objectContaining({
+          mode: 'envelope-json',
+          input: JSON.stringify(envelope),
+        }),
+      ]);
+    });
+  });
+
+  it('validates dispatch arguments before reading stdin', () => {
+    let stdinRead = false;
+
+    const result = runRainrailCli(['dispatch', '--json', '--stdin', 'typo'], {
+      stdinReader: () => {
+        stdinRead = true;
+        return '{}';
+      },
+    });
+
+    expect(result).toEqual({
+      exitCode: 1,
+      stdout: '',
+      stderr: 'Unexpected rainrail dispatch argument: typo.\n',
+    });
+    expect(stdinRead).toBe(false);
+  });
+
+  it('returns the missing dispatch runner error before reading stdin', () => {
+    let stdinRead = false;
+
+    const result = runRainrailCli(['dispatch', '--json', '--stdin'], {
+      stdinReader: () => {
+        stdinRead = true;
+        return '{}';
+      },
+    });
+
+    expect(result).toEqual({
+      exitCode: 2,
+      stdout: '',
+      stderr: 'rainrail dispatch requires a dispatch runner, which is not implemented yet.\n',
+    });
+    expect(stdinRead).toBe(false);
+  });
+
+  it('returns a clear error for invalid dispatch envelope shapes', async () => {
+    await withTempDirectory(async (directory) => {
+      const eventPath = join(directory, 'event.json');
+      await writeFile(eventPath, JSON.stringify({ source: { type: 'manual' } }), 'utf8');
+
+      expect(runRainrailCli(['dispatch', '--json', eventPath], {
+        dispatchRunner: () => ({ exitCode: 0, stdout: 'unexpected\n', stderr: '' }),
+      })).toEqual({
+        exitCode: 1,
+        stdout: '',
+        stderr: 'Invalid Rainrail event envelope: source.name must be a string.\n',
+      });
+    });
+  });
+
+  it.each([
+    [
+      'source.name',
+      {
+        source: { type: 'manual', name: 'bad\nname' },
+      },
+      'Invalid Rainrail event envelope: source.name must be a safe identifier.\n',
+    ],
+    [
+      'delivery.receivedAt',
+      {
+        delivery: { id: 'delivery-invalid-date', receivedAt: 'not-a-date' },
+      },
+      'Invalid Rainrail event envelope: delivery.receivedAt must be a UTC ISO timestamp.\n',
+    ],
+    [
+      'rawPayload.kind',
+      {
+        rawPayload: { kind: 'inline', reference: 'manual://deliveries/delivery-invalid-kind' },
+      },
+      'Invalid Rainrail event envelope: rawPayload.kind must be a known raw payload kind.\n',
+    ],
+    [
+      'rawPayload.reference',
+      {
+        rawPayload: { kind: 'inline-redacted', reference: 'https://example.com/raw' },
+      },
+      'Invalid Rainrail event envelope: rawPayload.reference must be an allowed Rainrail event URL.\n',
+    ],
+  ])('rejects invalid dispatch envelope contract field %s', async (_field, override, expectedError) => {
+    await withTempDirectory(async (directory) => {
+      const eventPath = join(directory, 'event.json');
+      const envelope = {
+        id: 'manual-source:delivery-contract:rainrail.manual.message',
+        schemaVersion: 'rainrail.event.v1',
+        source: { type: 'manual', name: 'manual-source' },
+        name: 'rainrail.manual.message',
+        delivery: { id: 'delivery-contract', receivedAt: '2026-07-09T00:00:00.000Z' },
+        occurredAt: '2026-07-09T00:00:00.000Z',
+        subject: { type: 'conversation', id: 'thread-contract' },
+        payload: manualDispatchPayload('thread-contract', 'hello contract'),
+        rawPayload: { kind: 'inline-redacted', reference: 'manual://deliveries/delivery-contract' },
+        ...override,
+      };
+      await writeFile(eventPath, JSON.stringify(envelope), 'utf8');
+
+      expect(runRainrailCli(['dispatch', '--json', eventPath], {
+        dispatchRunner: () => ({ exitCode: 0, stdout: 'unexpected\n', stderr: '' }),
+      })).toEqual({
+        exitCode: 1,
+        stdout: '',
+        stderr: expectedError,
+      });
+    });
+  });
+
+  it('preserves caller payload numbers when filling dispatch envelope defaults', () => {
+    const dispatched: unknown[] = [];
+    const envelopeInputJson = `{"source":{"type":"github","name":"github-webhook"},"name":"github.issue","delivery":{"id":"delivery-defaults","receivedAt":"2026-07-09T00:00:00.000Z"},"occurredAt":"2026-07-09T00:00:00.000Z","subject":{"type":"issue","id":"262","url":"https://github.com/reirei-lab/rainrail/issues/262"},"payload":{"provider":"github","resource":{"id":9007199254740993}},"rawPayload":{"kind":"external-reference","reference":"github://deliveries/delivery-defaults"}}`;
+
+    const result = runRainrailCli(['dispatch', '--envelope-json', envelopeInputJson], {
+      dispatchRunner: (request) => {
+        dispatched.push(request);
+        return {
+          exitCode: 0,
+          stdout: 'accepted defaults envelope\n',
+          stderr: '',
+        };
+      },
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(dispatched).toEqual([
+      expect.objectContaining({
+        mode: 'envelope-json',
+        input: `{"id":"github-webhook:delivery-defaults:github.issue","schemaVersion":"rainrail.event.v1",${envelopeInputJson.slice(1)}`,
+      }),
+    ]);
+    expect(JSON.stringify(dispatched)).toContain('9007199254740993');
+  });
+
+  it('accepts repository-shaped event ids and unsafe optional source metadata', () => {
+    const dispatched: unknown[] = [];
+    const envelope = {
+      id: 'reirei-lab/rainrail',
+      schemaVersion: 'rainrail.event.v1',
+      source: {
+        type: 'github',
+        name: 'github-webhook',
+        account: 'renovate[bot]',
+        environment: 'github-actions[bot]',
+      },
+      name: 'github.issue',
+      delivery: { id: 'delivery-repository-id', receivedAt: '2026-07-09T00:00:00.000Z' },
+      occurredAt: '2026-07-09T00:00:00.000Z',
+      subject: { type: 'issue', id: '262', url: 'https://github.com/reirei-lab/rainrail/issues/262' },
+      payload: { provider: 'github', action: 'opened' },
+      rawPayload: { kind: 'external-reference', reference: 'github://deliveries/delivery-repository-id' },
+    };
+
+    const result = runRainrailCli(['dispatch', '--envelope-json', JSON.stringify(envelope)], {
+      dispatchRunner: (request) => {
+        dispatched.push(request);
+        return {
+          exitCode: 0,
+          stdout: 'accepted repository id envelope\n',
+          stderr: '',
+        };
+      },
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(dispatched).toEqual([
+      expect.objectContaining({
+        mode: 'envelope-json',
+        input: JSON.stringify(envelope),
+      }),
+    ]);
+  });
+
+  it('accepts GitHub pull request review URL fragments in dispatch envelope URLs', () => {
+    const dispatched: unknown[] = [];
+    const envelope = {
+      id: 'github-webhook:delivery-review:github.pull_request_review',
+      schemaVersion: 'rainrail.event.v1',
+      source: {
+        type: 'github',
+        name: 'github-webhook',
+        repository: 'reirei-lab/rainrail',
+      },
+      name: 'github.pull_request_review',
+      delivery: { id: 'delivery-review', receivedAt: '2026-07-09T00:00:00.000Z' },
+      occurredAt: '2026-07-09T00:00:00.000Z',
+      subject: {
+        type: 'review',
+        id: '123',
+        url: 'https://github.com/reirei-lab/rainrail/pull/39#pullrequestreview-123',
+      },
+      payload: { provider: 'github', action: 'submitted' },
+      rawPayload: { kind: 'external-reference', reference: 'github://deliveries/delivery-review' },
+    };
+
+    const result = runRainrailCli(['dispatch', '--envelope-json', JSON.stringify(envelope)], {
+      dispatchRunner: (request) => {
+        dispatched.push(request);
+        return {
+          exitCode: 0,
+          stdout: 'accepted review envelope\n',
+          stderr: '',
+        };
+      },
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(dispatched).toEqual([
+      expect.objectContaining({
+        mode: 'envelope-json',
+        input: JSON.stringify(envelope),
+      }),
+    ]);
+  });
+
+  it.each([
+    [
+      'schemaVersion null',
+      {
+        id: 'manual-source:delivery-null-schema:rainrail.manual.message',
+        schemaVersion: null,
+      },
+      'Invalid Rainrail event envelope: schemaVersion must be "rainrail.event.v1".\n',
+    ],
+    [
+      'id null',
+      {
+        id: null,
+        schemaVersion: 'rainrail.event.v1',
+      },
+      'Invalid Rainrail event envelope: id must be a string.\n',
+    ],
+    [
+      'manual source with chat event name',
+      {
+        id: 'manual-source:delivery-manual-chat:rainrail.chat.message',
+        schemaVersion: 'rainrail.event.v1',
+        name: 'rainrail.chat.message',
+      },
+      'Invalid Rainrail event envelope: manual/chat event name must match source.type.\n',
+    ],
+    [
+      'manual payload missing required fields',
+      {
+        id: 'manual-source:delivery-manual-payload:rainrail.manual.message',
+        schemaVersion: 'rainrail.event.v1',
+        payload: { text: 'hello' },
+      },
+      'Invalid Rainrail event envelope: manual/chat payload is missing required fields.\n',
+    ],
+    [
+      'manual raw payload external reference',
+      {
+        id: 'manual-source:delivery-manual-external:rainrail.manual.message',
+        schemaVersion: 'rainrail.event.v1',
+        rawPayload: { kind: 'external-reference', reference: 'manual://deliveries/delivery-manual-external' },
+      },
+      'Invalid Rainrail event envelope: manual/chat raw payload kind must be inline-redacted.\n',
+    ],
+    [
+      'manual raw payload chat reference',
+      {
+        id: 'manual-source:delivery-manual-chat-ref:rainrail.manual.message',
+        schemaVersion: 'rainrail.event.v1',
+        rawPayload: { kind: 'inline-redacted', reference: 'chat://deliveries/delivery-manual-chat-ref' },
+      },
+      'Invalid Rainrail event envelope: manual/chat raw payload reference must match source.type.\n',
+    ],
+    [
+      'delivery reference port',
+      {
+        id: 'manual-source:delivery-manual-port:rainrail.manual.message',
+        schemaVersion: 'rainrail.event.v1',
+        rawPayload: { kind: 'inline-redacted', reference: 'manual://deliveries:123/delivery-manual-port' },
+      },
+      'Invalid Rainrail event envelope: rawPayload.reference must be an allowed Rainrail event URL.\n',
+    ],
+  ])('rejects invalid dispatch envelope contract extension %s', async (_case, override, expectedError) => {
+    await withTempDirectory(async (directory) => {
+      const eventPath = join(directory, 'event.json');
+      const baseEnvelope = {
+        id: 'manual-source:delivery-extension:rainrail.manual.message',
+        schemaVersion: 'rainrail.event.v1',
+        source: { type: 'manual', name: 'manual-source' },
+        name: 'rainrail.manual.message',
+        delivery: { id: 'delivery-extension', receivedAt: '2026-07-09T00:00:00.000Z' },
+        occurredAt: '2026-07-09T00:00:00.000Z',
+        subject: { type: 'conversation', id: 'thread-extension' },
+        payload: manualDispatchPayload('thread-extension', 'hello extension'),
+        rawPayload: { kind: 'inline-redacted', reference: 'manual://deliveries/delivery-extension' },
+      };
+      const envelope = { ...baseEnvelope, ...override };
+      await writeFile(eventPath, JSON.stringify(envelope), 'utf8');
+
+      expect(runRainrailCli(['dispatch', '--json', eventPath], {
+        dispatchRunner: () => ({ exitCode: 0, stdout: 'unexpected\n', stderr: '' }),
+      })).toEqual({
+        exitCode: 1,
+        stdout: '',
+        stderr: expectedError,
+      });
+    });
   });
 
   it('prints the CLI package version from rainrail version', async () => {

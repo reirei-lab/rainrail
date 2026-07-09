@@ -414,7 +414,7 @@ export function parseRainrailArguments(argv: readonly string[]): ParsedRainrailA
       break;
     }
 
-    if (commandName === 'dispatch' && isDispatchInputModeOption(arg)) {
+    if (commandName === 'dispatch' && isDispatchInputModeOption(arg, commandArgs)) {
       commandArgs.push(arg);
       const value = argv[index + 1];
       if (value !== undefined) {
@@ -498,8 +498,33 @@ export function parseRainrailArguments(argv: readonly string[]): ParsedRainrailA
   };
 }
 
-function isDispatchInputModeOption(arg: string): boolean {
-  return arg === '--message' || arg === '--envelope-json';
+function isDispatchInputModeOption(arg: string, commandArgs: readonly string[]): boolean {
+  if (arg === '--message' || arg === '--envelope-json') {
+    return true;
+  }
+  if (arg !== '--json') {
+    return false;
+  }
+  return !hasDispatchInputMode(commandArgs);
+}
+
+function hasDispatchInputMode(commandArgs: readonly string[]): boolean {
+  return commandArgs.some((arg, index) => {
+    if (
+      arg === '--message'
+      || arg === '--envelope-json'
+      || arg === '--stdin'
+      || arg.startsWith('--message=')
+      || arg.startsWith('--json=')
+      || arg.startsWith('--envelope-json=')
+    ) {
+      return true;
+    }
+    if (arg === '--json') {
+      return true;
+    }
+    return index === 0 && !arg.startsWith('--');
+  });
 }
 
 export function formatHelp(): string {
@@ -2401,7 +2426,12 @@ type ParsedDispatchArguments = {
   readonly help: boolean;
 };
 
-const dispatchUsage = 'Usage: rainrail dispatch <message> | --stdin | --message <text> | --envelope-json <json>';
+type DispatchEnvelopeInputSource =
+  | { readonly kind: 'inline'; readonly input: string }
+  | { readonly kind: 'file'; readonly path: string }
+  | { readonly kind: 'stdin' };
+
+const dispatchUsage = 'Usage: rainrail dispatch <message> | --stdin | --message <text> | --json <file> | --json --stdin | --envelope-json <json>';
 const dispatchCliConversationId = 'cli-manual';
 const dispatchCliSourceName = 'cli';
 const maxDispatchManualMessageTextLength = 8_000;
@@ -2461,6 +2491,7 @@ function parseDispatchArguments(
   let mode: RainrailDispatchMode | undefined;
   let input: string | undefined;
   let shouldReadStdin = false;
+  let envelopeSource: DispatchEnvelopeInputSource | undefined;
   const positionalParts: string[] = [];
 
   for (let index = 0; index < args.length; index += 1) {
@@ -2476,7 +2507,45 @@ function parseDispatchArguments(
         continue;
       }
       mode = parsedInlineMode.mode;
-      input = parsedInlineMode.input;
+      if (parsedInlineMode.mode === 'envelope-json') {
+        envelopeSource = { kind: 'inline', input: parsedInlineMode.input };
+      } else {
+        input = parsedInlineMode.input;
+      }
+      continue;
+    }
+
+    if (arg.startsWith('--json=')) {
+      const value = arg.slice('--json='.length);
+      if (value.length === 0) {
+        errors.push('Missing value for --json.');
+        continue;
+      }
+      if (mode !== undefined || positionalParts.length > 0) {
+        errors.push('Choose only one dispatch input mode.');
+        continue;
+      }
+      mode = 'envelope-json';
+      envelopeSource = { kind: 'file', path: value };
+      continue;
+    }
+
+    if (arg === '--json') {
+      const value = args[index + 1];
+      if (value === undefined) {
+        errors.push('Missing value for --json.');
+        continue;
+      }
+      if (mode !== undefined || positionalParts.length > 0) {
+        errors.push('Choose only one dispatch input mode.');
+        index += 1;
+        continue;
+      }
+      mode = 'envelope-json';
+      envelopeSource = value === '--stdin'
+        ? { kind: 'stdin' }
+        : { kind: 'file', path: value };
+      index += 1;
       continue;
     }
 
@@ -2502,7 +2571,11 @@ function parseDispatchArguments(
         continue;
       }
       mode = arg === '--message' ? 'message' : 'envelope-json';
-      input = value;
+      if (mode === 'envelope-json') {
+        envelopeSource = { kind: 'inline', input: value };
+      } else {
+        input = value;
+      }
       index += 1;
       continue;
     }
@@ -2520,7 +2593,21 @@ function parseDispatchArguments(
     positionalParts.push(arg);
   }
 
-  if (errors.length === 0 && shouldReadStdin) {
+  if (errors.length === 0 && mode === 'envelope-json' && envelopeSource !== undefined) {
+    if (environment.dispatchRunner === undefined) {
+      input = '';
+    } else {
+      const envelopeInput = readDispatchEnvelopeInput(envelopeSource, environment);
+      if (envelopeInput.error !== undefined) {
+        return { errors: [envelopeInput.error], help: false };
+      }
+      const validated = parseAndValidateDispatchEnvelope(envelopeInput.input);
+      if (validated.error !== undefined) {
+        return { errors: [validated.error], help: false };
+      }
+      input = validated.input;
+    }
+  } else if (errors.length === 0 && shouldReadStdin) {
     const stdinInput = readDispatchStdin(environment);
     if ('error' in stdinInput) {
       return { errors: [stdinInput.error], help: false };
@@ -2569,9 +2656,55 @@ function formatDispatchHelp(): string {
     '  <message>               Dispatch a message-only input as a manual Rainrail event.',
     '  --stdin                 Read the message from standard input.',
     '  --message <text>        Dispatch a message-only input payload.',
+    '  --json <file>           Dispatch a complete Rainrail event envelope JSON file.',
+    '  --json --stdin          Dispatch a complete Rainrail event envelope from stdin.',
     '  --envelope-json <json>  Dispatch a complete Rainrail event envelope JSON string.',
     '',
   ].join('\n');
+}
+
+function readDispatchEnvelopeInput(
+  source: DispatchEnvelopeInputSource,
+  environment: RainrailCliEnvironment,
+): { readonly input: string; readonly error?: undefined } | { readonly error: string } {
+  if (source.kind === 'inline') {
+    return { input: source.input };
+  }
+  if (source.kind === 'stdin') {
+    return readDispatchJsonStdin(environment);
+  }
+  return readDispatchJsonFile(source.path, environment);
+}
+
+function readDispatchJsonFile(
+  path: string,
+  environment: RainrailCliEnvironment,
+): { readonly input: string; readonly error?: undefined } | { readonly error: string } {
+  const fileSystem = {
+    ...defaultRainrailCliFileSystem,
+    ...environment.fileSystem,
+  };
+  const resolvedPath = resolve(environment.cwd ?? process.cwd(), path);
+  try {
+    return { input: fileSystem.readFileSync(resolvedPath, 'utf8') };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { error: `Unable to read rainrail dispatch JSON file: ${message}` };
+  }
+}
+
+function readDispatchJsonStdin(
+  environment: RainrailCliEnvironment,
+): { readonly input: string; readonly error?: undefined } | { readonly error: string } {
+  try {
+    if (environment.stdinReader !== undefined) {
+      return { input: environment.stdinReader() };
+    }
+    return { input: environment.stdin ?? readFileSync(0, 'utf8') };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { error: `Unable to read rainrail dispatch JSON from stdin: ${message}` };
+  }
 }
 
 function createDispatchRequest(
@@ -2658,6 +2791,427 @@ function createDispatchManualMessageEvent(
       sha256: messageSha256,
     },
   };
+}
+
+function parseAndValidateDispatchEnvelope(input: string): { readonly input: string; readonly error?: undefined } | { readonly error: string } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(input);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { error: `Invalid JSON for rainrail dispatch envelope: ${message}` };
+  }
+
+  const validation = validateDispatchEnvelopeInput(parsed);
+  if (validation.error !== undefined) {
+    return { error: `Invalid Rainrail event envelope: ${validation.error}` };
+  }
+
+  return {
+    input: validation.complete ? input : addDispatchEnvelopeDefaults(input, validation),
+  };
+}
+
+type DispatchEnvelopeObject = Record<string, unknown>;
+type DispatchEnvelopeValidation = {
+  readonly envelope: DispatchEnvelopeObject & {
+    readonly id: string;
+    readonly schemaVersion: 'rainrail.event.v1';
+  };
+  readonly complete: boolean;
+  readonly hasId: boolean;
+  readonly hasSchemaVersion: boolean;
+  readonly error?: undefined;
+};
+const dispatchSafeIdentifierPattern = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/u;
+const dispatchSafeRepositoryNamePattern = /^[A-Za-z0-9_.-]{1,64}\/[A-Za-z0-9_.-]{1,64}$/u;
+const dispatchSafeRefSubjectIdPattern = /^(?:(?:branch|tag):|refs\/(?:heads|tags)\/)[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$/u;
+const dispatchSafeDeliveryReferenceIdPattern = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/u;
+const dispatchSafeGithubUrlSegmentPattern = /^[A-Za-z0-9_.-]{1,64}$/u;
+const dispatchSafeGithubNumericIdPattern = /^\d{1,20}$/u;
+const dispatchUtcIsoTimestampPattern = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,3}))?Z$/u;
+const dispatchAllowedRawPayloadKinds = new Set(['external-reference', 'inline-redacted']);
+
+function validateDispatchEnvelopeInput(
+  value: unknown,
+): DispatchEnvelopeValidation | { readonly error: string } {
+  if (!isRecord(value)) {
+    return { error: 'envelope must be a JSON object.' };
+  }
+
+  const source = readRequiredObject(value, 'source');
+  if (source.error !== undefined) return source;
+  const sourceType = readRequiredString(source.value, 'source.type');
+  if (sourceType.error !== undefined) return sourceType;
+  if (!isDispatchSafeIdentifier(sourceType.value)) {
+    return { error: 'source.type must be a safe identifier.' };
+  }
+  const sourceName = readRequiredString(source.value, 'source.name');
+  if (sourceName.error !== undefined) return sourceName;
+  if (!isDispatchSafeIdentifier(sourceName.value)) {
+    return { error: 'source.name must be a safe identifier.' };
+  }
+  const sourceRepository = validateOptionalDispatchRepository(source.value, 'source.repository');
+  if (sourceRepository.error !== undefined) return sourceRepository;
+  const sourceAccount = validateOptionalDispatchIdentifier(source.value, 'source.account');
+  if (sourceAccount.error !== undefined) return sourceAccount;
+  const sourceEnvironment = validateOptionalDispatchIdentifier(source.value, 'source.environment');
+  if (sourceEnvironment.error !== undefined) return sourceEnvironment;
+
+  const name = readRequiredString(value, 'name');
+  if (name.error !== undefined) return name;
+  if (!isDispatchSafeIdentifier(name.value)) {
+    return { error: 'name must be a safe identifier.' };
+  }
+  const manualSourceMatch = validateManualInputEventSourceMatches(sourceType.value, name.value);
+  if (manualSourceMatch.error !== undefined) return manualSourceMatch;
+
+  const delivery = readRequiredObject(value, 'delivery');
+  if (delivery.error !== undefined) return delivery;
+  const deliveryId = readRequiredString(delivery.value, 'delivery.id');
+  if (deliveryId.error !== undefined) return deliveryId;
+  if (!isDispatchSafeIdentifier(deliveryId.value)) {
+    return { error: 'delivery.id must be a safe identifier.' };
+  }
+  const deliveryReceivedAt = readRequiredString(delivery.value, 'delivery.receivedAt');
+  if (deliveryReceivedAt.error !== undefined) return deliveryReceivedAt;
+  if (!isDispatchUtcIsoTimestamp(deliveryReceivedAt.value)) {
+    return { error: 'delivery.receivedAt must be a UTC ISO timestamp.' };
+  }
+
+  const occurredAt = readRequiredString(value, 'occurredAt');
+  if (occurredAt.error !== undefined) return occurredAt;
+  if (!isDispatchUtcIsoTimestamp(occurredAt.value)) {
+    return { error: 'occurredAt must be a UTC ISO timestamp.' };
+  }
+
+  const subject = readRequiredObject(value, 'subject');
+  if (subject.error !== undefined) return subject;
+  const subjectType = readRequiredString(subject.value, 'subject.type');
+  if (subjectType.error !== undefined) return subjectType;
+  if (!isDispatchSafeIdentifier(subjectType.value)) {
+    return { error: 'subject.type must be a safe identifier.' };
+  }
+  const subjectId = readRequiredString(subject.value, 'subject.id');
+  if (subjectId.error !== undefined) return subjectId;
+  if (!isDispatchSafeSubjectIdentifier(subjectId.value)) {
+    return { error: 'subject.id must be a safe identifier.' };
+  }
+  const subjectUrl = validateOptionalDispatchUrl(subject.value, 'subject.url');
+  if (subjectUrl.error !== undefined) return subjectUrl;
+
+  if (!Object.hasOwn(value, 'payload')) {
+    return { error: 'payload is required.' };
+  }
+  const manualPayload = validateManualInputPayload(
+    value.payload,
+    {
+      sourceType: sourceType.value,
+      name: name.value,
+      subjectType: subjectType.value,
+      subjectId: subjectId.value,
+    },
+  );
+  if (manualPayload.error !== undefined) return manualPayload;
+
+  const rawPayload = readRequiredObject(value, 'rawPayload');
+  if (rawPayload.error !== undefined) return rawPayload;
+  const rawPayloadKind = readRequiredString(rawPayload.value, 'rawPayload.kind');
+  if (rawPayloadKind.error !== undefined) return rawPayloadKind;
+  if (!dispatchAllowedRawPayloadKinds.has(rawPayloadKind.value)) {
+    return { error: 'rawPayload.kind must be a known raw payload kind.' };
+  }
+  const rawPayloadReference = readRequiredString(rawPayload.value, 'rawPayload.reference');
+  if (rawPayloadReference.error !== undefined) return rawPayloadReference;
+  if (!isAllowedDispatchEventUrl(rawPayloadReference.value)) {
+    return { error: 'rawPayload.reference must be an allowed Rainrail event URL.' };
+  }
+  const manualRawPayload = validateManualInputRawPayloadMatches(
+    sourceType.value,
+    name.value,
+    rawPayloadKind.value,
+    rawPayloadReference.value,
+  );
+  if (manualRawPayload.error !== undefined) return manualRawPayload;
+  const rawPayloadContentType = validateOptionalDispatchContentType(rawPayload.value, 'rawPayload.contentType');
+  if (rawPayloadContentType.error !== undefined) return rawPayloadContentType;
+  const rawPayloadSha256 = validateOptionalDispatchSha256(rawPayload.value, 'rawPayload.sha256');
+  if (rawPayloadSha256.error !== undefined) return rawPayloadSha256;
+
+  const hasSchemaVersion = Object.hasOwn(value, 'schemaVersion');
+  const schemaVersion = hasSchemaVersion ? value.schemaVersion : 'rainrail.event.v1';
+  if (schemaVersion !== 'rainrail.event.v1') {
+    return { error: 'schemaVersion must be "rainrail.event.v1".' };
+  }
+
+  const hasId = Object.hasOwn(value, 'id');
+  const id = hasId ? value.id : `${sourceName.value}:${deliveryId.value}:${name.value}`;
+  if (typeof id !== 'string') {
+    return { error: 'id must be a string.' };
+  }
+  if (!isDispatchSafeIdentifier(id)) {
+    return { error: 'id must be a safe identifier.' };
+  }
+
+  return {
+    envelope: {
+      ...value,
+      id,
+      schemaVersion,
+    },
+    complete: hasId && hasSchemaVersion,
+    hasId,
+    hasSchemaVersion,
+  };
+}
+
+function addDispatchEnvelopeDefaults(
+  input: string,
+  validation: DispatchEnvelopeValidation,
+): string {
+  const properties: string[] = [];
+  if (!validation.hasId) {
+    properties.push(`"id":${JSON.stringify(validation.envelope.id)}`);
+  }
+  if (!validation.hasSchemaVersion) {
+    properties.push('"schemaVersion":"rainrail.event.v1"');
+  }
+  if (properties.length === 0) {
+    return input;
+  }
+
+  const objectStartIndex = input.search(/\S/u);
+  if (objectStartIndex < 0 || input[objectStartIndex] !== '{') {
+    return JSON.stringify(validation.envelope);
+  }
+
+  const afterOpenBrace = input.slice(objectStartIndex + 1);
+  const hasExistingProperties = !afterOpenBrace.trimStart().startsWith('}');
+  return [
+    input.slice(0, objectStartIndex + 1),
+    properties.join(','),
+    hasExistingProperties ? ',' : '',
+    input.slice(objectStartIndex + 1),
+  ].join('');
+}
+
+function validateOptionalDispatchIdentifier(
+  value: DispatchEnvelopeObject,
+  path: string,
+): { readonly error?: undefined } | { readonly error: string } {
+  const fieldName = path.split('.').at(-1);
+  const field = fieldName === undefined ? undefined : value[fieldName];
+  if (field === undefined) return {};
+  if (typeof field !== 'string') {
+    return { error: `${path} must be a string.` };
+  }
+  return {};
+}
+
+function validateOptionalDispatchRepository(
+  value: DispatchEnvelopeObject,
+  path: string,
+): { readonly error?: undefined } | { readonly error: string } {
+  const fieldName = path.split('.').at(-1);
+  const field = fieldName === undefined ? undefined : value[fieldName];
+  if (field === undefined) return {};
+  if (typeof field !== 'string') {
+    return { error: `${path} must be a string.` };
+  }
+  if (!dispatchSafeRepositoryNamePattern.test(field)) {
+    return { error: `${path} must be an owner/repo identifier.` };
+  }
+  return {};
+}
+
+function validateOptionalDispatchUrl(
+  value: DispatchEnvelopeObject,
+  path: string,
+): { readonly error?: undefined } | { readonly error: string } {
+  const fieldName = path.split('.').at(-1);
+  const field = fieldName === undefined ? undefined : value[fieldName];
+  if (field === undefined) return {};
+  if (typeof field !== 'string') {
+    return { error: `${path} must be a string.` };
+  }
+  if (!isAllowedDispatchEventUrl(field)) {
+    return { error: `${path} must be an allowed Rainrail event URL.` };
+  }
+  return {};
+}
+
+function validateOptionalDispatchContentType(
+  value: DispatchEnvelopeObject,
+  path: string,
+): { readonly error?: undefined } | { readonly error: string } {
+  const fieldName = path.split('.').at(-1);
+  const field = fieldName === undefined ? undefined : value[fieldName];
+  if (field === undefined) return {};
+  if (typeof field !== 'string') {
+    return { error: `${path} must be a string.` };
+  }
+  const contentType = field.split(';', 1)[0]?.trim().toLowerCase();
+  if (contentType === undefined || !/^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/u.test(contentType)) {
+    return { error: `${path} must be a MIME type.` };
+  }
+  return {};
+}
+
+function validateOptionalDispatchSha256(
+  value: DispatchEnvelopeObject,
+  path: string,
+): { readonly error?: undefined } | { readonly error: string } {
+  const fieldName = path.split('.').at(-1);
+  const field = fieldName === undefined ? undefined : value[fieldName];
+  if (field === undefined) return {};
+  if (typeof field !== 'string') {
+    return { error: `${path} must be a string.` };
+  }
+  if (!/^[a-f0-9]{64}$/iu.test(field)) {
+    return { error: `${path} must be a SHA-256 hex digest.` };
+  }
+  return {};
+}
+
+function validateManualInputEventSourceMatches(
+  sourceType: string,
+  name: string,
+): { readonly error?: undefined } | { readonly error: string } {
+  if (
+    (name === 'rainrail.manual.message' && sourceType !== 'manual')
+    || (name === 'rainrail.chat.message' && sourceType !== 'chat')
+  ) {
+    return { error: 'manual/chat event name must match source.type.' };
+  }
+  if (
+    (sourceType === 'manual' && name !== 'rainrail.manual.message')
+    || (sourceType === 'chat' && name !== 'rainrail.chat.message')
+  ) {
+    return { error: 'manual/chat source.type must use the matching event name.' };
+  }
+  return {};
+}
+
+function validateManualInputPayload(
+  payload: unknown,
+  context: {
+    readonly sourceType: string;
+    readonly name: string;
+    readonly subjectType: string;
+    readonly subjectId: string;
+  },
+): { readonly error?: undefined } | { readonly error: string } {
+  if (!isManualInputDispatchEnvelope(context)) return {};
+  if (!isRecord(payload)) {
+    return { error: 'manual/chat payload must be an object.' };
+  }
+  if (payload.provider !== 'rainrail' || payload.channel !== context.sourceType || payload.action !== 'message') {
+    return { error: 'manual/chat payload is missing required fields.' };
+  }
+  if (!isRecord(payload.conversation) || typeof payload.conversation.id !== 'string' || payload.conversation.id.length === 0) {
+    return { error: 'manual/chat payload is missing required fields.' };
+  }
+  if (context.subjectType !== 'conversation' || payload.conversation.id !== context.subjectId) {
+    return { error: 'manual/chat subject must match payload conversation.' };
+  }
+  if (!isRecord(payload.message) || typeof payload.message.text !== 'string' || payload.message.text.trim().length === 0) {
+    return { error: 'payload.message.text is required.' };
+  }
+  return {};
+}
+
+function validateManualInputRawPayloadMatches(
+  sourceType: string,
+  name: string,
+  kind: string,
+  reference: string,
+): { readonly error?: undefined } | { readonly error: string } {
+  if (!isManualInputDispatchEnvelope({ sourceType, name })) return {};
+  if (kind !== 'inline-redacted') {
+    return { error: 'manual/chat raw payload kind must be inline-redacted.' };
+  }
+  if (new URL(reference).protocol !== `${sourceType}:`) {
+    return { error: 'manual/chat raw payload reference must match source.type.' };
+  }
+  return {};
+}
+
+function isManualInputDispatchEnvelope(context: { readonly sourceType: string; readonly name: string }): boolean {
+  return (context.sourceType === 'manual' && context.name === 'rainrail.manual.message')
+    || (context.sourceType === 'chat' && context.name === 'rainrail.chat.message');
+}
+
+function isDispatchSafeIdentifier(value: string): boolean {
+  return dispatchSafeIdentifierPattern.test(value) || dispatchSafeRepositoryNamePattern.test(value);
+}
+
+function isDispatchSafeSubjectIdentifier(value: string): boolean {
+  return isDispatchSafeIdentifier(value) || dispatchSafeRefSubjectIdPattern.test(value);
+}
+
+function isDispatchUtcIsoTimestamp(value: string): boolean {
+  const match = dispatchUtcIsoTimestampPattern.exec(value);
+  if (match === null) return false;
+  const parsed = Date.parse(value);
+  if (Number.isNaN(parsed)) return false;
+  const [, seconds, milliseconds] = match;
+  const canonical = `${seconds}.${(milliseconds ?? '').padEnd(3, '0')}Z`;
+  return new Date(parsed).toISOString() === canonical;
+}
+
+function isAllowedDispatchEventUrl(value: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  if (url.username !== '' || url.password !== '' || url.search !== '') {
+    return false;
+  }
+  if (url.protocol === 'github:' || url.protocol === 'cloudflare:' || url.protocol === 'manual:' || url.protocol === 'chat:') {
+    return url.hostname === 'deliveries'
+      && url.port.length === 0
+      && url.hash.length === 0
+      && dispatchSafeDeliveryReferenceIdPattern.test(url.pathname.slice(1))
+      && !url.pathname.slice(1).includes('/');
+  }
+  if (url.protocol !== 'https:' || url.hostname !== 'github.com') return false;
+  const segments = url.pathname.split('/').filter(Boolean);
+  if (segments.length < 2 || !segments.every((segment) => dispatchSafeGithubUrlSegmentPattern.test(segment))) {
+    return false;
+  }
+  if (segments.length === 2) return true;
+  if (segments.length === 4 && (segments[2] === 'issues' || segments[2] === 'pull' || segments[2] === 'runs')) {
+    return dispatchSafeGithubNumericIdPattern.test(segments[3] ?? '');
+  }
+  if (segments.length === 5 && segments[2] === 'actions' && segments[3] === 'runs') {
+    return dispatchSafeGithubNumericIdPattern.test(segments[4] ?? '');
+  }
+  return false;
+}
+
+function readRequiredObject(
+  value: DispatchEnvelopeObject,
+  path: string,
+): { readonly value: DispatchEnvelopeObject; readonly error?: undefined } | { readonly error: string } {
+  const field = value[path];
+  if (!isRecord(field)) {
+    return { error: `${path} must be an object.` };
+  }
+  return { value: field };
+}
+
+function readRequiredString(
+  value: DispatchEnvelopeObject,
+  path: string,
+): { readonly value: string; readonly error?: undefined } | { readonly error: string } {
+  const fieldName = path.split('.').at(-1);
+  const field = fieldName === undefined ? undefined : value[fieldName];
+  if (typeof field !== 'string') {
+    return { error: `${path} must be a string.` };
+  }
+  return { value: field };
 }
 
 function readDispatchStdin(environment: RainrailCliEnvironment):

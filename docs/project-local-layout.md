@@ -171,30 +171,46 @@ checks. Built-in help plus official plugin help routes such as `rainrail github
 help`, `rainrail github webhook add help`, and their canonical
 `rainrail plugin ... help` equivalents do not start the update notice check.
 
-`rainrail dispatch` accepts a simple manual message as either a positional
-argument, `--message <text>`, or `--stdin`. Message input is rejected before
-dispatch when it is blank after trimming. `--stdin` input is also rejected when
-it exceeds 65,536 bytes before the CLI stores the full input in memory. The CLI
-converts accepted message input into a `rainrail.manual.message`
-`RainrailDispatchEventEnvelope` with `source.type: "manual"` and
-`source.name: "cli"`, then passes it to `RainrailCliEnvironment.dispatchRunner`
-inside a `RainrailDispatchRequest`.
-The request keeps `mode: "message"`, the original `input` string, the
-synthesized `event`, and the shared `config`, `profile`, and `json` selections
-parsed before the dispatch command. `--message` values that look like options
-are preserved as message text. The synthesized event payload applies the same
-credential-looking text redaction and 8KB text bound as manual/chat source
-input before writing `payload.message.text`; `rawPayload.sha256` still hashes
-the original CLI input, and `rawPayload.contentType` is normalized to
-`text/plain`. Each synthesized manual event includes a per-process sequence and
-random entropy in `delivery.id` so repeated dispatches, including parallel CLI
-processes in the same millisecond, do not collide.
+`rainrail dispatch` accepts either a simple manual message or a complete
+Rainrail event envelope. Embedded callers can pass
+`RainrailCliEnvironment.dispatchRunner` to receive a `RainrailDispatchRequest`.
 
-The `envelope-json` mode remains a boundary for future full-envelope input:
-`rainrail dispatch --envelope-json <json>` forwards the raw JSON string in a
-`RainrailDispatchRequest` with `mode: "envelope-json"` and does not validate
-the envelope fields yet. `RainrailDispatchRunner` returns the same
-`RainrailCliResult` shape as other embedded command runners.
+Message input can be provided as a positional argument, `--message <text>`, or
+`--stdin`. Message input is rejected before dispatch when it is blank after
+trimming. `--stdin` input is also rejected when it exceeds 65,536 bytes before
+the CLI stores the full input in memory. The CLI converts accepted message
+input into a `rainrail.manual.message` `RainrailDispatchEventEnvelope` with
+`source.type: "manual"` and `source.name: "cli"`, then passes it to the runner
+inside a request with `mode: "message"`. The request keeps the original
+`input` string, the synthesized `event`, and the shared `config`, `profile`,
+and `json` selections parsed before the dispatch command. `--message` values
+that look like options are preserved as message text. The synthesized event
+payload applies the same credential-looking text redaction and 8KB text bound
+as manual/chat source input before writing `payload.message.text`;
+`rawPayload.sha256` still hashes the original CLI input, and
+`rawPayload.contentType` is normalized to `text/plain`. Each synthesized manual
+event includes a per-process sequence and random entropy in `delivery.id` so
+repeated dispatches, including parallel CLI processes in the same millisecond,
+do not collide.
+
+Complete envelope input can be provided as `--json <file>`, `--json --stdin`,
+or `--envelope-json <json>`. File paths are resolved relative to the CLI
+environment cwd. Envelope input is parsed as JSON and validated against the
+core event contract before it is passed to the runner, including safe
+identifiers, repository-shaped identifiers, UTC ISO timestamps, allowed raw
+payload kinds, and allowed event URL references. Optional
+`source.account` and `source.environment` values that are strings are accepted
+without enforcing safe identifier syntax, matching core publish omission
+semantics for unsafe optional metadata. Manual/chat envelopes additionally
+validate the `source.type`/`name` pairing, payload shape, and matching inline
+raw payload reference expected by core publish. Complete envelope JSON is
+forwarded without re-serialization so caller-provided payload fields remain
+byte-for-byte under the runner boundary. Accepted envelope input may omit `id`
+and `schemaVersion`; the CLI inserts those defaults into the raw JSON string
+without synthesizing message metadata or re-serializing payload fields. If a
+dispatch runner is not configured, JSON file/stdin input is not read before the
+standard missing-runner error is returned. `RainrailDispatchRunner` returns the
+same `RainrailCliResult` shape as other embedded command runners.
 
 ## Plugin command resolution
 
