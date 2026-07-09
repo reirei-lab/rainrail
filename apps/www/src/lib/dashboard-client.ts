@@ -155,20 +155,26 @@ export class RainrailDashboardApiClient {
     return this.get(`/api/v1/events?${params.toString()}`);
   }
 
-  workflowRuns(): Promise<DashboardCollection<DashboardWorkflowRun>> {
-    return this.get('/api/v1/workflow-runs?limit=25');
+  workflowRuns(filters: { status?: string } = {}): Promise<DashboardCollection<DashboardWorkflowRun>> {
+    const params = new URLSearchParams({ limit: '25' });
+    if (filters.status !== undefined && filters.status !== '') params.set('filter[status]', filters.status);
+    return this.get(`/api/v1/workflow-runs?${params.toString()}`);
   }
 
-  agentTasks(): Promise<DashboardCollection<DashboardAgentTask>> {
-    return this.get('/api/v1/agent-tasks?limit=25');
+  agentTasks(filters: { status?: string } = {}): Promise<DashboardCollection<DashboardAgentTask>> {
+    const params = new URLSearchParams({ limit: '25' });
+    if (filters.status !== undefined && filters.status !== '') params.set('filter[status]', filters.status);
+    return this.get(`/api/v1/agent-tasks?${params.toString()}`);
   }
 
   sources(): Promise<DashboardCollection<DashboardSource>> {
     return this.get('/api/v1/sources?limit=25');
   }
 
-  queue(): Promise<DashboardCollection<DashboardQueueItem>> {
-    return this.get('/api/v1/queue?limit=25');
+  queue(filters: { status?: string } = {}): Promise<DashboardCollection<DashboardQueueItem>> {
+    const params = new URLSearchParams({ limit: '25' });
+    if (filters.status !== undefined && filters.status !== '') params.set('filter[status]', filters.status);
+    return this.get(`/api/v1/queue?${params.toString()}`);
   }
 
   settings(): Promise<DashboardCollection<DashboardSetting>> {
