@@ -9,6 +9,7 @@ import {
   createRainrailHttpApp,
   RainrailBridgeRoom,
   RainrailOperationalStore,
+  type OperationalStore,
   type RainrailBridgeRoomState,
 } from './index.js';
 
@@ -2891,7 +2892,7 @@ describe('Rainrail dashboard API', () => {
 function createTestApp(options: {
   eventsBearerToken?: string;
   dashboardAuth?: Parameters<typeof createRainrailHttpApp>[0]['dashboardAuth'];
-  operationalStore?: RainrailOperationalStore;
+  operationalStore?: OperationalStore;
   runtime?: string;
   intakeAdapters?: Parameters<typeof createRainrailHttpApp>[0]['intakeAdapters'];
   taskQueue?: Parameters<typeof createRainrailHttpApp>[0]['taskQueue'];

@@ -6,10 +6,21 @@ file-backed な運用状態を扱う。Source provider や runtime provider の�
 
 ## Store
 
-`RainrailOperationalStore` は `RainrailOperationalStoreOptions` で `databasePath`、
-`eventLimit`、任意の clock を受け取る。store は `StoredOperationalEvent`、
-`StoredActivityEvent`、`StoredAgentTask`、`StoredEventHandlerRetry` を永続化し、
-`StoredCommandResult`、`OperationalStoreSnapshot` として recent state と counts を返す。
+`OperationalStore` は dashboard/API、command audit、handler retry、agent task reconcile が
+依存する store contract である。JSON file persistence はこの contract の実装詳細であり、
+consumer は `OperationalStore` の method と stable record/input/snapshot type だけを見る。
+`JsonFileOperationalStore` は `JsonFileOperationalStoreOptions` で `databasePath`、
+`eventLimit`、任意の clock を受け取る file-backed adapter である。既存 consumer との互換性のため、
+`RainrailOperationalStore` と `RainrailOperationalStoreOptions` は同じ JSON file-backed adapter の
+互換 export として残す。
+
+store は `StoredOperationalEvent`、`StoredActivityEvent`、`StoredAgentTask`、
+`StoredEventHandlerRetry` を永続化し、`StoredCommandResult`、
+`OperationalStoreSnapshot` として recent state と counts を返す。snapshot は
+`SnapshotOptions` で skipped activity の表示を制御でき、warnings は
+`OperationalStoreWarnings` と `StoredStaleProjectClaimWarning` に分けて返す。
+event/activity の list API は `ListOperationalStoreEventsOptions` と
+`ListOperationalStoreActivityEventsOptions` を受け取る。
 activity id の採番は store data 内の sequence で進め、同じ process 内で同じ
 `databasePath` を共有する store instance 間でも同じ id を返さない。`:memory:` は
 instance-local な一時 store として扱う。
@@ -21,6 +32,8 @@ preview / dispatching / accepted / failed audit row を保存し、`requestId`�
 `recordAgentTask` は同じ task id の再記録で
 未指定 optional field を既存値で保持し、status/result だけの更新で session、log path、
 issue、claim、pid、`resumeAttempts` などの runtime metadata を消さない。
+status と Project claim state の部分更新 contract は `UpdateAgentTaskStatusInput` と
+`UpdateAgentTaskProjectClaimInput` として分離している。
 
 ## Retry and Reconcile
 
