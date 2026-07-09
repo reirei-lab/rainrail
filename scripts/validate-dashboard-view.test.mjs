@@ -310,6 +310,52 @@ describe('dashboard operational views', () => {
     expect(dashboardContent).toContain('カード設定');
   });
 
+  it('renders a card picker and editable dashboard layout grid', () => {
+    for (const marker of [
+      'data-card-picker-search',
+      'data-card-picker-category',
+      'data-card-picker-provider',
+      'data-card-picker-list',
+      'data-dashboard-layout-grid',
+      'data-dashboard-layout-status',
+    ]) {
+      expect(localizedDashboardPage).toContain(marker);
+    }
+
+    for (const marker of [
+      'renderDashboardLayout()',
+      'renderCardPicker()',
+      'saveDashboardLayoutItems',
+      'draggable = true',
+      'data-layout-item-id',
+      'data-dashboard-card-id',
+      'data-dashboard-card-menu',
+      'data-dashboard-card-resize',
+      'removeDashboardLayoutItem',
+      'moveDashboardLayoutItem',
+      'resizeDashboardLayoutItem',
+      'createDashboardLayoutItem',
+      'unknownDashboardCard',
+      'cardAvailabilityLabel',
+    ]) {
+      expect(dashboardApp).toContain(marker);
+    }
+
+    expect(dashboardClient).toContain('entry: { type:');
+    expect(dashboardClient).toContain('size: {');
+    expect(dashboardApp).toContain('category / provider / plugin');
+    expect(dashboardApp).toContain('activeClient.saveDashboardLayout(items)');
+    expect(dashboardContent).toContain('Card picker');
+    expect(dashboardContent).toContain('カードピッカー');
+    expect(globalStyles).toContain('.dashboard-layout-grid');
+    expect(globalStyles).toContain('grid-template-columns: repeat(12, minmax(0, 1fr))');
+    expect(globalStyles).toContain('grid-column: span var(--dashboard-card-columns)');
+    expect(globalStyles).toContain('min-height: calc(var(--dashboard-card-rows) * 88px)');
+    expect(globalStyles).toContain('.dashboard-card-picker-list');
+    expect(globalStyles).toContain('@media (max-width: 900px)');
+    expect(globalStyles).toContain('--dashboard-card-columns: 1');
+  });
+
   it('does not mark the whole dashboard empty just because Event Inbox filters hide rows', () => {
     expect(dashboardApp).toContain('hasDashboardRecords(latestData)');
     expect(dashboardApp).not.toContain("setState(hasRows(latestData) ? 'ready' : 'empty'");

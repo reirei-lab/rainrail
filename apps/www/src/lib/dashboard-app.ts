@@ -6,6 +6,7 @@ import {
   type DashboardDetail,
   type DashboardEvent,
   type DashboardLayout,
+  type DashboardLayoutItem,
   type DashboardOverview,
   type DashboardQueueItem,
   type DashboardSetting,
@@ -48,6 +49,7 @@ const TOKEN_STORAGE_KEY = 'rainrail-dashboard-token';
 const API_BASE_URL_STORAGE_KEY = 'rainrail-dashboard-api-base-url';
 const OPERATOR_STORAGE_KEY = 'rainrail-dashboard-operator';
 const STALE_AFTER_MS = 45000;
+const DASHBOARD_GRID_COLUMNS = 12;
 
 const root = document.querySelector<HTMLElement>('[data-dashboard-app]');
 const sessionStore = createSafeStorage(() => window.sessionStorage);
@@ -77,6 +79,12 @@ if (root !== null) {
   const cardSettingsForm = root.querySelector<HTMLElement>('[data-card-settings-form]');
   const cardSettingsSaveButton = root.querySelector<HTMLButtonElement>('[data-card-settings-save]');
   const cardSettingsStatus = root.querySelector<HTMLElement>('[data-card-settings-status]');
+  const cardPickerSearch = root.querySelector<HTMLInputElement>('[data-card-picker-search]');
+  const cardPickerCategory = root.querySelector<HTMLSelectElement>('[data-card-picker-category]');
+  const cardPickerProvider = root.querySelector<HTMLSelectElement>('[data-card-picker-provider]');
+  const cardPickerList = root.querySelector<HTMLElement>('[data-card-picker-list]');
+  const dashboardLayoutGrid = root.querySelector<HTMLElement>('[data-dashboard-layout-grid]');
+  const dashboardLayoutStatus = root.querySelector<HTMLElement>('[data-dashboard-layout-status]');
   const demoIndicator = root.querySelector<HTMLElement>('[data-demo-indicator]');
   const tabButtons = Array.from(root.querySelectorAll<HTMLButtonElement>('[data-dashboard-tab]'));
 
@@ -93,6 +101,9 @@ if (root !== null) {
   let selectedDetailRowId: string | undefined;
   let selectedAgentTaskId: string | undefined;
   let cardSettingsDirty = false;
+  let dashboardLayoutSaving = false;
+  let draggedLayoutItemId: string | undefined;
+  let layoutMutationSequence = 0;
 
   const storedToken = sessionStore.get(TOKEN_STORAGE_KEY) ?? '';
   const storedApiBaseUrl = sessionStore.get(API_BASE_URL_STORAGE_KEY) ?? appRoot.dataset.apiBaseUrl ?? '';
@@ -226,6 +237,18 @@ if (root !== null) {
     void saveSelectedCardSettings();
   });
 
+  cardPickerSearch?.addEventListener('input', () => {
+    renderCardPicker();
+  });
+
+  cardPickerCategory?.addEventListener('change', () => {
+    renderCardPicker();
+  });
+
+  cardPickerProvider?.addEventListener('change', () => {
+    renderCardPicker();
+  });
+
   async function refresh(options: { quiet?: boolean } = {}): Promise<void> {
     if (client === undefined) {
       setState('auth-missing', copy.status.authMissing);
@@ -257,6 +280,8 @@ if (root !== null) {
       lastUpdatedAt = Date.now();
       scheduleStaleCheck();
       renderStats(latestData.overview);
+      renderDashboardLayout();
+      renderCardPicker();
       renderCardSettingsPicker(options);
       renderCurrentList();
       const hasOperationalData = hasDashboardRecords(latestData);
@@ -433,6 +458,11 @@ if (root !== null) {
     if (staleIndicator !== null) staleIndicator.hidden = true;
     renderEmptyStats();
     if (list !== null) list.replaceChildren();
+    if (dashboardLayoutGrid !== null) dashboardLayoutGrid.replaceChildren();
+    if (cardPickerList !== null) cardPickerList.replaceChildren();
+    if (cardPickerCategory !== null) cardPickerCategory.replaceChildren(cardPickerOption('', copy.cardLayout.allCategories));
+    if (cardPickerProvider !== null) cardPickerProvider.replaceChildren(cardPickerOption('', copy.cardLayout.allProviders));
+    setDashboardLayoutStatus('');
     if (cardSettingsSelect !== null) cardSettingsSelect.replaceChildren();
     if (cardSettingsForm !== null) cardSettingsForm.replaceChildren();
     renderPlaceholderDetail(copy.placeholder.selectStream);
@@ -728,6 +758,346 @@ if (root !== null) {
 
   function setCommandStatus(message: string): void {
     if (commandStatus !== null) commandStatus.textContent = message;
+  }
+
+  function renderDashboardLayout(): void {
+    if (latestData === undefined || dashboardLayoutGrid === null) return;
+
+    const cardsById = dashboardCardsById(latestData.cards);
+    const items = [...latestData.layout.items].sort(compareDashboardLayoutItems);
+    if (items.length === 0) {
+      dashboardLayoutGrid.textContent = copy.cardLayout.empty;
+      return;
+    }
+
+    dashboardLayoutGrid.replaceChildren(...items.map((item) => dashboardLayoutCard(item, cardsById.get(item.cardId))));
+  }
+
+  function dashboardLayoutCard(
+    item: DashboardLayoutItem,
+    entry: DashboardCardCatalogEntry | undefined,
+  ): HTMLElement {
+    const article = document.createElement('article');
+    const available = entry?.availability.status === 'available';
+    article.className = `dashboard-layout-card${available ? '' : ' unavailable'}`;
+    article.dataset.layoutItemId = item.id;
+    article.dataset.dashboardCardId = item.cardId;
+    article.setAttribute('data-layout-item-id', item.id);
+    article.setAttribute('data-dashboard-card-id', item.cardId);
+    article.draggable = true;
+    article.style.setProperty('--dashboard-card-columns', String(clampDashboardCardSize(item.columns, 1, DASHBOARD_GRID_COLUMNS)));
+    article.style.setProperty('--dashboard-card-rows', String(clampDashboardCardSize(item.rows, 1, 12)));
+
+    article.addEventListener('dragstart', (event) => {
+      draggedLayoutItemId = item.id;
+      event.dataTransfer?.setData('text/plain', item.id);
+      event.dataTransfer?.setData('application/x-rainrail-dashboard-layout-item', item.id);
+    });
+    article.addEventListener('dragover', (event) => {
+      event.preventDefault();
+    });
+    article.addEventListener('drop', (event) => {
+      event.preventDefault();
+      const draggedId = event.dataTransfer?.getData('application/x-rainrail-dashboard-layout-item') || draggedLayoutItemId;
+      if (draggedId !== undefined && draggedId !== item.id) {
+        void moveDashboardLayoutItem(draggedId, item.id);
+      }
+      draggedLayoutItemId = undefined;
+    });
+
+    const heading = document.createElement('div');
+    heading.className = 'dashboard-layout-card-heading';
+    const title = document.createElement('div');
+    const eyebrow = document.createElement('span');
+    eyebrow.textContent = entry === undefined
+      ? copy.cardLayout.unknownDashboardCard
+      : `${entry.definition.category} / ${cardProviderLabel(entry)}`;
+    const name = document.createElement('strong');
+    name.textContent = entry?.definition.title ?? item.cardId;
+    title.append(eyebrow, name);
+
+    const menu = document.createElement('div');
+    menu.className = 'dashboard-layout-card-menu';
+    menu.dataset.dashboardCardMenu = item.id;
+    menu.setAttribute('data-dashboard-card-menu', item.id);
+    const resizeButton = dashboardCardActionButton(copy.cardLayout.resize, () => resizeDashboardLayoutItem(item.id), entry === undefined);
+    resizeButton.setAttribute('data-dashboard-card-resize', item.id);
+    menu.append(
+      dashboardCardActionButton(copy.cardLayout.move, () => moveDashboardLayoutItem(item.id, previousLayoutItemId(item.id) ?? item.id), item.id === latestData?.layout.items[0]?.id),
+      resizeButton,
+      dashboardCardActionButton(copy.cardLayout.settings, () => selectCardSettingsItem(item.id), entry === undefined),
+      dashboardCardActionButton(copy.cardLayout.hide, () => removeDashboardLayoutItem(item.id)),
+      dashboardCardActionButton(copy.cardLayout.remove, () => removeDashboardLayoutItem(item.id)),
+    );
+    heading.append(title, menu);
+
+    const body = document.createElement('div');
+    body.className = 'dashboard-layout-card-body';
+    if (entry === undefined) {
+      body.textContent = copy.cardLayout.unknownDashboardCard;
+    } else if (!available) {
+      body.textContent = cardAvailabilityLabel(entry);
+    } else {
+      body.append(...dashboardLayoutCardBody(item, entry));
+    }
+
+    const footer = document.createElement('footer');
+    footer.textContent = `${item.id} · ${item.columns}x${item.rows}`;
+    article.append(heading, body, footer);
+    return article;
+  }
+
+  function dashboardLayoutCardBody(
+    item: DashboardLayoutItem,
+    entry: DashboardCardCatalogEntry,
+  ): HTMLElement[] {
+    const definition = entry.definition;
+    const meta = document.createElement('p');
+    meta.textContent = definition.description ?? cardAvailabilityLabel(entry);
+    const shortcut = document.createElement('button');
+    shortcut.type = 'button';
+    shortcut.className = 'dashboard-layout-card-link';
+    shortcut.textContent = dashboardCardShortcutLabel(definition.id);
+    shortcut.addEventListener('click', () => {
+      const tab = dashboardTabForCard(definition.id);
+      if (tab !== undefined) {
+        selectedTab = tab;
+        renderCurrentList();
+      } else {
+        selectCardSettingsItem(item.id);
+      }
+    });
+    return [meta, shortcut];
+  }
+
+  function dashboardCardActionButton(label: string, action: () => void | Promise<void>, disabled = false): HTMLButtonElement {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = label;
+    button.disabled = disabled || dashboardLayoutSaving;
+    button.addEventListener('click', () => {
+      void action();
+    });
+    return button;
+  }
+
+  function renderCardPicker(): void {
+    if (latestData === undefined || cardPickerList === null) return;
+
+    const categoryFilter = cardPickerCategory?.value ?? '';
+    const providerFilter = cardPickerProvider?.value ?? '';
+    const search = cardPickerSearch?.value.trim().toLocaleLowerCase() ?? '';
+    syncCardPickerFilters(latestData.cards);
+
+    const entries = latestData.cards.filter((entry) => {
+      if (categoryFilter !== '' && entry.definition.category !== categoryFilter) return false;
+      if (providerFilter !== '' && cardProviderLabel(entry) !== providerFilter) return false;
+      if (search === '') return true;
+      return cardSearchText(entry).includes(search);
+    });
+
+    cardPickerList.replaceChildren(...entries.map((entry) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.disabled = entry.availability.status !== 'available';
+      button.dataset.dashboardCardId = entry.definition.id;
+      button.setAttribute('data-dashboard-card-id', entry.definition.id);
+      button.innerHTML = `
+        <span>${escapeHtml(entry.definition.category)} / ${escapeHtml(cardProviderLabel(entry))}</span>
+        <strong>${escapeHtml(entry.definition.title)}</strong>
+        <small>${escapeHtml(cardAvailabilityLabel(entry))}</small>
+      `;
+      button.addEventListener('click', () => {
+        void addDashboardLayoutCard(entry);
+      });
+      return button;
+    }));
+  }
+
+  function syncCardPickerFilters(cards: DashboardCardCatalogEntry[]): void {
+    const selectedCategory = cardPickerCategory?.value ?? '';
+    const selectedProvider = cardPickerProvider?.value ?? '';
+    const categories = uniqueSorted(cards.map((entry) => entry.definition.category));
+    const providers = uniqueSorted(cards.map(cardProviderLabel));
+    if (cardPickerCategory !== null) {
+      cardPickerCategory.replaceChildren(cardPickerOption('', copy.cardLayout.allCategories), ...categories.map((category) => cardPickerOption(category, category)));
+      cardPickerCategory.value = categories.includes(selectedCategory) ? selectedCategory : '';
+    }
+    if (cardPickerProvider !== null) {
+      cardPickerProvider.replaceChildren(cardPickerOption('', copy.cardLayout.allProviders), ...providers.map((provider) => cardPickerOption(provider, provider)));
+      cardPickerProvider.value = providers.includes(selectedProvider) ? selectedProvider : '';
+    }
+  }
+
+  function addDashboardLayoutCard(entry: DashboardCardCatalogEntry): Promise<void> {
+    if (latestData === undefined) return Promise.resolve();
+    const item = createDashboardLayoutItem(entry);
+    return saveDashboardLayoutItems([...latestData.layout.items, item]);
+  }
+
+  function createDashboardLayoutItem(entry: DashboardCardCatalogEntry): DashboardLayoutItem {
+    const size = entry.definition.size.default;
+    const y = latestData === undefined
+      ? 0
+      : latestData.layout.items.reduce((nextY, item) => Math.max(nextY, item.y + item.rows), 0);
+    layoutMutationSequence += 1;
+    return {
+      id: `${entry.definition.id.replace(/[^a-zA-Z0-9]+/g, '-')}-${Date.now().toString(36)}-${layoutMutationSequence}`,
+      cardId: entry.definition.id,
+      x: 0,
+      y,
+      columns: size.columns,
+      rows: size.rows,
+    };
+  }
+
+  function removeDashboardLayoutItem(itemId: string): Promise<void> {
+    if (latestData === undefined) return Promise.resolve();
+    return saveDashboardLayoutItems(latestData.layout.items.filter((item) => item.id !== itemId));
+  }
+
+  function moveDashboardLayoutItem(sourceItemId: string, targetItemId: string): Promise<void> {
+    if (latestData === undefined || sourceItemId === targetItemId) return Promise.resolve();
+    const source = latestData.layout.items.find((item) => item.id === sourceItemId);
+    const target = latestData.layout.items.find((item) => item.id === targetItemId);
+    if (source === undefined || target === undefined) return Promise.resolve();
+    const items = latestData.layout.items.map((item) => {
+      if (item.id === sourceItemId) return { ...item, x: target.x, y: target.y };
+      if (item.id === targetItemId) return { ...item, x: source.x, y: source.y };
+      return item;
+    });
+    return saveDashboardLayoutItems(items);
+  }
+
+  function resizeDashboardLayoutItem(itemId: string): Promise<void> {
+    if (latestData === undefined) return Promise.resolve();
+    const cardsById = dashboardCardsById(latestData.cards);
+    const items = latestData.layout.items.map((item) => {
+      if (item.id !== itemId) return item;
+      const entry = cardsById.get(item.cardId);
+      const min = entry?.definition.size.min ?? { columns: 1, rows: 1 };
+      const max = entry?.definition.size.max ?? { columns: DASHBOARD_GRID_COLUMNS, rows: 12 };
+      const nextColumns = item.columns >= max.columns ? min.columns : item.columns + 1;
+      const nextRows = item.rows >= max.rows ? min.rows : item.rows + 1;
+      return {
+        ...item,
+        columns: clampDashboardCardSize(nextColumns, min.columns, Math.min(max.columns, DASHBOARD_GRID_COLUMNS)),
+        rows: clampDashboardCardSize(nextRows, min.rows, max.rows),
+      };
+    });
+    return saveDashboardLayoutItems(items);
+  }
+
+  async function saveDashboardLayoutItems(items: DashboardLayoutItem[]): Promise<void> {
+    if (client === undefined || latestData === undefined) {
+      setDashboardLayoutStatus(copy.command.connectFirst);
+      return;
+    }
+    const activeClient = client;
+    dashboardLayoutSaving = true;
+    setDashboardLayoutStatus(copy.cardLayout.saving);
+    renderDashboardLayout();
+    try {
+      const response = await activeClient.saveDashboardLayout(items);
+      if (client !== activeClient) return;
+      latestData = {
+        ...latestData,
+        layout: response.data,
+      };
+      setDashboardLayoutStatus(formatCommandResponse('accepted', response.data.auditId, response.data.auditWarning, copy));
+      renderDashboardLayout();
+      renderCardSettingsPicker();
+      setDashboardLayoutStatus(copy.cardLayout.saved);
+    } catch (error) {
+      setDashboardLayoutStatus(error instanceof RainrailDashboardApiError ? `${copy.cardLayout.failed}: ${error.code}` : copy.cardLayout.failed);
+    } finally {
+      dashboardLayoutSaving = false;
+      renderDashboardLayout();
+    }
+  }
+
+  function setDashboardLayoutStatus(message: string): void {
+    if (dashboardLayoutStatus !== null) dashboardLayoutStatus.textContent = message;
+  }
+
+  function selectCardSettingsItem(itemId: string): void {
+    if (cardSettingsSelect !== null) {
+      cardSettingsSelect.value = itemId;
+      renderCardSettingsForm();
+      cardSettingsSelect.scrollIntoView({ block: 'nearest' });
+    }
+  }
+
+  function dashboardCardsById(cards: DashboardCardCatalogEntry[]): Map<string, DashboardCardCatalogEntry> {
+    return new Map(cards.map((entry) => [entry.definition.id, entry]));
+  }
+
+  function compareDashboardLayoutItems(a: DashboardLayoutItem, b: DashboardLayoutItem): number {
+    return a.y - b.y || a.x - b.x || a.id.localeCompare(b.id);
+  }
+
+  function cardProviderLabel(entry: DashboardCardCatalogEntry): string {
+    return entry.definition.entry.type === 'plugin' ? entry.definition.entry.pluginName : 'core';
+  }
+
+  function cardAvailabilityLabel(entry: DashboardCardCatalogEntry): string {
+    if (entry.availability.status === 'available') return entry.definition.description ?? entry.definition.title;
+    return entry.availability.message
+      ?? entry.availability.reason
+      ?? copy.cardLayout.unavailable;
+  }
+
+  function cardSearchText(entry: DashboardCardCatalogEntry): string {
+    // Search dimensions: category / provider / plugin.
+    const definition = entry.definition;
+    const pluginName = definition.entry.type === 'plugin' ? definition.entry.pluginName : '';
+    const cardName = definition.entry.type === 'plugin' ? definition.entry.cardName : definition.entry.name;
+    return [
+      definition.id,
+      definition.title,
+      definition.description,
+      definition.category,
+      cardProviderLabel(entry),
+      pluginName,
+      cardName,
+    ].filter((value): value is string => typeof value === 'string').join(' ').toLocaleLowerCase();
+  }
+
+  function uniqueSorted(values: string[]): string[] {
+    return [...new Set(values)].sort((a, b) => a.localeCompare(b));
+  }
+
+  function cardPickerOption(value: string, label: string): HTMLOptionElement {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = label;
+    return option;
+  }
+
+  function previousLayoutItemId(itemId: string): string | undefined {
+    if (latestData === undefined) return undefined;
+    const items = [...latestData.layout.items].sort(compareDashboardLayoutItems);
+    const index = items.findIndex((item) => item.id === itemId);
+    return index > 0 ? items[index - 1]?.id : undefined;
+  }
+
+  function clampDashboardCardSize(value: number, min: number, max: number): number {
+    return Math.max(min, Math.min(max, Math.trunc(value)));
+  }
+
+  function dashboardTabForCard(cardId: string): DashboardTab | undefined {
+    if (cardId === 'core.eventInbox' || cardId === 'core.recentEvents') return 'events';
+    if (cardId === 'core.workflowRuns') return 'workflow-runs';
+    if (cardId === 'core.agentTasks') return 'agent-tasks';
+    if (cardId === 'core.sources') return 'sources';
+    if (cardId === 'core.queue') return 'queue';
+    if (cardId === 'core.settings') return 'settings';
+    if (cardId === 'core.operationalTotals' || cardId === 'core.overview') return 'overview';
+    return undefined;
+  }
+
+  function dashboardCardShortcutLabel(cardId: string): string {
+    return dashboardTabForCard(cardId) === undefined ? copy.cardLayout.settings : copy.cardLayout.move;
   }
 
   function renderCardSettingsPicker(options: { quiet?: boolean } = {}): void {
