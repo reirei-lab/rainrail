@@ -103,6 +103,9 @@ export function createRainrailNodeServer(options: RainrailNodeServerOptions): Ra
     server.once('close', () => {
       ownedOperationalStore?.close();
     });
+    server.once('error', () => {
+      ownedOperationalStore?.close();
+    });
 
     return {
       server,

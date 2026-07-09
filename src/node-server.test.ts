@@ -552,6 +552,41 @@ describe('Rainrail Node server', () => {
     }
   });
 
+  it('closes an owned operational store when listen emits an error', async () => {
+    const directory = join(tmpdir(), `rainrail-node-listen-owned-store-${crypto.randomUUID()}`);
+    await mkdir(directory, { recursive: true });
+    const databasePath = join(directory, 'operational.json');
+    const { server: occupied } = createRainrailNodeServer({
+      githubWebhookSecret: 'secret',
+      publishToken: 'test-publish-token',
+    });
+    occupied.listen(0, '127.0.0.1');
+    await once(occupied, 'listening');
+    const address = occupied.address();
+    if (address === null || typeof address === 'string') {
+      throw new Error('expected TCP server address');
+    }
+    const { server } = createRainrailNodeServer({
+      githubWebhookSecret: 'secret',
+      publishToken: 'test-publish-token',
+      operationalStoreConfig: {
+        kind: 'json',
+        databasePath,
+        eventLimit: 5,
+      },
+    });
+
+    try {
+      const errorPromise = once(server, 'error');
+      server.listen(address.port, '127.0.0.1');
+      await expect(errorPromise).resolves.toEqual([expect.objectContaining({ code: 'EADDRINUSE' })]);
+      await expect(readFile(databasePath, 'utf8')).resolves.toContain('"events"');
+    } finally {
+      await closeServer(occupied);
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it('forwards command API options and bodies to the shared HTTP app', async () => {
     const operationalStore = new RainrailOperationalStore({
       databasePath: ':memory:',

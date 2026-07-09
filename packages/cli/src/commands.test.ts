@@ -2573,6 +2573,152 @@ describe('Rainrail CLI built-in commands', () => {
     });
   });
 
+  it('migrates older SQLite operational event tables in local start', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'sqlite-operational-start-migration');
+      const port = await getFreePort();
+      const databasePath = join(projectRoot, 'var', 'rainrail-operational.sqlite');
+      await mkdir(join(projectRoot, 'var'), { recursive: true });
+      withSqliteDatabase(databasePath, (database) => {
+        database.exec(`
+          CREATE TABLE operational_events (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            source_json TEXT NOT NULL,
+            delivery_json TEXT NOT NULL,
+            subject_json TEXT NOT NULL,
+            occurred_at TEXT NOT NULL,
+            received_at TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            links_json TEXT
+          );
+        `);
+        database.prepare(`
+          INSERT INTO operational_events (
+            id, name, source_json, delivery_json, subject_json, occurred_at, received_at,
+            payload_json, links_json
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          'github-webhook:delivery-old-schema:github.issue',
+          'github.issue',
+          JSON.stringify({ type: 'github', name: 'github-webhook', repository: 'reirei-lab/rainrail' }),
+          JSON.stringify({ id: 'delivery-old-schema', receivedAt: '2026-07-09T00:00:00.000Z' }),
+          JSON.stringify({ type: 'issue', id: '271' }),
+          '2026-07-09T00:00:00.000Z',
+          '2026-07-09T00:00:00.000Z',
+          JSON.stringify({ action: 'opened' }),
+          null,
+        );
+      });
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        server: {
+          host: '127.0.0.1',
+          port,
+        },
+        operationalStore: {
+          kind: 'sqlite',
+          databasePath,
+          eventLimit: 10,
+        },
+        sourceBundles: [],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+
+      const result = await runRainrailCliAsync(['start'], { cwd: projectRoot });
+      try {
+        expect(result.exitCode).toBe(0);
+        const detail = await fetch(`http://127.0.0.1:${port}/api/v1/events/github-webhook%3Adelivery-old-schema%3Agithub.issue`);
+        await expect(detail.json()).resolves.toMatchObject({
+          data: {
+            id: 'github-webhook:delivery-old-schema:github.issue',
+            record: {
+              envelope: {
+                rawPayload: {
+                  kind: 'inline-redacted',
+                  reference: 'rainrail://redacted/raw-payload',
+                },
+              },
+            },
+          },
+        });
+      } finally {
+        await closeTestServer(result);
+      }
+    });
+  });
+
+  it('reserves local event ids across shared SQLite start processes', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'sqlite-operational-shared-id');
+      const firstPort = await getFreePort();
+      const secondPort = await getFreePort();
+      const databasePath = join(projectRoot, 'var', 'rainrail-operational.sqlite');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      const startConfig = (serverPort: number): string => `${JSON.stringify({
+        server: {
+          host: '127.0.0.1',
+          port: serverPort,
+        },
+        operationalStore: {
+          kind: 'sqlite',
+          databasePath,
+          eventLimit: 10,
+        },
+        sourceBundles: [
+          {
+            type: 'eep-bridge',
+            name: 'local',
+            sources: [
+              {
+                type: 'github-webhook',
+                name: 'github-local',
+                sourceType: 'github',
+                provider: 'github',
+                webhookSecret: 'secret',
+                endpoint: '/webhooks/github',
+              },
+            ],
+          },
+        ],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`;
+      await writeFile(configPath, startConfig(firstPort));
+      const first = await runRainrailCliAsync(['start'], { cwd: projectRoot });
+      await writeFile(configPath, startConfig(secondPort));
+      const second = await runRainrailCliAsync(['start'], { cwd: projectRoot });
+      try {
+        const body = JSON.stringify({ action: 'opened' });
+        const firstAccepted = await fetch(`http://127.0.0.1:${firstPort}/webhooks/github`, {
+          method: 'POST',
+          headers: githubWebhookHeaders('secret', body, { delivery: 'delivery-shared-first', event: 'issues' }),
+          body,
+        });
+        const secondAccepted = await fetch(`http://127.0.0.1:${secondPort}/webhooks/github`, {
+          method: 'POST',
+          headers: githubWebhookHeaders('secret', body, { delivery: 'delivery-shared-second', event: 'issues' }),
+          body,
+        });
+
+        expect(firstAccepted.status).toBe(202);
+        expect(secondAccepted.status).toBe(202);
+        await expect(firstAccepted.json()).resolves.toMatchObject({ data: { id: 'local-event-000001' } });
+        await expect(secondAccepted.json()).resolves.toMatchObject({ data: { id: 'local-event-000002' } });
+      } finally {
+        await closeTestServer(first);
+        await closeTestServer(second);
+      }
+
+      withSqliteDatabase(databasePath, (database) => {
+        expect(database.prepare('SELECT count(*) as count FROM operational_events WHERE id LIKE ?').get('local-event-%'))
+          .toEqual({ count: 2 });
+      });
+    });
+  });
+
   it('allocates local event ids from all persisted SQLite events', async () => {
     await withTempDirectory(async (directory) => {
       const projectRoot = await initRainrailProject(directory, 'sqlite-operational-local-id');

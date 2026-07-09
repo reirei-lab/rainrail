@@ -5420,6 +5420,7 @@ type LocalRainrailEventStore = {
   readonly listAgentTasks?: () => LocalOperationalAgentTask[];
   readonly listEventHandlerRetries?: () => LocalOperationalEventHandlerRetry[];
   readonly recordOperationalEvent?: (event: LocalOperationalEvent['envelope']) => LocalOperationalEvent;
+  readonly reserveLocalEventId?: () => string;
   readonly nextEventId?: () => number;
   readonly staleProjectClaimWarnings?: () => readonly LocalStaleProjectClaimWarning[];
   readonly counts?: () => {
@@ -5671,7 +5672,20 @@ function createSqliteLocalRainrailEventStore(databasePath: string, eventLimit: n
     );
     CREATE INDEX IF NOT EXISTS event_handler_retries_schedule_idx
       ON event_handler_retries (next_retry_at ASC, handler_name ASC);
+    CREATE TABLE IF NOT EXISTS operational_sequences (
+      name TEXT PRIMARY KEY,
+      value INTEGER NOT NULL
+    );
   `);
+  sqliteAddColumnIfMissing(
+    database,
+    'operational_events',
+    'raw_payload_reference_json',
+    `TEXT NOT NULL DEFAULT '${JSON.stringify({
+      kind: 'inline-redacted',
+      reference: 'rainrail://redacted/raw-payload',
+    }).replaceAll("'", "''")}'`,
+  );
   const selectEvents = database.prepare(
     `SELECT * FROM (
       SELECT * FROM operational_events ORDER BY received_at DESC, id DESC LIMIT ?
@@ -5689,6 +5703,14 @@ function createSqliteLocalRainrailEventStore(databasePath: string, eventLimit: n
       payload_json, raw_payload_reference_json, links_json
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO NOTHING`,
+  );
+  sqliteSeedSequenceValue(
+    database,
+    'local_event',
+    nextLocalEventId(
+      selectLocalEventIds.all('local-event-%')
+        .map((row) => ({ id: requiredStringRowValue(row, 'id') })),
+    ) - 1,
   );
 
   return {
@@ -5728,6 +5750,9 @@ function createSqliteLocalRainrailEventStore(databasePath: string, eventLimit: n
         JSON.stringify(event.links ?? null),
       );
       return localOperationalEventFromRow(selectEvent.get(event.id));
+    },
+    reserveLocalEventId() {
+      return `local-event-${String(sqliteNextSequenceValue(database, 'local_event')).padStart(6, '0')}`;
     },
     nextEventId() {
       return nextLocalEventId(
@@ -5963,6 +5988,59 @@ function sqliteCount(
   tableName: string,
 ): number {
   return requiredNumberRowValue(database.prepare(`SELECT count(*) as count FROM ${tableName}`).get(), 'count');
+}
+
+function sqliteAddColumnIfMissing(
+  database: { exec(sql: string): void; prepare(sql: string): { all(): unknown[] } },
+  tableName: string,
+  columnName: string,
+  definition: string,
+): void {
+  const rows = database.prepare(`PRAGMA table_info(${tableName})`).all();
+  if (rows.some((row) => rowValue(row, 'name') === columnName)) return;
+  database.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
+}
+
+function sqliteSeedSequenceValue(
+  database: {
+    exec(sql: string): void;
+    prepare(sql: string): {
+      run(...values: Array<string | number | null>): void;
+    };
+  },
+  name: string,
+  value: number,
+): void {
+  database.prepare(`
+    INSERT INTO operational_sequences (name, value) VALUES (?, ?)
+    ON CONFLICT(name) DO UPDATE SET value = max(value, excluded.value)
+  `).run(name, value);
+}
+
+function sqliteNextSequenceValue(
+  database: {
+    exec(sql: string): void;
+    prepare(sql: string): {
+      get(...values: Array<string | number | null>): unknown;
+      run(...values: Array<string | number | null>): void;
+    };
+  },
+  name: string,
+): number {
+  database.exec('BEGIN IMMEDIATE');
+  try {
+    const row = database.prepare('SELECT value FROM operational_sequences WHERE name = ?').get(name);
+    const value = (row === undefined ? 0 : requiredNumberRowValue(row, 'value')) + 1;
+    database.prepare(`
+      INSERT INTO operational_sequences (name, value) VALUES (?, ?)
+      ON CONFLICT(name) DO UPDATE SET value = excluded.value
+    `).run(name, value);
+    database.exec('COMMIT');
+    return value;
+  } catch (error) {
+    database.exec('ROLLBACK');
+    throw error;
+  }
 }
 
 function stringRowValue(row: unknown, key: string): string | undefined {
@@ -6524,8 +6602,10 @@ async function handleLocalIntakeRequest(
     writeJsonResponse(response, 400, { error: payload.error }, request);
     return;
   }
-  const id = `local-event-${String(state.nextEventId).padStart(6, '0')}`;
-  state.nextEventId += 1;
+  const id = state.eventStore?.reserveLocalEventId?.() ?? `local-event-${String(state.nextEventId).padStart(6, '0')}`;
+  if (state.eventStore?.reserveLocalEventId === undefined) {
+    state.nextEventId += 1;
+  }
   const eventName = payload.eventName ?? `${intakeSource.sourceType}.event`;
   const deliveryId = payload.deliveryId ?? id;
   const occurredAt = new Date().toISOString();
