@@ -5313,6 +5313,11 @@ type LocalDashboardLayoutItem = {
   readonly config?: Record<string, unknown>;
 };
 
+type LocalDashboardLayoutSnapshot = {
+  readonly items: readonly LocalDashboardLayoutItem[];
+  readonly updatedAt: string;
+};
+
 type LocalDashboardCardDefinition = {
   readonly id: string;
   readonly title: string;
@@ -5491,6 +5496,7 @@ type LocalRainrailServerState = {
   sseClients: Set<ServerResponse>;
   eventStore?: LocalRainrailEventStore;
   dashboardLayout: LocalDashboardLayoutItem[];
+  dashboardLayoutUpdatedAt?: string;
 };
 
 type LocalRainrailEventStore = {
@@ -5505,8 +5511,8 @@ type LocalRainrailEventStore = {
   readonly reserveLocalEventId?: () => string;
   readonly nextEventId?: () => number;
   readonly staleProjectClaimWarnings?: () => readonly LocalStaleProjectClaimWarning[];
-  readonly getDashboardLayout?: () => readonly LocalDashboardLayoutItem[] | undefined;
-  readonly saveDashboardLayout?: (items: readonly LocalDashboardLayoutItem[]) => void;
+  readonly getDashboardLayout?: () => LocalDashboardLayoutSnapshot | undefined;
+  readonly saveDashboardLayout?: (items: readonly LocalDashboardLayoutItem[]) => LocalDashboardLayoutSnapshot;
   readonly counts?: () => {
     readonly events: number;
     readonly activityEvents: number;
@@ -5530,11 +5536,13 @@ type LocalDashboardCommand = {
 async function startLocalRainrailServer(options: RainrailStartOptions): Promise<RainrailStartedServer> {
   const eventStore = createLocalRainrailEventStore(options.operationalStoreConfig);
   const restoredEvents = eventStore?.listEvents() ?? [];
+  const restoredDashboardLayout = eventStore?.getDashboardLayout?.();
   const state: LocalRainrailServerState = {
     nextEventId: eventStore?.nextEventId?.() ?? nextLocalEventId(restoredEvents),
     events: [...restoredEvents],
     sseClients: new Set(),
-    dashboardLayout: localCloneDashboardLayout(eventStore?.getDashboardLayout?.() ?? localDefaultDashboardLayout),
+    dashboardLayout: localCloneDashboardLayout(restoredDashboardLayout?.items ?? localDefaultDashboardLayout),
+    ...(restoredDashboardLayout === undefined ? {} : { dashboardLayoutUpdatedAt: restoredDashboardLayout.updatedAt }),
     ...(eventStore === undefined ? {} : { eventStore }),
   };
   const server = http.createServer((request, response) => {
@@ -5616,12 +5624,17 @@ function createLocalRainrailEventStore(
 function createMemoryLocalRainrailEventStore(eventLimit: number): LocalRainrailEventStore {
   let events: LocalRainrailEvent[] = [];
   let dashboardLayout: LocalDashboardLayoutItem[] | undefined;
+  let dashboardLayoutUpdatedAt: string | undefined;
   return {
     eventLimit,
     listEvents: () => [...events],
-    getDashboardLayout: () => dashboardLayout === undefined ? undefined : localCloneDashboardLayout(dashboardLayout),
+    getDashboardLayout: () => dashboardLayout === undefined || dashboardLayoutUpdatedAt === undefined
+      ? undefined
+      : { items: localCloneDashboardLayout(dashboardLayout), updatedAt: dashboardLayoutUpdatedAt },
     saveDashboardLayout(items) {
+      dashboardLayoutUpdatedAt = new Date().toISOString();
       dashboardLayout = localCloneDashboardLayout(items);
+      return { items: localCloneDashboardLayout(dashboardLayout), updatedAt: dashboardLayoutUpdatedAt };
     },
     replaceEvents(nextEvents) {
       events = [...nextEvents].slice(-eventLimit);
@@ -5629,6 +5642,7 @@ function createMemoryLocalRainrailEventStore(eventLimit: number): LocalRainrailE
     close() {
       events = [];
       dashboardLayout = undefined;
+      dashboardLayoutUpdatedAt = undefined;
     },
   };
 }
@@ -5636,21 +5650,28 @@ function createMemoryLocalRainrailEventStore(eventLimit: number): LocalRainrailE
 function createJsonLocalRainrailEventStore(databasePath: string, eventLimit: number): LocalRainrailEventStore {
   const initialData = readLocalRainrailEventStoreJson(databasePath);
   let events = initialData.events.slice(-eventLimit);
-  let dashboardLayout = initialData.dashboardLayout;
+  let dashboardLayout = initialData.dashboardLayout?.items;
+  let dashboardLayoutUpdatedAt = initialData.dashboardLayout?.updatedAt;
   const writeStore = (): void => {
     mkdirSync(dirname(databasePath), { recursive: true });
     writeFileSync(databasePath, `${JSON.stringify({
       events,
-      ...(dashboardLayout === undefined ? {} : { dashboardLayout }),
+      ...(dashboardLayout === undefined || dashboardLayoutUpdatedAt === undefined
+        ? {}
+        : { dashboardLayout, dashboardLayoutUpdatedAt }),
     }, null, 2)}\n`, { mode: 0o600 });
   };
   return {
     eventLimit,
     listEvents: () => [...events],
-    getDashboardLayout: () => dashboardLayout === undefined ? undefined : localCloneDashboardLayout(dashboardLayout),
+    getDashboardLayout: () => dashboardLayout === undefined || dashboardLayoutUpdatedAt === undefined
+      ? undefined
+      : { items: localCloneDashboardLayout(dashboardLayout), updatedAt: dashboardLayoutUpdatedAt },
     saveDashboardLayout(items) {
+      dashboardLayoutUpdatedAt = new Date().toISOString();
       dashboardLayout = localCloneDashboardLayout(items);
       writeStore();
+      return { items: localCloneDashboardLayout(dashboardLayout), updatedAt: dashboardLayoutUpdatedAt };
     },
     replaceEvents(nextEvents) {
       events = [...nextEvents].slice(-eventLimit);
@@ -5664,7 +5685,7 @@ function createJsonLocalRainrailEventStore(databasePath: string, eventLimit: num
 
 function readLocalRainrailEventStoreJson(databasePath: string): {
   readonly events: readonly LocalRainrailEvent[];
-  readonly dashboardLayout?: readonly LocalDashboardLayoutItem[];
+  readonly dashboardLayout?: LocalDashboardLayoutSnapshot;
 } {
   if (!existsSync(databasePath)) {
     return { events: [] };
@@ -5676,10 +5697,13 @@ function readLocalRainrailEventStoreJson(databasePath: string): {
         + 'Use kind "sqlite", kind "memory", or choose a separate JSON databasePath.',
     );
   }
+  const dashboardLayoutUpdatedAt = typeof parsed.dashboardLayoutUpdatedAt === 'string'
+    ? parsed.dashboardLayoutUpdatedAt
+    : undefined;
   return {
     events: parsed.events.filter(isLocalRainrailEvent),
-    ...(Array.isArray(parsed.dashboardLayout)
-      ? { dashboardLayout: parseLocalDashboardLayoutItems(parsed.dashboardLayout) }
+    ...(Array.isArray(parsed.dashboardLayout) && dashboardLayoutUpdatedAt !== undefined
+      ? { dashboardLayout: { items: parseLocalDashboardLayoutItems(parsed.dashboardLayout), updatedAt: dashboardLayoutUpdatedAt } }
       : {}),
   };
 }
@@ -5898,8 +5922,10 @@ function createSqliteLocalRainrailEventStore(databasePath: string, eventLimit: n
       return row === undefined ? undefined : localDashboardLayoutItemsFromRow(row);
     },
     saveDashboardLayout(items) {
-      upsertDashboardLayout.run('user.dashboardLayout', JSON.stringify(items), new Date().toISOString());
+      const updatedAt = new Date().toISOString();
+      upsertDashboardLayout.run('user.dashboardLayout', JSON.stringify(items), updatedAt);
       protectSqliteDatabaseFiles(databasePath);
+      return { items: localCloneDashboardLayout(items), updatedAt };
     },
     counts() {
       return {
@@ -6679,7 +6705,8 @@ async function handleLocalDashboardLayoutItemConfigRequest(
   state.dashboardLayout = state.dashboardLayout.map((item, index) => index === itemIndex
     ? { ...item, config: localCloneRecord(config) }
     : item);
-  state.eventStore?.saveDashboardLayout?.(state.dashboardLayout);
+  const saved = state.eventStore?.saveDashboardLayout?.(state.dashboardLayout);
+  state.dashboardLayoutUpdatedAt = saved?.updatedAt ?? new Date().toISOString();
   writeJsonResponse(response, 200, { data: localDashboardLayout(state) }, request, {
     'X-Request-ID': requestId,
   });
@@ -7335,15 +7362,16 @@ function localDashboardCards(): readonly unknown[] {
 }
 
 function localDashboardLayout(state: LocalRainrailServerState): {
-  readonly id: 'core.defaultLayout';
-  readonly source: 'default';
+  readonly id: 'core.defaultLayout' | 'user.dashboardLayout';
+  readonly source: 'default' | 'user';
   readonly updatedAt: string;
   readonly items: readonly LocalDashboardLayoutItem[];
 } {
+  const updatedAt = state.dashboardLayoutUpdatedAt;
   return {
-    id: 'core.defaultLayout',
-    source: 'default',
-    updatedAt: new Date(0).toISOString(),
+    id: updatedAt === undefined ? 'core.defaultLayout' : 'user.dashboardLayout',
+    source: updatedAt === undefined ? 'default' : 'user',
+    updatedAt: updatedAt ?? new Date(0).toISOString(),
     items: localCloneDashboardLayout(state.dashboardLayout),
   };
 }
@@ -7374,9 +7402,7 @@ function parseLocalDashboardLayoutItems(value: unknown): LocalDashboardLayoutIte
     ) {
       continue;
     }
-    const config = isRecord(rawItem.config) && isJsonSerializableLocalValue(rawItem.config)
-      ? localCloneRecord(rawItem.config)
-      : undefined;
+    const config = sanitizeLocalDashboardConfig(rawItem.config);
     items.push({
       id: rawItem.id,
       cardId: rawItem.cardId,
@@ -7390,8 +7416,11 @@ function parseLocalDashboardLayoutItems(value: unknown): LocalDashboardLayoutIte
   return items;
 }
 
-function localDashboardLayoutItemsFromRow(row: unknown): readonly LocalDashboardLayoutItem[] {
-  return parseLocalDashboardLayoutItems(JSON.parse(requiredStringRowValue(row, 'items_json')) as unknown);
+function localDashboardLayoutItemsFromRow(row: unknown): LocalDashboardLayoutSnapshot {
+  return {
+    items: parseLocalDashboardLayoutItems(JSON.parse(requiredStringRowValue(row, 'items_json')) as unknown),
+    updatedAt: requiredStringRowValue(row, 'updated_at'),
+  };
 }
 
 function isJsonSerializableLocalValue(value: unknown): boolean {
@@ -7401,6 +7430,30 @@ function isJsonSerializableLocalValue(value: unknown): boolean {
   } catch {
     return false;
   }
+}
+
+function sanitizeLocalDashboardConfig(value: unknown): Record<string, unknown> | undefined {
+  if (!isRecord(value) || !isJsonSerializableLocalValue(value)) return undefined;
+  const sanitized = omitSensitiveLocalDashboardConfigKeys(value);
+  return Object.keys(sanitized).length === 0 ? undefined : sanitized;
+}
+
+function omitSensitiveLocalDashboardConfigKeys(value: Record<string, unknown>): Record<string, unknown> {
+  const sanitized: Record<string, unknown> = {};
+  for (const [key, nested] of Object.entries(value)) {
+    if (isSensitiveLocalDashboardConfigKey(key)) continue;
+    if (isRecord(nested)) {
+      const nestedSanitized = omitSensitiveLocalDashboardConfigKeys(nested);
+      if (Object.keys(nestedSanitized).length > 0) sanitized[key] = nestedSanitized;
+      continue;
+    }
+    if (Array.isArray(nested)) {
+      sanitized[key] = nested.map((item) => isRecord(item) ? omitSensitiveLocalDashboardConfigKeys(item) : item);
+      continue;
+    }
+    sanitized[key] = nested;
+  }
+  return sanitized;
 }
 
 function hasSensitiveLocalDashboardConfigKey(value: unknown): boolean {

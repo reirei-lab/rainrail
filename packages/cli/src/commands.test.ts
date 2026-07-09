@@ -2357,8 +2357,9 @@ describe('Rainrail CLI built-in commands', () => {
         expect(layoutConfig.status).toBe(200);
         await expect(layoutConfig.json()).resolves.toMatchObject({
           data: {
-            id: 'core.defaultLayout',
-            source: 'default',
+            id: 'user.dashboardLayout',
+            source: 'user',
+            updatedAt: expect.not.stringMatching(/^1970-01-01/u),
             items: [{ id: 'operational-totals', config: { density: 'compact' } }],
           },
         });
@@ -2490,6 +2491,18 @@ describe('Rainrail CLI built-in commands', () => {
         await closeTestServer(first);
       }
 
+      withSqliteDatabase(databasePath, (database) => {
+        database.prepare('UPDATE dashboard_layout SET items_json = ? WHERE id = ?').run(JSON.stringify([{
+          id: 'operational-totals',
+          cardId: 'core.operationalTotals',
+          x: 0,
+          y: 0,
+          columns: 8,
+          rows: 2,
+          config: { density: 'comfortable', apiToken: 'must-not-read' },
+        }]), 'user.dashboardLayout');
+      });
+
       const limitedConfig = JSON.parse(startConfig(restartPort)) as Record<string, unknown>;
       if (
         typeof limitedConfig.operationalStore === 'object'
@@ -2526,9 +2539,15 @@ describe('Rainrail CLI built-in commands', () => {
         const layout = await fetch(`http://127.0.0.1:${restartPort}/api/v1/dashboard/layout`);
         await expect(layout.json()).resolves.toMatchObject({
           data: {
+            id: 'user.dashboardLayout',
+            source: 'user',
+            updatedAt: expect.not.stringMatching(/^1970-01-01/u),
             items: [{ id: 'operational-totals', config: { density: 'comfortable' } }],
           },
         });
+        const layoutBody = await (await fetch(`http://127.0.0.1:${restartPort}/api/v1/dashboard/layout`)).text();
+        expect(layoutBody).not.toContain('must-not-read');
+        expect(layoutBody).not.toContain('apiToken');
       } finally {
         await closeTestServer(second);
       }
