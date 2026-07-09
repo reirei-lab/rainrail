@@ -9,15 +9,61 @@ file-backed な運用状態を扱う。Source provider や runtime provider の�
 `OperationalStore` は dashboard/API、command audit、handler retry、agent task reconcile が
 依存する store contract である。persistence backend はこの contract の実装詳細であり、
 consumer は `OperationalStore` の method と stable record/input/snapshot type だけを見る。
+Operational state の public contract は `OperationalStore`、`JsonFileOperationalStore`、
+`JsonFileOperationalStoreOptions`、`SqliteOperationalStore`、`RainrailOperationalStore`、
+`RainrailOperationalStoreOptions`、`StoredOperationalEvent`、`RecordActivityEventInput`、
+`StoredActivityEvent`、`RecordCommandResultInput`、`StoredCommandResult`、
+`StoredDashboardLayout`、`RecordAgentTaskInput`、`StoredAgentTask`、`RecordEventHandlerRetryInput`、
+`StoredEventHandlerRetry`、`OperationalStoreSnapshot`、`OperationalStoreWarnings`、
+`StoredStaleProjectClaimWarning`、`SnapshotOptions`、
+`ListOperationalStoreEventsOptions`、`ListOperationalStoreActivityEventsOptions`、
+`UpdateAgentTaskStatusInput`、`UpdateAgentTaskProjectClaimInput`、
+`EventHandlerRetryHandler`、`ProcessDueEventHandlerRetriesOptions`、
+`ProcessDueEventHandlerRetryResult`、`ReconcileOperationalAgentTasksOptions`、
+`OperationalRuntimeStatus`、`isRetryableOperationalError`、`retryDelayMs`、
+`prioritizeEventHandlerRetriesForProcessing`、`processDueEventHandlerRetries`、
+`reconcileOperationalAgentTasks`、`CodexActivityTask`、`SummarizeCodexActivityOptions`、
+`CodexActivitySummary`、`summarizeCodexActivity` である。
 `SqliteOperationalStore` は local Node runtime 向けの `node:sqlite` adapter で、
 `RainrailOperationalStore` はこの SQLite-backed adapter の互換 export である。
 `RainrailOperationalStoreOptions` は `databasePath`、`eventLimit`、任意の clock を受け取る。
 `JsonFileOperationalStore` と `JsonFileOperationalStoreOptions` は古い JSON file-backed adapter として
 残すが、新しい local runtime は SQLite store を使う。
+local Node server の config では top-level `operationalStore` で backend を選ぶ。
+SQLite-backed local dashboard API の例:
+
+```json
+{
+  "operationalStore": {
+    "kind": "sqlite",
+    "databasePath": "${RAINRAIL_OPERATIONAL_DB}",
+    "eventLimit": 250
+  }
+}
+```
+
+`RAINRAIL_OPERATIONAL_STORE=sqlite` のように環境で backend を選びたい起動 wrapper は、
+上の JSON config へ展開して `kind: "sqlite"` と
+`databasePath: "${RAINRAIL_OPERATIONAL_DB}"` を渡す。推奨 local path は
+`var/rainrail-operational.sqlite` である。focused unit test や embedding test では
+`kind: "memory"` を使う。`kind: "json"` は local start 専用の一時 event file だけに使い、
+既存の `JsonFileOperationalStore` 形式を指している場合は上書き防止のため拒否する。
+`createRainrailNodeServer` は `operationalStoreConfig` を受け取り、
+`createOperationalStoreFromConfig` で作った store を shared HTTP app に差し込む。caller が
+既に store instance を持つ場合は従来通り `operationalStore` を直接渡す。
+`rainrail start` は `rainrail.config.json` の同じ `operationalStore` 設定を読み、
+`RainrailStartOptions.operationalStoreConfig` と default local dashboard server に渡す。
+SQLite の場合は shared `operational_events` table を読み書きするため、local start の
+dashboard events は process restart 後も local API で確認でき、`createRainrailNodeServer` が
+同じ DB に保存した event も復元対象になる。
+
+この SQLite config は local Node support のための operational state であり、Cloudflare Worker
+production storage の設定ではない。Worker deployment で使う durable storage は別の
+deployment contract として扱う。
 
 store は `StoredOperationalEvent`、`StoredActivityEvent`、`StoredAgentTask`、
 `StoredEventHandlerRetry` を永続化し、`StoredCommandResult`、
-`OperationalStoreSnapshot` として recent state と counts を返す。snapshot は
+`StoredDashboardLayout`、`OperationalStoreSnapshot` として recent state と counts を返す。snapshot は
 `SnapshotOptions` で skipped activity の表示を制御でき、warnings は
 `OperationalStoreWarnings` と `StoredStaleProjectClaimWarning` に分けて返す。
 event/activity の list API は `ListOperationalStoreEventsOptions` と

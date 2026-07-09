@@ -5,6 +5,7 @@ import net from 'node:net';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { once } from 'node:events';
+import { createRequire } from 'node:module';
 import { describe, expect, it } from 'vitest';
 import {
   BUILT_IN_COMMANDS,
@@ -20,6 +21,8 @@ import {
   runRainrailCliAsync,
 } from './index.js';
 
+const testRequire = createRequire(import.meta.url);
+
 async function withTempDirectory(test: (directory: string) => Promise<void>): Promise<void> {
   const directory = await mkdtemp(join(tmpdir(), 'rainrail-cli-'));
   const originalSseBearerToken = process.env.SSE_BEARER_TOKEN;
@@ -33,6 +36,38 @@ async function withTempDirectory(test: (directory: string) => Promise<void>): Pr
       process.env.SSE_BEARER_TOKEN = originalSseBearerToken;
     }
     await rm(directory, { recursive: true, force: true });
+  }
+}
+
+function withSqliteDatabase<T>(databasePath: string, callback: (database: {
+  exec(sql: string): void;
+  prepare(sql: string): {
+    run(...values: Array<string | number | null>): void;
+    get(...values: Array<string | number | null>): unknown;
+  };
+}) => T): T {
+  const { DatabaseSync } = testRequire('node:sqlite') as {
+    DatabaseSync: new (path: string) => {
+      exec(sql: string): void;
+      prepare(sql: string): {
+        run(...values: Array<string | number | null>): void;
+        get(...values: Array<string | number | null>): unknown;
+      };
+      close(): void;
+    };
+  };
+  const database = new DatabaseSync(databasePath);
+  try {
+    return callback(database);
+  } finally {
+    database.close();
+  }
+}
+
+async function expectSqliteOperationalFilesProtected(databasePath: string): Promise<void> {
+  for (const path of [databasePath, `${databasePath}-wal`, `${databasePath}-shm`]) {
+    const file = await stat(path);
+    expect(file.mode & 0o777, path).toBe(0o600);
   }
 }
 
@@ -1184,6 +1219,143 @@ describe('Rainrail CLI built-in commands', () => {
     });
   });
 
+  it('passes rainrail.config.json operationalStore into rainrail start options', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'configured-operational-store');
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        operationalStore: {
+          kind: 'sqlite',
+          databasePath: '${RAINRAIL_OPERATIONAL_DB}',
+          eventLimit: 123,
+        },
+        sourceBundles: [],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+      let startOptions: RainrailStartOptions | undefined;
+
+      const result = runRainrailCli(['start'], {
+        cwd: projectRoot,
+        env: {
+          RAINRAIL_OPERATIONAL_DB: 'var/rainrail-operational.sqlite',
+        },
+        serverStarter: (options) => {
+          startOptions = options;
+          return { stop: () => undefined };
+        },
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+      expect(startOptions?.operationalStoreConfig).toEqual({
+        kind: 'sqlite',
+        databasePath: join(projectRoot, 'var', 'rainrail-operational.sqlite'),
+        eventLimit: 123,
+      });
+    });
+  });
+
+  it('lets rainrail start operational store env override config', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'env-operational-store');
+      let startOptions: RainrailStartOptions | undefined;
+
+      const result = runRainrailCli(['start'], {
+        cwd: projectRoot,
+        env: {
+          RAINRAIL_OPERATIONAL_STORE: 'json',
+          RAINRAIL_OPERATIONAL_DB: 'var/rainrail-operational.json',
+          RAINRAIL_OPERATIONAL_EVENT_LIMIT: '17',
+        },
+        serverStarter: (options) => {
+          startOptions = options;
+          return { stop: () => undefined };
+        },
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+      expect(startOptions?.operationalStoreConfig).toEqual({
+        kind: 'json',
+        databasePath: join(projectRoot, 'var', 'rainrail-operational.json'),
+        eventLimit: 17,
+      });
+    });
+  });
+
+  it('does not validate config operationalStore before env override', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'env-operational-store-precedence');
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        operationalStore: {
+          kind: 'sqlite',
+          databasePath: '${RAINRAIL_OPERATIONAL_DB}',
+        },
+        sourceBundles: [],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+      let startOptions: RainrailStartOptions | undefined;
+
+      const result = runRainrailCli(['start'], {
+        cwd: projectRoot,
+        env: {
+          RAINRAIL_OPERATIONAL_STORE: 'memory',
+        },
+        serverStarter: (options) => {
+          startOptions = options;
+          return { stop: () => undefined };
+        },
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+      expect(startOptions?.operationalStoreConfig).toEqual({
+        kind: 'memory',
+        eventLimit: 250,
+      });
+    });
+  });
+
+  it('falls back to config operationalStore when env override is empty', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'empty-env-operational-store');
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        operationalStore: {
+          kind: 'sqlite',
+          databasePath: 'var/rainrail-operational.sqlite',
+          eventLimit: 19,
+        },
+        sourceBundles: [],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+      let startOptions: RainrailStartOptions | undefined;
+
+      const result = runRainrailCli(['start'], {
+        cwd: projectRoot,
+        env: {
+          RAINRAIL_OPERATIONAL_STORE: '',
+        },
+        serverStarter: (options) => {
+          startOptions = options;
+          return { stop: () => undefined };
+        },
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+      expect(startOptions?.operationalStoreConfig).toEqual({
+        kind: 'sqlite',
+        databasePath: join(projectRoot, 'var', 'rainrail-operational.sqlite'),
+        eventLimit: 19,
+      });
+    });
+  });
+
   it('prints custom config setup guidance when dashboard auth is not configured', async () => {
     await withTempDirectory(async (directory) => {
       const projectRoot = await initRainrailProject(directory, 'custom-start-auth-guide');
@@ -2156,6 +2328,590 @@ describe('Rainrail CLI built-in commands', () => {
       } finally {
         await closeTestServer(result);
       }
+    });
+  });
+
+  it('persists local dashboard events through configured SQLite operational store', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'sqlite-operational-start');
+      const port = await getFreePort();
+      const restartPort = await getFreePort();
+      const databasePath = join(projectRoot, 'var', 'rainrail-operational.sqlite');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      const startConfig = (serverPort: number): string => `${JSON.stringify({
+        server: {
+          host: '127.0.0.1',
+          port: serverPort,
+        },
+        operationalStore: {
+          kind: 'sqlite',
+          databasePath,
+          eventLimit: 3,
+        },
+        sourceBundles: [
+          {
+            type: 'eep-bridge',
+            name: 'local',
+            sources: [
+              {
+                type: 'github-webhook',
+                name: 'github-local',
+                sourceType: 'github',
+                provider: 'github',
+                webhookSecret: 'secret',
+                endpoint: '/webhooks/github',
+              },
+            ],
+          },
+        ],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`;
+      await writeFile(configPath, startConfig(port));
+
+      const first = await runRainrailCliAsync(['start'], { cwd: projectRoot });
+      try {
+        expect(first.exitCode).toBe(0);
+        for (const delivery of ['delivery-sqlite-start-1', 'delivery-sqlite-start-2', 'delivery-sqlite-start-3']) {
+          const body = JSON.stringify({ action: 'opened' });
+          const accepted = await fetch(`http://127.0.0.1:${port}/webhooks/github`, {
+            method: 'POST',
+            headers: githubWebhookHeaders('secret', body, { delivery, event: 'issues' }),
+            body,
+          });
+          expect(accepted.status).toBe(202);
+        }
+        await expectSqliteOperationalFilesProtected(databasePath);
+
+        const overview = await fetch(`http://127.0.0.1:${port}/api/v1/overview`);
+        await expect(overview.json()).resolves.toMatchObject({ data: { counts: { events: 3 } } });
+      } finally {
+        await closeTestServer(first);
+      }
+
+      const limitedConfig = JSON.parse(startConfig(restartPort)) as Record<string, unknown>;
+      if (
+        typeof limitedConfig.operationalStore === 'object'
+        && limitedConfig.operationalStore !== null
+        && !Array.isArray(limitedConfig.operationalStore)
+      ) {
+        Object.assign(limitedConfig.operationalStore, { eventLimit: 1 });
+      }
+      await writeFile(configPath, `${JSON.stringify(limitedConfig, null, 2)}\n`);
+      const second = await runRainrailCliAsync(['start'], { cwd: projectRoot });
+      try {
+        expect(second.exitCode).toBe(0);
+        const overview = await fetch(`http://127.0.0.1:${restartPort}/api/v1/overview`);
+        await expect(overview.json()).resolves.toMatchObject({ data: { counts: { events: 3 } } });
+
+        const events = await fetch(`http://127.0.0.1:${restartPort}/api/v1/events?limit=2`);
+        const eventsPayload = await events.json() as { data: Array<{ id: string; deliveryId: string }>; page: { nextCursor: string | null } };
+        expect(eventsPayload).toMatchObject({
+          data: [
+            { id: 'local-event-000003', deliveryId: 'delivery-sqlite-start-3' },
+            { id: 'local-event-000002', deliveryId: 'delivery-sqlite-start-2' },
+          ],
+          page: { nextCursor: expect.any(String) },
+        });
+
+        const nextEvents = await fetch(`http://127.0.0.1:${restartPort}/api/v1/events?limit=2&cursor=${eventsPayload.page.nextCursor}`);
+        await expect(nextEvents.json()).resolves.toMatchObject({
+          data: [
+            { id: 'local-event-000001', deliveryId: 'delivery-sqlite-start-1' },
+          ],
+          page: { nextCursor: null },
+        });
+      } finally {
+        await closeTestServer(second);
+      }
+    });
+  });
+
+  it('reads shared SQLite operational rows without overwriting existing event metadata', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'sqlite-operational-shared-start');
+      const setupPort = await getFreePort();
+      const port = await getFreePort();
+      const databasePath = join(projectRoot, 'var', 'rainrail-operational.sqlite');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      const startConfig = (serverPort: number): string => `${JSON.stringify({
+        server: {
+          host: '127.0.0.1',
+          port: serverPort,
+        },
+        operationalStore: {
+          kind: 'sqlite',
+          databasePath,
+          eventLimit: 10,
+        },
+        sourceBundles: [
+          {
+            type: 'eep-bridge',
+            name: 'local',
+            sources: [
+              {
+                type: 'github-webhook',
+                name: 'github-local',
+                sourceType: 'github',
+                provider: 'github',
+                webhookSecret: 'secret',
+                endpoint: '/webhooks/github',
+              },
+            ],
+          },
+        ],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`;
+      await writeFile(configPath, startConfig(setupPort));
+
+      const setup = await runRainrailCliAsync(['start'], { cwd: projectRoot });
+      await closeTestServer(setup);
+
+      withSqliteDatabase(databasePath, (database) => {
+        database.prepare(`
+          INSERT INTO operational_events (
+            id, name, source_json, delivery_json, subject_json, occurred_at, received_at,
+            payload_json, raw_payload_reference_json, links_json
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          'github-webhook:delivery-existing:github.issue',
+          'github.issue',
+          JSON.stringify({ type: 'github', name: 'github-webhook', repository: 'reirei-lab/rainrail' }),
+          JSON.stringify({ id: 'delivery-existing', receivedAt: '2026-07-09T00:00:00.000Z' }),
+          JSON.stringify({ type: 'issue', id: '271', url: 'https://github.com/reirei-lab/rainrail/issues/271' }),
+          '2026-07-09T00:00:00.000Z',
+          '2026-07-09T00:00:00.000Z',
+          JSON.stringify({ action: 'opened', preserved: true }),
+          JSON.stringify({ kind: 'external-reference', reference: 'github://deliveries/delivery-existing' }),
+          JSON.stringify({ html: 'https://github.com/reirei-lab/rainrail/issues/271' }),
+        );
+        database.prepare(`
+          INSERT INTO agent_tasks (
+            id, title, branch_name, status, claim_json, started_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          'agent_task_shared_sqlite',
+          'shared sqlite task',
+          'agent/reirei-lab-rainrail-271-dashboard-api-node-sqlite-operational-store',
+          'failed',
+          JSON.stringify({ provider: 'github-project', itemId: 'PVTI_shared' }),
+          '2026-07-09T00:01:00.000Z',
+          '2026-07-09T00:01:00.000Z',
+        );
+        database.prepare(`
+          INSERT INTO activity_events (
+            id, source_event_id, source_event_name, category, target_type, target_id,
+            action_type, outcome, summary, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          'act_shared_sqlite',
+          'github-webhook:delivery-existing:github.issue',
+          'github.issue',
+          'workflow',
+          'event',
+          'github-webhook:delivery-existing:github.issue',
+          'workflow_dispatched',
+          'success',
+          'shared workflow dispatched',
+          '2026-07-09T00:02:00.000Z',
+        );
+      });
+
+      await writeFile(configPath, startConfig(port));
+      const result = await runRainrailCliAsync(['start'], { cwd: projectRoot });
+      try {
+        expect(result.exitCode).toBe(0);
+
+        const overview = await fetch(`http://127.0.0.1:${port}/api/v1/overview`);
+        await expect(overview.json()).resolves.toMatchObject({
+          data: {
+            counts: { events: 1, agentTasks: 1, activityEvents: 1 },
+            warnings: { staleProjectClaims: [{ taskId: 'agent_task_shared_sqlite' }] },
+          },
+        });
+
+        const tasks = await fetch(`http://127.0.0.1:${port}/api/v1/agent-tasks`);
+        const taskPayload = await tasks.json();
+        expect(taskPayload).toMatchObject({
+          data: [{
+            id: 'agent_task_shared_sqlite',
+            title: 'shared sqlite task',
+            warnings: { staleProjectClaim: true },
+          }],
+        });
+        expect(JSON.stringify(taskPayload)).not.toContain('/api/v1/agent-tasks/agent_task_shared_sqlite');
+
+        const taskDetail = await fetch(`http://127.0.0.1:${port}/api/v1/agent-tasks/agent_task_shared_sqlite`);
+        expect(taskDetail.status).toBe(200);
+        await expect(taskDetail.json()).resolves.toMatchObject({
+          data: {
+            id: 'agent_task_shared_sqlite',
+            type: 'agent-task',
+            compact: {
+              id: 'agent_task_shared_sqlite',
+              warnings: { staleProjectClaim: true },
+            },
+            record: {
+              id: 'agent_task_shared_sqlite',
+              status: 'failed',
+            },
+          },
+        });
+
+        const invalidTasks = await fetch(`http://127.0.0.1:${port}/api/v1/agent-tasks?filter[unknown]=x`);
+        expect(invalidTasks.status).toBe(400);
+        await expect(invalidTasks.json()).resolves.toEqual({ error: 'unsupported_filter', filter: 'filter[unknown]' });
+
+        const invalidWorkflowSort = await fetch(`http://127.0.0.1:${port}/api/v1/workflow-runs?sort=newest`);
+        expect(invalidWorkflowSort.status).toBe(400);
+        await expect(invalidWorkflowSort.json()).resolves.toEqual({ error: 'unsupported_sort', sort: 'newest' });
+
+        const workflows = await fetch(`http://127.0.0.1:${port}/api/v1/workflow-runs`);
+        const workflowPayload = await workflows.json();
+        expect(workflowPayload).toMatchObject({
+          data: [{ id: 'act_shared_sqlite', summary: 'shared workflow dispatched' }],
+        });
+        expect(JSON.stringify(workflowPayload)).not.toContain('/api/v1/workflow-runs/act_shared_sqlite');
+
+        const workflowDetail = await fetch(`http://127.0.0.1:${port}/api/v1/workflow-runs/act_shared_sqlite`);
+        expect(workflowDetail.status).toBe(200);
+        await expect(workflowDetail.json()).resolves.toMatchObject({
+          data: {
+            id: 'act_shared_sqlite',
+            type: 'workflow-run',
+            compact: {
+              id: 'act_shared_sqlite',
+              summary: 'shared workflow dispatched',
+            },
+            record: {
+              id: 'act_shared_sqlite',
+              outcome: 'success',
+            },
+          },
+        });
+
+        const missingWorkflowDetail = await fetch(`http://127.0.0.1:${port}/api/v1/workflow-runs/missing`);
+        expect(missingWorkflowDetail.status).toBe(404);
+        await expect(missingWorkflowDetail.json()).resolves.toEqual({ error: 'workflow_run_not_found' });
+
+        const settings = await fetch(`http://127.0.0.1:${port}/api/v1/settings`);
+        const settingsPayload = await settings.json() as { data: Array<{ id: string; value: string }> };
+        expect(settingsPayload.data.find((row) => row.id === 'operational-snapshot-limit')).toMatchObject({
+          value: '10 events',
+        });
+
+        const detail = await fetch(`http://127.0.0.1:${port}/api/v1/events/github-webhook%3Adelivery-existing%3Agithub.issue`);
+        await expect(detail.json()).resolves.toMatchObject({
+          data: {
+            id: 'github-webhook:delivery-existing:github.issue',
+            record: {
+              subject: {
+                id: '271',
+                url: 'https://github.com/reirei-lab/rainrail/issues/271',
+              },
+            },
+          },
+        });
+
+        const body = JSON.stringify({ action: 'opened' });
+        const accepted = await fetch(`http://127.0.0.1:${port}/webhooks/github`, {
+          method: 'POST',
+          headers: githubWebhookHeaders('secret', body, { delivery: 'delivery-new', event: 'issues' }),
+          body,
+        });
+        expect(accepted.status).toBe(202);
+      } finally {
+        await closeTestServer(result);
+      }
+
+      withSqliteDatabase(databasePath, (database) => {
+        const row = database.prepare('SELECT payload_json FROM operational_events WHERE id = ?')
+          .get('github-webhook:delivery-existing:github.issue') as { payload_json: string };
+        expect(JSON.parse(row.payload_json)).toEqual({ action: 'opened', preserved: true });
+      });
+    });
+  });
+
+  it('migrates older SQLite operational event tables in local start', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'sqlite-operational-start-migration');
+      const port = await getFreePort();
+      const databasePath = join(projectRoot, 'var', 'rainrail-operational.sqlite');
+      await mkdir(join(projectRoot, 'var'), { recursive: true });
+      withSqliteDatabase(databasePath, (database) => {
+        database.exec(`
+          CREATE TABLE operational_events (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            source_json TEXT NOT NULL,
+            delivery_json TEXT NOT NULL,
+            subject_json TEXT NOT NULL,
+            occurred_at TEXT NOT NULL,
+            received_at TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            links_json TEXT
+          );
+        `);
+        database.prepare(`
+          INSERT INTO operational_events (
+            id, name, source_json, delivery_json, subject_json, occurred_at, received_at,
+            payload_json, links_json
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          'github-webhook:delivery-old-schema:github.issue',
+          'github.issue',
+          JSON.stringify({ type: 'github', name: 'github-webhook', repository: 'reirei-lab/rainrail' }),
+          JSON.stringify({ id: 'delivery-old-schema', receivedAt: '2026-07-09T00:00:00.000Z' }),
+          JSON.stringify({ type: 'issue', id: '271' }),
+          '2026-07-09T00:00:00.000Z',
+          '2026-07-09T00:00:00.000Z',
+          JSON.stringify({ action: 'opened' }),
+          null,
+        );
+      });
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        server: {
+          host: '127.0.0.1',
+          port,
+        },
+        operationalStore: {
+          kind: 'sqlite',
+          databasePath,
+          eventLimit: 10,
+        },
+        sourceBundles: [],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+
+      const result = await runRainrailCliAsync(['start'], { cwd: projectRoot });
+      try {
+        expect(result.exitCode).toBe(0);
+        const detail = await fetch(`http://127.0.0.1:${port}/api/v1/events/github-webhook%3Adelivery-old-schema%3Agithub.issue`);
+        await expect(detail.json()).resolves.toMatchObject({
+          data: {
+            id: 'github-webhook:delivery-old-schema:github.issue',
+            record: {
+              envelope: {
+                rawPayload: {
+                  kind: 'inline-redacted',
+                  reference: 'rainrail://redacted/raw-payload',
+                },
+              },
+            },
+          },
+        });
+      } finally {
+        await closeTestServer(result);
+      }
+    });
+  });
+
+  it('reserves local event ids across shared SQLite start processes', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'sqlite-operational-shared-id');
+      const firstPort = await getFreePort();
+      const secondPort = await getFreePort();
+      const databasePath = join(projectRoot, 'var', 'rainrail-operational.sqlite');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      const startConfig = (serverPort: number): string => `${JSON.stringify({
+        server: {
+          host: '127.0.0.1',
+          port: serverPort,
+        },
+        operationalStore: {
+          kind: 'sqlite',
+          databasePath,
+          eventLimit: 10,
+        },
+        sourceBundles: [
+          {
+            type: 'eep-bridge',
+            name: 'local',
+            sources: [
+              {
+                type: 'github-webhook',
+                name: 'github-local',
+                sourceType: 'github',
+                provider: 'github',
+                webhookSecret: 'secret',
+                endpoint: '/webhooks/github',
+              },
+            ],
+          },
+        ],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`;
+      await writeFile(configPath, startConfig(firstPort));
+      const first = await runRainrailCliAsync(['start'], { cwd: projectRoot });
+      await writeFile(configPath, startConfig(secondPort));
+      const second = await runRainrailCliAsync(['start'], { cwd: projectRoot });
+      try {
+        const body = JSON.stringify({ action: 'opened' });
+        const firstAccepted = await fetch(`http://127.0.0.1:${firstPort}/webhooks/github`, {
+          method: 'POST',
+          headers: githubWebhookHeaders('secret', body, { delivery: 'delivery-shared-first', event: 'issues' }),
+          body,
+        });
+        const secondAccepted = await fetch(`http://127.0.0.1:${secondPort}/webhooks/github`, {
+          method: 'POST',
+          headers: githubWebhookHeaders('secret', body, { delivery: 'delivery-shared-second', event: 'issues' }),
+          body,
+        });
+
+        expect(firstAccepted.status).toBe(202);
+        expect(secondAccepted.status).toBe(202);
+        await expect(firstAccepted.json()).resolves.toMatchObject({ data: { id: 'local-event-000001' } });
+        await expect(secondAccepted.json()).resolves.toMatchObject({ data: { id: 'local-event-000002' } });
+      } finally {
+        await closeTestServer(first);
+        await closeTestServer(second);
+      }
+
+      withSqliteDatabase(databasePath, (database) => {
+        expect(database.prepare('SELECT count(*) as count FROM operational_events WHERE id LIKE ?').get('local-event-%'))
+          .toEqual({ count: 2 });
+      });
+    });
+  });
+
+  it('allocates local event ids from all persisted SQLite events', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'sqlite-operational-local-id');
+      const setupPort = await getFreePort();
+      const port = await getFreePort();
+      const databasePath = join(projectRoot, 'var', 'rainrail-operational.sqlite');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      const startConfig = (serverPort: number): string => `${JSON.stringify({
+        server: {
+          host: '127.0.0.1',
+          port: serverPort,
+        },
+        operationalStore: {
+          kind: 'sqlite',
+          databasePath,
+          eventLimit: 1,
+        },
+        sourceBundles: [
+          {
+            type: 'eep-bridge',
+            name: 'local',
+            sources: [
+              {
+                type: 'github-webhook',
+                name: 'github-local',
+                sourceType: 'github',
+                provider: 'github',
+                webhookSecret: 'secret',
+                endpoint: '/webhooks/github',
+              },
+            ],
+          },
+        ],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`;
+      await writeFile(configPath, startConfig(setupPort));
+      const setup = await runRainrailCliAsync(['start'], { cwd: projectRoot });
+      await closeTestServer(setup);
+
+      withSqliteDatabase(databasePath, (database) => {
+        const insertEvent = database.prepare(`
+          INSERT INTO operational_events (
+            id, name, source_json, delivery_json, subject_json, occurred_at, received_at,
+            payload_json, raw_payload_reference_json, links_json
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+        insertEvent.run(
+          'local-event-000009',
+          'github.issue',
+          JSON.stringify({ type: 'github', name: 'github-local' }),
+          JSON.stringify({ id: 'delivery-old-local', receivedAt: '2026-07-09T00:00:00.000Z' }),
+          JSON.stringify({ type: 'issue', id: 'local-event-000009' }),
+          '2026-07-09T00:00:00.000Z',
+          '2026-07-09T00:00:00.000Z',
+          JSON.stringify({ localEvent: { status: 'received', summary: 'old local' } }),
+          JSON.stringify({ kind: 'external-reference', reference: 'local://events/local-event-000009' }),
+          JSON.stringify({ self: '/api/v1/events/local-event-000009' }),
+        );
+        insertEvent.run(
+          'github-webhook:delivery-latest:github.issue',
+          'github.issue',
+          JSON.stringify({ type: 'github', name: 'github-webhook' }),
+          JSON.stringify({ id: 'delivery-latest', receivedAt: '2026-07-09T00:10:00.000Z' }),
+          JSON.stringify({ type: 'issue', id: 'latest' }),
+          '2026-07-09T00:10:00.000Z',
+          '2026-07-09T00:10:00.000Z',
+          JSON.stringify({ action: 'opened' }),
+          JSON.stringify({ kind: 'external-reference', reference: 'github://deliveries/delivery-latest' }),
+          null,
+        );
+      });
+
+      await writeFile(configPath, startConfig(port));
+      const result = await runRainrailCliAsync(['start'], { cwd: projectRoot });
+      try {
+        const body = JSON.stringify({ action: 'opened' });
+        const accepted = await fetch(`http://127.0.0.1:${port}/webhooks/github`, {
+          method: 'POST',
+          headers: githubWebhookHeaders('secret', body, { delivery: 'delivery-new-local-id', event: 'issues' }),
+          body,
+        });
+        expect(accepted.status).toBe(202);
+        await expect(accepted.json()).resolves.toMatchObject({ data: { id: 'local-event-000010' } });
+      } finally {
+        await closeTestServer(result);
+      }
+
+      withSqliteDatabase(databasePath, (database) => {
+        expect(database.prepare('SELECT id FROM operational_events WHERE id = ?').get('local-event-000010'))
+          .toEqual({ id: 'local-event-000010' });
+      });
+    });
+  });
+
+  it('rejects incompatible JSON operational store files in local start', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'json-operational-start');
+      const port = await getFreePort();
+      const databasePath = join(projectRoot, 'var', 'rainrail-operational.json');
+      await mkdir(join(projectRoot, 'var'), { recursive: true });
+      await writeFile(databasePath, `${JSON.stringify({
+        events: {
+          existing: {
+            id: 'existing',
+          },
+        },
+        activityEvents: {},
+      }, null, 2)}\n`);
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        server: {
+          host: '127.0.0.1',
+          port,
+        },
+        operationalStore: {
+          kind: 'json',
+          databasePath,
+          eventLimit: 10,
+        },
+        sourceBundles: [],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+
+      const result = await runRainrailCliAsync(['start'], { cwd: projectRoot });
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('JSON operational store is not compatible with rainrail start local event storage');
+      await expect(readFile(databasePath, 'utf8')).resolves.toContain('"activityEvents"');
     });
   });
 
@@ -3666,18 +4422,25 @@ describe('Rainrail CLI built-in commands', () => {
       });
       try {
         expect(result.exitCode).toBe(0);
-        const preflight = await fetch(`http://127.0.0.1:${port}/api/v1/overview`, {
-          method: 'OPTIONS',
-          headers: {
-            Origin: 'http://localhost:3000',
-            'Access-Control-Request-Method': 'GET',
-            'Access-Control-Request-Headers': 'authorization',
-          },
-        });
+        for (const route of [
+          '/api/v1/overview',
+          '/api/v1/workflow-runs/workflow-1',
+          '/api/v1/agent-tasks/task-1',
+        ]) {
+          const preflight = await fetch(`http://127.0.0.1:${port}${route}`, {
+            method: 'OPTIONS',
+            headers: {
+              Origin: 'http://localhost:3000',
+              'Access-Control-Request-Method': 'GET',
+              'Access-Control-Request-Headers': 'authorization',
+            },
+          });
 
-        expect(preflight.status).toBe(204);
-        expect(preflight.headers.get('access-control-allow-origin')).toBe('http://localhost:3000');
-        expect(preflight.headers.get('access-control-allow-headers')?.toLowerCase()).toContain('authorization');
+          expect(preflight.status, route).toBe(204);
+          expect(preflight.headers.get('access-control-allow-origin'), route).toBe('http://localhost:3000');
+          expect(preflight.headers.get('access-control-allow-methods'), route).toBe('GET, OPTIONS');
+          expect(preflight.headers.get('access-control-allow-headers')?.toLowerCase(), route).toContain('authorization');
+        }
       } finally {
         await closeTestServer(result);
       }

@@ -226,10 +226,11 @@ export type RainrailCommandActionType =
   | 'agent_task_reset'
   | 'agent_task_terminate'
   | 'agent_task_terminate_all'
+  | 'dashboard_layout_update'
   | 'queue_assign_next'
   | 'settings_update';
 
-export type RainrailCommandTargetType = 'agent_task' | 'agent_tasks' | 'queue' | 'settings';
+export type RainrailCommandTargetType = 'agent_task' | 'agent_tasks' | 'dashboard_layout' | 'queue' | 'settings';
 
 export type RainrailCommandHandler = (command: RainrailCommandRequest) => unknown | Promise<unknown>;
 
@@ -296,7 +297,7 @@ export function rainrailHttpRequestBodyLimit(
   method: string,
   options: RainrailHttpAppOptions,
 ): number | undefined {
-  if (isDashboardCommandRoute(pathname, method)) return options.dashboardCommandMaxBodyBytes;
+  if (isDashboardBodyRoute(pathname, method)) return options.dashboardCommandMaxBodyBytes;
   return createRainrailIntakeRegistry(options.intakeAdapters).routeBodyLimit(pathname, method);
 }
 
@@ -451,8 +452,8 @@ async function routeRainrailHttpRequest(
   if (url.pathname === '/api/v1/dashboard/cards') {
     if (request.method !== 'GET') return methodNotAllowedResponse(['GET', 'OPTIONS']);
 
-    const auth = verifyDashboardReadRequest(request, options);
-    if (auth !== undefined) return auth;
+    const auth = verifyDashboardScopedRequest(request, options, 'read-only');
+    if (!auth.ok) return auth.response;
 
     return dashboardV1CardsResponse(options);
   }
@@ -618,6 +619,11 @@ function isDashboardCommandRoute(pathname: string, method: string): boolean {
     && (/^\/api\/v1\/agent-tasks\/(?:[^/]+\/actions\/(?:resume|reset|terminate)|actions\/terminate-all)$/.test(pathname)
       || pathname === '/api/v1/queue/actions/assign-next'
       || pathname === '/api/v1/settings/actions/update');
+}
+
+function isDashboardBodyRoute(pathname: string, method: string): boolean {
+  return isDashboardCommandRoute(pathname, method)
+    || (method.toUpperCase() === 'PUT' && pathname === '/api/v1/dashboard/layout');
 }
 
 function isStatusCodeError(error: unknown): error is { statusCode: number } {
@@ -942,12 +948,13 @@ function dashboardV1LayoutResponse(options: RainrailHttpAppOptions): Response {
 
   const stored = store.getDashboardLayout();
   if (stored !== undefined) {
+    const catalog = dashboardCardCatalog(options);
     return jsonResponse({
       data: {
         id: stored.id,
         source: 'user',
         updatedAt: stored.updatedAt,
-        items: stored.items,
+        items: filterDashboardLayoutItems(stored.items, catalog),
       },
     });
   }
@@ -974,19 +981,50 @@ async function handleDashboardLayoutUpdateRequest(
   const auth = verifyDashboardScopedRequest(request, options, 'operator');
   if (!auth.ok) return auth.response;
 
+  const requestId = sanitizeAuditHeaderValue(request.headers.get('x-request-id')) ?? generatedRequestId();
+  const client = sanitizeAuditHeaderValue(request.headers.get('x-rainrail-client')) ?? auth.principal.client ?? 'unknown';
   const body = await readJsonObjectBody(request, options.dashboardCommandMaxBodyBytes ?? DEFAULT_MAX_REQUEST_BODY_BYTES);
   if (!body.ok) return jsonResponse({ error: body.error }, { status: body.status });
 
   const parsed = parseDashboardLayoutItems(body.value.items, dashboardCardCatalog(options));
   if (!parsed.ok) return parsed.response;
 
-  const saved = store.saveDashboardLayout(parsed.items);
+  let saved;
+  let auditId: string;
+  try {
+    saved = store.saveDashboardLayout(parsed.items);
+    const audit = store.recordCommandResult({
+      actionType: 'dashboard_layout_update',
+      targetType: 'dashboard_layout',
+      targetId: USER_DASHBOARD_LAYOUT_ID,
+      status: 'accepted',
+      actor: auth.principal.actor,
+      ...(client === undefined ? {} : { client }),
+      requestId,
+      dryRun: false,
+      result: { itemCount: saved.items.length },
+    });
+    auditId = audit.id;
+    store.recordActivityEvent({
+      category: 'command',
+      targetType: 'dashboard_layout',
+      targetId: USER_DASHBOARD_LAYOUT_ID,
+      actionType: 'dashboard_layout_update',
+      outcome: 'success',
+      summary: `Accepted dashboard_layout_update for dashboard layout ${USER_DASHBOARD_LAYOUT_ID}`,
+      metadata: auditMetadata(auth.principal.actor, client, requestId, false),
+    });
+  } catch {
+    return jsonResponse({ error: 'operational_store_unavailable' }, { status: 503 });
+  }
+
   return jsonResponse({
     data: {
       id: USER_DASHBOARD_LAYOUT_ID,
       source: 'user',
       updatedAt: saved.updatedAt,
       items: saved.items,
+      auditId,
     },
   });
 }
@@ -1029,8 +1067,8 @@ function parseDashboardLayoutItems(
       return { ok: false, response: jsonResponse({ error: 'invalid_dashboard_layout_item' }, { status: 400 }) };
     }
 
-    const id = stringField(item, 'id');
-    const cardId = stringField(item, 'cardId');
+    const id = strictStringField(item, 'id');
+    const cardId = strictStringField(item, 'cardId');
     const x = integerField(item, 'x');
     const y = integerField(item, 'y');
     const columns = integerField(item, 'columns');
@@ -1061,7 +1099,7 @@ function parseDashboardLayoutItems(
     }
 
     const config = item.config;
-    if (config !== undefined && (!isPlainRecord(config) || !isJsonSerializable(config))) {
+    if (config !== undefined && (!isPlainRecord(config) || !isJsonSerializableValue(config))) {
       return { ok: false, response: jsonResponse({ error: 'invalid_dashboard_card_config', itemId: id, cardId }, { status: 400 }) };
     }
 
@@ -1077,6 +1115,23 @@ function parseDashboardLayoutItems(
   }
 
   return { ok: true, items };
+}
+
+function filterDashboardLayoutItems(
+  items: readonly DashboardLayoutItem[],
+  catalog: DashboardCardCatalogEntry[],
+): DashboardLayoutItem[] {
+  const seenItemIds = new Set<string>();
+  const filtered: DashboardLayoutItem[] = [];
+  for (const item of items) {
+    const parsed = parseDashboardLayoutItems([item], catalog);
+    if (!parsed.ok) continue;
+    const [parsedItem] = parsed.items;
+    if (parsedItem === undefined || seenItemIds.has(parsedItem.id)) continue;
+    seenItemIds.add(parsedItem.id);
+    filtered.push(parsedItem);
+  }
+  return filtered;
 }
 
 function dashboardCardSizeIsAllowed(
@@ -1587,6 +1642,11 @@ function stringField(record: Record<string, unknown> | undefined, field: string)
   return value === null || value === undefined ? undefined : String(value);
 }
 
+function strictStringField(record: Record<string, unknown> | undefined, field: string): string | undefined {
+  const value = record?.[field];
+  return typeof value === 'string' ? value : undefined;
+}
+
 function hasConfiguredDashboardToken(options: RainrailHttpAppOptions): boolean {
   return dashboardTokens(options).some((configured) => configured !== undefined && configured.length > 0);
 }
@@ -1607,12 +1667,14 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return prototype === Object.prototype || prototype === null;
 }
 
-function isJsonSerializable(value: unknown): boolean {
-  try {
-    return JSON.stringify(value) !== undefined;
-  } catch {
-    return false;
+function isJsonSerializableValue(value: unknown): boolean {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return true;
+  if (typeof value === 'number') return Number.isFinite(value);
+  if (Array.isArray(value)) return value.every(isJsonSerializableValue);
+  if (isPlainRecord(value)) {
+    return Object.values(value).every(isJsonSerializableValue);
   }
+  return false;
 }
 
 function jsonClone<T>(value: T): T {

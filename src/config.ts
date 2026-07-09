@@ -54,9 +54,18 @@ export interface RainrailServerConfig {
   allowedHosts: string[];
 }
 
+export type RainrailOperationalStoreKind = 'sqlite' | 'json' | 'memory';
+
+export interface RainrailOperationalStoreConfig {
+  kind: RainrailOperationalStoreKind;
+  databasePath?: string;
+  eventLimit: number;
+}
+
 export interface RainrailConfig {
   server: RainrailServerConfig;
   dashboardAuth: RainrailDashboardAuthOptions;
+  operationalStore?: RainrailOperationalStoreConfig | undefined;
   sourceBundles: SourceBundleConfig[];
   sources: SourceProviderConfig[];
   taskProviders: TaskProviderConfig;
@@ -78,6 +87,7 @@ const defaultServerConfig: RainrailServerConfig = {
   port: 8787,
   allowedHosts: [],
 };
+const defaultOperationalStoreEventLimit = 250;
 const safeSourceNamePattern = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/u;
 const githubWebhookSourceNameMaxLength = 53;
 
@@ -95,10 +105,12 @@ export function parseConfig(value: unknown): RainrailConfig {
   if (!isRecord(value)) {
     throw new Error('config must be an object');
   }
+  const operationalStore = parseOperationalStore(value.operationalStore);
 
   return {
     server: parseServer(value.server),
     dashboardAuth: parseDashboardAuth(value.dashboardAuth),
+    operationalStore,
     sourceBundles: parseSourceBundles(value.sourceBundles),
     sources: parseSources(value.sources),
     taskProviders: parseTaskProviders(value.taskProviders),
@@ -150,6 +162,33 @@ function parseServer(value: unknown): RainrailServerConfig {
     port: parseOptionalPort(value.port, 'config.server.port') ?? defaultServerConfig.port,
     allowedHosts: parseOptionalStringArray(value.allowedHosts, 'config.server.allowedHosts') ??
       [...defaultServerConfig.allowedHosts],
+  };
+}
+
+function parseOperationalStore(value: unknown): RainrailOperationalStoreConfig | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!isRecord(value)) {
+    throw new Error('config.operationalStore must be an object');
+  }
+
+  const kind = parseOperationalStoreKind(value.kind, 'config.operationalStore.kind');
+  const databasePath = parseOptionalString(value.databasePath, 'config.operationalStore.databasePath');
+  const eventLimit = parseOptionalPositiveInteger(value.eventLimit, 'config.operationalStore.eventLimit')
+    ?? defaultOperationalStoreEventLimit;
+
+  if ((kind === 'sqlite' || kind === 'json') && databasePath === undefined) {
+    throw new Error('config.operationalStore.databasePath must be a non-empty string for sqlite/json stores');
+  }
+  if (kind === 'memory' && databasePath !== undefined) {
+    throw new Error('config.operationalStore.databasePath must be omitted for memory stores');
+  }
+
+  return {
+    kind,
+    ...(databasePath === undefined ? {} : { databasePath }),
+    eventLimit,
   };
 }
 
@@ -291,6 +330,14 @@ function parseSourceEventType(value: unknown, path: string): RainrailEventSource
     throw new Error(`${path} must be one of: github, cloudflare, manual, chat, system`);
   }
   return type;
+}
+
+function parseOperationalStoreKind(value: unknown, path: string): RainrailOperationalStoreKind {
+  const kind = parseRequiredString(value, path);
+  if (kind !== 'sqlite' && kind !== 'json' && kind !== 'memory') {
+    throw new Error(`${path} must be one of: sqlite, json, memory`);
+  }
+  return kind;
 }
 
 function parseOptionalProviderName(value: unknown, path: string): keyof TaskProviderConfig | undefined {
@@ -474,6 +521,16 @@ function parseOptionalNonNegativeNumber(value: unknown, path: string): number | 
   }
   if (value < 0) {
     throw new Error(`${path} must be a finite non-negative number`);
+  }
+  return value;
+}
+
+function parseOptionalPositiveInteger(value: unknown, path: string): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) {
+    throw new Error(`${path} must be a positive integer`);
   }
   return value;
 }
