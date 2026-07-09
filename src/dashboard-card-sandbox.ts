@@ -147,6 +147,7 @@ function createBridge(
       if (typeof capabilityOrRequest !== 'string') {
         const bridgeRequest = normalizeBridgeRequest(definition, layoutItemId, capabilityOrRequest);
         assertBridgeCapability(cardId, granted, bridgeRequest.capability);
+        assertBridgeActionScope(cardId, bridgeRequest.action);
         const handler = bridgeHandler(cardId, handlers, bridgeRequest.capability);
         return handler(bridgeRequest);
       }
@@ -205,6 +206,12 @@ function assertBridgeCapability(
 ): void {
   if (!granted.has(capability)) {
     throw new Error(`Capability "${capability}" is not available to dashboard card "${cardId}"`);
+  }
+}
+
+function assertBridgeActionScope(cardId: string, action: DashboardCardBridgeAction): void {
+  if (action === 'runAction') {
+    throw new Error(`Bridge action "runAction" requires operator capability for dashboard card "${cardId}"`);
   }
 }
 

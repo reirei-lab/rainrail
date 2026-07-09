@@ -392,6 +392,8 @@ action を検証し、別 card へのなりすましや capability の横取り�
 `DashboardCardBridgeAction` は `refresh`、`openDetail`、`runAction`、`showToast` に限定する。
 `refresh` と `openDetail` は dashboard read capability の範囲で dashboard shell が代行し、
 `runAction` は operator API と同じ scope / confirmation / audit を通る handler だけが実装する。
+現行の iframe bridge は read-only capability だけを公開するため、operator capability の対応が
+追加されるまでは `runAction` を handler dispatch 前に拒否する。
 `showToast` は card-local feedback であり、token、store、raw payload への直接 access は提供しない。
 iframe bridge に公開できる capability は `dashboard:read` または `*:read` 形式の read-only
 capability だけとし、`runtime:start`、`secret:access`、`merge` などの workflow 用 capability は

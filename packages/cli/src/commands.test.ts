@@ -2431,6 +2431,7 @@ describe('Rainrail CLI built-in commands', () => {
       const projectRoot = await initRainrailProject(directory, 'json-layout-save-failure');
       const port = await getFreePort();
       const blockedParent = join(projectRoot, 'var', 'blocked-parent');
+      const databasePath = join(blockedParent, 'rainrail-operational.json');
       await mkdir(join(projectRoot, 'var'), { recursive: true });
       await writeFile(blockedParent, 'not a directory');
       await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
@@ -2440,7 +2441,7 @@ describe('Rainrail CLI built-in commands', () => {
         },
         operationalStore: {
           kind: 'json',
-          databasePath: join(blockedParent, 'rainrail-operational.json'),
+          databasePath,
           eventLimit: 10,
         },
         sourceBundles: [],
@@ -2474,6 +2475,8 @@ describe('Rainrail CLI built-in commands', () => {
         await rm(blockedParent, { force: true });
         await closeTestServer(result);
       }
+      const persisted = JSON.parse(await readFile(databasePath, 'utf8')) as { dashboardLayout?: unknown };
+      expect(JSON.stringify(persisted.dashboardLayout ?? '')).not.toContain('compact');
     });
   });
 

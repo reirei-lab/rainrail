@@ -324,5 +324,13 @@ describe('dashboard card sandbox host', () => {
       capability: 'dashboard:read',
       action: 'readToken' as 'refresh',
     })).rejects.toThrow(/Bridge action "readToken" is not available to dashboard card "plugin:github.queue"/u);
+
+    await expect(frame.bridge.request({
+      cardId: 'plugin:github.queue',
+      pluginName: 'github',
+      cardName: 'queue',
+      capability: 'dashboard:read',
+      action: 'runAction',
+    })).rejects.toThrow(/Bridge action "runAction" requires operator capability for dashboard card "plugin:github.queue"/u);
   });
 });

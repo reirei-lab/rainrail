@@ -5652,13 +5652,17 @@ function createJsonLocalRainrailEventStore(databasePath: string, eventLimit: num
   let events = initialData.events.slice(-eventLimit);
   let dashboardLayout = initialData.dashboardLayout?.items;
   let dashboardLayoutUpdatedAt = initialData.dashboardLayout?.updatedAt;
-  const writeStore = (): void => {
+  const writeStore = (
+    nextEvents = events,
+    nextDashboardLayout = dashboardLayout,
+    nextDashboardLayoutUpdatedAt = dashboardLayoutUpdatedAt,
+  ): void => {
     mkdirSync(dirname(databasePath), { recursive: true });
     writeFileSync(databasePath, `${JSON.stringify({
-      events,
-      ...(dashboardLayout === undefined || dashboardLayoutUpdatedAt === undefined
+      events: nextEvents,
+      ...(nextDashboardLayout === undefined || nextDashboardLayoutUpdatedAt === undefined
         ? {}
-        : { dashboardLayout, dashboardLayoutUpdatedAt }),
+        : { dashboardLayout: nextDashboardLayout, dashboardLayoutUpdatedAt: nextDashboardLayoutUpdatedAt }),
     }, null, 2)}\n`, { mode: 0o600 });
   };
   return {
@@ -5668,9 +5672,11 @@ function createJsonLocalRainrailEventStore(databasePath: string, eventLimit: num
       ? undefined
       : { items: localCloneDashboardLayout(dashboardLayout), updatedAt: dashboardLayoutUpdatedAt },
     saveDashboardLayout(items) {
-      dashboardLayoutUpdatedAt = new Date().toISOString();
-      dashboardLayout = localCloneDashboardLayout(items);
-      writeStore();
+      const nextDashboardLayoutUpdatedAt = new Date().toISOString();
+      const nextDashboardLayout = localCloneDashboardLayout(items);
+      writeStore(events, nextDashboardLayout, nextDashboardLayoutUpdatedAt);
+      dashboardLayoutUpdatedAt = nextDashboardLayoutUpdatedAt;
+      dashboardLayout = nextDashboardLayout;
       return { items: localCloneDashboardLayout(dashboardLayout), updatedAt: dashboardLayoutUpdatedAt };
     },
     replaceEvents(nextEvents) {
