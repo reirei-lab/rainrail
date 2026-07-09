@@ -8,6 +8,7 @@ import { createRainrailHttpApp } from '../src/http-app.js';
 import { SqliteOperationalStore } from '../src/operational-store.js';
 import type { RainrailIntakeAdapter } from '../src/intake-adapter.js';
 import type { ProjectIssue } from '../src/project-issues.js';
+import { dashboardDemoVrtScenarios } from './dashboard-demo-vrt-scenarios.mjs';
 
 const seedScript = new URL('./seed-dashboard-demo-db.mjs', import.meta.url);
 
@@ -191,6 +192,132 @@ describe('dashboard demo SQLite seed script', () => {
               },
             },
           });
+      } finally {
+        store.close();
+      }
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('backs every dashboard demo VRT scenario with representative SQLite API data', async () => {
+    const { databasePath, cleanup } = temporaryDatabasePath();
+    try {
+      expect(runSeed(databasePath).status).toBe(0);
+      const store = new SqliteOperationalStore({ databasePath, eventLimit: 25 });
+      try {
+        const app = createRainrailHttpApp({
+          room: { fetch: () => Response.json({ ok: true }) },
+          publishToken: 'publish-token',
+          runtime: 'node',
+          dashboardAuth: {
+            readOnlyToken: 'read-token',
+            operatorToken: 'operator-token',
+            adminToken: 'admin-token',
+          },
+          operationalStore: store,
+          intakeAdapters: demoIntakeAdapters(),
+          taskQueue: demoTaskQueue(),
+        });
+        const headers = { authorization: 'Bearer read-token' };
+
+        expect(dashboardDemoVrtScenarios).toEqual([
+          expect.objectContaining({ id: 'overview-demo-summary', tab: 'overview' }),
+          expect.objectContaining({ id: 'events-handler-retry-detail', tab: 'events' }),
+          expect.objectContaining({ id: 'workflow-runs-failed-retry', tab: 'workflow-runs' }),
+          expect.objectContaining({ id: 'agent-tasks-running-actions', tab: 'agent-tasks' }),
+          expect.objectContaining({ id: 'sources-last-deliveries', tab: 'sources' }),
+          expect.objectContaining({ id: 'queue-blocked-stale-claim', tab: 'queue' }),
+          expect.objectContaining({ id: 'settings-retry-auth', tab: 'settings' }),
+        ]);
+        for (const scenario of dashboardDemoVrtScenarios) {
+          expect(scenario.url).toMatch(/^\/(?:ja|en)\/dashboard\?demo=1\b/);
+          expect(scenario.captureHints.length).toBeGreaterThan(0);
+        }
+
+        const overview = await getJson(app, '/api/v1/overview', headers);
+        expect(overview.data).toMatchObject({
+          counts: {
+            events: 3,
+            activityEvents: 4,
+            agentTasks: 3,
+            commandResults: 3,
+            eventHandlerRetries: 2,
+          },
+          warnings: {
+            staleProjectClaims: [
+              expect.objectContaining({ taskId: 'agent_task_demo_failed_stale_claim' }),
+            ],
+          },
+        });
+
+        const retryEvents = await getJson(app, '/api/v1/events?filter[source]=github', headers);
+        expect(retryEvents.data).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            id: 'evt_demo_github_issue_272',
+            handlerRetryCount: 1,
+            latestOutcome: 'success',
+          }),
+        ]));
+        const retryEventDetail = await getJson(app, '/api/v1/events/evt_demo_github_issue_272', headers);
+        expect(retryEventDetail.data.record.handlerRetries).toEqual([
+          expect.objectContaining({
+            handlerName: 'agent-assignment-dispatch',
+            attempts: 1,
+            lastError: expect.stringContaining('waiting for capacity'),
+          }),
+        ]);
+
+        const failedWorkflowRuns = await getJson(app, '/api/v1/workflow-runs?filter[status]=failed', headers);
+        expect(failedWorkflowRuns.data).toEqual([
+          expect.objectContaining({
+            id: 'act_demo_workflow_failed_retry',
+            status: 'failed',
+            sourceEventId: 'evt_demo_cloudflare_tail_001',
+          }),
+        ]);
+
+        const runningTasks = await getJson(app, '/api/v1/agent-tasks?filter[status]=running', headers);
+        expect(runningTasks.data).toEqual([
+          expect.objectContaining({ id: 'agent_task_demo_running', status: 'running' }),
+        ]);
+        const runningTaskDetail = await getJson(app, '/api/v1/agent-tasks/agent_task_demo_running', headers);
+        expect(runningTaskDetail.data.record.resumeAttempts).toEqual([
+          expect.objectContaining({ id: 'resume-demo-001', status: 'running' }),
+        ]);
+        expect(store.snapshot().commandResults).toEqual([
+          expect.objectContaining({ actionType: 'queue_assign_next', status: 'failed', dryRun: false }),
+          expect.objectContaining({ actionType: 'settings_update', status: 'preview', dryRun: true }),
+          expect.objectContaining({ actionType: 'agent_task_resume', status: 'accepted', dryRun: false }),
+        ]);
+
+        const sources = await getJson(app, '/api/v1/sources', headers);
+        expect(sources.data).toEqual(expect.arrayContaining([
+          expect.objectContaining({ id: 'github-webhook', lastDelivery: expect.objectContaining({ id: 'gh-delivery-demo-001' }) }),
+          expect.objectContaining({ id: 'cloudflare-tail', lastDelivery: expect.objectContaining({ id: 'cf-tail-demo-001' }) }),
+          expect.objectContaining({ id: 'manual-chat', lastDelivery: expect.objectContaining({ id: 'chat-delivery-demo-001' }) }),
+        ]));
+
+        const blockedQueue = await getJson(app, '/api/v1/queue?filter[status]=blocked', headers);
+        expect(blockedQueue).toMatchObject({
+          data: [
+            expect.objectContaining({
+              id: 'agent_task_demo_failed_stale_claim',
+              status: 'blocked',
+              blockedReason: expect.stringContaining('stale'),
+            }),
+          ],
+          summary: {
+            blockedCount: 1,
+            staleClaimCount: 1,
+          },
+        });
+
+        const settings = await getJson(app, '/api/v1/settings', headers);
+        expect(settings.data).toEqual(expect.arrayContaining([
+          expect.objectContaining({ id: 'retry-policy', value: '2 retries pending' }),
+          expect.objectContaining({ id: 'dashboard-auth', value: 'bearer token configured' }),
+        ]));
       } finally {
         store.close();
       }

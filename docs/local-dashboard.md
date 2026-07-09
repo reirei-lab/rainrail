@@ -95,6 +95,20 @@ Demo data is SQLite-backed, not a frontend fixture client. Demo command actions
 return a demo-only accepted response and do not dispatch to GitHub, Cloudflare,
 OpenClaw, or a live local runner.
 
+Run the focused smoke/VRT baseline check before changing dashboard UI that uses
+the demo DB:
+
+```sh
+pnpm demo:dashboard:smoke
+```
+
+The smoke test rebuilds the deterministic SQLite DB, exercises every dashboard
+API resource, and checks the VRT scenario manifest in
+`scripts/dashboard-demo-vrt-scenarios.mjs`. The manifest pins the dashboard tab
+states to capture later with Playwright: overview, retrying events, failed
+workflow runs, running task actions, source delivery status, blocked stale
+claims, and settings.
+
 ## Auth scopes
 
 `dashboardAuth` supports three scopes. The local `rainrail start` startup flow

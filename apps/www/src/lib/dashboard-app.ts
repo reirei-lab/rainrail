@@ -26,6 +26,20 @@ interface DashboardData {
   settings: DashboardSetting[];
 }
 
+interface DashboardInitialState {
+  tab: DashboardTab;
+  eventFilters: { sourceType?: string; name?: string };
+  workflowRunFilters: { status?: string };
+  agentTaskFilters: { status?: string };
+  queueFilters: { status?: string };
+  detailIds: {
+    event?: string;
+    workflowRun?: string;
+    agentTask?: string;
+    queue?: string;
+  };
+}
+
 const TOKEN_STORAGE_KEY = 'rainrail-dashboard-token';
 const API_BASE_URL_STORAGE_KEY = 'rainrail-dashboard-api-base-url';
 const OPERATOR_STORAGE_KEY = 'rainrail-dashboard-operator';
@@ -59,7 +73,8 @@ if (root !== null) {
   const tabButtons = Array.from(root.querySelectorAll<HTMLButtonElement>('[data-dashboard-tab]'));
 
   let client: RainrailDashboardApiClient | undefined;
-  let selectedTab: DashboardTab = 'overview';
+  const initialDashboardState = initialDashboardStateFromUrl(new URLSearchParams(window.location.search));
+  let selectedTab: DashboardTab = initialDashboardState.tab;
   let latestData: DashboardData | undefined;
   let lastUpdatedAt = 0;
   let staleTimer: number | undefined;
@@ -78,6 +93,12 @@ if (root !== null) {
   const operatorEnabled = isOperatorModeEnabled();
   if (tokenInput !== null) tokenInput.value = storedToken;
   if (apiBaseUrlInput !== null) apiBaseUrlInput.value = storedApiBaseUrl;
+  if (eventSourceFilter !== null && initialDashboardState.eventFilters.sourceType !== undefined) {
+    eventSourceFilter.value = initialDashboardState.eventFilters.sourceType;
+  }
+  if (eventNameFilter !== null && initialDashboardState.eventFilters.name !== undefined) {
+    eventNameFilter.value = initialDashboardState.eventFilters.name;
+  }
   if (permissionToggle !== null) permissionToggle.checked = operatorEnabled;
   if (demoIndicator !== null) demoIndicator.hidden = !demoMode;
   setOperatorActionsEnabled(operatorEnabled);
@@ -197,10 +218,10 @@ if (root !== null) {
       const nextData = {
         overview: await activeClient.overview(),
         events: (await activeClient.events(currentEventFilters())).data,
-        workflowRuns: (await activeClient.workflowRuns()).data,
-        agentTasks: (await activeClient.agentTasks()).data,
+        workflowRuns: (await activeClient.workflowRuns(currentWorkflowRunFilters())).data,
+        agentTasks: (await activeClient.agentTasks(currentAgentTaskFilters())).data,
         sources: (await activeClient.sources()).data,
-        queue: (await activeClient.queue()).data,
+        queue: (await activeClient.queue(currentQueueFilters())).data,
         settings: (await activeClient.settings()).data,
       };
       if (!isCurrentRefresh(activeClient, activeRefreshId)) return;
@@ -240,7 +261,10 @@ if (root !== null) {
       return;
     }
 
-    void renderDetail(rows[0]!);
+    const target = rows.find((row) => row.id === selectedDetailRowId)
+      ?? rows.find((row) => row.id === preferredDetailRowId())
+      ?? rows[0]!;
+    void renderDetail(target);
   }
 
   function rowButton(row: DashboardRow): HTMLButtonElement {
@@ -468,6 +492,26 @@ if (root !== null) {
       sourceType: eventSourceFilter?.value.trim() ?? '',
       name: eventNameFilter?.value.trim() ?? '',
     };
+  }
+
+  function currentWorkflowRunFilters(): { status?: string } {
+    return initialDashboardState.workflowRunFilters;
+  }
+
+  function currentAgentTaskFilters(): { status?: string } {
+    return initialDashboardState.agentTaskFilters;
+  }
+
+  function currentQueueFilters(): { status?: string } {
+    return initialDashboardState.queueFilters;
+  }
+
+  function preferredDetailRowId(): string | undefined {
+    if (selectedTab === 'events') return initialDashboardState.detailIds.event;
+    if (selectedTab === 'workflow-runs') return initialDashboardState.detailIds.workflowRun;
+    if (selectedTab === 'agent-tasks') return initialDashboardState.detailIds.agentTask;
+    if (selectedTab === 'queue') return initialDashboardState.detailIds.queue;
+    return undefined;
   }
 
   function renderBasicDetail(row: DashboardRow, label: string): void {
@@ -733,6 +777,35 @@ function isDashboardTab(value: string | undefined): value is DashboardTab {
     || value === 'sources'
     || value === 'queue'
     || value === 'settings';
+}
+
+function initialDashboardStateFromUrl(params: URLSearchParams): DashboardInitialState {
+  const tabParam = params.get('tab') ?? undefined;
+  const tab = isDashboardTab(tabParam) ? tabParam : 'overview';
+  const status = params.get('status') ?? undefined;
+
+  return {
+    tab,
+    eventFilters: {
+      sourceType: params.get('source') ?? undefined,
+      name: params.get('name') ?? undefined,
+    },
+    workflowRunFilters: {
+      status: tab === 'workflow-runs' ? status : undefined,
+    },
+    agentTaskFilters: {
+      status: tab === 'agent-tasks' ? status : undefined,
+    },
+    queueFilters: {
+      status: tab === 'queue' ? status : undefined,
+    },
+    detailIds: {
+      event: params.get('event') ?? undefined,
+      workflowRun: params.get('run') ?? undefined,
+      agentTask: params.get('task') ?? undefined,
+      queue: params.get('queue') ?? undefined,
+    },
+  };
 }
 
 function hasOperationalRecords(overview: DashboardOverview): boolean {

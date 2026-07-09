@@ -29,6 +29,14 @@ const cloudflarePagesDocs = readFileSync(
   new URL('../docs/cloudflare-pages.md', import.meta.url),
   'utf8',
 );
+const dashboardDemoVrtScenarios = readFileSync(
+  new URL('./dashboard-demo-vrt-scenarios.mjs', import.meta.url),
+  'utf8',
+);
+/** @type {{ contracts: Array<{ id: string, sources: string[], tests: string[] }> }} */
+const contractsManifest = JSON.parse(
+  readFileSync(new URL('../docs/contracts.manifest.json', import.meta.url), 'utf8'),
+);
 
 describe('dashboard app shell', () => {
   it('places the operational dashboard under a dedicated app shell route', () => {
@@ -62,13 +70,13 @@ describe('dashboard app shell', () => {
       expect(localizedDashboardPage).toContain(`data-dashboard-tab="${tab}"`);
     }
 
-    for (const method of ['sources()', 'queue()', 'settings()']) {
+    for (const method of ['sources()', 'queue(', 'settings()']) {
       expect(dashboardClient).toContain(method);
     }
 
     expect(dashboardApp).toContain("type DashboardTab = 'overview' | 'events' | 'workflow-runs' | 'agent-tasks' | 'sources' | 'queue' | 'settings'");
     expect(dashboardApp).toContain('sources: (await activeClient.sources()).data');
-    expect(dashboardApp).toContain('queue: (await activeClient.queue()).data');
+    expect(dashboardApp).toContain('queue: (await activeClient.queue(currentQueueFilters())).data');
     expect(dashboardApp).toContain('settings: (await activeClient.settings()).data');
     expect(dashboardContent).toContain("sourceBundles: ['EEP Bridge', 'GitHub webhook', 'Cloudflare tail'");
     expect(dashboardContent).toContain("queueSignals: ['upcoming issue', 'blocked reason', 'in-progress count'");
@@ -134,6 +142,28 @@ describe('dashboard app shell', () => {
     expect(dashboardClient).toContain('demoMode?: boolean');
     expect(dashboardClient).toContain('pathWithDemoMode(path)');
     expect(dashboardClient).toContain('demo=1');
+  });
+
+  it('hydrates dashboard demo VRT state from URL parameters', () => {
+    expect(dashboardDemoVrtScenarios).toContain('tab=events&event=evt_demo_github_issue_272');
+    expect(dashboardDemoVrtScenarios).toContain('tab=workflow-runs&status=failed&run=act_demo_workflow_failed_retry');
+    expect(dashboardDemoVrtScenarios).toContain('tab=agent-tasks&task=agent_task_demo_running');
+    expect(dashboardDemoVrtScenarios).toContain('tab=queue&status=blocked');
+    expect(dashboardApp).toContain('initialDashboardStateFromUrl');
+    expect(dashboardApp).toContain('let selectedTab: DashboardTab = initialDashboardState.tab;');
+    expect(dashboardApp).toContain('workflowRuns: (await activeClient.workflowRuns(currentWorkflowRunFilters())).data');
+    expect(dashboardApp).toContain('agentTasks: (await activeClient.agentTasks(currentAgentTaskFilters())).data');
+    expect(dashboardApp).toContain('queue: (await activeClient.queue(currentQueueFilters())).data');
+    expect(dashboardApp).toContain('preferredDetailRowId()');
+    expect(dashboardClient).toContain("params.set('filter[status]', filters.status)");
+  });
+
+  it('keeps dashboard demo smoke and VRT files attached to the local dashboard contract', () => {
+    const contract = contractsManifest.contracts.find((entry) => entry.id === 'local-dashboard-start');
+    expect(contract).toBeDefined();
+    if (contract === undefined) throw new Error('local-dashboard-start contract missing');
+    expect(contract.sources).toContain('scripts/dashboard-demo-vrt-scenarios.mjs');
+    expect(contract.tests).toContain('scripts/seed-dashboard-demo-db.test.ts');
   });
 
   it('documents polling as the MVP live update strategy in code and UI affordances', () => {
