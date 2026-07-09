@@ -370,6 +370,9 @@ plugin 名と card 名の path だけで解決し、`cardId` と任意の layout
 `DashboardCardSandboxBridge` は card definition の `requiredCapabilities` と host 側
 `allowedCapabilities` の交差だけを公開する。bridge handler がない capability や許可されていない
 capability request は card 単位で失敗し、危険操作は Workflow plugin の action gate に残す。
+iframe bridge に公開できる capability は `dashboard:read` または `*:read` 形式の read-only
+capability だけとし、`runtime:start`、`secret:access`、`merge` などの workflow 用 capability は
+host 側の `allowedCapabilities` に含まれていても公開しない。
 `DashboardCardSandboxHost.load()` は load failure / timeout を throw せず
 `DashboardCardSandboxLoadResult` の `{ status: "error" }` として返すため、1 つの plugin card が
 落ちても dashboard shell と他カードの描画を継続できる。

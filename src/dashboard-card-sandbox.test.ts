@@ -122,6 +122,16 @@ describe('dashboard card sandbox host', () => {
       cardBaseUrl: '\\\\attacker.example/cards/',
       allowedCapabilities: ['dashboard:read'],
     })).toThrow(/card base URL must not be protocol-relative/u);
+
+    expect(() => createDashboardCardSandboxHost({
+      cardBaseUrl: '\t//attacker.example/cards/',
+      allowedCapabilities: ['dashboard:read'],
+    })).toThrow(/card base URL must not be protocol-relative/u);
+
+    expect(() => createDashboardCardSandboxHost({
+      cardBaseUrl: '\n/\\attacker.example/cards/',
+      allowedCapabilities: ['dashboard:read'],
+    })).toThrow(/card base URL must not be protocol-relative/u);
   });
 
   it('rejects plugin identifiers that could escape the sandbox card base path', () => {
@@ -143,20 +153,42 @@ describe('dashboard card sandbox host', () => {
     })).toThrow(/cardName must not contain "\." or ":"/u);
   });
 
-  it('ignores inherited bridge handler properties', async () => {
+  it('excludes workflow-only capabilities from the iframe bridge', async () => {
     const host = createDashboardCardSandboxHost({
       cardBaseUrl: '/dashboard/plugin-cards/',
-      allowedCapabilities: ['constructor'],
-      bridgeHandlers: {},
+      allowedCapabilities: ['dashboard:read', 'runtime:start', 'secret:access', 'merge'],
+      bridgeHandlers: {
+        'dashboard:read': async () => ({ ok: true }),
+        'runtime:start': async () => ({ ok: false }),
+        'secret:access': async () => ({ ok: false }),
+        merge: async () => ({ ok: false }),
+      },
     });
     const frame = host.createFrame({
       ...pluginQueueCard,
-      id: 'plugin:github.constructor',
-      entry: { type: 'plugin', pluginName: 'github', cardName: 'constructor' },
-      requiredCapabilities: ['constructor'],
+      requiredCapabilities: ['dashboard:read', 'runtime:start', 'secret:access', 'merge'],
     });
 
-    await expect(frame.bridge.request('constructor', {}))
-      .rejects.toThrow(/Capability "constructor" does not have a dashboard card bridge handler/u);
+    expect(frame.bridgeCapabilities).toEqual(['dashboard:read']);
+    await expect(frame.bridge.request('runtime:start', {}))
+      .rejects.toThrow(/Capability "runtime:start" is not available to dashboard card "plugin:github.queue"/u);
+  });
+
+  it('ignores inherited bridge handler properties', async () => {
+    const bridgeHandlers = Object.create({
+      'dashboard:read': async () => ({ ok: false }),
+    }) as Record<string, () => Promise<{ ok: boolean }>>;
+    const host = createDashboardCardSandboxHost({
+      cardBaseUrl: '/dashboard/plugin-cards/',
+      allowedCapabilities: ['dashboard:read'],
+      bridgeHandlers,
+    });
+    const frame = host.createFrame({
+      ...pluginQueueCard,
+      requiredCapabilities: ['dashboard:read'],
+    });
+
+    await expect(frame.bridge.request('dashboard:read', {}))
+      .rejects.toThrow(/Capability "dashboard:read" does not have a dashboard card bridge handler/u);
   });
 });

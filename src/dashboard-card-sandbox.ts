@@ -57,8 +57,8 @@ export function createDashboardCardSandboxHost(
   options: DashboardCardSandboxHostOptions,
 ): DashboardCardSandboxHost {
   const timeoutMs = options.timeoutMs ?? 5000;
-  const cardBaseUrl = options.cardBaseUrl;
-  if (cardBaseUrl.startsWith('//') || cardBaseUrl.startsWith('/\\') || cardBaseUrl.startsWith('\\')) {
+  const cardBaseUrl = options.cardBaseUrl.replace(/^[\u0000-\u0020]+/u, '');
+  if (isProtocolRelativeCardBaseUrl(cardBaseUrl)) {
     throw new Error('Dashboard card sandbox card base URL must not be protocol-relative');
   }
   const allowedCapabilities = options.allowedCapabilities === undefined
@@ -152,7 +152,11 @@ function grantedCapabilities(
   if (required.length === 0 || allowedCapabilities === undefined) return [];
 
   const allowed = new Set(allowedCapabilities);
-  return required.filter((capability) => allowed.has(capability));
+  return required.filter((capability) => allowed.has(capability) && isDashboardCardBridgeCapability(capability));
+}
+
+function isDashboardCardBridgeCapability(capability: RuntimeCapabilityName): boolean {
+  return capability === 'dashboard:read' || capability.endsWith(':read');
 }
 
 function validatePluginSandboxEntry(definition: DashboardCardDefinition): void {
@@ -198,7 +202,17 @@ function sandboxFrameSource(
   url.searchParams.set('cardId', definition.id);
   if (layoutItemId !== undefined) url.searchParams.set('layoutItemId', layoutItemId);
 
-  return isAbsolute ? url.href : `${url.pathname}${url.search}`;
+  if (isAbsolute) return url.href;
+
+  const relativeSource = `${url.pathname}${url.search}`;
+  if (relativeSource.startsWith('//')) {
+    throw new Error('Dashboard card sandbox card base URL must not be protocol-relative');
+  }
+  return relativeSource;
+}
+
+function isProtocolRelativeCardBaseUrl(value: string): boolean {
+  return value.startsWith('//') || value.startsWith('/\\') || value.startsWith('\\');
 }
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
