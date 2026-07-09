@@ -13,6 +13,7 @@ import {
 import { createRequire } from 'node:module';
 import { dirname } from 'node:path';
 
+import type { DashboardLayoutItem } from './dashboard-card-registry.js';
 import type { RainrailEventEnvelope } from './events.js';
 import type { RuntimeAgentResumeAttempt, RuntimeRunStatus } from './runtime-provider.js';
 
@@ -187,6 +188,12 @@ export interface StoredStaleProjectClaimWarning {
   releaseError?: string;
 }
 
+export interface StoredDashboardLayout {
+  id: 'user.dashboardLayout';
+  items: DashboardLayoutItem[];
+  updatedAt: string;
+}
+
 export interface SnapshotOptions {
   hideSkippedActivityEvents?: boolean;
 }
@@ -241,6 +248,8 @@ export interface OperationalStore {
     retry: StoredEventHandlerRetry,
     input: RecordEventHandlerRetryInput,
   ): StoredEventHandlerRetry | undefined;
+  getDashboardLayout(): StoredDashboardLayout | undefined;
+  saveDashboardLayout(items: DashboardLayoutItem[]): StoredDashboardLayout;
   snapshot(options?: SnapshotOptions): OperationalStoreSnapshot;
 }
 
@@ -250,6 +259,7 @@ interface OperationalStoreData {
   agentTasks: Record<string, StoredAgentTask>;
   commandResults: Record<string, StoredCommandResult>;
   eventHandlerRetries: Record<string, StoredEventHandlerRetry>;
+  dashboardLayout?: StoredDashboardLayout;
   sequences: Record<string, number>;
 }
 
@@ -575,6 +585,23 @@ export class JsonFileOperationalStore implements OperationalStore {
     this.#data.eventHandlerRetries[key] = next;
     this.#persist();
     return jsonClone(next);
+  }
+
+  getDashboardLayout(): StoredDashboardLayout | undefined {
+    this.#assertOpen();
+    return this.#data.dashboardLayout === undefined ? undefined : jsonClone(this.#data.dashboardLayout);
+  }
+
+  saveDashboardLayout(items: DashboardLayoutItem[]): StoredDashboardLayout {
+    this.#assertOpen();
+    const layout: StoredDashboardLayout = {
+      id: 'user.dashboardLayout',
+      items: jsonClone(items),
+      updatedAt: this.#now().toISOString(),
+    };
+    this.#data.dashboardLayout = layout;
+    this.#persist();
+    return jsonClone(layout);
   }
 
   snapshot(options: SnapshotOptions = {}): OperationalStoreSnapshot {
@@ -1155,6 +1182,30 @@ export class SqliteOperationalStore implements OperationalStore {
     return this.getEventHandlerRetry(input.eventId, input.handlerName);
   }
 
+  getDashboardLayout(): StoredDashboardLayout | undefined {
+    this.#assertOpen();
+    const row = this.#database.prepare('SELECT * FROM dashboard_layout WHERE id = ?').get('user.dashboardLayout');
+    return row === undefined ? undefined : dashboardLayoutFromRow(row);
+  }
+
+  saveDashboardLayout(items: DashboardLayoutItem[]): StoredDashboardLayout {
+    this.#assertOpen();
+    const layout: StoredDashboardLayout = {
+      id: 'user.dashboardLayout',
+      items: jsonClone(items),
+      updatedAt: this.#now().toISOString(),
+    };
+    this.#database.prepare(`
+      INSERT INTO dashboard_layout (id, items_json, updated_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        items_json = excluded.items_json,
+        updated_at = excluded.updated_at
+    `).run(layout.id, toJsonText(layout.items), layout.updatedAt);
+    this.#protectDatabaseFiles();
+    return jsonClone(layout);
+  }
+
   snapshot(options: SnapshotOptions = {}): OperationalStoreSnapshot {
     this.#assertOpen();
     const activityEvents = this.listActivityEvents({
@@ -1296,6 +1347,12 @@ export class SqliteOperationalStore implements OperationalStore {
       );
       CREATE INDEX IF NOT EXISTS event_handler_retries_schedule_idx
         ON event_handler_retries (next_retry_at ASC, handler_name ASC);
+
+      CREATE TABLE IF NOT EXISTS dashboard_layout (
+        id TEXT PRIMARY KEY,
+        items_json TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
 
       CREATE TABLE IF NOT EXISTS operational_sequences (
         name TEXT PRIMARY KEY,
@@ -1457,6 +1514,15 @@ export class SqliteOperationalStore implements OperationalStore {
         retry.updatedAt,
         retry.claimedUntilAt ?? null,
       );
+    }
+    if (data.dashboardLayout !== undefined) {
+      this.#database.prepare(`
+        INSERT INTO dashboard_layout (id, items_json, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          items_json = excluded.items_json,
+          updated_at = excluded.updated_at
+      `).run(data.dashboardLayout.id, toJsonText(data.dashboardLayout.items), data.dashboardLayout.updatedAt);
     }
     for (const [name, value] of Object.entries(data.sequences)) {
       this.#database.prepare(`
@@ -1662,6 +1728,14 @@ function eventHandlerRetryFromRow(row: unknown): StoredEventHandlerRetry {
   };
 }
 
+function dashboardLayoutFromRow(row: unknown): StoredDashboardLayout {
+  return {
+    id: 'user.dashboardLayout',
+    items: fromJsonText<DashboardLayoutItem[]>(requiredString(row, 'items_json')),
+    updatedAt: requiredString(row, 'updated_at'),
+  };
+}
+
 function eventEnvelopeWithoutRawPayload<TPayload>(event: RainrailEventEnvelope<TPayload>): RainrailEventEnvelope<TPayload> {
   const rawPayload = isSafeRawPayloadReference(event.rawPayload)
     ? jsonClone(event.rawPayload)
@@ -1763,6 +1837,7 @@ function parseStoreData(raw: string): OperationalStoreData {
       agentTasks: value.agentTasks ?? {},
       commandResults: value.commandResults ?? {},
       eventHandlerRetries: value.eventHandlerRetries ?? {},
+      ...(value.dashboardLayout === undefined ? {} : { dashboardLayout: value.dashboardLayout }),
       sequences: value.sequences ?? {},
     };
   } catch {

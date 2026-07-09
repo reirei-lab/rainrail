@@ -60,12 +60,13 @@ export interface DashboardCardListOptions {
 }
 
 export interface DashboardLayoutItem {
+  id: string;
   cardId: string;
   x: number;
   y: number;
   columns: number;
   rows: number;
-  settings?: Record<string, unknown>;
+  config?: Record<string, unknown>;
 }
 
 export type DashboardCardRegistryErrorCode =

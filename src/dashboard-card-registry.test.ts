@@ -417,15 +417,17 @@ describe('dashboard card registry contract', () => {
 
   it('defines layout items independently from card availability', () => {
     const layoutItem: DashboardLayoutItem = {
+      id: 'github-queue',
       cardId: 'plugin:github.queue',
       x: 0,
       y: 0,
       columns: 3,
       rows: 2,
-      settings: { repository: 'reirei-lab/rainrail' },
+      config: { repository: 'reirei-lab/rainrail' },
     };
 
     expect(layoutItem).toMatchObject({
+      id: 'github-queue',
       cardId: 'plugin:github.queue',
       columns: 3,
       rows: 2,

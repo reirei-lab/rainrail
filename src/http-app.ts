@@ -1,3 +1,12 @@
+import {
+  createDashboardCardRegistry,
+  defineDashboardCard,
+  type DashboardCardCatalogEntry,
+  type DashboardCardDefinition,
+  type DashboardCardListOptions,
+  type DashboardCardRegistry,
+  type DashboardLayoutItem,
+} from './dashboard-card-registry.js';
 import type { RainrailEventEnvelope } from './events.js';
 import {
   DEFAULT_MAX_REQUEST_BODY_BYTES,
@@ -26,6 +35,70 @@ import { getInProgressProjectIssues, getNextProjectIssueToStart, type ProjectIss
 import type { TaskQueueProvider } from './task-queue.js';
 
 const DEFAULT_MAX_CONCURRENT_AGENT_TASKS = 1;
+const USER_DASHBOARD_LAYOUT_ID = 'user.dashboardLayout';
+const DEFAULT_DASHBOARD_LAYOUT_ID = 'core.defaultLayout';
+
+const DEFAULT_DASHBOARD_CARDS: readonly DashboardCardDefinition[] = [
+  defineDashboardCard({
+    id: 'core.overview',
+    title: 'Overview',
+    description: 'Operational counts and warnings.',
+    entry: { type: 'core', name: 'overview' },
+    category: 'operations',
+    requiredCapabilities: ['dashboard:read'],
+    size: {
+      default: { columns: 4, rows: 2 },
+      min: { columns: 2, rows: 1 },
+      max: { columns: 8, rows: 4 },
+    },
+  }),
+  defineDashboardCard({
+    id: 'core.recentEvents',
+    title: 'Recent events',
+    description: 'Recent event deliveries and workflow outcomes.',
+    entry: { type: 'core', name: 'recentEvents' },
+    category: 'operations',
+    requiredCapabilities: ['dashboard:read'],
+    size: {
+      default: { columns: 4, rows: 2 },
+      min: { columns: 2, rows: 1 },
+      max: { columns: 8, rows: 4 },
+    },
+  }),
+  defineDashboardCard({
+    id: 'core.agentTasks',
+    title: 'Agent tasks',
+    description: 'Active and recent agent task status.',
+    entry: { type: 'core', name: 'agentTasks' },
+    category: 'operations',
+    requiredCapabilities: ['dashboard:read'],
+    size: {
+      default: { columns: 4, rows: 2 },
+      min: { columns: 2, rows: 1 },
+      max: { columns: 8, rows: 4 },
+    },
+  }),
+  defineDashboardCard({
+    id: 'core.queue',
+    title: 'Queue',
+    description: 'Project queue and blocked work.',
+    entry: { type: 'core', name: 'queue' },
+    category: 'operations',
+    requiredCapabilities: ['dashboard:read'],
+    size: {
+      default: { columns: 4, rows: 2 },
+      min: { columns: 2, rows: 1 },
+      max: { columns: 8, rows: 4 },
+    },
+  }),
+];
+
+const DEFAULT_DASHBOARD_LAYOUT: readonly DashboardLayoutItem[] = [
+  { id: 'overview', cardId: 'core.overview', x: 0, y: 0, columns: 4, rows: 2 },
+  { id: 'recent-events', cardId: 'core.recentEvents', x: 4, y: 0, columns: 4, rows: 2 },
+  { id: 'agent-tasks', cardId: 'core.agentTasks', x: 0, y: 2, columns: 4, rows: 2 },
+  { id: 'queue', cardId: 'core.queue', x: 4, y: 2, columns: 4, rows: 2 },
+];
 
 export type RainrailDashboardScope = 'read-only' | 'operator' | 'admin';
 
@@ -70,6 +143,9 @@ export interface RainrailHttpAppOptions {
   intakeAdapters?: readonly RainrailIntakeAdapter[];
   operationalStore?: OperationalStore;
   taskQueue?: Pick<TaskQueueProvider, 'listProjectIssues' | 'selection'>;
+  dashboardCardRegistry?: DashboardCardRegistry;
+  dashboardCardCatalog?: DashboardCardListOptions;
+  dashboardDefaultLayout?: readonly DashboardLayoutItem[];
   dashboardCommandMaxBodyBytes?: number;
   dashboardAuth?: RainrailDashboardAuthOptions;
   commandHandler?: RainrailCommandHandler;
@@ -268,6 +344,30 @@ async function routeRainrailHttpRequest(
     if (auth !== undefined) return auth;
 
     return dashboardV1SettingsResponse(url, options);
+  }
+
+  if (url.pathname === '/api/v1/dashboard/cards') {
+    if (request.method !== 'GET') return methodNotAllowedResponse(['GET', 'OPTIONS']);
+
+    const auth = verifyDashboardReadRequest(request, options);
+    if (auth !== undefined) return auth;
+
+    return dashboardV1CardsResponse(options);
+  }
+
+  if (url.pathname === '/api/v1/dashboard/layout') {
+    if (request.method === 'GET') {
+      const auth = verifyDashboardReadRequest(request, options);
+      if (auth !== undefined) return auth;
+
+      return dashboardV1LayoutResponse(options);
+    }
+
+    if (request.method === 'PUT') {
+      return handleDashboardLayoutUpdateRequest(request, options);
+    }
+
+    return methodNotAllowedResponse(['GET', 'PUT', 'OPTIONS']);
   }
 
   const v1AgentTaskDetailMatch = /^\/api\/v1\/agent-tasks\/([^/]+)$/.exec(url.pathname);
@@ -724,6 +824,168 @@ function dashboardV1SettingsResponse(url: URL, options: RainrailHttpAppOptions):
     updatePolicy: { requiredScope: 'admin', audit: 'required' },
     page: { limit: collection.limit, nextCursor: page.nextCursor },
   });
+}
+
+function dashboardV1CardsResponse(options: RainrailHttpAppOptions): Response {
+  return jsonResponse({
+    data: dashboardCardCatalog(options),
+  });
+}
+
+function dashboardV1LayoutResponse(options: RainrailHttpAppOptions): Response {
+  const store = options.operationalStore;
+  if (store === undefined) {
+    return jsonResponse({ error: 'operational_store_not_configured' }, { status: 503 });
+  }
+
+  const stored = store.getDashboardLayout();
+  if (stored !== undefined) {
+    return jsonResponse({
+      data: {
+        id: stored.id,
+        source: 'user',
+        updatedAt: stored.updatedAt,
+        items: stored.items,
+      },
+    });
+  }
+
+  return jsonResponse({
+    data: {
+      id: DEFAULT_DASHBOARD_LAYOUT_ID,
+      source: 'default',
+      updatedAt: null,
+      items: dashboardDefaultLayout(options),
+    },
+  });
+}
+
+async function handleDashboardLayoutUpdateRequest(
+  request: Request,
+  options: RainrailHttpAppOptions,
+): Promise<Response> {
+  const store = options.operationalStore;
+  if (store === undefined) {
+    return jsonResponse({ error: 'operational_store_not_configured' }, { status: 503 });
+  }
+
+  const auth = verifyDashboardScopedRequest(request, options, 'operator');
+  if (!auth.ok) return auth.response;
+
+  const body = await readJsonObjectBody(request, options.dashboardCommandMaxBodyBytes ?? DEFAULT_MAX_REQUEST_BODY_BYTES);
+  if (!body.ok) return jsonResponse({ error: body.error }, { status: body.status });
+
+  const parsed = parseDashboardLayoutItems(body.value.items, dashboardCardCatalog(options));
+  if (!parsed.ok) return parsed.response;
+
+  const saved = store.saveDashboardLayout(parsed.items);
+  return jsonResponse({
+    data: {
+      id: USER_DASHBOARD_LAYOUT_ID,
+      source: 'user',
+      updatedAt: saved.updatedAt,
+      items: saved.items,
+    },
+  });
+}
+
+function dashboardCardCatalog(options: RainrailHttpAppOptions): DashboardCardCatalogEntry[] {
+  return dashboardCardRegistry(options).list(options.dashboardCardCatalog ?? {
+    availableCapabilities: ['dashboard:read'],
+  });
+}
+
+function dashboardCardRegistry(options: RainrailHttpAppOptions): DashboardCardRegistry {
+  if (options.dashboardCardRegistry !== undefined) return options.dashboardCardRegistry;
+
+  const registry = createDashboardCardRegistry();
+  for (const card of DEFAULT_DASHBOARD_CARDS) {
+    registry.register(card);
+  }
+  return registry;
+}
+
+function dashboardDefaultLayout(options: RainrailHttpAppOptions): DashboardLayoutItem[] {
+  return jsonClone([...(options.dashboardDefaultLayout ?? DEFAULT_DASHBOARD_LAYOUT)]);
+}
+
+function parseDashboardLayoutItems(
+  value: unknown,
+  catalog: DashboardCardCatalogEntry[],
+): { ok: true; items: DashboardLayoutItem[] } | { ok: false; response: Response } {
+  if (!Array.isArray(value)) {
+    return { ok: false, response: jsonResponse({ error: 'invalid_dashboard_layout_items' }, { status: 400 }) };
+  }
+
+  const definitionsById = new Map(catalog.map((entry) => [entry.definition.id, entry]));
+  const seenItemIds = new Set<string>();
+  const items: DashboardLayoutItem[] = [];
+
+  for (const rawItem of value) {
+    const item = recordValue(rawItem);
+    if (item === undefined) {
+      return { ok: false, response: jsonResponse({ error: 'invalid_dashboard_layout_item' }, { status: 400 }) };
+    }
+
+    const id = stringField(item, 'id');
+    const cardId = stringField(item, 'cardId');
+    const x = integerField(item, 'x');
+    const y = integerField(item, 'y');
+    const columns = integerField(item, 'columns');
+    const rows = integerField(item, 'rows');
+    if (id === undefined || id.length === 0 || cardId === undefined || cardId.length === 0
+      || x === undefined || y === undefined || columns === undefined || rows === undefined
+      || x < 0 || y < 0 || columns < 1 || rows < 1) {
+      return { ok: false, response: jsonResponse({ error: 'invalid_dashboard_layout_item' }, { status: 400 }) };
+    }
+
+    if (seenItemIds.has(id)) {
+      return { ok: false, response: jsonResponse({ error: 'duplicate_dashboard_layout_item', itemId: id }, { status: 400 }) };
+    }
+    seenItemIds.add(id);
+
+    const catalogEntry = definitionsById.get(cardId);
+    if (catalogEntry === undefined) {
+      return { ok: false, response: jsonResponse({ error: 'unknown_dashboard_card', cardId }, { status: 400 }) };
+    }
+    if (catalogEntry.availability.status !== 'available') {
+      return { ok: false, response: jsonResponse({ error: 'unavailable_dashboard_card', cardId }, { status: 400 }) };
+    }
+    if (!dashboardCardSizeIsAllowed(catalogEntry.definition, { columns, rows })) {
+      return {
+        ok: false,
+        response: jsonResponse({ error: 'dashboard_card_size_out_of_range', itemId: id, cardId }, { status: 400 }),
+      };
+    }
+
+    const config = item.config;
+    if (config !== undefined && (!isPlainRecord(config) || !isJsonSerializable(config))) {
+      return { ok: false, response: jsonResponse({ error: 'invalid_dashboard_card_config', itemId: id, cardId }, { status: 400 }) };
+    }
+
+    items.push({
+      id,
+      cardId,
+      x,
+      y,
+      columns,
+      rows,
+      ...(config === undefined ? {} : { config: jsonClone(config as Record<string, unknown>) }),
+    });
+  }
+
+  return { ok: true, items };
+}
+
+function dashboardCardSizeIsAllowed(
+  definition: DashboardCardDefinition,
+  size: { columns: number; rows: number },
+): boolean {
+  const min = definition.size.min ?? { columns: 1, rows: 1 };
+  const max = definition.size.max;
+  return size.columns >= min.columns
+    && size.rows >= min.rows
+    && (max === undefined || (size.columns <= max.columns && size.rows <= max.rows));
 }
 
 type CollectionRequest =
@@ -1230,6 +1492,29 @@ function hasConfiguredDashboardToken(options: RainrailHttpAppOptions): boolean {
 function numberField(record: Record<string, unknown> | undefined, field: string): number | undefined {
   const value = record?.[field];
   return typeof value === 'number' ? value : undefined;
+}
+
+function integerField(record: Record<string, unknown> | undefined, field: string): number | undefined {
+  const value = numberField(record, field);
+  return value === undefined || !Number.isInteger(value) ? undefined : value;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value) as unknown;
+  return prototype === Object.prototype || prototype === null;
+}
+
+function isJsonSerializable(value: unknown): boolean {
+  try {
+    return JSON.stringify(value) !== undefined;
+  } catch {
+    return false;
+  }
+}
+
+function jsonClone<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
 }
 
 async function handleDashboardCommandRequest(

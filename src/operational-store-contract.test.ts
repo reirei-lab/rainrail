@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { RainrailEventEnvelope } from './events.js';
 import { createRainrailHttpApp } from './http-app.js';
 import { processDueEventHandlerRetries, reconcileOperationalAgentTasks } from './operational-runner.js';
+import type { DashboardLayoutItem } from './dashboard-card-registry.js';
 import type {
   OperationalStore,
   OperationalStoreSnapshot,
@@ -13,6 +14,7 @@ import type {
   StoredActivityEvent,
   StoredAgentTask,
   StoredCommandResult,
+  StoredDashboardLayout,
   StoredEventHandlerRetry,
   StoredOperationalEvent,
 } from './operational-store.js';
@@ -54,6 +56,7 @@ class InMemoryContractStore implements OperationalStore {
   readonly #agentTasks = new Map<string, StoredAgentTask>();
   readonly #commandResults = new Map<string, StoredCommandResult>();
   readonly #eventHandlerRetries = new Map<string, StoredEventHandlerRetry>();
+  #dashboardLayout: StoredDashboardLayout | undefined;
 
   recordEvent<TPayload>(event: RainrailEventEnvelope<TPayload>): StoredOperationalEvent<TPayload> {
     const stored: StoredOperationalEvent<TPayload> = {
@@ -238,6 +241,19 @@ class InMemoryContractStore implements OperationalStore {
       ...input,
       attempts: input.attempts ?? retry.attempts + 1,
     });
+  }
+
+  getDashboardLayout(): StoredDashboardLayout | undefined {
+    return this.#dashboardLayout;
+  }
+
+  saveDashboardLayout(items: DashboardLayoutItem[]): StoredDashboardLayout {
+    this.#dashboardLayout = {
+      id: 'user.dashboardLayout',
+      items,
+      updatedAt: '2026-07-09T00:00:00.000Z',
+    };
+    return this.#dashboardLayout;
   }
 
   snapshot(): OperationalStoreSnapshot {
