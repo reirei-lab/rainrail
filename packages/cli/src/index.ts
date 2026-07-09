@@ -145,35 +145,29 @@ export type RainrailDispatchRequest =
       };
     };
 
+export type RainrailDispatchRunnerResult = RainrailCliResult | Promise<RainrailCliResult>;
+
 export type RainrailDispatchRunner = (
   request: RainrailDispatchRequest,
-) => RainrailCliResult;
+) => RainrailDispatchRunnerResult;
 
-export type RainrailStandaloneDispatchEvent = RainrailDispatchEventEnvelope | {
-  readonly id: string;
-  readonly schemaVersion: 'rainrail.event.v1';
-  readonly source: Record<string, unknown>;
-  readonly name: string;
-  readonly delivery: Record<string, unknown>;
-  readonly occurredAt: string;
-  readonly subject: Record<string, unknown>;
-  readonly payload: unknown;
-  readonly rawPayload: Record<string, unknown>;
-  readonly links?: Record<string, string>;
+export type RainrailStandaloneDispatchFetchResult = {
+  readonly status: number;
+  readonly body: string;
 };
 
-export type RainrailStandaloneDispatchResult = {
-  readonly pluginName: string;
-  readonly eventId: string;
-  readonly status: 'fulfilled' | 'rejected' | (string & {});
-  readonly value?: unknown;
-  readonly reason?: unknown;
-};
+export type RainrailStandaloneDispatchFetcher = (
+  url: string,
+  options: {
+    readonly method: 'POST';
+    readonly headers: Record<string, string>;
+    readonly body: string;
+  },
+) => Promise<RainrailStandaloneDispatchFetchResult>;
 
 export type RainrailStandaloneDispatchRunnerOptions = {
-  readonly deliver?: (
-    event: RainrailStandaloneDispatchEvent,
-  ) => readonly RainrailStandaloneDispatchResult[];
+  readonly env?: Record<string, string | undefined>;
+  readonly fetcher?: RainrailStandaloneDispatchFetcher;
 };
 
 export type CommandRunnerResult = {
@@ -1592,7 +1586,11 @@ export async function runRainrailCliAsync(
   }
 
   const command = getBuiltInCommand(parsed.commandName);
-  if (command?.name !== 'start') {
+  if (command?.name !== 'start' && command?.name !== 'dispatch') {
+    return runRainrailCli(argv, environment);
+  }
+
+  if (command === undefined) {
     return runRainrailCli(argv, environment);
   }
 
@@ -1608,6 +1606,10 @@ export async function runRainrailCliAsync(
       stdout: '',
       stderr: `rainrail ${command.name} is a built-in command.\n${pluginCollisionHint}`,
     };
+  }
+
+  if (command.name === 'dispatch') {
+    return runDispatchCommandAsync(parsed.commandArgs, parsed.options, environment);
   }
 
   return runStartCommandAsync(parsed.commandArgs, parsed.options, environment);
@@ -2490,10 +2492,59 @@ function runDispatchCommand(
   return runDispatchRequest(parsed.request, environment.dispatchRunner);
 }
 
+async function runDispatchCommandAsync(
+  args: readonly string[],
+  options: SharedOptions,
+  environment: RainrailCliEnvironment,
+): Promise<RainrailCliResult> {
+  const parsed = parseDispatchArguments(args, options, environment);
+  if (parsed.help) {
+    return {
+      exitCode: 0,
+      stdout: formatDispatchHelp(),
+      stderr: '',
+    };
+  }
+
+  if (parsed.errors.length > 0 || parsed.request === undefined) {
+    return {
+      exitCode: 1,
+      stdout: '',
+      stderr: `${parsed.errors.length > 0 ? parsed.errors.join('\n') : dispatchUsage}\n`,
+    };
+  }
+
+  return runDispatchRequestAsync(parsed.request, environment.dispatchRunner);
+}
+
 function runDispatchRequest(
   request: RainrailDispatchRequest,
   dispatchRunner: RainrailDispatchRunner | undefined,
 ): RainrailCliResult {
+  if (dispatchRunner === undefined) {
+    return {
+      exitCode: 2,
+      stdout: '',
+      stderr: 'rainrail dispatch requires a dispatch runner, which is not implemented yet.\n',
+    };
+  }
+
+  const result = dispatchRunner(request);
+  if (isPromiseLike(result)) {
+    return {
+      exitCode: 2,
+      stdout: '',
+      stderr: 'rainrail dispatch requires the async CLI runner for asynchronous dispatch runners.\n',
+    };
+  }
+
+  return result;
+}
+
+async function runDispatchRequestAsync(
+  request: RainrailDispatchRequest,
+  dispatchRunner: RainrailDispatchRunner | undefined,
+): Promise<RainrailCliResult> {
   if (dispatchRunner === undefined) {
     return {
       exitCode: 2,
@@ -2508,57 +2559,99 @@ function runDispatchRequest(
 export function createStandaloneRainrailDispatchRunner(
   options: RainrailStandaloneDispatchRunnerOptions = {},
 ): RainrailDispatchRunner {
-  return (request) => {
-    const eventResult = dispatchRequestEvent(request);
-    if ('error' in eventResult) {
+  return async (request) => {
+    const env = options.env ?? process.env;
+    const publishUrl = env.RAINRAIL_PUBLISH_URL;
+    const publishToken = env.RAINRAIL_PUBLISH_TOKEN;
+    if (publishUrl === undefined || publishUrl.trim().length === 0 ||
+      publishToken === undefined || publishToken.trim().length === 0) {
       return {
-        exitCode: 1,
+        exitCode: 2,
         stdout: '',
-        stderr: `${eventResult.error}\n`,
+        stderr: 'rainrail dispatch requires RAINRAIL_PUBLISH_URL and RAINRAIL_PUBLISH_TOKEN for standalone event delivery.\n',
       };
     }
 
-    const workflowResults = [...(options.deliver?.(eventResult.event) ?? [])];
+    const body = request.mode === 'message' ? JSON.stringify(request.event) : request.input;
+    const fetcher = options.fetcher ?? defaultStandaloneDispatchFetcher;
+    const response = await fetcher(publishUrl, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${publishToken}`,
+        'Content-Type': 'application/json',
+      },
+      body,
+    });
+    if (response.status < 200 || response.status >= 300) {
+      return {
+        exitCode: 1,
+        stdout: '',
+        stderr: `rainrail dispatch publish failed with status ${response.status}.\n`,
+      };
+    }
+
+    const summary = summarizeStandaloneDispatchResponse(response);
     if (request.options.json) {
       return {
         exitCode: 0,
         stdout: `${JSON.stringify({
-          dispatched: true,
-          eventId: eventResult.event.id,
-          eventName: eventResult.event.name,
-          workflowResultCount: workflowResults.length,
-          workflowResults,
-          ...(request.mode === 'envelope-json' ? { input: request.input } : {}),
+          published: true,
+          status: response.status,
+          ...(summary.eventId === undefined ? {} : { eventId: summary.eventId }),
+          ...(summary.eventName === undefined ? {} : { eventName: summary.eventName }),
         })}\n`,
         stderr: '',
       };
     }
 
+    const eventDescription = summary.eventName === undefined || summary.eventId === undefined
+      ? 'event'
+      : `${summary.eventName} event ${summary.eventId}`;
     return {
       exitCode: 0,
-      stdout: [
-        `Dispatched ${eventResult.event.name} event ${eventResult.event.id}.`,
-        `Workflow results: ${workflowResults.length}`,
-        '',
-      ].join('\n'),
+      stdout: `Published ${eventDescription}.\n`,
       stderr: '',
     };
   };
 }
 
-function dispatchRequestEvent(
-  request: RainrailDispatchRequest,
-): { readonly event: RainrailStandaloneDispatchEvent } | { readonly error: string } {
-  if (request.mode === 'message') {
-    return { event: request.event };
-  }
+function isPromiseLike<T>(value: T | Promise<T>): value is Promise<T> {
+  return typeof (value as { then?: unknown }).then === 'function';
+}
 
+async function defaultStandaloneDispatchFetcher(
+  url: string,
+  options: Parameters<RainrailStandaloneDispatchFetcher>[1],
+): Promise<RainrailStandaloneDispatchFetchResult> {
+  const response = await fetch(url, {
+    method: options.method,
+    headers: options.headers,
+    body: options.body,
+  });
+  return {
+    status: response.status,
+    body: await response.text(),
+  };
+}
+
+function summarizeStandaloneDispatchResponse(
+  response: RainrailStandaloneDispatchFetchResult,
+): { readonly eventId?: string; readonly eventName?: string } {
+  let parsed: unknown;
   try {
-    return { event: JSON.parse(request.input) as RainrailStandaloneDispatchEvent };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return { error: `Invalid JSON for rainrail dispatch envelope: ${message}` };
+    parsed = JSON.parse(response.body) as unknown;
+  } catch {
+    return {};
   }
+  if (!isRecord(parsed)) {
+    return {};
+  }
+  const eventId = typeof parsed.id === 'string' ? parsed.id : undefined;
+  const eventName = typeof parsed.name === 'string' ? parsed.name : undefined;
+  return {
+    ...(eventId === undefined ? {} : { eventId }),
+    ...(eventName === undefined ? {} : { eventName }),
+  };
 }
 
 function parseDispatchArguments(

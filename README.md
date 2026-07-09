@@ -57,9 +57,10 @@ output, cache, and automatic notice behavior.
 ## Dispatching events from the CLI
 
 `rainrail dispatch` accepts one input mode at a time and sends the validated
-event through the same dispatch boundary used by embedded Rainrail callers.
-Embedded callers can still pass `RainrailCliEnvironment.dispatchRunner` to
-replace the standalone event delivery runner.
+event to a Rainrail publish endpoint when `RAINRAIL_PUBLISH_URL` and
+`RAINRAIL_PUBLISH_TOKEN` are configured. Embedded callers can still pass
+`RainrailCliEnvironment.dispatchRunner` to replace the standalone publish
+runner.
 
 For ad hoc manual messages, pass the text positionally, through `--message`, or
 through `--stdin`:
@@ -79,12 +80,15 @@ For replaying or testing a complete event contract, provide the whole
     cat ./event.json | rainrail dispatch --json --stdin
     rainrail dispatch --envelope-json '{"source":{"type":"manual","name":"manual-source"},"name":"rainrail.manual.message","delivery":{"id":"delivery-demo","receivedAt":"2026-07-09T00:00:00.000Z"},"occurredAt":"2026-07-09T00:00:00.000Z","subject":{"type":"conversation","id":"thread-demo"},"payload":{"provider":"rainrail","channel":"manual","action":"message","conversation":{"id":"thread-demo"},"message":{"id":"message-demo","text":"hello from JSON"}},"rawPayload":{"kind":"inline-redacted","reference":"manual://deliveries/delivery-demo"}}'
 
-Envelope JSON is validated before event delivery. The first CLI surface
-intentionally does not expose per-field metadata flags; use complete JSON
-envelope input when you need source, delivery, subject, payload, or raw payload
-metadata to be explicit. Add the shared `--json` option before `dispatch` when
-you need a machine-readable delivery summary. Run `rainrail dispatch help` for
-the current usage and error behavior.
+Envelope JSON is validated before event delivery and forwarded to the publish
+endpoint without re-serializing the caller-provided envelope string. The first
+CLI surface intentionally does not expose per-field metadata flags; use
+complete JSON envelope input when you need source, delivery, subject, payload,
+or raw payload metadata to be explicit. Add the shared `--json` option before
+`dispatch` when you need a machine-readable delivery summary; the summary is
+limited to publish status and event identity, and does not echo payload or raw
+provider data. Run `rainrail dispatch help` for the current usage and error
+behavior.
 
 ## Repository structure
 

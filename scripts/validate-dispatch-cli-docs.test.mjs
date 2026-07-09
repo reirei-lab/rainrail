@@ -32,10 +32,13 @@ describe('rainrail dispatch CLI documentation', () => {
     const help = runRainrailCli(['dispatch', 'help']);
 
     expect(help.exitCode).toBe(0);
-    expect(readme).toContain('same dispatch boundary used by embedded Rainrail callers');
+    expect(readme).toContain('RAINRAIL_PUBLISH_URL');
+    expect(readme).toContain('RAINRAIL_PUBLISH_TOKEN');
     expect(readme).toContain('RainrailCliEnvironment.dispatchRunner');
-    expect(readme).toContain('standalone event delivery runner');
-    expect(projectLocalLayout).toContain('installed binary passes the standalone dispatch runner');
+    expect(readme).toContain('does not echo payload or raw');
+    expect(projectLocalLayout).toContain('createStandaloneRainrailDispatchRunner');
+    expect(projectLocalLayout).toContain('standalone');
+    expect(projectLocalLayout).toContain('dispatch fails instead of reporting a no-op success');
     for (const documentedMode of [
       'rainrail dispatch "please inspect issue #263"',
       'rainrail dispatch --message "please inspect issue #263"',

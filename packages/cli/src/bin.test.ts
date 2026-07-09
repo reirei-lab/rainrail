@@ -17,7 +17,7 @@ describe('rainrail binary entrypoint', () => {
     expect(bin).toContain('process.exitCode = result.exitCode');
   });
 
-  it('wires standalone dispatch through the default event delivery runner', async () => {
+  it('fails standalone dispatch when no publish endpoint is configured', async () => {
     const writes: string[] = [];
 
     const result = await runRainrailCliEntrypoint(
@@ -27,15 +27,49 @@ describe('rainrail binary entrypoint', () => {
         stderr: { write: (value) => writes.push(`stderr:${value}`) },
       },
       {
+        dispatchRunner: createStandaloneRainrailDispatchRunner(),
+        updateNoticeCheck: () => Promise.resolve(undefined),
+      },
+    );
+
+    expect(result.exitCode).toBe(2);
+    expect(writes).toEqual([
+      'stderr:rainrail dispatch requires RAINRAIL_PUBLISH_URL and RAINRAIL_PUBLISH_TOKEN for standalone event delivery.\n',
+    ]);
+  });
+
+  it('publishes standalone message dispatch to the configured event delivery endpoint', async () => {
+    const writes: string[] = [];
+    const requests: Array<{ url: string; body: string; headers: Record<string, string> }> = [];
+
+    const result = await runRainrailCliEntrypoint(
+      ['dispatch', 'hello from standalone'],
+      {
+        stdout: { write: (value) => writes.push(`stdout:${value}`) },
+        stderr: { write: (value) => writes.push(`stderr:${value}`) },
+      },
+      {
         dispatchRunner: createStandaloneRainrailDispatchRunner({
-          deliver: (event) => [
-            {
-              pluginName: 'standalone-smoke',
-              eventId: event.id,
-              status: 'fulfilled',
-              value: event.payload,
-            },
-          ],
+          env: {
+            RAINRAIL_PUBLISH_URL: 'https://rainrail.example/publish',
+            RAINRAIL_PUBLISH_TOKEN: 'publish-token',
+          },
+          fetcher: (url, options) => {
+            requests.push({
+              url,
+              body: options.body,
+              headers: options.headers,
+            });
+            return Promise.resolve({
+              status: 200,
+              body: JSON.stringify({
+                ok: true,
+                id: 'cli:delivery:rainrail.manual.message',
+                name: 'rainrail.manual.message',
+                event: { payload: { message: { text: 'should-not-be-echoed' } } },
+              }),
+            });
+          },
         }),
         updateNoticeCheck: () => Promise.resolve(undefined),
       },
@@ -43,15 +77,26 @@ describe('rainrail binary entrypoint', () => {
 
     expect(result.exitCode).toBe(0);
     expect(writes).toEqual([
-      expect.stringContaining('stdout:Dispatched rainrail.manual.message event cli:'),
+      'stdout:Published rainrail.manual.message event cli:delivery:rainrail.manual.message.\n',
     ]);
-    expect(writes[0]).toContain('Workflow results: 1');
-    expect(writes[0]).not.toContain('requires a dispatch runner');
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({
+      url: 'https://rainrail.example/publish',
+      headers: {
+        Authorization: 'Bearer publish-token',
+        'Content-Type': 'application/json',
+      },
+    });
+    expect(JSON.parse(requests[0]?.body ?? '{}')).toMatchObject({
+      name: 'rainrail.manual.message',
+      payload: { message: { text: 'hello from standalone' } },
+    });
   });
 
-  it('preserves caller-provided envelope data when standalone dispatch uses JSON output', async () => {
+  it('publishes raw caller-provided envelope data without echoing it in JSON output', async () => {
     const writes: string[] = [];
     const envelopeJson = '{"id":"manual-source:delivery-standalone:rainrail.manual.message","schemaVersion":"rainrail.event.v1","source":{"type":"manual","name":"manual-source"},"name":"rainrail.manual.message","delivery":{"id":"delivery-standalone","receivedAt":"2026-07-09T00:00:00.000Z"},"occurredAt":"2026-07-09T00:00:00.000Z","subject":{"type":"conversation","id":"thread-standalone"},"payload":{"provider":"rainrail","channel":"manual","action":"message","conversation":{"id":"thread-standalone"},"message":{"id":"message-standalone","text":"hello JSON"},"numericId":9007199254740993},"rawPayload":{"kind":"inline-redacted","reference":"manual://deliveries/delivery-standalone"}}';
+    const requestBodies: string[] = [];
 
     const result = await runRainrailCliEntrypoint(
       ['--json', 'dispatch', '--envelope-json', envelopeJson],
@@ -61,14 +106,22 @@ describe('rainrail binary entrypoint', () => {
       },
       {
         dispatchRunner: createStandaloneRainrailDispatchRunner({
-          deliver: (event) => [
-            {
-              pluginName: 'standalone-json-smoke',
-              eventId: event.id,
-              status: 'fulfilled',
-              value: event.payload,
-            },
-          ],
+          env: {
+            RAINRAIL_PUBLISH_URL: 'https://rainrail.example/publish',
+            RAINRAIL_PUBLISH_TOKEN: 'publish-token',
+          },
+          fetcher: (_url, options) => {
+            requestBodies.push(options.body);
+            return Promise.resolve({
+              status: 200,
+              body: JSON.stringify({
+                ok: true,
+                id: 'manual-source:delivery-standalone:rainrail.manual.message',
+                name: 'rainrail.manual.message',
+                event: { payload: { message: { text: 'should-not-be-echoed' } } },
+              }),
+            });
+          },
         }),
         updateNoticeCheck: () => Promise.resolve(undefined),
       },
@@ -76,9 +129,12 @@ describe('rainrail binary entrypoint', () => {
 
     expect(result.exitCode).toBe(0);
     expect(writes).toHaveLength(1);
+    expect(requestBodies).toEqual([envelopeJson]);
+    expect(requestBodies[0]).toContain('9007199254740993');
     expect(writes[0]).toContain('"eventId":"manual-source:delivery-standalone:rainrail.manual.message"');
-    expect(writes[0]).toContain('"workflowResultCount":1');
-    expect(writes[0]).toContain('9007199254740993');
+    expect(writes[0]).toContain('"status":200');
+    expect(writes[0]).not.toContain('9007199254740993');
+    expect(writes[0]).not.toContain('should-not-be-echoed');
   });
 
   it('starts the update notice check before running the synchronous CLI and prints it after successful output', async () => {
