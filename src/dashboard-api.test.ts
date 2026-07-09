@@ -3,17 +3,726 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   createCloudflareTailIntakeAdapter,
   createEventEnvelope,
+  createDashboardCardRegistry,
   createGitHubWebhookIntakeAdapter,
   createGitHubWebhookSignature,
   createManualInputIntakeAdapter,
   createRainrailHttpApp,
   RainrailBridgeRoom,
   RainrailOperationalStore,
+  type DashboardCardDefinition,
   type OperationalStore,
   type RainrailBridgeRoomState,
 } from './index.js';
 
 describe('Rainrail dashboard API', () => {
+  it('registers the existing standard dashboard surfaces as default core cards', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-09T00:00:00.000Z'),
+    });
+    const app = createTestApp({
+      dashboardAuth: { readOnlyToken: 'read-token' },
+      operationalStore,
+    });
+
+    const headers = { authorization: 'Bearer read-token' };
+    const cardsResponse = await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/cards', { headers }));
+    expect(cardsResponse.status).toBe(200);
+    const cardsBody = await cardsResponse.json() as {
+      data: Array<{ definition: DashboardCardDefinition; availability: { status: string } }>;
+    };
+
+    expect(cardsBody.data.map((entry) => entry.definition.id)).toEqual([
+      'core.operationalTotals',
+      'core.eventInbox',
+      'core.workflowRuns',
+      'core.agentTasks',
+      'core.sources',
+      'core.queue',
+      'core.settings',
+      'core.operatorActions',
+      'core.overview',
+      'core.recentEvents',
+    ]);
+    expect(cardsBody.data.map((entry) => entry.definition.entry)).toEqual([
+      { type: 'core', name: 'operationalTotals' },
+      { type: 'core', name: 'eventInbox' },
+      { type: 'core', name: 'workflowRuns' },
+      { type: 'core', name: 'agentTasks' },
+      { type: 'core', name: 'sources' },
+      { type: 'core', name: 'queue' },
+      { type: 'core', name: 'settings' },
+      { type: 'core', name: 'operatorActions' },
+      { type: 'core', name: 'overview' },
+      { type: 'core', name: 'recentEvents' },
+    ]);
+    expect(cardsBody.data.map((entry) => entry.availability)).toEqual(Array.from({ length: 10 }, () => ({ status: 'available' })));
+    expect(cardsBody.data.every((entry) => entry.definition.requiredCapabilities?.includes('dashboard:read'))).toBe(true);
+
+    const layoutResponse = await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/layout', { headers }));
+    expect(layoutResponse.status).toBe(200);
+    const layoutBody = await layoutResponse.json() as { data: { items: Array<{ id: string; cardId: string }> } };
+    expect(layoutBody.data.items.map((item) => item.cardId)).toEqual(cardsBody.data.slice(0, 8).map((entry) => entry.definition.id));
+    operationalStore.close();
+  });
+
+  it('keeps legacy core card ids available for saved dashboard layouts', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-09T00:00:00.000Z'),
+    });
+    const app = createTestApp({
+      dashboardAuth: {
+        readOnlyToken: 'read-token',
+        operatorToken: 'operator-token',
+      },
+      operationalStore,
+    });
+
+    const savedLegacyLayout = await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/layout', {
+      method: 'PUT',
+      headers: { authorization: 'Bearer operator-token', 'content-type': 'application/json' },
+      body: JSON.stringify({
+        items: [
+          { id: 'legacy-overview', cardId: 'core.overview', x: 0, y: 0, columns: 4, rows: 2 },
+          { id: 'legacy-recent-events', cardId: 'core.recentEvents', x: 4, y: 0, columns: 4, rows: 2 },
+        ],
+      }),
+    }));
+    expect(savedLegacyLayout.status).toBe(200);
+
+    const headers = { authorization: 'Bearer read-token' };
+    const cardsBody = await (await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/cards', { headers }))).json() as {
+      data: Array<{ definition: DashboardCardDefinition }>;
+    };
+    const cardIds = cardsBody.data.map((entry) => entry.definition.id);
+    expect(cardIds).toContain('core.overview');
+    expect(cardIds).toContain('core.recentEvents');
+
+    const layoutBody = await (await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/layout', { headers }))).json() as {
+      data: { items: Array<{ cardId: string }> };
+    };
+    expect(layoutBody.data.items.map((item) => item.cardId)).toEqual(['core.overview', 'core.recentEvents']);
+    operationalStore.close();
+  });
+
+  it('serves dashboard card catalog and the default layout for read-only clients', async () => {
+    const registry = createDashboardCardRegistry();
+    registry.register(recentEventsCard);
+    registry.register(queueCard);
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-09T00:00:00.000Z'),
+    });
+    const app = createTestApp({
+      dashboardAuth: { readOnlyToken: 'read-token' },
+      operationalStore,
+      dashboardCardRegistry: registry,
+      dashboardCardCatalog: {
+        availableCapabilities: ['dashboard:read', 'github:read'],
+        enabledPlugins: ['github'],
+      },
+      dashboardDefaultLayout: [{
+        id: 'recent-events',
+        cardId: 'core.recentEvents',
+        x: 0,
+        y: 0,
+        columns: 4,
+        rows: 2,
+      }],
+    });
+
+    const headers = { authorization: 'Bearer read-token' };
+    const cardsBody = await (await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/cards', { headers }))).json() as {
+      data: Array<{ definition: DashboardCardDefinition; availability: { status: string } }>;
+    };
+    const cardsById = new Map(cardsBody.data.map((entry) => [entry.definition.id, entry]));
+    expect(cardsById.get('core.operationalTotals')?.availability).toEqual({ status: 'available' });
+    expect(cardsById.get('core.recentEvents')?.availability).toEqual({ status: 'available' });
+    expect(cardsById.get('plugin:github.queue')).toEqual({
+      definition: queueCard,
+      availability: { status: 'available' },
+    });
+
+    await expect((await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/layout', { headers }))).json())
+      .resolves.toEqual({
+        data: {
+          id: 'core.defaultLayout',
+          source: 'default',
+          updatedAt: null,
+          items: [{
+            id: 'recent-events',
+            cardId: 'core.recentEvents',
+            x: 0,
+            y: 0,
+            columns: 4,
+            rows: 2,
+          }],
+        },
+      });
+
+    operationalStore.close();
+  });
+
+  it('revalidates default dashboard layouts against the current card catalog before returning them', async () => {
+    const registry = createDashboardCardRegistry();
+    registry.register(queueCard);
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-09T00:00:00.000Z'),
+    });
+    const app = createTestApp({
+      dashboardAuth: { readOnlyToken: 'read-token' },
+      operationalStore,
+      dashboardCardRegistry: registry,
+      dashboardCardCatalog: {
+        availableCapabilities: ['dashboard:read'],
+        enabledPlugins: [],
+      },
+      dashboardDefaultLayout: [
+        { id: 'recent-events', cardId: 'core.recentEvents', x: 0, y: 0, columns: 4, rows: 2 },
+        { id: 'queue', cardId: 'plugin:github.queue', x: 4, y: 0, columns: 3, rows: 2 },
+        { id: 'missing', cardId: 'plugin:github.missing', x: 0, y: 2, columns: 3, rows: 2 },
+      ],
+    });
+
+    const response = await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/layout', {
+      headers: { authorization: 'Bearer read-token' },
+    }));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      data: {
+        id: 'core.defaultLayout',
+        source: 'default',
+        items: [{ id: 'recent-events', cardId: 'core.recentEvents' }],
+      },
+    });
+    operationalStore.close();
+  });
+
+  it('lets operator clients persist dashboard layouts after card and grid validation', async () => {
+    const registry = createDashboardCardRegistry();
+    registry.register(recentEventsCard);
+    registry.register(queueCard);
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-09T00:00:00.000Z'),
+    });
+    const app = createTestApp({
+      dashboardAuth: {
+        readOnlyToken: 'read-token',
+        operatorToken: 'operator-token',
+      },
+      operationalStore,
+      dashboardCardRegistry: registry,
+      dashboardCardCatalog: {
+        availableCapabilities: ['dashboard:read', 'github:read'],
+        enabledPlugins: ['github'],
+      },
+    });
+
+    const readOnlySave = await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/layout', {
+      method: 'PUT',
+      headers: { authorization: 'Bearer read-token', 'content-type': 'application/json' },
+      body: JSON.stringify({ items: [] }),
+    }));
+    expect(readOnlySave.status).toBe(403);
+    await expect(readOnlySave.json()).resolves.toEqual({ error: 'insufficient_scope', requiredScope: 'operator' });
+
+    const invalidCard = await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/layout', {
+      method: 'PUT',
+      headers: { authorization: 'Bearer operator-token', 'content-type': 'application/json' },
+      body: JSON.stringify({
+        items: [{ id: 'unknown', cardId: 'core.unknown', x: 0, y: 0, columns: 2, rows: 1 }],
+      }),
+    }));
+    expect(invalidCard.status).toBe(400);
+    await expect(invalidCard.json()).resolves.toEqual({ error: 'unknown_dashboard_card', cardId: 'core.unknown' });
+
+    const invalidSize = await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/layout', {
+      method: 'PUT',
+      headers: { authorization: 'Bearer operator-token', 'content-type': 'application/json' },
+      body: JSON.stringify({
+        items: [{ id: 'queue', cardId: 'plugin:github.queue', x: 0, y: 0, columns: 1, rows: 1 }],
+      }),
+    }));
+    expect(invalidSize.status).toBe(400);
+    await expect(invalidSize.json()).resolves.toEqual({
+      error: 'dashboard_card_size_out_of_range',
+      itemId: 'queue',
+      cardId: 'plugin:github.queue',
+    });
+
+    const unavailableCardRegistry = createDashboardCardRegistry();
+    unavailableCardRegistry.register(queueCard);
+    const unavailableCardApp = createTestApp({
+      dashboardAuth: { operatorToken: 'operator-token' },
+      operationalStore,
+      dashboardCardRegistry: unavailableCardRegistry,
+      dashboardCardCatalog: {
+        availableCapabilities: ['dashboard:read'],
+        enabledPlugins: ['github'],
+      },
+    });
+    const unavailableCard = await unavailableCardApp.fetch(new Request('https://rainrail.local/api/v1/dashboard/layout', {
+      method: 'PUT',
+      headers: { authorization: 'Bearer operator-token', 'content-type': 'application/json' },
+      body: JSON.stringify({
+        items: [{ id: 'queue', cardId: 'plugin:github.queue', x: 0, y: 0, columns: 3, rows: 2 }],
+      }),
+    }));
+    expect(unavailableCard.status).toBe(400);
+    await expect(unavailableCard.json()).resolves.toEqual({
+      error: 'unavailable_dashboard_card',
+      cardId: 'plugin:github.queue',
+    });
+
+    const duplicateItem = await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/layout', {
+      method: 'PUT',
+      headers: { authorization: 'Bearer operator-token', 'content-type': 'application/json' },
+      body: JSON.stringify({
+        items: [
+          { id: 'dup', cardId: 'core.recentEvents', x: 0, y: 0, columns: 4, rows: 2 },
+          { id: 'dup', cardId: 'core.recentEvents', x: 4, y: 0, columns: 4, rows: 2 },
+        ],
+      }),
+    }));
+    expect(duplicateItem.status).toBe(400);
+    await expect(duplicateItem.json()).resolves.toEqual({ error: 'duplicate_dashboard_layout_item', itemId: 'dup' });
+
+    const saved = await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/layout', {
+      method: 'PUT',
+      headers: {
+        authorization: 'Bearer operator-token',
+        'content-type': 'application/json',
+        'x-request-id': 'request-layout-save',
+      },
+      body: JSON.stringify({
+        items: [{
+          id: 'queue',
+          cardId: 'plugin:github.queue',
+          x: 4,
+          y: 0,
+          columns: 3,
+          rows: 2,
+          config: { repository: 'reirei-lab/rainrail' },
+        }],
+      }),
+    }));
+    expect(saved.status).toBe(200);
+    expect(saved.headers.get('x-request-id')).toBe('request-layout-save');
+    await expect(saved.json()).resolves.toMatchObject({
+      data: {
+        id: 'user.dashboardLayout',
+        source: 'user',
+        updatedAt: '2026-07-09T00:00:00.000Z',
+        items: [{
+          id: 'queue',
+          cardId: 'plugin:github.queue',
+          x: 4,
+          y: 0,
+          columns: 3,
+          rows: 2,
+          config: { repository: 'reirei-lab/rainrail' },
+        }],
+      },
+    });
+
+    await expect((await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/layout', {
+      headers: { authorization: 'Bearer read-token' },
+    }))).json()).resolves.toMatchObject({
+      data: {
+        id: 'user.dashboardLayout',
+        source: 'user',
+        items: [{ id: 'queue', cardId: 'plugin:github.queue' }],
+      },
+    });
+
+    operationalStore.close();
+  });
+
+  it('previews dashboard layout saves without persisting on dry run', async () => {
+    const registry = createDashboardCardRegistry();
+    registry.register(recentEventsCard);
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-09T00:00:00.000Z'),
+    });
+    const app = createTestApp({
+      dashboardAuth: { operatorToken: 'operator-token' },
+      operationalStore,
+      dashboardCardRegistry: registry,
+      dashboardCardCatalog: { availableCapabilities: ['dashboard:read'] },
+    });
+
+    const response = await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/layout', {
+      method: 'PUT',
+      headers: {
+        authorization: 'Bearer operator-token',
+        'content-type': 'application/json',
+        'x-rainrail-client': 'dashboard',
+        'x-request-id': 'request-layout-preview',
+      },
+      body: JSON.stringify({
+        dryRun: true,
+        items: [{ id: 'recent-events', cardId: 'core.recentEvents', x: 0, y: 0, columns: 4, rows: 2 }],
+      }),
+    }));
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('x-request-id')).toBe('request-layout-preview');
+    await expect(response.json()).resolves.toMatchObject({
+      data: {
+        action: 'dashboard_layout_update',
+        targetType: 'dashboard_layout',
+        targetId: 'user.dashboardLayout',
+        status: 'preview',
+        dryRun: true,
+        auditId: 'cmd_000001',
+        result: { itemCount: 1 },
+      },
+    });
+    expect(operationalStore.getDashboardLayout()).toBeUndefined();
+    expect(operationalStore.snapshot()).toMatchObject({
+      commandResults: [{
+        actionType: 'dashboard_layout_update',
+        status: 'preview',
+        dryRun: true,
+        result: { itemCount: 1 },
+      }],
+      activityEvents: [{
+        category: 'command',
+        actionType: 'dashboard_layout_update',
+        outcome: 'skipped',
+      }],
+    });
+    operationalStore.close();
+  });
+
+  it('returns saved dashboard layouts with an audit warning when post-save audit storage fails', async () => {
+    const registry = createDashboardCardRegistry();
+    registry.register(recentEventsCard);
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-09T00:00:00.000Z'),
+    });
+    const originalRecordActivityEvent = operationalStore.recordActivityEvent.bind(operationalStore);
+    vi.spyOn(operationalStore, 'recordActivityEvent').mockImplementation((input) => {
+      if (input.category === 'command' && input.outcome === 'success') {
+        throw new Error('simulated layout post-save audit failure');
+      }
+
+      return originalRecordActivityEvent(input);
+    });
+    const app = createTestApp({
+      dashboardAuth: { operatorToken: 'operator-token' },
+      operationalStore,
+      dashboardCardRegistry: registry,
+      dashboardCardCatalog: { availableCapabilities: ['dashboard:read'] },
+    });
+
+    const response = await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/layout', {
+      method: 'PUT',
+      headers: {
+        authorization: 'Bearer operator-token',
+        'content-type': 'application/json',
+        'x-request-id': 'request-layout-audit-warning',
+      },
+      body: JSON.stringify({
+        items: [{ id: 'recent-events', cardId: 'core.recentEvents', x: 0, y: 0, columns: 4, rows: 2 }],
+      }),
+    }));
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('x-request-id')).toBe('request-layout-audit-warning');
+    await expect(response.json()).resolves.toMatchObject({
+      data: {
+        id: 'user.dashboardLayout',
+        source: 'user',
+        auditId: 'cmd_000002',
+        auditWarning: 'post_dispatch_audit_failed',
+        items: [{ id: 'recent-events', cardId: 'core.recentEvents' }],
+      },
+    });
+    expect(operationalStore.getDashboardLayout()?.items).toEqual([
+      { id: 'recent-events', cardId: 'core.recentEvents', x: 0, y: 0, columns: 4, rows: 2 },
+    ]);
+    operationalStore.close();
+  });
+
+  it('revalidates saved dashboard layouts against the current card catalog before returning them', async () => {
+    const registry = createDashboardCardRegistry();
+    registry.register(recentEventsCard);
+    registry.register(queueCard);
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-09T00:00:00.000Z'),
+    });
+    operationalStore.saveDashboardLayout([
+      { id: 'recent-events', cardId: 'core.recentEvents', x: 0, y: 0, columns: 4, rows: 2 },
+      { id: 'queue', cardId: 'plugin:github.queue', x: 4, y: 0, columns: 3, rows: 2 },
+      { id: 'missing', cardId: 'plugin:github.missing', x: 0, y: 2, columns: 3, rows: 2 },
+    ]);
+    const app = createTestApp({
+      dashboardAuth: { readOnlyToken: 'read-token' },
+      operationalStore,
+      dashboardCardRegistry: registry,
+      dashboardCardCatalog: {
+        availableCapabilities: ['dashboard:read'],
+        enabledPlugins: [],
+      },
+    });
+
+    const response = await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/layout', {
+      headers: { authorization: 'Bearer read-token' },
+    }));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      data: {
+        id: 'user.dashboardLayout',
+        source: 'user',
+        items: [{ id: 'recent-events', cardId: 'core.recentEvents' }],
+      },
+    });
+
+    operationalStore.close();
+  });
+
+  it('records audit rows when operators save dashboard layouts', async () => {
+    const registry = createDashboardCardRegistry();
+    registry.register(recentEventsCard);
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-09T00:00:00.000Z'),
+    });
+    const app = createTestApp({
+      dashboardAuth: { operatorToken: 'operator-token' },
+      operationalStore,
+      dashboardCardRegistry: registry,
+      dashboardCardCatalog: { availableCapabilities: ['dashboard:read'] },
+    });
+
+    const response = await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/layout', {
+      method: 'PUT',
+      headers: {
+        authorization: 'Bearer operator-token',
+        'content-type': 'application/json',
+        'x-rainrail-client': 'dashboard',
+        'x-request-id': 'request-layout-save',
+      },
+      body: JSON.stringify({
+        items: [{ id: 'recent-events', cardId: 'core.recentEvents', x: 0, y: 0, columns: 4, rows: 2 }],
+      }),
+    }));
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('x-request-id')).toBe('request-layout-save');
+    expect(operationalStore.snapshot()).toMatchObject({
+      commandResults: [{
+        actionType: 'dashboard_layout_update',
+        targetType: 'dashboard_layout',
+        targetId: 'user.dashboardLayout',
+        status: 'accepted',
+        actor: 'operator',
+        client: 'dashboard',
+        requestId: 'request-layout-save',
+        dryRun: false,
+        result: { itemCount: 1 },
+      }, {
+        actionType: 'dashboard_layout_update',
+        targetType: 'dashboard_layout',
+        targetId: 'user.dashboardLayout',
+        status: 'dispatching',
+        actor: 'operator',
+        client: 'dashboard',
+        requestId: 'request-layout-save',
+        dryRun: false,
+      }],
+      activityEvents: [{
+        category: 'command',
+        targetType: 'dashboard_layout',
+        targetId: 'user.dashboardLayout',
+        actionType: 'dashboard_layout_update',
+        outcome: 'success',
+      }],
+    });
+
+    operationalStore.close();
+  });
+
+  it('allows browser preflight for saving dashboard layouts', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+    });
+    const app = createTestApp({
+      dashboardAuth: { operatorToken: 'operator-token' },
+      operationalStore,
+    });
+
+    const response = await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/layout', {
+      method: 'OPTIONS',
+    }));
+
+    expect(response.status).toBe(204);
+    expect(response.headers.get('access-control-allow-methods')).toContain('PUT');
+    operationalStore.close();
+  });
+
+  it('protects card catalog reads even when no operational store is configured', async () => {
+    const app = createTestApp({
+      dashboardAuth: { readOnlyToken: 'read-token' },
+    });
+
+    const unauthorized = await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/cards'));
+    expect(unauthorized.status).toBe(401);
+    await expect(unauthorized.json()).resolves.toEqual({ error: 'missing_bearer_token' });
+
+    const authorized = await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/cards', {
+      headers: { authorization: 'Bearer read-token' },
+    }));
+    expect(authorized.status).toBe(200);
+    await expect(authorized.json()).resolves.toMatchObject({ data: expect.any(Array) });
+  });
+
+  it('protects dashboard layout reads and writes even when no operational store is configured', async () => {
+    const app = createTestApp({
+      dashboardAuth: {
+        readOnlyToken: 'read-token',
+        operatorToken: 'operator-token',
+      },
+    });
+
+    const unauthenticatedRead = await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/layout'));
+    expect(unauthenticatedRead.status).toBe(401);
+    await expect(unauthenticatedRead.json()).resolves.toEqual({ error: 'missing_bearer_token' });
+
+    const authorizedRead = await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/layout', {
+      headers: { authorization: 'Bearer read-token' },
+    }));
+    expect(authorizedRead.status).toBe(503);
+    await expect(authorizedRead.json()).resolves.toEqual({ error: 'operational_store_not_configured' });
+
+    const unauthenticatedWrite = await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/layout', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ items: [] }),
+    }));
+    expect(unauthenticatedWrite.status).toBe(401);
+    await expect(unauthenticatedWrite.json()).resolves.toEqual({ error: 'missing_bearer_token' });
+
+    const readOnlyWrite = await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/layout', {
+      method: 'PUT',
+      headers: { authorization: 'Bearer read-token', 'content-type': 'application/json' },
+      body: JSON.stringify({ items: [] }),
+    }));
+    expect(readOnlyWrite.status).toBe(403);
+    await expect(readOnlyWrite.json()).resolves.toEqual({ error: 'insufficient_scope', requiredScope: 'operator' });
+
+    const operatorWrite = await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/layout', {
+      method: 'PUT',
+      headers: { authorization: 'Bearer operator-token', 'content-type': 'application/json' },
+      body: JSON.stringify({ items: [] }),
+    }));
+    expect(operatorWrite.status).toBe(503);
+    await expect(operatorWrite.json()).resolves.toEqual({ error: 'operational_store_not_configured' });
+  });
+
+  it('rejects non-string dashboard layout ids and card ids before persistence', async () => {
+    const registry = createDashboardCardRegistry();
+    registry.register(recentEventsCard);
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+    });
+    const app = createTestApp({
+      dashboardAuth: { operatorToken: 'operator-token' },
+      operationalStore,
+      dashboardCardRegistry: registry,
+      dashboardCardCatalog: { availableCapabilities: ['dashboard:read'] },
+    });
+
+    const invalidId = await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/layout', {
+      method: 'PUT',
+      headers: { authorization: 'Bearer operator-token', 'content-type': 'application/json' },
+      body: JSON.stringify({
+        items: [{ id: {}, cardId: 'core.recentEvents', x: 0, y: 0, columns: 4, rows: 2 }],
+      }),
+    }));
+    expect(invalidId.status).toBe(400);
+    await expect(invalidId.json()).resolves.toEqual({ error: 'invalid_dashboard_layout_item' });
+
+    const invalidCardId = await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/layout', {
+      method: 'PUT',
+      headers: { authorization: 'Bearer operator-token', 'content-type': 'application/json' },
+      body: JSON.stringify({
+        items: [{ id: 'recent-events', cardId: {}, x: 0, y: 0, columns: 4, rows: 2 }],
+      }),
+    }));
+    expect(invalidCardId.status).toBe(400);
+    await expect(invalidCardId.json()).resolves.toEqual({ error: 'invalid_dashboard_layout_item' });
+
+    expect(operationalStore.getDashboardLayout()).toBeUndefined();
+    operationalStore.close();
+  });
+
+  it('rejects sensitive dashboard layout config keys before persistence', async () => {
+    const registry = createDashboardCardRegistry();
+    registry.register(recentEventsCard);
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+    });
+    const app = createTestApp({
+      dashboardAuth: { operatorToken: 'operator-token' },
+      operationalStore,
+      dashboardCardRegistry: registry,
+      dashboardCardCatalog: { availableCapabilities: ['dashboard:read'] },
+    });
+
+    const response = await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/layout', {
+      method: 'PUT',
+      headers: {
+        authorization: 'Bearer operator-token',
+        'content-type': 'application/json',
+        'x-request-id': 'request-layout-sensitive-config',
+      },
+      body: JSON.stringify({
+        items: [{
+          id: 'recent-events',
+          cardId: 'core.recentEvents',
+          x: 0,
+          y: 0,
+          columns: 4,
+          rows: 2,
+          config: { nested: { apiToken: 'secret-token' } },
+        }],
+      }),
+    }));
+
+    expect(response.status).toBe(400);
+    expect(response.headers.get('x-request-id')).toBe('request-layout-sensitive-config');
+    await expect(response.json()).resolves.toEqual({
+      error: 'sensitive_dashboard_card_config',
+      itemId: 'recent-events',
+      cardId: 'core.recentEvents',
+    });
+    expect(operationalStore.getDashboardLayout()).toBeUndefined();
+    operationalStore.close();
+  });
+
   it('serves split v1 overview, events, workflow runs, and agent tasks without requiring the snapshot shape', async () => {
     const operationalStore = new RainrailOperationalStore({
       databasePath: ':memory:',
@@ -2889,6 +3598,39 @@ describe('Rainrail dashboard API', () => {
   });
 });
 
+const recentEventsCard: DashboardCardDefinition = {
+  id: 'core.recentEvents',
+  title: 'Recent events',
+  entry: { type: 'core', name: 'recentEvents' },
+  category: 'operations',
+  requiredCapabilities: ['dashboard:read'],
+  size: {
+    default: { columns: 4, rows: 2 },
+    min: { columns: 2, rows: 1 },
+    max: { columns: 8, rows: 4 },
+  },
+};
+
+const queueCard: DashboardCardDefinition = {
+  id: 'plugin:github.queue',
+  title: 'GitHub queue',
+  entry: { type: 'plugin', pluginName: 'github', cardName: 'queue' },
+  category: 'operations',
+  requiredCapabilities: ['dashboard:read', 'github:read'],
+  size: {
+    default: { columns: 3, rows: 2 },
+    min: { columns: 2, rows: 1 },
+    max: { columns: 6, rows: 4 },
+  },
+  settingsSchema: {
+    type: 'object',
+    properties: {
+      repository: { type: 'string' },
+    },
+    additionalProperties: false,
+  },
+};
+
 function createTestApp(options: {
   eventsBearerToken?: string;
   dashboardAuth?: Parameters<typeof createRainrailHttpApp>[0]['dashboardAuth'];
@@ -2896,6 +3638,9 @@ function createTestApp(options: {
   runtime?: string;
   intakeAdapters?: Parameters<typeof createRainrailHttpApp>[0]['intakeAdapters'];
   taskQueue?: Parameters<typeof createRainrailHttpApp>[0]['taskQueue'];
+  dashboardCardRegistry?: Parameters<typeof createRainrailHttpApp>[0]['dashboardCardRegistry'];
+  dashboardCardCatalog?: Parameters<typeof createRainrailHttpApp>[0]['dashboardCardCatalog'];
+  dashboardDefaultLayout?: Parameters<typeof createRainrailHttpApp>[0]['dashboardDefaultLayout'];
 } = {}) {
   return createRainrailHttpApp({
     room: new RainrailBridgeRoom(fakeState(), { publishToken: 'publish-token' }),
@@ -2905,6 +3650,9 @@ function createTestApp(options: {
     ...(options.operationalStore === undefined ? {} : { operationalStore: options.operationalStore }),
     ...(options.runtime === undefined ? {} : { runtime: options.runtime }),
     ...(options.taskQueue === undefined ? {} : { taskQueue: options.taskQueue }),
+    ...(options.dashboardCardRegistry === undefined ? {} : { dashboardCardRegistry: options.dashboardCardRegistry }),
+    ...(options.dashboardCardCatalog === undefined ? {} : { dashboardCardCatalog: options.dashboardCardCatalog }),
+    ...(options.dashboardDefaultLayout === undefined ? {} : { dashboardDefaultLayout: options.dashboardDefaultLayout }),
     intakeAdapters: options.intakeAdapters ?? [
       createGitHubWebhookIntakeAdapter({ secret: 'secret' }),
     ],

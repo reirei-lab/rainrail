@@ -13,7 +13,7 @@ Operational state の public contract は `OperationalStore`、`JsonFileOperatio
 `JsonFileOperationalStoreOptions`、`SqliteOperationalStore`、`RainrailOperationalStore`、
 `RainrailOperationalStoreOptions`、`StoredOperationalEvent`、`RecordActivityEventInput`、
 `StoredActivityEvent`、`RecordCommandResultInput`、`StoredCommandResult`、
-`RecordAgentTaskInput`、`StoredAgentTask`、`RecordEventHandlerRetryInput`、
+`StoredDashboardLayout`、`RecordAgentTaskInput`、`StoredAgentTask`、`RecordEventHandlerRetryInput`、
 `StoredEventHandlerRetry`、`OperationalStoreSnapshot`、`OperationalStoreWarnings`、
 `StoredStaleProjectClaimWarning`、`SnapshotOptions`、
 `ListOperationalStoreEventsOptions`、`ListOperationalStoreActivityEventsOptions`、
@@ -63,7 +63,7 @@ deployment contract として扱う。
 
 store は `StoredOperationalEvent`、`StoredActivityEvent`、`StoredAgentTask`、
 `StoredEventHandlerRetry` を永続化し、`StoredCommandResult`、
-`OperationalStoreSnapshot` として recent state と counts を返す。snapshot は
+`StoredDashboardLayout`、`OperationalStoreSnapshot` として recent state と counts を返す。snapshot は
 `SnapshotOptions` で skipped activity の表示を制御でき、warnings は
 `OperationalStoreWarnings` と `StoredStaleProjectClaimWarning` に分けて返す。
 event/activity の list API は `ListOperationalStoreEventsOptions` と
@@ -73,7 +73,7 @@ activity / command id の採番は `operational_sequences` table で進め、
 connection-local な一時 store として扱う。
 
 SQLite schema は events、activity events、agent tasks、command results、
-event handler retries、sequences を table として持つ。provider/runtime metadata のうち
+dashboard layout、event handler retries、sequences を table として持つ。provider/runtime metadata のうち
 まだ正規化する価値が薄い field は JSON column に保持する。raw provider payload は保存せず、
 dashboard が表示するための安全化済み raw payload reference だけを保存する。
 

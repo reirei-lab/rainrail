@@ -486,6 +486,41 @@ describe('RainrailOperationalStore', () => {
     }
   });
 
+  it('persists user dashboard layouts as card id references', () => {
+    const { databasePath, cleanup } = temporaryDatabasePath();
+    try {
+      const first = new RainrailOperationalStore({ databasePath, eventLimit: 10, now: fixedClock() });
+      first.saveDashboardLayout([{
+        id: 'queue',
+        cardId: 'plugin:github.queue',
+        x: 4,
+        y: 0,
+        columns: 3,
+        rows: 2,
+        config: { repository: 'reirei-lab/rainrail' },
+      }]);
+      first.close();
+
+      const second = new RainrailOperationalStore({ databasePath, eventLimit: 10, now: fixedClock() });
+      expect(second.getDashboardLayout()).toEqual({
+        id: 'user.dashboardLayout',
+        updatedAt: '2026-07-02T01:23:45.000Z',
+        items: [{
+          id: 'queue',
+          cardId: 'plugin:github.queue',
+          x: 4,
+          y: 0,
+          columns: 3,
+          rows: 2,
+          config: { repository: 'reirei-lab/rainrail' },
+        }],
+      });
+      second.close();
+    } finally {
+      cleanup();
+    }
+  });
+
   it('lists due handler retries in schedule order and clears them after success', () => {
     const store = new RainrailOperationalStore({ databasePath: ':memory:', eventLimit: 10, now: fixedClock() });
     const event = store.recordEvent(fixtureEvent('delivery-1', 'github.issue'));

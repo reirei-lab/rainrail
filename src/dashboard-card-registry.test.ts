@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   createDashboardCardRegistry,
+  defineDashboardCardProvider,
   type DashboardCardDefinition,
   type DashboardLayoutItem,
 } from './index.js';
@@ -73,6 +74,16 @@ describe('dashboard card registry contract', () => {
         availability: { status: 'available' },
       },
     ]);
+  });
+
+  it('reserves the core provider name from external provider registration', () => {
+    const registry = createDashboardCardRegistry();
+
+    expect(() => registry.registerProvider(defineDashboardCardProvider({
+      name: 'core',
+      kind: 'dashboard-card-provider',
+      cards: [recentEventsCard],
+    }))).toThrow(/Dashboard card provider name "core" is reserved/u);
   });
 
   it('rejects duplicate card ids before they can collide in a layout', () => {
@@ -417,15 +428,17 @@ describe('dashboard card registry contract', () => {
 
   it('defines layout items independently from card availability', () => {
     const layoutItem: DashboardLayoutItem = {
+      id: 'github-queue',
       cardId: 'plugin:github.queue',
       x: 0,
       y: 0,
       columns: 3,
       rows: 2,
-      settings: { repository: 'reirei-lab/rainrail' },
+      config: { repository: 'reirei-lab/rainrail' },
     };
 
     expect(layoutItem).toMatchObject({
+      id: 'github-queue',
       cardId: 'plugin:github.queue',
       columns: 3,
       rows: 2,
