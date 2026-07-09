@@ -70,6 +70,9 @@ describe('package scripts used by pull request CI', () => {
     expect(packageJson.scripts['demo:dashboard']).toBe(
       'node scripts/start-dashboard-demo.mjs',
     );
+    expect(packageJson.scripts['demo:dashboard:smoke']).toBe(
+      'vitest run scripts/seed-dashboard-demo-db.test.ts',
+    );
     expect(startDashboardDemoScript).toContain("'.tmp', 'dashboard-demo'");
     expect(startDashboardDemoScript).toContain("runRequiredPnpm(['--filter', 'www', 'build'])");
     expect(startDashboardDemoScript).toContain("runRequiredPnpm(['--filter', '@rainrail/cli', 'build'])");
