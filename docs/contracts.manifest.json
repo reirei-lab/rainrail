@@ -580,7 +580,12 @@
         "RainrailDispatchManualMessagePayload",
         "RainrailDispatchEventEnvelope",
         "RainrailDispatchRequest",
+        "RainrailDispatchRunnerResult",
         "RainrailDispatchRunner",
+        "RainrailAsyncDispatchRunner",
+        "RainrailStandaloneDispatchFetchResult",
+        "RainrailStandaloneDispatchFetcher",
+        "RainrailStandaloneDispatchRunnerOptions",
         "CommandRunnerResult",
         "CommandRunnerOptions",
         "CommandRunner",
@@ -602,6 +607,7 @@
         "formatHelp",
         "discoverRainrailProject",
         "runRainrailCli",
+        "createStandaloneRainrailDispatchRunner",
         "runRainrailCliEntrypoint"
       ],
       "publicExportKinds": {
@@ -614,7 +620,12 @@
         "RainrailDispatchManualMessagePayload": "type",
         "RainrailDispatchEventEnvelope": "type",
         "RainrailDispatchRequest": "type",
+        "RainrailDispatchRunnerResult": "type",
         "RainrailDispatchRunner": "type",
+        "RainrailAsyncDispatchRunner": "type",
+        "RainrailStandaloneDispatchFetchResult": "type",
+        "RainrailStandaloneDispatchFetcher": "type",
+        "RainrailStandaloneDispatchRunnerOptions": "type",
         "CommandRunnerResult": "type",
         "CommandRunnerOptions": "type",
         "CommandRunner": "type",
@@ -636,6 +647,7 @@
         "formatHelp": "value",
         "discoverRainrailProject": "value",
         "runRainrailCli": "value",
+        "createStandaloneRainrailDispatchRunner": "value",
         "runRainrailCliEntrypoint": "value"
       }
     },
