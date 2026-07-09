@@ -657,6 +657,23 @@ h3 {
   font-size: 2rem;
 }
 
+.dashboard-demo-badge[hidden] {
+  display: none;
+}
+
+.dashboard-demo-badge:not([hidden]) {
+  display: inline-flex;
+  align-items: center;
+  margin-top: 8px;
+  border: 1px solid rgb(180 83 9 / 34%);
+  border-radius: 999px;
+  padding: 5px 9px;
+  background: rgb(180 83 9 / 10%);
+  color: rgb(146 64 14);
+  font-size: 0.78rem;
+  font-weight: 760;
+}
+
 .dashboard-auth {
   display: grid;
   grid-template-columns: minmax(160px, 0.8fr) minmax(160px, 1fr) auto auto;
