@@ -65,7 +65,8 @@ root, rebuild the deterministic SQLite demo DB and start the local dashboard:
 pnpm demo:dashboard
 ```
 
-The script creates a minimal demo config under `.tmp/dashboard-demo/`, runs
+The script first builds the product dashboard and CLI package, creates a
+minimal demo config under `.tmp/dashboard-demo/`, runs
 `node scripts/seed-dashboard-demo-db.mjs`, then starts `rainrail start --demo`
 with `RAINRAIL_DASHBOARD_DEMO=1`. The default demo DB path is
 `.tmp/dashboard-demo.sqlite`, and `rainrail start --demo` reads it as a SQLite

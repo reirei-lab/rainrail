@@ -73,7 +73,8 @@ if (root !== null) {
   const storedToken = sessionStore.get(TOKEN_STORAGE_KEY) ?? '';
   const storedApiBaseUrl = sessionStore.get(API_BASE_URL_STORAGE_KEY) ?? appRoot.dataset.apiBaseUrl ?? '';
   const demoMode = new URLSearchParams(window.location.search).get('demo') === '1';
-  const authRequired = !demoMode && appRoot.dataset.authRequired !== 'false';
+  const demoAuthBypass = demoMode && isLoopbackDashboardHost(window.location.hostname);
+  const authRequired = !demoAuthBypass && appRoot.dataset.authRequired !== 'false';
   const operatorEnabled = isOperatorModeEnabled();
   if (tokenInput !== null) tokenInput.value = storedToken;
   if (apiBaseUrlInput !== null) apiBaseUrlInput.value = storedApiBaseUrl;
@@ -713,6 +714,10 @@ function createSafeStorage(getStorage: () => Storage): SafeStorage {
 
 function normalizeApiBaseUrl(value: string): string {
   return value.trim().replace(/\/+$/, '');
+}
+
+function isLoopbackDashboardHost(hostname: string): boolean {
+  return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]' || hostname === '::1';
 }
 
 function isDashboardAuthError(error: unknown): boolean {

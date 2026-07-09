@@ -94,6 +94,18 @@ async function getFreePort(host = '127.0.0.1'): Promise<number> {
   return port;
 }
 
+async function rawLocalHttpRequest(port: number, lines: readonly string[]): Promise<string> {
+  const socket = net.createConnection({ host: '127.0.0.1', port });
+  socket.write(lines.join('\r\n'));
+  let response = '';
+  socket.setEncoding('utf8');
+  socket.on('data', (chunk) => {
+    response += chunk;
+  });
+  await once(socket, 'end');
+  return response;
+}
+
 async function closeTestServer(result: { server?: { stop: () => void | Promise<void> } }): Promise<void> {
   await result.server?.stop();
 }
@@ -2807,6 +2819,60 @@ describe('Rainrail CLI built-in commands', () => {
         await expect(authenticated.json()).resolves.toMatchObject({
           data: { counts: { events: 3 } },
         });
+      } finally {
+        await closeTestServer(result);
+      }
+    });
+  });
+
+  it('keeps dashboard demo mode authenticated for non-loopback allowed Host headers', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'seeded-dashboard-demo-allowed-host');
+      const port = await getFreePort();
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        server: {
+          host: '127.0.0.1',
+          port,
+          allowedHosts: ['rainrail-demo.example'],
+        },
+        dashboardAuth: {
+          readOnlyToken: 'read-token',
+        },
+        sourceBundles: [],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+      const databasePath = join(projectRoot, '.tmp', 'dashboard-demo.sqlite');
+      const seed = spawnSync(process.execPath, [dashboardDemoSeedScript.pathname, '--database', databasePath], {
+        encoding: 'utf8',
+      });
+      expect(seed.status).toBe(0);
+
+      const result = await runRainrailCliAsync(['start', '--demo'], { cwd: projectRoot });
+      try {
+        expect(result.exitCode).toBe(0);
+
+        const tunneled = await rawLocalHttpRequest(port, [
+          'GET /api/v1/overview?demo=1 HTTP/1.1',
+          `Host: rainrail-demo.example:${port}`,
+          'Connection: close',
+          '',
+          '',
+        ]);
+        expect(tunneled).toContain('401 Unauthorized');
+        expect(tunneled).toContain('missing_bearer_token');
+
+        const authenticated = await rawLocalHttpRequest(port, [
+          'GET /api/v1/overview?demo=1 HTTP/1.1',
+          `Host: rainrail-demo.example:${port}`,
+          'Authorization: Bearer read-token',
+          'Connection: close',
+          '',
+          '',
+        ]);
+        expect(authenticated).toContain('200 OK');
+        expect(authenticated).toContain('"events":3');
       } finally {
         await closeTestServer(result);
       }

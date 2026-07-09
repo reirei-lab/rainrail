@@ -7348,6 +7348,7 @@ function getLocalServerAuthError(
   if (
     options.demoMode === true
     && isLocalBindHost(options.host)
+    && isLocalRequestHost(request)
     && url.searchParams.get('demo') === '1'
     && isLocalDashboardDemoPath(pathname)
   ) {
@@ -7378,6 +7379,13 @@ function getLocalServerAuthError(
 
 function isLocalDashboardDemoPath(pathname: string): boolean {
   return pathname === '/events' || pathname.startsWith('/api/v1/') || pathname === '/api/state';
+}
+
+function isLocalRequestHost(request: IncomingMessage): boolean {
+  const host = Array.isArray(request.headers.host) ? request.headers.host[0] : request.headers.host;
+  if (host === undefined) return false;
+  const hostName = hostHeaderName(host);
+  return hostName === 'localhost' || hostName === '127.0.0.1' || hostName === '::1';
 }
 
 function requiredLocalDashboardScopeForPath(pathname: string): LocalDashboardScope {

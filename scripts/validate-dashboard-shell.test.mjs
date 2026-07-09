@@ -113,7 +113,7 @@ describe('dashboard app shell', () => {
     expect(localizedDashboardPage).toContain('data-auth-required="true"');
     expect(dashboardClient).toContain("this.baseUrl = options.baseUrl ?? '';");
     expect(dashboardClient).toContain('fetch(`${this.baseUrl}${this.pathWithDemoMode(path)}`');
-    expect(dashboardApp).toContain("const authRequired = !demoMode && appRoot.dataset.authRequired !== 'false';");
+    expect(dashboardApp).toContain("const authRequired = !demoAuthBypass && appRoot.dataset.authRequired !== 'false';");
     expect(dashboardApp).toContain("if (storedToken === '' && authRequired)");
     expect(dashboardApp).toContain('client = createDashboardClient(storedToken, storedApiBaseUrl);');
     expect(dashboardClient).not.toContain('http://127.0.0.1:8787');
@@ -126,7 +126,9 @@ describe('dashboard app shell', () => {
     expect(dashboardContent).toContain("demoModeBadge: 'Demo mode'");
     expect(dashboardContent).toContain("demoModeBadge: 'デモモード'");
     expect(dashboardApp).toContain("new URLSearchParams(window.location.search).get('demo') === '1'");
-    expect(dashboardApp).toContain("const authRequired = !demoMode && appRoot.dataset.authRequired !== 'false';");
+    expect(dashboardApp).toContain('const demoAuthBypass = demoMode && isLoopbackDashboardHost(window.location.hostname);');
+    expect(dashboardApp).toContain("const authRequired = !demoAuthBypass && appRoot.dataset.authRequired !== 'false';");
+    expect(dashboardApp).toContain('function isLoopbackDashboardHost');
     expect(dashboardApp).toContain('demoIndicator.hidden = !demoMode');
     expect(dashboardApp).toContain('isOperatorModeEnabled');
     expect(dashboardClient).toContain('demoMode?: boolean');

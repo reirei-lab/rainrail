@@ -11,6 +11,9 @@ const demoRoot = resolve(repositoryRoot, '.tmp', 'dashboard-demo');
 const configPath = resolve(demoRoot, 'rainrail.config.json');
 const databasePath = resolve(repositoryRoot, '.tmp', 'dashboard-demo.sqlite');
 
+runRequiredPnpm(['--filter', 'www', 'build']);
+runRequiredPnpm(['--filter', '@rainrail/cli', 'build']);
+
 mkdirSync(demoRoot, { recursive: true });
 seedDashboardDemoDatabase({ databasePath });
 writeFileSync(configPath, `${JSON.stringify({
@@ -61,3 +64,17 @@ const result = spawnSync('pnpm', [
 });
 
 process.exitCode = result.status ?? 1;
+
+/**
+ * @param {string[]} args
+ */
+function runRequiredPnpm(args) {
+  const result = spawnSync('pnpm', args, {
+    cwd: repositoryRoot,
+    env: process.env,
+    stdio: 'inherit',
+  });
+  if (result.status !== 0) {
+    process.exit(result.status ?? 1);
+  }
+}

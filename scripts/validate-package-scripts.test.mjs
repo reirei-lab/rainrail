@@ -71,6 +71,8 @@ describe('package scripts used by pull request CI', () => {
       'node scripts/start-dashboard-demo.mjs',
     );
     expect(startDashboardDemoScript).toContain("'.tmp', 'dashboard-demo'");
+    expect(startDashboardDemoScript).toContain("runRequiredPnpm(['--filter', 'www', 'build'])");
+    expect(startDashboardDemoScript).toContain("runRequiredPnpm(['--filter', '@rainrail/cli', 'build'])");
     expect(startDashboardDemoScript).toContain('rainrail.config.json');
     expect(startDashboardDemoScript).toContain("'--config'");
     expect(startDashboardDemoScript).toContain("'--demo'");
