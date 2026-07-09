@@ -345,6 +345,13 @@ function validateProvider(provider: DashboardCardProvider): void {
     );
   }
 
+  if (provider.name === 'core') {
+    throw new DashboardCardRegistryError(
+      'Dashboard card provider name "core" is reserved',
+      'invalid_provider',
+    );
+  }
+
   if (provider.kind !== 'dashboard-card-provider') {
     throw new DashboardCardRegistryError(
       'Dashboard card provider kind must be "dashboard-card-provider"',

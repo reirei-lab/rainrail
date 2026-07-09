@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   createDashboardCardRegistry,
+  defineDashboardCardProvider,
   type DashboardCardDefinition,
   type DashboardLayoutItem,
 } from './index.js';
@@ -73,6 +74,16 @@ describe('dashboard card registry contract', () => {
         availability: { status: 'available' },
       },
     ]);
+  });
+
+  it('reserves the core provider name from external provider registration', () => {
+    const registry = createDashboardCardRegistry();
+
+    expect(() => registry.registerProvider(defineDashboardCardProvider({
+      name: 'core',
+      kind: 'dashboard-card-provider',
+      cards: [recentEventsCard],
+    }))).toThrow(/Dashboard card provider name "core" is reserved/u);
   });
 
   it('rejects duplicate card ids before they can collide in a layout', () => {

@@ -16,6 +16,99 @@ import {
 } from './index.js';
 
 describe('Rainrail dashboard API', () => {
+  it('registers the existing standard dashboard surfaces as default core cards', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-09T00:00:00.000Z'),
+    });
+    const app = createTestApp({
+      dashboardAuth: { readOnlyToken: 'read-token' },
+      operationalStore,
+    });
+
+    const headers = { authorization: 'Bearer read-token' };
+    const cardsResponse = await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/cards', { headers }));
+    expect(cardsResponse.status).toBe(200);
+    const cardsBody = await cardsResponse.json() as {
+      data: Array<{ definition: DashboardCardDefinition; availability: { status: string } }>;
+    };
+
+    expect(cardsBody.data.map((entry) => entry.definition.id)).toEqual([
+      'core.operationalTotals',
+      'core.eventInbox',
+      'core.workflowRuns',
+      'core.agentTasks',
+      'core.sources',
+      'core.queue',
+      'core.settings',
+      'core.operatorActions',
+      'core.overview',
+      'core.recentEvents',
+    ]);
+    expect(cardsBody.data.map((entry) => entry.definition.entry)).toEqual([
+      { type: 'core', name: 'operationalTotals' },
+      { type: 'core', name: 'eventInbox' },
+      { type: 'core', name: 'workflowRuns' },
+      { type: 'core', name: 'agentTasks' },
+      { type: 'core', name: 'sources' },
+      { type: 'core', name: 'queue' },
+      { type: 'core', name: 'settings' },
+      { type: 'core', name: 'operatorActions' },
+      { type: 'core', name: 'overview' },
+      { type: 'core', name: 'recentEvents' },
+    ]);
+    expect(cardsBody.data.map((entry) => entry.availability)).toEqual(Array.from({ length: 10 }, () => ({ status: 'available' })));
+    expect(cardsBody.data.every((entry) => entry.definition.requiredCapabilities?.includes('dashboard:read'))).toBe(true);
+
+    const layoutResponse = await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/layout', { headers }));
+    expect(layoutResponse.status).toBe(200);
+    const layoutBody = await layoutResponse.json() as { data: { items: Array<{ id: string; cardId: string }> } };
+    expect(layoutBody.data.items.map((item) => item.cardId)).toEqual(cardsBody.data.slice(0, 8).map((entry) => entry.definition.id));
+    operationalStore.close();
+  });
+
+  it('keeps legacy core card ids available for saved dashboard layouts', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-09T00:00:00.000Z'),
+    });
+    const app = createTestApp({
+      dashboardAuth: {
+        readOnlyToken: 'read-token',
+        operatorToken: 'operator-token',
+      },
+      operationalStore,
+    });
+
+    const savedLegacyLayout = await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/layout', {
+      method: 'PUT',
+      headers: { authorization: 'Bearer operator-token', 'content-type': 'application/json' },
+      body: JSON.stringify({
+        items: [
+          { id: 'legacy-overview', cardId: 'core.overview', x: 0, y: 0, columns: 4, rows: 2 },
+          { id: 'legacy-recent-events', cardId: 'core.recentEvents', x: 4, y: 0, columns: 4, rows: 2 },
+        ],
+      }),
+    }));
+    expect(savedLegacyLayout.status).toBe(200);
+
+    const headers = { authorization: 'Bearer read-token' };
+    const cardsBody = await (await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/cards', { headers }))).json() as {
+      data: Array<{ definition: DashboardCardDefinition }>;
+    };
+    const cardIds = cardsBody.data.map((entry) => entry.definition.id);
+    expect(cardIds).toContain('core.overview');
+    expect(cardIds).toContain('core.recentEvents');
+
+    const layoutBody = await (await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/layout', { headers }))).json() as {
+      data: { items: Array<{ cardId: string }> };
+    };
+    expect(layoutBody.data.items.map((item) => item.cardId)).toEqual(['core.overview', 'core.recentEvents']);
+    operationalStore.close();
+  });
+
   it('serves dashboard card catalog and the default layout for read-only clients', async () => {
     const registry = createDashboardCardRegistry();
     registry.register(recentEventsCard);

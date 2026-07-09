@@ -146,6 +146,21 @@ describe('dashboard operational views', () => {
     expect(localizedDashboardPage).toContain('data-dashboard-tab="agent-tasks"');
   });
 
+  it('marks existing standard surfaces as core dashboard cards', () => {
+    for (const marker of [
+      'data-dashboard-core-card="core.operationalTotals"',
+      'data-dashboard-core-card="core.eventInbox"',
+      'data-dashboard-core-card="core.workflowRuns"',
+      'data-dashboard-core-card="core.agentTasks"',
+      'data-dashboard-core-card="core.sources"',
+      'data-dashboard-core-card="core.queue"',
+      'data-dashboard-core-card="core.settings"',
+      'data-dashboard-core-card="core.operatorActions"',
+    ]) {
+      expect(localizedDashboardPage).toContain(marker);
+    }
+  });
+
   it('renders event inbox filters and delivery/result columns', () => {
     for (const marker of [
       'data-event-source-filter',

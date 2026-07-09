@@ -1,6 +1,7 @@
 import {
   createDashboardCardRegistry,
   defineDashboardCard,
+  defineDashboardCardProvider,
   type DashboardCardCatalogEntry,
   type DashboardCardDefinition,
   type DashboardCardListOptions,
@@ -38,66 +39,167 @@ const DEFAULT_MAX_CONCURRENT_AGENT_TASKS = 1;
 const USER_DASHBOARD_LAYOUT_ID = 'user.dashboardLayout';
 const DEFAULT_DASHBOARD_LAYOUT_ID = 'core.defaultLayout';
 
-const DEFAULT_DASHBOARD_CARDS: readonly DashboardCardDefinition[] = [
-  defineDashboardCard({
-    id: 'core.overview',
-    title: 'Overview',
-    description: 'Operational counts and warnings.',
-    entry: { type: 'core', name: 'overview' },
-    category: 'operations',
-    requiredCapabilities: ['dashboard:read'],
-    size: {
-      default: { columns: 4, rows: 2 },
-      min: { columns: 2, rows: 1 },
-      max: { columns: 8, rows: 4 },
-    },
-  }),
-  defineDashboardCard({
-    id: 'core.recentEvents',
-    title: 'Recent events',
-    description: 'Recent event deliveries and workflow outcomes.',
-    entry: { type: 'core', name: 'recentEvents' },
-    category: 'operations',
-    requiredCapabilities: ['dashboard:read'],
-    size: {
-      default: { columns: 4, rows: 2 },
-      min: { columns: 2, rows: 1 },
-      max: { columns: 8, rows: 4 },
-    },
-  }),
-  defineDashboardCard({
-    id: 'core.agentTasks',
-    title: 'Agent tasks',
-    description: 'Active and recent agent task status.',
-    entry: { type: 'core', name: 'agentTasks' },
-    category: 'operations',
-    requiredCapabilities: ['dashboard:read'],
-    size: {
-      default: { columns: 4, rows: 2 },
-      min: { columns: 2, rows: 1 },
-      max: { columns: 8, rows: 4 },
-    },
-  }),
-  defineDashboardCard({
-    id: 'core.queue',
-    title: 'Queue',
-    description: 'Project queue and blocked work.',
-    entry: { type: 'core', name: 'queue' },
-    category: 'operations',
-    requiredCapabilities: ['dashboard:read'],
-    size: {
-      default: { columns: 4, rows: 2 },
-      min: { columns: 2, rows: 1 },
-      max: { columns: 8, rows: 4 },
-    },
-  }),
-];
+const defaultCoreSettingsSchema = {
+  type: 'object',
+  additionalProperties: false,
+} as const;
+
+const CORE_DASHBOARD_CARD_PROVIDER = defineDashboardCardProvider({
+  name: 'core',
+  kind: 'dashboard-card-provider',
+  cards: [
+    defineDashboardCard({
+      id: 'core.operationalTotals',
+      title: 'Operational totals',
+      description: 'Current event, workflow, agent task, retry, source, and queue totals.',
+      entry: { type: 'core', name: 'operationalTotals' },
+      category: 'operations',
+      requiredCapabilities: ['dashboard:read'],
+      size: {
+        default: { columns: 8, rows: 2 },
+        min: { columns: 4, rows: 1 },
+        max: { columns: 12, rows: 3 },
+      },
+      settingsSchema: defaultCoreSettingsSchema,
+    }),
+    defineDashboardCard({
+      id: 'core.eventInbox',
+      title: 'Event Inbox',
+      description: 'Filtered event deliveries with publish results and workflow matches.',
+      entry: { type: 'core', name: 'eventInbox' },
+      category: 'events',
+      requiredCapabilities: ['dashboard:read'],
+      size: {
+        default: { columns: 8, rows: 4 },
+        min: { columns: 4, rows: 2 },
+        max: { columns: 12, rows: 8 },
+      },
+      settingsSchema: defaultCoreSettingsSchema,
+    }),
+    defineDashboardCard({
+      id: 'core.workflowRuns',
+      title: 'Workflow Runs',
+      description: 'Workflow run rows and detail records.',
+      entry: { type: 'core', name: 'workflowRuns' },
+      category: 'workflows',
+      requiredCapabilities: ['dashboard:read'],
+      size: {
+        default: { columns: 4, rows: 3 },
+        min: { columns: 3, rows: 2 },
+        max: { columns: 8, rows: 6 },
+      },
+      settingsSchema: defaultCoreSettingsSchema,
+    }),
+    defineDashboardCard({
+      id: 'core.agentTasks',
+      title: 'Agent Tasks',
+      description: 'Agent task status, timelines, logs, and Codex activity.',
+      entry: { type: 'core', name: 'agentTasks' },
+      category: 'agents',
+      requiredCapabilities: ['dashboard:read'],
+      size: {
+        default: { columns: 4, rows: 3 },
+        min: { columns: 3, rows: 2 },
+        max: { columns: 8, rows: 6 },
+      },
+      settingsSchema: defaultCoreSettingsSchema,
+    }),
+    defineDashboardCard({
+      id: 'core.sources',
+      title: 'Sources',
+      description: 'Configured source bundles, health, and source metadata.',
+      entry: { type: 'core', name: 'sources' },
+      category: 'sources',
+      requiredCapabilities: ['dashboard:read'],
+      size: {
+        default: { columns: 4, rows: 2 },
+        min: { columns: 2, rows: 1 },
+        max: { columns: 8, rows: 4 },
+      },
+      settingsSchema: defaultCoreSettingsSchema,
+    }),
+    defineDashboardCard({
+      id: 'core.queue',
+      title: 'Queue',
+      description: 'Task queue rows, upcoming work, and blocked signals.',
+      entry: { type: 'core', name: 'queue' },
+      category: 'queue',
+      requiredCapabilities: ['dashboard:read'],
+      size: {
+        default: { columns: 4, rows: 2 },
+        min: { columns: 2, rows: 1 },
+        max: { columns: 8, rows: 4 },
+      },
+      settingsSchema: defaultCoreSettingsSchema,
+    }),
+    defineDashboardCard({
+      id: 'core.settings',
+      title: 'Settings',
+      description: 'Read-only operational settings and local dashboard configuration.',
+      entry: { type: 'core', name: 'settings' },
+      category: 'settings',
+      requiredCapabilities: ['dashboard:read'],
+      size: {
+        default: { columns: 4, rows: 2 },
+        min: { columns: 2, rows: 1 },
+        max: { columns: 8, rows: 4 },
+      },
+      settingsSchema: defaultCoreSettingsSchema,
+    }),
+    defineDashboardCard({
+      id: 'core.operatorActions',
+      title: 'Operator Actions',
+      description: 'Scoped resume, reset, terminate, and queue operation controls.',
+      entry: { type: 'core', name: 'operatorActions' },
+      category: 'operators',
+      requiredCapabilities: ['dashboard:read'],
+      size: {
+        default: { columns: 4, rows: 2 },
+        min: { columns: 2, rows: 1 },
+        max: { columns: 8, rows: 4 },
+      },
+      settingsSchema: defaultCoreSettingsSchema,
+    }),
+    defineDashboardCard({
+      id: 'core.overview',
+      title: 'Overview',
+      description: 'Legacy dashboard overview card id kept for saved layout compatibility.',
+      entry: { type: 'core', name: 'overview' },
+      category: 'operations',
+      requiredCapabilities: ['dashboard:read'],
+      size: {
+        default: { columns: 4, rows: 2 },
+        min: { columns: 2, rows: 1 },
+        max: { columns: 8, rows: 4 },
+      },
+      settingsSchema: defaultCoreSettingsSchema,
+    }),
+    defineDashboardCard({
+      id: 'core.recentEvents',
+      title: 'Recent events',
+      description: 'Legacy dashboard recent-events card id kept for saved layout compatibility.',
+      entry: { type: 'core', name: 'recentEvents' },
+      category: 'events',
+      requiredCapabilities: ['dashboard:read'],
+      size: {
+        default: { columns: 4, rows: 2 },
+        min: { columns: 2, rows: 1 },
+        max: { columns: 8, rows: 4 },
+      },
+      settingsSchema: defaultCoreSettingsSchema,
+    }),
+  ],
+});
 
 const DEFAULT_DASHBOARD_LAYOUT: readonly DashboardLayoutItem[] = [
-  { id: 'overview', cardId: 'core.overview', x: 0, y: 0, columns: 4, rows: 2 },
-  { id: 'recent-events', cardId: 'core.recentEvents', x: 4, y: 0, columns: 4, rows: 2 },
-  { id: 'agent-tasks', cardId: 'core.agentTasks', x: 0, y: 2, columns: 4, rows: 2 },
-  { id: 'queue', cardId: 'core.queue', x: 4, y: 2, columns: 4, rows: 2 },
+  { id: 'operational-totals', cardId: 'core.operationalTotals', x: 0, y: 0, columns: 8, rows: 2 },
+  { id: 'event-inbox', cardId: 'core.eventInbox', x: 0, y: 2, columns: 8, rows: 4 },
+  { id: 'workflow-runs', cardId: 'core.workflowRuns', x: 0, y: 6, columns: 4, rows: 3 },
+  { id: 'agent-tasks', cardId: 'core.agentTasks', x: 4, y: 6, columns: 4, rows: 3 },
+  { id: 'sources', cardId: 'core.sources', x: 0, y: 9, columns: 4, rows: 2 },
+  { id: 'queue', cardId: 'core.queue', x: 4, y: 9, columns: 4, rows: 2 },
+  { id: 'settings', cardId: 'core.settings', x: 0, y: 11, columns: 4, rows: 2 },
+  { id: 'operator-actions', cardId: 'core.operatorActions', x: 4, y: 11, columns: 4, rows: 2 },
 ];
 
 export type RainrailDashboardScope = 'read-only' | 'operator' | 'admin';
@@ -937,7 +1039,7 @@ function dashboardCardRegistry(options: RainrailHttpAppOptions): DashboardCardRe
   if (options.dashboardCardRegistry !== undefined) return options.dashboardCardRegistry;
 
   const registry = createDashboardCardRegistry();
-  for (const card of DEFAULT_DASHBOARD_CARDS) {
+  for (const card of CORE_DASHBOARD_CARD_PROVIDER.cards) {
     registry.register(card);
   }
   return registry;
