@@ -11,6 +11,7 @@ import {
   OFFICIAL_PLUGIN_CATALOG,
   type RainrailCliFileSystem,
   type RainrailStartOptions,
+  createStandaloneRainrailDispatchRunner,
   discoverRainrailProject,
   getBuiltInCommand,
   getOfficialPluginByAlias,
@@ -783,6 +784,36 @@ describe('Rainrail CLI built-in commands', () => {
       stderr: 'rainrail dispatch requires a dispatch runner, which is not implemented yet.\n',
     });
     expect(stdinRead).toBe(false);
+  });
+
+  it('rejects async dispatch runners in the synchronous CLI before side effects', () => {
+    let publishStarted = false;
+    let stdinRead = false;
+
+    const result = runRainrailCli(['dispatch', '--json', '--stdin'], {
+      asyncDispatchRunner: createStandaloneRainrailDispatchRunner({
+        env: {
+          RAINRAIL_PUBLISH_URL: 'https://rainrail.example/publish',
+          RAINRAIL_PUBLISH_TOKEN: 'publish-token',
+        },
+        fetcher: () => {
+          publishStarted = true;
+          return Promise.resolve({ status: 200, body: '{}' });
+        },
+      }),
+      stdinReader: () => {
+        stdinRead = true;
+        return '{}';
+      },
+    });
+
+    expect(result).toEqual({
+      exitCode: 2,
+      stdout: '',
+      stderr: 'rainrail dispatch requires the async CLI runner for asynchronous dispatch runners.\n',
+    });
+    expect(stdinRead).toBe(false);
+    expect(publishStarted).toBe(false);
   });
 
   it('returns a clear error for invalid dispatch envelope shapes', async () => {
