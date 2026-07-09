@@ -66,8 +66,13 @@ export function createDashboardCardProviderFromManifest(
     cards: manifestCards.map((card) => manifestCardToDefinition(manifest.name, card)),
   };
 
-  createDashboardCardRegistry().registerProvider(provider);
-  return provider;
+  const registry = createDashboardCardRegistry();
+  registry.registerProvider(provider);
+  return {
+    name: provider.name,
+    kind: 'dashboard-card-provider',
+    cards: registry.list().map((entry) => entry.definition),
+  };
 }
 
 function manifestCardToDefinition(

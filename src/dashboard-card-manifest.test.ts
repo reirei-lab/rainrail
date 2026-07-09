@@ -64,6 +64,54 @@ describe('dashboard card plugin manifest contribution', () => {
     }]);
   });
 
+  it('snapshots manifest card values after validation', () => {
+    const manifest: DashboardPluginManifest = {
+      name: 'github',
+      version: '1.0.0',
+      dashboard: {
+        cards: [{
+          name: 'queue',
+          title: 'GitHub queue',
+          category: 'operations',
+          requiredCapabilities: ['dashboard:read'],
+          size: {
+            default: { columns: 3, rows: 2 },
+          },
+          settingsSchema: {
+            type: 'object',
+            properties: {
+              repository: { type: 'string' },
+            },
+            additionalProperties: false,
+          },
+        }],
+      },
+    };
+
+    const provider = createDashboardCardProviderFromManifest(manifest);
+    const manifestCard = manifest.dashboard!.cards![0]!;
+    (manifestCard.requiredCapabilities as string[]).push('runtime:start');
+    manifestCard.size.default.columns = 99;
+    manifestCard.settingsSchema!.properties = {
+      owner: { type: 'string' },
+    };
+
+    const registry = createDashboardCardRegistry();
+    registry.registerProvider(provider);
+
+    expect(registry.list({ enabledPlugins: ['github'], availableCapabilities: ['dashboard:read'] }))
+      .toMatchObject([{
+        definition: {
+          requiredCapabilities: ['dashboard:read'],
+          size: { default: { columns: 3, rows: 2 } },
+          settingsSchema: {
+            properties: { repository: { type: 'string' } },
+          },
+        },
+        availability: { status: 'available' },
+      }]);
+  });
+
   it('rejects malformed manifest dashboard card contributions before registration', () => {
     expect(() => createDashboardCardProviderFromManifest({
       name: 'github',

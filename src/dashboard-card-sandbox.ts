@@ -57,6 +57,7 @@ export function createDashboardCardSandboxHost(
   options: DashboardCardSandboxHostOptions,
 ): DashboardCardSandboxHost {
   const timeoutMs = options.timeoutMs ?? 5000;
+  const cardBaseUrl = options.cardBaseUrl;
   const allowedCapabilities = options.allowedCapabilities === undefined
     ? undefined
     : [...options.allowedCapabilities];
@@ -71,6 +72,7 @@ export function createDashboardCardSandboxHost(
     if (definition.entry.type !== 'plugin') {
       throw new Error(`Dashboard card "${definition.id}" is not a plugin card`);
     }
+    validatePluginSandboxEntry(definition);
 
     const bridgeCapabilities = grantedCapabilities(definition, allowedCapabilities);
     const bridge = createBridge(definition.id, bridgeCapabilities, bridgeHandlers);
@@ -80,7 +82,7 @@ export function createDashboardCardSandboxHost(
       pluginName: definition.entry.pluginName,
       cardName: definition.entry.cardName,
       title: definition.title,
-      src: sandboxFrameSource(options.cardBaseUrl, definition, frameOptions.layoutItemId),
+      src: sandboxFrameSource(cardBaseUrl, definition, frameOptions.layoutItemId),
       sandbox: 'allow-scripts',
       referrerPolicy: 'no-referrer',
       loading: 'lazy',
@@ -148,6 +150,34 @@ function grantedCapabilities(
 
   const allowed = new Set(allowedCapabilities);
   return required.filter((capability) => allowed.has(capability));
+}
+
+function validatePluginSandboxEntry(definition: DashboardCardDefinition): void {
+  if (definition.entry.type !== 'plugin') {
+    throw new Error(`Dashboard card "${definition.id}" is not a plugin card`);
+  }
+
+  validatePluginEntryIdentifier(definition, 'pluginName', definition.entry.pluginName);
+  validatePluginEntryIdentifier(definition, 'cardName', definition.entry.cardName);
+
+  const expectedId = `plugin:${definition.entry.pluginName}.${definition.entry.cardName}`;
+  if (definition.id !== expectedId) {
+    throw new Error(`Dashboard card "${definition.id}" id must match plugin entry namespace "${expectedId}"`);
+  }
+}
+
+function validatePluginEntryIdentifier(
+  definition: DashboardCardDefinition,
+  field: 'pluginName' | 'cardName',
+  value: string,
+): void {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new Error(`Dashboard card "${definition.id}" ${field} must be a non-empty string`);
+  }
+
+  if (value.includes('.') || value.includes(':')) {
+    throw new Error(`Dashboard card "${definition.id}" ${field} must not contain "." or ":"`);
+  }
 }
 
 function sandboxFrameSource(

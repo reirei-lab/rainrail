@@ -94,6 +94,38 @@ describe('dashboard card sandbox host', () => {
     expect(host.createFrame(pluginQueueCard).bridgeCapabilities).toEqual(['dashboard:read']);
   });
 
+  it('snapshots the card base URL when the sandbox host is created', () => {
+    const options = {
+      cardBaseUrl: '/dashboard/plugin-cards/',
+      allowedCapabilities: ['dashboard:read'],
+    };
+    const host = createDashboardCardSandboxHost(options);
+
+    options.cardBaseUrl = 'https://attacker.example/cards/';
+
+    expect(host.createFrame(pluginQueueCard).src)
+      .toBe('/dashboard/plugin-cards/github/queue/?cardId=plugin%3Agithub.queue');
+  });
+
+  it('rejects plugin identifiers that could escape the sandbox card base path', () => {
+    const host = createDashboardCardSandboxHost({
+      cardBaseUrl: '/dashboard/plugin-cards/',
+      allowedCapabilities: ['dashboard:read'],
+    });
+
+    expect(() => host.createFrame({
+      ...pluginQueueCard,
+      id: 'plugin:...queue',
+      entry: { type: 'plugin', pluginName: '..', cardName: 'queue' },
+    })).toThrow(/pluginName must not contain "\." or ":"/u);
+
+    expect(() => host.createFrame({
+      ...pluginQueueCard,
+      id: 'plugin:github.',
+      entry: { type: 'plugin', pluginName: 'github', cardName: '.' },
+    })).toThrow(/cardName must not contain "\." or ":"/u);
+  });
+
   it('ignores inherited bridge handler properties', async () => {
     const host = createDashboardCardSandboxHost({
       cardBaseUrl: '/dashboard/plugin-cards/',
