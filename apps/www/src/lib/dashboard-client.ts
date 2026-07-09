@@ -1,6 +1,7 @@
 export interface DashboardClientOptions {
   token: string;
   baseUrl?: string;
+  demoMode?: boolean;
   pollIntervalMs?: number;
 }
 
@@ -134,10 +135,12 @@ export class RainrailDashboardApiClient {
   readonly pollIntervalMs: number;
   private readonly token: string;
   private readonly baseUrl: string;
+  private readonly demoMode: boolean;
 
   constructor(options: DashboardClientOptions) {
     this.token = options.token;
     this.baseUrl = options.baseUrl ?? '';
+    this.demoMode = options.demoMode ?? false;
     this.pollIntervalMs = options.pollIntervalMs ?? 30000;
   }
 
@@ -201,7 +204,7 @@ export class RainrailDashboardApiClient {
   }
 
   private async get<T>(path: string): Promise<T> {
-    const response = await fetch(`${this.baseUrl}${path}`, {
+    const response = await fetch(`${this.baseUrl}${this.pathWithDemoMode(path)}`, {
       headers: {
         authorization: `Bearer ${this.token}`,
         accept: 'application/json',
@@ -216,7 +219,7 @@ export class RainrailDashboardApiClient {
   }
 
   private async postCommand(path: string, body: Record<string, unknown>): Promise<DashboardCommandResponse> {
-    const response = await fetch(`${this.baseUrl}${path}`, {
+    const response = await fetch(`${this.baseUrl}${this.pathWithDemoMode(path)}`, {
       method: 'POST',
       headers: {
         authorization: `Bearer ${this.token}`,
@@ -233,6 +236,12 @@ export class RainrailDashboardApiClient {
     }
 
     return payload as DashboardCommandResponse;
+  }
+
+  private pathWithDemoMode(path: string): string {
+    if (!this.demoMode) return path;
+    const separator = path.includes('?') ? '&' : '?';
+    return `${path}${separator}demo=1`;
   }
 }
 
