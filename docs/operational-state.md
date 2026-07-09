@@ -7,12 +7,13 @@ file-backed な運用状態を扱う。Source provider や runtime provider の�
 ## Store
 
 `OperationalStore` は dashboard/API、command audit、handler retry、agent task reconcile が
-依存する store contract である。JSON file persistence はこの contract の実装詳細であり、
+依存する store contract である。persistence backend はこの contract の実装詳細であり、
 consumer は `OperationalStore` の method と stable record/input/snapshot type だけを見る。
-`JsonFileOperationalStore` は `JsonFileOperationalStoreOptions` で `databasePath`、
-`eventLimit`、任意の clock を受け取る file-backed adapter である。既存 consumer との互換性のため、
-`RainrailOperationalStore` と `RainrailOperationalStoreOptions` は同じ JSON file-backed adapter の
-互換 export として残す。
+`SqliteOperationalStore` は local Node runtime 向けの `node:sqlite` adapter で、
+`RainrailOperationalStore` はこの SQLite-backed adapter の互換 export である。
+`RainrailOperationalStoreOptions` は `databasePath`、`eventLimit`、任意の clock を受け取る。
+`JsonFileOperationalStore` と `JsonFileOperationalStoreOptions` は古い JSON file-backed adapter として
+残すが、新しい local runtime は SQLite store を使う。
 
 store は `StoredOperationalEvent`、`StoredActivityEvent`、`StoredAgentTask`、
 `StoredEventHandlerRetry` を永続化し、`StoredCommandResult`、
@@ -21,9 +22,14 @@ store は `StoredOperationalEvent`、`StoredActivityEvent`、`StoredAgentTask`�
 `OperationalStoreWarnings` と `StoredStaleProjectClaimWarning` に分けて返す。
 event/activity の list API は `ListOperationalStoreEventsOptions` と
 `ListOperationalStoreActivityEventsOptions` を受け取る。
-activity id の採番は store data 内の sequence で進め、同じ process 内で同じ
-`databasePath` を共有する store instance 間でも同じ id を返さない。`:memory:` は
-instance-local な一時 store として扱う。
+activity / command id の採番は `operational_sequences` table で進め、
+同じ `.sqlite` path を共有する複数 connection 間でも同じ id を返さない。`:memory:` は
+connection-local な一時 store として扱う。
+
+SQLite schema は events、activity events、agent tasks、command results、
+event handler retries、sequences を table として持つ。provider/runtime metadata のうち
+まだ正規化する価値が薄い field は JSON column に保持する。raw provider payload は保存せず、
+dashboard が表示するための安全化済み raw payload reference だけを保存する。
 
 record input は `RecordActivityEventInput`、`RecordCommandResultInput`、`RecordAgentTaskInput`、
 `RecordEventHandlerRetryInput` を使う。`recordCommandResult` は dashboard command API の
