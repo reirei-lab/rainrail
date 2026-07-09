@@ -212,6 +212,14 @@ dispatch runner is not configured, JSON file/stdin input is not read before the
 standard missing-runner error is returned. `RainrailDispatchRunner` returns the
 same `RainrailCliResult` shape as other embedded command runners.
 
+The first `rainrail dispatch` CLI surface intentionally avoids per-field
+metadata flags such as `--source-name`, `--delivery-id`, or `--subject-id`.
+Those fields belong to the event envelope contract, and exposing them as many
+independent flags would create a second event-construction surface that can
+drift from core validation. Operators that need explicit source, delivery,
+subject, payload, or raw payload metadata should use complete envelope JSON
+input; message-only mode stays a small manual trigger path.
+
 ## Plugin command resolution
 
 Rainrail resolves command names in this order:

@@ -563,7 +563,11 @@
       "title": "CLI project-local layout",
       "sources": ["packages/cli/src/index.ts"],
       "docs": ["docs/project-local-layout.md", "docs/cli-update-and-version.md"],
-      "tests": ["packages/cli/src/commands.test.ts", "packages/cli/src/bin.test.ts"],
+      "tests": [
+        "packages/cli/src/commands.test.ts",
+        "packages/cli/src/bin.test.ts",
+        "scripts/validate-dispatch-cli-docs.test.mjs"
+      ],
       "publicExports": [
         "BuiltInCommandName",
         "BuiltInCommand",
