@@ -149,7 +149,8 @@ used by tests and future embedding code:
 
 - Types: `BuiltInCommandName`, `BuiltInCommand`, `SharedOptions`,
   `ParsedRainrailArguments`, `RainrailCliResult`, `RainrailCliEnvironment`,
-  `RainrailDispatchMode`, `RainrailDispatchRequest`,
+  `RainrailDispatchMode`, `RainrailDispatchManualMessagePayload`,
+  `RainrailDispatchEventEnvelope`, `RainrailDispatchRequest`,
   `RainrailDispatchRunner`, `CommandRunnerResult`, `CommandRunnerOptions`,
   `CommandRunner`, `ReleaseFetchResult`, `ReleaseFetcher`,
   `AsyncReleaseFetcherOptions`, `AsyncReleaseFetcher`, `RainrailCliEntrypointIO`,
@@ -170,14 +171,29 @@ checks. Built-in help plus official plugin help routes such as `rainrail github
 help`, `rainrail github webhook add help`, and their canonical
 `rainrail plugin ... help` equivalents do not start the update notice check.
 
-`rainrail dispatch` is a command skeleton for future input-mode implementations.
-Embedded callers can pass `RainrailCliEnvironment.dispatchRunner` to receive a
-`RainrailDispatchRequest`. Its `mode` is the `RainrailDispatchMode`
-discriminant, currently `message` for `--message <text>` and `envelope-json`
-for `--envelope-json <json>`. Its `input` preserves the raw input string for
-that mode, including values that look like CLI options, and its `options`
-contains the shared `config`, `profile`, and `json` selections parsed before
-the dispatch command. `RainrailDispatchRunner` returns the same
+`rainrail dispatch` accepts a simple manual message as either a positional
+argument, `--message <text>`, or `--stdin`. Message input is rejected before
+dispatch when it is blank after trimming. `--stdin` input is also rejected when
+it exceeds 65,536 bytes before the CLI stores the full input in memory. The CLI
+converts accepted message input into a `rainrail.manual.message`
+`RainrailDispatchEventEnvelope` with `source.type: "manual"` and
+`source.name: "cli"`, then passes it to `RainrailCliEnvironment.dispatchRunner`
+inside a `RainrailDispatchRequest`.
+The request keeps `mode: "message"`, the original `input` string, the
+synthesized `event`, and the shared `config`, `profile`, and `json` selections
+parsed before the dispatch command. `--message` values that look like options
+are preserved as message text. The synthesized event payload applies the same
+credential-looking text redaction and 8KB text bound as manual/chat source
+input before writing `payload.message.text`; `rawPayload.sha256` still hashes
+the original CLI input, and `rawPayload.contentType` is normalized to
+`text/plain`. Each synthesized manual event includes a per-process sequence and
+random entropy in `delivery.id` so repeated dispatches, including parallel CLI
+processes in the same millisecond, do not collide.
+
+The `envelope-json` mode remains a boundary for future full-envelope input:
+`rainrail dispatch --envelope-json <json>` forwards the raw JSON string in a
+`RainrailDispatchRequest` with `mode: "envelope-json"` and does not validate
+the envelope fields yet. `RainrailDispatchRunner` returns the same
 `RainrailCliResult` shape as other embedded command runners.
 
 ## Plugin command resolution
