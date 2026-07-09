@@ -39,6 +39,8 @@ describe('operational API v1 design note', () => {
       '`GET /api/v1/sources`',
       '`GET /api/v1/queue`',
       '`GET /api/v1/settings`',
+      '`GET /api/v1/dashboard/cards`',
+      '`GET /api/v1/dashboard/layout`',
     ]) {
       expect(apiSpec).toContain(resource);
     }
@@ -68,6 +70,14 @@ describe('operational API v1 design note', () => {
       'detail record',
       '`/api/state`',
       '`src/dashboard-api.test.ts`',
+      '`definition.entry`',
+      '`definition.category`',
+      '`definition.size`',
+      '`size.default`',
+      '`size.min`',
+      '`size.max`',
+      'provider / plugin filter',
+      'resize guard',
     ]) {
       expect(apiSpec).toContain(contractTerm);
     }

@@ -142,6 +142,10 @@ layout は catalog の現在値と照合して復元する。
 Dashboard UI の card settings は catalog の `definition.settingsSchema` から描画し、保存値は
 該当 layout item の `config` に保存する。plugin card からは token や store へ直接触れず、
 dashboard shell が検証した layout config と sandbox bridge capability だけを渡す。
+Dashboard UI の card picker と editable layout grid は catalog の `definition.entry`、
+`definition.category`、`definition.size` を client contract として使う。`entry.type` と
+plugin 名は provider / plugin filter に、`size.default` / `size.min` / `size.max` は
+card 追加時の初期 size と resize guard に使う。
 
 `PUT /api/v1/dashboard/layout` は `{ "items": [...] }` を受け取り、operator scope を要求する。
 保存前に item id 重複、不明 card id、unavailable card、範囲外 size、非 JSON object config を
