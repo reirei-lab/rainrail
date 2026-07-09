@@ -184,8 +184,8 @@ are preserved as message text. The synthesized event payload applies the same
 credential-looking text redaction and 8KB text bound as manual/chat source
 input before writing `payload.message.text`; `rawPayload.sha256` still hashes
 the original CLI input. Each synthesized manual event includes a per-process
-sequence in `delivery.id` so repeated dispatches in the same millisecond do not
-collide.
+sequence and random entropy in `delivery.id` so repeated dispatches, including
+parallel CLI processes in the same millisecond, do not collide.
 
 The `envelope-json` mode remains a boundary for future full-envelope input:
 `rainrail dispatch --envelope-json <json>` forwards the raw JSON string in a

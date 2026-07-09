@@ -2610,7 +2610,8 @@ function createDispatchManualMessageEvent(
   const messageSha256 = sha256Hex(message);
   dispatchDeliverySequence += 1;
   const sequence = dispatchDeliverySequence.toString(36);
-  const deliveryId = `cli-${sha256Hex(`${occurredAt}\n${message}`).slice(0, 16)}-${sequence}`;
+  const entropy = randomBytes(8).toString('hex');
+  const deliveryId = `cli-${sha256Hex(`${occurredAt}\n${message}`).slice(0, 16)}-${sequence}-${entropy}`;
 
   return {
     id: `${dispatchCliSourceName}:${deliveryId}:rainrail.manual.message`,

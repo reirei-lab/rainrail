@@ -266,7 +266,7 @@ describe('Rainrail CLI built-in commands', () => {
       },
     );
     expect((dispatched[0] as { event: { id: string; delivery: { id: string }; rawPayload: { reference: string; sha256: string } } }).event.id)
-      .toMatch(/^cli:cli-[a-f0-9]{16}-[a-z0-9]+:rainrail\.manual\.message$/u);
+      .toMatch(/^cli:cli-[a-f0-9]{16}-[a-z0-9]+-[a-f0-9]{16}:rainrail\.manual\.message$/u);
     expect((dispatched[0] as { event: { delivery: { id: string }; rawPayload: { reference: string; sha256: string } } }).event.rawPayload.reference)
       .toBe(`manual://deliveries/${(dispatched[0] as { event: { delivery: { id: string } } }).event.delivery.id}`);
     expect((dispatched[0] as { event: { rawPayload: { sha256: string } } }).event.rawPayload.sha256)
@@ -417,6 +417,10 @@ describe('Rainrail CLI built-in commands', () => {
     const deliveryIds = dispatched.map((request) => (request as { event: { delivery: { id: string } } }).event.delivery.id);
     expect(new Set(eventIds).size).toBe(2);
     expect(new Set(deliveryIds).size).toBe(2);
+    expect(deliveryIds).toEqual([
+      expect.stringMatching(/^cli-[a-f0-9]{16}-[a-z0-9]+-[a-f0-9]{16}$/u),
+      expect.stringMatching(/^cli-[a-f0-9]{16}-[a-z0-9]+-[a-f0-9]{16}$/u),
+    ]);
   });
 
   it('allows message-only dispatch input that starts with option syntax', () => {
