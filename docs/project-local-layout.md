@@ -177,12 +177,15 @@ Its `mode` is the `RainrailDispatchMode` discriminant, currently `message` for
 `--message <text>` and `envelope-json` for `--json <file>`,
 `--json --stdin`, or `--envelope-json <json>`. Message input preserves the raw
 string, including values that look like CLI options. Envelope input is parsed
-as JSON, validated as a complete `rainrail.event.v1` envelope or accepted
-envelope input, and then forwarded as a canonical JSON string. Accepted
-envelope input may omit `id` and `schemaVersion`; the CLI fills those defaults
-without synthesizing message metadata or replacing caller-provided envelope
-fields. The request `options` contains the shared `config`, `profile`, and
-global `json` selections parsed before the dispatch command.
+as JSON and validated against the core event contract, including safe
+identifiers, UTC ISO timestamps, allowed raw payload kinds, and allowed event
+URL references. Complete envelope JSON is forwarded without re-serialization
+so caller-provided payload fields remain byte-for-byte under the runner
+boundary. Accepted envelope input may omit `id` and `schemaVersion`; the CLI
+fills those defaults without synthesizing message metadata or replacing other
+caller-provided envelope fields. The request `options` contains the shared
+`config`, `profile`, and global `json` selections parsed before the dispatch
+command.
 `RainrailDispatchRunner` returns the same `RainrailCliResult` shape as other
 embedded command runners.
 
