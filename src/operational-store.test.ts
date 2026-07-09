@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -6,9 +6,87 @@ import { describe, expect, it } from 'vitest';
 
 import { createEventEnvelope } from './events.js';
 import { createRainrailHttpApp } from './http-app.js';
-import { RainrailOperationalStore, SqliteOperationalStore } from './operational-store.js';
+import { JsonFileOperationalStore, RainrailOperationalStore, SqliteOperationalStore } from './operational-store.js';
 
 describe('RainrailOperationalStore', () => {
+  it('keeps the module importable on Node versions without a static node:sqlite import', () => {
+    const source = readFileSync(new URL('./operational-store.ts', import.meta.url), 'utf8');
+    expect(source).not.toContain("from 'node:sqlite'");
+  });
+
+  it('migrates an existing JSON-backed RainrailOperationalStore file into SQLite', () => {
+    const { databasePath, cleanup } = temporaryDatabasePath();
+    try {
+      const jsonStore = new JsonFileOperationalStore({ databasePath, eventLimit: 10, now: fixedClock() });
+      const event = jsonStore.recordEvent(fixtureEvent('delivery-json-migration', 'github.issue'));
+      jsonStore.recordActivityEvent({
+        category: 'plugin',
+        targetType: 'event',
+        targetId: event.id,
+        actionType: 'plugin_executed',
+        outcome: 'success',
+        summary: 'legacy activity',
+      });
+      jsonStore.recordCommandResult({
+        actionType: 'agent_task_resume',
+        targetType: 'agent_task',
+        targetId: 'agent_task_legacy',
+        status: 'accepted',
+        actor: 'operator',
+        requestId: 'request-legacy',
+        dryRun: false,
+      });
+      jsonStore.close();
+
+      const migrated = new RainrailOperationalStore({ databasePath, eventLimit: 10, now: fixedClock() });
+      expect(migrated.snapshot()).toMatchObject({
+        counts: { events: 1, activityEvents: 1, commandResults: 1 },
+        events: [{ id: event.id }],
+        activityEvents: [{ id: 'act_000001', summary: 'legacy activity' }],
+        commandResults: [{ id: 'cmd_000001', requestId: 'request-legacy' }],
+      });
+      migrated.close();
+
+      const database = new DatabaseSync(databasePath, { readOnly: true });
+      try {
+        expect(database.prepare('select count(*) as count from operational_events').get()).toEqual({ count: 1 });
+      } finally {
+        database.close();
+      }
+      expect(existsSync(`${databasePath}.json-backup`)).toBe(true);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('restricts SQLite database and sidecar file permissions', () => {
+    const { databasePath, cleanup } = temporaryDatabasePath();
+    try {
+      const store = new RainrailOperationalStore({ databasePath, eventLimit: 10, now: fixedClock() });
+      store.recordEvent(fixtureEvent('delivery-permissions', 'github.issue'));
+      store.recordActivityEvent({
+        category: 'plugin',
+        targetType: 'event',
+        actionType: 'plugin_executed',
+        outcome: 'success',
+        summary: 'permission check',
+      });
+
+      for (const path of [databasePath, `${databasePath}-wal`, `${databasePath}-shm`]) {
+        if (!existsSync(path)) continue;
+        expect(statMode(path)).toBe(0o600);
+      }
+      store.close();
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('configures SQLite connections to wait briefly for write locks during sequence allocation', () => {
+    const source = readFileSync(new URL('./operational-store.ts', import.meta.url), 'utf8');
+    expect(source).toContain('PRAGMA busy_timeout = 5000');
+  });
+
   it('uses SQLite-backed tables for local file persistence without storing raw provider payloads', () => {
     const { databasePath, cleanup } = temporaryDatabasePath();
     try {
@@ -467,4 +545,8 @@ function temporaryDatabasePath(): { databasePath: string; cleanup: () => void } 
 
 function fixedClock(): () => Date {
   return () => new Date('2026-07-02T01:23:45.000Z');
+}
+
+function statMode(path: string): number {
+  return statSync(path).mode & 0o777;
 }

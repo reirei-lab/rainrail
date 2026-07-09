@@ -1,9 +1,31 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { dirname } from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
 
 import type { RainrailEventEnvelope } from './events.js';
 import type { RuntimeAgentResumeAttempt, RuntimeRunStatus } from './runtime-provider.js';
+
+const nodeRequire = createRequire(import.meta.url);
+interface SqliteRunResult {
+  changes: number;
+}
+
+interface SqliteStatement {
+  run(...values: Array<string | number | null>): SqliteRunResult;
+  get(...values: Array<string | number | null>): unknown;
+  all(...values: Array<string | number | null>): unknown[];
+}
+
+interface SqliteDatabase {
+  exec(sql: string): void;
+  prepare(sql: string): SqliteStatement;
+  close(): void;
+}
+
+type DatabaseSyncConstructor = new (
+  databasePath: string,
+  options?: { readOnly?: boolean },
+) => SqliteDatabase;
 
 export interface RainrailOperationalStoreOptions {
   databasePath: string;
@@ -589,21 +611,31 @@ export class JsonFileOperationalStore implements OperationalStore {
 }
 
 export class SqliteOperationalStore implements OperationalStore {
-  readonly #database: DatabaseSync;
+  readonly #databasePath: string;
+  readonly #database: SqliteDatabase;
   readonly #eventLimit: number;
   readonly #now: () => Date;
   #closed = false;
 
   constructor(options: RainrailOperationalStoreOptions) {
+    const legacyData = prepareLegacyJsonStoreMigration(options.databasePath);
+    this.#databasePath = options.databasePath;
     this.#eventLimit = expectPositiveInteger(options.eventLimit, 'eventLimit');
     this.#now = options.now ?? (() => new Date());
     if (options.databasePath !== ':memory:') {
       mkdirSync(dirname(options.databasePath), { recursive: true });
     }
+    const DatabaseSync = loadDatabaseSync();
     this.#database = new DatabaseSync(options.databasePath);
+    this.#protectDatabaseFiles();
+    this.#database.exec('PRAGMA busy_timeout = 5000');
     this.#database.exec('PRAGMA foreign_keys = ON');
     this.#database.exec('PRAGMA journal_mode = WAL');
     this.#migrate();
+    if (legacyData !== undefined) {
+      this.#importLegacyData(legacyData);
+    }
+    this.#protectDatabaseFiles();
   }
 
   close(): void {
@@ -643,6 +675,7 @@ export class SqliteOperationalStore implements OperationalStore {
       toJsonText(sanitizedEnvelope.rawPayload),
       toNullableJsonText(sanitizedEnvelope.links),
     );
+    this.#protectDatabaseFiles();
 
     return this.getEvent(stored.id) as StoredOperationalEvent<TPayload>;
   }
@@ -715,6 +748,7 @@ export class SqliteOperationalStore implements OperationalStore {
       toNullableJsonText(activity.metadata),
       activity.createdAt,
     );
+    this.#protectDatabaseFiles();
     return jsonClone(activity);
   }
 
@@ -787,6 +821,7 @@ export class SqliteOperationalStore implements OperationalStore {
       toNullableJsonText(commandResult.metadata),
       commandResult.createdAt,
     );
+    this.#protectDatabaseFiles();
     return jsonClone(commandResult);
   }
 
@@ -869,6 +904,7 @@ export class SqliteOperationalStore implements OperationalStore {
       task.completedAt ?? null,
       task.updatedAt,
     );
+    this.#protectDatabaseFiles();
     return jsonClone(task);
   }
 
@@ -964,6 +1000,7 @@ export class SqliteOperationalStore implements OperationalStore {
         updated_at = excluded.updated_at,
         claimed_until_at = NULL
     `).run(retry.eventId, retry.handlerName, retry.attempts, retry.nextRetryAt, retry.lastError, retry.updatedAt);
+    this.#protectDatabaseFiles();
     return jsonClone(retry);
   }
 
@@ -999,6 +1036,7 @@ export class SqliteOperationalStore implements OperationalStore {
       retry.claimedUntilAt ?? null,
       now,
     );
+    this.#protectDatabaseFiles();
     return result.changes === 1;
   }
 
@@ -1029,6 +1067,7 @@ export class SqliteOperationalStore implements OperationalStore {
   clearEventHandlerRetry(eventId: string, handlerName: string): void {
     this.#assertOpen();
     this.#database.prepare('DELETE FROM event_handler_retries WHERE event_id = ? AND handler_name = ?').run(eventId, handlerName);
+    this.#protectDatabaseFiles();
   }
 
   clearClaimedEventHandlerRetry(retry: StoredEventHandlerRetry): boolean {
@@ -1052,6 +1091,7 @@ export class SqliteOperationalStore implements OperationalStore {
       retry.claimedUntilAt ?? null,
       retry.claimedUntilAt ?? null,
     );
+    this.#protectDatabaseFiles();
     return result.changes === 1;
   }
 
@@ -1089,6 +1129,7 @@ export class SqliteOperationalStore implements OperationalStore {
       retry.claimedUntilAt ?? null,
     );
     if (result.changes !== 1) return undefined;
+    this.#protectDatabaseFiles();
     return this.getEventHandlerRetry(input.eventId, input.handlerName);
   }
 
@@ -1132,6 +1173,7 @@ export class SqliteOperationalStore implements OperationalStore {
         ON CONFLICT(name) DO UPDATE SET value = excluded.value
       `).run(name, value);
       this.#database.exec('COMMIT');
+      this.#protectDatabaseFiles();
       return `${prefix}_${String(value).padStart(6, '0')}`;
     } catch (error) {
       this.#database.exec('ROLLBACK');
@@ -1243,6 +1285,7 @@ export class SqliteOperationalStore implements OperationalStore {
       'raw_payload_reference_json',
       `TEXT NOT NULL DEFAULT '${toJsonText(redactedRawPayloadReference()).replaceAll("'", "''")}'`,
     );
+    this.#protectDatabaseFiles();
   }
 
   #assertOpen(): void {
@@ -1255,10 +1298,80 @@ export class SqliteOperationalStore implements OperationalStore {
     const rows = this.#database.prepare(`PRAGMA table_info(${tableName})`).all();
     if (rows.some((row) => rowValue(row, 'name') === columnName)) return;
     this.#database.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
+    this.#protectDatabaseFiles();
+  }
+
+  #importLegacyData(data: OperationalStoreData): void {
+    for (const event of Object.values(data.events)) {
+      this.recordEvent(event.envelope);
+    }
+    for (const activity of Object.values(data.activityEvents)) {
+      this.recordActivityEvent(activity);
+    }
+    for (const task of Object.values(data.agentTasks)) {
+      this.recordAgentTask(task);
+    }
+    for (const result of Object.values(data.commandResults)) {
+      this.recordCommandResult(result);
+    }
+    for (const retry of Object.values(data.eventHandlerRetries)) {
+      this.recordEventHandlerRetry(retry);
+    }
+    for (const [name, value] of Object.entries(data.sequences)) {
+      this.#database.prepare(`
+        INSERT INTO operational_sequences (name, value) VALUES (?, ?)
+        ON CONFLICT(name) DO UPDATE SET value = max(value, excluded.value)
+      `).run(name, value);
+    }
+    this.#protectDatabaseFiles();
+  }
+
+  #protectDatabaseFiles(): void {
+    if (this.#databasePath === ':memory:') return;
+    for (const path of [this.#databasePath, `${this.#databasePath}-wal`, `${this.#databasePath}-shm`]) {
+      if (!existsSync(path)) continue;
+      chmodSync(path, 0o600);
+    }
   }
 }
 
 export { SqliteOperationalStore as RainrailOperationalStore };
+
+function loadDatabaseSync(): DatabaseSyncConstructor {
+  try {
+    return (nodeRequire('node:sqlite') as { DatabaseSync: DatabaseSyncConstructor }).DatabaseSync;
+  } catch (error) {
+    throw new Error(
+      'SQLite operational store requires a Node.js runtime with node:sqlite support. '
+        + 'Use JsonFileOperationalStore on older Node.js versions or upgrade Node.js.',
+      { cause: error },
+    );
+  }
+}
+
+function prepareLegacyJsonStoreMigration(databasePath: string): OperationalStoreData | undefined {
+  if (databasePath === ':memory:' || !existsSync(databasePath) || isSqliteDatabaseFile(databasePath)) {
+    return undefined;
+  }
+
+  const raw = readFileSync(databasePath, 'utf8');
+  const firstNonWhitespace = raw.match(/\S/u)?.[0];
+  if (firstNonWhitespace !== '{') {
+    return undefined;
+  }
+
+  const data = parseStoreData(raw);
+  const backupPath = `${databasePath}.json-backup`;
+  renameSync(databasePath, backupPath);
+  chmodSync(backupPath, 0o600);
+  sharedFileStores.delete(databasePath);
+  return data;
+}
+
+function isSqliteDatabaseFile(databasePath: string): boolean {
+  const header = readFileSync(databasePath, { encoding: 'utf8', flag: 'r' }).slice(0, 16);
+  return header === 'SQLite format 3\u0000';
+}
 
 function operationalEventFromRow(row: unknown): StoredOperationalEvent {
   const source = fromJsonText<RainrailEventEnvelope['source']>(requiredString(row, 'source_json'));
