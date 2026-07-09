@@ -191,4 +191,71 @@ describe('dashboard card sandbox host', () => {
     await expect(frame.bridge.request('dashboard:read', {}))
       .rejects.toThrow(/Capability "dashboard:read" does not have a dashboard card bridge handler/u);
   });
+
+  it('validates card identity and capability before dispatching bridge calls', async () => {
+    const dashboardRead = vi.fn(async () => ({ ok: true }));
+    const host = createDashboardCardSandboxHost({
+      cardBaseUrl: '/dashboard/plugin-cards/',
+      allowedCapabilities: ['dashboard:read'],
+      bridgeHandlers: {
+        'dashboard:read': dashboardRead,
+      },
+    });
+    const frame = host.createFrame(pluginQueueCard, {
+      layoutItemId: 'github-queue',
+    });
+
+    await expect(frame.bridge.request({
+      cardId: 'plugin:github.queue',
+      pluginName: 'github',
+      cardName: 'queue',
+      layoutItemId: 'github-queue',
+      capability: 'dashboard:read',
+      action: 'refresh',
+    })).resolves.toEqual({ ok: true });
+    expect(dashboardRead).toHaveBeenCalledWith({
+      cardId: 'plugin:github.queue',
+      pluginName: 'github',
+      cardName: 'queue',
+      layoutItemId: 'github-queue',
+      capability: 'dashboard:read',
+      action: 'refresh',
+      params: {},
+    });
+
+    await expect(frame.bridge.request({
+      cardId: 'plugin:github.other',
+      pluginName: 'github',
+      cardName: 'queue',
+      capability: 'dashboard:read',
+      action: 'refresh',
+    })).rejects.toThrow(/Bridge request cardId does not match dashboard card "plugin:github.queue"/u);
+
+    await expect(frame.bridge.request({
+      cardId: 'plugin:github.queue',
+      pluginName: 'github',
+      cardName: 'queue',
+      capability: 'runtime:start',
+      action: 'runAction',
+    })).rejects.toThrow(/Capability "runtime:start" is not available to dashboard card "plugin:github.queue"/u);
+  });
+
+  it('limits bridge actions to dashboard card capabilities', async () => {
+    const host = createDashboardCardSandboxHost({
+      cardBaseUrl: '/dashboard/plugin-cards/',
+      allowedCapabilities: ['dashboard:read'],
+      bridgeHandlers: {
+        'dashboard:read': async () => ({ ok: true }),
+      },
+    });
+    const frame = host.createFrame(pluginQueueCard);
+
+    await expect(frame.bridge.request({
+      cardId: 'plugin:github.queue',
+      pluginName: 'github',
+      cardName: 'queue',
+      capability: 'dashboard:read',
+      action: 'readToken' as 'refresh',
+    })).rejects.toThrow(/Bridge action "readToken" is not available to dashboard card "plugin:github.queue"/u);
+  });
 });

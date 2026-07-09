@@ -138,10 +138,14 @@ card も catalog からは落とさない。HTTP app に registry が注入さ�
 layout item は `id`、`cardId`、`x`、`y`、`columns`、`rows`、任意の JSON object `config` を持つ。
 永続化されるのは card definition の copy ではなく `cardId` 参照なので、card definition が変わっても
 layout は catalog の現在値と照合して復元する。
+Dashboard UI の card settings は catalog の `definition.settingsSchema` から描画し、保存値は
+該当 layout item の `config` に保存する。plugin card からは token や store へ直接触れず、
+dashboard shell が検証した layout config と sandbox bridge capability だけを渡す。
 
 `PUT /api/v1/dashboard/layout` は `{ "items": [...] }` を受け取り、operator scope を要求する。
 保存前に item id 重複、不明 card id、unavailable card、範囲外 size、非 JSON object config を
-`400` として拒否し、検証済み item だけを operational store に保存する。
+`400` として拒否し、secret / token / credential 系 key を含まない検証済み item だけを
+operational store に保存する。
 
 ## Pagination, filtering, and sorting
 

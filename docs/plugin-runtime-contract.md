@@ -286,7 +286,8 @@ Dashboard card は Core built-in card と plugin contribution を同じ catalog 
 `DashboardPluginManifest`、`DashboardPluginManifestDashboard`、
 `DashboardPluginManifestCard`、`createDashboardCardProviderFromManifest`、
 `DashboardCardSandboxHostOptions`、`DashboardCardSandboxFrameOptions`、
-`DashboardCardSandboxBridgeHandler`、`DashboardCardSandboxBridge`、
+`DashboardCardSandboxBridgeHandler`、`DashboardCardBridgeAction`、
+`DashboardCardBridgeRequest`、`DashboardCardSandboxBridge`、
 `DashboardCardSandboxFrame`、`DashboardCardSandboxLoadResult`、
 `DashboardCardSandboxHost`、`createDashboardCardSandboxHost` を入口にする。
 
@@ -357,6 +358,10 @@ card definition と `settingsSchema` を指定する場合の schema は plain o
 `additionalProperties` は boolean または JSON schema plain object だけを指定できる。
 `Map`、function、`undefined`、`BigInt`、循環 object など、JSON として安定保存できない
 値は登録時に拒否する。
+Dashboard UI は card catalog の `settingsSchema` から per-card settings form を最小描画し、
+保存値は user dashboard layout item の `config` にだけ保存する。`config` は operational API の
+layout validation を通り、secret / token / credential 系 key は保存前に拒否するため、
+plugin card は provider credential や dashboard bearer token を settings に持ち込まない。
 registry は登録時に検証済み definition を clone/freeze し、plugin 側が元 object を後から
 mutate しても Map key、entry namespace、capability、size、entry resolution failure の照合が
 変わらないようにする。
@@ -378,6 +383,14 @@ plugin 名と card 名の path だけで解決し、`cardId` と任意の layout
 `DashboardCardSandboxBridge` は card definition の `requiredCapabilities` と host 側
 `allowedCapabilities` の交差だけを公開する。bridge handler がない capability や許可されていない
 capability request は card 単位で失敗し、危険操作は Workflow plugin の action gate に残す。
+Structured bridge call は `DashboardCardBridgeRequest` として `cardId`、`pluginName`、
+`cardName`、任意の `layoutItemId`、`capability`、`action`、JSON object `params` を渡す。
+host は handler dispatch 前に card id / plugin name / card name / layout item id / capability /
+action を検証し、別 card へのなりすましや capability の横取りを拒否する。
+`DashboardCardBridgeAction` は `refresh`、`openDetail`、`runAction`、`showToast` に限定する。
+`refresh` と `openDetail` は dashboard read capability の範囲で dashboard shell が代行し、
+`runAction` は operator API と同じ scope / confirmation / audit を通る handler だけが実装する。
+`showToast` は card-local feedback であり、token、store、raw payload への直接 access は提供しない。
 iframe bridge に公開できる capability は `dashboard:read` または `*:read` 形式の read-only
 capability だけとし、`runtime:start`、`secret:access`、`merge` などの workflow 用 capability は
 host 側の `allowedCapabilities` に含まれていても公開しない。

@@ -1,9 +1,12 @@
 import {
   RainrailDashboardApiClient,
   RainrailDashboardApiError,
+  type DashboardCardCatalogEntry,
   type DashboardAgentTask,
   type DashboardDetail,
   type DashboardEvent,
+  type DashboardLayout,
+  type DashboardLayoutItem,
   type DashboardOverview,
   type DashboardQueueItem,
   type DashboardSetting,
@@ -24,6 +27,8 @@ interface DashboardData {
   sources: DashboardSource[];
   queue: DashboardQueueItem[];
   settings: DashboardSetting[];
+  cards: DashboardCardCatalogEntry[];
+  layout: DashboardLayout['data'];
 }
 
 interface DashboardInitialState {
@@ -69,6 +74,10 @@ if (root !== null) {
   const operatorActions = Array.from(root.querySelectorAll<HTMLButtonElement>('[data-action-permission="operator"]'));
   const agentActionButtons = Array.from(root.querySelectorAll<HTMLButtonElement>('[data-agent-action]'));
   const commandStatus = root.querySelector<HTMLElement>('[data-command-status]');
+  const cardSettingsSelect = root.querySelector<HTMLSelectElement>('[data-card-settings-select]');
+  const cardSettingsForm = root.querySelector<HTMLElement>('[data-card-settings-form]');
+  const cardSettingsSaveButton = root.querySelector<HTMLButtonElement>('[data-card-settings-save]');
+  const cardSettingsStatus = root.querySelector<HTMLElement>('[data-card-settings-status]');
   const demoIndicator = root.querySelector<HTMLElement>('[data-demo-indicator]');
   const tabButtons = Array.from(root.querySelectorAll<HTMLButtonElement>('[data-dashboard-tab]'));
 
@@ -201,6 +210,14 @@ if (root !== null) {
     });
   }
 
+  cardSettingsSelect?.addEventListener('change', () => {
+    renderCardSettingsForm();
+  });
+
+  cardSettingsSaveButton?.addEventListener('click', () => {
+    void saveSelectedCardSettings();
+  });
+
   async function refresh(options: { quiet?: boolean } = {}): Promise<void> {
     if (client === undefined) {
       setState('auth-missing', copy.status.authMissing);
@@ -223,6 +240,8 @@ if (root !== null) {
         sources: (await activeClient.sources()).data,
         queue: (await activeClient.queue(currentQueueFilters())).data,
         settings: (await activeClient.settings()).data,
+        cards: (await activeClient.dashboardCards()).data,
+        layout: (await activeClient.dashboardLayout()).data,
       };
       if (!isCurrentRefresh(activeClient, activeRefreshId)) return;
 
@@ -230,6 +249,7 @@ if (root !== null) {
       lastUpdatedAt = Date.now();
       scheduleStaleCheck();
       renderStats(latestData.overview);
+      renderCardSettingsPicker();
       renderCurrentList();
       const hasOperationalData = hasDashboardRecords(latestData);
       setState(hasOperationalData ? 'ready' : 'empty', hasOperationalData ? copy.status.ready : copy.status.empty);
@@ -405,6 +425,8 @@ if (root !== null) {
     if (staleIndicator !== null) staleIndicator.hidden = true;
     renderEmptyStats();
     if (list !== null) list.replaceChildren();
+    if (cardSettingsSelect !== null) cardSettingsSelect.replaceChildren();
+    if (cardSettingsForm !== null) cardSettingsForm.replaceChildren();
     renderPlaceholderDetail(copy.placeholder.selectStream);
   }
 
@@ -447,6 +469,10 @@ if (root !== null) {
   function setOperatorActionsEnabled(enabled: boolean): void {
     for (const action of operatorActions) {
       const agentAction = action.dataset.agentAction;
+      if (agentAction === undefined) {
+        action.disabled = !enabled;
+        continue;
+      }
       const needsSelectedTask = agentAction !== 'terminate-all';
       action.disabled = !enabled || (needsSelectedTask && selectedAgentTaskId === undefined);
     }
@@ -694,6 +720,114 @@ if (root !== null) {
 
   function setCommandStatus(message: string): void {
     if (commandStatus !== null) commandStatus.textContent = message;
+  }
+
+  function renderCardSettingsPicker(): void {
+    if (latestData === undefined || cardSettingsSelect === null) return;
+
+    const selectedValue = cardSettingsSelect.value;
+    const cardTitles = new Map(latestData.cards.map((entry) => [entry.definition.id, entry.definition.title]));
+    cardSettingsSelect.replaceChildren(...latestData.layout.items.map((item) => {
+      const option = document.createElement('option');
+      option.value = item.id;
+      option.textContent = `${cardTitles.get(item.cardId) ?? item.cardId} (${item.id})`;
+      return option;
+    }));
+    if (latestData.layout.items.some((item) => item.id === selectedValue)) {
+      cardSettingsSelect.value = selectedValue;
+    }
+    renderCardSettingsForm();
+  }
+
+  function renderCardSettingsForm(): void {
+    if (latestData === undefined || cardSettingsSelect === null || cardSettingsForm === null) return;
+
+    const selectedLayoutItem = latestData.layout.items.find((item) => item.id === cardSettingsSelect.value)
+      ?? latestData.layout.items[0];
+    cardSettingsForm.replaceChildren();
+    if (selectedLayoutItem === undefined) {
+      cardSettingsForm.textContent = copy.cardSettings.empty;
+      return;
+    }
+
+    const catalogEntry = latestData.cards.find((entry) => entry.definition.id === selectedLayoutItem.cardId);
+    const settingsSchema = objectRecord(catalogEntry?.definition.settingsSchema);
+    const properties = objectRecord(settingsSchema.properties);
+    const propertyEntries = Object.entries(properties);
+    if (propertyEntries.length === 0) {
+      cardSettingsForm.textContent = copy.cardSettings.noFields;
+      return;
+    }
+
+    for (const [name, schemaValue] of propertyEntries) {
+      const schema = objectRecord(schemaValue);
+      const label = document.createElement('label');
+      label.textContent = name;
+      const input = document.createElement('input');
+      input.dataset.cardSetting = name;
+      input.autocomplete = 'off';
+      input.type = schema.type === 'number' || schema.type === 'integer'
+        ? 'number'
+        : schema.type === 'boolean'
+          ? 'checkbox'
+          : 'text';
+      const currentValue = selectedLayoutItem.config?.[name];
+      if (input.type === 'checkbox') {
+        input.checked = currentValue === true;
+      } else if (currentValue !== undefined) {
+        input.value = String(currentValue);
+      }
+      label.append(input);
+      cardSettingsForm.append(label);
+    }
+  }
+
+  async function saveSelectedCardSettings(): Promise<void> {
+    if (client === undefined || latestData === undefined || cardSettingsSelect === null || cardSettingsForm === null) {
+      setCardSettingsStatus(copy.command.connectFirst);
+      return;
+    }
+
+    const selectedLayoutItem = latestData.layout.items.find((item) => item.id === cardSettingsSelect.value);
+    if (selectedLayoutItem === undefined) {
+      setCardSettingsStatus(copy.cardSettings.empty);
+      return;
+    }
+
+    const config = readCardSettingsConfig(cardSettingsForm);
+    const items = latestData.layout.items.map((item): DashboardLayoutItem => (
+      item.id === selectedLayoutItem.id
+        ? { ...item, config }
+        : item
+    ));
+
+    try {
+      await client.saveDashboardLayout(items);
+      setCardSettingsStatus(copy.cardSettings.saved);
+      await refresh({ quiet: true });
+    } catch (error) {
+      setCardSettingsStatus(error instanceof RainrailDashboardApiError ? `${copy.cardSettings.failed}: ${error.code}` : copy.cardSettings.failed);
+    }
+  }
+
+  function readCardSettingsConfig(form: HTMLElement): Record<string, unknown> {
+    const config: Record<string, unknown> = {};
+    for (const input of Array.from(form.querySelectorAll<HTMLInputElement>('[data-card-setting]'))) {
+      const name = input.dataset.cardSetting;
+      if (name === undefined || name === '') continue;
+      if (input.type === 'checkbox') {
+        config[name] = input.checked;
+      } else if (input.type === 'number') {
+        config[name] = input.value === '' ? null : Number(input.value);
+      } else {
+        config[name] = input.value;
+      }
+    }
+    return config;
+  }
+
+  function setCardSettingsStatus(message: string): void {
+    if (cardSettingsStatus !== null) cardSettingsStatus.textContent = message;
   }
 }
 

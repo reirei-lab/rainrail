@@ -265,6 +265,32 @@ describe('dashboard operational views', () => {
     expect(dashboardApp).toContain('setCommandStatus');
   });
 
+  it('wires card settings editing through the dashboard layout API', () => {
+    for (const marker of [
+      'data-card-settings-select',
+      'data-card-settings-form',
+      'data-card-settings-save',
+      'data-card-settings-status',
+    ]) {
+      expect(localizedDashboardPage).toContain(marker);
+    }
+
+    for (const method of [
+      'dashboardCards()',
+      'dashboardLayout()',
+      'saveDashboardLayout',
+    ]) {
+      expect(dashboardClient).toContain(method);
+      expect(dashboardApp).toContain(method);
+    }
+
+    expect(dashboardApp).toContain('renderCardSettingsForm');
+    expect(dashboardApp).toContain('settingsSchema');
+    expect(dashboardApp).toContain('selectedLayoutItem.config');
+    expect(dashboardContent).toContain('Card settings');
+    expect(dashboardContent).toContain('カード設定');
+  });
+
   it('does not mark the whole dashboard empty just because Event Inbox filters hide rows', () => {
     expect(dashboardApp).toContain('hasDashboardRecords(latestData)');
     expect(dashboardApp).not.toContain("setState(hasRows(latestData) ? 'ready' : 'empty'");
