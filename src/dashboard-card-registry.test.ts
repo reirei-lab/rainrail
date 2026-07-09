@@ -99,6 +99,11 @@ describe('dashboard card registry contract', () => {
       category: 'operations',
       size: { default: { columns: 2, rows: 1 } },
     } as unknown as DashboardCardDefinition)).toThrow(/Dashboard card id must be a non-empty string/u);
+
+    expect(() => registry.register({
+      ...pluginQueueCard,
+      description: { text: 'Broken description' },
+    } as unknown as DashboardCardDefinition)).toThrow(/description must be a string/u);
   });
 
   it('rejects ids that do not match the entry namespace', () => {
@@ -143,6 +148,11 @@ describe('dashboard card registry contract', () => {
       ...pluginQueueCard,
       settingsSchema: { type: 'object', properties: { repository: undefined } },
     } as unknown as DashboardCardDefinition)).toThrow(/settingsSchema must contain only JSON-serializable values/u);
+
+    expect(() => registry.register({
+      ...pluginQueueCard,
+      settingsSchema: { type: 'object', additionalProperties: 'no' },
+    } as unknown as DashboardCardDefinition)).toThrow(/settingsSchema.additionalProperties must be a boolean or plain JSON object/u);
 
     expect(() => registry.register({
       ...pluginQueueCard,

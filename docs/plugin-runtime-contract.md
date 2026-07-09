@@ -289,6 +289,7 @@ Dashboard card は Core built-in card と plugin contribution を同じ catalog 
 `plugin:<pluginName>.<cardName>` のように plugin 名を含める。registry は id 衝突を
 登録時に拒否するため、dashboard layout の `DashboardLayoutItem.cardId` は
 Core/plugin の区別を意識せず同じ id 空間を参照できる。
+`description` は任意だが、指定する場合は文字列だけを許可する。
 Core card の id は `core.${entry.name}`、plugin card の id は
 `plugin:${entry.pluginName}.${entry.cardName}` と完全一致させる。registry はこの
 namespace 不一致を登録時に拒否し、catalog consumer が id から Core/plugin と owner を
@@ -339,7 +340,7 @@ compatible な operator settings metadata で、secret value や provider creden
 definition と layout metadata だけを持つ。
 card definition と `settingsSchema` を指定する場合の schema は plain object として受ける。
 `settingsSchema` は `type: "object"`、JSON-serializable な値だけを許可する。
-`additionalProperties` は boolean または JSON schema object を指定できる。
+`additionalProperties` は boolean または JSON schema plain object だけを指定できる。
 `Map`、function、`undefined`、`BigInt`、循環 object など、JSON として安定保存できない
 値は登録時に拒否する。
 registry は登録時に検証済み definition を clone/freeze し、plugin 側が元 object を後から

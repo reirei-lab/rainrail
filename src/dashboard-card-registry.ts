@@ -244,6 +244,14 @@ function validateDefinition(definition: DashboardCardDefinition): void {
     );
   }
 
+  if (definition.description !== undefined && typeof definition.description !== 'string') {
+    throw new DashboardCardRegistryError(
+      `Dashboard card "${definition.id}" description must be a string`,
+      'invalid_definition',
+      definition.id,
+    );
+  }
+
   if (!isNonEmptyString(definition.category)) {
     throw new DashboardCardRegistryError(
       `Dashboard card "${definition.id}" category must be a non-empty string`,
@@ -384,6 +392,18 @@ function validateSettingsSchema(definition: DashboardCardDefinition): void {
   if (settingsSchema.type !== 'object') {
     throw new DashboardCardRegistryError(
       `Dashboard card "${definition.id}" settingsSchema.type must be "object"`,
+      'invalid_definition',
+      definition.id,
+    );
+  }
+
+  if (
+    settingsSchema.additionalProperties !== undefined
+    && typeof settingsSchema.additionalProperties !== 'boolean'
+    && !isPlainObject(settingsSchema.additionalProperties)
+  ) {
+    throw new DashboardCardRegistryError(
+      `Dashboard card "${definition.id}" settingsSchema.additionalProperties must be a boolean or plain JSON object`,
       'invalid_definition',
       definition.id,
     );
