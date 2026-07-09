@@ -238,6 +238,7 @@ export type DashboardAppCopy = {
     saved: string;
     failed: string;
     hiddenCardsWarning: string;
+    moveBlocked: string;
     resizeBlocked: string;
   };
 };
@@ -423,6 +424,7 @@ const englishApp: DashboardAppCopy = {
     saved: 'Dashboard layout saved',
     failed: 'Dashboard layout save failed',
     hiddenCardsWarning: 'Hidden cards may be omitted by this save. Re-enable missing plugin cards before editing this saved layout.',
+    moveBlocked: 'Move would place a card outside the grid or overlap another card.',
     resizeBlocked: 'Resize would overlap another card.',
   },
 };
@@ -608,6 +610,7 @@ const japaneseApp: DashboardAppCopy = {
     saved: 'Dashboard レイアウトを保存しました',
     failed: 'Dashboard レイアウトの保存に失敗しました',
     hiddenCardsWarning: 'Hidden cards may be omitted by this save。非表示の plugin card を再度有効にしてから保存してください。',
+    moveBlocked: '移動するとカードが grid 外へ出るか別のカードと重なります。',
     resizeBlocked: 'サイズ変更すると別のカードと重なります。',
   },
 };

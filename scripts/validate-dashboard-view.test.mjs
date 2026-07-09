@@ -337,19 +337,26 @@ describe('dashboard operational views', () => {
       'data-action-permission',
       'removeDashboardLayoutItem',
       'moveDashboardLayoutItem',
+      'movedDashboardLayoutItems',
       'resizeDashboardLayoutItem',
       'createDashboardLayoutItem',
       'unknownDashboardCard',
       'cardAvailabilityLabel',
       'dashboardLayoutSaving',
       'isOperatorModeEnabled()',
+      'currentLayoutCardIds',
       'hasUnavailableDashboardCards',
       'layoutSaveWouldDropHiddenCards',
+      'dashboardLayoutItemInGridBounds',
       'dashboardLayoutItemsOverlap',
       'dashboardLayoutItemBounds',
     ]) {
       expect(dashboardApp).toContain(marker);
     }
+
+    expect(dashboardApp.indexOf('syncCardPickerFilters(latestData.cards);')).toBeLessThan(
+      dashboardApp.indexOf("const categoryFilter = cardPickerCategory?.value ?? '';"),
+    );
 
     expect(dashboardClient).toContain('entry: { type:');
     expect(dashboardClient).toContain('size: {');
@@ -359,6 +366,7 @@ describe('dashboard operational views', () => {
     expect(dashboardContent).toContain('Card picker');
     expect(dashboardContent).toContain('カードピッカー');
     expect(dashboardContent).toContain('Hidden cards may be omitted');
+    expect(dashboardContent).toContain('Move would place a card outside the grid');
     expect(globalStyles).toContain('.dashboard-layout-grid');
     expect(globalStyles).toContain('grid-template-columns: repeat(12, minmax(0, 1fr))');
     expect(globalStyles).toContain('grid-auto-rows: 88px');

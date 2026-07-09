@@ -895,10 +895,10 @@ if (root !== null) {
   function renderCardPicker(): void {
     if (latestData === undefined || cardPickerList === null) return;
 
+    syncCardPickerFilters(latestData.cards);
     const categoryFilter = cardPickerCategory?.value ?? '';
     const providerFilter = cardPickerProvider?.value ?? '';
     const search = cardPickerSearch?.value.trim().toLocaleLowerCase() ?? '';
-    syncCardPickerFilters(latestData.cards);
 
     const entries = latestData.cards.filter((entry) => {
       if (categoryFilter !== '' && entry.definition.category !== categoryFilter) return false;
@@ -976,14 +976,14 @@ if (root !== null) {
   function moveDashboardLayoutItem(sourceItemId: string, targetItemId: string): Promise<void> {
     if (latestData === undefined || sourceItemId === targetItemId) return Promise.resolve();
     if (!canEditDashboardLayout()) return Promise.resolve();
-    const source = latestData.layout.items.find((item) => item.id === sourceItemId);
-    const target = latestData.layout.items.find((item) => item.id === targetItemId);
-    if (source === undefined || target === undefined) return Promise.resolve();
-    const items = latestData.layout.items.map((item) => {
-      if (item.id === sourceItemId) return { ...item, x: target.x, y: target.y };
-      if (item.id === targetItemId) return { ...item, x: source.x, y: source.y };
-      return item;
-    });
+    const items = movedDashboardLayoutItems(latestData.layout.items, sourceItemId, targetItemId);
+    if (items === undefined) return Promise.resolve();
+    const blocked = items.some((item) => !dashboardLayoutItemInGridBounds(item))
+      || items.some((item, index) => items.some((other, otherIndex) => otherIndex > index && dashboardLayoutItemsOverlap(item, other)));
+    if (blocked) {
+      setDashboardLayoutStatus(copy.cardLayout.moveBlocked);
+      return Promise.resolve();
+    }
     return saveDashboardLayoutItems(items);
   }
 
@@ -1080,14 +1080,18 @@ if (root !== null) {
     return dataTransfer !== null && Array.from(dataTransfer.types).includes(DASHBOARD_LAYOUT_DRAG_MIME);
   }
 
-  function hasUnavailableDashboardCards(cards: DashboardCardCatalogEntry[]): boolean {
-    return cards.some((entry) => entry.availability.status !== 'available');
+  function currentLayoutCardIds(): Set<string> {
+    return new Set(latestData?.layout.items.map((item) => item.cardId) ?? []);
+  }
+
+  function hasUnavailableDashboardCards(cards: DashboardCardCatalogEntry[], layoutCardIds: Set<string>): boolean {
+    return cards.some((entry) => layoutCardIds.has(entry.definition.id) && entry.availability.status !== 'available');
   }
 
   function layoutSaveWouldDropHiddenCards(): boolean {
     return latestData !== undefined
       && latestData.layout.source === 'user'
-      && hasUnavailableDashboardCards(latestData.cards);
+      && hasUnavailableDashboardCards(latestData.cards, currentLayoutCardIds());
   }
 
   function compareDashboardLayoutItems(a: DashboardLayoutItem, b: DashboardLayoutItem): number {
@@ -1152,6 +1156,14 @@ if (root !== null) {
     };
   }
 
+  function dashboardLayoutItemInGridBounds(item: DashboardLayoutItem): boolean {
+    return item.x >= 0
+      && item.y >= 0
+      && item.columns > 0
+      && item.rows > 0
+      && item.x + item.columns <= DASHBOARD_GRID_COLUMNS;
+  }
+
   function dashboardLayoutItemsOverlap(leftItem: DashboardLayoutItem, rightItem: DashboardLayoutItem): boolean {
     const left = dashboardLayoutItemBounds(leftItem);
     const right = dashboardLayoutItemBounds(rightItem);
@@ -1159,6 +1171,21 @@ if (root !== null) {
       && left.right > right.left
       && left.top < right.bottom
       && left.bottom > right.top;
+  }
+
+  function movedDashboardLayoutItems(
+    items: DashboardLayoutItem[],
+    sourceItemId: string,
+    targetItemId: string,
+  ): DashboardLayoutItem[] | undefined {
+    const source = items.find((item) => item.id === sourceItemId);
+    const target = items.find((item) => item.id === targetItemId);
+    if (source === undefined || target === undefined) return undefined;
+    return items.map((item) => {
+      if (item.id === sourceItemId) return { ...item, x: target.x, y: target.y };
+      if (item.id === targetItemId) return { ...item, x: source.x, y: source.y };
+      return item;
+    });
   }
 
   function dashboardTabForCard(cardId: string): DashboardTab | undefined {
