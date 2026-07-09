@@ -4,7 +4,7 @@ import {
   createRainrailEepBridgeIntakeAdaptersFromEnv,
   type RainrailEepBridgeBundleEnv,
 } from './eep-bridge-bundle.js';
-import { parseConfigJson, type RainrailConfig } from './config.js';
+import { parseConfig, type RainrailConfig } from './config.js';
 import { createRainrailHttpApp } from './http-app.js';
 
 export interface RainrailWorkerEnv extends RainrailEepBridgeBundleEnv {
@@ -86,11 +86,23 @@ function workerConfig(env: RainrailWorkerEnv): WorkerParsedConfig | undefined {
   if (env.RAINRAIL_CONFIG_JSON === undefined || env.RAINRAIL_CONFIG_JSON.length === 0) {
     return undefined;
   }
+  const configValue = JSON.parse(expandWorkerConfigEnv(env.RAINRAIL_CONFIG_JSON, stringEnv(env))) as unknown;
+  if (isWorkerConfigRecord(configValue)) {
+    delete configValue.operationalStore;
+  }
 
   return {
-    config: parseConfigJson(env.RAINRAIL_CONFIG_JSON, stringEnv(env)),
+    config: parseConfig(configValue),
     configuresSourceBundles: hasTopLevelJsonProperty(env.RAINRAIL_CONFIG_JSON, 'sourceBundles'),
   };
+}
+
+function expandWorkerConfigEnv(raw: string, env: Record<string, string | undefined>): string {
+  return raw.replace(/\$\{([A-Z0-9_]+)\}/gu, (_match, name: string) => env[name] ?? '');
+}
+
+function isWorkerConfigRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function hasTopLevelJsonProperty(raw: string, propertyName: string): boolean {

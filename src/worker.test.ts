@@ -276,6 +276,55 @@ describe('Rainrail Cloudflare Worker entrypoint', () => {
     expect(webhook.status).toBe(202);
   });
 
+  it('ignores local-only operationalStore config in Worker config JSON', async () => {
+    const env = {
+      ...fakeEnv(),
+      RAINRAIL_CONFIG_JSON: JSON.stringify({
+        operationalStore: {
+          kind: 'sqlite',
+          databasePath: '${RAINRAIL_OPERATIONAL_DB}',
+        },
+        sourceBundles: [
+          {
+            type: 'eep-bridge',
+            name: 'worker-ingress',
+            sources: [
+              {
+                type: 'github-webhook',
+                name: 'worker-github',
+                sourceType: 'github',
+                provider: 'github',
+                webhookSecret: 'GITHUB_WEBHOOK_SECRET',
+                endpoint: '/github',
+              },
+            ],
+          },
+        ],
+      }),
+    };
+    const payload = JSON.stringify({
+      action: 'opened',
+      repository: { full_name: 'reirei-lab/rainrail' },
+      issue: {
+        number: 271,
+        html_url: 'https://github.com/reirei-lab/rainrail/issues/271',
+      },
+    });
+
+    const webhook = await rainrailWorker.fetch(new Request('https://worker.local/github', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-github-event': 'issues',
+        'x-github-delivery': 'delivery-worker-local-store',
+        'x-hub-signature-256': await createGitHubWebhookSignature('secret', payload),
+      },
+      body: payload,
+    }), env);
+
+    expect(webhook.status).toBe(202);
+  });
+
   it('keeps explicit empty sourceBundles as an invalid Worker intake config', async () => {
     const env = {
       ...fakeEnv(),

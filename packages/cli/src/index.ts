@@ -1884,7 +1884,9 @@ function readStartConfig(
 
   const server = parseStartConfigServer(value.server);
   const dashboardAuth = parseStartDashboardAuth(value.dashboardAuth);
-  const operationalStore = parseStartOperationalStoreConfig(value.operationalStore);
+  const operationalStore = env.RAINRAIL_OPERATIONAL_STORE === undefined
+    ? parseStartOperationalStoreConfig(value.operationalStore)
+    : undefined;
   const sources = parseStartConfigSources(value, markerValue, env);
   return {
     ...(server === undefined ? {} : { server }),
@@ -5303,6 +5305,94 @@ type LocalRainrailEvent = {
   };
 };
 
+type LocalOperationalEvent = {
+  readonly id: string;
+  readonly name: string;
+  readonly source: {
+    readonly type: string;
+    readonly name: string;
+    readonly repository?: string;
+  };
+  readonly delivery: {
+    readonly id: string;
+    readonly receivedAt: string;
+  };
+  readonly subject: {
+    readonly type: string;
+    readonly id: string;
+    readonly url?: string;
+  };
+  readonly occurredAt: string;
+  readonly receivedAt: string;
+  readonly envelope: {
+    readonly id: string;
+    readonly schemaVersion: 'rainrail.event.v1';
+    readonly source: LocalOperationalEvent['source'];
+    readonly name: string;
+    readonly delivery: LocalOperationalEvent['delivery'];
+    readonly occurredAt: string;
+    readonly subject: LocalOperationalEvent['subject'];
+    readonly payload?: unknown;
+    readonly rawPayload: {
+      readonly kind: string;
+      readonly reference: string;
+      readonly contentType?: string;
+      readonly sha256?: string;
+    };
+    readonly links?: Record<string, string>;
+  };
+};
+
+type LocalOperationalActivityEvent = {
+  readonly id: string;
+  readonly sourceEventId?: string;
+  readonly sourceEventName?: string;
+  readonly category: string;
+  readonly targetType: string;
+  readonly targetId?: string;
+  readonly targetUrl?: string;
+  readonly actionType: string;
+  readonly outcome: string;
+  readonly summary: string;
+  readonly metadata?: Record<string, unknown>;
+  readonly createdAt: string;
+};
+
+type LocalOperationalAgentTask = {
+  readonly id: string;
+  readonly title: string;
+  readonly agentSessionId?: string;
+  readonly branchName: string;
+  readonly status: string;
+  readonly issue?: unknown;
+  readonly claim?: unknown;
+  readonly logPath?: string;
+  readonly stderrLogPath?: string;
+  readonly pid?: number;
+  readonly resumeAttempts?: unknown;
+  readonly projectClaim?: unknown;
+  readonly result?: string;
+  readonly startedAt: string;
+  readonly completedAt?: string;
+  readonly updatedAt: string;
+  readonly runtime: {
+    readonly status: string;
+    readonly pid?: number;
+    readonly startedAt: string;
+    readonly completedAt?: string;
+  };
+};
+
+type LocalOperationalEventHandlerRetry = {
+  readonly eventId: string;
+  readonly handlerName: string;
+  readonly attempts: number;
+  readonly nextRetryAt: string;
+  readonly lastError: string;
+  readonly updatedAt: string;
+  readonly claimedUntilAt?: string;
+};
+
 type LocalRainrailServerState = {
   nextEventId: number;
   events: LocalRainrailEvent[];
@@ -5313,6 +5403,19 @@ type LocalRainrailServerState = {
 type LocalRainrailEventStore = {
   readonly eventLimit: number;
   readonly listEvents: () => LocalRainrailEvent[];
+  readonly listOperationalEvents?: () => LocalOperationalEvent[];
+  readonly getOperationalEvent?: (id: string) => LocalOperationalEvent | undefined;
+  readonly listActivityEvents?: () => LocalOperationalActivityEvent[];
+  readonly listAgentTasks?: () => LocalOperationalAgentTask[];
+  readonly listEventHandlerRetries?: () => LocalOperationalEventHandlerRetry[];
+  readonly recordOperationalEvent?: (event: LocalOperationalEvent['envelope']) => LocalOperationalEvent;
+  readonly counts?: () => {
+    readonly events: number;
+    readonly activityEvents: number;
+    readonly agentTasks: number;
+    readonly commandResults: number;
+    readonly eventHandlerRetries: number;
+  };
   readonly replaceEvents: (events: readonly LocalRainrailEvent[]) => void;
   readonly close: () => void;
 };
@@ -5462,8 +5565,9 @@ function createSqliteLocalRainrailEventStore(databasePath: string, eventLimit: n
     DatabaseSync: new (path: string) => {
       exec(sql: string): void;
       prepare(sql: string): {
-        run(...values: Array<string | number>): void;
-        all(...values: Array<string | number>): unknown[];
+        run(...values: Array<string | number | null>): void;
+        get(...values: Array<string | number | null>): unknown;
+        all(...values: Array<string | number | null>): unknown[];
       };
       close(): void;
     };
@@ -5485,27 +5589,90 @@ function createSqliteLocalRainrailEventStore(databasePath: string, eventLimit: n
     );
     CREATE INDEX IF NOT EXISTS operational_events_received_at_idx
       ON operational_events (received_at DESC, id DESC);
+    CREATE TABLE IF NOT EXISTS activity_events (
+      id TEXT PRIMARY KEY,
+      source_event_id TEXT,
+      source_event_name TEXT,
+      category TEXT NOT NULL,
+      target_type TEXT NOT NULL,
+      target_id TEXT,
+      target_url TEXT,
+      action_type TEXT NOT NULL,
+      outcome TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      metadata_json TEXT,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS activity_events_created_at_idx
+      ON activity_events (created_at DESC, id DESC);
+    CREATE TABLE IF NOT EXISTS command_results (
+      id TEXT PRIMARY KEY,
+      action_type TEXT NOT NULL,
+      target_type TEXT NOT NULL,
+      target_id TEXT NOT NULL,
+      status TEXT NOT NULL,
+      actor TEXT NOT NULL,
+      client TEXT,
+      request_id TEXT NOT NULL,
+      dry_run INTEGER NOT NULL,
+      result_json TEXT,
+      error TEXT,
+      metadata_json TEXT,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS command_results_created_at_idx
+      ON command_results (created_at DESC, id DESC);
+    CREATE TABLE IF NOT EXISTS agent_tasks (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      agent_session_id TEXT,
+      branch_name TEXT NOT NULL,
+      status TEXT NOT NULL,
+      issue_json TEXT,
+      claim_json TEXT,
+      log_path TEXT,
+      stderr_log_path TEXT,
+      pid INTEGER,
+      resume_attempts_json TEXT,
+      project_claim_json TEXT,
+      result TEXT,
+      started_at TEXT NOT NULL,
+      completed_at TEXT,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS agent_tasks_updated_at_idx
+      ON agent_tasks (updated_at DESC, id DESC);
+    CREATE INDEX IF NOT EXISTS agent_tasks_branch_name_idx
+      ON agent_tasks (branch_name);
+    CREATE TABLE IF NOT EXISTS event_handler_retries (
+      event_id TEXT NOT NULL,
+      handler_name TEXT NOT NULL,
+      attempts INTEGER NOT NULL,
+      next_retry_at TEXT NOT NULL,
+      last_error TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      claimed_until_at TEXT,
+      PRIMARY KEY (event_id, handler_name)
+    );
+    CREATE INDEX IF NOT EXISTS event_handler_retries_schedule_idx
+      ON event_handler_retries (next_retry_at ASC, handler_name ASC);
   `);
   const selectEvents = database.prepare(
     `SELECT * FROM (
       SELECT * FROM operational_events ORDER BY received_at DESC, id DESC LIMIT ?
     ) ORDER BY received_at ASC, id ASC`,
   );
+  const selectEventsNewest = database.prepare('SELECT * FROM operational_events ORDER BY received_at DESC, id DESC LIMIT ?');
+  const selectEvent = database.prepare('SELECT * FROM operational_events WHERE id = ?');
+  const selectActivities = database.prepare('SELECT * FROM activity_events ORDER BY created_at DESC, id DESC LIMIT ?');
+  const selectAgentTasks = database.prepare('SELECT * FROM agent_tasks ORDER BY updated_at DESC, id DESC');
+  const selectRetries = database.prepare('SELECT * FROM event_handler_retries ORDER BY next_retry_at ASC, handler_name ASC');
   const insertEvent = database.prepare(
     `INSERT INTO operational_events (
       id, name, source_json, delivery_json, subject_json, occurred_at, received_at,
       payload_json, raw_payload_reference_json, links_json
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(id) DO UPDATE SET
-      name = excluded.name,
-      source_json = excluded.source_json,
-      delivery_json = excluded.delivery_json,
-      subject_json = excluded.subject_json,
-      occurred_at = excluded.occurred_at,
-      received_at = excluded.received_at,
-      payload_json = excluded.payload_json,
-      raw_payload_reference_json = excluded.raw_payload_reference_json,
-      links_json = excluded.links_json`,
+    ON CONFLICT(id) DO NOTHING`,
   );
 
   return {
@@ -5515,10 +5682,53 @@ function createSqliteLocalRainrailEventStore(databasePath: string, eventLimit: n
         .map(localRainrailEventFromOperationalRow)
         .filter((event): event is LocalRainrailEvent => event !== undefined);
     },
+    listOperationalEvents() {
+      return selectEventsNewest.all(eventLimit).map(localOperationalEventFromRow);
+    },
+    getOperationalEvent(id) {
+      const row = selectEvent.get(id);
+      return row === undefined ? undefined : localOperationalEventFromRow(row);
+    },
+    listActivityEvents() {
+      return selectActivities.all(eventLimit).map(localOperationalActivityEventFromRow);
+    },
+    listAgentTasks() {
+      return selectAgentTasks.all().map(localOperationalAgentTaskFromRow);
+    },
+    listEventHandlerRetries() {
+      return selectRetries.all().map(localOperationalEventHandlerRetryFromRow);
+    },
+    recordOperationalEvent(event) {
+      insertEvent.run(
+        event.id,
+        event.name,
+        JSON.stringify(event.source),
+        JSON.stringify(event.delivery),
+        JSON.stringify(event.subject),
+        event.occurredAt,
+        event.delivery.receivedAt,
+        JSON.stringify(event.payload ?? null),
+        JSON.stringify(event.rawPayload),
+        JSON.stringify(event.links ?? null),
+      );
+      return localOperationalEventFromRow(selectEvent.get(event.id));
+    },
+    counts() {
+      return {
+        events: sqliteCount(database, 'operational_events'),
+        activityEvents: sqliteCount(database, 'activity_events'),
+        agentTasks: sqliteCount(database, 'agent_tasks'),
+        commandResults: sqliteCount(database, 'command_results'),
+        eventHandlerRetries: sqliteCount(database, 'event_handler_retries'),
+      };
+    },
     replaceEvents(nextEvents) {
       database.exec('BEGIN IMMEDIATE');
       try {
         for (const event of [...nextEvents].slice(-eventLimit)) {
+          if (selectEvent.get(event.id) !== undefined) {
+            continue;
+          }
           insertEvent.run(
             event.id,
             event.name,
@@ -5614,13 +5824,170 @@ function localRainrailEventFromOperationalRow(row: unknown): LocalRainrailEvent 
   };
 }
 
-function stringRowValue(row: Record<string, unknown>, key: string): string | undefined {
-  const value = row[key];
+function localOperationalEventFromRow(row: unknown): LocalOperationalEvent {
+  const source = requiredJsonRowValue<LocalOperationalEvent['source']>(row, 'source_json');
+  const delivery = requiredJsonRowValue<LocalOperationalEvent['delivery']>(row, 'delivery_json');
+  const subject = requiredJsonRowValue<LocalOperationalEvent['subject']>(row, 'subject_json');
+  const payload = requiredJsonRowValue<unknown>(row, 'payload_json');
+  const rawPayload = requiredJsonRowValue<LocalOperationalEvent['envelope']['rawPayload']>(row, 'raw_payload_reference_json');
+  const links = nullableJsonRowValue<Record<string, string>>(row, 'links_json');
+  const id = requiredStringRowValue(row, 'id');
+  const name = requiredStringRowValue(row, 'name');
+  const occurredAt = requiredStringRowValue(row, 'occurred_at');
+  const receivedAt = requiredStringRowValue(row, 'received_at');
+  const envelope = {
+    id,
+    schemaVersion: 'rainrail.event.v1' as const,
+    source,
+    name,
+    delivery,
+    occurredAt,
+    subject,
+    payload,
+    rawPayload,
+    ...(links === undefined ? {} : { links }),
+  };
+  return {
+    id,
+    name,
+    source,
+    delivery,
+    subject,
+    occurredAt,
+    receivedAt,
+    envelope,
+  };
+}
+
+function localOperationalActivityEventFromRow(row: unknown): LocalOperationalActivityEvent {
+  const sourceEventId = nullableStringRowValue(row, 'source_event_id');
+  const sourceEventName = nullableStringRowValue(row, 'source_event_name');
+  const targetId = nullableStringRowValue(row, 'target_id');
+  const targetUrl = nullableStringRowValue(row, 'target_url');
+  const metadata = nullableJsonRowValue<Record<string, unknown>>(row, 'metadata_json');
+  return {
+    id: requiredStringRowValue(row, 'id'),
+    ...(sourceEventId === undefined ? {} : { sourceEventId }),
+    ...(sourceEventName === undefined ? {} : { sourceEventName }),
+    category: requiredStringRowValue(row, 'category'),
+    targetType: requiredStringRowValue(row, 'target_type'),
+    ...(targetId === undefined ? {} : { targetId }),
+    ...(targetUrl === undefined ? {} : { targetUrl }),
+    actionType: requiredStringRowValue(row, 'action_type'),
+    outcome: requiredStringRowValue(row, 'outcome'),
+    summary: requiredStringRowValue(row, 'summary'),
+    ...(metadata === undefined ? {} : { metadata }),
+    createdAt: requiredStringRowValue(row, 'created_at'),
+  };
+}
+
+function localOperationalAgentTaskFromRow(row: unknown): LocalOperationalAgentTask {
+  const agentSessionId = nullableStringRowValue(row, 'agent_session_id');
+  const issue = nullableJsonRowValue<unknown>(row, 'issue_json');
+  const claim = nullableJsonRowValue<unknown>(row, 'claim_json');
+  const logPath = nullableStringRowValue(row, 'log_path');
+  const stderrLogPath = nullableStringRowValue(row, 'stderr_log_path');
+  const pid = nullableNumberRowValue(row, 'pid');
+  const resumeAttempts = nullableJsonRowValue<unknown>(row, 'resume_attempts_json');
+  const projectClaim = nullableJsonRowValue<unknown>(row, 'project_claim_json');
+  const result = nullableStringRowValue(row, 'result');
+  const completedAt = nullableStringRowValue(row, 'completed_at');
+  const status = requiredStringRowValue(row, 'status');
+  const startedAt = requiredStringRowValue(row, 'started_at');
+  return {
+    id: requiredStringRowValue(row, 'id'),
+    title: requiredStringRowValue(row, 'title'),
+    ...(agentSessionId === undefined ? {} : { agentSessionId }),
+    branchName: requiredStringRowValue(row, 'branch_name'),
+    status,
+    ...(issue === undefined ? {} : { issue }),
+    ...(claim === undefined ? {} : { claim }),
+    ...(logPath === undefined ? {} : { logPath }),
+    ...(stderrLogPath === undefined ? {} : { stderrLogPath }),
+    ...(pid === undefined ? {} : { pid }),
+    ...(resumeAttempts === undefined ? {} : { resumeAttempts }),
+    ...(projectClaim === undefined ? {} : { projectClaim }),
+    ...(result === undefined ? {} : { result }),
+    startedAt,
+    ...(completedAt === undefined ? {} : { completedAt }),
+    updatedAt: requiredStringRowValue(row, 'updated_at'),
+    runtime: {
+      status,
+      ...(pid === undefined ? {} : { pid }),
+      startedAt,
+      ...(completedAt === undefined ? {} : { completedAt }),
+    },
+  };
+}
+
+function localOperationalEventHandlerRetryFromRow(row: unknown): LocalOperationalEventHandlerRetry {
+  const claimedUntilAt = nullableStringRowValue(row, 'claimed_until_at');
+  return {
+    eventId: requiredStringRowValue(row, 'event_id'),
+    handlerName: requiredStringRowValue(row, 'handler_name'),
+    attempts: requiredNumberRowValue(row, 'attempts'),
+    nextRetryAt: requiredStringRowValue(row, 'next_retry_at'),
+    lastError: requiredStringRowValue(row, 'last_error'),
+    updatedAt: requiredStringRowValue(row, 'updated_at'),
+    ...(claimedUntilAt === undefined ? {} : { claimedUntilAt }),
+  };
+}
+
+function sqliteCount(
+  database: { prepare(sql: string): { get(...values: Array<string | number | null>): unknown } },
+  tableName: string,
+): number {
+  return requiredNumberRowValue(database.prepare(`SELECT count(*) as count FROM ${tableName}`).get(), 'count');
+}
+
+function stringRowValue(row: unknown, key: string): string | undefined {
+  const value = rowValue(row, key);
   return typeof value === 'string' ? value : undefined;
 }
 
-function jsonRowValue<T>(row: Record<string, unknown>, key: string): T | undefined {
-  const value = row[key];
+function requiredStringRowValue(row: unknown, key: string): string {
+  const value = rowValue(row, key);
+  if (typeof value !== 'string') {
+    throw new Error(`SQLite row ${key} must be a string`);
+  }
+  return value;
+}
+
+function nullableStringRowValue(row: unknown, key: string): string | undefined {
+  const value = rowValue(row, key);
+  if (value === null) return undefined;
+  if (typeof value !== 'string') {
+    throw new Error(`SQLite row ${key} must be a string or null`);
+  }
+  return value;
+}
+
+function requiredNumberRowValue(row: unknown, key: string): number {
+  const value = rowValue(row, key);
+  if (typeof value !== 'number') {
+    throw new Error(`SQLite row ${key} must be a number`);
+  }
+  return value;
+}
+
+function nullableNumberRowValue(row: unknown, key: string): number | undefined {
+  const value = rowValue(row, key);
+  if (value === null) return undefined;
+  if (typeof value !== 'number') {
+    throw new Error(`SQLite row ${key} must be a number or null`);
+  }
+  return value;
+}
+
+function rowValue(row: unknown, key: string): unknown {
+  if (!isRecord(row) || !(key in row)) {
+    throw new Error(`SQLite row is missing ${key}`);
+  }
+  return row[key];
+}
+
+function jsonRowValue<T>(row: unknown, key: string): T | undefined {
+  const value = rowValue(row, key);
   if (typeof value !== 'string') {
     return undefined;
   }
@@ -5629,6 +5996,23 @@ function jsonRowValue<T>(row: Record<string, unknown>, key: string): T | undefin
   } catch {
     return undefined;
   }
+}
+
+function requiredJsonRowValue<T>(row: unknown, key: string): T {
+  const value = rowValue(row, key);
+  if (typeof value !== 'string') {
+    throw new Error(`SQLite row ${key} must be JSON text`);
+  }
+  return JSON.parse(value) as T;
+}
+
+function nullableJsonRowValue<T>(row: unknown, key: string): T | undefined {
+  const value = rowValue(row, key);
+  if (value === null) return undefined;
+  if (typeof value !== 'string') {
+    throw new Error(`SQLite row ${key} must be JSON text or null`);
+  }
+  return JSON.parse(value) as T;
 }
 
 function nextLocalEventId(events: readonly LocalRainrailEvent[]): number {
@@ -5725,6 +6109,30 @@ async function handleLocalRainrailRequest(
   }
 
   if (request.method === 'GET' && url.pathname === '/api/v1/overview') {
+    if (state.eventStore?.counts !== undefined) {
+      const activityEvents = state.eventStore.listActivityEvents?.() ?? [];
+      writeJsonResponse(response, 200, {
+        data: {
+          runtime: 'node',
+          workspace: options.root,
+          counts: state.eventStore.counts(),
+          warnings: { staleProjectClaims: [] },
+          recentActivity: activityEvents
+            .filter(isLocalWorkflowRunActivity)
+            .slice(0, 5)
+            .map(localActivityToWorkflowRunRow),
+          links: {
+            events: '/api/v1/events',
+            workflowRuns: '/api/v1/workflow-runs',
+            agentTasks: '/api/v1/agent-tasks',
+            sources: '/api/v1/sources',
+            queue: '/api/v1/queue',
+            settings: '/api/v1/settings',
+          },
+        },
+      }, request);
+      return;
+    }
     writeJsonResponse(response, 200, {
       data: {
         runtime: 'node',
@@ -5751,6 +6159,22 @@ async function handleLocalRainrailRequest(
       writeJsonResponse(response, 400, queryError, request);
       return;
     }
+    if (state.eventStore?.listOperationalEvents !== undefined) {
+      const activityEvents = state.eventStore.listActivityEvents?.() ?? [];
+      const handlerRetries = state.eventStore.listEventHandlerRetries?.() ?? [];
+      writeLocalCollectionResponse(
+        response,
+        filterLocalOperationalEvents(state.eventStore.listOperationalEvents(), url)
+          .map((event) => localOperationalEventToCompactRow(event, {
+            activityEvents: activityEvents.filter((activity) => activity.sourceEventId === event.id),
+            handlerRetries: handlerRetries.filter((retry) => retry.eventId === event.id),
+          })),
+        url,
+        request,
+        (row) => typeof row.receivedAt === 'string' ? row.receivedAt : row.id,
+      );
+      return;
+    }
     writeLocalCollectionResponse(
       response,
       filterLocalEvents([...state.events].reverse(), url),
@@ -5764,6 +6188,15 @@ async function handleLocalRainrailRequest(
   const eventDetailMatch = /^\/api\/v1\/events\/([^/]+)$/u.exec(url.pathname);
   if (request.method === 'GET' && eventDetailMatch !== null) {
     const eventId = safeDecodeURIComponent(eventDetailMatch[1] ?? '');
+    const operationalEvent = eventId === undefined ? undefined : state.eventStore?.getOperationalEvent?.(eventId);
+    if (operationalEvent !== undefined) {
+      const activityEvents = state.eventStore?.listActivityEvents?.().filter((activity) => activity.sourceEventId === operationalEvent.id) ?? [];
+      const handlerRetries = state.eventStore?.listEventHandlerRetries?.().filter((retry) => retry.eventId === operationalEvent.id) ?? [];
+      writeJsonResponse(response, 200, {
+        data: localOperationalEventDetail(operationalEvent, { activityEvents, handlerRetries }),
+      }, request);
+      return;
+    }
     const event = eventId === undefined ? undefined : state.events.find((item) => item.id === eventId);
     if (event === undefined) {
       writeJsonResponse(response, 404, { error: 'event_not_found' }, request);
@@ -5776,6 +6209,19 @@ async function handleLocalRainrailRequest(
   }
 
   if (request.method === 'GET' && url.pathname === '/api/v1/workflow-runs') {
+    if (state.eventStore?.listActivityEvents !== undefined) {
+      writeLocalCollectionResponse(
+        response,
+        state.eventStore.listActivityEvents()
+          .filter(isLocalWorkflowRunActivity)
+          .filter((activity) => matchesOptionalLocalFilter(activity.outcome, url.searchParams.get('filter[status]')))
+          .map(localActivityToWorkflowRunRow),
+        url,
+        request,
+        (row) => typeof row.createdAt === 'string' ? row.createdAt : row.id,
+      );
+      return;
+    }
     if (!writeValidatedLocalCollectionResponse(response, localEmptyCollectionRows, url, request, (row) => row.id, ['filter[status]'])) {
       return;
     }
@@ -5783,6 +6229,18 @@ async function handleLocalRainrailRequest(
   }
 
   if (request.method === 'GET' && url.pathname === '/api/v1/agent-tasks') {
+    if (state.eventStore?.listAgentTasks !== undefined) {
+      writeLocalCollectionResponse(
+        response,
+        state.eventStore.listAgentTasks()
+          .filter((task) => matchesOptionalLocalFilter(task.status, url.searchParams.get('filter[status]')))
+          .map(localAgentTaskToCompactRow),
+        url,
+        request,
+        (row) => typeof row.updatedAt === 'string' ? row.updatedAt : row.id,
+      );
+      return;
+    }
     if (!writeValidatedLocalCollectionResponse(response, localEmptyCollectionRows, url, request, (row) => row.id, ['filter[status]'])) {
       return;
     }
@@ -6063,7 +6521,12 @@ async function handleLocalIntakeRequest(
   if (state.events.length > eventLimit) {
     state.events.splice(0, state.events.length - eventLimit);
   }
-  state.eventStore?.replaceEvents(state.events);
+  if (state.eventStore?.recordOperationalEvent !== undefined) {
+    state.eventStore.recordOperationalEvent(localOperationalEnvelopeFromLocalEvent(event));
+    state.events = state.eventStore.listEvents();
+  } else {
+    state.eventStore?.replaceEvents(state.events);
+  }
   broadcastLocalEvent(state, event);
   writeJsonResponse(response, 202, { data: event }, request);
 }
@@ -6109,6 +6572,158 @@ function localEventDetail(event: LocalRainrailEvent): {
       activityEvents: [],
       handlerRetries: [],
     },
+  };
+}
+
+function localOperationalEnvelopeFromLocalEvent(event: LocalRainrailEvent): LocalOperationalEvent['envelope'] {
+  return {
+    id: event.id,
+    schemaVersion: 'rainrail.event.v1',
+    source: event.source,
+    name: event.name,
+    delivery: { id: event.deliveryId, receivedAt: event.receivedAt },
+    occurredAt: event.occurredAt,
+    subject: event.subject,
+    payload: {
+      localEvent: {
+        status: event.status,
+        summary: event.summary,
+        workflowRunCount: event.workflowRunCount,
+        handlerRetryCount: event.handlerRetryCount,
+      },
+    },
+    rawPayload: { kind: 'external-reference', reference: event.rawPayloadReference },
+    links: event.links,
+  };
+}
+
+function filterLocalOperationalEvents(events: readonly LocalOperationalEvent[], url: URL): readonly LocalOperationalEvent[] {
+  const sourceFilter = url.searchParams.get('filter[source]');
+  const nameFilter = url.searchParams.get('filter[name]');
+  return events
+    .filter((event) => matchesOptionalLocalFilter(event.source.type, sourceFilter))
+    .filter((event) => matchesOptionalLocalFilter(event.name, nameFilter));
+}
+
+function localOperationalEventToCompactRow(
+  event: LocalOperationalEvent,
+  context: {
+    readonly activityEvents?: readonly LocalOperationalActivityEvent[];
+    readonly handlerRetries?: readonly LocalOperationalEventHandlerRetry[];
+  } = {},
+) {
+  const activityEvents = context.activityEvents ?? [];
+  const handlerRetries = context.handlerRetries ?? [];
+  const latestActivity = activityEvents[0];
+  return {
+    id: event.id,
+    type: 'event',
+    name: event.name,
+    status: 'received',
+    summary: localOperationalEventSummary(event),
+    deliveryId: event.delivery.id,
+    rawPayloadReference: event.envelope.rawPayload.reference,
+    workflowRunCount: activityEvents.length,
+    handlerRetryCount: handlerRetries.length,
+    ...(latestActivity === undefined ? {} : { latestOutcome: latestActivity.outcome }),
+    source: {
+      type: event.source.type,
+      name: event.source.name,
+      ...(event.source.repository === undefined ? {} : { repository: event.source.repository }),
+    },
+    subject: event.subject,
+    occurredAt: event.occurredAt,
+    receivedAt: event.receivedAt,
+    links: { self: `/api/v1/events/${encodeURIComponent(event.id)}` },
+  };
+}
+
+function localOperationalEventDetail(
+  event: LocalOperationalEvent,
+  context: {
+    readonly activityEvents?: readonly LocalOperationalActivityEvent[];
+    readonly handlerRetries?: readonly LocalOperationalEventHandlerRetry[];
+  } = {},
+) {
+  const activityEvents = context.activityEvents ?? [];
+  const handlerRetries = context.handlerRetries ?? [];
+  return {
+    id: event.id,
+    type: 'event',
+    compact: localOperationalEventToCompactRow(event, { activityEvents, handlerRetries }),
+    record: {
+      name: event.name,
+      humanSummary: localOperationalEventSummary(event),
+      source: event.source,
+      delivery: event.delivery,
+      subject: event.subject,
+      occurredAt: event.occurredAt,
+      receivedAt: event.receivedAt,
+      envelope: localSanitizedOperationalEnvelope(event),
+      activityEvents,
+      handlerRetries,
+    },
+  };
+}
+
+function localOperationalEventSummary(event: LocalOperationalEvent): string {
+  const repository = event.source.repository;
+  if (repository !== undefined) {
+    return `${event.name} ${repository}#${event.subject.id}`;
+  }
+  return `${event.name} ${event.subject.type}#${event.subject.id}`;
+}
+
+function localSanitizedOperationalEnvelope(event: LocalOperationalEvent) {
+  return {
+    id: event.envelope.id,
+    schemaVersion: event.envelope.schemaVersion,
+    source: event.envelope.source,
+    name: event.envelope.name,
+    delivery: event.envelope.delivery,
+    occurredAt: event.envelope.occurredAt,
+    subject: event.envelope.subject,
+    rawPayload: event.envelope.rawPayload,
+    ...(event.envelope.links === undefined ? {} : { links: event.envelope.links }),
+  };
+}
+
+function localActivityToWorkflowRunRow(activity: LocalOperationalActivityEvent) {
+  return {
+    id: activity.id,
+    type: 'workflow-run',
+    status: activity.outcome,
+    summary: activity.summary,
+    category: activity.category,
+    actionType: activity.actionType,
+    targetType: activity.targetType,
+    ...(activity.targetId === undefined ? {} : { targetId: activity.targetId }),
+    ...(activity.targetUrl === undefined ? {} : { targetUrl: activity.targetUrl }),
+    ...(activity.sourceEventId === undefined ? {} : { sourceEventId: activity.sourceEventId }),
+    ...(activity.sourceEventName === undefined ? {} : { sourceEventName: activity.sourceEventName }),
+    createdAt: activity.createdAt,
+    links: { self: `/api/v1/workflow-runs/${encodeURIComponent(activity.id)}` },
+  };
+}
+
+function isLocalWorkflowRunActivity(activity: LocalOperationalActivityEvent): boolean {
+  return activity.category !== 'command';
+}
+
+function localAgentTaskToCompactRow(task: LocalOperationalAgentTask) {
+  return {
+    id: task.id,
+    type: 'agent-task',
+    status: task.status,
+    title: task.title,
+    branchName: task.branchName,
+    ...(task.agentSessionId === undefined ? {} : { agentSessionId: task.agentSessionId }),
+    ...(task.issue === undefined ? {} : { issue: task.issue }),
+    startedAt: task.startedAt,
+    updatedAt: task.updatedAt,
+    ...(task.completedAt === undefined ? {} : { completedAt: task.completedAt }),
+    warnings: { staleProjectClaim: false },
+    links: { self: `/api/v1/agent-tasks/${encodeURIComponent(task.id)}` },
   };
 }
 
