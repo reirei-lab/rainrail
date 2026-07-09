@@ -383,7 +383,8 @@
         "apps/www/src/pages/[locale]/dashboard.astro",
         "apps/www/src/lib/dashboard-client.ts",
         "apps/www/src/lib/dashboard-app.ts",
-        "apps/www/src/lib/dashboard-content.ts"
+        "apps/www/src/lib/dashboard-content.ts",
+        "scripts/dashboard-demo-vrt-scenarios.mjs"
       ],
       "docs": [
         "docs/local-dashboard.md",
@@ -393,6 +394,7 @@
       "tests": [
         "scripts/validate-local-dashboard-start.test.mjs",
         "scripts/validate-dashboard-shell.test.mjs",
+        "scripts/seed-dashboard-demo-db.test.ts",
         "packages/cli/src/commands.test.ts",
         "src/dashboard-api.test.ts"
       ],
