@@ -7364,14 +7364,14 @@ function localDashboardCards(): readonly unknown[] {
 function localDashboardLayout(state: LocalRainrailServerState): {
   readonly id: 'core.defaultLayout' | 'user.dashboardLayout';
   readonly source: 'default' | 'user';
-  readonly updatedAt: string;
+  readonly updatedAt: string | null;
   readonly items: readonly LocalDashboardLayoutItem[];
 } {
   const updatedAt = state.dashboardLayoutUpdatedAt;
   return {
     id: updatedAt === undefined ? 'core.defaultLayout' : 'user.dashboardLayout',
     source: updatedAt === undefined ? 'default' : 'user',
-    updatedAt: updatedAt ?? new Date(0).toISOString(),
+    updatedAt: updatedAt ?? null,
     items: localCloneDashboardLayout(state.dashboardLayout),
   };
 }

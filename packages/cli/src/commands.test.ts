@@ -2339,6 +2339,7 @@ describe('Rainrail CLI built-in commands', () => {
           data: {
             id: 'core.defaultLayout',
             source: 'default',
+            updatedAt: null,
             items: [{ id: 'operational-totals', cardId: 'core.operationalTotals' }],
           },
         });

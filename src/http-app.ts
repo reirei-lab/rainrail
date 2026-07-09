@@ -1132,15 +1132,16 @@ async function handleDashboardLayoutItemConfigUpdateRequest(
     return withRequestIdHeader(jsonResponse({ error: 'sensitive_dashboard_card_config', itemId }, { status: 400 }), requestId);
   }
 
+  const catalog = dashboardCardCatalog(options);
   const existingLayout = store.getDashboardLayout();
-  const currentItems = jsonClone(existingLayout?.items ?? dashboardDefaultLayout(options));
+  const currentItems = jsonClone(existingLayout?.items ?? filterDashboardLayoutItems(dashboardDefaultLayout(options), catalog));
   const itemIndex = currentItems.findIndex((item) => item.id === itemId);
   if (itemIndex < 0) {
     return withRequestIdHeader(jsonResponse({ error: 'unknown_dashboard_layout_item', itemId }, { status: 404 }), requestId);
   }
 
   const currentItem = currentItems[itemIndex]!;
-  const parsed = parseDashboardLayoutItems([{ ...currentItem, config }], dashboardCardCatalog(options));
+  const parsed = parseDashboardLayoutItems([{ ...currentItem, config }], catalog);
   if (!parsed.ok) return withRequestIdHeader(parsed.response, requestId);
   currentItems[itemIndex] = parsed.items[0]!;
 
@@ -1201,7 +1202,7 @@ async function handleDashboardLayoutItemConfigUpdateRequest(
       id: USER_DASHBOARD_LAYOUT_ID,
       source: 'user',
       updatedAt: saved.updatedAt,
-      items: saved.items,
+      items: filterDashboardLayoutItems(saved.items, catalog),
       auditId,
       ...(auditWarning === undefined ? {} : { auditWarning }),
     },
