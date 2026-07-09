@@ -618,15 +618,23 @@ export class SqliteOperationalStore implements OperationalStore {
   #closed = false;
 
   constructor(options: RainrailOperationalStoreOptions) {
-    const legacyData = prepareLegacyJsonStoreMigration(options.databasePath);
+    const DatabaseSync = loadDatabaseSync();
+    const legacyData = readLegacyJsonStoreData(options.databasePath);
     this.#databasePath = options.databasePath;
     this.#eventLimit = expectPositiveInteger(options.eventLimit, 'eventLimit');
     this.#now = options.now ?? (() => new Date());
     if (options.databasePath !== ':memory:') {
       mkdirSync(dirname(options.databasePath), { recursive: true });
     }
-    const DatabaseSync = loadDatabaseSync();
-    this.#database = new DatabaseSync(options.databasePath);
+    const legacyBackupPath = legacyData === undefined ? undefined : moveLegacyJsonStore(options.databasePath);
+    try {
+      this.#database = new DatabaseSync(options.databasePath);
+    } catch (error) {
+      if (legacyBackupPath !== undefined) {
+        restoreLegacyJsonStore(options.databasePath, legacyBackupPath);
+      }
+      throw error;
+    }
     this.#protectDatabaseFiles();
     this.#database.exec('PRAGMA busy_timeout = 5000');
     this.#database.exec('PRAGMA foreign_keys = ON');
@@ -1306,16 +1314,135 @@ export class SqliteOperationalStore implements OperationalStore {
       this.recordEvent(event.envelope);
     }
     for (const activity of Object.values(data.activityEvents)) {
-      this.recordActivityEvent(activity);
+      this.#database.prepare(`
+        INSERT INTO activity_events (
+          id, source_event_id, source_event_name, category, target_type, target_id, target_url,
+          action_type, outcome, summary, metadata_json, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          source_event_id = excluded.source_event_id,
+          source_event_name = excluded.source_event_name,
+          category = excluded.category,
+          target_type = excluded.target_type,
+          target_id = excluded.target_id,
+          target_url = excluded.target_url,
+          action_type = excluded.action_type,
+          outcome = excluded.outcome,
+          summary = excluded.summary,
+          metadata_json = excluded.metadata_json,
+          created_at = excluded.created_at
+      `).run(
+        activity.id,
+        activity.sourceEventId ?? null,
+        activity.sourceEventName ?? null,
+        activity.category,
+        activity.targetType,
+        activity.targetId ?? null,
+        activity.targetUrl ?? null,
+        activity.actionType,
+        activity.outcome,
+        activity.summary,
+        toNullableJsonText(activity.metadata),
+        activity.createdAt,
+      );
     }
     for (const task of Object.values(data.agentTasks)) {
-      this.recordAgentTask(task);
+      this.#database.prepare(`
+        INSERT INTO agent_tasks (
+          id, title, agent_session_id, branch_name, status, issue_json, claim_json, log_path,
+          stderr_log_path, pid, resume_attempts_json, project_claim_json, result, started_at,
+          completed_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          title = excluded.title,
+          agent_session_id = excluded.agent_session_id,
+          branch_name = excluded.branch_name,
+          status = excluded.status,
+          issue_json = excluded.issue_json,
+          claim_json = excluded.claim_json,
+          log_path = excluded.log_path,
+          stderr_log_path = excluded.stderr_log_path,
+          pid = excluded.pid,
+          resume_attempts_json = excluded.resume_attempts_json,
+          project_claim_json = excluded.project_claim_json,
+          result = excluded.result,
+          started_at = excluded.started_at,
+          completed_at = excluded.completed_at,
+          updated_at = excluded.updated_at
+      `).run(
+        task.id,
+        task.title,
+        task.agentSessionId ?? null,
+        task.branchName,
+        task.status,
+        toNullableJsonText(task.issue),
+        toNullableJsonText(task.claim),
+        task.logPath ?? null,
+        task.stderrLogPath ?? null,
+        task.pid ?? null,
+        toNullableJsonText(task.resumeAttempts),
+        toNullableJsonText(task.projectClaim),
+        task.result ?? null,
+        task.startedAt,
+        task.completedAt ?? null,
+        task.updatedAt,
+      );
     }
     for (const result of Object.values(data.commandResults)) {
-      this.recordCommandResult(result);
+      this.#database.prepare(`
+        INSERT INTO command_results (
+          id, action_type, target_type, target_id, status, actor, client, request_id,
+          dry_run, result_json, error, metadata_json, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          action_type = excluded.action_type,
+          target_type = excluded.target_type,
+          target_id = excluded.target_id,
+          status = excluded.status,
+          actor = excluded.actor,
+          client = excluded.client,
+          request_id = excluded.request_id,
+          dry_run = excluded.dry_run,
+          result_json = excluded.result_json,
+          error = excluded.error,
+          metadata_json = excluded.metadata_json,
+          created_at = excluded.created_at
+      `).run(
+        result.id,
+        result.actionType,
+        result.targetType,
+        result.targetId,
+        result.status,
+        result.actor,
+        result.client ?? null,
+        result.requestId,
+        result.dryRun ? 1 : 0,
+        toNullableJsonText(result.result),
+        result.error ?? null,
+        toNullableJsonText(result.metadata),
+        result.createdAt,
+      );
     }
     for (const retry of Object.values(data.eventHandlerRetries)) {
-      this.recordEventHandlerRetry(retry);
+      this.#database.prepare(`
+        INSERT INTO event_handler_retries (
+          event_id, handler_name, attempts, next_retry_at, last_error, updated_at, claimed_until_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(event_id, handler_name) DO UPDATE SET
+          attempts = excluded.attempts,
+          next_retry_at = excluded.next_retry_at,
+          last_error = excluded.last_error,
+          updated_at = excluded.updated_at,
+          claimed_until_at = excluded.claimed_until_at
+      `).run(
+        retry.eventId,
+        retry.handlerName,
+        retry.attempts,
+        retry.nextRetryAt,
+        retry.lastError,
+        retry.updatedAt,
+        retry.claimedUntilAt ?? null,
+      );
     }
     for (const [name, value] of Object.entries(data.sequences)) {
       this.#database.prepare(`
@@ -1349,7 +1476,7 @@ function loadDatabaseSync(): DatabaseSyncConstructor {
   }
 }
 
-function prepareLegacyJsonStoreMigration(databasePath: string): OperationalStoreData | undefined {
+function readLegacyJsonStoreData(databasePath: string): OperationalStoreData | undefined {
   if (databasePath === ':memory:' || !existsSync(databasePath) || isSqliteDatabaseFile(databasePath)) {
     return undefined;
   }
@@ -1360,12 +1487,20 @@ function prepareLegacyJsonStoreMigration(databasePath: string): OperationalStore
     return undefined;
   }
 
-  const data = parseStoreData(raw);
+  return parseStoreData(raw);
+}
+
+function moveLegacyJsonStore(databasePath: string): string {
   const backupPath = `${databasePath}.json-backup`;
   renameSync(databasePath, backupPath);
   chmodSync(backupPath, 0o600);
   sharedFileStores.delete(databasePath);
-  return data;
+  return backupPath;
+}
+
+function restoreLegacyJsonStore(databasePath: string, backupPath: string): void {
+  if (existsSync(databasePath)) return;
+  renameSync(backupPath, databasePath);
 }
 
 function isSqliteDatabaseFile(databasePath: string): boolean {
@@ -1501,13 +1636,19 @@ function eventHandlerRetryFromRow(row: unknown): StoredEventHandlerRetry {
 }
 
 function eventEnvelopeWithoutRawPayload<TPayload>(event: RainrailEventEnvelope<TPayload>): RainrailEventEnvelope<TPayload> {
-  const rawPayload = event.rawPayload.kind === 'external-reference'
+  const rawPayload = isSafeRawPayloadReference(event.rawPayload)
     ? jsonClone(event.rawPayload)
     : redactedRawPayloadReference();
   return {
     ...jsonClone(event),
     rawPayload,
   };
+}
+
+function isSafeRawPayloadReference(rawPayload: RainrailEventEnvelope['rawPayload']): boolean {
+  if (rawPayload.kind === 'external-reference') return true;
+  if (rawPayload.kind !== 'inline-redacted') return false;
+  return /^(github|cloudflare|rainrail):\/\//u.test(rawPayload.reference);
 }
 
 function redactedRawPayloadReference(): RainrailEventEnvelope['rawPayload'] {
