@@ -597,6 +597,49 @@ describe('Rainrail dashboard API', () => {
     await expect(authorized.json()).resolves.toMatchObject({ data: expect.any(Array) });
   });
 
+  it('protects dashboard layout reads and writes even when no operational store is configured', async () => {
+    const app = createTestApp({
+      dashboardAuth: {
+        readOnlyToken: 'read-token',
+        operatorToken: 'operator-token',
+      },
+    });
+
+    const unauthenticatedRead = await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/layout'));
+    expect(unauthenticatedRead.status).toBe(401);
+    await expect(unauthenticatedRead.json()).resolves.toEqual({ error: 'missing_bearer_token' });
+
+    const authorizedRead = await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/layout', {
+      headers: { authorization: 'Bearer read-token' },
+    }));
+    expect(authorizedRead.status).toBe(503);
+    await expect(authorizedRead.json()).resolves.toEqual({ error: 'operational_store_not_configured' });
+
+    const unauthenticatedWrite = await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/layout', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ items: [] }),
+    }));
+    expect(unauthenticatedWrite.status).toBe(401);
+    await expect(unauthenticatedWrite.json()).resolves.toEqual({ error: 'missing_bearer_token' });
+
+    const readOnlyWrite = await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/layout', {
+      method: 'PUT',
+      headers: { authorization: 'Bearer read-token', 'content-type': 'application/json' },
+      body: JSON.stringify({ items: [] }),
+    }));
+    expect(readOnlyWrite.status).toBe(403);
+    await expect(readOnlyWrite.json()).resolves.toEqual({ error: 'insufficient_scope', requiredScope: 'operator' });
+
+    const operatorWrite = await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/layout', {
+      method: 'PUT',
+      headers: { authorization: 'Bearer operator-token', 'content-type': 'application/json' },
+      body: JSON.stringify({ items: [] }),
+    }));
+    expect(operatorWrite.status).toBe(503);
+    await expect(operatorWrite.json()).resolves.toEqual({ error: 'operational_store_not_configured' });
+  });
+
   it('rejects non-string dashboard layout ids and card ids before persistence', async () => {
     const registry = createDashboardCardRegistry();
     registry.register(recentEventsCard);

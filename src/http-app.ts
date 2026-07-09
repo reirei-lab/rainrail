@@ -460,8 +460,8 @@ async function routeRainrailHttpRequest(
 
   if (url.pathname === '/api/v1/dashboard/layout') {
     if (request.method === 'GET') {
-      const auth = verifyDashboardReadRequest(request, options);
-      if (auth !== undefined) return auth;
+      const auth = verifyDashboardScopedRequest(request, options, 'read-only');
+      if (!auth.ok) return auth.response;
 
       return dashboardV1LayoutResponse(options);
     }
@@ -973,13 +973,13 @@ async function handleDashboardLayoutUpdateRequest(
   request: Request,
   options: RainrailHttpAppOptions,
 ): Promise<Response> {
+  const auth = verifyDashboardScopedRequest(request, options, 'operator');
+  if (!auth.ok) return auth.response;
+
   const store = options.operationalStore;
   if (store === undefined) {
     return jsonResponse({ error: 'operational_store_not_configured' }, { status: 503 });
   }
-
-  const auth = verifyDashboardScopedRequest(request, options, 'operator');
-  if (!auth.ok) return auth.response;
 
   const requestId = sanitizeAuditHeaderValue(request.headers.get('x-request-id')) ?? generatedRequestId();
   const client = sanitizeAuditHeaderValue(request.headers.get('x-rainrail-client')) ?? auth.principal.client ?? 'unknown';

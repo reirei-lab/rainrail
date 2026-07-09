@@ -73,7 +73,7 @@ activity / command id の採番は `operational_sequences` table で進め、
 connection-local な一時 store として扱う。
 
 SQLite schema は events、activity events、agent tasks、command results、
-event handler retries、sequences を table として持つ。provider/runtime metadata のうち
+dashboard layout、event handler retries、sequences を table として持つ。provider/runtime metadata のうち
 まだ正規化する価値が薄い field は JSON column に保持する。raw provider payload は保存せず、
 dashboard が表示するための安全化済み raw payload reference だけを保存する。
 
