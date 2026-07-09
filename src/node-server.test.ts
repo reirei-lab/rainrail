@@ -211,9 +211,14 @@ describe('Rainrail Node server', () => {
       headers: { authorization: 'Bearer read-token' },
     }));
     expect(catalog.status).toBe(200);
-    await expect(catalog.json()).resolves.toMatchObject({
-      data: [{ definition: { id: 'plugin:github.nodeQueue' }, availability: { status: 'available' } }],
-    });
+    const catalogBody = await catalog.json() as {
+      data: Array<{ definition: { id: string }; availability: { status: string } }>;
+    };
+    const catalogIds = catalogBody.data.map((entry) => entry.definition.id);
+    expect(catalogIds).toContain('core.operationalTotals');
+    expect(catalogIds).toContain('plugin:github.nodeQueue');
+    expect(catalogBody.data.find((entry) => entry.definition.id === 'plugin:github.nodeQueue')?.availability)
+      .toEqual({ status: 'available' });
 
     const layout = await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/layout', {
       headers: { authorization: 'Bearer read-token' },

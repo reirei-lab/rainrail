@@ -964,7 +964,7 @@ function dashboardV1LayoutResponse(options: RainrailHttpAppOptions): Response {
       id: DEFAULT_DASHBOARD_LAYOUT_ID,
       source: 'default',
       updatedAt: null,
-      items: dashboardDefaultLayout(options),
+      items: filterDashboardLayoutItems(dashboardDefaultLayout(options), dashboardCardCatalog(options)),
     },
   });
 }
@@ -984,15 +984,79 @@ async function handleDashboardLayoutUpdateRequest(
   const requestId = sanitizeAuditHeaderValue(request.headers.get('x-request-id')) ?? generatedRequestId();
   const client = sanitizeAuditHeaderValue(request.headers.get('x-rainrail-client')) ?? auth.principal.client ?? 'unknown';
   const body = await readJsonObjectBody(request, options.dashboardCommandMaxBodyBytes ?? DEFAULT_MAX_REQUEST_BODY_BYTES);
-  if (!body.ok) return jsonResponse({ error: body.error }, { status: body.status });
+  if (!body.ok) return commandResponse({ error: body.error }, requestId, body.status);
 
   const parsed = parseDashboardLayoutItems(body.value.items, dashboardCardCatalog(options));
-  if (!parsed.ok) return parsed.response;
+  if (!parsed.ok) return withRequestIdHeader(parsed.response, requestId);
+
+  const dryRun = body.value.dryRun === true;
+  if (dryRun) {
+    let previewAudit: StoredCommandResult;
+    try {
+      previewAudit = store.recordCommandResult({
+        actionType: 'dashboard_layout_update',
+        targetType: 'dashboard_layout',
+        targetId: USER_DASHBOARD_LAYOUT_ID,
+        status: 'preview',
+        actor: auth.principal.actor,
+        ...(client === undefined ? {} : { client }),
+        requestId,
+        dryRun: true,
+        result: { itemCount: parsed.items.length },
+      });
+      store.recordActivityEvent({
+        category: 'command',
+        targetType: 'dashboard_layout',
+        targetId: USER_DASHBOARD_LAYOUT_ID,
+        actionType: 'dashboard_layout_update',
+        outcome: 'skipped',
+        summary: `Previewed dashboard_layout_update for dashboard layout ${USER_DASHBOARD_LAYOUT_ID}`,
+        metadata: auditMetadata(auth.principal.actor, client, requestId, true),
+      });
+    } catch {
+      return commandResponse({ error: 'operational_store_unavailable' }, requestId, 503);
+    }
+
+    return commandResponse({
+      data: {
+        action: 'dashboard_layout_update',
+        targetType: 'dashboard_layout',
+        targetId: USER_DASHBOARD_LAYOUT_ID,
+        status: 'preview',
+        dryRun: true,
+        auditId: previewAudit.id,
+        result: { itemCount: parsed.items.length },
+      },
+    }, requestId, 200);
+  }
+
+  let dispatchAuditId: string;
+  try {
+    const dispatchAudit = store.recordCommandResult({
+      actionType: 'dashboard_layout_update',
+      targetType: 'dashboard_layout',
+      targetId: USER_DASHBOARD_LAYOUT_ID,
+      status: 'dispatching',
+      actor: auth.principal.actor,
+      ...(client === undefined ? {} : { client }),
+      requestId,
+      dryRun: false,
+    });
+    dispatchAuditId = dispatchAudit.id;
+  } catch {
+    return commandResponse({ error: 'operational_store_unavailable' }, requestId, 503);
+  }
 
   let saved;
-  let auditId: string;
+  let auditId = dispatchAuditId;
+  let auditWarning: string | undefined;
   try {
     saved = store.saveDashboardLayout(parsed.items);
+  } catch {
+    return commandResponse({ error: 'operational_store_unavailable' }, requestId, 503);
+  }
+
+  try {
     const audit = store.recordCommandResult({
       actionType: 'dashboard_layout_update',
       targetType: 'dashboard_layout',
@@ -1015,18 +1079,19 @@ async function handleDashboardLayoutUpdateRequest(
       metadata: auditMetadata(auth.principal.actor, client, requestId, false),
     });
   } catch {
-    return jsonResponse({ error: 'operational_store_unavailable' }, { status: 503 });
+    auditWarning = 'post_dispatch_audit_failed';
   }
 
-  return jsonResponse({
+  return commandResponse({
     data: {
       id: USER_DASHBOARD_LAYOUT_ID,
       source: 'user',
       updatedAt: saved.updatedAt,
       items: saved.items,
       auditId,
+      ...(auditWarning === undefined ? {} : { auditWarning }),
     },
-  });
+  }, requestId, 200);
 }
 
 function dashboardCardCatalog(options: RainrailHttpAppOptions): DashboardCardCatalogEntry[] {
@@ -1036,12 +1101,21 @@ function dashboardCardCatalog(options: RainrailHttpAppOptions): DashboardCardCat
 }
 
 function dashboardCardRegistry(options: RainrailHttpAppOptions): DashboardCardRegistry {
-  if (options.dashboardCardRegistry !== undefined) return options.dashboardCardRegistry;
-
   const registry = createDashboardCardRegistry();
+  const registered = new Set<string>();
   for (const card of CORE_DASHBOARD_CARD_PROVIDER.cards) {
     registry.register(card);
+    registered.add(card.id);
   }
+
+  if (options.dashboardCardRegistry !== undefined) {
+    for (const entry of options.dashboardCardRegistry.list()) {
+      if (registered.has(entry.definition.id)) continue;
+      registry.register(entry.definition);
+      registered.add(entry.definition.id);
+    }
+  }
+
   return registry;
 }
 
@@ -1101,6 +1175,9 @@ function parseDashboardLayoutItems(
     const config = item.config;
     if (config !== undefined && (!isPlainRecord(config) || !isJsonSerializableValue(config))) {
       return { ok: false, response: jsonResponse({ error: 'invalid_dashboard_card_config', itemId: id, cardId }, { status: 400 }) };
+    }
+    if (config !== undefined && hasSensitiveConfigKey(config)) {
+      return { ok: false, response: jsonResponse({ error: 'sensitive_dashboard_card_config', itemId: id, cardId }, { status: 400 }) };
     }
 
     items.push({
@@ -1677,6 +1754,12 @@ function isJsonSerializableValue(value: unknown): boolean {
   return false;
 }
 
+function hasSensitiveConfigKey(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some(hasSensitiveConfigKey);
+  if (!isPlainRecord(value)) return false;
+  return Object.entries(value).some(([key, nested]) => isSensitiveCommandResultKey(key) || hasSensitiveConfigKey(nested));
+}
+
 function jsonClone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
@@ -2169,6 +2252,16 @@ function commandResponse(body: unknown, requestId: string, status: number): Resp
   return jsonResponse(body, {
     status,
     headers: { 'X-Request-ID': requestId },
+  });
+}
+
+function withRequestIdHeader(response: Response, requestId: string): Response {
+  const headers = new Headers(response.headers);
+  headers.set('X-Request-ID', requestId);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
   });
 }
 
