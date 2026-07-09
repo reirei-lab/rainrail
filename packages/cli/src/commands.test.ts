@@ -266,7 +266,7 @@ describe('Rainrail CLI built-in commands', () => {
       },
     );
     expect((dispatched[0] as { event: { id: string; delivery: { id: string }; rawPayload: { reference: string; sha256: string } } }).event.id)
-      .toMatch(/^cli:cli-[a-f0-9]{16}:rainrail\.manual\.message$/u);
+      .toMatch(/^cli:cli-[a-f0-9]{16}-[a-z0-9]+:rainrail\.manual\.message$/u);
     expect((dispatched[0] as { event: { delivery: { id: string }; rawPayload: { reference: string; sha256: string } } }).event.rawPayload.reference)
       .toBe(`manual://deliveries/${(dispatched[0] as { event: { delivery: { id: string } } }).event.delivery.id}`);
     expect((dispatched[0] as { event: { rawPayload: { sha256: string } } }).event.rawPayload.sha256)
@@ -296,12 +296,127 @@ describe('Rainrail CLI built-in commands', () => {
         event: {
           payload: {
             message: {
-              text: 'from stdin\n',
+              text: 'from stdin',
             },
           },
         },
       },
     ]);
+  });
+
+  it('does not read stdin until dispatch input modes are valid', () => {
+    const dispatched: unknown[] = [];
+    let stdinReads = 0;
+
+    expect(runRainrailCli(['dispatch', '--stdin', '--message', 'hello'], {
+      stdinReader: () => {
+        stdinReads += 1;
+        return 'from stdin\n';
+      },
+      dispatchRunner: (request) => {
+        dispatched.push(request);
+        return {
+          exitCode: 0,
+          stdout: 'accepted message\n',
+          stderr: '',
+        };
+      },
+    })).toMatchObject({
+      exitCode: 1,
+      stdout: '',
+      stderr: 'Choose only one dispatch input mode.\n',
+    });
+
+    expect(stdinReads).toBe(0);
+    expect(dispatched).toEqual([]);
+  });
+
+  it('rejects positional arguments after explicit dispatch input modes', () => {
+    const dispatched: unknown[] = [];
+    let stdinReads = 0;
+
+    expect(runRainrailCli(['dispatch', '--message', 'hello', 'world'], {
+      dispatchRunner: (request) => {
+        dispatched.push(request);
+        return {
+          exitCode: 0,
+          stdout: 'accepted message\n',
+          stderr: '',
+        };
+      },
+    })).toMatchObject({
+      exitCode: 1,
+      stdout: '',
+      stderr: 'Unexpected rainrail dispatch argument: world.\n',
+    });
+
+    expect(runRainrailCli(['dispatch', '--stdin', 'trailing'], {
+      stdinReader: () => {
+        stdinReads += 1;
+        return 'from stdin\n';
+      },
+      dispatchRunner: (request) => {
+        dispatched.push(request);
+        return {
+          exitCode: 0,
+          stdout: 'accepted message\n',
+          stderr: '',
+        };
+      },
+    })).toMatchObject({
+      exitCode: 1,
+      stdout: '',
+      stderr: 'Unexpected rainrail dispatch argument: trailing.\n',
+    });
+
+    expect(stdinReads).toBe(0);
+    expect(dispatched).toEqual([]);
+  });
+
+  it('redacts and bounds CLI manual message event payload text', () => {
+    const dispatched: unknown[] = [];
+    const longSuffix = 'x'.repeat(9_000);
+
+    const result = runRainrailCli(['dispatch', '--message', `DATABASE_URL=postgres://user:pass@db/prod ${longSuffix}`], {
+      dispatchRunner: (request) => {
+        dispatched.push(request);
+        return {
+          exitCode: 0,
+          stdout: 'accepted message\n',
+          stderr: '',
+        };
+      },
+    });
+
+    expect(result.exitCode).toBe(0);
+    const messageText = (dispatched[0] as { event: { payload: { message: { text: string } } } }).event.payload.message.text;
+    expect(messageText).toContain('DATABASE_URL=[redacted-url]');
+    expect(messageText).not.toContain('postgres://user:pass@db/prod');
+    expect(messageText).toHaveLength(8_000);
+  });
+
+  it('generates unique manual delivery ids for repeated dispatches in the same millisecond', () => {
+    const dispatched: unknown[] = [];
+
+    for (let index = 0; index < 2; index += 1) {
+      const result = runRainrailCli(['dispatch', 'same message'], {
+        now: () => new Date('2026-07-09T12:36:56.000Z'),
+        dispatchRunner: (request) => {
+          dispatched.push(request);
+          return {
+            exitCode: 0,
+            stdout: 'accepted message\n',
+            stderr: '',
+          };
+        },
+      });
+      expect(result.exitCode).toBe(0);
+    }
+
+    const eventIds = dispatched.map((request) => (request as { event: { id: string } }).event.id);
+    const deliveryIds = dispatched.map((request) => (request as { event: { delivery: { id: string } } }).event.delivery.id);
+    expect(new Set(eventIds).size).toBe(2);
+    expect(new Set(deliveryIds).size).toBe(2);
   });
 
   it('allows message-only dispatch input that starts with option syntax', () => {
