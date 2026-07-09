@@ -11,9 +11,11 @@ import {
   DEFAULT_MAX_REQUEST_BODY_BYTES,
   RainrailOperationalStore,
   createOperationalStoreFromConfig,
+  createDashboardCardRegistry,
   createManualInputIntakeAdapter,
   createGitHubWebhookSignature,
   createRainrailNodeServer,
+  type DashboardCardDefinition,
   type RainrailIntakeAdapter,
 } from './index.js';
 
@@ -170,6 +172,67 @@ describe('Rainrail Node server', () => {
       data: [{ id: 'project:PVTI_NODE', status: 'upcoming', title: 'Node queued issue' }],
       summary: { upcomingIssues: 1 },
     });
+
+    operationalStore.close();
+  });
+
+  it('passes dashboard card options into the shared HTTP dashboard app', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-09T00:00:00.000Z'),
+    });
+    const registry = createDashboardCardRegistry();
+    registry.register(nodePluginCard);
+    const { app } = createRainrailNodeServer({
+      githubWebhookSecret: 'secret',
+      publishToken: 'test-publish-token',
+      dashboardAuth: {
+        readOnlyToken: 'read-token',
+        operatorToken: 'operator-token',
+      },
+      operationalStore,
+      dashboardCardRegistry: registry,
+      dashboardCardCatalog: {
+        availableCapabilities: ['dashboard:read', 'github:read'],
+        enabledPlugins: ['github'],
+      },
+      dashboardDefaultLayout: [{
+        id: 'node-queue',
+        cardId: 'plugin:github.nodeQueue',
+        x: 0,
+        y: 0,
+        columns: 3,
+        rows: 2,
+      }],
+    });
+
+    const catalog = await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/cards', {
+      headers: { authorization: 'Bearer read-token' },
+    }));
+    expect(catalog.status).toBe(200);
+    await expect(catalog.json()).resolves.toMatchObject({
+      data: [{ definition: { id: 'plugin:github.nodeQueue' }, availability: { status: 'available' } }],
+    });
+
+    const layout = await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/layout', {
+      headers: { authorization: 'Bearer read-token' },
+    }));
+    await expect(layout.json()).resolves.toMatchObject({
+      data: { items: [{ id: 'node-queue', cardId: 'plugin:github.nodeQueue' }] },
+    });
+
+    const saved = await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/layout', {
+      method: 'PUT',
+      headers: {
+        authorization: 'Bearer operator-token',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        items: [{ id: 'node-queue', cardId: 'plugin:github.nodeQueue', x: 0, y: 0, columns: 3, rows: 2 }],
+      }),
+    }));
+    expect(saved.status).toBe(200);
 
     operationalStore.close();
   });
@@ -1008,6 +1071,19 @@ describe('Rainrail Node server', () => {
     }
   });
 });
+
+const nodePluginCard: DashboardCardDefinition = {
+  id: 'plugin:github.nodeQueue',
+  title: 'Node queue',
+  entry: { type: 'plugin', pluginName: 'github', cardName: 'nodeQueue' },
+  category: 'operations',
+  requiredCapabilities: ['dashboard:read', 'github:read'],
+  size: {
+    default: { columns: 3, rows: 2 },
+    min: { columns: 2, rows: 1 },
+    max: { columns: 6, rows: 4 },
+  },
+};
 
 async function closeServer(server: { listening: boolean; closeAllConnections?: () => void; close: (callback: () => void) => void }): Promise<void> {
   if (!server.listening) return;

@@ -124,10 +124,11 @@ export type RainrailCommandActionType =
   | 'agent_task_reset'
   | 'agent_task_terminate'
   | 'agent_task_terminate_all'
+  | 'dashboard_layout_update'
   | 'queue_assign_next'
   | 'settings_update';
 
-export type RainrailCommandTargetType = 'agent_task' | 'agent_tasks' | 'queue' | 'settings';
+export type RainrailCommandTargetType = 'agent_task' | 'agent_tasks' | 'dashboard_layout' | 'queue' | 'settings';
 
 export type RainrailCommandHandler = (command: RainrailCommandRequest) => unknown | Promise<unknown>;
 
@@ -845,12 +846,13 @@ function dashboardV1LayoutResponse(options: RainrailHttpAppOptions): Response {
 
   const stored = store.getDashboardLayout();
   if (stored !== undefined) {
+    const catalog = dashboardCardCatalog(options);
     return jsonResponse({
       data: {
         id: stored.id,
         source: 'user',
         updatedAt: stored.updatedAt,
-        items: stored.items,
+        items: filterDashboardLayoutItems(stored.items, catalog),
       },
     });
   }
@@ -877,19 +879,50 @@ async function handleDashboardLayoutUpdateRequest(
   const auth = verifyDashboardScopedRequest(request, options, 'operator');
   if (!auth.ok) return auth.response;
 
+  const requestId = sanitizeAuditHeaderValue(request.headers.get('x-request-id')) ?? generatedRequestId();
+  const client = sanitizeAuditHeaderValue(request.headers.get('x-rainrail-client')) ?? auth.principal.client ?? 'unknown';
   const body = await readJsonObjectBody(request, options.dashboardCommandMaxBodyBytes ?? DEFAULT_MAX_REQUEST_BODY_BYTES);
   if (!body.ok) return jsonResponse({ error: body.error }, { status: body.status });
 
   const parsed = parseDashboardLayoutItems(body.value.items, dashboardCardCatalog(options));
   if (!parsed.ok) return parsed.response;
 
-  const saved = store.saveDashboardLayout(parsed.items);
+  let saved;
+  let auditId: string;
+  try {
+    saved = store.saveDashboardLayout(parsed.items);
+    const audit = store.recordCommandResult({
+      actionType: 'dashboard_layout_update',
+      targetType: 'dashboard_layout',
+      targetId: USER_DASHBOARD_LAYOUT_ID,
+      status: 'accepted',
+      actor: auth.principal.actor,
+      ...(client === undefined ? {} : { client }),
+      requestId,
+      dryRun: false,
+      result: { itemCount: saved.items.length },
+    });
+    auditId = audit.id;
+    store.recordActivityEvent({
+      category: 'command',
+      targetType: 'dashboard_layout',
+      targetId: USER_DASHBOARD_LAYOUT_ID,
+      actionType: 'dashboard_layout_update',
+      outcome: 'success',
+      summary: `Accepted dashboard_layout_update for dashboard layout ${USER_DASHBOARD_LAYOUT_ID}`,
+      metadata: auditMetadata(auth.principal.actor, client, requestId, false),
+    });
+  } catch {
+    return jsonResponse({ error: 'operational_store_unavailable' }, { status: 503 });
+  }
+
   return jsonResponse({
     data: {
       id: USER_DASHBOARD_LAYOUT_ID,
       source: 'user',
       updatedAt: saved.updatedAt,
       items: saved.items,
+      auditId,
     },
   });
 }
@@ -980,6 +1013,23 @@ function parseDashboardLayoutItems(
   }
 
   return { ok: true, items };
+}
+
+function filterDashboardLayoutItems(
+  items: readonly DashboardLayoutItem[],
+  catalog: DashboardCardCatalogEntry[],
+): DashboardLayoutItem[] {
+  const seenItemIds = new Set<string>();
+  const filtered: DashboardLayoutItem[] = [];
+  for (const item of items) {
+    const parsed = parseDashboardLayoutItems([item], catalog);
+    if (!parsed.ok) continue;
+    const [parsedItem] = parsed.items;
+    if (parsedItem === undefined || seenItemIds.has(parsedItem.id)) continue;
+    seenItemIds.add(parsedItem.id);
+    filtered.push(parsedItem);
+  }
+  return filtered;
 }
 
 function dashboardCardSizeIsAllowed(

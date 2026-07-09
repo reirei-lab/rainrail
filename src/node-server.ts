@@ -61,6 +61,9 @@ export function createRainrailNodeServer(options: RainrailNodeServerOptions): Ra
       runtime: options.runtime ?? 'node',
       ...(operationalStore === undefined ? {} : { operationalStore }),
       ...(options.taskQueue === undefined ? {} : { taskQueue: options.taskQueue }),
+      ...(options.dashboardCardRegistry === undefined ? {} : { dashboardCardRegistry: options.dashboardCardRegistry }),
+      ...(options.dashboardCardCatalog === undefined ? {} : { dashboardCardCatalog: options.dashboardCardCatalog }),
+      ...(options.dashboardDefaultLayout === undefined ? {} : { dashboardDefaultLayout: options.dashboardDefaultLayout }),
       ...(options.dashboardCommandMaxBodyBytes === undefined && options.maxBodyBytes === undefined ? {} : {
         dashboardCommandMaxBodyBytes: options.dashboardCommandMaxBodyBytes ?? options.maxBodyBytes,
       }),
