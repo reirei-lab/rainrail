@@ -458,6 +458,18 @@ async function routeRainrailHttpRequest(
     return dashboardV1CardsResponse(options);
   }
 
+  const v1DashboardLayoutItemConfigMatch = /^\/api\/v1\/dashboard\/layout\/items\/([^/]+)\/config$/.exec(url.pathname);
+  if (v1DashboardLayoutItemConfigMatch !== null) {
+    if (request.method !== 'PATCH') return methodNotAllowedResponse(['PATCH', 'OPTIONS']);
+
+    const itemId = safeDecodeURIComponent(v1DashboardLayoutItemConfigMatch[1]!);
+    if (itemId === undefined) {
+      return jsonResponse({ error: 'invalid_dashboard_layout_item_id' }, { status: 400 });
+    }
+
+    return handleDashboardLayoutItemConfigUpdateRequest(request, itemId, options);
+  }
+
   if (url.pathname === '/api/v1/dashboard/layout') {
     if (request.method === 'GET') {
       const auth = verifyDashboardScopedRequest(request, options, 'read-only');
@@ -1076,6 +1088,108 @@ async function handleDashboardLayoutUpdateRequest(
       actionType: 'dashboard_layout_update',
       outcome: 'success',
       summary: `Accepted dashboard_layout_update for dashboard layout ${USER_DASHBOARD_LAYOUT_ID}`,
+      metadata: auditMetadata(auth.principal.actor, client, requestId, false),
+    });
+  } catch {
+    auditWarning = 'post_dispatch_audit_failed';
+  }
+
+  return commandResponse({
+    data: {
+      id: USER_DASHBOARD_LAYOUT_ID,
+      source: 'user',
+      updatedAt: saved.updatedAt,
+      items: saved.items,
+      auditId,
+      ...(auditWarning === undefined ? {} : { auditWarning }),
+    },
+  }, requestId, 200);
+}
+
+async function handleDashboardLayoutItemConfigUpdateRequest(
+  request: Request,
+  itemId: string,
+  options: RainrailHttpAppOptions,
+): Promise<Response> {
+  const auth = verifyDashboardScopedRequest(request, options, 'operator');
+  if (!auth.ok) return auth.response;
+
+  const store = options.operationalStore;
+  if (store === undefined) {
+    return jsonResponse({ error: 'operational_store_not_configured' }, { status: 503 });
+  }
+
+  const requestId = sanitizeAuditHeaderValue(request.headers.get('x-request-id')) ?? generatedRequestId();
+  const client = sanitizeAuditHeaderValue(request.headers.get('x-rainrail-client')) ?? auth.principal.client ?? 'unknown';
+  const body = await readJsonObjectBody(request, options.dashboardCommandMaxBodyBytes ?? DEFAULT_MAX_REQUEST_BODY_BYTES);
+  if (!body.ok) return commandResponse({ error: body.error }, requestId, body.status);
+
+  const config = body.value.config;
+  if (!isPlainRecord(config) || !isJsonSerializableValue(config)) {
+    return withRequestIdHeader(jsonResponse({ error: 'invalid_dashboard_card_config', itemId }, { status: 400 }), requestId);
+  }
+  if (hasSensitiveConfigKey(config)) {
+    return withRequestIdHeader(jsonResponse({ error: 'sensitive_dashboard_card_config', itemId }, { status: 400 }), requestId);
+  }
+
+  const existingLayout = store.getDashboardLayout();
+  const currentItems = jsonClone(existingLayout?.items ?? dashboardDefaultLayout(options));
+  const itemIndex = currentItems.findIndex((item) => item.id === itemId);
+  if (itemIndex < 0) {
+    return withRequestIdHeader(jsonResponse({ error: 'unknown_dashboard_layout_item', itemId }, { status: 404 }), requestId);
+  }
+
+  const currentItem = currentItems[itemIndex]!;
+  const parsed = parseDashboardLayoutItems([{ ...currentItem, config }], dashboardCardCatalog(options));
+  if (!parsed.ok) return withRequestIdHeader(parsed.response, requestId);
+  currentItems[itemIndex] = parsed.items[0]!;
+
+  let dispatchAuditId: string;
+  try {
+    const dispatchAudit = store.recordCommandResult({
+      actionType: 'dashboard_layout_update',
+      targetType: 'dashboard_layout',
+      targetId: USER_DASHBOARD_LAYOUT_ID,
+      status: 'dispatching',
+      actor: auth.principal.actor,
+      ...(client === undefined ? {} : { client }),
+      requestId,
+      dryRun: false,
+    });
+    dispatchAuditId = dispatchAudit.id;
+  } catch {
+    return commandResponse({ error: 'operational_store_unavailable' }, requestId, 503);
+  }
+
+  let saved;
+  let auditId = dispatchAuditId;
+  let auditWarning: string | undefined;
+  try {
+    saved = store.saveDashboardLayout(currentItems);
+  } catch {
+    return commandResponse({ error: 'operational_store_unavailable' }, requestId, 503);
+  }
+
+  try {
+    const audit = store.recordCommandResult({
+      actionType: 'dashboard_layout_update',
+      targetType: 'dashboard_layout',
+      targetId: USER_DASHBOARD_LAYOUT_ID,
+      status: 'accepted',
+      actor: auth.principal.actor,
+      ...(client === undefined ? {} : { client }),
+      requestId,
+      dryRun: false,
+      result: { itemCount: saved.items.length, itemId },
+    });
+    auditId = audit.id;
+    store.recordActivityEvent({
+      category: 'command',
+      targetType: 'dashboard_layout',
+      targetId: USER_DASHBOARD_LAYOUT_ID,
+      actionType: 'dashboard_layout_update',
+      outcome: 'success',
+      summary: `Accepted dashboard_layout_update for dashboard layout item ${itemId}`,
       metadata: auditMetadata(auth.principal.actor, client, requestId, false),
     });
   } catch {

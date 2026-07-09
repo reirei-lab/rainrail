@@ -279,17 +279,22 @@ describe('dashboard operational views', () => {
       'dashboardCards()',
       'dashboardLayout()',
       'saveDashboardLayout',
+      'saveDashboardLayoutItemConfig',
     ]) {
       expect(dashboardClient).toContain(method);
       expect(dashboardApp).toContain(method);
     }
 
+    expect(dashboardClient).toContain('DashboardLayoutUpdateResponse');
+    expect(dashboardClient).toContain('/api/v1/dashboard/layout/items/${encodeURIComponent(itemId)}/config');
     expect(dashboardApp).toContain('renderCardSettingsForm');
     expect(dashboardApp).toContain('settingsSchema');
     expect(dashboardApp).toContain('selectedLayoutItem.config');
     expect(dashboardApp).toContain('mergeCardSettingsConfig');
     expect(dashboardApp).toContain('cardSettingsDirty');
     expect(dashboardApp).toContain('if (cardSettingsDirty && options.quiet) return;');
+    expect(dashboardApp).toContain('void refresh({ quiet: true });');
+    expect(dashboardApp).not.toContain('await refresh({ quiet: true });');
     expect(dashboardContent).toContain('Card settings');
     expect(dashboardContent).toContain('カード設定');
   });

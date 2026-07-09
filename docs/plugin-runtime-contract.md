@@ -387,6 +387,8 @@ Structured bridge call は `DashboardCardBridgeRequest` として `cardId`、`pl
 `cardName`、任意の `layoutItemId`、`capability`、`action`、JSON object `params` を渡す。
 host は handler dispatch 前に card id / plugin name / card name / layout item id / capability /
 action を検証し、別 card へのなりすましや capability の横取りを拒否する。
+旧 `bridge.request(capability, payload)` 形式は untrusted iframe 境界では handler dispatch 前に
+拒否し、structured request validation の迂回経路として残さない。
 `DashboardCardBridgeAction` は `refresh`、`openDetail`、`runAction`、`showToast` に限定する。
 `refresh` と `openDetail` は dashboard read capability の範囲で dashboard shell が代行し、
 `runAction` は operator API と同じ scope / confirmation / audit を通る handler だけが実装する。

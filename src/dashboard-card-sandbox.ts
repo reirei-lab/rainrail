@@ -29,7 +29,6 @@ export interface DashboardCardBridgeRequest {
 
 export interface DashboardCardSandboxBridge {
   capabilities: readonly RuntimeCapabilityName[];
-  request(capability: RuntimeCapabilityName, request: unknown): Promise<unknown>;
   request(request: DashboardCardBridgeRequest): Promise<unknown>;
 }
 
@@ -140,18 +139,17 @@ function createBridge(
 
   return {
     capabilities,
-    async request(capabilityOrRequest, request?) {
+    async request(capabilityOrRequest: DashboardCardBridgeRequest | string) {
+      if (typeof capabilityOrRequest === 'string') {
+        throw new Error(`Legacy dashboard card bridge requests are not available to dashboard card "${cardId}"`);
+      }
+
       if (typeof capabilityOrRequest !== 'string') {
         const bridgeRequest = normalizeBridgeRequest(definition, layoutItemId, capabilityOrRequest);
         assertBridgeCapability(cardId, granted, bridgeRequest.capability);
         const handler = bridgeHandler(cardId, handlers, bridgeRequest.capability);
         return handler(bridgeRequest);
       }
-
-      const capability = capabilityOrRequest;
-      assertBridgeCapability(cardId, granted, capability);
-      const handler = bridgeHandler(cardId, handlers, capability);
-      return handler(request);
     },
   };
 }

@@ -147,6 +147,13 @@ export interface DashboardLayout {
   };
 }
 
+export interface DashboardLayoutUpdateResponse extends DashboardLayout {
+  data: DashboardLayout['data'] & {
+    auditId?: string;
+    auditWarning?: string;
+  };
+}
+
 export interface DashboardDetail<TRecord = unknown> {
   data: {
     id: string;
@@ -229,8 +236,12 @@ export class RainrailDashboardApiClient {
     return this.get('/api/v1/dashboard/layout');
   }
 
-  saveDashboardLayout(items: DashboardLayoutItem[]): Promise<DashboardCommandResponse> {
+  saveDashboardLayout(items: DashboardLayoutItem[]): Promise<DashboardLayoutUpdateResponse> {
     return this.putCommand('/api/v1/dashboard/layout', { items });
+  }
+
+  saveDashboardLayoutItemConfig(itemId: string, config: Record<string, unknown>): Promise<DashboardLayoutUpdateResponse> {
+    return this.patchCommand(`/api/v1/dashboard/layout/items/${encodeURIComponent(itemId)}/config`, { config });
   }
 
   eventDetail(id: string): Promise<DashboardDetail> {
@@ -280,11 +291,15 @@ export class RainrailDashboardApiClient {
     return this.writeCommand('POST', path, body);
   }
 
-  private async putCommand(path: string, body: Record<string, unknown>): Promise<DashboardCommandResponse> {
+  private async putCommand<T = DashboardCommandResponse>(path: string, body: Record<string, unknown>): Promise<T> {
     return this.writeCommand('PUT', path, body);
   }
 
-  private async writeCommand(method: 'POST' | 'PUT', path: string, body: Record<string, unknown>): Promise<DashboardCommandResponse> {
+  private async patchCommand<T = DashboardCommandResponse>(path: string, body: Record<string, unknown>): Promise<T> {
+    return this.writeCommand('PATCH', path, body);
+  }
+
+  private async writeCommand<T = DashboardCommandResponse>(method: 'POST' | 'PUT' | 'PATCH', path: string, body: Record<string, unknown>): Promise<T> {
     const response = await fetch(`${this.baseUrl}${this.pathWithDemoMode(path)}`, {
       method,
       headers: {
@@ -301,7 +316,7 @@ export class RainrailDashboardApiClient {
       throw new RainrailDashboardApiError(response.status, errorCodeFromPayload(payload, response.status), payload);
     }
 
-    return payload as DashboardCommandResponse;
+    return payload as T;
   }
 
   private pathWithDemoMode(path: string): string {

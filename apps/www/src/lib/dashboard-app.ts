@@ -6,7 +6,6 @@ import {
   type DashboardDetail,
   type DashboardEvent,
   type DashboardLayout,
-  type DashboardLayoutItem,
   type DashboardOverview,
   type DashboardQueueItem,
   type DashboardSetting,
@@ -805,17 +804,11 @@ if (root !== null) {
     }
 
     const config = mergeCardSettingsConfig(selectedLayoutItem.config, readCardSettingsConfig(cardSettingsForm));
-    const items = latestData.layout.items.map((item): DashboardLayoutItem => (
-      item.id === selectedLayoutItem.id
-        ? { ...item, config }
-        : item
-    ));
-
     try {
-      await client.saveDashboardLayout(items);
+      await client.saveDashboardLayoutItemConfig(selectedLayoutItem.id, config);
       cardSettingsDirty = false;
       setCardSettingsStatus(copy.cardSettings.saved);
-      await refresh({ quiet: true });
+      void refresh({ quiet: true });
     } catch (error) {
       setCardSettingsStatus(error instanceof RainrailDashboardApiError ? `${copy.cardSettings.failed}: ${error.code}` : copy.cardSettings.failed);
     }
