@@ -774,16 +774,21 @@ if (root !== null) {
     for (const [name, schemaValue] of propertyEntries) {
       const schema = objectRecord(schemaValue);
       const currentValue = selectedLayoutItem.config?.[name];
-      const inputType = cardSettingInputType(schema, currentValue);
-      if (inputType === undefined) continue;
+      const valueType = cardSettingValueType(schema, currentValue);
+      if (valueType === undefined) continue;
+      const inputType = cardSettingInputType(valueType);
 
       const label = document.createElement('label');
       label.textContent = name;
       const input = document.createElement('input');
       input.dataset.cardSetting = name;
       input.dataset.cardSettingChanged = 'false';
+      input.dataset.cardSettingValueType = valueType;
       input.autocomplete = 'off';
       input.type = inputType;
+      if (valueType === 'integer') {
+        input.step = '1';
+      }
       if (input.type === 'checkbox') {
         input.checked = currentValue === true;
       } else if (currentValue !== undefined && currentValue !== null) {
@@ -836,7 +841,10 @@ if (root !== null) {
         if (input.value === '') {
           config[name] = undefined;
         } else {
-          config[name] = Number(input.value);
+          const value = Number(input.value);
+          if (!input.validity.valid || !Number.isFinite(value)) continue;
+          if (input.dataset.cardSettingValueType === 'integer' && !Number.isInteger(value)) continue;
+          config[name] = value;
         }
       } else {
         config[name] = input.value;
@@ -884,23 +892,31 @@ if (root !== null) {
 
 type CardSettingInputType = 'checkbox' | 'number' | 'text';
 
-function cardSettingInputType(schema: Record<string, unknown>, currentValue: unknown): CardSettingInputType | undefined {
+type CardSettingValueType = 'boolean' | 'number' | 'integer' | 'string';
+
+function cardSettingValueType(schema: Record<string, unknown>, currentValue: unknown): CardSettingValueType | undefined {
   const schemaType = schema.type;
   if (schemaType === 'boolean') {
-    return currentValue === undefined || typeof currentValue === 'boolean' ? 'checkbox' : undefined;
+    return currentValue === undefined || typeof currentValue === 'boolean' ? 'boolean' : undefined;
   }
   if (schemaType === 'number' || schemaType === 'integer') {
-    return currentValue === undefined || currentValue === null || typeof currentValue === 'number' ? 'number' : undefined;
+    return currentValue === undefined || currentValue === null || typeof currentValue === 'number' ? schemaType : undefined;
   }
   if (schemaType === 'string') {
-    return currentValue === undefined || typeof currentValue === 'string' ? 'text' : undefined;
+    return currentValue === undefined || typeof currentValue === 'string' ? 'string' : undefined;
   }
   if (schemaType !== undefined) return undefined;
 
-  if (typeof currentValue === 'boolean') return 'checkbox';
+  if (typeof currentValue === 'boolean') return 'boolean';
   if (typeof currentValue === 'number') return 'number';
-  if (typeof currentValue === 'string') return 'text';
+  if (typeof currentValue === 'string') return 'string';
   return undefined;
+}
+
+function cardSettingInputType(valueType: CardSettingValueType): CardSettingInputType {
+  if (valueType === 'boolean') return 'checkbox';
+  if (valueType === 'number' || valueType === 'integer') return 'number';
+  return 'text';
 }
 
 interface SafeStorage {

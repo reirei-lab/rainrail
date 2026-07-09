@@ -2368,7 +2368,7 @@ describe('Rainrail CLI built-in commands', () => {
         const sensitiveLayoutConfig = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout/items/operational-totals/config`, {
           method: 'PATCH',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ config: { apiToken: 'must-not-store' } }),
+          body: JSON.stringify({ config: { credential: 'must-not-store' } }),
         });
         expect(sensitiveLayoutConfig.status).toBe(400);
         await expect(sensitiveLayoutConfig.json()).resolves.toEqual({
@@ -2421,6 +2421,57 @@ describe('Rainrail CLI built-in commands', () => {
           },
         });
       } finally {
+        await closeTestServer(result);
+      }
+    });
+  });
+
+  it('does not update local dashboard layout memory when JSON persistence fails', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'json-layout-save-failure');
+      const port = await getFreePort();
+      const blockedParent = join(projectRoot, 'var', 'blocked-parent');
+      await mkdir(join(projectRoot, 'var'), { recursive: true });
+      await writeFile(blockedParent, 'not a directory');
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        server: {
+          host: '127.0.0.1',
+          port,
+        },
+        operationalStore: {
+          kind: 'json',
+          databasePath: join(blockedParent, 'rainrail-operational.json'),
+          eventLimit: 10,
+        },
+        sourceBundles: [],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+
+      const result = await runRainrailCliAsync(['start'], { cwd: projectRoot });
+      try {
+        expect(result.exitCode).toBe(0);
+        const failed = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout/items/operational-totals/config`, {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ config: { density: 'compact' } }),
+        });
+        expect(failed.status).toBe(500);
+
+        const layout = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout`);
+        await expect(layout.json()).resolves.toMatchObject({
+          data: {
+            id: 'core.defaultLayout',
+            source: 'default',
+            updatedAt: null,
+            items: [{ id: 'operational-totals' }],
+          },
+        });
+        const layoutBody = await (await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout`)).text();
+        expect(layoutBody).not.toContain('compact');
+      } finally {
+        await rm(blockedParent, { force: true });
         await closeTestServer(result);
       }
     });

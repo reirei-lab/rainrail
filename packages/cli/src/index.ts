@@ -6702,10 +6702,11 @@ async function handleLocalDashboardLayoutItemConfigRequest(
     return;
   }
 
-  state.dashboardLayout = state.dashboardLayout.map((item, index) => index === itemIndex
+  const nextDashboardLayout = state.dashboardLayout.map((item, index) => index === itemIndex
     ? { ...item, config: localCloneRecord(config) }
     : item);
-  const saved = state.eventStore?.saveDashboardLayout?.(state.dashboardLayout);
+  const saved = state.eventStore?.saveDashboardLayout?.(nextDashboardLayout);
+  state.dashboardLayout = localCloneDashboardLayout(saved?.items ?? nextDashboardLayout);
   state.dashboardLayoutUpdatedAt = saved?.updatedAt ?? new Date().toISOString();
   writeJsonResponse(response, 200, { data: localDashboardLayout(state) }, request, {
     'X-Request-ID': requestId,
@@ -7463,7 +7464,7 @@ function hasSensitiveLocalDashboardConfigKey(value: unknown): boolean {
 }
 
 function isSensitiveLocalDashboardConfigKey(key: string): boolean {
-  return /(?:authorization|cookie|token|secret|password|key|code|reset|verification|session|confirmation)/iu.test(key);
+  return /(?:authorization|cookie|token|secret|password|key|credential|code|reset|verification|session|confirmation)/iu.test(key);
 }
 
 function isLocalDashboardLayoutItemConfigPath(pathname: string): boolean {

@@ -2351,7 +2351,7 @@ function redactSensitiveText(value: string): string {
 }
 
 function isSensitiveCommandResultKey(key: string): boolean {
-  return /(?:authorization|cookie|token|secret|password|key|code|reset|verification|session|confirmation)/iu.test(key);
+  return /(?:authorization|cookie|token|secret|password|key|credential|code|reset|verification|session|confirmation)/iu.test(key);
 }
 
 function auditMetadata(actor: string, client: string | undefined, requestId: string, dryRun: boolean): Record<string, unknown> {

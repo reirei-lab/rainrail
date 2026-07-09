@@ -857,7 +857,7 @@ describe('Rainrail dashboard API', () => {
           y: 0,
           columns: 4,
           rows: 2,
-          config: { nested: { apiToken: 'secret-token' } },
+          config: { nested: { credential: 'secret-token' } },
         }],
       }),
     }));
