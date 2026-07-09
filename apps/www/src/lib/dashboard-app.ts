@@ -93,6 +93,7 @@ if (root !== null) {
   let detailRequestSequence = 0;
   let selectedDetailRowId: string | undefined;
   let selectedAgentTaskId: string | undefined;
+  let cardSettingsDirty = false;
 
   const storedToken = sessionStore.get(TOKEN_STORAGE_KEY) ?? '';
   const storedApiBaseUrl = sessionStore.get(API_BASE_URL_STORAGE_KEY) ?? appRoot.dataset.apiBaseUrl ?? '';
@@ -211,7 +212,12 @@ if (root !== null) {
   }
 
   cardSettingsSelect?.addEventListener('change', () => {
+    cardSettingsDirty = false;
     renderCardSettingsForm();
+  });
+
+  cardSettingsForm?.addEventListener('input', () => {
+    cardSettingsDirty = true;
   });
 
   cardSettingsSaveButton?.addEventListener('click', () => {
@@ -249,7 +255,7 @@ if (root !== null) {
       lastUpdatedAt = Date.now();
       scheduleStaleCheck();
       renderStats(latestData.overview);
-      renderCardSettingsPicker();
+      renderCardSettingsPicker(options);
       renderCurrentList();
       const hasOperationalData = hasDashboardRecords(latestData);
       setState(hasOperationalData ? 'ready' : 'empty', hasOperationalData ? copy.status.ready : copy.status.empty);
@@ -722,8 +728,9 @@ if (root !== null) {
     if (commandStatus !== null) commandStatus.textContent = message;
   }
 
-  function renderCardSettingsPicker(): void {
+  function renderCardSettingsPicker(options: { quiet?: boolean } = {}): void {
     if (latestData === undefined || cardSettingsSelect === null) return;
+    if (cardSettingsDirty && options.quiet) return;
 
     const selectedValue = cardSettingsSelect.value;
     const cardTitles = new Map(latestData.cards.map((entry) => [entry.definition.id, entry.definition.title]));
@@ -747,6 +754,7 @@ if (root !== null) {
     cardSettingsForm.replaceChildren();
     if (selectedLayoutItem === undefined) {
       cardSettingsForm.textContent = copy.cardSettings.empty;
+      cardSettingsDirty = false;
       return;
     }
 
@@ -756,6 +764,7 @@ if (root !== null) {
     const propertyEntries = Object.entries(properties);
     if (propertyEntries.length === 0) {
       cardSettingsForm.textContent = copy.cardSettings.noFields;
+      cardSettingsDirty = false;
       return;
     }
 
@@ -780,6 +789,7 @@ if (root !== null) {
       label.append(input);
       cardSettingsForm.append(label);
     }
+    cardSettingsDirty = false;
   }
 
   async function saveSelectedCardSettings(): Promise<void> {
@@ -794,7 +804,7 @@ if (root !== null) {
       return;
     }
 
-    const config = readCardSettingsConfig(cardSettingsForm);
+    const config = mergeCardSettingsConfig(selectedLayoutItem.config, readCardSettingsConfig(cardSettingsForm));
     const items = latestData.layout.items.map((item): DashboardLayoutItem => (
       item.id === selectedLayoutItem.id
         ? { ...item, config }
@@ -803,6 +813,7 @@ if (root !== null) {
 
     try {
       await client.saveDashboardLayout(items);
+      cardSettingsDirty = false;
       setCardSettingsStatus(copy.cardSettings.saved);
       await refresh({ quiet: true });
     } catch (error) {
@@ -824,6 +835,16 @@ if (root !== null) {
       }
     }
     return config;
+  }
+
+  function mergeCardSettingsConfig(
+    currentConfig: Record<string, unknown> | undefined,
+    renderedConfig: Record<string, unknown>,
+  ): Record<string, unknown> {
+    return {
+      ...(currentConfig ?? {}),
+      ...renderedConfig,
+    };
   }
 
   function setCardSettingsStatus(message: string): void {

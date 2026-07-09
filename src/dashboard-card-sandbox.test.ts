@@ -235,9 +235,30 @@ describe('dashboard card sandbox host', () => {
       cardId: 'plugin:github.queue',
       pluginName: 'github',
       cardName: 'queue',
+      layoutItemId: 'github-queue',
       capability: 'runtime:start',
       action: 'runAction',
     })).rejects.toThrow(/Capability "runtime:start" is not available to dashboard card "plugin:github.queue"/u);
+  });
+
+  it('rejects structured bridge layout item ids that were not bound to the frame', async () => {
+    const host = createDashboardCardSandboxHost({
+      cardBaseUrl: '/dashboard/plugin-cards/',
+      allowedCapabilities: ['dashboard:read'],
+      bridgeHandlers: {
+        'dashboard:read': async () => ({ ok: true }),
+      },
+    });
+    const frame = host.createFrame(pluginQueueCard);
+
+    await expect(frame.bridge.request({
+      cardId: 'plugin:github.queue',
+      pluginName: 'github',
+      cardName: 'queue',
+      layoutItemId: 'other-slot',
+      capability: 'dashboard:read',
+      action: 'openDetail',
+    })).rejects.toThrow(/Bridge request layoutItemId does not match dashboard card "plugin:github.queue"/u);
   });
 
   it('limits bridge actions to dashboard card capabilities', async () => {

@@ -287,6 +287,9 @@ describe('dashboard operational views', () => {
     expect(dashboardApp).toContain('renderCardSettingsForm');
     expect(dashboardApp).toContain('settingsSchema');
     expect(dashboardApp).toContain('selectedLayoutItem.config');
+    expect(dashboardApp).toContain('mergeCardSettingsConfig');
+    expect(dashboardApp).toContain('cardSettingsDirty');
+    expect(dashboardApp).toContain('if (cardSettingsDirty && options.quiet) return;');
     expect(dashboardContent).toContain('Card settings');
     expect(dashboardContent).toContain('カード設定');
   });

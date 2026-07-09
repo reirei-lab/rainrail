@@ -176,7 +176,7 @@ function normalizeBridgeRequest(
   if (request.cardName !== definition.entry.cardName) {
     throw new Error(`Bridge request cardName does not match dashboard card "${definition.id}"`);
   }
-  if (layoutItemId !== undefined && request.layoutItemId !== undefined && request.layoutItemId !== layoutItemId) {
+  if (request.layoutItemId !== layoutItemId) {
     throw new Error(`Bridge request layoutItemId does not match dashboard card "${definition.id}"`);
   }
   if (!isDashboardCardBridgeAction(request.action)) {
