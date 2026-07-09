@@ -145,9 +145,35 @@ export type RainrailDispatchRequest =
       };
     };
 
-export type RainrailDispatchRunner = (
-  request: RainrailDispatchRequest,
-) => RainrailCliResult;
+export type RainrailDispatchRunnerResult = RainrailCliResult;
+
+export type RainrailDispatchRunner = {
+  (request: RainrailDispatchRequest): RainrailDispatchRunnerResult;
+};
+
+export type RainrailAsyncDispatchRunner = {
+  (request: RainrailDispatchRequest): Promise<RainrailCliResult>;
+  readonly preflight?: () => RainrailCliResult | undefined;
+};
+
+export type RainrailStandaloneDispatchFetchResult = {
+  readonly status: number;
+  readonly body: string;
+};
+
+export type RainrailStandaloneDispatchFetcher = (
+  url: string,
+  options: {
+    readonly method: 'POST';
+    readonly headers: Record<string, string>;
+    readonly body: string;
+  },
+) => Promise<RainrailStandaloneDispatchFetchResult>;
+
+export type RainrailStandaloneDispatchRunnerOptions = {
+  readonly env?: Record<string, string | undefined>;
+  readonly fetcher?: RainrailStandaloneDispatchFetcher;
+};
 
 export type CommandRunnerResult = {
   readonly status: number | null;
@@ -236,6 +262,7 @@ export type RainrailCliEnvironment = {
   readonly commandRunner?: CommandRunner;
   readonly currentVersion?: string;
   readonly dispatchRunner?: RainrailDispatchRunner;
+  readonly asyncDispatchRunner?: RainrailAsyncDispatchRunner;
   readonly currentBinPath?: string;
   readonly env?: Record<string, string | undefined>;
   readonly fileSystem?: Partial<RainrailCliFileSystem>;
@@ -1565,7 +1592,11 @@ export async function runRainrailCliAsync(
   }
 
   const command = getBuiltInCommand(parsed.commandName);
-  if (command?.name !== 'start') {
+  if (command?.name !== 'start' && command?.name !== 'dispatch') {
+    return runRainrailCli(argv, environment);
+  }
+
+  if (command === undefined) {
     return runRainrailCli(argv, environment);
   }
 
@@ -1581,6 +1612,10 @@ export async function runRainrailCliAsync(
       stdout: '',
       stderr: `rainrail ${command.name} is a built-in command.\n${pluginCollisionHint}`,
     };
+  }
+
+  if (command.name === 'dispatch') {
+    return runDispatchCommandAsync(parsed.commandArgs, parsed.options, environment);
   }
 
   return runStartCommandAsync(parsed.commandArgs, parsed.options, environment);
@@ -2443,6 +2478,22 @@ function runDispatchCommand(
   options: SharedOptions,
   environment: RainrailCliEnvironment,
 ): RainrailCliResult {
+  if (args.length === 1 && (args[0] === 'help' || args[0] === '--help')) {
+    return {
+      exitCode: 0,
+      stdout: formatDispatchHelp(),
+      stderr: '',
+    };
+  }
+
+  if (environment.asyncDispatchRunner !== undefined) {
+    return {
+      exitCode: 2,
+      stdout: '',
+      stderr: 'rainrail dispatch requires the async CLI runner for asynchronous dispatch runners.\n',
+    };
+  }
+
   const parsed = parseDispatchArguments(args, options, environment);
   if (parsed.help) {
     return {
@@ -2463,6 +2514,47 @@ function runDispatchCommand(
   return runDispatchRequest(parsed.request, environment.dispatchRunner);
 }
 
+async function runDispatchCommandAsync(
+  args: readonly string[],
+  options: SharedOptions,
+  environment: RainrailCliEnvironment,
+): Promise<RainrailCliResult> {
+  if (args.length === 1 && (args[0] === 'help' || args[0] === '--help')) {
+    return {
+      exitCode: 0,
+      stdout: formatDispatchHelp(),
+      stderr: '',
+    };
+  }
+
+  const preflightError = environment.asyncDispatchRunner?.preflight?.();
+  if (preflightError !== undefined) {
+    return preflightError;
+  }
+
+  const parsed = parseDispatchArguments(args, options, environment);
+  if (parsed.help) {
+    return {
+      exitCode: 0,
+      stdout: formatDispatchHelp(),
+      stderr: '',
+    };
+  }
+
+  if (parsed.errors.length > 0 || parsed.request === undefined) {
+    return {
+      exitCode: 1,
+      stdout: '',
+      stderr: `${parsed.errors.length > 0 ? parsed.errors.join('\n') : dispatchUsage}\n`,
+    };
+  }
+
+  return runDispatchRequestAsync(
+    parsed.request,
+    environment.asyncDispatchRunner ?? environment.dispatchRunner,
+  );
+}
+
 function runDispatchRequest(
   request: RainrailDispatchRequest,
   dispatchRunner: RainrailDispatchRunner | undefined,
@@ -2475,7 +2567,137 @@ function runDispatchRequest(
     };
   }
 
+  const result = dispatchRunner(request);
+  return result;
+}
+
+async function runDispatchRequestAsync(
+  request: RainrailDispatchRequest,
+  dispatchRunner: RainrailDispatchRunner | RainrailAsyncDispatchRunner | undefined,
+): Promise<RainrailCliResult> {
+  if (dispatchRunner === undefined) {
+    return {
+      exitCode: 2,
+      stdout: '',
+      stderr: 'rainrail dispatch requires a dispatch runner, which is not implemented yet.\n',
+    };
+  }
+
   return dispatchRunner(request);
+}
+
+export function createStandaloneRainrailDispatchRunner(
+  options: RainrailStandaloneDispatchRunnerOptions = {},
+): RainrailAsyncDispatchRunner {
+  const preflight = (): RainrailCliResult | undefined => {
+    const env = options.env ?? process.env;
+    const publishUrl = env.RAINRAIL_PUBLISH_URL;
+    const publishToken = env.RAINRAIL_PUBLISH_TOKEN;
+    if (publishUrl === undefined || publishUrl.trim().length === 0 ||
+      publishToken === undefined || publishToken.trim().length === 0) {
+      return {
+        exitCode: 2,
+        stdout: '',
+        stderr: 'rainrail dispatch requires RAINRAIL_PUBLISH_URL and RAINRAIL_PUBLISH_TOKEN for standalone event delivery.\n',
+      };
+    }
+    return undefined;
+  };
+
+  return Object.assign(async (request: RainrailDispatchRequest) => {
+    const env = options.env ?? process.env;
+    const configError = preflight();
+    if (configError !== undefined) {
+      return configError;
+    }
+    const publishUrl = env.RAINRAIL_PUBLISH_URL as string;
+    const publishToken = env.RAINRAIL_PUBLISH_TOKEN as string;
+
+    const body = request.mode === 'message' ? JSON.stringify(request.event) : request.input;
+    const fetcher = options.fetcher ?? defaultStandaloneDispatchFetcher;
+    let response: RainrailStandaloneDispatchFetchResult;
+    try {
+      response = await fetcher(publishUrl, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${publishToken}`,
+          'Content-Type': 'application/json',
+        },
+        body,
+      });
+    } catch (error) {
+      return {
+        exitCode: 1,
+        stdout: '',
+        stderr: `rainrail dispatch publish failed: ${error instanceof Error ? error.message : String(error)}\n`,
+      };
+    }
+    if (response.status < 200 || response.status >= 300) {
+      return {
+        exitCode: 1,
+        stdout: '',
+        stderr: `rainrail dispatch publish failed with status ${response.status}.\n`,
+      };
+    }
+
+    const summary = summarizeStandaloneDispatchResponse(response);
+    if (request.options.json) {
+      return {
+        exitCode: 0,
+        stdout: `${JSON.stringify({
+          published: true,
+          status: response.status,
+          ...(summary.eventId === undefined ? {} : { eventId: summary.eventId }),
+          ...(summary.eventName === undefined ? {} : { eventName: summary.eventName }),
+        })}\n`,
+        stderr: '',
+      };
+    }
+
+    const eventDescription = summary.eventName === undefined || summary.eventId === undefined
+      ? 'event'
+      : `${summary.eventName} event ${summary.eventId}`;
+    return {
+      exitCode: 0,
+      stdout: `Published ${eventDescription}.\n`,
+      stderr: '',
+    };
+  }, { preflight });
+}
+
+async function defaultStandaloneDispatchFetcher(
+  url: string,
+  options: Parameters<RainrailStandaloneDispatchFetcher>[1],
+): Promise<RainrailStandaloneDispatchFetchResult> {
+  const response = await fetch(url, {
+    method: options.method,
+    headers: options.headers,
+    body: options.body,
+  });
+  return {
+    status: response.status,
+    body: await response.text(),
+  };
+}
+
+function summarizeStandaloneDispatchResponse(
+  response: RainrailStandaloneDispatchFetchResult,
+): { readonly eventId?: string; readonly eventName?: string } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(response.body) as unknown;
+  } catch {
+    return {};
+  }
+  if (!isRecord(parsed)) {
+    return {};
+  }
+  const eventId = typeof parsed.id === 'string' ? parsed.id : undefined;
+  const eventName = typeof parsed.name === 'string' ? parsed.name : undefined;
+  return {
+    ...(eventId === undefined ? {} : { eventId }),
+    ...(eventName === undefined ? {} : { eventName }),
+  };
 }
 
 function parseDispatchArguments(
@@ -2594,7 +2816,7 @@ function parseDispatchArguments(
   }
 
   if (errors.length === 0 && mode === 'envelope-json' && envelopeSource !== undefined) {
-    if (environment.dispatchRunner === undefined) {
+    if (environment.dispatchRunner === undefined && environment.asyncDispatchRunner === undefined) {
       input = '';
     } else {
       const envelopeInput = readDispatchEnvelopeInput(envelopeSource, environment);
