@@ -1884,7 +1884,7 @@ function readStartConfig(
 
   const server = parseStartConfigServer(value.server);
   const dashboardAuth = parseStartDashboardAuth(value.dashboardAuth);
-  const operationalStore = env.RAINRAIL_OPERATIONAL_STORE === undefined
+  const operationalStore = env.RAINRAIL_OPERATIONAL_STORE === undefined || env.RAINRAIL_OPERATIONAL_STORE.length === 0
     ? parseStartOperationalStoreConfig(value.operationalStore)
     : undefined;
   const sources = parseStartConfigSources(value, markerValue, env);
@@ -5393,6 +5393,17 @@ type LocalOperationalEventHandlerRetry = {
   readonly claimedUntilAt?: string;
 };
 
+type LocalStaleProjectClaimWarning = {
+  readonly taskId: string;
+  readonly title: string;
+  readonly status: string;
+  readonly agentSessionId?: string;
+  readonly branchName: string;
+  readonly issue?: unknown;
+  readonly claim?: unknown;
+  readonly releaseError?: string;
+};
+
 type LocalRainrailServerState = {
   nextEventId: number;
   events: LocalRainrailEvent[];
@@ -5409,6 +5420,8 @@ type LocalRainrailEventStore = {
   readonly listAgentTasks?: () => LocalOperationalAgentTask[];
   readonly listEventHandlerRetries?: () => LocalOperationalEventHandlerRetry[];
   readonly recordOperationalEvent?: (event: LocalOperationalEvent['envelope']) => LocalOperationalEvent;
+  readonly nextEventId?: () => number;
+  readonly staleProjectClaimWarnings?: () => readonly LocalStaleProjectClaimWarning[];
   readonly counts?: () => {
     readonly events: number;
     readonly activityEvents: number;
@@ -5433,7 +5446,7 @@ async function startLocalRainrailServer(options: RainrailStartOptions): Promise<
   const eventStore = createLocalRainrailEventStore(options.operationalStoreConfig);
   const restoredEvents = eventStore?.listEvents() ?? [];
   const state: LocalRainrailServerState = {
-    nextEventId: nextLocalEventId(restoredEvents),
+    nextEventId: eventStore?.nextEventId?.() ?? nextLocalEventId(restoredEvents),
     events: [...restoredEvents],
     sseClients: new Set(),
     ...(eventStore === undefined ? {} : { eventStore }),
@@ -5574,6 +5587,8 @@ function createSqliteLocalRainrailEventStore(databasePath: string, eventLimit: n
   };
   const database = new DatabaseSync(databasePath);
   chmodSync(databasePath, 0o600);
+  database.exec('PRAGMA busy_timeout = 5000');
+  database.exec('PRAGMA journal_mode = WAL');
   database.exec(`
     CREATE TABLE IF NOT EXISTS operational_events (
       id TEXT PRIMARY KEY,
@@ -5664,6 +5679,7 @@ function createSqliteLocalRainrailEventStore(databasePath: string, eventLimit: n
   );
   const selectEventsNewest = database.prepare('SELECT * FROM operational_events ORDER BY received_at DESC, id DESC LIMIT ?');
   const selectEvent = database.prepare('SELECT * FROM operational_events WHERE id = ?');
+  const selectLocalEventIds = database.prepare('SELECT id FROM operational_events WHERE id LIKE ?');
   const selectActivities = database.prepare('SELECT * FROM activity_events ORDER BY created_at DESC, id DESC LIMIT ?');
   const selectAgentTasks = database.prepare('SELECT * FROM agent_tasks ORDER BY updated_at DESC, id DESC');
   const selectRetries = database.prepare('SELECT * FROM event_handler_retries ORDER BY next_retry_at ASC, handler_name ASC');
@@ -5712,6 +5728,15 @@ function createSqliteLocalRainrailEventStore(databasePath: string, eventLimit: n
         JSON.stringify(event.links ?? null),
       );
       return localOperationalEventFromRow(selectEvent.get(event.id));
+    },
+    nextEventId() {
+      return nextLocalEventId(
+        selectLocalEventIds.all('local-event-%')
+          .map((row) => ({ id: requiredStringRowValue(row, 'id') })),
+      );
+    },
+    staleProjectClaimWarnings() {
+      return localStaleProjectClaimWarnings(selectAgentTasks.all().map(localOperationalAgentTaskFromRow));
     },
     counts() {
       return {
@@ -6015,7 +6040,7 @@ function nullableJsonRowValue<T>(row: unknown, key: string): T | undefined {
   return JSON.parse(value) as T;
 }
 
-function nextLocalEventId(events: readonly LocalRainrailEvent[]): number {
+function nextLocalEventId(events: readonly { readonly id: string }[]): number {
   return events.reduce((nextId, event) => {
     const match = /^local-event-(\d+)$/u.exec(event.id);
     if (match === null) {
@@ -6111,12 +6136,13 @@ async function handleLocalRainrailRequest(
   if (request.method === 'GET' && url.pathname === '/api/v1/overview') {
     if (state.eventStore?.counts !== undefined) {
       const activityEvents = state.eventStore.listActivityEvents?.() ?? [];
+      const staleProjectClaims = state.eventStore.staleProjectClaimWarnings?.() ?? [];
       writeJsonResponse(response, 200, {
         data: {
           runtime: 'node',
           workspace: options.root,
           counts: state.eventStore.counts(),
-          warnings: { staleProjectClaims: [] },
+          warnings: { staleProjectClaims },
           recentActivity: activityEvents
             .filter(isLocalWorkflowRunActivity)
             .slice(0, 5)
@@ -6209,6 +6235,11 @@ async function handleLocalRainrailRequest(
   }
 
   if (request.method === 'GET' && url.pathname === '/api/v1/workflow-runs') {
+    const queryError = validateLocalCollectionQuery(url, ['filter[status]']);
+    if (queryError !== undefined) {
+      writeJsonResponse(response, 400, queryError, request);
+      return;
+    }
     if (state.eventStore?.listActivityEvents !== undefined) {
       writeLocalCollectionResponse(
         response,
@@ -6229,12 +6260,18 @@ async function handleLocalRainrailRequest(
   }
 
   if (request.method === 'GET' && url.pathname === '/api/v1/agent-tasks') {
+    const queryError = validateLocalCollectionQuery(url, ['filter[status]']);
+    if (queryError !== undefined) {
+      writeJsonResponse(response, 400, queryError, request);
+      return;
+    }
     if (state.eventStore?.listAgentTasks !== undefined) {
+      const staleTaskIds = new Set((state.eventStore.staleProjectClaimWarnings?.() ?? []).map((warning) => warning.taskId));
       writeLocalCollectionResponse(
         response,
         state.eventStore.listAgentTasks()
           .filter((task) => matchesOptionalLocalFilter(task.status, url.searchParams.get('filter[status]')))
-          .map(localAgentTaskToCompactRow),
+          .map((task) => localAgentTaskToCompactRow(task, staleTaskIds)),
         url,
         request,
         (row) => typeof row.updatedAt === 'string' ? row.updatedAt : row.id,
@@ -6702,7 +6739,6 @@ function localActivityToWorkflowRunRow(activity: LocalOperationalActivityEvent) 
     ...(activity.sourceEventId === undefined ? {} : { sourceEventId: activity.sourceEventId }),
     ...(activity.sourceEventName === undefined ? {} : { sourceEventName: activity.sourceEventName }),
     createdAt: activity.createdAt,
-    links: { self: `/api/v1/workflow-runs/${encodeURIComponent(activity.id)}` },
   };
 }
 
@@ -6710,7 +6746,7 @@ function isLocalWorkflowRunActivity(activity: LocalOperationalActivityEvent): bo
   return activity.category !== 'command';
 }
 
-function localAgentTaskToCompactRow(task: LocalOperationalAgentTask) {
+function localAgentTaskToCompactRow(task: LocalOperationalAgentTask, staleTaskIds: ReadonlySet<string> = new Set()) {
   return {
     id: task.id,
     type: 'agent-task',
@@ -6722,9 +6758,31 @@ function localAgentTaskToCompactRow(task: LocalOperationalAgentTask) {
     startedAt: task.startedAt,
     updatedAt: task.updatedAt,
     ...(task.completedAt === undefined ? {} : { completedAt: task.completedAt }),
-    warnings: { staleProjectClaim: false },
-    links: { self: `/api/v1/agent-tasks/${encodeURIComponent(task.id)}` },
+    warnings: { staleProjectClaim: staleTaskIds.has(task.id) },
   };
+}
+
+const localStaleProjectClaimStatuses = new Set(['failed', 'canceled', 'stopped', 'timed_out', 'compaction_failed']);
+
+function localStaleProjectClaimWarnings(tasks: readonly LocalOperationalAgentTask[]): readonly LocalStaleProjectClaimWarning[] {
+  return tasks
+    .filter((task) =>
+      localStaleProjectClaimStatuses.has(task.status)
+      && task.claim !== undefined
+      && (!isRecord(task.projectClaim) || task.projectClaim.status !== 'released')
+    )
+    .map((task) => ({
+      taskId: task.id,
+      title: task.title,
+      status: task.status,
+      ...(task.agentSessionId === undefined ? {} : { agentSessionId: task.agentSessionId }),
+      branchName: task.branchName,
+      ...(task.issue === undefined ? {} : { issue: task.issue }),
+      ...(task.claim === undefined ? {} : { claim: task.claim }),
+      ...(isRecord(task.projectClaim) && typeof task.projectClaim.error === 'string'
+        ? { releaseError: task.projectClaim.error }
+        : {}),
+    }));
 }
 
 function isLocalRainrailEvent(value: unknown): value is LocalRainrailEvent {

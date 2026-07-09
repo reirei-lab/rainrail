@@ -98,7 +98,11 @@ function workerConfig(env: RainrailWorkerEnv): WorkerParsedConfig | undefined {
 }
 
 function expandWorkerConfigEnv(raw: string, env: Record<string, string | undefined>): string {
-  return raw.replace(/\$\{([A-Z0-9_]+)\}/gu, (_match, name: string) => env[name] ?? '');
+  return raw.replace(/\$\{([A-Z0-9_]+)\}/gu, (_match, name: string) => escapeWorkerJsonStringContent(env[name] ?? ''));
+}
+
+function escapeWorkerJsonStringContent(value: string): string {
+  return JSON.stringify(value).slice(1, -1);
 }
 
 function isWorkerConfigRecord(value: unknown): value is Record<string, unknown> {

@@ -325,6 +325,22 @@ describe('Rainrail Cloudflare Worker entrypoint', () => {
     expect(webhook.status).toBe(202);
   });
 
+  it('escapes Worker config env values before JSON parsing', async () => {
+    const env = {
+      ...fakeEnv(),
+      RAINRAIL_CONFIG_JSON: JSON.stringify({
+        dashboardAuth: {
+          readOnlyToken: '${RAINRAIL_READ_TOKEN}',
+        },
+      }),
+      RAINRAIL_READ_TOKEN: 'token"with\\json\ncharacters',
+    };
+
+    const health = await rainrailWorker.fetch(new Request('https://worker.local/healthz'), env);
+
+    expect(health.status).toBe(200);
+  });
+
   it('keeps explicit empty sourceBundles as an invalid Worker intake config', async () => {
     const env = {
       ...fakeEnv(),
