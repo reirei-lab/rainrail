@@ -10,6 +10,8 @@ export interface RainrailOperationalStoreOptions {
   now?: () => Date;
 }
 
+export type JsonFileOperationalStoreOptions = RainrailOperationalStoreOptions;
+
 export interface StoredOperationalEvent<TPayload = unknown> {
   id: string;
   name: string;
@@ -151,7 +153,7 @@ export interface StoredStaleProjectClaimWarning {
   releaseError?: string;
 }
 
-interface SnapshotOptions {
+export interface SnapshotOptions {
   hideSkippedActivityEvents?: boolean;
 }
 
@@ -162,6 +164,50 @@ export interface ListOperationalStoreEventsOptions {
 export interface ListOperationalStoreActivityEventsOptions {
   hideSkippedActivityEvents?: boolean;
   limit?: number;
+}
+
+export interface UpdateAgentTaskStatusInput {
+  id: string;
+  status: RuntimeRunStatus;
+  completedAt?: string;
+  result?: string;
+}
+
+export interface UpdateAgentTaskProjectClaimInput {
+  id: string;
+  status: StoredAgentTaskProjectClaimState['status'];
+  reason: string;
+  error?: string;
+  updatedAt?: string;
+}
+
+export interface OperationalStore {
+  recordEvent<TPayload>(event: RainrailEventEnvelope<TPayload>): StoredOperationalEvent<TPayload>;
+  getEvent(id: string): StoredOperationalEvent | undefined;
+  eventLimit(): number;
+  listEvents(options?: ListOperationalStoreEventsOptions): StoredOperationalEvent[];
+  recordActivityEvent(input: RecordActivityEventInput): StoredActivityEvent;
+  getActivityEvent(id: string): StoredActivityEvent | undefined;
+  listActivityEvents(options?: ListOperationalStoreActivityEventsOptions): StoredActivityEvent[];
+  recordCommandResult(input: RecordCommandResultInput): StoredCommandResult;
+  recordAgentTask(input: RecordAgentTaskInput): StoredAgentTask;
+  getAgentTask(id: string): StoredAgentTask | undefined;
+  getAgentTaskByBranchName(branchName: string): StoredAgentTask | undefined;
+  listAgentTasks(): StoredAgentTask[];
+  updateAgentTaskStatus(input: UpdateAgentTaskStatusInput): StoredAgentTask | undefined;
+  updateAgentTaskProjectClaim(input: UpdateAgentTaskProjectClaimInput): StoredAgentTask | undefined;
+  recordEventHandlerRetry(input: RecordEventHandlerRetryInput): StoredEventHandlerRetry;
+  getEventHandlerRetry(eventId: string, handlerName: string): StoredEventHandlerRetry | undefined;
+  claimEventHandlerRetry(retry: StoredEventHandlerRetry, claimedUntilAt: string, now: string): boolean;
+  listDueEventHandlerRetries(now: string, limit?: number): StoredEventHandlerRetry[];
+  listEventHandlerRetries(): StoredEventHandlerRetry[];
+  clearEventHandlerRetry(eventId: string, handlerName: string): void;
+  clearClaimedEventHandlerRetry(retry: StoredEventHandlerRetry): boolean;
+  rescheduleClaimedEventHandlerRetry(
+    retry: StoredEventHandlerRetry,
+    input: RecordEventHandlerRetryInput,
+  ): StoredEventHandlerRetry | undefined;
+  snapshot(options?: SnapshotOptions): OperationalStoreSnapshot;
 }
 
 interface OperationalStoreData {
@@ -175,14 +221,14 @@ interface OperationalStoreData {
 
 const sharedFileStores = new Map<string, OperationalStoreData>();
 
-export class RainrailOperationalStore {
+export class JsonFileOperationalStore implements OperationalStore {
   readonly #databasePath: string;
   readonly #data: OperationalStoreData;
   readonly #eventLimit: number;
   readonly #now: () => Date;
   #closed = false;
 
-  constructor(options: RainrailOperationalStoreOptions) {
+  constructor(options: JsonFileOperationalStoreOptions) {
     this.#databasePath = options.databasePath;
     this.#eventLimit = expectPositiveInteger(options.eventLimit, 'eventLimit');
     this.#now = options.now ?? (() => new Date());
@@ -346,12 +392,7 @@ export class RainrailOperationalStore {
       .sort((left, right) => compareDesc(left.updatedAt, right.updatedAt) || compareDesc(left.id, right.id));
   }
 
-  updateAgentTaskStatus(input: {
-    id: string;
-    status: RuntimeRunStatus;
-    completedAt?: string;
-    result?: string;
-  }): StoredAgentTask | undefined {
+  updateAgentTaskStatus(input: UpdateAgentTaskStatusInput): StoredAgentTask | undefined {
     const existing = this.getAgentTask(input.id);
     if (existing === undefined) return undefined;
 
@@ -376,13 +417,7 @@ export class RainrailOperationalStore {
     });
   }
 
-  updateAgentTaskProjectClaim(input: {
-    id: string;
-    status: StoredAgentTaskProjectClaimState['status'];
-    reason: string;
-    error?: string;
-    updatedAt?: string;
-  }): StoredAgentTask | undefined {
+  updateAgentTaskProjectClaim(input: UpdateAgentTaskProjectClaimInput): StoredAgentTask | undefined {
     const existing = this.getAgentTask(input.id);
     if (existing === undefined) return undefined;
 
@@ -551,6 +586,8 @@ export class RainrailOperationalStore {
     }
   }
 }
+
+export { JsonFileOperationalStore as RainrailOperationalStore };
 
 function loadStoreData(databasePath: string): OperationalStoreData {
   if (databasePath === ':memory:') return emptyStoreData();
