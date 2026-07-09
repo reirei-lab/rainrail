@@ -2492,11 +2492,23 @@ function parseDispatchArguments(
 
   let request: RainrailDispatchRequest | undefined;
   if (errors.length === 0 && dispatchInput !== undefined) {
-    const prepared = prepareDispatchRequest(dispatchInput, options, environment);
-    if (prepared.error !== undefined) {
-      return { errors: [prepared.error], help: false };
+    if (environment.dispatchRunner === undefined) {
+      request = {
+        mode: dispatchInput.mode,
+        input: '',
+        options: {
+          config: options.config,
+          profile: options.profile,
+          json: options.json,
+        },
+      };
+    } else {
+      const prepared = prepareDispatchRequest(dispatchInput, options, environment);
+      if (prepared.error !== undefined) {
+        return { errors: [prepared.error], help: false };
+      }
+      request = prepared.request;
     }
-    request = prepared.request;
   }
 
   return {
@@ -2882,9 +2894,6 @@ function validateOptionalDispatchIdentifier(
   if (typeof field !== 'string') {
     return { error: `${path} must be a string.` };
   }
-  if (!isDispatchSafeIdentifier(field)) {
-    return { error: `${path} must be a safe identifier.` };
-  }
   return {};
 }
 
@@ -3035,7 +3044,7 @@ function isManualInputDispatchEnvelope(context: { readonly sourceType: string; r
 }
 
 function isDispatchSafeIdentifier(value: string): boolean {
-  return dispatchSafeIdentifierPattern.test(value);
+  return dispatchSafeIdentifierPattern.test(value) || dispatchSafeRepositoryNamePattern.test(value);
 }
 
 function isDispatchSafeSubjectIdentifier(value: string): boolean {

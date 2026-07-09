@@ -426,7 +426,9 @@ describe('Rainrail CLI built-in commands', () => {
       const eventPath = join(directory, 'event.json');
       await writeFile(eventPath, '{"source":', 'utf8');
 
-      expect(runRainrailCli(['dispatch', '--json', eventPath])).toMatchObject({
+      expect(runRainrailCli(['dispatch', '--json', eventPath], {
+        dispatchRunner: () => ({ exitCode: 0, stdout: 'unexpected\n', stderr: '' }),
+      })).toMatchObject({
         exitCode: 1,
         stdout: '',
         stderr: expect.stringContaining('Invalid JSON for rainrail dispatch envelope:'),
@@ -490,12 +492,32 @@ describe('Rainrail CLI built-in commands', () => {
     expect(stdinRead).toBe(false);
   });
 
+  it('returns the missing dispatch runner error before reading stdin', () => {
+    let stdinRead = false;
+
+    const result = runRainrailCli(['dispatch', '--json', '--stdin'], {
+      stdinReader: () => {
+        stdinRead = true;
+        return '{}';
+      },
+    });
+
+    expect(result).toEqual({
+      exitCode: 2,
+      stdout: '',
+      stderr: 'rainrail dispatch requires a dispatch runner, which is not implemented yet.\n',
+    });
+    expect(stdinRead).toBe(false);
+  });
+
   it('returns a clear error for invalid dispatch envelope shapes', async () => {
     await withTempDirectory(async (directory) => {
       const eventPath = join(directory, 'event.json');
       await writeFile(eventPath, JSON.stringify({ source: { type: 'manual' } }), 'utf8');
 
-      expect(runRainrailCli(['dispatch', '--json', eventPath])).toEqual({
+      expect(runRainrailCli(['dispatch', '--json', eventPath], {
+        dispatchRunner: () => ({ exitCode: 0, stdout: 'unexpected\n', stderr: '' }),
+      })).toEqual({
         exitCode: 1,
         stdout: '',
         stderr: 'Invalid Rainrail event envelope: source.name must be a string.\n',
@@ -549,7 +571,9 @@ describe('Rainrail CLI built-in commands', () => {
       };
       await writeFile(eventPath, JSON.stringify(envelope), 'utf8');
 
-      expect(runRainrailCli(['dispatch', '--json', eventPath])).toEqual({
+      expect(runRainrailCli(['dispatch', '--json', eventPath], {
+        dispatchRunner: () => ({ exitCode: 0, stdout: 'unexpected\n', stderr: '' }),
+      })).toEqual({
         exitCode: 1,
         stdout: '',
         stderr: expectedError,
@@ -580,6 +604,45 @@ describe('Rainrail CLI built-in commands', () => {
       }),
     ]);
     expect(JSON.stringify(dispatched)).toContain('9007199254740993');
+  });
+
+  it('accepts repository-shaped event ids and unsafe optional source metadata', () => {
+    const dispatched: unknown[] = [];
+    const envelope = {
+      id: 'reirei-lab/rainrail',
+      schemaVersion: 'rainrail.event.v1',
+      source: {
+        type: 'github',
+        name: 'github-webhook',
+        account: 'renovate[bot]',
+        environment: 'github-actions[bot]',
+      },
+      name: 'github.issue',
+      delivery: { id: 'delivery-repository-id', receivedAt: '2026-07-09T00:00:00.000Z' },
+      occurredAt: '2026-07-09T00:00:00.000Z',
+      subject: { type: 'issue', id: '262', url: 'https://github.com/reirei-lab/rainrail/issues/262' },
+      payload: { provider: 'github', action: 'opened' },
+      rawPayload: { kind: 'external-reference', reference: 'github://deliveries/delivery-repository-id' },
+    };
+
+    const result = runRainrailCli(['dispatch', '--envelope-json', JSON.stringify(envelope)], {
+      dispatchRunner: (request) => {
+        dispatched.push(request);
+        return {
+          exitCode: 0,
+          stdout: 'accepted repository id envelope\n',
+          stderr: '',
+        };
+      },
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(dispatched).toEqual([
+      expect.objectContaining({
+        mode: 'envelope-json',
+        input: JSON.stringify(envelope),
+      }),
+    ]);
   });
 
   it.each([
@@ -661,7 +724,9 @@ describe('Rainrail CLI built-in commands', () => {
       const envelope = { ...baseEnvelope, ...override };
       await writeFile(eventPath, JSON.stringify(envelope), 'utf8');
 
-      expect(runRainrailCli(['dispatch', '--json', eventPath])).toEqual({
+      expect(runRainrailCli(['dispatch', '--json', eventPath], {
+        dispatchRunner: () => ({ exitCode: 0, stdout: 'unexpected\n', stderr: '' }),
+      })).toEqual({
         exitCode: 1,
         stdout: '',
         stderr: expectedError,
