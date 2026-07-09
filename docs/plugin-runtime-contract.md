@@ -282,7 +282,13 @@ Dashboard card は Core built-in card と plugin contribution を同じ catalog 
 `DashboardCardAvailability`、`DashboardCardEntry`、`DashboardCardSize`、
 `DashboardCardSizeConstraints`、`DashboardCardSettingsSchema`、
 `DashboardCardListOptions`、`DashboardLayoutItem`、
-`DashboardCardRegistryError`、`DashboardCardRegistryErrorCode` を入口にする。
+`DashboardCardRegistryError`、`DashboardCardRegistryErrorCode`、
+`DashboardPluginManifest`、`DashboardPluginManifestDashboard`、
+`DashboardPluginManifestCard`、`createDashboardCardProviderFromManifest`、
+`DashboardCardSandboxHostOptions`、`DashboardCardSandboxFrameOptions`、
+`DashboardCardSandboxBridgeHandler`、`DashboardCardSandboxBridge`、
+`DashboardCardSandboxFrame`、`DashboardCardSandboxLoadResult`、
+`DashboardCardSandboxHost`、`createDashboardCardSandboxHost` を入口にする。
 
 `DashboardCardDefinition.id` は catalog 全体で一意にする。Core card は
 `core.recentEvents` のように `core.` prefix を使い、plugin card は
@@ -346,6 +352,27 @@ card definition と `settingsSchema` を指定する場合の schema は plain o
 registry は登録時に検証済み definition を clone/freeze し、plugin 側が元 object を後から
 mutate しても Map key、entry namespace、capability、size、entry resolution failure の照合が
 変わらないようにする。
+
+Plugin package manifest は `DashboardPluginManifest.dashboard.cards[]` で dashboard card
+contribution を宣言できる。`createDashboardCardProviderFromManifest()` は manifest の
+`name` を provider 名として使い、各 card の `name` から
+`plugin:<pluginName>.<cardName>` id と `{ type: "plugin", pluginName, cardName }`
+entry を生成する。manifest の `dashboard.cards` は配列だけを許可し、card object は通常の
+`DashboardCardDefinition` と同じ validation を受ける。これにより sample plugin は
+manifest だけで card catalog に contribution を登録でき、namespace 不一致や delimiter を含む
+card name は registry 登録前に `DashboardCardRegistryError` として扱われる。
+
+Plugin card の描画境界は `createDashboardCardSandboxHost()` が作る
+`DashboardCardSandboxFrame` を正とする。host は plugin card だけを iframe sandbox 対象にし、
+`sandbox: "allow-scripts"`、`referrerPolicy: "no-referrer"`、lazy loading の descriptor を返す。
+`allow-same-origin`、form、popup、top-navigation などの権限は付けない。sandbox URL は
+plugin 名と card 名の path だけで解決し、`cardId` と任意の layout item id を query に渡す。
+`DashboardCardSandboxBridge` は card definition の `requiredCapabilities` と host 側
+`allowedCapabilities` の交差だけを公開する。bridge handler がない capability や許可されていない
+capability request は card 単位で失敗し、危険操作は Workflow plugin の action gate に残す。
+`DashboardCardSandboxHost.load()` は load failure / timeout を throw せず
+`DashboardCardSandboxLoadResult` の `{ status: "error" }` として返すため、1 つの plugin card が
+落ちても dashboard shell と他カードの描画を継続できる。
 
 ## Workflow plugin
 

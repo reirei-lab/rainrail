@@ -10,6 +10,8 @@ export * from './agent-runtime/timeline.js';
 export * from './dispatcher.js';
 export * from './dispatcher/index.js';
 export * from './dashboard-card-registry.js';
+export * from './dashboard-card-manifest.js';
+export * from './dashboard-card-sandbox.js';
 export * from './event-delivery/event-bus.js';
 export * from './events.js';
 export * from './events-auth.js';
