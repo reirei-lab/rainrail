@@ -55,6 +55,7 @@ if (root !== null) {
   const operatorActions = Array.from(root.querySelectorAll<HTMLButtonElement>('[data-action-permission="operator"]'));
   const agentActionButtons = Array.from(root.querySelectorAll<HTMLButtonElement>('[data-agent-action]'));
   const commandStatus = root.querySelector<HTMLElement>('[data-command-status]');
+  const demoIndicator = root.querySelector<HTMLElement>('[data-demo-indicator]');
   const tabButtons = Array.from(root.querySelectorAll<HTMLButtonElement>('[data-dashboard-tab]'));
 
   let client: RainrailDashboardApiClient | undefined;
@@ -71,11 +72,14 @@ if (root !== null) {
 
   const storedToken = sessionStore.get(TOKEN_STORAGE_KEY) ?? '';
   const storedApiBaseUrl = sessionStore.get(API_BASE_URL_STORAGE_KEY) ?? appRoot.dataset.apiBaseUrl ?? '';
-  const authRequired = appRoot.dataset.authRequired !== 'false';
-  const operatorEnabled = localStore.get(OPERATOR_STORAGE_KEY) === '1';
+  const demoMode = new URLSearchParams(window.location.search).get('demo') === '1';
+  const demoAuthBypass = demoMode && isLoopbackDashboardHost(window.location.hostname);
+  const authRequired = !demoAuthBypass && appRoot.dataset.authRequired !== 'false';
+  const operatorEnabled = isOperatorModeEnabled();
   if (tokenInput !== null) tokenInput.value = storedToken;
   if (apiBaseUrlInput !== null) apiBaseUrlInput.value = storedApiBaseUrl;
   if (permissionToggle !== null) permissionToggle.checked = operatorEnabled;
+  if (demoIndicator !== null) demoIndicator.hidden = !demoMode;
   setOperatorActionsEnabled(operatorEnabled);
   resetDashboardData();
 
@@ -399,7 +403,7 @@ if (root !== null) {
 
   function createDashboardClient(token: string, configuredApiBaseUrl?: string): RainrailDashboardApiClient {
     const apiBaseUrl = normalizeApiBaseUrl(configuredApiBaseUrl ?? apiBaseUrlInput?.value ?? appRoot.dataset.apiBaseUrl ?? '');
-    return new RainrailDashboardApiClient({ token, baseUrl: apiBaseUrl });
+    return new RainrailDashboardApiClient({ token, baseUrl: apiBaseUrl, demoMode });
   }
 
   function startPolling(nextClient: RainrailDashboardApiClient): void {
@@ -424,6 +428,10 @@ if (root !== null) {
     }
   }
 
+  function isOperatorModeEnabled(): boolean {
+    return demoMode || localStore.get(OPERATOR_STORAGE_KEY) === '1';
+  }
+
   function isCurrentRefresh(activeClient: RainrailDashboardApiClient, activeRefreshId: number): boolean {
     if (client !== activeClient) return false;
     return refreshSequence === activeRefreshId;
@@ -444,7 +452,7 @@ if (root !== null) {
   function clearSelectedDetail(): void {
     selectedDetailRowId = undefined;
     selectedAgentTaskId = undefined;
-    setOperatorActionsEnabled(localStore.get(OPERATOR_STORAGE_KEY) === '1');
+    setOperatorActionsEnabled(isOperatorModeEnabled());
     detailRequestSequence += 1;
   }
 
@@ -465,7 +473,7 @@ if (root !== null) {
   function renderBasicDetail(row: DashboardRow, label: string): void {
     if (detail === null) return;
     selectedAgentTaskId = row.type === 'agent-task' ? row.id : undefined;
-    setOperatorActionsEnabled(localStore.get(OPERATOR_STORAGE_KEY) === '1');
+    setOperatorActionsEnabled(isOperatorModeEnabled());
 
     detail.innerHTML = `
       <div class="dashboard-detail-heading">
@@ -540,7 +548,7 @@ if (root !== null) {
     if (detail === null) return;
 
     selectedAgentTaskId = row.id;
-    setOperatorActionsEnabled(localStore.get(OPERATOR_STORAGE_KEY) === '1');
+    setOperatorActionsEnabled(isOperatorModeEnabled());
     const record = objectRecord(loaded.data.record);
     const runtime = objectRecord(record.runtime);
     const resumeAttempts = arrayRecord(record.resumeAttempts);
@@ -706,6 +714,10 @@ function createSafeStorage(getStorage: () => Storage): SafeStorage {
 
 function normalizeApiBaseUrl(value: string): string {
   return value.trim().replace(/\/+$/, '');
+}
+
+function isLoopbackDashboardHost(hostname: string): boolean {
+  return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]' || hostname === '::1';
 }
 
 function isDashboardAuthError(error: unknown): boolean {

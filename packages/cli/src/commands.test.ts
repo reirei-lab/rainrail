@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { once } from 'node:events';
 import { createRequire } from 'node:module';
+import { spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 import {
   BUILT_IN_COMMANDS,
@@ -22,6 +23,7 @@ import {
 } from './index.js';
 
 const testRequire = createRequire(import.meta.url);
+const dashboardDemoSeedScript = new URL('../../../scripts/seed-dashboard-demo-db.mjs', import.meta.url);
 
 async function withTempDirectory(test: (directory: string) => Promise<void>): Promise<void> {
   const directory = await mkdtemp(join(tmpdir(), 'rainrail-cli-'));
@@ -90,6 +92,18 @@ async function getFreePort(host = '127.0.0.1'): Promise<number> {
   server.close();
   await once(server, 'close');
   return port;
+}
+
+async function rawLocalHttpRequest(port: number, lines: readonly string[]): Promise<string> {
+  const socket = net.createConnection({ host: '127.0.0.1', port });
+  socket.write(lines.join('\r\n'));
+  let response = '';
+  socket.setEncoding('utf8');
+  socket.on('data', (chunk) => {
+    response += chunk;
+  });
+  await once(socket, 'end');
+  return response;
 }
 
 async function closeTestServer(result: { server?: { stop: () => void | Promise<void> } }): Promise<void> {
@@ -1280,6 +1294,32 @@ describe('Rainrail CLI built-in commands', () => {
         kind: 'json',
         databasePath: join(projectRoot, 'var', 'rainrail-operational.json'),
         eventLimit: 17,
+      });
+    });
+  });
+
+  it('resolves rainrail start --demo to the default seeded SQLite dashboard DB', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'dashboard-demo-options');
+      let startOptions: RainrailStartOptions | undefined;
+
+      const result = runRainrailCli(['start', '--demo'], {
+        cwd: projectRoot,
+        serverStarter: (options) => {
+          startOptions = options;
+          return { stop: () => undefined };
+        },
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+      expect(result.stdout).toContain('Dashboard demo: http://127.0.0.1:8787/dashboard?demo=1');
+      expect(result.stdout).toContain('Dashboard demo API: http://127.0.0.1:8787/api/v1/overview?demo=1');
+      expect(startOptions?.demoMode).toBe(true);
+      expect(startOptions?.operationalStoreConfig).toEqual({
+        kind: 'sqlite',
+        databasePath: join(projectRoot, '.tmp', 'dashboard-demo.sqlite'),
+        eventLimit: 250,
       });
     });
   });
@@ -2632,6 +2672,210 @@ describe('Rainrail CLI built-in commands', () => {
           .get('github-webhook:delivery-existing:github.issue') as { payload_json: string };
         expect(JSON.parse(row.payload_json)).toEqual({ action: 'opened', preserved: true });
       });
+    });
+  });
+
+  it('serves seeded SQLite dashboard demo mode without an operator token or external command dispatch', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'seeded-dashboard-demo-start');
+      const port = await getFreePort();
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        server: { host: '127.0.0.1', port },
+        dashboardAuth: {
+          readOnlyToken: 'read-token',
+          operatorToken: 'operator-token',
+        },
+        sourceBundles: [{
+          type: 'eep-bridge',
+          name: 'demo-eep',
+          sources: [{
+            type: 'github-webhook',
+            name: 'github-webhook',
+            sourceType: 'github',
+            provider: 'github',
+            webhookSecret: 'demo-secret',
+            endpoint: '/webhooks/github',
+          }],
+        }],
+        sources: [{
+          type: 'manual-chat',
+          name: 'manual-chat',
+          sourceType: 'chat',
+          endpoint: '/manual/chat',
+        }],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+      const databasePath = join(projectRoot, '.tmp', 'dashboard-demo.sqlite');
+      const seed = spawnSync(process.execPath, [dashboardDemoSeedScript.pathname, '--database', databasePath], {
+        encoding: 'utf8',
+      });
+      expect(seed.status).toBe(0);
+
+      const result = await runRainrailCliAsync(['start', '--demo'], { cwd: projectRoot });
+      try {
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toContain(`Dashboard demo: http://127.0.0.1:${port}/dashboard?demo=1`);
+
+        const overview = await fetch(`http://127.0.0.1:${port}/api/v1/overview?demo=1`);
+        expect(overview.status).toBe(200);
+        await expect(overview.json()).resolves.toMatchObject({
+          data: {
+            counts: {
+              events: 3,
+              activityEvents: 4,
+              agentTasks: 3,
+              commandResults: 3,
+              eventHandlerRetries: 2,
+            },
+          },
+        });
+
+        for (const path of [
+          '/api/v1/events',
+          '/api/v1/workflow-runs',
+          '/api/v1/agent-tasks',
+          '/api/v1/sources',
+          '/api/v1/queue',
+          '/api/v1/settings',
+        ]) {
+          const response = await fetch(`http://127.0.0.1:${port}${path}?demo=1`);
+          expect(response.status, path).toBe(200);
+          const body = await response.json() as { data?: unknown[] };
+          expect(body.data?.length, path).toBeGreaterThan(0);
+        }
+
+        const protectedOverview = await fetch(`http://127.0.0.1:${port}/api/v1/overview`);
+        expect(protectedOverview.status).toBe(401);
+
+        const blockedQueue = await fetch(`http://127.0.0.1:${port}/api/v1/queue?demo=1&filter[status]=blocked`);
+        expect(blockedQueue.status).toBe(200);
+        await expect(blockedQueue.json()).resolves.toMatchObject({
+          data: [expect.objectContaining({
+            id: 'agent_task_demo_failed_stale_claim',
+            status: 'blocked',
+          })],
+        });
+
+        const demoCommand = await fetch(`http://127.0.0.1:${port}/api/v1/agent-tasks/agent_task_demo_failed_stale_claim/actions/resume?demo=1`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Request-ID': 'request-demo-resume',
+          },
+          body: JSON.stringify({}),
+        });
+        expect(demoCommand.status).toBe(202);
+        expect(demoCommand.headers.get('x-request-id')).toBe('request-demo-resume');
+        await expect(demoCommand.json()).resolves.toMatchObject({
+          data: {
+            action: 'agent_task_resume',
+            targetType: 'agent_task',
+            targetId: 'agent_task_demo_failed_stale_claim',
+            status: 'accepted',
+            dryRun: false,
+            auditId: 'demo-request-demo-resume',
+            result: { demoOnly: true },
+          },
+        });
+      } finally {
+        await closeTestServer(result);
+      }
+    });
+  });
+
+  it('keeps dashboard demo mode authenticated when local start binds outside localhost', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'seeded-dashboard-demo-external-bind');
+      const port = await getFreePort('0.0.0.0');
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        server: { host: '0.0.0.0', port },
+        dashboardAuth: {
+          readOnlyToken: 'read-token',
+        },
+        sourceBundles: [],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+      const databasePath = join(projectRoot, '.tmp', 'dashboard-demo.sqlite');
+      const seed = spawnSync(process.execPath, [dashboardDemoSeedScript.pathname, '--database', databasePath], {
+        encoding: 'utf8',
+      });
+      expect(seed.status).toBe(0);
+
+      const result = await runRainrailCliAsync(['start', '--demo'], { cwd: projectRoot });
+      try {
+        expect(result.exitCode).toBe(0);
+
+        const unauthenticated = await fetch(`http://127.0.0.1:${port}/api/v1/overview?demo=1`);
+        expect(unauthenticated.status).toBe(401);
+        await expect(unauthenticated.json()).resolves.toEqual({ error: 'missing_bearer_token' });
+
+        const authenticated = await fetch(`http://127.0.0.1:${port}/api/v1/overview?demo=1`, {
+          headers: { Authorization: 'Bearer read-token' },
+        });
+        expect(authenticated.status).toBe(200);
+        await expect(authenticated.json()).resolves.toMatchObject({
+          data: { counts: { events: 3 } },
+        });
+      } finally {
+        await closeTestServer(result);
+      }
+    });
+  });
+
+  it('keeps dashboard demo mode authenticated for non-loopback allowed Host headers', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'seeded-dashboard-demo-allowed-host');
+      const port = await getFreePort();
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        server: {
+          host: '127.0.0.1',
+          port,
+          allowedHosts: ['rainrail-demo.example'],
+        },
+        dashboardAuth: {
+          readOnlyToken: 'read-token',
+        },
+        sourceBundles: [],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+      const databasePath = join(projectRoot, '.tmp', 'dashboard-demo.sqlite');
+      const seed = spawnSync(process.execPath, [dashboardDemoSeedScript.pathname, '--database', databasePath], {
+        encoding: 'utf8',
+      });
+      expect(seed.status).toBe(0);
+
+      const result = await runRainrailCliAsync(['start', '--demo'], { cwd: projectRoot });
+      try {
+        expect(result.exitCode).toBe(0);
+
+        const tunneled = await rawLocalHttpRequest(port, [
+          'GET /api/v1/overview?demo=1 HTTP/1.1',
+          `Host: rainrail-demo.example:${port}`,
+          'Connection: close',
+          '',
+          '',
+        ]);
+        expect(tunneled).toContain('401 Unauthorized');
+        expect(tunneled).toContain('missing_bearer_token');
+
+        const authenticated = await rawLocalHttpRequest(port, [
+          'GET /api/v1/overview?demo=1 HTTP/1.1',
+          `Host: rainrail-demo.example:${port}`,
+          'Authorization: Bearer read-token',
+          'Connection: close',
+          '',
+          '',
+        ]);
+        expect(authenticated).toContain('200 OK');
+        expect(authenticated).toContain('"events":3');
+      } finally {
+        await closeTestServer(result);
+      }
     });
   });
 

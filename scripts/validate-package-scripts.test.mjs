@@ -27,6 +27,10 @@ const copyDashboardAssetsScript = readFileSync(
   new URL('./copy-dashboard-assets.mjs', import.meta.url),
   'utf8',
 );
+const startDashboardDemoScript = readFileSync(
+  new URL('./start-dashboard-demo.mjs', import.meta.url),
+  'utf8',
+);
 
 describe('package scripts used by pull request CI', () => {
   it('builds repository scripts, the product site, docs site, and CLI package from the root command', () => {
@@ -63,6 +67,15 @@ describe('package scripts used by pull request CI', () => {
     expect(packageJson.scripts['release:cli']).toBe(
       'node scripts/package-cli-release.mjs',
     );
+    expect(packageJson.scripts['demo:dashboard']).toBe(
+      'node scripts/start-dashboard-demo.mjs',
+    );
+    expect(startDashboardDemoScript).toContain("'.tmp', 'dashboard-demo'");
+    expect(startDashboardDemoScript).toContain("runRequiredPnpm(['--filter', 'www', 'build'])");
+    expect(startDashboardDemoScript).toContain("runRequiredPnpm(['--filter', '@rainrail/cli', 'build'])");
+    expect(startDashboardDemoScript).toContain('rainrail.config.json');
+    expect(startDashboardDemoScript).toContain("'--config'");
+    expect(startDashboardDemoScript).toContain("'--demo'");
     expect(cliPackageJson.name).toBe('@rainrail/cli');
     expect(cliPackageJson.bin.rainrail).toBe('./dist/bin/rainrail.js');
     expect(cliPackageJson.scripts.build).toBe(

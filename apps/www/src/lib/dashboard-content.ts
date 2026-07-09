@@ -11,6 +11,7 @@ export type DashboardContent = {
     brandLabel: string;
     eyebrow: string;
     heading: string;
+    demoModeBadge: string;
     apiBaseUrlPlaceholder: string;
     apiBaseUrlLabel: string;
     tokenPlaceholder: string;
@@ -515,6 +516,7 @@ const dashboardContent = {
       brandLabel: 'Rainrail home',
       eyebrow: 'Operational API client',
       heading: 'Rainrail Operations',
+      demoModeBadge: 'Demo mode',
       apiBaseUrlPlaceholder: 'Operational API URL',
       apiBaseUrlLabel: 'Rainrail Operational API base URL',
       tokenPlaceholder: 'Bearer token',
@@ -572,6 +574,7 @@ const dashboardContent = {
       brandLabel: 'Rainrail ホーム',
       eyebrow: '運用 API クライアント',
       heading: 'Rainrail 運用',
+      demoModeBadge: 'デモモード',
       apiBaseUrlPlaceholder: '運用 API URL',
       apiBaseUrlLabel: 'Rainrail 運用 API ベース URL',
       tokenPlaceholder: 'Bearer トークン',
