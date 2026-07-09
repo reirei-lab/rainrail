@@ -176,7 +176,9 @@ describe('Rainrail CLI built-in commands', () => {
 
     expect(result.exitCode).toBe(0);
     expect(result.stderr).toBe('');
-    expect(result.stdout).toContain('Usage: rainrail dispatch (--message <text> | --envelope-json <json>)');
+    expect(result.stdout).toContain('Usage: rainrail dispatch <message> | --stdin | --message <text> | --envelope-json <json>');
+    expect(result.stdout).toContain('<message>');
+    expect(result.stdout).toContain('--stdin');
     expect(result.stdout).toContain('--message <text>');
     expect(result.stdout).toContain('--envelope-json <json>');
   });
@@ -185,7 +187,7 @@ describe('Rainrail CLI built-in commands', () => {
     expect(runRainrailCli(['dispatch'])).toMatchObject({
       exitCode: 1,
       stdout: '',
-      stderr: 'Usage: rainrail dispatch (--message <text> | --envelope-json <json>)\n',
+      stderr: 'Usage: rainrail dispatch <message> | --stdin | --message <text> | --envelope-json <json>\n',
     });
 
     expect(runRainrailCli(['dispatch', '--message', 'hello', '--envelope-json', '{}'])).toMatchObject({
@@ -195,10 +197,88 @@ describe('Rainrail CLI built-in commands', () => {
     });
   });
 
-  it('routes message-only dispatch input into the shared dispatch boundary', () => {
+  it('dispatches a positional message as a manual Rainrail event envelope', () => {
     const dispatched: unknown[] = [];
 
-    const result = runRainrailCli(['dispatch', '--message', 'hello world'], {
+    const result = runRainrailCli(['dispatch', '明日の13時に歯医者'], {
+      now: () => new Date('2026-07-09T12:34:56.000Z'),
+      dispatchRunner: (request) => {
+        dispatched.push(request);
+        return {
+          exitCode: 0,
+          stdout: 'accepted event\n',
+          stderr: '',
+        };
+      },
+    });
+
+    expect(result).toEqual({
+      exitCode: 0,
+      stdout: 'accepted event\n',
+      stderr: '',
+    });
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0]).toMatchObject(
+      {
+        mode: 'message',
+        input: '明日の13時に歯医者',
+        event: {
+          schemaVersion: 'rainrail.event.v1',
+          source: {
+            type: 'manual',
+            name: 'cli',
+          },
+          name: 'rainrail.manual.message',
+          delivery: {
+            receivedAt: '2026-07-09T12:34:56.000Z',
+          },
+          occurredAt: '2026-07-09T12:34:56.000Z',
+          subject: {
+            type: 'conversation',
+            id: 'cli-manual',
+          },
+          payload: {
+            provider: 'rainrail',
+            channel: 'manual',
+            action: 'message',
+            conversation: {
+              id: 'cli-manual',
+            },
+            message: {
+              text: '明日の13時に歯医者',
+            },
+            actor: {
+              id: 'rainrail-cli',
+              displayName: 'Rainrail CLI',
+              type: 'cli',
+            },
+          },
+          rawPayload: {
+            kind: 'inline-redacted',
+            contentType: 'text/plain; charset=utf-8',
+          },
+        },
+        options: {
+          config: undefined,
+          profile: undefined,
+          json: false,
+        },
+      },
+    );
+    expect((dispatched[0] as { event: { id: string; delivery: { id: string }; rawPayload: { reference: string; sha256: string } } }).event.id)
+      .toMatch(/^cli:cli-[a-f0-9]{16}:rainrail\.manual\.message$/u);
+    expect((dispatched[0] as { event: { delivery: { id: string }; rawPayload: { reference: string; sha256: string } } }).event.rawPayload.reference)
+      .toBe(`manual://deliveries/${(dispatched[0] as { event: { delivery: { id: string } } }).event.delivery.id}`);
+    expect((dispatched[0] as { event: { rawPayload: { sha256: string } } }).event.rawPayload.sha256)
+      .toMatch(/^[a-f0-9]{64}$/u);
+  });
+
+  it('dispatches stdin message input as a manual Rainrail event envelope', () => {
+    const dispatched: unknown[] = [];
+
+    const result = runRainrailCli(['dispatch', '--stdin'], {
+      stdin: 'from stdin\n',
+      now: () => new Date('2026-07-09T12:35:56.000Z'),
       dispatchRunner: (request) => {
         dispatched.push(request);
         return {
@@ -209,19 +289,16 @@ describe('Rainrail CLI built-in commands', () => {
       },
     });
 
-    expect(result).toEqual({
-      exitCode: 0,
-      stdout: 'accepted message\n',
-      stderr: '',
-    });
-    expect(dispatched).toEqual([
+    expect(result.exitCode).toBe(0);
+    expect(dispatched).toMatchObject([
       {
-        mode: 'message',
-        input: 'hello world',
-        options: {
-          config: undefined,
-          profile: undefined,
-          json: false,
+        input: 'from stdin\n',
+        event: {
+          payload: {
+            message: {
+              text: 'from stdin\n',
+            },
+          },
         },
       },
     ]);
@@ -242,14 +319,16 @@ describe('Rainrail CLI built-in commands', () => {
     });
 
     expect(result.exitCode).toBe(0);
-    expect(dispatched).toEqual([
+    expect(dispatched).toMatchObject([
       {
         mode: 'message',
         input: '--review this',
-        options: {
-          config: undefined,
-          profile: undefined,
-          json: false,
+        event: {
+          payload: {
+            message: {
+              text: '--review this',
+            },
+          },
         },
       },
     ]);
@@ -270,10 +349,17 @@ describe('Rainrail CLI built-in commands', () => {
     });
 
     expect(result.exitCode).toBe(0);
-    expect(dispatched).toEqual([
+    expect(dispatched).toMatchObject([
       {
         mode: 'message',
         input: '--json',
+        event: {
+          payload: {
+            message: {
+              text: '--json',
+            },
+          },
+        },
         options: {
           config: undefined,
           profile: undefined,
@@ -281,6 +367,42 @@ describe('Rainrail CLI built-in commands', () => {
         },
       },
     ]);
+  });
+
+  it('rejects empty dispatch messages before dispatching', () => {
+    const dispatched: unknown[] = [];
+
+    expect(runRainrailCli(['dispatch', '   '], {
+      dispatchRunner: (request) => {
+        dispatched.push(request);
+        return {
+          exitCode: 0,
+          stdout: 'accepted message\n',
+          stderr: '',
+        };
+      },
+    })).toMatchObject({
+      exitCode: 1,
+      stdout: '',
+      stderr: 'Message must not be empty.\n',
+    });
+
+    expect(runRainrailCli(['dispatch', '--stdin'], {
+      stdin: '\n\t',
+      dispatchRunner: (request) => {
+        dispatched.push(request);
+        return {
+          exitCode: 0,
+          stdout: 'accepted message\n',
+          stderr: '',
+        };
+      },
+    })).toMatchObject({
+      exitCode: 1,
+      stdout: '',
+      stderr: 'Message must not be empty.\n',
+    });
+    expect(dispatched).toEqual([]);
   });
 
   it('routes envelope-json dispatch input into the shared dispatch boundary without validating fields yet', () => {

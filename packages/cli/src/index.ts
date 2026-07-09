@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import http, { type IncomingMessage, type OutgoingHttpHeaders, type ServerResponse } from 'node:http';
 import {
   existsSync,
@@ -81,15 +81,69 @@ export type RainrailCliResult = {
 
 export type RainrailDispatchMode = 'message' | 'envelope-json';
 
-export type RainrailDispatchRequest = {
-  readonly mode: RainrailDispatchMode;
-  readonly input: string;
-  readonly options: {
-    readonly config?: string | undefined;
-    readonly profile?: string | undefined;
-    readonly json: boolean;
+export type RainrailDispatchManualMessagePayload = {
+  readonly provider: 'rainrail';
+  readonly channel: 'manual';
+  readonly action: 'message';
+  readonly conversation: {
+    readonly id: string;
+  };
+  readonly message: {
+    readonly text: string;
+  };
+  readonly actor: {
+    readonly id: string;
+    readonly displayName: string;
+    readonly type: 'cli';
   };
 };
+
+export type RainrailDispatchEventEnvelope = {
+  readonly id: string;
+  readonly schemaVersion: 'rainrail.event.v1';
+  readonly source: {
+    readonly type: 'manual';
+    readonly name: 'cli';
+  };
+  readonly name: 'rainrail.manual.message';
+  readonly delivery: {
+    readonly id: string;
+    readonly receivedAt: string;
+  };
+  readonly occurredAt: string;
+  readonly subject: {
+    readonly type: 'conversation';
+    readonly id: string;
+  };
+  readonly payload: RainrailDispatchManualMessagePayload;
+  readonly rawPayload: {
+    readonly kind: 'inline-redacted';
+    readonly reference: string;
+    readonly contentType: 'text/plain; charset=utf-8';
+    readonly sha256: string;
+  };
+};
+
+export type RainrailDispatchRequest =
+  | {
+      readonly mode: 'message';
+      readonly input: string;
+      readonly event: RainrailDispatchEventEnvelope;
+      readonly options: {
+        readonly config?: string | undefined;
+        readonly profile?: string | undefined;
+        readonly json: boolean;
+      };
+    }
+  | {
+      readonly mode: 'envelope-json';
+      readonly input: string;
+      readonly options: {
+        readonly config?: string | undefined;
+        readonly profile?: string | undefined;
+        readonly json: boolean;
+      };
+    };
 
 export type RainrailDispatchRunner = (
   request: RainrailDispatchRequest,
@@ -2347,14 +2401,16 @@ type ParsedDispatchArguments = {
   readonly help: boolean;
 };
 
-const dispatchUsage = 'Usage: rainrail dispatch (--message <text> | --envelope-json <json>)';
+const dispatchUsage = 'Usage: rainrail dispatch <message> | --stdin | --message <text> | --envelope-json <json>';
+const dispatchCliConversationId = 'cli-manual';
+const dispatchCliSourceName = 'cli';
 
 function runDispatchCommand(
   args: readonly string[],
   options: SharedOptions,
   environment: RainrailCliEnvironment,
 ): RainrailCliResult {
-  const parsed = parseDispatchArguments(args, options);
+  const parsed = parseDispatchArguments(args, options, environment);
   if (parsed.help) {
     return {
       exitCode: 0,
@@ -2392,6 +2448,7 @@ function runDispatchRequest(
 function parseDispatchArguments(
   args: readonly string[],
   options: SharedOptions,
+  environment: RainrailCliEnvironment,
 ): ParsedDispatchArguments {
   if (args.length === 1 && (args[0] === 'help' || args[0] === '--help')) {
     return { errors: [], help: true };
@@ -2400,6 +2457,7 @@ function parseDispatchArguments(
   const errors: string[] = [];
   let mode: RainrailDispatchMode | undefined;
   let input: string | undefined;
+  const positionalParts: string[] = [];
 
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
@@ -2418,13 +2476,23 @@ function parseDispatchArguments(
       continue;
     }
 
+    if (arg === '--stdin') {
+      if (mode !== undefined || positionalParts.length > 0) {
+        errors.push('Choose only one dispatch input mode.');
+        continue;
+      }
+      mode = 'message';
+      input = readDispatchStdin(environment);
+      continue;
+    }
+
     if (arg === '--message' || arg === '--envelope-json') {
       const value = args[index + 1];
       if (value === undefined) {
         errors.push(`Missing value for ${arg}.`);
         continue;
       }
-      if (mode !== undefined) {
+      if (mode !== undefined || positionalParts.length > 0) {
         errors.push('Choose only one dispatch input mode.');
         index += 1;
         continue;
@@ -2440,27 +2508,32 @@ function parseDispatchArguments(
       continue;
     }
 
-    errors.push(`Unexpected rainrail dispatch argument: ${arg}.`);
+    if (mode !== undefined && mode !== 'message') {
+      errors.push('Choose only one dispatch input mode.');
+      continue;
+    }
+    mode = 'message';
+    positionalParts.push(arg);
+  }
+
+  if (input === undefined && positionalParts.length > 0) {
+    input = positionalParts.join(' ');
+  }
+
+  if (errors.length === 0 && mode === 'message' && input !== undefined && input.trim().length === 0) {
+    return { errors: ['Message must not be empty.'], help: false };
   }
 
   if (errors.length === 0 && (mode === undefined || input === undefined)) {
     return { errors: [dispatchUsage], help: false };
   }
 
+  const request = createDispatchRequest(mode, input, options, environment);
+
   return {
     errors,
     help: false,
-    request: mode === undefined || input === undefined
-      ? undefined
-      : {
-          mode,
-          input,
-          options: {
-            config: options.config,
-            profile: options.profile,
-            json: options.json,
-          },
-        },
+    request,
   };
 }
 
@@ -2483,10 +2556,129 @@ function formatDispatchHelp(): string {
     dispatchUsage,
     '',
     'Input modes:',
+    '  <message>               Dispatch a message-only input as a manual Rainrail event.',
+    '  --stdin                 Read the message from standard input.',
     '  --message <text>        Dispatch a message-only input payload.',
     '  --envelope-json <json>  Dispatch a complete Rainrail event envelope JSON string.',
     '',
   ].join('\n');
+}
+
+function createDispatchRequest(
+  mode: RainrailDispatchMode | undefined,
+  input: string | undefined,
+  options: SharedOptions,
+  environment: RainrailCliEnvironment,
+): RainrailDispatchRequest | undefined {
+  if (mode === undefined || input === undefined) {
+    return undefined;
+  }
+
+  const requestOptions = {
+    config: options.config,
+    profile: options.profile,
+    json: options.json,
+  };
+
+  if (mode === 'envelope-json') {
+    return {
+      mode,
+      input,
+      options: requestOptions,
+    };
+  }
+
+  return {
+    mode,
+    input,
+    event: createDispatchManualMessageEvent(input, environment.now?.() ?? new Date()),
+    options: requestOptions,
+  };
+}
+
+function createDispatchManualMessageEvent(
+  message: string,
+  receivedAt: Date,
+): RainrailDispatchEventEnvelope {
+  const occurredAt = receivedAt.toISOString();
+  const messageSha256 = sha256Hex(message);
+  const deliveryId = `cli-${sha256Hex(`${occurredAt}\n${message}`).slice(0, 16)}`;
+
+  return {
+    id: `${dispatchCliSourceName}:${deliveryId}:rainrail.manual.message`,
+    schemaVersion: 'rainrail.event.v1',
+    source: {
+      type: 'manual',
+      name: dispatchCliSourceName,
+    },
+    name: 'rainrail.manual.message',
+    delivery: {
+      id: deliveryId,
+      receivedAt: occurredAt,
+    },
+    occurredAt,
+    subject: {
+      type: 'conversation',
+      id: dispatchCliConversationId,
+    },
+    payload: {
+      provider: 'rainrail',
+      channel: 'manual',
+      action: 'message',
+      conversation: {
+        id: dispatchCliConversationId,
+      },
+      message: {
+        text: message,
+      },
+      actor: {
+        id: 'rainrail-cli',
+        displayName: 'Rainrail CLI',
+        type: 'cli',
+      },
+    },
+    rawPayload: {
+      kind: 'inline-redacted',
+      reference: `manual://deliveries/${deliveryId}`,
+      contentType: 'text/plain; charset=utf-8',
+      sha256: messageSha256,
+    },
+  };
+}
+
+function readDispatchStdin(environment: RainrailCliEnvironment): string {
+  if (environment.stdin !== undefined) {
+    return environment.stdin;
+  }
+
+  if (environment.stdinReader !== undefined) {
+    return environment.stdinReader();
+  }
+
+  if (process.stdin.isTTY) {
+    return '';
+  }
+
+  return readStdinAllSync();
+}
+
+function readStdinAllSync(): string {
+  const chunks: Buffer[] = [];
+  const buffer = Buffer.alloc(4096);
+
+  while (true) {
+    const bytesRead = readSync(0, buffer, 0, buffer.length, null);
+    if (bytesRead === 0) {
+      break;
+    }
+    chunks.push(Buffer.from(buffer.subarray(0, bytesRead)));
+  }
+
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+function sha256Hex(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
 }
 
 function runInitCommand(
