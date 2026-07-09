@@ -119,7 +119,7 @@ export type RainrailDispatchEventEnvelope = {
   readonly rawPayload: {
     readonly kind: 'inline-redacted';
     readonly reference: string;
-    readonly contentType: 'text/plain; charset=utf-8';
+    readonly contentType: 'text/plain';
     readonly sha256: string;
   };
 };
@@ -2405,6 +2405,7 @@ const dispatchUsage = 'Usage: rainrail dispatch <message> | --stdin | --message 
 const dispatchCliConversationId = 'cli-manual';
 const dispatchCliSourceName = 'cli';
 const maxDispatchManualMessageTextLength = 8_000;
+const maxDispatchStdinMessageBytes = 65_536;
 let dispatchDeliverySequence = 0;
 
 function runDispatchCommand(
@@ -2520,7 +2521,11 @@ function parseDispatchArguments(
   }
 
   if (errors.length === 0 && shouldReadStdin) {
-    input = readDispatchStdin(environment);
+    const stdinInput = readDispatchStdin(environment);
+    if ('error' in stdinInput) {
+      return { errors: [stdinInput.error], help: false };
+    }
+    input = stdinInput.input;
   } else if (input === undefined && positionalParts.length > 0) {
     input = positionalParts.join(' ');
   }
@@ -2649,41 +2654,62 @@ function createDispatchManualMessageEvent(
     rawPayload: {
       kind: 'inline-redacted',
       reference: `manual://deliveries/${deliveryId}`,
-      contentType: 'text/plain; charset=utf-8',
+      contentType: 'text/plain',
       sha256: messageSha256,
     },
   };
 }
 
-function readDispatchStdin(environment: RainrailCliEnvironment): string {
+function readDispatchStdin(environment: RainrailCliEnvironment):
+  | { readonly input: string }
+  | { readonly error: string } {
   if (environment.stdin !== undefined) {
-    return environment.stdin;
+    return dispatchStdinInputResult(environment.stdin);
   }
 
   if (environment.stdinReader !== undefined) {
-    return environment.stdinReader();
+    return dispatchStdinInputResult(environment.stdinReader());
   }
 
   if (process.stdin.isTTY) {
-    return '';
+    return { input: '' };
   }
 
   return readStdinAllSync();
 }
 
-function readStdinAllSync(): string {
+function dispatchStdinInputResult(input: string):
+  | { readonly input: string }
+  | { readonly error: string } {
+  return Buffer.byteLength(input, 'utf8') > maxDispatchStdinMessageBytes
+    ? { error: formatDispatchStdinTooLargeError() }
+    : { input };
+}
+
+function readStdinAllSync():
+  | { readonly input: string }
+  | { readonly error: string } {
   const chunks: Buffer[] = [];
   const buffer = Buffer.alloc(4096);
+  let bytesTotal = 0;
 
   while (true) {
     const bytesRead = readSync(0, buffer, 0, buffer.length, null);
     if (bytesRead === 0) {
       break;
     }
+    bytesTotal += bytesRead;
+    if (bytesTotal > maxDispatchStdinMessageBytes) {
+      return { error: formatDispatchStdinTooLargeError() };
+    }
     chunks.push(Buffer.from(buffer.subarray(0, bytesRead)));
   }
 
-  return Buffer.concat(chunks).toString('utf8');
+  return { input: Buffer.concat(chunks).toString('utf8') };
+}
+
+function formatDispatchStdinTooLargeError(): string {
+  return `Message from stdin must not exceed ${maxDispatchStdinMessageBytes} bytes.`;
 }
 
 function sha256Hex(value: string): string {

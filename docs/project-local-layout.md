@@ -173,19 +173,22 @@ help`, `rainrail github webhook add help`, and their canonical
 
 `rainrail dispatch` accepts a simple manual message as either a positional
 argument, `--message <text>`, or `--stdin`. Message input is rejected before
-dispatch when it is blank after trimming. The CLI converts accepted message
-input into a `rainrail.manual.message` `RainrailDispatchEventEnvelope` with
-`source.type: "manual"` and `source.name: "cli"`, then passes it to
-`RainrailCliEnvironment.dispatchRunner` inside a `RainrailDispatchRequest`.
+dispatch when it is blank after trimming. `--stdin` input is also rejected when
+it exceeds 65,536 bytes before the CLI stores the full input in memory. The CLI
+converts accepted message input into a `rainrail.manual.message`
+`RainrailDispatchEventEnvelope` with `source.type: "manual"` and
+`source.name: "cli"`, then passes it to `RainrailCliEnvironment.dispatchRunner`
+inside a `RainrailDispatchRequest`.
 The request keeps `mode: "message"`, the original `input` string, the
 synthesized `event`, and the shared `config`, `profile`, and `json` selections
 parsed before the dispatch command. `--message` values that look like options
 are preserved as message text. The synthesized event payload applies the same
 credential-looking text redaction and 8KB text bound as manual/chat source
 input before writing `payload.message.text`; `rawPayload.sha256` still hashes
-the original CLI input. Each synthesized manual event includes a per-process
-sequence and random entropy in `delivery.id` so repeated dispatches, including
-parallel CLI processes in the same millisecond, do not collide.
+the original CLI input, and `rawPayload.contentType` is normalized to
+`text/plain`. Each synthesized manual event includes a per-process sequence and
+random entropy in `delivery.id` so repeated dispatches, including parallel CLI
+processes in the same millisecond, do not collide.
 
 The `envelope-json` mode remains a boundary for future full-envelope input:
 `rainrail dispatch --envelope-json <json>` forwards the raw JSON string in a

@@ -255,7 +255,7 @@ describe('Rainrail CLI built-in commands', () => {
           },
           rawPayload: {
             kind: 'inline-redacted',
-            contentType: 'text/plain; charset=utf-8',
+            contentType: 'text/plain',
           },
         },
         options: {
@@ -302,6 +302,27 @@ describe('Rainrail CLI built-in commands', () => {
         },
       },
     ]);
+  });
+
+  it('rejects stdin message input that exceeds the dispatch byte limit', () => {
+    const dispatched: unknown[] = [];
+
+    expect(runRainrailCli(['dispatch', '--stdin'], {
+      stdin: 'x'.repeat(65_537),
+      dispatchRunner: (request) => {
+        dispatched.push(request);
+        return {
+          exitCode: 0,
+          stdout: 'accepted message\n',
+          stderr: '',
+        };
+      },
+    })).toMatchObject({
+      exitCode: 1,
+      stdout: '',
+      stderr: 'Message from stdin must not exceed 65536 bytes.\n',
+    });
+    expect(dispatched).toEqual([]);
   });
 
   it('does not read stdin until dispatch input modes are valid', () => {
