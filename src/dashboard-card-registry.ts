@@ -104,24 +104,40 @@ export function createDashboardCardRegistry(): DashboardCardRegistry {
   const cards = new Map<string, DashboardCardDefinition>();
 
   const register = (definition: DashboardCardDefinition): void => {
-    validateDefinition(definition);
-    if (cards.has(definition.id)) {
+    const prepared = prepareDefinition(definition);
+    if (cards.has(prepared.id)) {
       throw new DashboardCardRegistryError(
-        `Dashboard card id "${definition.id}" is already registered`,
+        `Dashboard card id "${prepared.id}" is already registered`,
         'duplicate_id',
-        definition.id,
+        prepared.id,
       );
     }
 
-    cards.set(definition.id, freezeDefinition(cloneDefinition(definition)));
+    cards.set(prepared.id, prepared);
   };
 
   return {
     register,
     registerProvider(provider) {
+      validateProvider(provider);
+      const preparedCards: DashboardCardDefinition[] = [];
+      const providerIds = new Set<string>();
       for (const card of provider.cards) {
         validateProviderCard(provider, card);
-        register(card);
+        const prepared = prepareDefinition(card);
+        if (cards.has(prepared.id) || providerIds.has(prepared.id)) {
+          throw new DashboardCardRegistryError(
+            `Dashboard card id "${prepared.id}" is already registered`,
+            'duplicate_id',
+            prepared.id,
+          );
+        }
+        providerIds.add(prepared.id);
+        preparedCards.push(prepared);
+      }
+
+      for (const card of preparedCards) {
+        cards.set(card.id, card);
       }
     },
     list(options = {}) {
@@ -220,6 +236,7 @@ function validateDefinition(definition: DashboardCardDefinition): void {
 
   validateEntry(definition);
   validateRequiredCapabilities(definition);
+  validateSettingsSchema(definition);
   validateSize(definition);
 }
 
@@ -270,21 +287,60 @@ function validateRequiredCapabilities(definition: DashboardCardDefinition): void
   }
 }
 
-function validateProviderCard(provider: DashboardCardProvider, definition: DashboardCardDefinition): void {
+function validateProvider(provider: DashboardCardProvider): void {
   if (!isNonEmptyString(provider.name)) {
     throw new DashboardCardRegistryError(
       'Dashboard card provider name must be a non-empty string',
       'invalid_provider',
     );
   }
+}
 
-  if (definition.entry?.type !== 'plugin' || definition.entry.pluginName === provider.name) return;
+function validateProviderCard(provider: DashboardCardProvider, definition: DashboardCardDefinition): void {
+  if (definition.entry?.type !== 'plugin') {
+    throw new DashboardCardRegistryError(
+      `Provider "${provider.name}" cannot register non-plugin card "${definition.id}"`,
+      'invalid_provider',
+      definition.id,
+    );
+  }
+
+  if (definition.entry.pluginName === provider.name) return;
 
   throw new DashboardCardRegistryError(
     `Provider "${provider.name}" cannot register plugin card "${definition.id}" for plugin "${definition.entry.pluginName}"`,
     'invalid_provider',
     definition.id,
   );
+}
+
+function validateSettingsSchema(definition: DashboardCardDefinition): void {
+  const { settingsSchema } = definition;
+  if (settingsSchema === undefined) return;
+
+  if (!isPlainObject(settingsSchema)) {
+    throw new DashboardCardRegistryError(
+      `Dashboard card "${definition.id}" settingsSchema must be a plain JSON object`,
+      'invalid_definition',
+      definition.id,
+    );
+  }
+
+  if (settingsSchema.type !== 'object') {
+    throw new DashboardCardRegistryError(
+      `Dashboard card "${definition.id}" settingsSchema.type must be "object"`,
+      'invalid_definition',
+      definition.id,
+    );
+  }
+
+  if (!isJsonSerializable(settingsSchema)) {
+    throw new DashboardCardRegistryError(
+      `Dashboard card "${definition.id}" settingsSchema must contain only JSON-serializable values`,
+      'invalid_definition',
+      definition.id,
+    );
+  }
 }
 
 function validateSize(definition: DashboardCardDefinition): void {
@@ -362,6 +418,11 @@ function isPositiveInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isInteger(value) && value > 0;
 }
 
+function prepareDefinition(definition: DashboardCardDefinition): DashboardCardDefinition {
+  validateDefinition(definition);
+  return freezeDefinition(cloneDefinition(definition));
+}
+
 function cloneDefinition(definition: DashboardCardDefinition): DashboardCardDefinition {
   return {
     id: definition.id,
@@ -412,4 +473,27 @@ function deepFreeze<T>(value: T): T {
   }
 
   return Object.freeze(value);
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== 'object' || value === null) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function isJsonSerializable(value: unknown): boolean {
+  if (value === null) return true;
+
+  const valueType = typeof value;
+  if (valueType === 'string' || valueType === 'boolean') return true;
+  if (valueType === 'number') return Number.isFinite(value);
+  if (valueType !== 'object') return false;
+
+  if (Array.isArray(value)) {
+    return value.every(isJsonSerializable);
+  }
+
+  if (!isPlainObject(value)) return false;
+
+  return Object.values(value).every(isJsonSerializable);
 }

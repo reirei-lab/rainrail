@@ -106,6 +106,25 @@ describe('dashboard card registry contract', () => {
     } as unknown as DashboardCardDefinition)).toThrow(/requiredCapabilities must be an array of non-empty strings/u);
   });
 
+  it('rejects invalid settings schema at registration time', () => {
+    const registry = createDashboardCardRegistry();
+
+    expect(() => registry.register({
+      ...pluginQueueCard,
+      settingsSchema: { type: 'string' },
+    } as unknown as DashboardCardDefinition)).toThrow(/settingsSchema.type must be "object"/u);
+
+    expect(() => registry.register({
+      ...pluginQueueCard,
+      settingsSchema: new Map([['type', 'object']]),
+    } as unknown as DashboardCardDefinition)).toThrow(/settingsSchema must be a plain JSON object/u);
+
+    expect(() => registry.register({
+      ...pluginQueueCard,
+      settingsSchema: { type: 'object', properties: { repository: undefined } },
+    } as unknown as DashboardCardDefinition)).toThrow(/settingsSchema must contain only JSON-serializable values/u);
+  });
+
   it('rejects invalid size constraints', () => {
     const registry = createDashboardCardRegistry();
 
@@ -168,6 +187,39 @@ describe('dashboard card registry contract', () => {
       kind: 'dashboard-card-provider',
       cards: [pluginQueueCard],
     })).toThrow(/Provider "other" cannot register plugin card "plugin:github.queue"/u);
+  });
+
+  it('rejects core cards from plugin providers', () => {
+    const registry = createDashboardCardRegistry();
+
+    expect(() => registry.registerProvider({
+      name: 'github',
+      kind: 'dashboard-card-provider',
+      cards: [recentEventsCard],
+    })).toThrow(/Provider "github" cannot register non-plugin card "core.recentEvents"/u);
+  });
+
+  it('keeps provider registration all-or-nothing when a later card is invalid', () => {
+    const registry = createDashboardCardRegistry();
+
+    expect(() => registry.registerProvider({
+      name: 'github',
+      kind: 'dashboard-card-provider',
+      cards: [
+        pluginQueueCard,
+        {
+          ...pluginQueueCard,
+          id: 'plugin:github.badSize',
+          entry: { type: 'plugin', pluginName: 'github', cardName: 'badSize' },
+          size: {
+            default: { columns: 1, rows: 2 },
+            min: { columns: 2, rows: 1 },
+          },
+        },
+      ],
+    })).toThrow(/default columns must be greater than or equal to min columns/u);
+
+    expect(registry.list({ enabledPlugins: ['github'] })).toEqual([]);
   });
 
   it('marks unavailable plugin cards and missing capabilities without dropping them from the catalog', () => {

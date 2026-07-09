@@ -307,7 +307,10 @@ plugin card の availability 評価では `DashboardCardListOptions.enabledPlugi
 plugin 有効性は未確認として扱い、`invalid_plugin` で unavailable にする。
 `registerProvider()` で plugin contribution を受ける場合、plugin entry の `pluginName` は
 `DashboardCardProvider.name` と一致しなければならない。別 provider の namespace を
-先取りする card は登録時に拒否する。
+先取りする card は登録時に拒否する。Core entry は Rainrail 本体の登録経路だけが扱い、
+plugin provider 経由の non-plugin entry は拒否する。provider 登録は all-or-nothing とし、
+複数 card のうち 1 件でも invalid definition、duplicate id、namespace mismatch があれば、
+その provider 由来の card は 1 件も catalog に追加しない。
 
 `requiredCapabilities` は dashboard 表示や provider 読み取りに必要な read-only
 capability を宣言する。registry の `list()` は caller が渡した
@@ -325,6 +328,9 @@ min/default/max の大小関係が壊れた definition は登録時に
 compatible な operator settings metadata で、secret value や provider credential は
 含めない。Card-specific rendering payload は別 API で解決し、registry contract は
 definition と layout metadata だけを持つ。
+`settingsSchema` を指定する場合は plain object、`type: "object"`、JSON-serializable な
+値だけを許可する。`Map`、function、`undefined`、`BigInt` など、JSON として安定保存できない
+値は登録時に拒否する。
 registry は登録時に検証済み definition を clone/freeze し、plugin 側が元 object を後から
 mutate しても Map key、entry namespace、capability、size、entry resolution failure の照合が
 変わらないようにする。
