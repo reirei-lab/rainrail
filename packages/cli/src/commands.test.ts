@@ -2405,12 +2405,22 @@ describe('Rainrail CLI built-in commands', () => {
         const overview = await fetch(`http://127.0.0.1:${restartPort}/api/v1/overview`);
         await expect(overview.json()).resolves.toMatchObject({ data: { counts: { events: 3 } } });
 
-        const events = await fetch(`http://127.0.0.1:${restartPort}/api/v1/events`);
-        await expect(events.json()).resolves.toMatchObject({
-          data: [{
-            id: 'local-event-000003',
-            deliveryId: 'delivery-sqlite-start-3',
-          }],
+        const events = await fetch(`http://127.0.0.1:${restartPort}/api/v1/events?limit=2`);
+        const eventsPayload = await events.json() as { data: Array<{ id: string; deliveryId: string }>; page: { nextCursor: string | null } };
+        expect(eventsPayload).toMatchObject({
+          data: [
+            { id: 'local-event-000003', deliveryId: 'delivery-sqlite-start-3' },
+            { id: 'local-event-000002', deliveryId: 'delivery-sqlite-start-2' },
+          ],
+          page: { nextCursor: expect.any(String) },
+        });
+
+        const nextEvents = await fetch(`http://127.0.0.1:${restartPort}/api/v1/events?limit=2&cursor=${eventsPayload.page.nextCursor}`);
+        await expect(nextEvents.json()).resolves.toMatchObject({
+          data: [
+            { id: 'local-event-000001', deliveryId: 'delivery-sqlite-start-1' },
+          ],
+          page: { nextCursor: null },
         });
       } finally {
         await closeTestServer(second);

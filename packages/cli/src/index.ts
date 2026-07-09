@@ -5693,7 +5693,7 @@ function createSqliteLocalRainrailEventStore(databasePath: string, eventLimit: n
       SELECT * FROM operational_events ORDER BY received_at DESC, id DESC LIMIT ?
     ) ORDER BY received_at ASC, id ASC`,
   );
-  const selectEventsNewest = database.prepare('SELECT * FROM operational_events ORDER BY received_at DESC, id DESC LIMIT ?');
+  const selectOperationalEventsNewest = database.prepare('SELECT * FROM operational_events ORDER BY received_at DESC, id DESC');
   const selectEvent = database.prepare('SELECT * FROM operational_events WHERE id = ?');
   const selectLocalEventIds = database.prepare('SELECT id FROM operational_events WHERE id LIKE ?');
   const selectActivities = database.prepare('SELECT * FROM activity_events ORDER BY created_at DESC, id DESC LIMIT ?');
@@ -5724,7 +5724,7 @@ function createSqliteLocalRainrailEventStore(databasePath: string, eventLimit: n
         .filter((event): event is LocalRainrailEvent => event !== undefined);
     },
     listOperationalEvents() {
-      return selectEventsNewest.all(eventLimit).map(localOperationalEventFromRow);
+      return selectOperationalEventsNewest.all().map(localOperationalEventFromRow);
     },
     getOperationalEvent(id) {
       const row = selectEvent.get(id);
