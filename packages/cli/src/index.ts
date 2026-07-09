@@ -147,9 +147,10 @@ export type RainrailDispatchRequest =
 
 export type RainrailDispatchRunnerResult = RainrailCliResult | Promise<RainrailCliResult>;
 
-export type RainrailDispatchRunner = (
-  request: RainrailDispatchRequest,
-) => RainrailDispatchRunnerResult;
+export type RainrailDispatchRunner = {
+  (request: RainrailDispatchRequest): RainrailDispatchRunnerResult;
+  readonly requiresAsyncCli?: true;
+};
 
 export type RainrailStandaloneDispatchFetchResult = {
   readonly status: number;
@@ -2529,6 +2530,14 @@ function runDispatchRequest(
     };
   }
 
+  if (isAsyncDispatchRunner(dispatchRunner)) {
+    return {
+      exitCode: 2,
+      stdout: '',
+      stderr: 'rainrail dispatch requires the async CLI runner for asynchronous dispatch runners.\n',
+    };
+  }
+
   const result = dispatchRunner(request);
   if (isPromiseLike(result)) {
     return {
@@ -2559,7 +2568,7 @@ async function runDispatchRequestAsync(
 export function createStandaloneRainrailDispatchRunner(
   options: RainrailStandaloneDispatchRunnerOptions = {},
 ): RainrailDispatchRunner {
-  return async (request) => {
+  return Object.assign(async (request: RainrailDispatchRequest) => {
     const env = options.env ?? process.env;
     const publishUrl = env.RAINRAIL_PUBLISH_URL;
     const publishToken = env.RAINRAIL_PUBLISH_TOKEN;
@@ -2574,14 +2583,23 @@ export function createStandaloneRainrailDispatchRunner(
 
     const body = request.mode === 'message' ? JSON.stringify(request.event) : request.input;
     const fetcher = options.fetcher ?? defaultStandaloneDispatchFetcher;
-    const response = await fetcher(publishUrl, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${publishToken}`,
-        'Content-Type': 'application/json',
-      },
-      body,
-    });
+    let response: RainrailStandaloneDispatchFetchResult;
+    try {
+      response = await fetcher(publishUrl, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${publishToken}`,
+          'Content-Type': 'application/json',
+        },
+        body,
+      });
+    } catch (error) {
+      return {
+        exitCode: 1,
+        stdout: '',
+        stderr: `rainrail dispatch publish failed: ${error instanceof Error ? error.message : String(error)}\n`,
+      };
+    }
     if (response.status < 200 || response.status >= 300) {
       return {
         exitCode: 1,
@@ -2612,11 +2630,15 @@ export function createStandaloneRainrailDispatchRunner(
       stdout: `Published ${eventDescription}.\n`,
       stderr: '',
     };
-  };
+  }, { requiresAsyncCli: true as const });
 }
 
 function isPromiseLike<T>(value: T | Promise<T>): value is Promise<T> {
   return typeof (value as { then?: unknown }).then === 'function';
+}
+
+function isAsyncDispatchRunner(dispatchRunner: RainrailDispatchRunner): boolean {
+  return dispatchRunner.requiresAsyncCli === true || isAsyncFunction(dispatchRunner);
 }
 
 async function defaultStandaloneDispatchFetcher(

@@ -27,7 +27,7 @@ describe('rainrail binary entrypoint', () => {
         stderr: { write: (value) => writes.push(`stderr:${value}`) },
       },
       {
-        dispatchRunner: createStandaloneRainrailDispatchRunner(),
+        dispatchRunner: createStandaloneRainrailDispatchRunner({ env: {} }),
         updateNoticeCheck: () => Promise.resolve(undefined),
       },
     );
@@ -135,6 +135,33 @@ describe('rainrail binary entrypoint', () => {
     expect(writes[0]).toContain('"status":200');
     expect(writes[0]).not.toContain('9007199254740993');
     expect(writes[0]).not.toContain('should-not-be-echoed');
+  });
+
+  it('converts standalone publish network failures into a CLI result', async () => {
+    const writes: string[] = [];
+
+    const result = await runRainrailCliEntrypoint(
+      ['dispatch', 'hello from standalone'],
+      {
+        stdout: { write: (value) => writes.push(`stdout:${value}`) },
+        stderr: { write: (value) => writes.push(`stderr:${value}`) },
+      },
+      {
+        dispatchRunner: createStandaloneRainrailDispatchRunner({
+          env: {
+            RAINRAIL_PUBLISH_URL: 'https://rainrail.example/publish',
+            RAINRAIL_PUBLISH_TOKEN: 'publish-token',
+          },
+          fetcher: () => Promise.reject(new Error('network unavailable')),
+        }),
+        updateNoticeCheck: () => Promise.resolve(undefined),
+      },
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(writes).toEqual([
+      'stderr:rainrail dispatch publish failed: network unavailable\n',
+    ]);
   });
 
   it('starts the update notice check before running the synchronous CLI and prints it after successful output', async () => {

@@ -218,9 +218,12 @@ dispatch runner is not configured by an embedded caller, JSON file/stdin input
 is not read before the standard missing-runner error is returned.
 `RainrailDispatchRunner` returns the same `RainrailCliResult` shape as other
 embedded command runners, or a promise for that shape when invoked through
-`runRainrailCliAsync` / `runRainrailCliEntrypoint`. The standalone publish
-runner uses the raw validated envelope string as its request body for complete
-envelope mode, so payload JSON is not re-parsed or echoed in the CLI summary.
+`runRainrailCliAsync` / `runRainrailCliEntrypoint`. The synchronous
+`runRainrailCli` path rejects async dispatch runners before invoking them, so a
+caller cannot accidentally start publish side effects and then receive a
+synchronous failure result. The standalone publish runner uses the raw validated
+envelope string as its request body for complete envelope mode, so payload JSON
+is not re-parsed or echoed in the CLI summary.
 
 The first `rainrail dispatch` CLI surface intentionally avoids per-field
 metadata flags such as `--source-name`, `--delivery-id`, or `--subject-id`.
