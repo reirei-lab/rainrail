@@ -5505,6 +5505,8 @@ type LocalRainrailEventStore = {
   readonly reserveLocalEventId?: () => string;
   readonly nextEventId?: () => number;
   readonly staleProjectClaimWarnings?: () => readonly LocalStaleProjectClaimWarning[];
+  readonly getDashboardLayout?: () => readonly LocalDashboardLayoutItem[] | undefined;
+  readonly saveDashboardLayout?: (items: readonly LocalDashboardLayoutItem[]) => void;
   readonly counts?: () => {
     readonly events: number;
     readonly activityEvents: number;
@@ -5532,7 +5534,7 @@ async function startLocalRainrailServer(options: RainrailStartOptions): Promise<
     nextEventId: eventStore?.nextEventId?.() ?? nextLocalEventId(restoredEvents),
     events: [...restoredEvents],
     sseClients: new Set(),
-    dashboardLayout: localCloneDashboardLayout(localDefaultDashboardLayout),
+    dashboardLayout: localCloneDashboardLayout(eventStore?.getDashboardLayout?.() ?? localDefaultDashboardLayout),
     ...(eventStore === undefined ? {} : { eventStore }),
   };
   const server = http.createServer((request, response) => {
@@ -5613,38 +5615,59 @@ function createLocalRainrailEventStore(
 
 function createMemoryLocalRainrailEventStore(eventLimit: number): LocalRainrailEventStore {
   let events: LocalRainrailEvent[] = [];
+  let dashboardLayout: LocalDashboardLayoutItem[] | undefined;
   return {
     eventLimit,
     listEvents: () => [...events],
+    getDashboardLayout: () => dashboardLayout === undefined ? undefined : localCloneDashboardLayout(dashboardLayout),
+    saveDashboardLayout(items) {
+      dashboardLayout = localCloneDashboardLayout(items);
+    },
     replaceEvents(nextEvents) {
       events = [...nextEvents].slice(-eventLimit);
     },
     close() {
       events = [];
+      dashboardLayout = undefined;
     },
   };
 }
 
 function createJsonLocalRainrailEventStore(databasePath: string, eventLimit: number): LocalRainrailEventStore {
-  let events = readLocalRainrailEventStoreJson(databasePath).slice(-eventLimit);
+  const initialData = readLocalRainrailEventStoreJson(databasePath);
+  let events = initialData.events.slice(-eventLimit);
+  let dashboardLayout = initialData.dashboardLayout;
+  const writeStore = (): void => {
+    mkdirSync(dirname(databasePath), { recursive: true });
+    writeFileSync(databasePath, `${JSON.stringify({
+      events,
+      ...(dashboardLayout === undefined ? {} : { dashboardLayout }),
+    }, null, 2)}\n`, { mode: 0o600 });
+  };
   return {
     eventLimit,
     listEvents: () => [...events],
+    getDashboardLayout: () => dashboardLayout === undefined ? undefined : localCloneDashboardLayout(dashboardLayout),
+    saveDashboardLayout(items) {
+      dashboardLayout = localCloneDashboardLayout(items);
+      writeStore();
+    },
     replaceEvents(nextEvents) {
       events = [...nextEvents].slice(-eventLimit);
-      mkdirSync(dirname(databasePath), { recursive: true });
-      writeFileSync(databasePath, `${JSON.stringify({ events }, null, 2)}\n`, { mode: 0o600 });
+      writeStore();
     },
     close() {
-      mkdirSync(dirname(databasePath), { recursive: true });
-      writeFileSync(databasePath, `${JSON.stringify({ events }, null, 2)}\n`, { mode: 0o600 });
+      writeStore();
     },
   };
 }
 
-function readLocalRainrailEventStoreJson(databasePath: string): LocalRainrailEvent[] {
+function readLocalRainrailEventStoreJson(databasePath: string): {
+  readonly events: readonly LocalRainrailEvent[];
+  readonly dashboardLayout?: readonly LocalDashboardLayoutItem[];
+} {
   if (!existsSync(databasePath)) {
-    return [];
+    return { events: [] };
   }
   const parsed = JSON.parse(readFileSync(databasePath, 'utf8')) as unknown;
   if (!isRecord(parsed) || !Array.isArray(parsed.events)) {
@@ -5653,7 +5676,12 @@ function readLocalRainrailEventStoreJson(databasePath: string): LocalRainrailEve
         + 'Use kind "sqlite", kind "memory", or choose a separate JSON databasePath.',
     );
   }
-  return parsed.events.filter(isLocalRainrailEvent);
+  return {
+    events: parsed.events.filter(isLocalRainrailEvent),
+    ...(Array.isArray(parsed.dashboardLayout)
+      ? { dashboardLayout: parseLocalDashboardLayoutItems(parsed.dashboardLayout) }
+      : {}),
+  };
 }
 
 function createSqliteLocalRainrailEventStore(databasePath: string, eventLimit: number): LocalRainrailEventStore {
@@ -5760,6 +5788,11 @@ function createSqliteLocalRainrailEventStore(databasePath: string, eventLimit: n
       name TEXT PRIMARY KEY,
       value INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS dashboard_layout (
+      id TEXT PRIMARY KEY,
+      items_json TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
   `);
   sqliteAddColumnIfMissing(
     database,
@@ -5782,6 +5815,14 @@ function createSqliteLocalRainrailEventStore(databasePath: string, eventLimit: n
   const selectActivities = database.prepare('SELECT * FROM activity_events ORDER BY created_at DESC, id DESC LIMIT ?');
   const selectAgentTasks = database.prepare('SELECT * FROM agent_tasks ORDER BY updated_at DESC, id DESC');
   const selectRetries = database.prepare('SELECT * FROM event_handler_retries ORDER BY next_retry_at ASC, handler_name ASC');
+  const selectDashboardLayout = database.prepare('SELECT * FROM dashboard_layout WHERE id = ?');
+  const upsertDashboardLayout = database.prepare(`
+    INSERT INTO dashboard_layout (id, items_json, updated_at)
+    VALUES (?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      items_json = excluded.items_json,
+      updated_at = excluded.updated_at
+  `);
   const insertEvent = database.prepare(
     `INSERT INTO operational_events (
       id, name, source_json, delivery_json, subject_json, occurred_at, received_at,
@@ -5851,6 +5892,14 @@ function createSqliteLocalRainrailEventStore(databasePath: string, eventLimit: n
     },
     staleProjectClaimWarnings() {
       return localStaleProjectClaimWarnings(selectAgentTasks.all().map(localOperationalAgentTaskFromRow));
+    },
+    getDashboardLayout() {
+      const row = selectDashboardLayout.get('user.dashboardLayout');
+      return row === undefined ? undefined : localDashboardLayoutItemsFromRow(row);
+    },
+    saveDashboardLayout(items) {
+      upsertDashboardLayout.run('user.dashboardLayout', JSON.stringify(items), new Date().toISOString());
+      protectSqliteDatabaseFiles(databasePath);
     },
     counts() {
       return {
@@ -6612,6 +6661,12 @@ async function handleLocalDashboardLayoutItemConfigRequest(
     });
     return;
   }
+  if (hasSensitiveLocalDashboardConfigKey(config)) {
+    writeJsonResponse(response, 400, { error: 'sensitive_dashboard_card_config', itemId }, request, {
+      'X-Request-ID': requestId,
+    });
+    return;
+  }
 
   const itemIndex = state.dashboardLayout.findIndex((item) => item.id === itemId);
   if (itemIndex < 0) {
@@ -6624,6 +6679,7 @@ async function handleLocalDashboardLayoutItemConfigRequest(
   state.dashboardLayout = state.dashboardLayout.map((item, index) => index === itemIndex
     ? { ...item, config: localCloneRecord(config) }
     : item);
+  state.eventStore?.saveDashboardLayout?.(state.dashboardLayout);
   writeJsonResponse(response, 200, { data: localDashboardLayout(state) }, request, {
     'X-Request-ID': requestId,
   });
@@ -7303,6 +7359,41 @@ function localCloneRecord(value: Record<string, unknown>): Record<string, unknow
   return JSON.parse(JSON.stringify(value)) as Record<string, unknown>;
 }
 
+function parseLocalDashboardLayoutItems(value: unknown): LocalDashboardLayoutItem[] {
+  if (!Array.isArray(value)) return [];
+  const items: LocalDashboardLayoutItem[] = [];
+  for (const rawItem of value) {
+    if (!isRecord(rawItem)) continue;
+    if (
+      typeof rawItem.id !== 'string'
+      || typeof rawItem.cardId !== 'string'
+      || typeof rawItem.x !== 'number'
+      || typeof rawItem.y !== 'number'
+      || typeof rawItem.columns !== 'number'
+      || typeof rawItem.rows !== 'number'
+    ) {
+      continue;
+    }
+    const config = isRecord(rawItem.config) && isJsonSerializableLocalValue(rawItem.config)
+      ? localCloneRecord(rawItem.config)
+      : undefined;
+    items.push({
+      id: rawItem.id,
+      cardId: rawItem.cardId,
+      x: rawItem.x,
+      y: rawItem.y,
+      columns: rawItem.columns,
+      rows: rawItem.rows,
+      ...(config === undefined ? {} : { config }),
+    });
+  }
+  return items;
+}
+
+function localDashboardLayoutItemsFromRow(row: unknown): readonly LocalDashboardLayoutItem[] {
+  return parseLocalDashboardLayoutItems(JSON.parse(requiredStringRowValue(row, 'items_json')) as unknown);
+}
+
 function isJsonSerializableLocalValue(value: unknown): boolean {
   try {
     JSON.stringify(value);
@@ -7310,6 +7401,16 @@ function isJsonSerializableLocalValue(value: unknown): boolean {
   } catch {
     return false;
   }
+}
+
+function hasSensitiveLocalDashboardConfigKey(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some(hasSensitiveLocalDashboardConfigKey);
+  if (!isRecord(value)) return false;
+  return Object.entries(value).some(([key, nested]) => isSensitiveLocalDashboardConfigKey(key) || hasSensitiveLocalDashboardConfigKey(nested));
+}
+
+function isSensitiveLocalDashboardConfigKey(key: string): boolean {
+  return /(?:authorization|cookie|token|secret|password|key|code|reset|verification|session|confirmation)/iu.test(key);
 }
 
 function isLocalDashboardLayoutItemConfigPath(pathname: string): boolean {

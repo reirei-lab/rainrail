@@ -291,9 +291,12 @@ describe('dashboard operational views', () => {
     expect(dashboardApp).toContain('settingsSchema');
     expect(dashboardApp).toContain('selectedLayoutItem.config');
     expect(dashboardApp).toContain('mergeCardSettingsConfig');
+    expect(dashboardApp).toContain('updateLatestCardSettingsConfig');
     expect(dashboardApp).toContain('cardSettingInputType');
     expect(dashboardApp).toContain('cardSettingChanged');
     expect(dashboardApp).toContain("input.dataset.cardSettingChanged !== 'true'");
+    expect(dashboardApp).toContain('delete config[name]');
+    expect(dashboardApp).toContain("currentValue !== null");
     expect(dashboardApp).toContain('cardSettingsDirty');
     expect(dashboardApp).toContain('if (cardSettingsDirty && options.quiet) return;');
     expect(dashboardApp).toContain('void refresh({ quiet: true });');

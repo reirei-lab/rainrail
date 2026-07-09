@@ -2363,6 +2363,17 @@ describe('Rainrail CLI built-in commands', () => {
           },
         });
 
+        const sensitiveLayoutConfig = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout/items/operational-totals/config`, {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ config: { apiToken: 'must-not-store' } }),
+        });
+        expect(sensitiveLayoutConfig.status).toBe(400);
+        await expect(sensitiveLayoutConfig.json()).resolves.toEqual({
+          error: 'sensitive_dashboard_card_config',
+          itemId: 'operational-totals',
+        });
+
         const sources = await fetch(`http://127.0.0.1:${port}/api/v1/sources`);
         await expect(sources.json()).resolves.toMatchObject({
           data: [{
@@ -2468,6 +2479,13 @@ describe('Rainrail CLI built-in commands', () => {
 
         const overview = await fetch(`http://127.0.0.1:${port}/api/v1/overview`);
         await expect(overview.json()).resolves.toMatchObject({ data: { counts: { events: 3 } } });
+
+        const layoutConfig = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout/items/operational-totals/config`, {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ config: { density: 'comfortable' } }),
+        });
+        expect(layoutConfig.status).toBe(200);
       } finally {
         await closeTestServer(first);
       }
@@ -2503,6 +2521,13 @@ describe('Rainrail CLI built-in commands', () => {
             { id: 'local-event-000001', deliveryId: 'delivery-sqlite-start-1' },
           ],
           page: { nextCursor: null },
+        });
+
+        const layout = await fetch(`http://127.0.0.1:${restartPort}/api/v1/dashboard/layout`);
+        await expect(layout.json()).resolves.toMatchObject({
+          data: {
+            items: [{ id: 'operational-totals', config: { density: 'comfortable' } }],
+          },
         });
       } finally {
         await closeTestServer(second);

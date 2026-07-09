@@ -786,7 +786,7 @@ if (root !== null) {
       input.type = inputType;
       if (input.type === 'checkbox') {
         input.checked = currentValue === true;
-      } else if (currentValue !== undefined) {
+      } else if (currentValue !== undefined && currentValue !== null) {
         input.value = String(currentValue);
       }
       label.append(input);
@@ -814,6 +814,7 @@ if (root !== null) {
     const config = mergeCardSettingsConfig(selectedLayoutItem.config, readCardSettingsConfig(cardSettingsForm));
     try {
       await client.saveDashboardLayoutItemConfig(selectedLayoutItem.id, config);
+      updateLatestCardSettingsConfig(selectedLayoutItem.id, config);
       cardSettingsDirty = false;
       markCardSettingsFormClean(cardSettingsForm);
       setCardSettingsStatus(copy.cardSettings.saved);
@@ -832,7 +833,11 @@ if (root !== null) {
       if (input.type === 'checkbox') {
         config[name] = input.checked;
       } else if (input.type === 'number') {
-        config[name] = input.value === '' ? null : Number(input.value);
+        if (input.value === '') {
+          config[name] = undefined;
+        } else {
+          config[name] = Number(input.value);
+        }
       } else {
         config[name] = input.value;
       }
@@ -844,9 +849,25 @@ if (root !== null) {
     currentConfig: Record<string, unknown> | undefined,
     renderedConfig: Record<string, unknown>,
   ): Record<string, unknown> {
-    return {
-      ...(currentConfig ?? {}),
-      ...renderedConfig,
+    const config: Record<string, unknown> = { ...(currentConfig ?? {}) };
+    for (const [name, value] of Object.entries(renderedConfig)) {
+      if (value === undefined) {
+        delete config[name];
+      } else {
+        config[name] = value;
+      }
+    }
+    return config;
+  }
+
+  function updateLatestCardSettingsConfig(layoutItemId: string, config: Record<string, unknown>): void {
+    if (latestData === undefined) return;
+    latestData = {
+      ...latestData,
+      layout: {
+        ...latestData.layout,
+        items: latestData.layout.items.map((item) => item.id === layoutItemId ? { ...item, config } : item),
+      },
     };
   }
 
@@ -869,7 +890,7 @@ function cardSettingInputType(schema: Record<string, unknown>, currentValue: unk
     return currentValue === undefined || typeof currentValue === 'boolean' ? 'checkbox' : undefined;
   }
   if (schemaType === 'number' || schemaType === 'integer') {
-    return currentValue === undefined || typeof currentValue === 'number' ? 'number' : undefined;
+    return currentValue === undefined || currentValue === null || typeof currentValue === 'number' ? 'number' : undefined;
   }
   if (schemaType === 'string') {
     return currentValue === undefined || typeof currentValue === 'string' ? 'text' : undefined;
