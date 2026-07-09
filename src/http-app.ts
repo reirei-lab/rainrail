@@ -14,7 +14,7 @@ import {
   type RainrailIntakeRegistry,
 } from './intake-adapter.js';
 import type {
-  RainrailOperationalStore,
+  OperationalStore,
   StoredActivityEvent,
   StoredAgentTask,
   StoredCommandResult,
@@ -68,7 +68,7 @@ export interface RainrailHttpAppOptions {
   eventsBearerToken?: string;
   runtime?: string;
   intakeAdapters?: readonly RainrailIntakeAdapter[];
-  operationalStore?: RainrailOperationalStore;
+  operationalStore?: OperationalStore;
   taskQueue?: Pick<TaskQueueProvider, 'listProjectIssues' | 'selection'>;
   dashboardCommandMaxBodyBytes?: number;
   dashboardAuth?: RainrailDashboardAuthOptions;
