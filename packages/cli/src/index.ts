@@ -5265,7 +5265,7 @@ function formatRainrailLock(projectName: string): string {
 }
 
 const localCorsHeaders = {
-  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Methods': 'GET, POST, PATCH, OPTIONS',
   'Access-Control-Allow-Headers': 'Authorization, Content-Type, Last-Event-ID, X-GitHub-Delivery, X-GitHub-Event, X-Hub-Signature-256, X-Rainrail-Client, X-Rainrail-Publish-Token, X-Request-ID',
   'Access-Control-Expose-Headers': 'X-Request-ID',
   'Access-Control-Max-Age': '86400',
@@ -5288,6 +5288,8 @@ const localCoreRoutePaths = new Set([
   '/api/v1/sources',
   '/api/v1/queue',
   '/api/v1/settings',
+  '/api/v1/dashboard/cards',
+  '/api/v1/dashboard/layout',
 ]);
 const localCoreRoutePrefixes = [
   '/_astro/',
@@ -5298,7 +5300,71 @@ const localCoreRoutePrefixes = [
   '/api/v1/sources/',
   '/api/v1/queue/',
   '/api/v1/settings/',
+  '/api/v1/dashboard/layout/items/',
 ] as const;
+
+type LocalDashboardLayoutItem = {
+  readonly id: string;
+  readonly cardId: string;
+  readonly x: number;
+  readonly y: number;
+  readonly columns: number;
+  readonly rows: number;
+  readonly config?: Record<string, unknown>;
+};
+
+type LocalDashboardLayoutSnapshot = {
+  readonly items: readonly LocalDashboardLayoutItem[];
+  readonly updatedAt: string;
+};
+
+type LocalDashboardCardDefinition = {
+  readonly id: string;
+  readonly title: string;
+  readonly description: string;
+  readonly entry: { readonly type: 'core'; readonly name: string };
+  readonly category: string;
+  readonly requiredCapabilities: readonly ['dashboard:read'];
+  readonly size: {
+    readonly default: { readonly columns: number; readonly rows: number };
+    readonly min: { readonly columns: number; readonly rows: number };
+    readonly max: { readonly columns: number; readonly rows: number };
+  };
+  readonly settingsSchema: {
+    readonly type: 'object';
+    readonly properties: Record<string, unknown>;
+    readonly additionalProperties: false;
+  };
+};
+
+const localDashboardSettingsSchema = {
+  type: 'object',
+  properties: {
+    density: { type: 'string' },
+  },
+  additionalProperties: false,
+} as const;
+
+const localDashboardCardDefinitions: readonly LocalDashboardCardDefinition[] = [
+  {
+    id: 'core.operationalTotals',
+    title: 'Operational totals',
+    description: 'Current event, workflow, agent task, retry, source, and queue totals.',
+    entry: { type: 'core', name: 'operationalTotals' },
+    category: 'operations',
+    requiredCapabilities: ['dashboard:read'],
+    size: {
+      default: { columns: 8, rows: 2 },
+      min: { columns: 4, rows: 1 },
+      max: { columns: 12, rows: 3 },
+    },
+    settingsSchema: localDashboardSettingsSchema,
+  },
+];
+
+const localDefaultDashboardLayout: readonly LocalDashboardLayoutItem[] = [
+  { id: 'operational-totals', cardId: 'core.operationalTotals', x: 0, y: 0, columns: 8, rows: 2 },
+];
 
 type LocalRainrailEvent = {
   readonly id: string;
@@ -5429,6 +5495,8 @@ type LocalRainrailServerState = {
   events: LocalRainrailEvent[];
   sseClients: Set<ServerResponse>;
   eventStore?: LocalRainrailEventStore;
+  dashboardLayout: LocalDashboardLayoutItem[];
+  dashboardLayoutUpdatedAt?: string;
 };
 
 type LocalRainrailEventStore = {
@@ -5443,6 +5511,8 @@ type LocalRainrailEventStore = {
   readonly reserveLocalEventId?: () => string;
   readonly nextEventId?: () => number;
   readonly staleProjectClaimWarnings?: () => readonly LocalStaleProjectClaimWarning[];
+  readonly getDashboardLayout?: () => LocalDashboardLayoutSnapshot | undefined;
+  readonly saveDashboardLayout?: (items: readonly LocalDashboardLayoutItem[]) => LocalDashboardLayoutSnapshot;
   readonly counts?: () => {
     readonly events: number;
     readonly activityEvents: number;
@@ -5466,10 +5536,13 @@ type LocalDashboardCommand = {
 async function startLocalRainrailServer(options: RainrailStartOptions): Promise<RainrailStartedServer> {
   const eventStore = createLocalRainrailEventStore(options.operationalStoreConfig);
   const restoredEvents = eventStore?.listEvents() ?? [];
+  const restoredDashboardLayout = eventStore?.getDashboardLayout?.();
   const state: LocalRainrailServerState = {
     nextEventId: eventStore?.nextEventId?.() ?? nextLocalEventId(restoredEvents),
     events: [...restoredEvents],
     sseClients: new Set(),
+    dashboardLayout: localCloneDashboardLayout(restoredDashboardLayout?.items ?? localDefaultDashboardLayout),
+    ...(restoredDashboardLayout === undefined ? {} : { dashboardLayoutUpdatedAt: restoredDashboardLayout.updatedAt }),
     ...(eventStore === undefined ? {} : { eventStore }),
   };
   const server = http.createServer((request, response) => {
@@ -5550,38 +5623,78 @@ function createLocalRainrailEventStore(
 
 function createMemoryLocalRainrailEventStore(eventLimit: number): LocalRainrailEventStore {
   let events: LocalRainrailEvent[] = [];
+  let dashboardLayout: LocalDashboardLayoutItem[] | undefined;
+  let dashboardLayoutUpdatedAt: string | undefined;
   return {
     eventLimit,
     listEvents: () => [...events],
+    getDashboardLayout: () => dashboardLayout === undefined || dashboardLayoutUpdatedAt === undefined
+      ? undefined
+      : { items: localCloneDashboardLayout(dashboardLayout), updatedAt: dashboardLayoutUpdatedAt },
+    saveDashboardLayout(items) {
+      dashboardLayoutUpdatedAt = new Date().toISOString();
+      dashboardLayout = localCloneDashboardLayout(items);
+      return { items: localCloneDashboardLayout(dashboardLayout), updatedAt: dashboardLayoutUpdatedAt };
+    },
     replaceEvents(nextEvents) {
       events = [...nextEvents].slice(-eventLimit);
     },
     close() {
       events = [];
+      dashboardLayout = undefined;
+      dashboardLayoutUpdatedAt = undefined;
     },
   };
 }
 
 function createJsonLocalRainrailEventStore(databasePath: string, eventLimit: number): LocalRainrailEventStore {
-  let events = readLocalRainrailEventStoreJson(databasePath).slice(-eventLimit);
+  const initialData = readLocalRainrailEventStoreJson(databasePath);
+  let events = initialData.events.slice(-eventLimit);
+  let dashboardLayout = initialData.dashboardLayout?.items;
+  let dashboardLayoutUpdatedAt = initialData.dashboardLayout?.updatedAt;
+  const writeStore = (
+    nextEvents = events,
+    nextDashboardLayout = dashboardLayout,
+    nextDashboardLayoutUpdatedAt = dashboardLayoutUpdatedAt,
+  ): void => {
+    mkdirSync(dirname(databasePath), { recursive: true });
+    writeFileSync(databasePath, `${JSON.stringify({
+      events: nextEvents,
+      ...(nextDashboardLayout === undefined || nextDashboardLayoutUpdatedAt === undefined
+        ? {}
+        : { dashboardLayout: nextDashboardLayout, dashboardLayoutUpdatedAt: nextDashboardLayoutUpdatedAt }),
+    }, null, 2)}\n`, { mode: 0o600 });
+  };
   return {
     eventLimit,
     listEvents: () => [...events],
+    getDashboardLayout: () => dashboardLayout === undefined || dashboardLayoutUpdatedAt === undefined
+      ? undefined
+      : { items: localCloneDashboardLayout(dashboardLayout), updatedAt: dashboardLayoutUpdatedAt },
+    saveDashboardLayout(items) {
+      const nextDashboardLayoutUpdatedAt = new Date().toISOString();
+      const nextDashboardLayout = localCloneDashboardLayout(items);
+      writeStore(events, nextDashboardLayout, nextDashboardLayoutUpdatedAt);
+      dashboardLayoutUpdatedAt = nextDashboardLayoutUpdatedAt;
+      dashboardLayout = nextDashboardLayout;
+      return { items: localCloneDashboardLayout(dashboardLayout), updatedAt: dashboardLayoutUpdatedAt };
+    },
     replaceEvents(nextEvents) {
       events = [...nextEvents].slice(-eventLimit);
-      mkdirSync(dirname(databasePath), { recursive: true });
-      writeFileSync(databasePath, `${JSON.stringify({ events }, null, 2)}\n`, { mode: 0o600 });
+      writeStore();
     },
     close() {
-      mkdirSync(dirname(databasePath), { recursive: true });
-      writeFileSync(databasePath, `${JSON.stringify({ events }, null, 2)}\n`, { mode: 0o600 });
+      writeStore();
     },
   };
 }
 
-function readLocalRainrailEventStoreJson(databasePath: string): LocalRainrailEvent[] {
+function readLocalRainrailEventStoreJson(databasePath: string): {
+  readonly events: readonly LocalRainrailEvent[];
+  readonly dashboardLayout?: LocalDashboardLayoutSnapshot;
+} {
   if (!existsSync(databasePath)) {
-    return [];
+    return { events: [] };
   }
   const parsed = JSON.parse(readFileSync(databasePath, 'utf8')) as unknown;
   if (!isRecord(parsed) || !Array.isArray(parsed.events)) {
@@ -5590,7 +5703,15 @@ function readLocalRainrailEventStoreJson(databasePath: string): LocalRainrailEve
         + 'Use kind "sqlite", kind "memory", or choose a separate JSON databasePath.',
     );
   }
-  return parsed.events.filter(isLocalRainrailEvent);
+  const dashboardLayoutUpdatedAt = typeof parsed.dashboardLayoutUpdatedAt === 'string'
+    ? parsed.dashboardLayoutUpdatedAt
+    : undefined;
+  return {
+    events: parsed.events.filter(isLocalRainrailEvent),
+    ...(Array.isArray(parsed.dashboardLayout) && dashboardLayoutUpdatedAt !== undefined
+      ? { dashboardLayout: { items: parseLocalDashboardLayoutItems(parsed.dashboardLayout), updatedAt: dashboardLayoutUpdatedAt } }
+      : {}),
+  };
 }
 
 function createSqliteLocalRainrailEventStore(databasePath: string, eventLimit: number): LocalRainrailEventStore {
@@ -5697,6 +5818,11 @@ function createSqliteLocalRainrailEventStore(databasePath: string, eventLimit: n
       name TEXT PRIMARY KEY,
       value INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS dashboard_layout (
+      id TEXT PRIMARY KEY,
+      items_json TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
   `);
   sqliteAddColumnIfMissing(
     database,
@@ -5719,6 +5845,14 @@ function createSqliteLocalRainrailEventStore(databasePath: string, eventLimit: n
   const selectActivities = database.prepare('SELECT * FROM activity_events ORDER BY created_at DESC, id DESC LIMIT ?');
   const selectAgentTasks = database.prepare('SELECT * FROM agent_tasks ORDER BY updated_at DESC, id DESC');
   const selectRetries = database.prepare('SELECT * FROM event_handler_retries ORDER BY next_retry_at ASC, handler_name ASC');
+  const selectDashboardLayout = database.prepare('SELECT * FROM dashboard_layout WHERE id = ?');
+  const upsertDashboardLayout = database.prepare(`
+    INSERT INTO dashboard_layout (id, items_json, updated_at)
+    VALUES (?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      items_json = excluded.items_json,
+      updated_at = excluded.updated_at
+  `);
   const insertEvent = database.prepare(
     `INSERT INTO operational_events (
       id, name, source_json, delivery_json, subject_json, occurred_at, received_at,
@@ -5788,6 +5922,16 @@ function createSqliteLocalRainrailEventStore(databasePath: string, eventLimit: n
     },
     staleProjectClaimWarnings() {
       return localStaleProjectClaimWarnings(selectAgentTasks.all().map(localOperationalAgentTaskFromRow));
+    },
+    getDashboardLayout() {
+      const row = selectDashboardLayout.get('user.dashboardLayout');
+      return row === undefined ? undefined : localDashboardLayoutItemsFromRow(row);
+    },
+    saveDashboardLayout(items) {
+      const updatedAt = new Date().toISOString();
+      upsertDashboardLayout.run('user.dashboardLayout', JSON.stringify(items), updatedAt);
+      protectSqliteDatabaseFiles(databasePath);
+      return { items: localCloneDashboardLayout(items), updatedAt };
     },
     counts() {
       return {
@@ -6497,6 +6641,27 @@ async function handleLocalRainrailRequest(
     return;
   }
 
+  if (request.method === 'GET' && url.pathname === '/api/v1/dashboard/cards') {
+    writeJsonResponse(response, 200, { data: localDashboardCards() }, request);
+    return;
+  }
+
+  if (request.method === 'GET' && url.pathname === '/api/v1/dashboard/layout') {
+    writeJsonResponse(response, 200, { data: localDashboardLayout(state) }, request);
+    return;
+  }
+
+  const localDashboardLayoutConfigMatch = /^\/api\/v1\/dashboard\/layout\/items\/([^/]+)\/config$/u.exec(url.pathname);
+  if (request.method === 'PATCH' && localDashboardLayoutConfigMatch !== null) {
+    const itemId = safeDecodeURIComponent(localDashboardLayoutConfigMatch[1] ?? '');
+    if (itemId === undefined) {
+      writeJsonResponse(response, 400, { error: 'invalid_dashboard_layout_item_id' }, request);
+      return;
+    }
+    await handleLocalDashboardLayoutItemConfigRequest(request, response, state, itemId);
+    return;
+  }
+
   const localCommand = localDashboardCommandForPath(url.pathname);
   if (request.method === 'POST' && localCommand !== undefined) {
     await handleLocalDashboardCommandRequest(request, response, localCommand, options.demoMode === true && url.searchParams.get('demo') === '1');
@@ -6504,6 +6669,54 @@ async function handleLocalRainrailRequest(
   }
 
   writeJsonResponse(response, 404, { error: 'not_found' }, request);
+}
+
+async function handleLocalDashboardLayoutItemConfigRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  state: LocalRainrailServerState,
+  itemId: string,
+): Promise<void> {
+  const requestId = localRequestId(request);
+  const body = await readLocalJsonObjectBody(request);
+  if (!body.ok) {
+    writeJsonResponse(response, body.status, { error: body.error }, request, {
+      'X-Request-ID': requestId,
+    });
+    return;
+  }
+
+  const config = body.value.config;
+  if (!isRecord(config) || !isJsonSerializableLocalValue(config)) {
+    writeJsonResponse(response, 400, { error: 'invalid_dashboard_card_config', itemId }, request, {
+      'X-Request-ID': requestId,
+    });
+    return;
+  }
+  if (hasSensitiveLocalDashboardConfigKey(config)) {
+    writeJsonResponse(response, 400, { error: 'sensitive_dashboard_card_config', itemId }, request, {
+      'X-Request-ID': requestId,
+    });
+    return;
+  }
+
+  const itemIndex = state.dashboardLayout.findIndex((item) => item.id === itemId);
+  if (itemIndex < 0) {
+    writeJsonResponse(response, 404, { error: 'unknown_dashboard_layout_item', itemId }, request, {
+      'X-Request-ID': requestId,
+    });
+    return;
+  }
+
+  const nextDashboardLayout = state.dashboardLayout.map((item, index) => index === itemIndex
+    ? { ...item, config: localCloneRecord(config) }
+    : item);
+  const saved = state.eventStore?.saveDashboardLayout?.(nextDashboardLayout);
+  state.dashboardLayout = localCloneDashboardLayout(saved?.items ?? nextDashboardLayout);
+  state.dashboardLayoutUpdatedAt = saved?.updatedAt ?? new Date().toISOString();
+  writeJsonResponse(response, 200, { data: localDashboardLayout(state) }, request, {
+    'X-Request-ID': requestId,
+  });
 }
 
 async function handleLocalDashboardCommandRequest(
@@ -7148,6 +7361,122 @@ function localSettingsRows(options: RainrailStartOptions): readonly LocalSetting
   ];
 }
 
+function localDashboardCards(): readonly unknown[] {
+  return localDashboardCardDefinitions.map((definition) => ({
+    definition,
+    availability: { status: 'available' },
+  }));
+}
+
+function localDashboardLayout(state: LocalRainrailServerState): {
+  readonly id: 'core.defaultLayout' | 'user.dashboardLayout';
+  readonly source: 'default' | 'user';
+  readonly updatedAt: string | null;
+  readonly items: readonly LocalDashboardLayoutItem[];
+} {
+  const updatedAt = state.dashboardLayoutUpdatedAt;
+  return {
+    id: updatedAt === undefined ? 'core.defaultLayout' : 'user.dashboardLayout',
+    source: updatedAt === undefined ? 'default' : 'user',
+    updatedAt: updatedAt ?? null,
+    items: localCloneDashboardLayout(state.dashboardLayout),
+  };
+}
+
+function localCloneDashboardLayout(items: readonly LocalDashboardLayoutItem[]): LocalDashboardLayoutItem[] {
+  return items.map((item) => ({
+    ...item,
+    ...(item.config === undefined ? {} : { config: localCloneRecord(item.config) }),
+  }));
+}
+
+function localCloneRecord(value: Record<string, unknown>): Record<string, unknown> {
+  return JSON.parse(JSON.stringify(value)) as Record<string, unknown>;
+}
+
+function parseLocalDashboardLayoutItems(value: unknown): LocalDashboardLayoutItem[] {
+  if (!Array.isArray(value)) return [];
+  const items: LocalDashboardLayoutItem[] = [];
+  for (const rawItem of value) {
+    if (!isRecord(rawItem)) continue;
+    if (
+      typeof rawItem.id !== 'string'
+      || typeof rawItem.cardId !== 'string'
+      || typeof rawItem.x !== 'number'
+      || typeof rawItem.y !== 'number'
+      || typeof rawItem.columns !== 'number'
+      || typeof rawItem.rows !== 'number'
+    ) {
+      continue;
+    }
+    const config = sanitizeLocalDashboardConfig(rawItem.config);
+    items.push({
+      id: rawItem.id,
+      cardId: rawItem.cardId,
+      x: rawItem.x,
+      y: rawItem.y,
+      columns: rawItem.columns,
+      rows: rawItem.rows,
+      ...(config === undefined ? {} : { config }),
+    });
+  }
+  return items;
+}
+
+function localDashboardLayoutItemsFromRow(row: unknown): LocalDashboardLayoutSnapshot {
+  return {
+    items: parseLocalDashboardLayoutItems(JSON.parse(requiredStringRowValue(row, 'items_json')) as unknown),
+    updatedAt: requiredStringRowValue(row, 'updated_at'),
+  };
+}
+
+function isJsonSerializableLocalValue(value: unknown): boolean {
+  try {
+    JSON.stringify(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function sanitizeLocalDashboardConfig(value: unknown): Record<string, unknown> | undefined {
+  if (!isRecord(value) || !isJsonSerializableLocalValue(value)) return undefined;
+  const sanitized = omitSensitiveLocalDashboardConfigKeys(value);
+  return Object.keys(sanitized).length === 0 ? undefined : sanitized;
+}
+
+function omitSensitiveLocalDashboardConfigKeys(value: Record<string, unknown>): Record<string, unknown> {
+  const sanitized: Record<string, unknown> = {};
+  for (const [key, nested] of Object.entries(value)) {
+    if (isSensitiveLocalDashboardConfigKey(key)) continue;
+    if (isRecord(nested)) {
+      const nestedSanitized = omitSensitiveLocalDashboardConfigKeys(nested);
+      if (Object.keys(nestedSanitized).length > 0) sanitized[key] = nestedSanitized;
+      continue;
+    }
+    if (Array.isArray(nested)) {
+      sanitized[key] = nested.map((item) => isRecord(item) ? omitSensitiveLocalDashboardConfigKeys(item) : item);
+      continue;
+    }
+    sanitized[key] = nested;
+  }
+  return sanitized;
+}
+
+function hasSensitiveLocalDashboardConfigKey(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some(hasSensitiveLocalDashboardConfigKey);
+  if (!isRecord(value)) return false;
+  return Object.entries(value).some(([key, nested]) => isSensitiveLocalDashboardConfigKey(key) || hasSensitiveLocalDashboardConfigKey(nested));
+}
+
+function isSensitiveLocalDashboardConfigKey(key: string): boolean {
+  return /(?:authorization|cookie|token|secret|password|key|credential|code|reset|verification|session|confirmation)/iu.test(key);
+}
+
+function isLocalDashboardLayoutItemConfigPath(pathname: string): boolean {
+  return /^\/api\/v1\/dashboard\/layout\/items\/[^/]+\/config$/u.test(pathname);
+}
+
 function matchesOptionalLocalFilter(value: string | undefined, filter: string | null): boolean {
   return filter === null || filter.length === 0 || value === filter;
 }
@@ -7389,6 +7718,7 @@ function isLocalRequestHost(request: IncomingMessage): boolean {
 }
 
 function requiredLocalDashboardScopeForPath(pathname: string): LocalDashboardScope {
+  if (isLocalDashboardLayoutItemConfigPath(pathname)) return 'operator';
   return localDashboardCommandForPath(pathname) === undefined ? 'read-only' : 'operator';
 }
 
@@ -7705,13 +8035,16 @@ function preflightMethodsForLocalPath(pathname: string, options: RainrailStartOp
   if (/^\/api\/v1\/events\/[^/]+$/u.test(pathname)) return ['GET', 'OPTIONS'];
   if (/^\/api\/v1\/workflow-runs\/[^/]+$/u.test(pathname)) return ['GET', 'OPTIONS'];
   if (/^\/api\/v1\/agent-tasks\/[^/]+$/u.test(pathname)) return ['GET', 'OPTIONS'];
+  if (isLocalDashboardLayoutItemConfigPath(pathname)) return ['PATCH', 'OPTIONS'];
   if (localDashboardCommandForPath(pathname) !== undefined) return ['POST', 'OPTIONS'];
   if (
     pathname === '/api/v1/workflow-runs' ||
     pathname === '/api/v1/agent-tasks' ||
     pathname === '/api/v1/sources' ||
     pathname === '/api/v1/queue' ||
-    pathname === '/api/v1/settings'
+    pathname === '/api/v1/settings' ||
+    pathname === '/api/v1/dashboard/cards' ||
+    pathname === '/api/v1/dashboard/layout'
   ) {
     return ['GET', 'OPTIONS'];
   }

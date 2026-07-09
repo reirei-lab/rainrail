@@ -34,6 +34,7 @@ v1 resource は operational workflow を観察・操作する単位に合わせ�
 | Settings | `GET /api/v1/settings` | operator-visible runtime/source settings metadata。secret value は返さない。 | `read-only` |
 | Dashboard card catalog | `GET /api/v1/dashboard/cards` | Core/plugin dashboard card definition と availability を返す。 | `read-only` |
 | Dashboard layout | `GET /api/v1/dashboard/layout` | 保存済み user layout、未保存時は `core.defaultLayout` を返す。 | `read-only` |
+| Save dashboard card config | `PATCH /api/v1/dashboard/layout/items/:itemId/config` | 対象 layout item の `config` だけを更新する。 | `operator` |
 
 Action endpoints は resource ごとの `actions` subresource として追加する。初期 command API は
 handler 注入で実操作に接続し、HTTP layer は endpoint、scope check、confirmation、audit/result
@@ -138,10 +139,21 @@ card も catalog からは落とさない。HTTP app に registry が注入さ�
 layout item は `id`、`cardId`、`x`、`y`、`columns`、`rows`、任意の JSON object `config` を持つ。
 永続化されるのは card definition の copy ではなく `cardId` 参照なので、card definition が変わっても
 layout は catalog の現在値と照合して復元する。
+Dashboard UI の card settings は catalog の `definition.settingsSchema` から描画し、保存値は
+該当 layout item の `config` に保存する。plugin card からは token や store へ直接触れず、
+dashboard shell が検証した layout config と sandbox bridge capability だけを渡す。
 
 `PUT /api/v1/dashboard/layout` は `{ "items": [...] }` を受け取り、operator scope を要求する。
 保存前に item id 重複、不明 card id、unavailable card、範囲外 size、非 JSON object config を
-`400` として拒否し、検証済み item だけを operational store に保存する。
+`400` として拒否し、secret / token / credential 系 key を含まない検証済み item だけを
+operational store に保存する。
+
+`PATCH /api/v1/dashboard/layout/items/:itemId/config` は `{ "config": {...} }` を受け取り、
+対象 item の `config` だけを差し替える。保存済み layout に現在の catalog では unavailable な
+plugin card が含まれていて `GET /api/v1/dashboard/layout` の返却から filter されている場合も、
+この endpoint は store 内の既存 layout 全体を読み、対象 item 以外は再保存時に保持する。
+対象 item 自体は現在の catalog / size / config validation を通すため、不明 item、unavailable item、
+非 JSON object config、secret / token / credential 系 key は拒否する。
 
 ## Pagination, filtering, and sorting
 

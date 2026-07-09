@@ -231,7 +231,8 @@ function isDashboardCommandRoute(pathname: string, method: string): boolean {
 
 function isDashboardBodyRoute(pathname: string, method: string): boolean {
   return isDashboardCommandRoute(pathname, method)
-    || (method.toUpperCase() === 'PUT' && pathname === '/api/v1/dashboard/layout');
+    || (method.toUpperCase() === 'PUT' && pathname === '/api/v1/dashboard/layout')
+    || (method.toUpperCase() === 'PATCH' && /^\/api\/v1\/dashboard\/layout\/items\/[^/]+\/config$/.test(pathname));
 }
 
 function isStatusCodeError(error: unknown): error is { statusCode: number } {

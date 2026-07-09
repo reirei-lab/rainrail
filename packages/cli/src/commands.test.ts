@@ -2321,6 +2321,61 @@ describe('Rainrail CLI built-in commands', () => {
           });
         }
 
+        const cards = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/cards`);
+        expect(cards.status).toBe(200);
+        await expect(cards.json()).resolves.toMatchObject({
+          data: [{
+            definition: {
+              id: 'core.operationalTotals',
+              settingsSchema: { type: 'object' },
+            },
+            availability: { status: 'available' },
+          }],
+        });
+
+        const layout = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout`);
+        expect(layout.status).toBe(200);
+        await expect(layout.json()).resolves.toMatchObject({
+          data: {
+            id: 'core.defaultLayout',
+            source: 'default',
+            updatedAt: null,
+            items: [{ id: 'operational-totals', cardId: 'core.operationalTotals' }],
+          },
+        });
+
+        const layoutConfigPreflight = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout/items/operational-totals/config`, {
+          method: 'OPTIONS',
+        });
+        expect(layoutConfigPreflight.status).toBe(204);
+        expect(layoutConfigPreflight.headers.get('access-control-allow-methods')).toBe('PATCH, OPTIONS');
+
+        const layoutConfig = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout/items/operational-totals/config`, {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ config: { density: 'compact' } }),
+        });
+        expect(layoutConfig.status).toBe(200);
+        await expect(layoutConfig.json()).resolves.toMatchObject({
+          data: {
+            id: 'user.dashboardLayout',
+            source: 'user',
+            updatedAt: expect.not.stringMatching(/^1970-01-01/u),
+            items: [{ id: 'operational-totals', config: { density: 'compact' } }],
+          },
+        });
+
+        const sensitiveLayoutConfig = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout/items/operational-totals/config`, {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ config: { credential: 'must-not-store' } }),
+        });
+        expect(sensitiveLayoutConfig.status).toBe(400);
+        await expect(sensitiveLayoutConfig.json()).resolves.toEqual({
+          error: 'sensitive_dashboard_card_config',
+          itemId: 'operational-totals',
+        });
+
         const sources = await fetch(`http://127.0.0.1:${port}/api/v1/sources`);
         await expect(sources.json()).resolves.toMatchObject({
           data: [{
@@ -2368,6 +2423,60 @@ describe('Rainrail CLI built-in commands', () => {
       } finally {
         await closeTestServer(result);
       }
+    });
+  });
+
+  it('does not update local dashboard layout memory when JSON persistence fails', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'json-layout-save-failure');
+      const port = await getFreePort();
+      const blockedParent = join(projectRoot, 'var', 'blocked-parent');
+      const databasePath = join(blockedParent, 'rainrail-operational.json');
+      await mkdir(join(projectRoot, 'var'), { recursive: true });
+      await writeFile(blockedParent, 'not a directory');
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        server: {
+          host: '127.0.0.1',
+          port,
+        },
+        operationalStore: {
+          kind: 'json',
+          databasePath,
+          eventLimit: 10,
+        },
+        sourceBundles: [],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+
+      const result = await runRainrailCliAsync(['start'], { cwd: projectRoot });
+      try {
+        expect(result.exitCode).toBe(0);
+        const failed = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout/items/operational-totals/config`, {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ config: { density: 'compact' } }),
+        });
+        expect(failed.status).toBe(500);
+
+        const layout = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout`);
+        await expect(layout.json()).resolves.toMatchObject({
+          data: {
+            id: 'core.defaultLayout',
+            source: 'default',
+            updatedAt: null,
+            items: [{ id: 'operational-totals' }],
+          },
+        });
+        const layoutBody = await (await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout`)).text();
+        expect(layoutBody).not.toContain('compact');
+      } finally {
+        await rm(blockedParent, { force: true });
+        await closeTestServer(result);
+      }
+      const persisted = JSON.parse(await readFile(databasePath, 'utf8')) as { dashboardLayout?: unknown };
+      expect(JSON.stringify(persisted.dashboardLayout ?? '')).not.toContain('compact');
     });
   });
 
@@ -2426,9 +2535,28 @@ describe('Rainrail CLI built-in commands', () => {
 
         const overview = await fetch(`http://127.0.0.1:${port}/api/v1/overview`);
         await expect(overview.json()).resolves.toMatchObject({ data: { counts: { events: 3 } } });
+
+        const layoutConfig = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout/items/operational-totals/config`, {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ config: { density: 'comfortable' } }),
+        });
+        expect(layoutConfig.status).toBe(200);
       } finally {
         await closeTestServer(first);
       }
+
+      withSqliteDatabase(databasePath, (database) => {
+        database.prepare('UPDATE dashboard_layout SET items_json = ? WHERE id = ?').run(JSON.stringify([{
+          id: 'operational-totals',
+          cardId: 'core.operationalTotals',
+          x: 0,
+          y: 0,
+          columns: 8,
+          rows: 2,
+          config: { density: 'comfortable', apiToken: 'must-not-read' },
+        }]), 'user.dashboardLayout');
+      });
 
       const limitedConfig = JSON.parse(startConfig(restartPort)) as Record<string, unknown>;
       if (
@@ -2462,6 +2590,19 @@ describe('Rainrail CLI built-in commands', () => {
           ],
           page: { nextCursor: null },
         });
+
+        const layout = await fetch(`http://127.0.0.1:${restartPort}/api/v1/dashboard/layout`);
+        await expect(layout.json()).resolves.toMatchObject({
+          data: {
+            id: 'user.dashboardLayout',
+            source: 'user',
+            updatedAt: expect.not.stringMatching(/^1970-01-01/u),
+            items: [{ id: 'operational-totals', config: { density: 'comfortable' } }],
+          },
+        });
+        const layoutBody = await (await fetch(`http://127.0.0.1:${restartPort}/api/v1/dashboard/layout`)).text();
+        expect(layoutBody).not.toContain('must-not-read');
+        expect(layoutBody).not.toContain('apiToken');
       } finally {
         await closeTestServer(second);
       }

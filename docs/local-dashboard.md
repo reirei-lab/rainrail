@@ -226,7 +226,10 @@ design should add tests for:
 
 The local dashboard defaults to same origin fetches such as
 `/api/v1/overview`, `/api/v1/events`, `/api/v1/queue`, and
-`/api/v1/settings`. This is the path used by `rainrail start`.
+`/api/v1/settings`. `rainrail start` also serves the same-origin dashboard card
+catalog/layout routes used by the card settings UI:
+`/api/v1/dashboard/cards`, `/api/v1/dashboard/layout`, and
+`PATCH /api/v1/dashboard/layout/items/:itemId/config`.
 
 The Cloudflare Pages product/docs site is separate. When the static dashboard
 page is built for Pages and needs to call an external operational API, set

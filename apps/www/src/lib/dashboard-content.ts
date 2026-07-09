@@ -204,6 +204,16 @@ export type DashboardAppCopy = {
       allRunningTasks: string;
     };
   };
+  cardSettings: {
+    title: string;
+    card: string;
+    save: string;
+    saved: string;
+    failed: string;
+    invalid: string;
+    empty: string;
+    noFields: string;
+  };
 };
 
 export const getDashboardHref = (locale: Locale): string => `/${locale}/dashboard`;
@@ -353,6 +363,16 @@ const englishApp: DashboardAppCopy = {
       allRunningTasks: 'all running tasks',
     },
   },
+  cardSettings: {
+    title: 'Card settings',
+    card: 'Card',
+    save: 'Save card settings',
+    saved: 'Card settings saved',
+    failed: 'Card settings save failed',
+    invalid: 'Fix invalid card settings before saving.',
+    empty: 'No dashboard cards in the current layout.',
+    noFields: 'This card has no configurable fields.',
+  },
 };
 
 export const fallbackDashboardAppCopy: DashboardAppCopy = englishApp;
@@ -501,6 +521,16 @@ const japaneseApp: DashboardAppCopy = {
     targets: {
       allRunningTasks: '一括対象の実行中タスク',
     },
+  },
+  cardSettings: {
+    title: 'カード設定',
+    card: 'カード',
+    save: 'カード設定を保存',
+    saved: 'カード設定を保存しました',
+    failed: 'カード設定の保存に失敗しました',
+    invalid: '無効なカード設定を修正してから保存してください。',
+    empty: '現在のレイアウトに dashboard card がありません。',
+    noFields: 'このカードに設定項目はありません。',
   },
 };
 

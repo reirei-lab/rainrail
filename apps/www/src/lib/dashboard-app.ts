@@ -1,9 +1,11 @@
 import {
   RainrailDashboardApiClient,
   RainrailDashboardApiError,
+  type DashboardCardCatalogEntry,
   type DashboardAgentTask,
   type DashboardDetail,
   type DashboardEvent,
+  type DashboardLayout,
   type DashboardOverview,
   type DashboardQueueItem,
   type DashboardSetting,
@@ -24,6 +26,8 @@ interface DashboardData {
   sources: DashboardSource[];
   queue: DashboardQueueItem[];
   settings: DashboardSetting[];
+  cards: DashboardCardCatalogEntry[];
+  layout: DashboardLayout['data'];
 }
 
 interface DashboardInitialState {
@@ -69,6 +73,10 @@ if (root !== null) {
   const operatorActions = Array.from(root.querySelectorAll<HTMLButtonElement>('[data-action-permission="operator"]'));
   const agentActionButtons = Array.from(root.querySelectorAll<HTMLButtonElement>('[data-agent-action]'));
   const commandStatus = root.querySelector<HTMLElement>('[data-command-status]');
+  const cardSettingsSelect = root.querySelector<HTMLSelectElement>('[data-card-settings-select]');
+  const cardSettingsForm = root.querySelector<HTMLElement>('[data-card-settings-form]');
+  const cardSettingsSaveButton = root.querySelector<HTMLButtonElement>('[data-card-settings-save]');
+  const cardSettingsStatus = root.querySelector<HTMLElement>('[data-card-settings-status]');
   const demoIndicator = root.querySelector<HTMLElement>('[data-demo-indicator]');
   const tabButtons = Array.from(root.querySelectorAll<HTMLButtonElement>('[data-dashboard-tab]'));
 
@@ -84,6 +92,7 @@ if (root !== null) {
   let detailRequestSequence = 0;
   let selectedDetailRowId: string | undefined;
   let selectedAgentTaskId: string | undefined;
+  let cardSettingsDirty = false;
 
   const storedToken = sessionStore.get(TOKEN_STORAGE_KEY) ?? '';
   const storedApiBaseUrl = sessionStore.get(API_BASE_URL_STORAGE_KEY) ?? appRoot.dataset.apiBaseUrl ?? '';
@@ -201,6 +210,22 @@ if (root !== null) {
     });
   }
 
+  cardSettingsSelect?.addEventListener('change', () => {
+    cardSettingsDirty = false;
+    renderCardSettingsForm();
+  });
+
+  cardSettingsForm?.addEventListener('input', (event) => {
+    if (event.target instanceof HTMLInputElement && event.target.dataset.cardSetting !== undefined) {
+      event.target.dataset.cardSettingChanged = 'true';
+    }
+    cardSettingsDirty = true;
+  });
+
+  cardSettingsSaveButton?.addEventListener('click', () => {
+    void saveSelectedCardSettings();
+  });
+
   async function refresh(options: { quiet?: boolean } = {}): Promise<void> {
     if (client === undefined) {
       setState('auth-missing', copy.status.authMissing);
@@ -223,6 +248,8 @@ if (root !== null) {
         sources: (await activeClient.sources()).data,
         queue: (await activeClient.queue(currentQueueFilters())).data,
         settings: (await activeClient.settings()).data,
+        cards: (await activeClient.dashboardCards()).data,
+        layout: (await activeClient.dashboardLayout()).data,
       };
       if (!isCurrentRefresh(activeClient, activeRefreshId)) return;
 
@@ -230,6 +257,7 @@ if (root !== null) {
       lastUpdatedAt = Date.now();
       scheduleStaleCheck();
       renderStats(latestData.overview);
+      renderCardSettingsPicker(options);
       renderCurrentList();
       const hasOperationalData = hasDashboardRecords(latestData);
       setState(hasOperationalData ? 'ready' : 'empty', hasOperationalData ? copy.status.ready : copy.status.empty);
@@ -405,6 +433,8 @@ if (root !== null) {
     if (staleIndicator !== null) staleIndicator.hidden = true;
     renderEmptyStats();
     if (list !== null) list.replaceChildren();
+    if (cardSettingsSelect !== null) cardSettingsSelect.replaceChildren();
+    if (cardSettingsForm !== null) cardSettingsForm.replaceChildren();
     renderPlaceholderDetail(copy.placeholder.selectStream);
   }
 
@@ -447,6 +477,10 @@ if (root !== null) {
   function setOperatorActionsEnabled(enabled: boolean): void {
     for (const action of operatorActions) {
       const agentAction = action.dataset.agentAction;
+      if (agentAction === undefined) {
+        action.disabled = !enabled;
+        continue;
+      }
       const needsSelectedTask = agentAction !== 'terminate-all';
       action.disabled = !enabled || (needsSelectedTask && selectedAgentTaskId === undefined);
     }
@@ -695,6 +729,212 @@ if (root !== null) {
   function setCommandStatus(message: string): void {
     if (commandStatus !== null) commandStatus.textContent = message;
   }
+
+  function renderCardSettingsPicker(options: { quiet?: boolean } = {}): void {
+    if (latestData === undefined || cardSettingsSelect === null) return;
+    if (cardSettingsDirty && options.quiet) return;
+
+    const selectedValue = cardSettingsSelect.value;
+    const cardTitles = new Map(latestData.cards.map((entry) => [entry.definition.id, entry.definition.title]));
+    cardSettingsSelect.replaceChildren(...latestData.layout.items.map((item) => {
+      const option = document.createElement('option');
+      option.value = item.id;
+      option.textContent = `${cardTitles.get(item.cardId) ?? item.cardId} (${item.id})`;
+      return option;
+    }));
+    if (latestData.layout.items.some((item) => item.id === selectedValue)) {
+      cardSettingsSelect.value = selectedValue;
+    }
+    renderCardSettingsForm();
+  }
+
+  function renderCardSettingsForm(): void {
+    if (latestData === undefined || cardSettingsSelect === null || cardSettingsForm === null) return;
+
+    const selectedLayoutItem = latestData.layout.items.find((item) => item.id === cardSettingsSelect.value)
+      ?? latestData.layout.items[0];
+    cardSettingsForm.replaceChildren();
+    if (selectedLayoutItem === undefined) {
+      cardSettingsForm.textContent = copy.cardSettings.empty;
+      cardSettingsDirty = false;
+      return;
+    }
+
+    const catalogEntry = latestData.cards.find((entry) => entry.definition.id === selectedLayoutItem.cardId);
+    const settingsSchema = objectRecord(catalogEntry?.definition.settingsSchema);
+    const properties = objectRecord(settingsSchema.properties);
+    const propertyEntries = Object.entries(properties);
+    if (propertyEntries.length === 0) {
+      cardSettingsForm.textContent = copy.cardSettings.noFields;
+      cardSettingsDirty = false;
+      return;
+    }
+
+    let renderedFieldCount = 0;
+    for (const [name, schemaValue] of propertyEntries) {
+      const schema = objectRecord(schemaValue);
+      const currentValue = selectedLayoutItem.config?.[name];
+      const valueType = cardSettingValueType(schema, currentValue);
+      if (valueType === undefined) continue;
+      const inputType = cardSettingInputType(valueType);
+
+      const label = document.createElement('label');
+      label.textContent = name;
+      const input = document.createElement('input');
+      input.dataset.cardSetting = name;
+      input.dataset.cardSettingChanged = 'false';
+      input.dataset.cardSettingValueType = valueType;
+      input.autocomplete = 'off';
+      input.type = inputType;
+      if (valueType === 'integer') {
+        input.step = '1';
+      }
+      if (input.type === 'checkbox') {
+        input.checked = currentValue === true;
+      } else if (currentValue !== undefined && currentValue !== null) {
+        input.value = String(currentValue);
+      }
+      label.append(input);
+      cardSettingsForm.append(label);
+      renderedFieldCount += 1;
+    }
+    if (renderedFieldCount === 0) {
+      cardSettingsForm.textContent = copy.cardSettings.noFields;
+    }
+    cardSettingsDirty = false;
+  }
+
+  async function saveSelectedCardSettings(): Promise<void> {
+    if (client === undefined || latestData === undefined || cardSettingsSelect === null || cardSettingsForm === null) {
+      setCardSettingsStatus(copy.command.connectFirst);
+      return;
+    }
+
+    const selectedLayoutItem = latestData.layout.items.find((item) => item.id === cardSettingsSelect.value);
+    if (selectedLayoutItem === undefined) {
+      setCardSettingsStatus(copy.cardSettings.empty);
+      return;
+    }
+
+    const renderedConfig = readCardSettingsConfig(cardSettingsForm);
+    if (!renderedConfig.ok) {
+      setCardSettingsStatus(copy.cardSettings.invalid);
+      return;
+    }
+
+    const config = mergeCardSettingsConfig(selectedLayoutItem.config, renderedConfig.config);
+    try {
+      await client.saveDashboardLayoutItemConfig(selectedLayoutItem.id, config);
+      updateLatestCardSettingsConfig(selectedLayoutItem.id, config);
+      cardSettingsDirty = false;
+      markCardSettingsFormClean(cardSettingsForm);
+      setCardSettingsStatus(copy.cardSettings.saved);
+      void refresh({ quiet: true });
+    } catch (error) {
+      setCardSettingsStatus(error instanceof RainrailDashboardApiError ? `${copy.cardSettings.failed}: ${error.code}` : copy.cardSettings.failed);
+    }
+  }
+
+  function readCardSettingsConfig(form: HTMLElement): CardSettingsConfigReadResult {
+    const config: Record<string, unknown> = {};
+    for (const input of Array.from(form.querySelectorAll<HTMLInputElement>('[data-card-setting]'))) {
+      const name = input.dataset.cardSetting;
+      if (name === undefined || name === '') continue;
+      if (input.dataset.cardSettingChanged !== 'true') continue;
+      if (input.type === 'checkbox') {
+        config[name] = input.checked;
+      } else if (input.type === 'number') {
+        if (input.value === '') {
+          config[name] = undefined;
+        } else {
+          const value = Number(input.value);
+          if (invalidCardSettingsConfig(input, value)) {
+            input.reportValidity();
+            return { ok: false };
+          }
+          config[name] = value;
+        }
+      } else {
+        config[name] = input.value;
+      }
+    }
+    return { ok: true, config };
+  }
+
+  function mergeCardSettingsConfig(
+    currentConfig: Record<string, unknown> | undefined,
+    renderedConfig: Record<string, unknown>,
+  ): Record<string, unknown> {
+    const config: Record<string, unknown> = { ...(currentConfig ?? {}) };
+    for (const [name, value] of Object.entries(renderedConfig)) {
+      if (value === undefined) {
+        delete config[name];
+      } else {
+        config[name] = value;
+      }
+    }
+    return config;
+  }
+
+  function updateLatestCardSettingsConfig(layoutItemId: string, config: Record<string, unknown>): void {
+    if (latestData === undefined) return;
+    latestData = {
+      ...latestData,
+      layout: {
+        ...latestData.layout,
+        items: latestData.layout.items.map((item) => item.id === layoutItemId ? { ...item, config } : item),
+      },
+    };
+  }
+
+  function markCardSettingsFormClean(form: HTMLElement): void {
+    for (const input of Array.from(form.querySelectorAll<HTMLInputElement>('[data-card-setting]'))) {
+      input.dataset.cardSettingChanged = 'false';
+    }
+  }
+
+  function setCardSettingsStatus(message: string): void {
+    if (cardSettingsStatus !== null) cardSettingsStatus.textContent = message;
+  }
+}
+
+type CardSettingInputType = 'checkbox' | 'number' | 'text';
+
+type CardSettingValueType = 'boolean' | 'number' | 'integer' | 'string';
+
+type CardSettingsConfigReadResult =
+  | { ok: true; config: Record<string, unknown> }
+  | { ok: false };
+
+function cardSettingValueType(schema: Record<string, unknown>, currentValue: unknown): CardSettingValueType | undefined {
+  const schemaType = schema.type;
+  if (schemaType === 'boolean') {
+    return currentValue === undefined || typeof currentValue === 'boolean' ? 'boolean' : undefined;
+  }
+  if (schemaType === 'number' || schemaType === 'integer') {
+    return currentValue === undefined || currentValue === null || typeof currentValue === 'number' ? schemaType : undefined;
+  }
+  if (schemaType === 'string') {
+    return currentValue === undefined || typeof currentValue === 'string' ? 'string' : undefined;
+  }
+  if (schemaType !== undefined) return undefined;
+
+  if (typeof currentValue === 'boolean') return 'boolean';
+  if (typeof currentValue === 'number') return 'number';
+  if (typeof currentValue === 'string') return 'string';
+  return undefined;
+}
+
+function cardSettingInputType(valueType: CardSettingValueType): CardSettingInputType {
+  if (valueType === 'boolean') return 'checkbox';
+  if (valueType === 'number' || valueType === 'integer') return 'number';
+  return 'text';
+}
+
+function invalidCardSettingsConfig(input: HTMLInputElement, value: number): boolean {
+  return !input.validity.valid
+    || !Number.isFinite(value)
+    || (input.dataset.cardSettingValueType === 'integer' && !Number.isInteger(value));
 }
 
 interface SafeStorage {

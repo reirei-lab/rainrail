@@ -265,6 +265,51 @@ describe('dashboard operational views', () => {
     expect(dashboardApp).toContain('setCommandStatus');
   });
 
+  it('wires card settings editing through the dashboard layout API', () => {
+    for (const marker of [
+      'data-card-settings-select',
+      'data-card-settings-form',
+      'data-card-settings-save',
+      'data-card-settings-status',
+    ]) {
+      expect(localizedDashboardPage).toContain(marker);
+    }
+
+    for (const method of [
+      'dashboardCards()',
+      'dashboardLayout()',
+      'saveDashboardLayout',
+      'saveDashboardLayoutItemConfig',
+    ]) {
+      expect(dashboardClient).toContain(method);
+      expect(dashboardApp).toContain(method);
+    }
+
+    expect(dashboardClient).toContain('DashboardLayoutUpdateResponse');
+    expect(dashboardClient).toContain('/api/v1/dashboard/layout/items/${encodeURIComponent(itemId)}/config');
+    expect(dashboardApp).toContain('renderCardSettingsForm');
+    expect(dashboardApp).toContain('settingsSchema');
+    expect(dashboardApp).toContain('selectedLayoutItem.config');
+    expect(dashboardApp).toContain('mergeCardSettingsConfig');
+    expect(dashboardApp).toContain('updateLatestCardSettingsConfig');
+    expect(dashboardApp).toContain('cardSettingInputType');
+    expect(dashboardApp).toContain('cardSettingValueType');
+    expect(dashboardApp).toContain('cardSettingChanged');
+    expect(dashboardApp).toContain("input.dataset.cardSettingChanged !== 'true'");
+    expect(dashboardApp).toContain('invalidCardSettingsConfig');
+    expect(dashboardApp).toContain('Number.isInteger');
+    expect(dashboardApp).toContain("input.step = '1'");
+    expect(dashboardApp).toContain('setCardSettingsStatus(copy.cardSettings.invalid)');
+    expect(dashboardApp).toContain('delete config[name]');
+    expect(dashboardApp).toContain("currentValue !== null");
+    expect(dashboardApp).toContain('cardSettingsDirty');
+    expect(dashboardApp).toContain('if (cardSettingsDirty && options.quiet) return;');
+    expect(dashboardApp).toContain('void refresh({ quiet: true });');
+    expect(dashboardApp).not.toContain('await refresh({ quiet: true });');
+    expect(dashboardContent).toContain('Card settings');
+    expect(dashboardContent).toContain('カード設定');
+  });
+
   it('does not mark the whole dashboard empty just because Event Inbox filters hide rows', () => {
     expect(dashboardApp).toContain('hasDashboardRecords(latestData)');
     expect(dashboardApp).not.toContain("setState(hasRows(latestData) ? 'ready' : 'empty'");

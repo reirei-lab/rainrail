@@ -886,6 +886,58 @@ describe('Rainrail Node server', () => {
     }
   });
 
+  it('forwards Node dashboard layout item config update bodies into the shared HTTP app', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-09T00:00:00.000Z'),
+    });
+    operationalStore.saveDashboardLayout([{
+      id: 'overview',
+      cardId: 'core.overview',
+      x: 0,
+      y: 0,
+      columns: 4,
+      rows: 2,
+    }]);
+    const { server } = createRainrailNodeServer({
+      githubWebhookSecret: 'secret',
+      publishToken: 'test-publish-token',
+      operationalStore,
+      dashboardAuth: {
+        operatorToken: 'operator-token',
+      },
+    });
+
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const address = server.address();
+    if (address === null || typeof address === 'string') {
+      throw new Error('expected TCP server address');
+    }
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${address.port}/api/v1/dashboard/layout/items/overview/config`, {
+        method: 'PATCH',
+        headers: {
+          authorization: 'Bearer operator-token',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          config: { density: 'compact' },
+        }),
+      });
+
+      expect(response.status).toBe(200);
+      expect(operationalStore.getDashboardLayout()).toMatchObject({
+        items: [{ id: 'overview', cardId: 'core.overview', config: { density: 'compact' } }],
+      });
+    } finally {
+      await closeServer(server);
+      operationalStore.close();
+    }
+  });
+
   it('falls back to maxBodyBytes for Node command action request limits', async () => {
     const operationalStore = new RainrailOperationalStore({
       databasePath: ':memory:',

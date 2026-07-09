@@ -133,6 +133,16 @@ const dashboardCopy = JSON.stringify(content.app);
         <button type="button" class="dashboard-action danger" data-agent-action="terminate-all" data-action-permission="operator" disabled>{content.shell.commandButtons.terminateAll}</button>
         <span class="dashboard-command-status" data-command-status aria-live="polite"></span>
       </section>
+
+      <section class="dashboard-card-settings" aria-label={content.app.cardSettings.title}>
+        <label>
+          {content.app.cardSettings.card}
+          <select data-card-settings-select></select>
+        </label>
+        <div class="dashboard-card-settings-form" data-card-settings-form></div>
+        <button type="button" class="dashboard-action" data-card-settings-save data-action-permission="operator" disabled>{content.app.cardSettings.save}</button>
+        <span class="dashboard-command-status" data-card-settings-status aria-live="polite"></span>
+      </section>
     </div>
   </section>
 
