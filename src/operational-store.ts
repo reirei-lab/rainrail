@@ -1,4 +1,15 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname } from 'node:path';
 
@@ -627,21 +638,24 @@ export class SqliteOperationalStore implements OperationalStore {
       mkdirSync(dirname(options.databasePath), { recursive: true });
     }
     const legacyBackupPath = legacyData === undefined ? undefined : moveLegacyJsonStore(options.databasePath);
+    let database: SqliteDatabase | undefined;
     try {
-      this.#database = new DatabaseSync(options.databasePath);
+      database = new DatabaseSync(options.databasePath);
+      this.#database = database;
+      this.#protectDatabaseFiles();
+      this.#database.exec('PRAGMA busy_timeout = 5000');
+      this.#database.exec('PRAGMA foreign_keys = ON');
+      this.#database.exec('PRAGMA journal_mode = WAL');
+      this.#migrate();
+      if (legacyData !== undefined) {
+        this.#importLegacyData(legacyData);
+      }
     } catch (error) {
       if (legacyBackupPath !== undefined) {
+        database?.close();
         restoreLegacyJsonStore(options.databasePath, legacyBackupPath);
       }
       throw error;
-    }
-    this.#protectDatabaseFiles();
-    this.#database.exec('PRAGMA busy_timeout = 5000');
-    this.#database.exec('PRAGMA foreign_keys = ON');
-    this.#database.exec('PRAGMA journal_mode = WAL');
-    this.#migrate();
-    if (legacyData !== undefined) {
-      this.#importLegacyData(legacyData);
     }
     this.#protectDatabaseFiles();
   }
@@ -1499,13 +1513,26 @@ function moveLegacyJsonStore(databasePath: string): string {
 }
 
 function restoreLegacyJsonStore(databasePath: string, backupPath: string): void {
-  if (existsSync(databasePath)) return;
+  removeSqliteDatabaseFiles(databasePath);
   renameSync(backupPath, databasePath);
+  chmodSync(databasePath, 0o600);
 }
 
 function isSqliteDatabaseFile(databasePath: string): boolean {
-  const header = readFileSync(databasePath, { encoding: 'utf8', flag: 'r' }).slice(0, 16);
-  return header === 'SQLite format 3\u0000';
+  const fd = openSync(databasePath, 'r');
+  try {
+    const header = Buffer.alloc(16);
+    const bytesRead = readSync(fd, header, 0, header.length, 0);
+    return bytesRead === header.length && header.toString('utf8') === 'SQLite format 3\u0000';
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function removeSqliteDatabaseFiles(databasePath: string): void {
+  for (const path of [databasePath, `${databasePath}-wal`, `${databasePath}-shm`]) {
+    rmSync(path, { force: true });
+  }
 }
 
 function operationalEventFromRow(row: unknown): StoredOperationalEvent {
@@ -1648,7 +1675,7 @@ function eventEnvelopeWithoutRawPayload<TPayload>(event: RainrailEventEnvelope<T
 function isSafeRawPayloadReference(rawPayload: RainrailEventEnvelope['rawPayload']): boolean {
   if (rawPayload.kind === 'external-reference') return true;
   if (rawPayload.kind !== 'inline-redacted') return false;
-  return /^(github|cloudflare|rainrail):\/\//u.test(rawPayload.reference);
+  return /^(github|cloudflare|rainrail|manual|chat):\/\//u.test(rawPayload.reference);
 }
 
 function redactedRawPayloadReference(): RainrailEventEnvelope['rawPayload'] {
@@ -1712,6 +1739,13 @@ function loadStoreData(databasePath: string): OperationalStoreData {
 
   const shared = sharedFileStores.get(databasePath);
   if (shared !== undefined) return shared;
+
+  if (existsSync(databasePath) && isSqliteDatabaseFile(databasePath)) {
+    throw new Error(
+      'SQLite operational store file cannot be opened with JsonFileOperationalStore. '
+        + 'Use RainrailOperationalStore/SqliteOperationalStore or choose a separate JSON databasePath.',
+    );
+  }
 
   const data = existsSync(databasePath)
     ? parseStoreData(readFileSync(databasePath, 'utf8'))

@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -94,6 +94,48 @@ describe('RainrailOperationalStore', () => {
     expect(source.indexOf('const DatabaseSync = loadDatabaseSync()')).toBeLessThan(
       source.indexOf('moveLegacyJsonStore'),
     );
+  });
+
+  it('restores the legacy JSON store when migration import fails', () => {
+    const { databasePath, cleanup } = temporaryDatabasePath();
+    const legacyJson = JSON.stringify({
+      events: {
+        event_broken: {
+          id: 'event_broken',
+          name: 'github.issue',
+          source: { type: 'github', name: 'github-webhook', repository: 'reirei-lab/rainrail' },
+          delivery: { id: 'delivery-broken', receivedAt: '2026-07-02T00:00:00.000Z' },
+          subject: { type: 'issue', id: '270' },
+          occurredAt: '2026-07-02T00:00:00.000Z',
+          receivedAt: '2026-07-02T00:00:00.000Z',
+          envelope: {
+            id: 'event_broken',
+            schemaVersion: 'rainrail.event.v1',
+            source: { type: 'github', name: 'github-webhook', repository: 'reirei-lab/rainrail' },
+            name: 'github.issue',
+            delivery: { id: 'delivery-broken', receivedAt: '2026-07-02T00:00:00.000Z' },
+            occurredAt: '2026-07-02T00:00:00.000Z',
+            subject: { type: 'issue', id: '270' },
+            payload: { action: 'opened' },
+          },
+        },
+      },
+      activityEvents: {},
+      agentTasks: {},
+      commandResults: {},
+      eventHandlerRetries: {},
+      sequences: {},
+    });
+    try {
+      writeFileSync(databasePath, legacyJson, { mode: 0o600 });
+
+      expect(() => new RainrailOperationalStore({ databasePath, eventLimit: 10, now: fixedClock() })).toThrow();
+
+      expect(readFileSync(databasePath, 'utf8')).toBe(legacyJson);
+      expect(existsSync(`${databasePath}.json-backup`)).toBe(false);
+    } finally {
+      cleanup();
+    }
   });
 
   it('restricts SQLite database and sidecar file permissions', () => {
@@ -232,6 +274,69 @@ describe('RainrailOperationalStore', () => {
       sha256: '0'.repeat(64),
     });
     store.close();
+  });
+
+  it('preserves manual and chat inline-redacted raw payload references for dashboard tracing', () => {
+    const store = new RainrailOperationalStore({ databasePath: ':memory:', eventLimit: 10, now: fixedClock() });
+    const manual = store.recordEvent(createEventEnvelope({
+      source: { type: 'manual', name: 'rainrail-dispatch' },
+      name: 'manual.message',
+      delivery: { id: 'manual-delivery-safe', receivedAt: '2026-07-02T00:00:00.000Z' },
+      occurredAt: '2026-07-02T00:00:00.000Z',
+      subject: { type: 'message', id: 'manual-message' },
+      payload: { text: 'manual note' },
+      rawPayload: {
+        kind: 'inline-redacted',
+        reference: 'manual://deliveries/manual-delivery-safe',
+        sha256: '1'.repeat(64),
+      },
+    }));
+    const chat = store.recordEvent(createEventEnvelope({
+      source: { type: 'chat', name: 'chat-ingress' },
+      name: 'chat.message',
+      delivery: { id: 'chat-delivery-safe', receivedAt: '2026-07-02T00:00:00.000Z' },
+      occurredAt: '2026-07-02T00:00:00.000Z',
+      subject: { type: 'message', id: 'chat-message' },
+      payload: { text: 'chat note' },
+      rawPayload: {
+        kind: 'inline-redacted',
+        reference: 'chat://deliveries/chat-delivery-safe',
+        sha256: '2'.repeat(64),
+      },
+    }));
+
+    expect(store.getEvent(manual.id)?.envelope.rawPayload).toEqual({
+      kind: 'inline-redacted',
+      reference: 'manual://deliveries/manual-delivery-safe',
+      sha256: '1'.repeat(64),
+    });
+    expect(store.getEvent(chat.id)?.envelope.rawPayload).toEqual({
+      kind: 'inline-redacted',
+      reference: 'chat://deliveries/chat-delivery-safe',
+      sha256: '2'.repeat(64),
+    });
+    store.close();
+  });
+
+  it('rejects opening an existing SQLite database through the JSON fallback store', () => {
+    const { databasePath, cleanup } = temporaryDatabasePath();
+    try {
+      const sqlite = new RainrailOperationalStore({ databasePath, eventLimit: 10, now: fixedClock() });
+      sqlite.recordEvent(fixtureEvent('delivery-json-fallback-sqlite', 'github.issue'));
+      sqlite.close();
+
+      expect(() => new JsonFileOperationalStore({ databasePath, eventLimit: 10, now: fixedClock() }))
+        .toThrow(/SQLite operational store file/u);
+
+      const database = new DatabaseSync(databasePath, { readOnly: true });
+      try {
+        expect(database.prepare('select count(*) as count from operational_events').get()).toEqual({ count: 1 });
+      } finally {
+        database.close();
+      }
+    } finally {
+      cleanup();
+    }
   });
 
   it('serves the dashboard v1 resource surface from a SQLite-backed store', async () => {
