@@ -60,12 +60,13 @@ export interface DashboardCardListOptions {
 }
 
 export interface DashboardLayoutItem {
+  id: string;
   cardId: string;
   x: number;
   y: number;
   columns: number;
   rows: number;
-  settings?: Record<string, unknown>;
+  config?: Record<string, unknown>;
 }
 
 export type DashboardCardRegistryErrorCode =
@@ -340,6 +341,13 @@ function validateProvider(provider: DashboardCardProvider): void {
   if (!isNonEmptyString(provider.name)) {
     throw new DashboardCardRegistryError(
       'Dashboard card provider name must be a non-empty string',
+      'invalid_provider',
+    );
+  }
+
+  if (provider.name === 'core') {
+    throw new DashboardCardRegistryError(
+      'Dashboard card provider name "core" is reserved',
       'invalid_provider',
     );
   }

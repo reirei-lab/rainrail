@@ -38,12 +38,12 @@ const dashboardCopy = JSON.stringify(content.app);
       <a class="dashboard-brand" href={content.shell.brandHref} aria-label={content.shell.brandLabel}>Rainrail</a>
       <nav>
         <button type="button" data-dashboard-tab="overview" aria-pressed="true">{content.shell.tabs.overview}</button>
-        <button type="button" data-dashboard-tab="events" aria-pressed="false">{content.shell.tabs.events}</button>
-        <button type="button" data-dashboard-tab="workflow-runs" aria-pressed="false">{content.shell.tabs.workflowRuns}</button>
-        <button type="button" data-dashboard-tab="agent-tasks" aria-pressed="false">{content.shell.tabs.agentTasks}</button>
-        <button type="button" data-dashboard-tab="sources" aria-pressed="false">{content.shell.tabs.sources}</button>
-        <button type="button" data-dashboard-tab="queue" aria-pressed="false">{content.shell.tabs.queue}</button>
-        <button type="button" data-dashboard-tab="settings" aria-pressed="false">{content.shell.tabs.settings}</button>
+        <button type="button" data-dashboard-tab="events" data-dashboard-core-card="core.eventInbox" aria-pressed="false">{content.shell.tabs.events}</button>
+        <button type="button" data-dashboard-tab="workflow-runs" data-dashboard-core-card="core.workflowRuns" aria-pressed="false">{content.shell.tabs.workflowRuns}</button>
+        <button type="button" data-dashboard-tab="agent-tasks" data-dashboard-core-card="core.agentTasks" aria-pressed="false">{content.shell.tabs.agentTasks}</button>
+        <button type="button" data-dashboard-tab="sources" data-dashboard-core-card="core.sources" aria-pressed="false">{content.shell.tabs.sources}</button>
+        <button type="button" data-dashboard-tab="queue" data-dashboard-core-card="core.queue" aria-pressed="false">{content.shell.tabs.queue}</button>
+        <button type="button" data-dashboard-tab="settings" data-dashboard-core-card="core.settings" aria-pressed="false">{content.shell.tabs.settings}</button>
       </nav>
       <label class="dashboard-permission">
         <input type="checkbox" data-permission-toggle />
@@ -80,7 +80,7 @@ const dashboardCopy = JSON.stringify(content.app);
       <div class="dashboard-state" data-state="error">{content.shell.states.unavailable}</div>
       <div class="dashboard-state" data-state="auth-missing">{content.shell.states.authMissing}</div>
 
-      <section class="dashboard-stats dashboard-overview-grid" data-dashboard-stats aria-label={content.shell.statsLabel}>
+      <section class="dashboard-stats dashboard-overview-grid" data-dashboard-stats data-dashboard-core-card="core.operationalTotals" aria-label={content.shell.statsLabel}>
         <div class="dashboard-stat"><span>{content.app.stats.events}</span><strong>0</strong></div>
         <div class="dashboard-stat"><span>{content.app.stats.activeRuns}</span><strong>0</strong></div>
         <div class="dashboard-stat"><span>{content.app.stats.agentTasks}</span><strong>0</strong></div>
@@ -126,7 +126,7 @@ const dashboardCopy = JSON.stringify(content.app);
         </article>
       </section>
 
-      <section class="dashboard-actions" aria-label={content.shell.actionsLabel}>
+      <section class="dashboard-actions" data-dashboard-core-card="core.operatorActions" aria-label={content.shell.actionsLabel}>
         <button type="button" class="dashboard-action" data-agent-action="resume" data-action-permission="operator" disabled>{content.shell.commandButtons.resume}</button>
         <button type="button" class="dashboard-action" data-agent-action="reset" data-action-permission="operator" disabled>{content.shell.commandButtons.reset}</button>
         <button type="button" class="dashboard-action" data-agent-action="terminate" data-action-permission="operator" disabled>{content.shell.commandButtons.terminate}</button>
