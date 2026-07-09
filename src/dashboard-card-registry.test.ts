@@ -39,6 +39,20 @@ const pluginQueueCard: DashboardCardDefinition = {
   },
 };
 
+const pluginSearchCard: DashboardCardDefinition = {
+  id: 'plugin:github.search',
+  title: 'GitHub search',
+  entry: { type: 'plugin', pluginName: 'github', cardName: 'search' },
+  category: 'operations',
+  size: {
+    default: { columns: 2, rows: 1 },
+  },
+  settingsSchema: {
+    type: 'object',
+    additionalProperties: { type: 'string' },
+  },
+};
+
 describe('dashboard card registry contract', () => {
   it('returns core and plugin dashboard cards from the same catalog list', () => {
     const registry = createDashboardCardRegistry();
@@ -140,6 +154,11 @@ describe('dashboard card registry contract', () => {
     const registry = createDashboardCardRegistry();
 
     expect(() => registry.register({
+      ...pluginQueueCard,
+      size: null,
+    } as unknown as DashboardCardDefinition)).toThrow(/size must be a plain object/u);
+
+    expect(() => registry.register({
       ...recentEventsCard,
       id: 'core.badSize',
       entry: { type: 'core', name: 'badSize' },
@@ -233,6 +252,18 @@ describe('dashboard card registry contract', () => {
       cards: pluginQueueCard,
     } as unknown as Parameters<typeof registry.registerProvider>[0])).toThrow(
       /Dashboard card provider cards must be an array/u,
+    );
+  });
+
+  it('rejects invalid provider card entries before namespace checks', () => {
+    const registry = createDashboardCardRegistry();
+
+    expect(() => registry.registerProvider({
+      name: 'github',
+      kind: 'dashboard-card-provider',
+      cards: [null],
+    } as unknown as Parameters<typeof registry.registerProvider>[0])).toThrow(
+      /Dashboard card definition must be a plain object/u,
     );
   });
 
@@ -337,6 +368,19 @@ describe('dashboard card registry contract', () => {
         reason: 'entry_resolution_failed',
         message: 'Plugin card module did not export the requested card entry',
       },
+    }]);
+  });
+
+  it('accepts JSON schema objects for additional properties', () => {
+    const registry = createDashboardCardRegistry();
+
+    registry.register(pluginSearchCard);
+
+    expect(registry.list({
+      enabledPlugins: ['github'],
+    })).toEqual([{
+      definition: pluginSearchCard,
+      availability: { status: 'available' },
     }]);
   });
 

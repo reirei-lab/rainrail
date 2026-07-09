@@ -316,7 +316,8 @@ plugin provider 経由の non-plugin entry は拒否する。provider 登録は 
 複数 card のうち 1 件でも invalid definition、duplicate id、namespace mismatch があれば、
 その provider 由来の card は 1 件も catalog に追加しない。
 provider object は `kind: "dashboard-card-provider"` と `cards` 配列を必須とし、
-別 kind や非配列 cards は登録時に拒否する。plugin id の曖昧な分割を避けるため、
+別 kind や非配列 cards は登録時に拒否する。provider の各 card も通常の definition として
+先に検証し、非 object card から TypeError を漏らさない。plugin id の曖昧な分割を避けるため、
 plugin entry の `pluginName` と `cardName` は `.` と `:` を含めない。
 
 `requiredCapabilities` は dashboard 表示や provider 読み取りに必要な read-only
@@ -328,7 +329,8 @@ capability を宣言する。registry の `list()` は caller が渡した
 JS/JSON 経由の plugin が別 shape を渡した場合は登録時に `DashboardCardRegistryError` で
 拒否し、catalog 生成中に TypeError を漏らさない。
 
-`category` は dashboard 側の grouping 用の安定文字列とする。`size.default` は必須で、
+`category` は dashboard 側の grouping 用の安定文字列とする。`size` は plain object、
+`size.default` は必須で、
 `size.min` / `size.max` は任意の制約として扱う。columns/rows は正の整数だけを許可し、
 min/default/max の大小関係が壊れた definition は登録時に
 `DashboardCardRegistryError` として拒否する。`settingsSchema` は JSON object schema
@@ -337,6 +339,7 @@ compatible な operator settings metadata で、secret value や provider creden
 definition と layout metadata だけを持つ。
 card definition と `settingsSchema` を指定する場合の schema は plain object として受ける。
 `settingsSchema` は `type: "object"`、JSON-serializable な値だけを許可する。
+`additionalProperties` は boolean または JSON schema object を指定できる。
 `Map`、function、`undefined`、`BigInt`、循環 object など、JSON として安定保存できない
 値は登録時に拒否する。
 registry は登録時に検証済み definition を clone/freeze し、plugin 側が元 object を後から

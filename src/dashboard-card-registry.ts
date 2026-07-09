@@ -28,7 +28,7 @@ export type DashboardCardSettingsSchema = {
   type: 'object';
   properties?: Record<string, unknown>;
   required?: string[];
-  additionalProperties?: boolean;
+  additionalProperties?: boolean | Record<string, unknown>;
 } & Record<string, unknown>;
 
 export interface DashboardCardDefinition {
@@ -123,8 +123,8 @@ export function createDashboardCardRegistry(): DashboardCardRegistry {
       const preparedCards: DashboardCardDefinition[] = [];
       const providerIds = new Set<string>();
       for (const card of provider.cards) {
-        validateProviderCard(provider, card);
         const prepared = prepareDefinition(card);
+        validateProviderCard(provider, prepared);
         if (cards.has(prepared.id) || providerIds.has(prepared.id)) {
           throw new DashboardCardRegistryError(
             `Dashboard card id "${prepared.id}" is already registered`,
@@ -400,9 +400,9 @@ function validateSettingsSchema(definition: DashboardCardDefinition): void {
 
 function validateSize(definition: DashboardCardDefinition): void {
   const { size } = definition;
-  if (size === undefined) {
+  if (!isPlainObject(size)) {
     throw new DashboardCardRegistryError(
-      `Dashboard card "${definition.id}" size.default must be defined`,
+      `Dashboard card "${definition.id}" size must be a plain object`,
       'invalid_size',
       definition.id,
     );
