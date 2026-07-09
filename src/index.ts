@@ -9,6 +9,7 @@ export * from './agent-timeline.js';
 export * from './agent-runtime/timeline.js';
 export * from './dispatcher.js';
 export * from './dispatcher/index.js';
+export * from './dashboard-card-registry.js';
 export * from './event-delivery/event-bus.js';
 export * from './events.js';
 export * from './events-auth.js';
