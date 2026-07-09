@@ -788,9 +788,10 @@ describe('Rainrail CLI built-in commands', () => {
 
   it('rejects async dispatch runners in the synchronous CLI before side effects', () => {
     let publishStarted = false;
+    let stdinRead = false;
 
-    const result = runRainrailCli(['dispatch', 'hello sync'], {
-      dispatchRunner: createStandaloneRainrailDispatchRunner({
+    const result = runRainrailCli(['dispatch', '--json', '--stdin'], {
+      asyncDispatchRunner: createStandaloneRainrailDispatchRunner({
         env: {
           RAINRAIL_PUBLISH_URL: 'https://rainrail.example/publish',
           RAINRAIL_PUBLISH_TOKEN: 'publish-token',
@@ -800,6 +801,10 @@ describe('Rainrail CLI built-in commands', () => {
           return Promise.resolve({ status: 200, body: '{}' });
         },
       }),
+      stdinReader: () => {
+        stdinRead = true;
+        return '{}';
+      },
     });
 
     expect(result).toEqual({
@@ -807,6 +812,7 @@ describe('Rainrail CLI built-in commands', () => {
       stdout: '',
       stderr: 'rainrail dispatch requires the async CLI runner for asynchronous dispatch runners.\n',
     });
+    expect(stdinRead).toBe(false);
     expect(publishStarted).toBe(false);
   });
 

@@ -27,7 +27,7 @@ describe('rainrail binary entrypoint', () => {
         stderr: { write: (value) => writes.push(`stderr:${value}`) },
       },
       {
-        dispatchRunner: createStandaloneRainrailDispatchRunner({ env: {} }),
+        asyncDispatchRunner: createStandaloneRainrailDispatchRunner({ env: {} }),
         updateNoticeCheck: () => Promise.resolve(undefined),
       },
     );
@@ -49,7 +49,7 @@ describe('rainrail binary entrypoint', () => {
         stderr: { write: (value) => writes.push(`stderr:${value}`) },
       },
       {
-        dispatchRunner: createStandaloneRainrailDispatchRunner({
+        asyncDispatchRunner: createStandaloneRainrailDispatchRunner({
           env: {
             RAINRAIL_PUBLISH_URL: 'https://rainrail.example/publish',
             RAINRAIL_PUBLISH_TOKEN: 'publish-token',
@@ -105,7 +105,7 @@ describe('rainrail binary entrypoint', () => {
         stderr: { write: (value) => writes.push(value) },
       },
       {
-        dispatchRunner: createStandaloneRainrailDispatchRunner({
+        asyncDispatchRunner: createStandaloneRainrailDispatchRunner({
           env: {
             RAINRAIL_PUBLISH_URL: 'https://rainrail.example/publish',
             RAINRAIL_PUBLISH_TOKEN: 'publish-token',
@@ -147,7 +147,7 @@ describe('rainrail binary entrypoint', () => {
         stderr: { write: (value) => writes.push(`stderr:${value}`) },
       },
       {
-        dispatchRunner: createStandaloneRainrailDispatchRunner({
+        asyncDispatchRunner: createStandaloneRainrailDispatchRunner({
           env: {
             RAINRAIL_PUBLISH_URL: 'https://rainrail.example/publish',
             RAINRAIL_PUBLISH_TOKEN: 'publish-token',
@@ -161,6 +161,33 @@ describe('rainrail binary entrypoint', () => {
     expect(result.exitCode).toBe(1);
     expect(writes).toEqual([
       'stderr:rainrail dispatch publish failed: network unavailable\n',
+    ]);
+  });
+
+  it('fails standalone dispatch configuration before reading stdin', async () => {
+    const writes: string[] = [];
+    let stdinRead = false;
+
+    const result = await runRainrailCliEntrypoint(
+      ['dispatch', '--json', '--stdin'],
+      {
+        stdout: { write: (value) => writes.push(`stdout:${value}`) },
+        stderr: { write: (value) => writes.push(`stderr:${value}`) },
+      },
+      {
+        asyncDispatchRunner: createStandaloneRainrailDispatchRunner({ env: {} }),
+        stdinReader: () => {
+          stdinRead = true;
+          return '{}';
+        },
+        updateNoticeCheck: () => Promise.resolve(undefined),
+      },
+    );
+
+    expect(result.exitCode).toBe(2);
+    expect(stdinRead).toBe(false);
+    expect(writes).toEqual([
+      'stderr:rainrail dispatch requires RAINRAIL_PUBLISH_URL and RAINRAIL_PUBLISH_TOKEN for standalone event delivery.\n',
     ]);
   });
 

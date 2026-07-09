@@ -145,11 +145,15 @@ export type RainrailDispatchRequest =
       };
     };
 
-export type RainrailDispatchRunnerResult = RainrailCliResult | Promise<RainrailCliResult>;
+export type RainrailDispatchRunnerResult = RainrailCliResult;
 
 export type RainrailDispatchRunner = {
   (request: RainrailDispatchRequest): RainrailDispatchRunnerResult;
-  readonly requiresAsyncCli?: true;
+};
+
+export type RainrailAsyncDispatchRunner = {
+  (request: RainrailDispatchRequest): Promise<RainrailCliResult>;
+  readonly preflight?: () => RainrailCliResult | undefined;
 };
 
 export type RainrailStandaloneDispatchFetchResult = {
@@ -258,6 +262,7 @@ export type RainrailCliEnvironment = {
   readonly commandRunner?: CommandRunner;
   readonly currentVersion?: string;
   readonly dispatchRunner?: RainrailDispatchRunner;
+  readonly asyncDispatchRunner?: RainrailAsyncDispatchRunner;
   readonly currentBinPath?: string;
   readonly env?: Record<string, string | undefined>;
   readonly fileSystem?: Partial<RainrailCliFileSystem>;
@@ -2473,6 +2478,22 @@ function runDispatchCommand(
   options: SharedOptions,
   environment: RainrailCliEnvironment,
 ): RainrailCliResult {
+  if (args.length === 1 && (args[0] === 'help' || args[0] === '--help')) {
+    return {
+      exitCode: 0,
+      stdout: formatDispatchHelp(),
+      stderr: '',
+    };
+  }
+
+  if (environment.asyncDispatchRunner !== undefined) {
+    return {
+      exitCode: 2,
+      stdout: '',
+      stderr: 'rainrail dispatch requires the async CLI runner for asynchronous dispatch runners.\n',
+    };
+  }
+
   const parsed = parseDispatchArguments(args, options, environment);
   if (parsed.help) {
     return {
@@ -2498,6 +2519,19 @@ async function runDispatchCommandAsync(
   options: SharedOptions,
   environment: RainrailCliEnvironment,
 ): Promise<RainrailCliResult> {
+  if (args.length === 1 && (args[0] === 'help' || args[0] === '--help')) {
+    return {
+      exitCode: 0,
+      stdout: formatDispatchHelp(),
+      stderr: '',
+    };
+  }
+
+  const preflightError = environment.asyncDispatchRunner?.preflight?.();
+  if (preflightError !== undefined) {
+    return preflightError;
+  }
+
   const parsed = parseDispatchArguments(args, options, environment);
   if (parsed.help) {
     return {
@@ -2515,7 +2549,10 @@ async function runDispatchCommandAsync(
     };
   }
 
-  return runDispatchRequestAsync(parsed.request, environment.dispatchRunner);
+  return runDispatchRequestAsync(
+    parsed.request,
+    environment.asyncDispatchRunner ?? environment.dispatchRunner,
+  );
 }
 
 function runDispatchRequest(
@@ -2530,29 +2567,13 @@ function runDispatchRequest(
     };
   }
 
-  if (isAsyncDispatchRunner(dispatchRunner)) {
-    return {
-      exitCode: 2,
-      stdout: '',
-      stderr: 'rainrail dispatch requires the async CLI runner for asynchronous dispatch runners.\n',
-    };
-  }
-
   const result = dispatchRunner(request);
-  if (isPromiseLike(result)) {
-    return {
-      exitCode: 2,
-      stdout: '',
-      stderr: 'rainrail dispatch requires the async CLI runner for asynchronous dispatch runners.\n',
-    };
-  }
-
   return result;
 }
 
 async function runDispatchRequestAsync(
   request: RainrailDispatchRequest,
-  dispatchRunner: RainrailDispatchRunner | undefined,
+  dispatchRunner: RainrailDispatchRunner | RainrailAsyncDispatchRunner | undefined,
 ): Promise<RainrailCliResult> {
   if (dispatchRunner === undefined) {
     return {
@@ -2567,8 +2588,8 @@ async function runDispatchRequestAsync(
 
 export function createStandaloneRainrailDispatchRunner(
   options: RainrailStandaloneDispatchRunnerOptions = {},
-): RainrailDispatchRunner {
-  return Object.assign(async (request: RainrailDispatchRequest) => {
+): RainrailAsyncDispatchRunner {
+  const preflight = (): RainrailCliResult | undefined => {
     const env = options.env ?? process.env;
     const publishUrl = env.RAINRAIL_PUBLISH_URL;
     const publishToken = env.RAINRAIL_PUBLISH_TOKEN;
@@ -2580,6 +2601,17 @@ export function createStandaloneRainrailDispatchRunner(
         stderr: 'rainrail dispatch requires RAINRAIL_PUBLISH_URL and RAINRAIL_PUBLISH_TOKEN for standalone event delivery.\n',
       };
     }
+    return undefined;
+  };
+
+  return Object.assign(async (request: RainrailDispatchRequest) => {
+    const env = options.env ?? process.env;
+    const configError = preflight();
+    if (configError !== undefined) {
+      return configError;
+    }
+    const publishUrl = env.RAINRAIL_PUBLISH_URL as string;
+    const publishToken = env.RAINRAIL_PUBLISH_TOKEN as string;
 
     const body = request.mode === 'message' ? JSON.stringify(request.event) : request.input;
     const fetcher = options.fetcher ?? defaultStandaloneDispatchFetcher;
@@ -2630,15 +2662,7 @@ export function createStandaloneRainrailDispatchRunner(
       stdout: `Published ${eventDescription}.\n`,
       stderr: '',
     };
-  }, { requiresAsyncCli: true as const });
-}
-
-function isPromiseLike<T>(value: T | Promise<T>): value is Promise<T> {
-  return typeof (value as { then?: unknown }).then === 'function';
-}
-
-function isAsyncDispatchRunner(dispatchRunner: RainrailDispatchRunner): boolean {
-  return dispatchRunner.requiresAsyncCli === true || isAsyncFunction(dispatchRunner);
+  }, { preflight });
 }
 
 async function defaultStandaloneDispatchFetcher(
@@ -2792,7 +2816,7 @@ function parseDispatchArguments(
   }
 
   if (errors.length === 0 && mode === 'envelope-json' && envelopeSource !== undefined) {
-    if (environment.dispatchRunner === undefined) {
+    if (environment.dispatchRunner === undefined && environment.asyncDispatchRunner === undefined) {
       input = '';
     } else {
       const envelopeInput = readDispatchEnvelopeInput(envelopeSource, environment);

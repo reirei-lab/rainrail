@@ -5,7 +5,7 @@ import {
 } from '../index.js';
 
 const result = await runRainrailCliEntrypoint(process.argv.slice(2), undefined, {
-  dispatchRunner: createStandaloneRainrailDispatchRunner(),
+  asyncDispatchRunner: createStandaloneRainrailDispatchRunner(),
   stderrWriter: (message) => {
     process.stderr.write(message);
   },
