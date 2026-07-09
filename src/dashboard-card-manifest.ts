@@ -96,7 +96,7 @@ function manifestCardToDefinition(
     category: card.category,
     ...(card.requiredCapabilities === undefined
       ? {}
-      : { requiredCapabilities: [...card.requiredCapabilities] }),
+      : { requiredCapabilities: card.requiredCapabilities }),
     size: card.size,
     ...(card.settingsSchema === undefined ? {} : { settingsSchema: card.settingsSchema }),
   };

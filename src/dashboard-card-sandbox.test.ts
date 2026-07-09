@@ -81,4 +81,33 @@ describe('dashboard card sandbox host', () => {
     await expect(frame.bridge.request('github:read', {}))
       .rejects.toThrow(/Capability "github:read" is not available to dashboard card "plugin:github.queue"/u);
   });
+
+  it('snapshots allowed capabilities when the sandbox host is created', () => {
+    const allowedCapabilities = ['dashboard:read'];
+    const host = createDashboardCardSandboxHost({
+      cardBaseUrl: '/dashboard/plugin-cards/',
+      allowedCapabilities,
+    });
+
+    allowedCapabilities.push('runtime:start');
+
+    expect(host.createFrame(pluginQueueCard).bridgeCapabilities).toEqual(['dashboard:read']);
+  });
+
+  it('ignores inherited bridge handler properties', async () => {
+    const host = createDashboardCardSandboxHost({
+      cardBaseUrl: '/dashboard/plugin-cards/',
+      allowedCapabilities: ['constructor'],
+      bridgeHandlers: {},
+    });
+    const frame = host.createFrame({
+      ...pluginQueueCard,
+      id: 'plugin:github.constructor',
+      entry: { type: 'plugin', pluginName: 'github', cardName: 'constructor' },
+      requiredCapabilities: ['constructor'],
+    });
+
+    await expect(frame.bridge.request('constructor', {}))
+      .rejects.toThrow(/Capability "constructor" does not have a dashboard card bridge handler/u);
+  });
 });

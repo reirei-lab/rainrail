@@ -83,5 +83,19 @@ describe('dashboard card plugin manifest contribution', () => {
         }],
       },
     })).toThrow(/cardName must not contain "\." or ":"/u);
+
+    expect(() => createDashboardCardProviderFromManifest({
+      name: 'github',
+      version: '1.0.0',
+      dashboard: {
+        cards: [{
+          name: 'queue',
+          title: 'GitHub queue',
+          category: 'operations',
+          requiredCapabilities: 'github:read',
+          size: { default: { columns: 3, rows: 2 } },
+        }],
+      },
+    } as unknown as DashboardPluginManifest)).toThrow(/requiredCapabilities must be an array of non-empty strings/u);
   });
 });

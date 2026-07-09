@@ -57,6 +57,12 @@ export function createDashboardCardSandboxHost(
   options: DashboardCardSandboxHostOptions,
 ): DashboardCardSandboxHost {
   const timeoutMs = options.timeoutMs ?? 5000;
+  const allowedCapabilities = options.allowedCapabilities === undefined
+    ? undefined
+    : [...options.allowedCapabilities];
+  const bridgeHandlers = options.bridgeHandlers === undefined
+    ? {}
+    : { ...options.bridgeHandlers };
 
   const createFrame = (
     definition: DashboardCardDefinition,
@@ -66,8 +72,8 @@ export function createDashboardCardSandboxHost(
       throw new Error(`Dashboard card "${definition.id}" is not a plugin card`);
     }
 
-    const bridgeCapabilities = grantedCapabilities(definition, options.allowedCapabilities);
-    const bridge = createBridge(definition.id, bridgeCapabilities, options.bridgeHandlers ?? {});
+    const bridgeCapabilities = grantedCapabilities(definition, allowedCapabilities);
+    const bridge = createBridge(definition.id, bridgeCapabilities, bridgeHandlers);
 
     return {
       cardId: definition.id,
@@ -117,6 +123,10 @@ function createBridge(
     async request(capability, request) {
       if (!granted.has(capability)) {
         throw new Error(`Capability "${capability}" is not available to dashboard card "${cardId}"`);
+      }
+
+      if (!Object.hasOwn(handlers, capability)) {
+        throw new Error(`Capability "${capability}" does not have a dashboard card bridge handler`);
       }
 
       const handler = handlers[capability];
