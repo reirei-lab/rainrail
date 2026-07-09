@@ -103,8 +103,9 @@ describe('Rainrail dashboard API', () => {
     expect(cardIds).toContain('core.recentEvents');
 
     const layoutBody = await (await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/layout', { headers }))).json() as {
-      data: { items: Array<{ cardId: string }> };
+      data: { filteredItemCount: number; items: Array<{ cardId: string }> };
     };
+    expect(layoutBody.data.filteredItemCount).toBe(0);
     expect(layoutBody.data.items.map((item) => item.cardId)).toEqual(['core.overview', 'core.recentEvents']);
     operationalStore.close();
   });
@@ -154,6 +155,7 @@ describe('Rainrail dashboard API', () => {
           id: 'core.defaultLayout',
           source: 'default',
           updatedAt: null,
+          filteredItemCount: 0,
           items: [{
             id: 'recent-events',
             cardId: 'core.recentEvents',
@@ -492,6 +494,7 @@ describe('Rainrail dashboard API', () => {
       data: {
         id: 'user.dashboardLayout',
         source: 'user',
+        filteredItemCount: 2,
         items: [{ id: 'recent-events', cardId: 'core.recentEvents' }],
       },
     });

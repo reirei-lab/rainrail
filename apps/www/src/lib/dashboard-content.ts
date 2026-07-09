@@ -232,6 +232,7 @@ export type DashboardAppCopy = {
     resize: string;
     move: string;
     unavailable: string;
+    tooWide: string;
     unknownDashboardCard: string;
     empty: string;
     saving: string;
@@ -418,6 +419,7 @@ const englishApp: DashboardAppCopy = {
     resize: 'Resize',
     move: 'Move',
     unavailable: 'Unavailable',
+    tooWide: 'This card does not fit the 12-column dashboard grid.',
     unknownDashboardCard: 'Unknown dashboard card',
     empty: 'No cards in this layout yet.',
     saving: 'Saving dashboard layout',
@@ -604,6 +606,7 @@ const japaneseApp: DashboardAppCopy = {
     resize: 'サイズ変更',
     move: '移動',
     unavailable: '利用不可',
+    tooWide: 'このカードは12列の dashboard grid に収まりません。',
     unknownDashboardCard: '不明な dashboard card',
     empty: 'このレイアウトにはまだカードがありません。',
     saving: 'Dashboard レイアウトを保存中',

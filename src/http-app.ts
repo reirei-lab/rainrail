@@ -962,22 +962,14 @@ function dashboardV1LayoutResponse(options: RainrailHttpAppOptions): Response {
   if (stored !== undefined) {
     const catalog = dashboardCardCatalog(options);
     return jsonResponse({
-      data: {
-        id: stored.id,
-        source: 'user',
-        updatedAt: stored.updatedAt,
-        items: filterDashboardLayoutItems(stored.items, catalog),
-      },
+      data: dashboardLayoutResponseData(stored.id, 'user', stored.updatedAt, stored.items, catalog),
     });
   }
 
+  const catalog = dashboardCardCatalog(options);
+  const items = dashboardDefaultLayout(options);
   return jsonResponse({
-    data: {
-      id: DEFAULT_DASHBOARD_LAYOUT_ID,
-      source: 'default',
-      updatedAt: null,
-      items: filterDashboardLayoutItems(dashboardDefaultLayout(options), dashboardCardCatalog(options)),
-    },
+    data: dashboardLayoutResponseData(DEFAULT_DASHBOARD_LAYOUT_ID, 'default', null, items, catalog),
   });
 }
 
@@ -1096,10 +1088,7 @@ async function handleDashboardLayoutUpdateRequest(
 
   return commandResponse({
     data: {
-      id: USER_DASHBOARD_LAYOUT_ID,
-      source: 'user',
-      updatedAt: saved.updatedAt,
-      items: saved.items,
+      ...dashboardLayoutResponseData(USER_DASHBOARD_LAYOUT_ID, 'user', saved.updatedAt, saved.items, dashboardCardCatalog(options)),
       auditId,
       ...(auditWarning === undefined ? {} : { auditWarning }),
     },
@@ -1199,10 +1188,7 @@ async function handleDashboardLayoutItemConfigUpdateRequest(
 
   return commandResponse({
     data: {
-      id: USER_DASHBOARD_LAYOUT_ID,
-      source: 'user',
-      updatedAt: saved.updatedAt,
-      items: filterDashboardLayoutItems(saved.items, catalog),
+      ...dashboardLayoutResponseData(USER_DASHBOARD_LAYOUT_ID, 'user', saved.updatedAt, saved.items, catalog),
       auditId,
       ...(auditWarning === undefined ? {} : { auditWarning }),
     },
@@ -1236,6 +1222,29 @@ function dashboardCardRegistry(options: RainrailHttpAppOptions): DashboardCardRe
 
 function dashboardDefaultLayout(options: RainrailHttpAppOptions): DashboardLayoutItem[] {
   return jsonClone([...(options.dashboardDefaultLayout ?? DEFAULT_DASHBOARD_LAYOUT)]);
+}
+
+function dashboardLayoutResponseData(
+  id: string,
+  source: 'default' | 'user',
+  updatedAt: string | null,
+  items: readonly DashboardLayoutItem[],
+  catalog: DashboardCardCatalogEntry[],
+): {
+  id: string;
+  source: 'default' | 'user';
+  updatedAt: string | null;
+  filteredItemCount: number;
+  items: DashboardLayoutItem[];
+} {
+  const filteredItems = filterDashboardLayoutItems(items, catalog);
+  return {
+    id,
+    source,
+    updatedAt,
+    filteredItemCount: items.length - filteredItems.length,
+    items: filteredItems,
+  };
 }
 
 function parseDashboardLayoutItems(

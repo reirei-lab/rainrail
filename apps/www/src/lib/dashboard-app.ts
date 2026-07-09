@@ -772,12 +772,13 @@ if (root !== null) {
       return;
     }
 
-    dashboardLayoutGrid.replaceChildren(...items.map((item) => dashboardLayoutCard(item, cardsById.get(item.cardId))));
+    dashboardLayoutGrid.replaceChildren(...items.map((item, index) => dashboardLayoutCard(item, cardsById.get(item.cardId), index === 0)));
   }
 
   function dashboardLayoutCard(
     item: DashboardLayoutItem,
     entry: DashboardCardCatalogEntry | undefined,
+    isFirstLayoutItem: boolean,
   ): HTMLElement {
     const article = document.createElement('article');
     const available = entry?.availability.status === 'available';
@@ -833,7 +834,7 @@ if (root !== null) {
     const resizeButton = dashboardCardActionButton(copy.cardLayout.resize, () => resizeDashboardLayoutItem(item.id), entry === undefined);
     resizeButton.setAttribute('data-dashboard-card-resize', item.id);
     menu.append(
-      dashboardCardActionButton(copy.cardLayout.move, () => moveDashboardLayoutItem(item.id, previousLayoutItemId(item.id) ?? item.id), item.id === latestData?.layout.items[0]?.id),
+      dashboardCardActionButton(copy.cardLayout.move, () => moveDashboardLayoutItem(item.id, previousLayoutItemId(item.id) ?? item.id), isFirstLayoutItem),
       resizeButton,
       dashboardCardActionButton(copy.cardLayout.settings, () => selectCardSettingsItem(item.id), entry === undefined),
       dashboardCardActionButton(copy.cardLayout.hide, () => removeDashboardLayoutItem(item.id)),
@@ -910,13 +911,15 @@ if (root !== null) {
     cardPickerList.replaceChildren(...entries.map((entry) => {
       const button = document.createElement('button');
       button.type = 'button';
-      button.disabled = entry.availability.status !== 'available' || !canEditDashboardLayout();
+      const gridSize = dashboardCardGridInitialSize(entry);
+      const canAdd = dashboardCardCanBeAdded(entry);
+      button.disabled = !canAdd;
       button.dataset.dashboardCardId = entry.definition.id;
       button.setAttribute('data-dashboard-card-id', entry.definition.id);
       button.innerHTML = `
         <span>${escapeHtml(entry.definition.category)} / ${escapeHtml(cardProviderLabel(entry))}</span>
         <strong>${escapeHtml(entry.definition.title)}</strong>
-        <small>${escapeHtml(cardAvailabilityLabel(entry))}</small>
+        <small>${escapeHtml(entry.availability.status !== 'available' ? cardAvailabilityLabel(entry) : gridSize === undefined ? copy.cardLayout.tooWide : cardAvailabilityLabel(entry))}</small>
       `;
       button.addEventListener('click', () => {
         void addDashboardLayoutCard(entry);
@@ -943,6 +946,7 @@ if (root !== null) {
   function addDashboardLayoutCard(entry: DashboardCardCatalogEntry): Promise<void> {
     if (latestData === undefined) return Promise.resolve();
     if (!canEditDashboardLayout()) return Promise.resolve();
+    if (!dashboardCardCanBeAdded(entry)) return Promise.resolve();
     if (layoutSaveWouldDropHiddenCards()) {
       setDashboardLayoutStatus(copy.cardLayout.hiddenCardsWarning);
       return Promise.resolve();
@@ -952,7 +956,7 @@ if (root !== null) {
   }
 
   function createDashboardLayoutItem(entry: DashboardCardCatalogEntry): DashboardLayoutItem {
-    const size = entry.definition.size.default;
+    const size = dashboardCardGridInitialSize(entry) ?? { columns: DASHBOARD_GRID_COLUMNS, rows: entry.definition.size.default.rows };
     const y = latestData === undefined
       ? 0
       : latestData.layout.items.reduce((nextY, item) => Math.max(nextY, item.y + item.rows), 0);
@@ -1091,7 +1095,8 @@ if (root !== null) {
   function layoutSaveWouldDropHiddenCards(): boolean {
     return latestData !== undefined
       && latestData.layout.source === 'user'
-      && hasUnavailableDashboardCards(latestData.cards, currentLayoutCardIds());
+      && ((latestData.layout.filteredItemCount ?? 0) > 0
+        || hasUnavailableDashboardCards(latestData.cards, currentLayoutCardIds()));
   }
 
   function compareDashboardLayoutItems(a: DashboardLayoutItem, b: DashboardLayoutItem): number {
@@ -1107,6 +1112,24 @@ if (root !== null) {
     return entry.availability.message
       ?? entry.availability.reason
       ?? copy.cardLayout.unavailable;
+  }
+
+  function dashboardCardCanBeAdded(entry: DashboardCardCatalogEntry): boolean {
+    return entry.availability.status === 'available'
+      && canEditDashboardLayout()
+      && dashboardCardGridInitialSize(entry) !== undefined;
+  }
+
+  function dashboardCardGridInitialSize(entry: DashboardCardCatalogEntry): { columns: number; rows: number } | undefined {
+    const size = entry.definition.size;
+    const min = size.min ?? { columns: 1, rows: 1 };
+    const max = size.max ?? { columns: DASHBOARD_GRID_COLUMNS, rows: 12 };
+    const maxColumns = Math.min(max.columns, DASHBOARD_GRID_COLUMNS);
+    if (min.columns > maxColumns) return undefined;
+    return {
+      columns: clampDashboardCardSize(size.default.columns, min.columns, maxColumns),
+      rows: clampDashboardCardSize(size.default.rows, min.rows, max.rows),
+    };
   }
 
   function cardSearchText(entry: DashboardCardCatalogEntry): string {

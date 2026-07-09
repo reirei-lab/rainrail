@@ -149,6 +149,7 @@ export interface DashboardLayout {
     id: string;
     source: 'default' | 'user';
     updatedAt: string | null;
+    filteredItemCount?: number;
     items: DashboardLayoutItem[];
   };
 }

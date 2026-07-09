@@ -134,11 +134,14 @@ card も catalog からは落とさない。HTTP app に registry が注入さ�
 保存済み layout の再保存や catalog 照合で `unknown_dashboard_card` にならないようにする。
 
 `GET /api/v1/dashboard/layout` は保存済み layout があれば
-`{ id: "user.dashboardLayout", source: "user", updatedAt, items }` を返す。保存済み layout がない
-初回状態では `{ id: "core.defaultLayout", source: "default", updatedAt: null, items }` を返す。
+`{ id: "user.dashboardLayout", source: "user", updatedAt, filteredItemCount, items }` を返す。保存済み layout がない
+初回状態では `{ id: "core.defaultLayout", source: "default", updatedAt: null, filteredItemCount, items }` を返す。
 layout item は `id`、`cardId`、`x`、`y`、`columns`、`rows`、任意の JSON object `config` を持つ。
 永続化されるのは card definition の copy ではなく `cardId` 参照なので、card definition が変わっても
 layout は catalog の現在値と照合して復元する。
+`filteredItemCount` は保存済み/default layout のうち現在の catalog / capability では返却されなかった
+item 数を表す。Dashboard UI は `source: "user"` かつ `filteredItemCount > 0` の layout では
+見えている `items` だけを authoritative とする全体 `PUT` を避け、非表示 card と config を落とさない。
 Dashboard UI の card settings は catalog の `definition.settingsSchema` から描画し、保存値は
 該当 layout item の `config` に保存する。plugin card からは token や store へ直接触れず、
 dashboard shell が検証した layout config と sandbox bridge capability だけを渡す。

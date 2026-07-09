@@ -7483,6 +7483,7 @@ function localDashboardLayout(state: LocalRainrailServerState): {
   readonly id: 'core.defaultLayout' | 'user.dashboardLayout';
   readonly source: 'default' | 'user';
   readonly updatedAt: string | null;
+  readonly filteredItemCount: 0;
   readonly items: readonly LocalDashboardLayoutItem[];
 } {
   const updatedAt = state.dashboardLayoutUpdatedAt;
@@ -7490,6 +7491,7 @@ function localDashboardLayout(state: LocalRainrailServerState): {
     id: updatedAt === undefined ? 'core.defaultLayout' : 'user.dashboardLayout',
     source: updatedAt === undefined ? 'default' : 'user',
     updatedAt: updatedAt ?? null,
+    filteredItemCount: 0,
     items: localCloneDashboardLayout(state.dashboardLayout),
   };
 }
