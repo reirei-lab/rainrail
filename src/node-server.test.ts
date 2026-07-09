@@ -1,4 +1,7 @@
 import { once } from 'node:events';
+import { mkdir, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { describe, expect, it, vi } from 'vitest';
 
@@ -7,6 +10,7 @@ import { getReaderOrThrow, readUntil, waitForValue } from './test-helpers.js';
 import {
   DEFAULT_MAX_REQUEST_BODY_BYTES,
   RainrailOperationalStore,
+  createOperationalStoreFromConfig,
   createManualInputIntakeAdapter,
   createGitHubWebhookSignature,
   createRainrailNodeServer,
@@ -411,6 +415,94 @@ describe('Rainrail Node server', () => {
     } finally {
       await closeServer(server);
       operationalStore.close();
+    }
+  });
+
+  it('creates a SQLite operational store from local Node server config', async () => {
+    const directory = join(tmpdir(), `rainrail-node-store-${crypto.randomUUID()}`);
+    await mkdir(directory, { recursive: true });
+    const databasePath = join(directory, 'rainrail-operational.sqlite');
+    const { server } = createRainrailNodeServer({
+      githubWebhookSecret: 'secret',
+      publishToken: 'test-publish-token',
+      eventsBearerToken: 'events-token',
+      operationalStoreConfig: {
+        kind: 'sqlite',
+        databasePath,
+        eventLimit: 10,
+      },
+    });
+
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const address = server.address();
+    if (address === null || typeof address === 'string') {
+      throw new Error('expected TCP server address');
+    }
+
+    try {
+      const payload = JSON.stringify({
+        action: 'opened',
+        repository: { full_name: 'reirei-lab/rainrail' },
+        issue: {
+          number: 271,
+          html_url: 'https://github.com/reirei-lab/rainrail/issues/271',
+        },
+      });
+      const webhook = await fetch(`http://127.0.0.1:${address.port}/webhooks/github`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-github-event': 'issues',
+          'x-github-delivery': 'delivery-node-sqlite-config',
+          'x-hub-signature-256': await createGitHubWebhookSignature('secret', payload),
+        },
+        body: payload,
+      });
+      expect(webhook.status).toBe(202);
+    } finally {
+      await closeServer(server);
+    }
+
+    const reopened = new RainrailOperationalStore({
+      databasePath,
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:00:00.000Z'),
+    });
+    try {
+      expect(reopened.getEvent('github-webhook:delivery-node-sqlite-config:github.issue')).toMatchObject({
+        subject: {
+          type: 'issue',
+          url: 'https://github.com/reirei-lab/rainrail/issues/271',
+        },
+      });
+    } finally {
+      reopened.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps JSON and in-memory operational store config paths available for focused tests', async () => {
+    const directory = join(tmpdir(), `rainrail-node-json-store-${crypto.randomUUID()}`);
+    await mkdir(directory, { recursive: true });
+    const jsonPath = join(directory, 'operational.json');
+    const jsonStore = createOperationalStoreFromConfig({
+      kind: 'json',
+      databasePath: jsonPath,
+      eventLimit: 5,
+    });
+    const memoryStore = createOperationalStoreFromConfig({
+      kind: 'memory',
+      eventLimit: 5,
+    });
+
+    try {
+      expect(jsonStore.eventLimit()).toBe(5);
+      expect(memoryStore.eventLimit()).toBe(5);
+    } finally {
+      jsonStore.close();
+      memoryStore.close();
+      await rm(directory, { recursive: true, force: true });
     }
   });
 

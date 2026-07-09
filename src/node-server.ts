@@ -13,12 +13,19 @@ import {
 } from './http-app.js';
 import { jsonResponse, readRequestBody, writeFetchResponse } from './http-utils.js';
 import type { RainrailIntakeAdapter } from './intake-adapter.js';
+import {
+  JsonFileOperationalStore,
+  RainrailOperationalStore,
+  type OperationalStore,
+} from './operational-store.js';
+import type { RainrailOperationalStoreConfig } from './config.js';
 
 export interface RainrailNodeServerOptions extends Omit<RainrailHttpAppOptions, 'room'> {
   githubWebhookSecret: string;
   githubSourceName?: string;
   maxWebhookBodyBytes?: number;
   intakeAdapters?: readonly RainrailIntakeAdapter[];
+  operationalStoreConfig?: RainrailOperationalStoreConfig;
   state?: RainrailBridgeRoomState;
   replayLimit?: number;
   keepAliveIntervalMs?: number;
@@ -29,10 +36,18 @@ export interface RainrailNodeServer {
   server: http.Server;
   app: RainrailHttpApp;
   room: RainrailBridgeRoom;
+  operationalStore?: OperationalStore;
 }
 
 export function createRainrailNodeServer(options: RainrailNodeServerOptions): RainrailNodeServer {
+  if (options.operationalStore !== undefined && options.operationalStoreConfig !== undefined) {
+    throw new Error('operationalStore and operationalStoreConfig are mutually exclusive');
+  }
   const hasCustomTailAdapter = options.intakeAdapters?.some((adapter) => adapter.tail !== undefined) ?? false;
+  const ownedOperationalStore = options.operationalStore === undefined && options.operationalStoreConfig !== undefined
+    ? createOperationalStoreFromConfig(options.operationalStoreConfig)
+    : undefined;
+  const operationalStore = options.operationalStore ?? ownedOperationalStore;
   const room = new RainrailBridgeRoom(options.state ?? createInMemoryBridgeRoomState(), {
     publishToken: options.publishToken,
     ...(options.replayLimit === undefined ? {} : { replayLimit: options.replayLimit }),
@@ -43,7 +58,7 @@ export function createRainrailNodeServer(options: RainrailNodeServerOptions): Ra
     publishToken: options.publishToken,
     ...(options.eventsBearerToken === undefined ? {} : { eventsBearerToken: options.eventsBearerToken }),
     runtime: options.runtime ?? 'node',
-    ...(options.operationalStore === undefined ? {} : { operationalStore: options.operationalStore }),
+    ...(operationalStore === undefined ? {} : { operationalStore }),
     ...(options.taskQueue === undefined ? {} : { taskQueue: options.taskQueue }),
     ...(options.dashboardCommandMaxBodyBytes === undefined && options.maxBodyBytes === undefined ? {} : {
       dashboardCommandMaxBodyBytes: options.dashboardCommandMaxBodyBytes ?? options.maxBodyBytes,
@@ -84,8 +99,35 @@ export function createRainrailNodeServer(options: RainrailNodeServerOptions): Ra
       );
     }
   });
+  server.once('close', () => {
+    ownedOperationalStore?.close();
+  });
 
-  return { server, app, room };
+  return {
+    server,
+    app,
+    room,
+    ...(operationalStore === undefined ? {} : { operationalStore }),
+  };
+}
+
+export function createOperationalStoreFromConfig(
+  config: RainrailOperationalStoreConfig,
+): OperationalStore & { close(): void } {
+  if (config.kind === 'json') {
+    if (config.databasePath === undefined) {
+      throw new Error('operationalStoreConfig.databasePath is required for json stores');
+    }
+    return new JsonFileOperationalStore({
+      databasePath: config.databasePath,
+      eventLimit: config.eventLimit,
+    });
+  }
+
+  return new RainrailOperationalStore({
+    databasePath: config.kind === 'memory' ? ':memory:' : expectConfiguredDatabasePath(config),
+    eventLimit: config.eventLimit,
+  });
 }
 
 export function createInMemoryBridgeRoomState(): RainrailBridgeRoomState {
@@ -173,4 +215,11 @@ function isStatusCodeError(error: unknown): error is { statusCode: number } {
     && error !== null
     && 'statusCode' in error
     && typeof error.statusCode === 'number';
+}
+
+function expectConfiguredDatabasePath(config: RainrailOperationalStoreConfig): string {
+  if (config.databasePath === undefined) {
+    throw new Error('operationalStoreConfig.databasePath is required for sqlite stores');
+  }
+  return config.databasePath;
 }
