@@ -2637,11 +2637,21 @@ function parseAndValidateDispatchEnvelope(input: string): { readonly input: stri
   }
 
   return {
-    input: validation.complete ? input : JSON.stringify(validation.envelope),
+    input: validation.complete ? input : addDispatchEnvelopeDefaults(input, validation),
   };
 }
 
 type DispatchEnvelopeObject = Record<string, unknown>;
+type DispatchEnvelopeValidation = {
+  readonly envelope: DispatchEnvelopeObject & {
+    readonly id: string;
+    readonly schemaVersion: 'rainrail.event.v1';
+  };
+  readonly complete: boolean;
+  readonly hasId: boolean;
+  readonly hasSchemaVersion: boolean;
+  readonly error?: undefined;
+};
 const dispatchSafeIdentifierPattern = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/u;
 const dispatchSafeRepositoryNamePattern = /^[A-Za-z0-9_.-]{1,64}\/[A-Za-z0-9_.-]{1,64}$/u;
 const dispatchSafeRefSubjectIdPattern = /^(?:(?:branch|tag):|refs\/(?:heads|tags)\/)[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$/u;
@@ -2653,7 +2663,7 @@ const dispatchAllowedRawPayloadKinds = new Set(['external-reference', 'inline-re
 
 function validateDispatchEnvelopeInput(
   value: unknown,
-): { readonly envelope: DispatchEnvelopeObject; readonly complete: boolean; readonly error?: undefined } | { readonly error: string } {
+): DispatchEnvelopeValidation | { readonly error: string } {
   if (!isRecord(value)) {
     return { error: 'envelope must be a JSON object.' };
   }
@@ -2695,6 +2705,10 @@ function validateDispatchEnvelopeInput(
   }
   if (!isDispatchSafeIdentifier(name.value)) {
     return { error: 'name must be a safe identifier.' };
+  }
+  const manualSourceMatch = validateManualInputEventSourceMatches(sourceType.value, name.value);
+  if (manualSourceMatch.error !== undefined) {
+    return manualSourceMatch;
   }
 
   const delivery = readRequiredObject(value, 'delivery');
@@ -2750,6 +2764,18 @@ function validateDispatchEnvelopeInput(
   if (!Object.hasOwn(value, 'payload')) {
     return { error: 'payload is required.' };
   }
+  const manualPayload = validateManualInputPayload(
+    value.payload,
+    {
+      sourceType: sourceType.value,
+      name: name.value,
+      subjectType: subjectType.value,
+      subjectId: subjectId.value,
+    },
+  );
+  if (manualPayload.error !== undefined) {
+    return manualPayload;
+  }
 
   const rawPayload = readRequiredObject(value, 'rawPayload');
   if (rawPayload.error !== undefined) {
@@ -2769,6 +2795,15 @@ function validateDispatchEnvelopeInput(
   if (!isAllowedDispatchEventUrl(rawPayloadReference.value)) {
     return { error: 'rawPayload.reference must be an allowed Rainrail event URL.' };
   }
+  const manualRawPayload = validateManualInputRawPayloadMatches(
+    sourceType.value,
+    name.value,
+    rawPayloadKind.value,
+    rawPayloadReference.value,
+  );
+  if (manualRawPayload.error !== undefined) {
+    return manualRawPayload;
+  }
   const rawPayloadContentType = validateOptionalDispatchContentType(rawPayload.value, 'rawPayload.contentType');
   if (rawPayloadContentType.error !== undefined) {
     return rawPayloadContentType;
@@ -2778,12 +2813,14 @@ function validateDispatchEnvelopeInput(
     return rawPayloadSha256;
   }
 
-  const schemaVersion = value.schemaVersion ?? 'rainrail.event.v1';
+  const hasSchemaVersion = Object.hasOwn(value, 'schemaVersion');
+  const schemaVersion = hasSchemaVersion ? value.schemaVersion : 'rainrail.event.v1';
   if (schemaVersion !== 'rainrail.event.v1') {
     return { error: 'schemaVersion must be "rainrail.event.v1".' };
   }
 
-  const id = value.id ?? `${sourceName.value}:${deliveryId.value}:${name.value}`;
+  const hasId = Object.hasOwn(value, 'id');
+  const id = hasId ? value.id : `${sourceName.value}:${deliveryId.value}:${name.value}`;
   if (typeof id !== 'string') {
     return { error: 'id must be a string.' };
   }
@@ -2797,8 +2834,40 @@ function validateDispatchEnvelopeInput(
       id,
       schemaVersion,
     },
-    complete: Object.hasOwn(value, 'id') && Object.hasOwn(value, 'schemaVersion'),
+    complete: hasId && hasSchemaVersion,
+    hasId,
+    hasSchemaVersion,
   };
+}
+
+function addDispatchEnvelopeDefaults(
+  input: string,
+  validation: DispatchEnvelopeValidation,
+): string {
+  const properties: string[] = [];
+  if (!validation.hasId) {
+    properties.push(`"id":${JSON.stringify(validation.envelope.id)}`);
+  }
+  if (!validation.hasSchemaVersion) {
+    properties.push('"schemaVersion":"rainrail.event.v1"');
+  }
+  if (properties.length === 0) {
+    return input;
+  }
+
+  const objectStartIndex = input.search(/\S/u);
+  if (objectStartIndex < 0 || input[objectStartIndex] !== '{') {
+    return JSON.stringify(validation.envelope);
+  }
+
+  const afterOpenBrace = input.slice(objectStartIndex + 1);
+  const hasExistingProperties = !afterOpenBrace.trimStart().startsWith('}');
+  return [
+    input.slice(0, objectStartIndex + 1),
+    properties.join(','),
+    hasExistingProperties ? ',' : '',
+    input.slice(objectStartIndex + 1),
+  ].join('');
 }
 
 function validateOptionalDispatchIdentifier(
@@ -2892,6 +2961,79 @@ function validateOptionalDispatchSha256(
   return {};
 }
 
+function validateManualInputEventSourceMatches(
+  sourceType: string,
+  name: string,
+): { readonly error?: undefined } | { readonly error: string } {
+  if (
+    (name === 'rainrail.manual.message' && sourceType !== 'manual')
+    || (name === 'rainrail.chat.message' && sourceType !== 'chat')
+  ) {
+    return { error: 'manual/chat event name must match source.type.' };
+  }
+  if (
+    (sourceType === 'manual' && name !== 'rainrail.manual.message')
+    || (sourceType === 'chat' && name !== 'rainrail.chat.message')
+  ) {
+    return { error: 'manual/chat source.type must use the matching event name.' };
+  }
+  return {};
+}
+
+function validateManualInputPayload(
+  payload: unknown,
+  context: {
+    readonly sourceType: string;
+    readonly name: string;
+    readonly subjectType: string;
+    readonly subjectId: string;
+  },
+): { readonly error?: undefined } | { readonly error: string } {
+  if (!isManualInputDispatchEnvelope(context)) {
+    return {};
+  }
+
+  if (!isRecord(payload)) {
+    return { error: 'manual/chat payload must be an object.' };
+  }
+  if (payload.provider !== 'rainrail' || payload.channel !== context.sourceType || payload.action !== 'message') {
+    return { error: 'manual/chat payload is missing required fields.' };
+  }
+  if (!isRecord(payload.conversation) || typeof payload.conversation.id !== 'string' || payload.conversation.id.length === 0) {
+    return { error: 'manual/chat payload is missing required fields.' };
+  }
+  if (context.subjectType !== 'conversation' || payload.conversation.id !== context.subjectId) {
+    return { error: 'manual/chat subject must match payload conversation.' };
+  }
+  if (!isRecord(payload.message) || typeof payload.message.text !== 'string' || payload.message.text.trim().length === 0) {
+    return { error: 'payload.message.text is required.' };
+  }
+  return {};
+}
+
+function validateManualInputRawPayloadMatches(
+  sourceType: string,
+  name: string,
+  kind: string,
+  reference: string,
+): { readonly error?: undefined } | { readonly error: string } {
+  if (!isManualInputDispatchEnvelope({ sourceType, name })) {
+    return {};
+  }
+  if (kind !== 'inline-redacted') {
+    return { error: 'manual/chat raw payload kind must be inline-redacted.' };
+  }
+  if (new URL(reference).protocol !== `${sourceType}:`) {
+    return { error: 'manual/chat raw payload reference must match source.type.' };
+  }
+  return {};
+}
+
+function isManualInputDispatchEnvelope(context: { readonly sourceType: string; readonly name: string }): boolean {
+  return (context.sourceType === 'manual' && context.name === 'rainrail.manual.message')
+    || (context.sourceType === 'chat' && context.name === 'rainrail.chat.message');
+}
+
 function isDispatchSafeIdentifier(value: string): boolean {
   return dispatchSafeIdentifierPattern.test(value);
 }
@@ -2928,6 +3070,7 @@ function isAllowedDispatchEventUrl(value: string): boolean {
 
   if (url.protocol === 'github:' || url.protocol === 'cloudflare:' || url.protocol === 'manual:' || url.protocol === 'chat:') {
     return url.hostname === 'deliveries'
+      && url.port.length === 0
       && dispatchSafeDeliveryReferenceIdPattern.test(url.pathname.slice(1))
       && !url.pathname.slice(1).includes('/');
   }

@@ -179,13 +179,15 @@ Its `mode` is the `RainrailDispatchMode` discriminant, currently `message` for
 string, including values that look like CLI options. Envelope input is parsed
 as JSON and validated against the core event contract, including safe
 identifiers, UTC ISO timestamps, allowed raw payload kinds, and allowed event
-URL references. Complete envelope JSON is forwarded without re-serialization
-so caller-provided payload fields remain byte-for-byte under the runner
-boundary. Accepted envelope input may omit `id` and `schemaVersion`; the CLI
-fills those defaults without synthesizing message metadata or replacing other
-caller-provided envelope fields. The request `options` contains the shared
-`config`, `profile`, and global `json` selections parsed before the dispatch
-command.
+URL references. Manual/chat envelopes additionally validate the
+`source.type`/`name` pairing, payload shape, and matching inline raw payload
+reference expected by core publish. Complete envelope JSON is forwarded
+without re-serialization so caller-provided payload fields remain
+byte-for-byte under the runner boundary. Accepted envelope input may omit `id`
+and `schemaVersion`; the CLI inserts those defaults into the raw JSON string
+without synthesizing message metadata or re-serializing payload fields. The
+request `options` contains the shared `config`, `profile`, and global `json`
+selections parsed before the dispatch command.
 `RainrailDispatchRunner` returns the same `RainrailCliResult` shape as other
 embedded command runners.
 
