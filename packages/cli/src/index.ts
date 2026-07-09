@@ -7575,6 +7575,8 @@ function preflightMethodsForLocalPath(pathname: string, options: RainrailStartOp
   if (pathname === '/api/v1/overview') return ['GET', 'OPTIONS'];
   if (pathname === '/api/v1/events') return ['GET', 'OPTIONS'];
   if (/^\/api\/v1\/events\/[^/]+$/u.test(pathname)) return ['GET', 'OPTIONS'];
+  if (/^\/api\/v1\/workflow-runs\/[^/]+$/u.test(pathname)) return ['GET', 'OPTIONS'];
+  if (/^\/api\/v1\/agent-tasks\/[^/]+$/u.test(pathname)) return ['GET', 'OPTIONS'];
   if (localDashboardCommandForPath(pathname) !== undefined) return ['POST', 'OPTIONS'];
   if (
     pathname === '/api/v1/workflow-runs' ||

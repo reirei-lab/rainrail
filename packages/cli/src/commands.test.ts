@@ -4412,18 +4412,25 @@ describe('Rainrail CLI built-in commands', () => {
       });
       try {
         expect(result.exitCode).toBe(0);
-        const preflight = await fetch(`http://127.0.0.1:${port}/api/v1/overview`, {
-          method: 'OPTIONS',
-          headers: {
-            Origin: 'http://localhost:3000',
-            'Access-Control-Request-Method': 'GET',
-            'Access-Control-Request-Headers': 'authorization',
-          },
-        });
+        for (const route of [
+          '/api/v1/overview',
+          '/api/v1/workflow-runs/workflow-1',
+          '/api/v1/agent-tasks/task-1',
+        ]) {
+          const preflight = await fetch(`http://127.0.0.1:${port}${route}`, {
+            method: 'OPTIONS',
+            headers: {
+              Origin: 'http://localhost:3000',
+              'Access-Control-Request-Method': 'GET',
+              'Access-Control-Request-Headers': 'authorization',
+            },
+          });
 
-        expect(preflight.status).toBe(204);
-        expect(preflight.headers.get('access-control-allow-origin')).toBe('http://localhost:3000');
-        expect(preflight.headers.get('access-control-allow-headers')?.toLowerCase()).toContain('authorization');
+          expect(preflight.status, route).toBe(204);
+          expect(preflight.headers.get('access-control-allow-origin'), route).toBe('http://localhost:3000');
+          expect(preflight.headers.get('access-control-allow-methods'), route).toBe('GET, OPTIONS');
+          expect(preflight.headers.get('access-control-allow-headers')?.toLowerCase(), route).toContain('authorization');
+        }
       } finally {
         await closeTestServer(result);
       }
