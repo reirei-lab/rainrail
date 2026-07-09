@@ -107,7 +107,8 @@ storage / replay / workflow 起動や subscriber 枠消費の副作用を作ら�
 `verifyRainrailEventsBearerToken()` は legacy events bearer token だけを検証する
 互換 helper として public export に残す。新しい HTTP entrypoint は scoped verifier を使う。
 HTTP entrypoint の公開入口は Fetch adapter の `createRainrailHttpApp` と Node adapter の
-`createRainrailNodeServer`。
+`createRainrailNodeServer`。local Node の operational store config を shared HTTP app に
+接続する helper として `createOperationalStoreFromConfig` も公開する。
 Dashboard command API を組み込む caller 向けには、scoped token の `RainrailDashboardScope`、
 `RainrailDashboardAuthOptions`、handler 入力の `RainrailCommandRequest`、
 `RainrailCommandActionType`、`RainrailCommandTargetType`、および handler 型の

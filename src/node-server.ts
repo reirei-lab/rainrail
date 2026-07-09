@@ -13,12 +13,19 @@ import {
 } from './http-app.js';
 import { jsonResponse, readRequestBody, writeFetchResponse } from './http-utils.js';
 import type { RainrailIntakeAdapter } from './intake-adapter.js';
+import {
+  JsonFileOperationalStore,
+  RainrailOperationalStore,
+  type OperationalStore,
+} from './operational-store.js';
+import type { RainrailOperationalStoreConfig } from './config.js';
 
 export interface RainrailNodeServerOptions extends Omit<RainrailHttpAppOptions, 'room'> {
   githubWebhookSecret: string;
   githubSourceName?: string;
   maxWebhookBodyBytes?: number;
   intakeAdapters?: readonly RainrailIntakeAdapter[];
+  operationalStoreConfig?: RainrailOperationalStoreConfig;
   state?: RainrailBridgeRoomState;
   replayLimit?: number;
   keepAliveIntervalMs?: number;
@@ -29,63 +36,114 @@ export interface RainrailNodeServer {
   server: http.Server;
   app: RainrailHttpApp;
   room: RainrailBridgeRoom;
+  operationalStore?: OperationalStore;
 }
 
 export function createRainrailNodeServer(options: RainrailNodeServerOptions): RainrailNodeServer {
-  const hasCustomTailAdapter = options.intakeAdapters?.some((adapter) => adapter.tail !== undefined) ?? false;
-  const room = new RainrailBridgeRoom(options.state ?? createInMemoryBridgeRoomState(), {
-    publishToken: options.publishToken,
-    ...(options.replayLimit === undefined ? {} : { replayLimit: options.replayLimit }),
-    ...(options.keepAliveIntervalMs === undefined ? {} : { keepAliveIntervalMs: options.keepAliveIntervalMs }),
-  });
-  const appOptions: RainrailHttpAppOptions = {
-    room,
-    publishToken: options.publishToken,
-    ...(options.eventsBearerToken === undefined ? {} : { eventsBearerToken: options.eventsBearerToken }),
-    runtime: options.runtime ?? 'node',
-    ...(options.operationalStore === undefined ? {} : { operationalStore: options.operationalStore }),
-    ...(options.taskQueue === undefined ? {} : { taskQueue: options.taskQueue }),
-    ...(options.dashboardCommandMaxBodyBytes === undefined && options.maxBodyBytes === undefined ? {} : {
-      dashboardCommandMaxBodyBytes: options.dashboardCommandMaxBodyBytes ?? options.maxBodyBytes,
-    }),
-    ...(options.dashboardAuth === undefined ? {} : { dashboardAuth: options.dashboardAuth }),
-    ...(options.commandHandler === undefined ? {} : { commandHandler: options.commandHandler }),
-    intakeAdapters: [
-      ...createRainrailEepBridgeIntakeAdapters({
-        env: { GITHUB_WEBHOOK_SECRET: options.githubWebhookSecret },
-        ...(options.githubSourceName === undefined ? {} : { githubSourceName: options.githubSourceName }),
-        includeCloudflareTail: !hasCustomTailAdapter,
-        ...(options.maxWebhookBodyBytes === undefined && options.maxBodyBytes === undefined ? {} : {
-          githubMaxBodyBytes: options.maxWebhookBodyBytes ?? options.maxBodyBytes,
-        }),
+  if (options.operationalStore !== undefined && options.operationalStoreConfig !== undefined) {
+    throw new Error('operationalStore and operationalStoreConfig are mutually exclusive');
+  }
+  const ownedOperationalStore = options.operationalStore === undefined && options.operationalStoreConfig !== undefined
+    ? createOperationalStoreFromConfig(options.operationalStoreConfig)
+    : undefined;
+  try {
+    const hasCustomTailAdapter = options.intakeAdapters?.some((adapter) => adapter.tail !== undefined) ?? false;
+    const operationalStore = options.operationalStore ?? ownedOperationalStore;
+    const room = new RainrailBridgeRoom(options.state ?? createInMemoryBridgeRoomState(), {
+      publishToken: options.publishToken,
+      ...(options.replayLimit === undefined ? {} : { replayLimit: options.replayLimit }),
+      ...(options.keepAliveIntervalMs === undefined ? {} : { keepAliveIntervalMs: options.keepAliveIntervalMs }),
+    });
+    const appOptions: RainrailHttpAppOptions = {
+      room,
+      publishToken: options.publishToken,
+      ...(options.eventsBearerToken === undefined ? {} : { eventsBearerToken: options.eventsBearerToken }),
+      runtime: options.runtime ?? 'node',
+      ...(operationalStore === undefined ? {} : { operationalStore }),
+      ...(options.taskQueue === undefined ? {} : { taskQueue: options.taskQueue }),
+      ...(options.dashboardCommandMaxBodyBytes === undefined && options.maxBodyBytes === undefined ? {} : {
+        dashboardCommandMaxBodyBytes: options.dashboardCommandMaxBodyBytes ?? options.maxBodyBytes,
       }),
-      ...(options.intakeAdapters ?? []),
-    ],
-  };
-  const app = createRainrailHttpApp(appOptions);
+      ...(options.dashboardAuth === undefined ? {} : { dashboardAuth: options.dashboardAuth }),
+      ...(options.commandHandler === undefined ? {} : { commandHandler: options.commandHandler }),
+      intakeAdapters: [
+        ...createRainrailEepBridgeIntakeAdapters({
+          env: { GITHUB_WEBHOOK_SECRET: options.githubWebhookSecret },
+          ...(options.githubSourceName === undefined ? {} : { githubSourceName: options.githubSourceName }),
+          includeCloudflareTail: !hasCustomTailAdapter,
+          ...(options.maxWebhookBodyBytes === undefined && options.maxBodyBytes === undefined ? {} : {
+            githubMaxBodyBytes: options.maxWebhookBodyBytes ?? options.maxBodyBytes,
+          }),
+        }),
+        ...(options.intakeAdapters ?? []),
+      ],
+    };
+    const app = createRainrailHttpApp(appOptions);
 
-  const server = http.createServer(async (request, response) => {
-    const abortController = new AbortController();
-    response.once('close', () => {
-      abortController.abort();
+    const server = http.createServer(async (request, response) => {
+      const abortController = new AbortController();
+      response.once('close', () => {
+        abortController.abort();
+      });
+
+      try {
+        await writeFetchResponse(
+          response,
+          await app.fetch(await toFetchRequest(request, options, appOptions, abortController.signal)),
+          { signal: abortController.signal },
+        );
+      } catch (error) {
+        const status = isStatusCodeError(error) ? error.statusCode : 500;
+        await writeFetchResponse(
+          response,
+          jsonResponse({ error: status === 413 ? 'request_body_too_large' : 'internal_server_error' }, { status }),
+        );
+      }
+    });
+    server.once('close', () => {
+      ownedOperationalStore?.close();
+    });
+    server.once('error', () => {
+      ownedOperationalStore?.close();
     });
 
-    try {
-      await writeFetchResponse(
-        response,
-        await app.fetch(await toFetchRequest(request, options, appOptions, abortController.signal)),
-        { signal: abortController.signal },
-      );
-    } catch (error) {
-      const status = isStatusCodeError(error) ? error.statusCode : 500;
-      await writeFetchResponse(
-        response,
-        jsonResponse({ error: status === 413 ? 'request_body_too_large' : 'internal_server_error' }, { status }),
-      );
-    }
-  });
+    return {
+      server,
+      app,
+      room,
+      ...(operationalStore === undefined ? {} : { operationalStore }),
+    };
+  } catch (error) {
+    ownedOperationalStore?.close();
+    throw error;
+  }
+}
 
-  return { server, app, room };
+export function createOperationalStoreFromConfig(
+  config: RainrailOperationalStoreConfig,
+): OperationalStore & { close(): void } {
+  switch (config.kind) {
+    case 'json':
+      return new JsonFileOperationalStore({
+        databasePath: expectConfiguredDatabasePath(config, 'json'),
+        eventLimit: config.eventLimit,
+      });
+    case 'memory':
+      if (config.databasePath !== undefined) {
+        throw new Error('operationalStoreConfig.databasePath must be omitted for memory stores');
+      }
+      return new RainrailOperationalStore({
+        databasePath: ':memory:',
+        eventLimit: config.eventLimit,
+      });
+    case 'sqlite':
+      return new RainrailOperationalStore({
+        databasePath: expectConfiguredDatabasePath(config, 'sqlite'),
+        eventLimit: config.eventLimit,
+      });
+    default:
+      throw new Error('operationalStoreConfig.kind must be one of: sqlite, json, memory');
+  }
 }
 
 export function createInMemoryBridgeRoomState(): RainrailBridgeRoomState {
@@ -173,4 +231,11 @@ function isStatusCodeError(error: unknown): error is { statusCode: number } {
     && error !== null
     && 'statusCode' in error
     && typeof error.statusCode === 'number';
+}
+
+function expectConfiguredDatabasePath(config: RainrailOperationalStoreConfig, kind: 'sqlite' | 'json'): string {
+  if (config.databasePath === undefined || config.databasePath.length === 0) {
+    throw new Error(`operationalStoreConfig.databasePath is required for ${kind} stores`);
+  }
+  return config.databasePath;
 }

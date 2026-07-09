@@ -82,6 +82,11 @@ describe('parseConfig', () => {
         host: '127.0.0.1',
         port: 8787,
       },
+      operationalStore: {
+        kind: 'sqlite',
+        databasePath: 'var/rainrail-operational.sqlite',
+        eventLimit: 100,
+      },
       dashboardAuth: {
         readOnlyToken: 'read-token',
         operatorToken: 'operator-token',
@@ -148,6 +153,11 @@ describe('parseConfig', () => {
       port: 8787,
       allowedHosts: [],
     });
+    expect(config.operationalStore).toEqual({
+      kind: 'sqlite',
+      databasePath: 'var/rainrail-operational.sqlite',
+      eventLimit: 100,
+    });
     expect(config.dashboardAuth).toEqual({
       readOnlyToken: 'read-token',
       operatorToken: 'operator-token',
@@ -163,6 +173,7 @@ describe('parseConfig', () => {
         allowedHosts: [],
       },
       dashboardAuth: {},
+      operationalStore: undefined,
       sourceBundles: [],
       sources: [],
       taskProviders: {
@@ -353,6 +364,57 @@ describe('parseConfig', () => {
     [42, 'config.runtimeProviders must be an object'],
   ])('rejects runtimeProviders when it is %#', (runtimeProviders, message) => {
     expectConfigError({ runtimeProviders }, message);
+  });
+
+  it('parses local operational store config with environment-expanded database path', () => {
+    const config = parseConfigJson(JSON.stringify({
+      operationalStore: {
+        kind: 'sqlite',
+        databasePath: '${RAINRAIL_OPERATIONAL_DB}',
+      },
+    }), {
+      RAINRAIL_OPERATIONAL_DB: 'var/rainrail-operational.sqlite',
+    });
+
+    expect(config.operationalStore).toEqual({
+      kind: 'sqlite',
+      databasePath: 'var/rainrail-operational.sqlite',
+      eventLimit: 250,
+    });
+  });
+
+  it.each([
+    ['string', 'config.operationalStore must be an object'],
+    [
+      { kind: 'postgres', databasePath: 'var/state.db' },
+      'config.operationalStore.kind must be one of: sqlite, json, memory',
+    ],
+    [
+      { kind: 'sqlite' },
+      'config.operationalStore.databasePath must be a non-empty string for sqlite/json stores',
+    ],
+    [
+      { kind: 'json' },
+      'config.operationalStore.databasePath must be a non-empty string for sqlite/json stores',
+    ],
+    [
+      { kind: 'memory', databasePath: ':memory:' },
+      'config.operationalStore.databasePath must be omitted for memory stores',
+    ],
+    [
+      { kind: 'sqlite', databasePath: '', eventLimit: 10 },
+      'config.operationalStore.databasePath must be a non-empty string',
+    ],
+    [
+      { kind: 'sqlite', databasePath: 'var/state.sqlite', eventLimit: 0 },
+      'config.operationalStore.eventLimit must be a positive integer',
+    ],
+    [
+      { kind: 'sqlite', databasePath: 'var/state.sqlite', eventLimit: 1.5 },
+      'config.operationalStore.eventLimit must be a positive integer',
+    ],
+  ])('rejects invalid operationalStore config %#', (operationalStore, message) => {
+    expectConfigError({ operationalStore }, message);
   });
 
   it.each([
