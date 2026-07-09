@@ -32,6 +32,9 @@ describe('rainrail dispatch CLI documentation', () => {
     const help = runRainrailCli(['dispatch', 'help']);
 
     expect(help.exitCode).toBe(0);
+    expect(readme).toContain('standalone binary does not wire a dispatch runner yet');
+    expect(readme).toContain('RainrailCliEnvironment.dispatchRunner');
+    expect(readme).toContain('rainrail dispatch requires a dispatch runner');
     for (const documentedMode of [
       'rainrail dispatch "please inspect issue #263"',
       'rainrail dispatch --message "please inspect issue #263"',

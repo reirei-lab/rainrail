@@ -56,9 +56,14 @@ output, cache, and automatic notice behavior.
 
 ## Dispatching events from the CLI
 
-`rainrail dispatch` accepts one input mode at a time. For ad hoc manual
-messages, pass the text positionally, through `--message`, or through
-`--stdin`:
+`rainrail dispatch` accepts one input mode at a time, but the installed
+standalone binary does not wire a dispatch runner yet. These examples describe
+the supported argv surface for embedded callers or future local harness wiring
+that passes `RainrailCliEnvironment.dispatchRunner`; running them with only the
+standalone binary returns `rainrail dispatch requires a dispatch runner`.
+
+For ad hoc manual messages, pass the text positionally, through `--message`, or
+through `--stdin`:
 
     rainrail dispatch "please inspect issue #263"
     rainrail dispatch --message "please inspect issue #263"
