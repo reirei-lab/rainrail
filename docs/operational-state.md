@@ -13,7 +13,7 @@ Operational state の public contract は `OperationalStore`、`JsonFileOperatio
 `JsonFileOperationalStoreOptions`、`SqliteOperationalStore`、`RainrailOperationalStore`、
 `RainrailOperationalStoreOptions`、`StoredOperationalEvent`、`RecordActivityEventInput`、
 `StoredActivityEvent`、`RecordCommandResultInput`、`StoredCommandResult`、
-`RecordAgentTaskInput`、`StoredAgentTask`、`RecordEventHandlerRetryInput`、
+`StoredDashboardLayout`、`RecordAgentTaskInput`、`StoredAgentTask`、`RecordEventHandlerRetryInput`、
 `StoredEventHandlerRetry`、`OperationalStoreSnapshot`、`OperationalStoreWarnings`、
 `StoredStaleProjectClaimWarning`、`SnapshotOptions`、
 `ListOperationalStoreEventsOptions`、`ListOperationalStoreActivityEventsOptions`、
