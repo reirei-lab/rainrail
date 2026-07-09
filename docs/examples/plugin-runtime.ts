@@ -1,7 +1,9 @@
 import {
+  createDashboardCardProviderFromManifest,
   createManualInputEvent,
   createEventEnvelope,
   defineWorkflowPlugin,
+  type DashboardPluginManifest,
   type ManualInputRainrailEvent,
   type RainrailEventEnvelope,
 } from '../../src/index.js';
@@ -76,3 +78,30 @@ export const chatRuntimeStartWorkflow = defineWorkflowPlugin<ManualInputRainrail
     prompt: candidate.payload.message.text,
   }),
 });
+
+export const issueSummaryManifest: DashboardPluginManifest = {
+  name: 'issueSummary',
+  version: '1.0.0',
+  dashboard: {
+    cards: [{
+      name: 'queue',
+      title: 'Issue summary queue',
+      category: 'operations',
+      requiredCapabilities: ['dashboard:read'],
+      size: {
+        default: { columns: 3, rows: 2 },
+        min: { columns: 2, rows: 1 },
+        max: { columns: 6, rows: 4 },
+      },
+      settingsSchema: {
+        type: 'object',
+        properties: {
+          repository: { type: 'string' },
+        },
+        additionalProperties: false,
+      },
+    }],
+  },
+};
+
+export const issueSummaryCards = createDashboardCardProviderFromManifest(issueSummaryManifest);
