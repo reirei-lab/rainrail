@@ -273,6 +273,47 @@ secret や provider 固有 token は runtime provider の実装が保持し、
 contract には含めない。
 公開 contract は `RuntimeProvider` として提供する。
 
+## Dashboard card contribution
+
+Dashboard card は Core built-in card と plugin contribution を同じ catalog で扱う。
+公開 API は `DashboardCardDefinition`、`DashboardCardProvider`、
+`DashboardCardRegistry`、`createDashboardCardRegistry`、`defineDashboardCard`、
+`defineDashboardCardProvider`、`DashboardCardCatalogEntry`、
+`DashboardCardAvailability`、`DashboardCardEntry`、`DashboardCardSize`、
+`DashboardCardSizeConstraints`、`DashboardCardSettingsSchema`、
+`DashboardCardListOptions`、`DashboardLayoutItem`、
+`DashboardCardRegistryError`、`DashboardCardRegistryErrorCode` を入口にする。
+
+`DashboardCardDefinition.id` は catalog 全体で一意にする。Core card は
+`core.recentEvents` のように `core.` prefix を使い、plugin card は
+`plugin:<pluginName>.<cardName>` のように plugin 名を含める。registry は id 衝突を
+登録時に拒否するため、dashboard layout の `DashboardLayoutItem.cardId` は
+Core/plugin の区別を意識せず同じ id 空間を参照できる。
+
+`DashboardCardDefinition.entry` は `{ type: "core", name }` または
+`{ type: "plugin", pluginName, cardName }` のどちらかに分ける。Core entry は
+Rainrail 本体が解決し、plugin entry は enabled plugin catalog で plugin が有効な場合だけ
+利用可能とする。無効な plugin、capability 不足、entry 解決失敗は card を catalog から
+消す理由にはしない。`DashboardCardCatalogEntry.availability` を
+`available` / `unavailable` で返し、`invalid_plugin`、`missing_capability`、
+`entry_resolution_failed` の reason と operator 向け message を保持する。
+entry 解決を実行する caller は、解決できなかった card id と理由を
+`DashboardCardListOptions.entryResolutionFailures` に渡して catalog 上へ反映する。
+
+`requiredCapabilities` は dashboard 表示や provider 読み取りに必要な read-only
+capability を宣言する。registry の `list()` は caller が渡した
+`availableCapabilities` と `enabledPlugins` で availability を評価し、不足 capability は
+`missingCapabilities` として返す。危険操作の capability gate は Workflow plugin の
+`context.actions` に残し、Dashboard card は action 実行経路を持たない。
+
+`category` は dashboard 側の grouping 用の安定文字列とする。`size.default` は必須で、
+`size.min` / `size.max` は任意の制約として扱う。columns/rows は正の整数だけを許可し、
+min/default/max の大小関係が壊れた definition は登録時に
+`DashboardCardRegistryError` として拒否する。`settingsSchema` は JSON object schema
+compatible な operator settings metadata で、secret value や provider credential は
+含めない。Card-specific rendering payload は別 API で解決し、registry contract は
+definition と layout metadata だけを持つ。
+
 ## Workflow plugin
 
 Workflow plugin は `accepts(event)` で対象イベントを絞り込み、
