@@ -160,6 +160,34 @@ const CORE_DASHBOARD_CARD_PROVIDER = defineDashboardCardProvider({
       },
       settingsSchema: defaultCoreSettingsSchema,
     }),
+    defineDashboardCard({
+      id: 'core.overview',
+      title: 'Overview',
+      description: 'Legacy dashboard overview card id kept for saved layout compatibility.',
+      entry: { type: 'core', name: 'overview' },
+      category: 'operations',
+      requiredCapabilities: ['dashboard:read'],
+      size: {
+        default: { columns: 4, rows: 2 },
+        min: { columns: 2, rows: 1 },
+        max: { columns: 8, rows: 4 },
+      },
+      settingsSchema: defaultCoreSettingsSchema,
+    }),
+    defineDashboardCard({
+      id: 'core.recentEvents',
+      title: 'Recent events',
+      description: 'Legacy dashboard recent-events card id kept for saved layout compatibility.',
+      entry: { type: 'core', name: 'recentEvents' },
+      category: 'events',
+      requiredCapabilities: ['dashboard:read'],
+      size: {
+        default: { columns: 4, rows: 2 },
+        min: { columns: 2, rows: 1 },
+        max: { columns: 8, rows: 4 },
+      },
+      settingsSchema: defaultCoreSettingsSchema,
+    }),
   ],
 });
 
@@ -973,7 +1001,9 @@ function dashboardCardRegistry(options: RainrailHttpAppOptions): DashboardCardRe
   if (options.dashboardCardRegistry !== undefined) return options.dashboardCardRegistry;
 
   const registry = createDashboardCardRegistry();
-  registry.registerProvider(CORE_DASHBOARD_CARD_PROVIDER);
+  for (const card of CORE_DASHBOARD_CARD_PROVIDER.cards) {
+    registry.register(card);
+  }
   return registry;
 }
 

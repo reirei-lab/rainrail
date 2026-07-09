@@ -76,19 +76,14 @@ describe('dashboard card registry contract', () => {
     ]);
   });
 
-  it('allows Rainrail core to register built-in dashboard cards as a provider', () => {
+  it('reserves the core provider name from external provider registration', () => {
     const registry = createDashboardCardRegistry();
 
-    registry.registerProvider(defineDashboardCardProvider({
+    expect(() => registry.registerProvider(defineDashboardCardProvider({
       name: 'core',
       kind: 'dashboard-card-provider',
       cards: [recentEventsCard],
-    }));
-
-    expect(registry.list({ availableCapabilities: ['dashboard:read'] })).toEqual([{
-      definition: recentEventsCard,
-      availability: { status: 'available' },
-    }]);
+    }))).toThrow(/Dashboard card provider name "core" is reserved/u);
   });
 
   it('rejects duplicate card ids before they can collide in a layout', () => {

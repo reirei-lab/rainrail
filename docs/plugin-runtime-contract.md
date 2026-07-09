@@ -313,12 +313,15 @@ card が宣言した `requiredCapabilities` をすべて missing として返す
 Rainrail 本体の標準 dashboard は `core` provider として
 `core.operationalTotals`、`core.eventInbox`、`core.workflowRuns`、`core.agentTasks`、
 `core.sources`、`core.queue`、`core.settings`、`core.operatorActions` を登録する。
+保存済み layout の永続 `cardId` 互換のため、legacy id の `core.overview` と
+`core.recentEvents` も catalog には残す。
 これらは既存の fixed dashboard surface と同じ情報境界を保ち、card dashboard 移行中も
 auth、token 入力、polling、stale data 表示、operator action の workflow を維持する。
 `registerProvider()` で plugin contribution を受ける場合、plugin entry の `pluginName` は
 `DashboardCardProvider.name` と一致しなければならない。別 provider の namespace を
-先取りする card は登録時に拒否する。Core entry は `core` provider だけが扱い、
-plugin provider 経由の non-plugin entry は拒否する。provider 登録は all-or-nothing とし、
+先取りする card は登録時に拒否する。Core entry は Rainrail 本体の内部登録経路だけが扱い、
+`registerProvider()` では `core` provider 名を予約名として拒否し、plugin provider 経由の
+non-plugin entry も拒否する。provider 登録は all-or-nothing とし、
 複数 card のうち 1 件でも invalid definition、duplicate id、namespace mismatch があれば、
 その provider 由来の card は 1 件も catalog に追加しない。
 provider object は `kind: "dashboard-card-provider"` と `cards` 配列を必須とし、

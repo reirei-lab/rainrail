@@ -128,6 +128,9 @@ card も catalog からは落とさない。HTTP app に registry が注入さ�
 既定 card catalog を使う。既定 catalog は現行 dashboard の標準 surface に対応し、
 `core.operationalTotals`、`core.eventInbox`、`core.workflowRuns`、`core.agentTasks`、
 `core.sources`、`core.queue`、`core.settings`、`core.operatorActions` を登録する。
+5cefb07 以前の保存済み layout 互換のため、legacy id の `core.overview` と
+`core.recentEvents` も catalog に残す。これらは新規 default layout には使わないが、
+保存済み layout の再保存や catalog 照合で `unknown_dashboard_card` にならないようにする。
 
 `GET /api/v1/dashboard/layout` は保存済み layout があれば
 `{ id: "user.dashboardLayout", source: "user", updatedAt, items }` を返す。保存済み layout がない

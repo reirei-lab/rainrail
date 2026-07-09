@@ -345,6 +345,13 @@ function validateProvider(provider: DashboardCardProvider): void {
     );
   }
 
+  if (provider.name === 'core') {
+    throw new DashboardCardRegistryError(
+      'Dashboard card provider name "core" is reserved',
+      'invalid_provider',
+    );
+  }
+
   if (provider.kind !== 'dashboard-card-provider') {
     throw new DashboardCardRegistryError(
       'Dashboard card provider kind must be "dashboard-card-provider"',
@@ -361,16 +368,6 @@ function validateProvider(provider: DashboardCardProvider): void {
 }
 
 function validateProviderCard(provider: DashboardCardProvider, definition: DashboardCardDefinition): void {
-  if (provider.name === 'core') {
-    if (definition.entry?.type === 'core') return;
-
-    throw new DashboardCardRegistryError(
-      `Provider "core" cannot register plugin card "${definition.id}"`,
-      'invalid_provider',
-      definition.id,
-    );
-  }
-
   if (definition.entry?.type !== 'plugin') {
     throw new DashboardCardRegistryError(
       `Provider "${provider.name}" cannot register non-plugin card "${definition.id}"`,
