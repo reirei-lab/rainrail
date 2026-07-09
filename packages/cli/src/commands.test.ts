@@ -64,6 +64,13 @@ function withSqliteDatabase<T>(databasePath: string, callback: (database: {
   }
 }
 
+async function expectSqliteOperationalFilesProtected(databasePath: string): Promise<void> {
+  for (const path of [databasePath, `${databasePath}-wal`, `${databasePath}-shm`]) {
+    const file = await stat(path);
+    expect(file.mode & 0o777, path).toBe(0o600);
+  }
+}
+
 async function initRainrailProject(parentDirectory: string, projectName: string): Promise<string> {
   const projectRoot = join(parentDirectory, projectName);
   await mkdir(projectRoot, { recursive: true });
@@ -2375,6 +2382,7 @@ describe('Rainrail CLI built-in commands', () => {
           });
           expect(accepted.status).toBe(202);
         }
+        await expectSqliteOperationalFilesProtected(databasePath);
 
         const overview = await fetch(`http://127.0.0.1:${port}/api/v1/overview`);
         await expect(overview.json()).resolves.toMatchObject({ data: { counts: { events: 3 } } });

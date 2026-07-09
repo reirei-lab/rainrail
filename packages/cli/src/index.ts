@@ -5587,9 +5587,10 @@ function createSqliteLocalRainrailEventStore(databasePath: string, eventLimit: n
     };
   };
   const database = new DatabaseSync(databasePath);
-  chmodSync(databasePath, 0o600);
+  protectSqliteDatabaseFiles(databasePath);
   database.exec('PRAGMA busy_timeout = 5000');
   database.exec('PRAGMA journal_mode = WAL');
+  protectSqliteDatabaseFiles(databasePath);
   database.exec(`
     CREATE TABLE IF NOT EXISTS operational_events (
       id TEXT PRIMARY KEY,
@@ -5686,6 +5687,7 @@ function createSqliteLocalRainrailEventStore(databasePath: string, eventLimit: n
       reference: 'rainrail://redacted/raw-payload',
     }).replaceAll("'", "''")}'`,
   );
+  protectSqliteDatabaseFiles(databasePath);
   const selectEvents = database.prepare(
     `SELECT * FROM (
       SELECT * FROM operational_events ORDER BY received_at DESC, id DESC LIMIT ?
@@ -5712,6 +5714,7 @@ function createSqliteLocalRainrailEventStore(databasePath: string, eventLimit: n
         .map((row) => ({ id: requiredStringRowValue(row, 'id') })),
     ) - 1,
   );
+  protectSqliteDatabaseFiles(databasePath);
 
   return {
     eventLimit,
@@ -5749,10 +5752,13 @@ function createSqliteLocalRainrailEventStore(databasePath: string, eventLimit: n
         JSON.stringify(event.rawPayload),
         JSON.stringify(event.links ?? null),
       );
+      protectSqliteDatabaseFiles(databasePath);
       return localOperationalEventFromRow(selectEvent.get(event.id));
     },
     reserveLocalEventId() {
-      return `local-event-${String(sqliteNextSequenceValue(database, 'local_event')).padStart(6, '0')}`;
+      const id = `local-event-${String(sqliteNextSequenceValue(database, 'local_event')).padStart(6, '0')}`;
+      protectSqliteDatabaseFiles(databasePath);
+      return id;
     },
     nextEventId() {
       return nextLocalEventId(
@@ -5988,6 +5994,14 @@ function sqliteCount(
   tableName: string,
 ): number {
   return requiredNumberRowValue(database.prepare(`SELECT count(*) as count FROM ${tableName}`).get(), 'count');
+}
+
+function protectSqliteDatabaseFiles(databasePath: string): void {
+  for (const path of [databasePath, `${databasePath}-wal`, `${databasePath}-shm`]) {
+    if (existsSync(path)) {
+      chmodSync(path, 0o600);
+    }
+  }
 }
 
 function sqliteAddColumnIfMissing(
