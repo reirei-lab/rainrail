@@ -296,8 +296,10 @@ describe('dashboard operational views', () => {
     expect(dashboardApp).toContain('cardSettingValueType');
     expect(dashboardApp).toContain('cardSettingChanged');
     expect(dashboardApp).toContain("input.dataset.cardSettingChanged !== 'true'");
+    expect(dashboardApp).toContain('invalidCardSettingsConfig');
     expect(dashboardApp).toContain('Number.isInteger');
     expect(dashboardApp).toContain("input.step = '1'");
+    expect(dashboardApp).toContain('setCardSettingsStatus(copy.cardSettings.invalid)');
     expect(dashboardApp).toContain('delete config[name]');
     expect(dashboardApp).toContain("currentValue !== null");
     expect(dashboardApp).toContain('cardSettingsDirty');

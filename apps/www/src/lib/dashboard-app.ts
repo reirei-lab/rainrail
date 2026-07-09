@@ -816,7 +816,13 @@ if (root !== null) {
       return;
     }
 
-    const config = mergeCardSettingsConfig(selectedLayoutItem.config, readCardSettingsConfig(cardSettingsForm));
+    const renderedConfig = readCardSettingsConfig(cardSettingsForm);
+    if (!renderedConfig.ok) {
+      setCardSettingsStatus(copy.cardSettings.invalid);
+      return;
+    }
+
+    const config = mergeCardSettingsConfig(selectedLayoutItem.config, renderedConfig.config);
     try {
       await client.saveDashboardLayoutItemConfig(selectedLayoutItem.id, config);
       updateLatestCardSettingsConfig(selectedLayoutItem.id, config);
@@ -829,7 +835,7 @@ if (root !== null) {
     }
   }
 
-  function readCardSettingsConfig(form: HTMLElement): Record<string, unknown> {
+  function readCardSettingsConfig(form: HTMLElement): CardSettingsConfigReadResult {
     const config: Record<string, unknown> = {};
     for (const input of Array.from(form.querySelectorAll<HTMLInputElement>('[data-card-setting]'))) {
       const name = input.dataset.cardSetting;
@@ -842,15 +848,17 @@ if (root !== null) {
           config[name] = undefined;
         } else {
           const value = Number(input.value);
-          if (!input.validity.valid || !Number.isFinite(value)) continue;
-          if (input.dataset.cardSettingValueType === 'integer' && !Number.isInteger(value)) continue;
+          if (invalidCardSettingsConfig(input, value)) {
+            input.reportValidity();
+            return { ok: false };
+          }
           config[name] = value;
         }
       } else {
         config[name] = input.value;
       }
     }
-    return config;
+    return { ok: true, config };
   }
 
   function mergeCardSettingsConfig(
@@ -894,6 +902,10 @@ type CardSettingInputType = 'checkbox' | 'number' | 'text';
 
 type CardSettingValueType = 'boolean' | 'number' | 'integer' | 'string';
 
+type CardSettingsConfigReadResult =
+  | { ok: true; config: Record<string, unknown> }
+  | { ok: false };
+
 function cardSettingValueType(schema: Record<string, unknown>, currentValue: unknown): CardSettingValueType | undefined {
   const schemaType = schema.type;
   if (schemaType === 'boolean') {
@@ -917,6 +929,12 @@ function cardSettingInputType(valueType: CardSettingValueType): CardSettingInput
   if (valueType === 'boolean') return 'checkbox';
   if (valueType === 'number' || valueType === 'integer') return 'number';
   return 'text';
+}
+
+function invalidCardSettingsConfig(input: HTMLInputElement, value: number): boolean {
+  return !input.validity.valid
+    || !Number.isFinite(value)
+    || (input.dataset.cardSettingValueType === 'integer' && !Number.isInteger(value));
 }
 
 interface SafeStorage {
