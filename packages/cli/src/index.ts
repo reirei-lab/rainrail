@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import http, { type IncomingMessage, type OutgoingHttpHeaders, type ServerResponse } from 'node:http';
 import {
+  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -12,6 +13,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
+import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
 import { basename, dirname, extname, join, normalize, parse, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -25,6 +27,8 @@ import {
   isOfficialPluginHelpRequest,
   type OfficialPluginMetadata,
 } from './official-plugin-catalog.js';
+
+const nodeRequire = createRequire(import.meta.url);
 
 export {
   OFFICIAL_PLUGIN_CATALOG,
@@ -203,6 +207,7 @@ export type RainrailStartOptions = {
   readonly dashboardAssetRoot?: string;
   readonly dashboardAuth: RainrailDashboardAuth;
   readonly sources: readonly RainrailLocalSource[];
+  readonly operationalStoreConfig?: RainrailStartOperationalStoreConfig;
 };
 
 export type RainrailStartedServer = {
@@ -228,6 +233,14 @@ export type RainrailDashboardAuth = {
   readonly readOnlyToken?: string;
   readonly operatorToken?: string;
   readonly adminToken?: string;
+};
+
+export type RainrailStartOperationalStoreKind = 'sqlite' | 'json' | 'memory';
+
+export type RainrailStartOperationalStoreConfig = {
+  readonly kind: RainrailStartOperationalStoreKind;
+  readonly databasePath?: string;
+  readonly eventLimit: number;
 };
 
 export type RainrailCliEnvironment = {
@@ -1599,12 +1612,14 @@ type StartConfig = {
     readonly allowedHosts?: readonly string[];
   };
   readonly dashboardAuth: RainrailDashboardAuth;
+  readonly operationalStore?: RainrailStartOperationalStoreConfig;
   readonly sources: readonly RainrailLocalSource[];
 };
 
 const localDefaultMaxRequestBodyBytes = 25 * 1024 * 1024;
 const localGitHubWebhookSourceNameMaxLength = 53;
 const localEventHistoryLimit = 50;
+const localDefaultOperationalStoreEventLimit = 250;
 const localEmptyCollectionRows: readonly { readonly id: string }[] = [];
 
 function runStartCommand(
@@ -1834,8 +1849,14 @@ function readStartConfig(
 
   const server = parseStartConfigServer(value.server);
   const dashboardAuth = parseStartDashboardAuth(value.dashboardAuth);
+  const operationalStore = parseStartOperationalStoreConfig(value.operationalStore);
   const sources = parseStartConfigSources(value, markerValue, env);
-  return server === undefined ? { dashboardAuth, sources } : { server, dashboardAuth, sources };
+  return {
+    ...(server === undefined ? {} : { server }),
+    dashboardAuth,
+    ...(operationalStore === undefined ? {} : { operationalStore }),
+    sources,
+  };
 }
 
 function parseStartDashboardAuth(value: unknown): RainrailDashboardAuth {
@@ -1873,6 +1894,27 @@ function assertUniqueLocalDashboardAuthTokens(auth: RainrailDashboardAuth): void
     }
     seen.set(token, key);
   }
+}
+
+function parseStartOperationalStoreConfig(value: unknown): RainrailStartOperationalStoreConfig | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!isRecord(value)) {
+    throw new Error('config.operationalStore must be an object');
+  }
+
+  const kind = parseStartOperationalStoreKind(value.kind, 'config.operationalStore.kind');
+  const databasePath = parseOptionalStartConfigString(value.databasePath, 'config.operationalStore.databasePath');
+  const eventLimit = parseOptionalStartPositiveInteger(value.eventLimit, 'config.operationalStore.eventLimit')
+    ?? localDefaultOperationalStoreEventLimit;
+  assertStartOperationalStorePath(kind, databasePath, 'config.operationalStore.databasePath');
+
+  return {
+    kind,
+    ...(databasePath === undefined ? {} : { databasePath }),
+    eventLimit,
+  };
 }
 
 function parseStartConfigServer(value: unknown): StartConfig['server'] {
@@ -2273,6 +2315,11 @@ function resolveStartOptions(
     return { error: 'dashboardAuth.readOnlyToken, dashboardAuth.operatorToken, dashboardAuth.adminToken, or SSE_BEARER_TOKEN is required when rainrail start binds outside localhost' };
   }
   const dashboardAssetRoot = resolveDashboardAssetRoot(env);
+  const envOperationalStore = parseStartOperationalStoreEnv(env);
+  if (envOperationalStore.error !== undefined) {
+    return { error: envOperationalStore.error };
+  }
+  const operationalStoreConfig = envOperationalStore.config ?? config.operationalStore;
 
   return {
     options: {
@@ -2285,6 +2332,7 @@ function resolveStartOptions(
       sources: config.sources,
       dashboardAuth,
       ...(dashboardToken === undefined ? {} : { dashboardToken }),
+      ...(operationalStoreConfig === undefined ? {} : { operationalStoreConfig }),
     },
   };
 }
@@ -2321,6 +2369,81 @@ function parseStartPort(value: unknown, label: string): number | { readonly mess
     return { message: `${label} must be an integer from 1 to 65535` };
   }
   return port;
+}
+
+function parseStartOperationalStoreEnv(
+  env: Record<string, string | undefined>,
+): { readonly config?: RainrailStartOperationalStoreConfig; readonly error?: undefined } | { readonly error: string } {
+  const envKind = env.RAINRAIL_OPERATIONAL_STORE;
+  if (envKind === undefined || envKind.length === 0) {
+    return {};
+  }
+  let kind: RainrailStartOperationalStoreKind;
+  try {
+    kind = parseStartOperationalStoreKind(envKind, 'RAINRAIL_OPERATIONAL_STORE');
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) };
+  }
+
+  const databasePath = env.RAINRAIL_OPERATIONAL_DB === undefined || env.RAINRAIL_OPERATIONAL_DB.length === 0
+    ? undefined
+    : env.RAINRAIL_OPERATIONAL_DB;
+  const eventLimit = env.RAINRAIL_OPERATIONAL_EVENT_LIMIT === undefined || env.RAINRAIL_OPERATIONAL_EVENT_LIMIT.length === 0
+    ? localDefaultOperationalStoreEventLimit
+    : Number(env.RAINRAIL_OPERATIONAL_EVENT_LIMIT);
+  if (!Number.isInteger(eventLimit) || eventLimit < 1) {
+    return { error: 'RAINRAIL_OPERATIONAL_EVENT_LIMIT must be a positive integer' };
+  }
+  try {
+    assertStartOperationalStorePath(kind, databasePath, 'RAINRAIL_OPERATIONAL_DB');
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) };
+  }
+
+  return {
+    config: {
+      kind,
+      ...(databasePath === undefined ? {} : { databasePath }),
+      eventLimit,
+    },
+  };
+}
+
+function parseStartOperationalStoreKind(value: unknown, label: string): RainrailStartOperationalStoreKind {
+  if (value !== 'sqlite' && value !== 'json' && value !== 'memory') {
+    throw new Error(`${label} must be one of: sqlite, json, memory`);
+  }
+  return value;
+}
+
+function parseOptionalStartConfigString(value: unknown, label: string): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  return parseLocalNonEmptyString(value, label);
+}
+
+function parseOptionalStartPositiveInteger(value: unknown, label: string): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) {
+    throw new Error(`${label} must be a positive integer`);
+  }
+  return value;
+}
+
+function assertStartOperationalStorePath(
+  kind: RainrailStartOperationalStoreKind,
+  databasePath: string | undefined,
+  label: string,
+): void {
+  if ((kind === 'sqlite' || kind === 'json') && databasePath === undefined) {
+    throw new Error(`${label} must be a non-empty string for sqlite/json stores`);
+  }
+  if (kind === 'memory' && databasePath !== undefined) {
+    throw new Error(`${label} must be omitted for memory stores`);
+  }
 }
 
 function parseStartConfigPort(value: unknown, label: string): number | { readonly message: string } {
@@ -4946,6 +5069,14 @@ type LocalRainrailServerState = {
   nextEventId: number;
   events: LocalRainrailEvent[];
   sseClients: Set<ServerResponse>;
+  eventStore?: LocalRainrailEventStore;
+};
+
+type LocalRainrailEventStore = {
+  readonly eventLimit: number;
+  readonly listEvents: () => LocalRainrailEvent[];
+  readonly replaceEvents: (events: readonly LocalRainrailEvent[]) => void;
+  readonly close: () => void;
 };
 
 type LocalDashboardScope = 'read-only' | 'operator' | 'admin';
@@ -4958,10 +5089,13 @@ type LocalDashboardCommand = {
 };
 
 async function startLocalRainrailServer(options: RainrailStartOptions): Promise<RainrailStartedServer> {
+  const eventStore = createLocalRainrailEventStore(options.operationalStoreConfig);
+  const restoredEvents = eventStore?.listEvents() ?? [];
   const state: LocalRainrailServerState = {
-    nextEventId: 1,
-    events: [],
+    nextEventId: nextLocalEventId(restoredEvents),
+    events: [...restoredEvents],
     sseClients: new Set(),
+    ...(eventStore === undefined ? {} : { eventStore }),
   };
   const server = http.createServer((request, response) => {
     handleLocalRainrailRequest(request, response, options, state).catch(() => {
@@ -4976,6 +5110,7 @@ async function startLocalRainrailServer(options: RainrailStartOptions): Promise<
   await new Promise<void>((resolveListen, rejectListen) => {
     const onError = (error: Error): void => {
       server.off('listening', onListening);
+      eventStore?.close();
       rejectListen(error);
     };
     const onListening = (): void => {
@@ -4989,6 +5124,7 @@ async function startLocalRainrailServer(options: RainrailStartOptions): Promise<
 
   const stop = async (): Promise<void> => {
     await closeHttpServer(server);
+    eventStore?.close();
   };
   const onSigint = (): void => {
     stop().finally(() => {
@@ -5016,6 +5152,139 @@ async function closeHttpServer(server: http.Server): Promise<void> {
       resolveClose();
     });
   });
+}
+
+function createLocalRainrailEventStore(
+  config: RainrailStartOperationalStoreConfig | undefined,
+): LocalRainrailEventStore | undefined {
+  if (config === undefined) {
+    return undefined;
+  }
+  switch (config.kind) {
+    case 'memory':
+      if (config.databasePath !== undefined) {
+        throw new Error('operationalStoreConfig.databasePath must be omitted for memory stores');
+      }
+      return createMemoryLocalRainrailEventStore(config.eventLimit);
+    case 'json':
+      return createJsonLocalRainrailEventStore(expectStartStoreDatabasePath(config, 'json'), config.eventLimit);
+    case 'sqlite':
+      return createSqliteLocalRainrailEventStore(expectStartStoreDatabasePath(config, 'sqlite'), config.eventLimit);
+  }
+}
+
+function createMemoryLocalRainrailEventStore(eventLimit: number): LocalRainrailEventStore {
+  let events: LocalRainrailEvent[] = [];
+  return {
+    eventLimit,
+    listEvents: () => [...events],
+    replaceEvents(nextEvents) {
+      events = [...nextEvents].slice(-eventLimit);
+    },
+    close() {
+      events = [];
+    },
+  };
+}
+
+function createJsonLocalRainrailEventStore(databasePath: string, eventLimit: number): LocalRainrailEventStore {
+  let events = readLocalRainrailEventStoreJson(databasePath).slice(-eventLimit);
+  return {
+    eventLimit,
+    listEvents: () => [...events],
+    replaceEvents(nextEvents) {
+      events = [...nextEvents].slice(-eventLimit);
+      mkdirSync(dirname(databasePath), { recursive: true });
+      writeFileSync(databasePath, `${JSON.stringify({ events }, null, 2)}\n`, { mode: 0o600 });
+    },
+    close() {
+      mkdirSync(dirname(databasePath), { recursive: true });
+      writeFileSync(databasePath, `${JSON.stringify({ events }, null, 2)}\n`, { mode: 0o600 });
+    },
+  };
+}
+
+function readLocalRainrailEventStoreJson(databasePath: string): LocalRainrailEvent[] {
+  if (!existsSync(databasePath)) {
+    return [];
+  }
+  const parsed = JSON.parse(readFileSync(databasePath, 'utf8')) as unknown;
+  if (!isRecord(parsed) || !Array.isArray(parsed.events)) {
+    return [];
+  }
+  return parsed.events.filter(isLocalRainrailEvent);
+}
+
+function createSqliteLocalRainrailEventStore(databasePath: string, eventLimit: number): LocalRainrailEventStore {
+  mkdirSync(dirname(databasePath), { recursive: true });
+  const { DatabaseSync } = nodeRequire('node:sqlite') as {
+    DatabaseSync: new (path: string) => {
+      exec(sql: string): void;
+      prepare(sql: string): {
+        run(...values: Array<string | number>): void;
+        all(...values: Array<string | number>): unknown[];
+      };
+      close(): void;
+    };
+  };
+  const database = new DatabaseSync(databasePath);
+  chmodSync(databasePath, 0o600);
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS local_events (
+      id TEXT PRIMARY KEY,
+      received_at TEXT NOT NULL,
+      body TEXT NOT NULL
+    );
+  `);
+  const selectEvents = database.prepare(
+    'SELECT body FROM local_events ORDER BY received_at ASC, id ASC LIMIT ?',
+  );
+  const deleteEvents = database.prepare('DELETE FROM local_events');
+  const insertEvent = database.prepare(
+    'INSERT INTO local_events (id, received_at, body) VALUES (?, ?, ?)',
+  );
+
+  return {
+    eventLimit,
+    listEvents() {
+      return selectEvents.all(eventLimit)
+        .map((row) => isRecord(row) && typeof row.body === 'string' ? JSON.parse(row.body) as unknown : undefined)
+        .filter(isLocalRainrailEvent);
+    },
+    replaceEvents(nextEvents) {
+      database.exec('BEGIN IMMEDIATE');
+      try {
+        deleteEvents.run();
+        for (const event of [...nextEvents].slice(-eventLimit)) {
+          insertEvent.run(event.id, event.receivedAt, JSON.stringify(event));
+        }
+        database.exec('COMMIT');
+      } catch (error) {
+        database.exec('ROLLBACK');
+        throw error;
+      }
+    },
+    close() {
+      database.close();
+    },
+  };
+}
+
+function expectStartStoreDatabasePath(config: RainrailStartOperationalStoreConfig, kind: 'sqlite' | 'json'): string {
+  if (config.databasePath === undefined) {
+    throw new Error(`operationalStoreConfig.databasePath is required for ${kind} stores`);
+  }
+  return config.databasePath;
+}
+
+function nextLocalEventId(events: readonly LocalRainrailEvent[]): number {
+  return events.reduce((nextId, event) => {
+    const match = /^local-event-(\d+)$/u.exec(event.id);
+    if (match === null) {
+      return nextId;
+    }
+    return Math.max(nextId, Number(match[1]) + 1);
+  }, 1);
 }
 
 async function handleLocalRainrailRequest(
@@ -5436,9 +5705,11 @@ async function handleLocalIntakeRequest(
     },
   };
   state.events.push(event);
-  if (state.events.length > localEventHistoryLimit) {
-    state.events.splice(0, state.events.length - localEventHistoryLimit);
+  const eventLimit = state.eventStore?.eventLimit ?? localEventHistoryLimit;
+  if (state.events.length > eventLimit) {
+    state.events.splice(0, state.events.length - eventLimit);
   }
+  state.eventStore?.replaceEvents(state.events);
   broadcastLocalEvent(state, event);
   writeJsonResponse(response, 202, { data: event }, request);
 }
@@ -5485,6 +5756,29 @@ function localEventDetail(event: LocalRainrailEvent): {
       handlerRetries: [],
     },
   };
+}
+
+function isLocalRainrailEvent(value: unknown): value is LocalRainrailEvent {
+  return isRecord(value)
+    && typeof value.id === 'string'
+    && value.type === 'event'
+    && typeof value.name === 'string'
+    && typeof value.status === 'string'
+    && typeof value.summary === 'string'
+    && typeof value.deliveryId === 'string'
+    && typeof value.rawPayloadReference === 'string'
+    && typeof value.workflowRunCount === 'number'
+    && typeof value.handlerRetryCount === 'number'
+    && typeof value.occurredAt === 'string'
+    && typeof value.receivedAt === 'string'
+    && isRecord(value.subject)
+    && typeof value.subject.type === 'string'
+    && typeof value.subject.id === 'string'
+    && isRecord(value.source)
+    && typeof value.source.type === 'string'
+    && typeof value.source.name === 'string'
+    && isRecord(value.links)
+    && typeof value.links.self === 'string';
 }
 
 type LocalSourceRow = {

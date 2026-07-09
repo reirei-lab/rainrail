@@ -1,5 +1,5 @@
 import { once } from 'node:events';
-import { mkdir, rm } from 'node:fs/promises';
+import { mkdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -502,6 +502,46 @@ describe('Rainrail Node server', () => {
     } finally {
       jsonStore.close();
       memoryStore.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects unparsed operational store config values in the public helper', () => {
+    expect(() => createOperationalStoreFromConfig({
+      kind: 'memory',
+      databasePath: 'var/ignored.sqlite',
+      eventLimit: 5,
+    })).toThrow('operationalStoreConfig.databasePath must be omitted for memory stores');
+
+    expect(() => createOperationalStoreFromConfig({
+      kind: 'postgres',
+      databasePath: 'var/postgres.sqlite',
+      eventLimit: 5,
+    } as never)).toThrow('operationalStoreConfig.kind must be one of: sqlite, json, memory');
+  });
+
+  it('closes an owned operational store when app creation validation fails', async () => {
+    const directory = join(tmpdir(), `rainrail-node-owned-store-${crypto.randomUUID()}`);
+    await mkdir(directory, { recursive: true });
+    const databasePath = join(directory, 'operational.json');
+
+    try {
+      expect(() => createRainrailNodeServer({
+        githubWebhookSecret: 'secret',
+        publishToken: 'test-publish-token',
+        eventsBearerToken: 'same-token',
+        dashboardAuth: {
+          operatorToken: 'same-token',
+        },
+        operationalStoreConfig: {
+          kind: 'json',
+          databasePath,
+          eventLimit: 5,
+        },
+      })).toThrow('duplicate dashboard token scopes are not allowed');
+
+      await expect(readFile(databasePath, 'utf8')).resolves.toContain('"events"');
+    } finally {
       await rm(directory, { recursive: true, force: true });
     }
   });

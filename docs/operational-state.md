@@ -50,6 +50,10 @@ SQLite-backed local dashboard API の例:
 `databasePath` を使える。`createRainrailNodeServer` は `operationalStoreConfig` を受け取り、
 `createOperationalStoreFromConfig` で作った store を shared HTTP app に差し込む。caller が
 既に store instance を持つ場合は従来通り `operationalStore` を直接渡す。
+`rainrail start` は `rainrail.config.json` の同じ `operationalStore` 設定を読み、
+`RainrailStartOptions.operationalStoreConfig` と default local dashboard server に渡す。
+そのため、local start の dashboard events は SQLite/JSON store から復元され、process restart
+後も local API で確認できる。
 
 この SQLite config は local Node support のための operational state であり、Cloudflare Worker
 production storage の設定ではない。Worker deployment で使う durable storage は別の
