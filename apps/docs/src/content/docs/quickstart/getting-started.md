@@ -48,19 +48,7 @@ rainrail.lock
 
 The generated config uses the current directory name as the project name.
 
-## 3. Inspect available plugin commands
-
-Start with help output before running plugin-specific commands.
-
-```sh
-rainrail openclaw help
-rainrail openclaw session test help
-```
-
-Plugin command help explains the options and required local setup for each
-workflow.
-
-## 4. Start the local harness when ready
+## 3. Start the local harness when ready
 
 ```sh
 rainrail start
