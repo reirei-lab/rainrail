@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   createDashboardCardRegistry,
+  defineDashboardCardProvider,
   type DashboardCardDefinition,
   type DashboardLayoutItem,
 } from './index.js';
@@ -73,6 +74,21 @@ describe('dashboard card registry contract', () => {
         availability: { status: 'available' },
       },
     ]);
+  });
+
+  it('allows Rainrail core to register built-in dashboard cards as a provider', () => {
+    const registry = createDashboardCardRegistry();
+
+    registry.registerProvider(defineDashboardCardProvider({
+      name: 'core',
+      kind: 'dashboard-card-provider',
+      cards: [recentEventsCard],
+    }));
+
+    expect(registry.list({ availableCapabilities: ['dashboard:read'] })).toEqual([{
+      definition: recentEventsCard,
+      availability: { status: 'available' },
+    }]);
   });
 
   it('rejects duplicate card ids before they can collide in a layout', () => {

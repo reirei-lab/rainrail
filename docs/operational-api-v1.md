@@ -124,8 +124,10 @@ versioned tests.
 
 `GET /api/v1/dashboard/cards` は `DashboardCardRegistry` の catalog projection を返す。
 各 row は `definition` と `availability` を持ち、unavailable な plugin card や capability 不足の
-card も catalog からは落とさない。HTTP app に registry が注入されない場合は Core の既定 card
-catalog を使う。
+card も catalog からは落とさない。HTTP app に registry が注入されない場合は `core` provider の
+既定 card catalog を使う。既定 catalog は現行 dashboard の標準 surface に対応し、
+`core.operationalTotals`、`core.eventInbox`、`core.workflowRuns`、`core.agentTasks`、
+`core.sources`、`core.queue`、`core.settings`、`core.operatorActions` を登録する。
 
 `GET /api/v1/dashboard/layout` は保存済み layout があれば
 `{ id: "user.dashboardLayout", source: "user", updatedAt, items }` を返す。保存済み layout がない

@@ -361,6 +361,16 @@ function validateProvider(provider: DashboardCardProvider): void {
 }
 
 function validateProviderCard(provider: DashboardCardProvider, definition: DashboardCardDefinition): void {
+  if (provider.name === 'core') {
+    if (definition.entry?.type === 'core') return;
+
+    throw new DashboardCardRegistryError(
+      `Provider "core" cannot register plugin card "${definition.id}"`,
+      'invalid_provider',
+      definition.id,
+    );
+  }
+
   if (definition.entry?.type !== 'plugin') {
     throw new DashboardCardRegistryError(
       `Provider "${provider.name}" cannot register non-plugin card "${definition.id}"`,
