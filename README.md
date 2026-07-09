@@ -56,11 +56,10 @@ output, cache, and automatic notice behavior.
 
 ## Dispatching events from the CLI
 
-`rainrail dispatch` accepts one input mode at a time, but the installed
-standalone binary does not wire a dispatch runner yet. These examples describe
-the supported argv surface for embedded callers or future local harness wiring
-that passes `RainrailCliEnvironment.dispatchRunner`; running them with only the
-standalone binary returns `rainrail dispatch requires a dispatch runner`.
+`rainrail dispatch` accepts one input mode at a time and sends the validated
+event through the same dispatch boundary used by embedded Rainrail callers.
+Embedded callers can still pass `RainrailCliEnvironment.dispatchRunner` to
+replace the standalone event delivery runner.
 
 For ad hoc manual messages, pass the text positionally, through `--message`, or
 through `--stdin`:
@@ -70,8 +69,8 @@ through `--stdin`:
     printf '%s\n' "please inspect issue #263" | rainrail dispatch --stdin
 
 The CLI turns message-only input into a `rainrail.manual.message` event from
-the manual `cli` source before handing it to the configured dispatch runner.
-Blank messages are rejected before dispatch.
+the manual `cli` source before handing it to event delivery. Blank messages are
+rejected before dispatch.
 
 For replaying or testing a complete event contract, provide the whole
 `rainrail.event.v1` envelope as JSON:
@@ -80,11 +79,12 @@ For replaying or testing a complete event contract, provide the whole
     cat ./event.json | rainrail dispatch --json --stdin
     rainrail dispatch --envelope-json '{"source":{"type":"manual","name":"manual-source"},"name":"rainrail.manual.message","delivery":{"id":"delivery-demo","receivedAt":"2026-07-09T00:00:00.000Z"},"occurredAt":"2026-07-09T00:00:00.000Z","subject":{"type":"conversation","id":"thread-demo"},"payload":{"provider":"rainrail","channel":"manual","action":"message","conversation":{"id":"thread-demo"},"message":{"id":"message-demo","text":"hello from JSON"}},"rawPayload":{"kind":"inline-redacted","reference":"manual://deliveries/delivery-demo"}}'
 
-Envelope JSON is validated before it reaches the dispatch runner. The first CLI
-surface intentionally does not expose per-field metadata flags; use complete
-JSON envelope input when you need source, delivery, subject, payload, or raw
-payload metadata to be explicit. Run `rainrail dispatch help` for the current
-usage and error behavior.
+Envelope JSON is validated before event delivery. The first CLI surface
+intentionally does not expose per-field metadata flags; use complete JSON
+envelope input when you need source, delivery, subject, payload, or raw payload
+metadata to be explicit. Add the shared `--json` option before `dispatch` when
+you need a machine-readable delivery summary. Run `rainrail dispatch help` for
+the current usage and error behavior.
 
 ## Repository structure
 

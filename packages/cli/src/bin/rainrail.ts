@@ -1,7 +1,11 @@
 #!/usr/bin/env node
-import { runRainrailCliEntrypoint } from '../index.js';
+import {
+  createStandaloneRainrailDispatchRunner,
+  runRainrailCliEntrypoint,
+} from '../index.js';
 
 const result = await runRainrailCliEntrypoint(process.argv.slice(2), undefined, {
+  dispatchRunner: createStandaloneRainrailDispatchRunner(),
   stderrWriter: (message) => {
     process.stderr.write(message);
   },

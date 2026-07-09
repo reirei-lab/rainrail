@@ -32,9 +32,10 @@ describe('rainrail dispatch CLI documentation', () => {
     const help = runRainrailCli(['dispatch', 'help']);
 
     expect(help.exitCode).toBe(0);
-    expect(readme).toContain('standalone binary does not wire a dispatch runner yet');
+    expect(readme).toContain('same dispatch boundary used by embedded Rainrail callers');
     expect(readme).toContain('RainrailCliEnvironment.dispatchRunner');
-    expect(readme).toContain('rainrail dispatch requires a dispatch runner');
+    expect(readme).toContain('standalone event delivery runner');
+    expect(projectLocalLayout).toContain('installed binary passes the standalone dispatch runner');
     for (const documentedMode of [
       'rainrail dispatch "please inspect issue #263"',
       'rainrail dispatch --message "please inspect issue #263"',
@@ -117,7 +118,8 @@ describe('rainrail dispatch CLI documentation', () => {
   });
 
   it('keeps documented error behavior aligned with the CLI', () => {
-    expect(readme).toContain('Blank messages are rejected before dispatch.');
+    expect(readme).toContain('Blank messages are');
+    expect(readme).toContain('rejected before dispatch.');
     expect(runRainrailCli(['dispatch', '   '], {
       dispatchRunner: () => ({ exitCode: 0, stdout: 'unexpected\n', stderr: '' }),
     })).toEqual({

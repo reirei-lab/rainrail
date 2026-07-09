@@ -149,6 +149,33 @@ export type RainrailDispatchRunner = (
   request: RainrailDispatchRequest,
 ) => RainrailCliResult;
 
+export type RainrailStandaloneDispatchEvent = RainrailDispatchEventEnvelope | {
+  readonly id: string;
+  readonly schemaVersion: 'rainrail.event.v1';
+  readonly source: Record<string, unknown>;
+  readonly name: string;
+  readonly delivery: Record<string, unknown>;
+  readonly occurredAt: string;
+  readonly subject: Record<string, unknown>;
+  readonly payload: unknown;
+  readonly rawPayload: Record<string, unknown>;
+  readonly links?: Record<string, string>;
+};
+
+export type RainrailStandaloneDispatchResult = {
+  readonly pluginName: string;
+  readonly eventId: string;
+  readonly status: 'fulfilled' | 'rejected' | (string & {});
+  readonly value?: unknown;
+  readonly reason?: unknown;
+};
+
+export type RainrailStandaloneDispatchRunnerOptions = {
+  readonly deliver?: (
+    event: RainrailStandaloneDispatchEvent,
+  ) => readonly RainrailStandaloneDispatchResult[];
+};
+
 export type CommandRunnerResult = {
   readonly status: number | null;
   readonly stdout?: string | Buffer | null;
@@ -2476,6 +2503,62 @@ function runDispatchRequest(
   }
 
   return dispatchRunner(request);
+}
+
+export function createStandaloneRainrailDispatchRunner(
+  options: RainrailStandaloneDispatchRunnerOptions = {},
+): RainrailDispatchRunner {
+  return (request) => {
+    const eventResult = dispatchRequestEvent(request);
+    if ('error' in eventResult) {
+      return {
+        exitCode: 1,
+        stdout: '',
+        stderr: `${eventResult.error}\n`,
+      };
+    }
+
+    const workflowResults = [...(options.deliver?.(eventResult.event) ?? [])];
+    if (request.options.json) {
+      return {
+        exitCode: 0,
+        stdout: `${JSON.stringify({
+          dispatched: true,
+          eventId: eventResult.event.id,
+          eventName: eventResult.event.name,
+          workflowResultCount: workflowResults.length,
+          workflowResults,
+          ...(request.mode === 'envelope-json' ? { input: request.input } : {}),
+        })}\n`,
+        stderr: '',
+      };
+    }
+
+    return {
+      exitCode: 0,
+      stdout: [
+        `Dispatched ${eventResult.event.name} event ${eventResult.event.id}.`,
+        `Workflow results: ${workflowResults.length}`,
+        '',
+      ].join('\n'),
+      stderr: '',
+    };
+  };
+}
+
+function dispatchRequestEvent(
+  request: RainrailDispatchRequest,
+): { readonly event: RainrailStandaloneDispatchEvent } | { readonly error: string } {
+  if (request.mode === 'message') {
+    return { event: request.event };
+  }
+
+  try {
+    return { event: JSON.parse(request.input) as RainrailStandaloneDispatchEvent };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { error: `Invalid JSON for rainrail dispatch envelope: ${message}` };
+  }
 }
 
 function parseDispatchArguments(

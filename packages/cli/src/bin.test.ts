@@ -1,6 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { runRainrailCliEntrypoint } from './index.js';
+import {
+  createStandaloneRainrailDispatchRunner,
+  runRainrailCliEntrypoint,
+} from './index.js';
 
 describe('rainrail binary entrypoint', () => {
   it('runs through the CLI package entrypoint', () => {
@@ -9,8 +12,73 @@ describe('rainrail binary entrypoint', () => {
     expect(bin).toContain('#!/usr/bin/env node');
     expect(bin).toContain("from '../index.js'");
     expect(bin).toContain('await runRainrailCliEntrypoint(process.argv.slice(2)');
+    expect(bin).toContain('createStandaloneRainrailDispatchRunner()');
     expect(bin).toContain('stderrWriter');
     expect(bin).toContain('process.exitCode = result.exitCode');
+  });
+
+  it('wires standalone dispatch through the default event delivery runner', async () => {
+    const writes: string[] = [];
+
+    const result = await runRainrailCliEntrypoint(
+      ['dispatch', 'hello from standalone'],
+      {
+        stdout: { write: (value) => writes.push(`stdout:${value}`) },
+        stderr: { write: (value) => writes.push(`stderr:${value}`) },
+      },
+      {
+        dispatchRunner: createStandaloneRainrailDispatchRunner({
+          deliver: (event) => [
+            {
+              pluginName: 'standalone-smoke',
+              eventId: event.id,
+              status: 'fulfilled',
+              value: event.payload,
+            },
+          ],
+        }),
+        updateNoticeCheck: () => Promise.resolve(undefined),
+      },
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(writes).toEqual([
+      expect.stringContaining('stdout:Dispatched rainrail.manual.message event cli:'),
+    ]);
+    expect(writes[0]).toContain('Workflow results: 1');
+    expect(writes[0]).not.toContain('requires a dispatch runner');
+  });
+
+  it('preserves caller-provided envelope data when standalone dispatch uses JSON output', async () => {
+    const writes: string[] = [];
+    const envelopeJson = '{"id":"manual-source:delivery-standalone:rainrail.manual.message","schemaVersion":"rainrail.event.v1","source":{"type":"manual","name":"manual-source"},"name":"rainrail.manual.message","delivery":{"id":"delivery-standalone","receivedAt":"2026-07-09T00:00:00.000Z"},"occurredAt":"2026-07-09T00:00:00.000Z","subject":{"type":"conversation","id":"thread-standalone"},"payload":{"provider":"rainrail","channel":"manual","action":"message","conversation":{"id":"thread-standalone"},"message":{"id":"message-standalone","text":"hello JSON"},"numericId":9007199254740993},"rawPayload":{"kind":"inline-redacted","reference":"manual://deliveries/delivery-standalone"}}';
+
+    const result = await runRainrailCliEntrypoint(
+      ['--json', 'dispatch', '--envelope-json', envelopeJson],
+      {
+        stdout: { write: (value) => writes.push(value) },
+        stderr: { write: (value) => writes.push(value) },
+      },
+      {
+        dispatchRunner: createStandaloneRainrailDispatchRunner({
+          deliver: (event) => [
+            {
+              pluginName: 'standalone-json-smoke',
+              eventId: event.id,
+              status: 'fulfilled',
+              value: event.payload,
+            },
+          ],
+        }),
+        updateNoticeCheck: () => Promise.resolve(undefined),
+      },
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toContain('"eventId":"manual-source:delivery-standalone:rainrail.manual.message"');
+    expect(writes[0]).toContain('"workflowResultCount":1');
+    expect(writes[0]).toContain('9007199254740993');
   });
 
   it('starts the update notice check before running the synchronous CLI and prints it after successful output', async () => {

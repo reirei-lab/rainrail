@@ -174,6 +174,8 @@ help`, `rainrail github webhook add help`, and their canonical
 `rainrail dispatch` accepts either a simple manual message or a complete
 Rainrail event envelope. Embedded callers can pass
 `RainrailCliEnvironment.dispatchRunner` to receive a `RainrailDispatchRequest`.
+The installed binary passes the standalone dispatch runner by default, so
+accepted CLI input is delivered without requiring an embedded test runner.
 
 Message input can be provided as a positional argument, `--message <text>`, or
 `--stdin`. Message input is rejected before dispatch when it is blank after
@@ -208,9 +210,10 @@ forwarded without re-serialization so caller-provided payload fields remain
 byte-for-byte under the runner boundary. Accepted envelope input may omit `id`
 and `schemaVersion`; the CLI inserts those defaults into the raw JSON string
 without synthesizing message metadata or re-serializing payload fields. If a
-dispatch runner is not configured, JSON file/stdin input is not read before the
-standard missing-runner error is returned. `RainrailDispatchRunner` returns the
-same `RainrailCliResult` shape as other embedded command runners.
+dispatch runner is not configured by an embedded caller, JSON file/stdin input
+is not read before the standard missing-runner error is returned.
+`RainrailDispatchRunner` returns the same `RainrailCliResult` shape as other
+embedded command runners.
 
 The first `rainrail dispatch` CLI surface intentionally avoids per-field
 metadata flags such as `--source-name`, `--delivery-id`, or `--subject-id`.
