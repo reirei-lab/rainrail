@@ -55,6 +55,7 @@ if (root !== null) {
   const operatorActions = Array.from(root.querySelectorAll<HTMLButtonElement>('[data-action-permission="operator"]'));
   const agentActionButtons = Array.from(root.querySelectorAll<HTMLButtonElement>('[data-agent-action]'));
   const commandStatus = root.querySelector<HTMLElement>('[data-command-status]');
+  const demoIndicator = root.querySelector<HTMLElement>('[data-demo-indicator]');
   const tabButtons = Array.from(root.querySelectorAll<HTMLButtonElement>('[data-dashboard-tab]'));
 
   let client: RainrailDashboardApiClient | undefined;
@@ -71,11 +72,13 @@ if (root !== null) {
 
   const storedToken = sessionStore.get(TOKEN_STORAGE_KEY) ?? '';
   const storedApiBaseUrl = sessionStore.get(API_BASE_URL_STORAGE_KEY) ?? appRoot.dataset.apiBaseUrl ?? '';
-  const authRequired = appRoot.dataset.authRequired !== 'false';
-  const operatorEnabled = localStore.get(OPERATOR_STORAGE_KEY) === '1';
+  const demoMode = new URLSearchParams(window.location.search).get('demo') === '1';
+  const authRequired = !demoMode && appRoot.dataset.authRequired !== 'false';
+  const operatorEnabled = demoMode || localStore.get(OPERATOR_STORAGE_KEY) === '1';
   if (tokenInput !== null) tokenInput.value = storedToken;
   if (apiBaseUrlInput !== null) apiBaseUrlInput.value = storedApiBaseUrl;
   if (permissionToggle !== null) permissionToggle.checked = operatorEnabled;
+  if (demoIndicator !== null) demoIndicator.hidden = !demoMode;
   setOperatorActionsEnabled(operatorEnabled);
   resetDashboardData();
 
@@ -399,7 +402,7 @@ if (root !== null) {
 
   function createDashboardClient(token: string, configuredApiBaseUrl?: string): RainrailDashboardApiClient {
     const apiBaseUrl = normalizeApiBaseUrl(configuredApiBaseUrl ?? apiBaseUrlInput?.value ?? appRoot.dataset.apiBaseUrl ?? '');
-    return new RainrailDashboardApiClient({ token, baseUrl: apiBaseUrl });
+    return new RainrailDashboardApiClient({ token, baseUrl: apiBaseUrl, demoMode });
   }
 
   function startPolling(nextClient: RainrailDashboardApiClient): void {

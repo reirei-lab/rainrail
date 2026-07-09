@@ -63,6 +63,9 @@ describe('package scripts used by pull request CI', () => {
     expect(packageJson.scripts['release:cli']).toBe(
       'node scripts/package-cli-release.mjs',
     );
+    expect(packageJson.scripts['demo:dashboard']).toBe(
+      'node scripts/seed-dashboard-demo-db.mjs && RAINRAIL_DASHBOARD_DEMO=1 pnpm --filter @rainrail/cli exec rainrail start --demo',
+    );
     expect(cliPackageJson.name).toBe('@rainrail/cli');
     expect(cliPackageJson.bin.rainrail).toBe('./dist/bin/rainrail.js');
     expect(cliPackageJson.scripts.build).toBe(

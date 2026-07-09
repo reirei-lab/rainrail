@@ -112,12 +112,23 @@ describe('dashboard app shell', () => {
     expect(localizedDashboardPage).toContain('data-api-base-url={apiBaseUrl}');
     expect(localizedDashboardPage).toContain('data-auth-required="true"');
     expect(dashboardClient).toContain("this.baseUrl = options.baseUrl ?? '';");
-    expect(dashboardClient).toContain('fetch(`${this.baseUrl}${path}`');
-    expect(dashboardApp).toContain("const authRequired = appRoot.dataset.authRequired !== 'false';");
+    expect(dashboardClient).toContain('fetch(`${this.baseUrl}${this.pathWithDemoMode(path)}`');
+    expect(dashboardApp).toContain("const authRequired = !demoMode && appRoot.dataset.authRequired !== 'false';");
     expect(dashboardApp).toContain("if (storedToken === '' && authRequired)");
     expect(dashboardApp).toContain('client = createDashboardClient(storedToken, storedApiBaseUrl);');
     expect(dashboardClient).not.toContain('http://127.0.0.1:8787');
     expect(dashboardClient).not.toContain('localhost:8787');
+  });
+
+  it('supports explicit local dashboard demo mode without a bearer token', () => {
+    expect(localizedDashboardPage).toContain('data-demo-indicator');
+    expect(localizedDashboardPage).toContain('Demo mode');
+    expect(dashboardApp).toContain("new URLSearchParams(window.location.search).get('demo') === '1'");
+    expect(dashboardApp).toContain("const authRequired = !demoMode && appRoot.dataset.authRequired !== 'false';");
+    expect(dashboardApp).toContain('demoIndicator.hidden = !demoMode');
+    expect(dashboardClient).toContain('demoMode?: boolean');
+    expect(dashboardClient).toContain('pathWithDemoMode(path)');
+    expect(dashboardClient).toContain('demo=1');
   });
 
   it('documents polling as the MVP live update strategy in code and UI affordances', () => {

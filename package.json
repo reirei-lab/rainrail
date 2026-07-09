@@ -19,6 +19,7 @@
     "docs:deploy:preview": "pnpm docs:build && wrangler pages deploy apps/docs/dist --project-name rainrail-docs --branch \"${RAINRAIL_DOCS_BRANCH:-preview}\"",
     "docs:deploy:production": "pnpm docs:build && wrangler pages deploy apps/docs/dist --project-name rainrail-docs --branch main",
     "docs:smoke": "node scripts/smoke-cloudflare-docs.mjs",
+    "demo:dashboard": "node scripts/seed-dashboard-demo-db.mjs && RAINRAIL_DASHBOARD_DEMO=1 pnpm --filter @rainrail/cli exec rainrail start --demo",
     "pages:build": "pnpm --filter www build",
     "pages:deploy:preview": "pnpm pages:build && wrangler pages deploy apps/www/dist --project-name rainrail-www --branch \"${RAINRAIL_PAGES_BRANCH:-preview}\"",
     "pages:deploy:production": "pnpm pages:build && wrangler pages deploy apps/www/dist --project-name rainrail-www --branch main",

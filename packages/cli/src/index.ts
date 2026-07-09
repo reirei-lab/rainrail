@@ -229,6 +229,7 @@ export type RainrailStartOptions = {
   readonly root: string;
   readonly configPath: string;
   readonly allowedHosts: readonly string[];
+  readonly demoMode?: boolean;
   readonly dashboardToken?: string;
   readonly dashboardAssetRoot?: string;
   readonly dashboardAuth: RainrailDashboardAuth;
@@ -1637,6 +1638,7 @@ export async function runRainrailCliAsync(
 type StartArguments = {
   readonly host?: string;
   readonly port?: number;
+  readonly demoMode: boolean;
   readonly errors: readonly string[];
 };
 
@@ -1655,6 +1657,7 @@ const localDefaultMaxRequestBodyBytes = 25 * 1024 * 1024;
 const localGitHubWebhookSourceNameMaxLength = 53;
 const localEventHistoryLimit = 50;
 const localDefaultOperationalStoreEventLimit = 250;
+const localDefaultDemoOperationalStorePath = '.tmp/dashboard-demo.sqlite';
 const localEmptyCollectionRows: readonly { readonly id: string }[] = [];
 
 function runStartCommand(
@@ -1819,10 +1822,16 @@ function parseStartArguments(args: readonly string[]): StartArguments {
   const errors: string[] = [];
   let host: string | undefined;
   let port: number | undefined;
+  let demoMode = false;
 
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === undefined) continue;
+
+    if (arg === '--demo') {
+      demoMode = true;
+      continue;
+    }
 
     if (arg === '--host' || arg === '--port') {
       const value = args[index + 1];
@@ -1860,7 +1869,7 @@ function parseStartArguments(args: readonly string[]): StartArguments {
     errors.push(`Unknown rainrail start option: ${arg}.`);
   }
 
-  const result: { host?: string; port?: number; errors: readonly string[] } = { errors };
+  const result: { host?: string; port?: number; demoMode: boolean; errors: readonly string[] } = { demoMode, errors };
   if (host !== undefined) result.host = host;
   if (port !== undefined) result.port = port;
   return result;
@@ -2356,8 +2365,16 @@ function resolveStartOptions(
   if (envOperationalStore.error !== undefined) {
     return { error: envOperationalStore.error };
   }
+  const demoMode = args.demoMode || env.RAINRAIL_DASHBOARD_DEMO === '1';
+  const configuredOperationalStore = envOperationalStore.config ?? config.operationalStore;
   const operationalStoreConfig = normalizeStartOperationalStoreConfigPath(
-    envOperationalStore.config ?? config.operationalStore,
+    configuredOperationalStore ?? (demoMode
+      ? {
+        kind: 'sqlite',
+        databasePath: localDefaultDemoOperationalStorePath,
+        eventLimit: localDefaultOperationalStoreEventLimit,
+      }
+      : undefined),
     project.root,
   );
 
@@ -2371,6 +2388,7 @@ function resolveStartOptions(
       ...(dashboardAssetRoot === undefined ? {} : { dashboardAssetRoot }),
       sources: config.sources,
       dashboardAuth,
+      ...(demoMode ? { demoMode } : {}),
       ...(dashboardToken === undefined ? {} : { dashboardToken }),
       ...(operationalStoreConfig === undefined ? {} : { operationalStoreConfig }),
     },
@@ -2520,7 +2538,9 @@ function formatStartOutput(options: RainrailStartOptions): string {
     `Port: ${options.port}`,
     `Health: ${baseUrl}/healthz`,
     `Dashboard: ${baseUrl}/dashboard`,
+    ...(options.demoMode ? [`Dashboard demo: ${baseUrl}/dashboard?demo=1`] : []),
     `Dashboard API: ${baseUrl}/api/v1/overview`,
+    ...(options.demoMode ? [`Dashboard demo API: ${baseUrl}/api/v1/overview?demo=1`] : []),
     ...dashboardAuthRows,
     `Event Stream: ${baseUrl}/events`,
     ...(localIntakeRows.length === 0 ? [] : [
@@ -6194,7 +6214,7 @@ async function handleLocalRainrailRequest(
     }
   }
 
-  const authError = getLocalServerAuthError(request, url.pathname, options);
+  const authError = getLocalServerAuthError(request, url, options);
   if (authError !== undefined) {
     writeJsonResponse(response, authError.status, authError.body, request);
     return;
@@ -6447,6 +6467,12 @@ async function handleLocalRainrailRequest(
   }
 
   if (request.method === 'GET' && url.pathname === '/api/v1/queue') {
+    if (options.demoMode && state.eventStore?.listAgentTasks !== undefined) {
+      writeValidatedLocalCollectionResponse(response, localDemoQueueRows(state.eventStore.listAgentTasks()), url, request, (row) => row.id, [], {
+        summary: localDemoQueueSummary(state.eventStore.listAgentTasks()),
+      });
+      return;
+    }
     if (!writeValidatedLocalCollectionResponse(response, localEmptyCollectionRows, url, request, (row) => row.id, ['filter[status]'], {
       summary: {
         upcomingIssues: 0,
@@ -6473,7 +6499,7 @@ async function handleLocalRainrailRequest(
 
   const localCommand = localDashboardCommandForPath(url.pathname);
   if (request.method === 'POST' && localCommand !== undefined) {
-    await handleLocalDashboardCommandRequest(request, response, localCommand);
+    await handleLocalDashboardCommandRequest(request, response, localCommand, options.demoMode === true && url.searchParams.get('demo') === '1');
     return;
   }
 
@@ -6484,6 +6510,7 @@ async function handleLocalDashboardCommandRequest(
   request: IncomingMessage,
   response: ServerResponse,
   command: LocalDashboardCommand,
+  demoMode: boolean,
 ): Promise<void> {
   const requestId = localRequestId(request);
   const body = await readLocalJsonObjectBody(request);
@@ -6513,6 +6540,24 @@ async function handleLocalDashboardCommandRequest(
     writeJsonResponse(response, 409, {
       error: 'action_confirmation_required',
       data: preview,
+    }, request, {
+      'X-Request-ID': requestId,
+    });
+    return;
+  }
+
+  if (demoMode) {
+    writeJsonResponse(response, 202, {
+      data: {
+        ...preview,
+        status: 'accepted',
+        dryRun: false,
+        auditId: `demo-${requestId}`,
+        result: {
+          demoOnly: true,
+          message: 'Demo mode accepted the command without dispatching to an external runtime.',
+        },
+      },
     }, request, {
       'X-Request-ID': requestId,
     });
@@ -6912,6 +6957,60 @@ function localAgentTaskDetail(task: LocalOperationalAgentTask, staleTaskIds: Rea
   };
 }
 
+function localDemoQueueRows(tasks: readonly LocalOperationalAgentTask[]) {
+  const taskRows = tasks
+    .filter((task) => task.status === 'running' || localStaleProjectClaimStatuses.has(task.status))
+    .map((task) => {
+      const blocked = localStaleProjectClaimStatuses.has(task.status);
+      return {
+        id: task.id,
+        type: 'queue-item',
+        status: blocked ? 'blocked' : 'in-progress',
+        title: task.title,
+        branchName: task.branchName,
+        projectStatus: blocked ? 'Blocked' : 'In Progress',
+        ...(blocked ? { blockedReason: 'stale demo project claim' } : {}),
+        ...(isLocalIssueReference(task.issue) ? { issue: task.issue } : {}),
+        ...(isRecord(task.claim) ? { claimLock: task.claim } : {}),
+        links: { self: `/api/v1/agent-tasks/${encodeURIComponent(task.id)}` },
+      };
+    });
+
+  return [
+    {
+      id: 'demo-upcoming-issue-300',
+      type: 'queue-item',
+      status: 'upcoming',
+      title: 'Upcoming dashboard polish task',
+      projectStatus: 'Todo',
+      issue: {
+        repository: 'reirei-lab/rainrail',
+        number: 300,
+      },
+    },
+    ...taskRows,
+  ];
+}
+
+function localDemoQueueSummary(tasks: readonly LocalOperationalAgentTask[]) {
+  const blockedCount = tasks.filter((task) => localStaleProjectClaimStatuses.has(task.status)).length;
+  const inProgressCount = tasks.filter((task) => task.status === 'running').length;
+  return {
+    upcomingIssues: 1,
+    blockedReasons: blockedCount === 0 ? [] : ['stale demo project claim'],
+    inProgressCount,
+    blockedCount,
+    claimedCount: blockedCount + inProgressCount,
+    staleClaimCount: blockedCount,
+  };
+}
+
+function isLocalIssueReference(value: unknown): value is { readonly repository?: string; readonly number?: number } {
+  return isRecord(value)
+    && (typeof value.repository === 'string' || value.repository === undefined)
+    && (typeof value.number === 'number' || value.number === undefined);
+}
+
 const localStaleProjectClaimStatuses = new Set(['failed', 'canceled', 'stopped', 'timed_out', 'compaction_failed']);
 
 function localStaleProjectClaimWarnings(tasks: readonly LocalOperationalAgentTask[]): readonly LocalStaleProjectClaimWarning[] {
@@ -7234,9 +7333,13 @@ function requiresLocalServerAuth(pathname: string, options: RainrailStartOptions
 
 function getLocalServerAuthError(
   request: IncomingMessage,
-  pathname: string,
+  url: URL,
   options: RainrailStartOptions,
 ): { readonly status: number; readonly body: { readonly error: string; readonly requiredScope?: LocalDashboardScope } } | undefined {
+  const pathname = url.pathname;
+  if (options.demoMode === true && url.searchParams.get('demo') === '1' && isLocalDashboardDemoPath(pathname)) {
+    return undefined;
+  }
   if (!requiresLocalServerAuth(pathname, options)) {
     return undefined;
   }
@@ -7258,6 +7361,10 @@ function getLocalServerAuthError(
     return { status: 403, body: { error: 'insufficient_scope', requiredScope } };
   }
   return undefined;
+}
+
+function isLocalDashboardDemoPath(pathname: string): boolean {
+  return pathname === '/events' || pathname.startsWith('/api/v1/') || pathname === '/api/state';
 }
 
 function requiredLocalDashboardScopeForPath(pathname: string): LocalDashboardScope {

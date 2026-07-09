@@ -27,6 +27,11 @@ describe('local dashboard start documentation', () => {
       'rainrail setup --dashboard-auth-only --yes',
       'rainrail setup --dashboard-auth-only --rotate --yes',
       'rainrail start',
+      'pnpm demo:dashboard',
+      'rainrail start --demo',
+      'Dashboard demo: http://127.0.0.1:8787/dashboard?demo=1',
+      'Dashboard demo API: http://127.0.0.1:8787/api/v1/overview?demo=1',
+      'Demo mode',
       'Dashboard: http://127.0.0.1:8787/dashboard',
       'Dashboard API: http://127.0.0.1:8787/api/v1/overview',
       'dashboardAuth.readOnlyToken',
@@ -61,6 +66,7 @@ describe('local dashboard start documentation', () => {
       'scoped SSE token',
       'multi-user actor management',
       'handler-backed local runtime execution for operator/admin mutations',
+      'demo-only accepted response',
       'https://github.com/reirei-lab/rainrail/issues/228',
       'https://github.com/reirei-lab/rainrail/issues/230',
       'https://github.com/reirei-lab/rainrail/issues/231',
@@ -127,6 +133,8 @@ describe('local dashboard start documentation', () => {
   it('maps the guide to the implementation tests that protect the documented flow', () => {
     expect(cliCommandsTest).toContain('Dashboard: http://127.0.0.1:8787/dashboard');
     expect(cliCommandsTest).toContain('Dashboard API: http://127.0.0.1:8787/api/v1/overview');
+    expect(cliCommandsTest).toContain('Dashboard demo: http://127.0.0.1:8787/dashboard?demo=1');
+    expect(cliCommandsTest).toContain('serves seeded SQLite dashboard demo mode without an operator token');
     expect(cliCommandsTest).toContain('missing_bearer_token');
     expect(cliCommandsTest).toContain('invalid_bearer_token');
     expect(dashboardShellTest).toContain('defaults the dashboard API client to same-origin');

@@ -55,6 +55,42 @@ dashboard token into the dashboard auth field. API requests use
 `Authorization: Bearer <token>` behind the same origin, so the local dashboard
 does not need a separate API base URL.
 
+## Seeded SQLite demo mode
+
+Use demo mode when you want to inspect every dashboard tab without GitHub,
+Cloudflare, live runner state, or a real operator token. From the repository
+root, rebuild the deterministic SQLite demo DB and start the local dashboard:
+
+```sh
+pnpm demo:dashboard
+```
+
+The script runs `node scripts/seed-dashboard-demo-db.mjs`, then starts
+`rainrail start --demo` with `RAINRAIL_DASHBOARD_DEMO=1`. The default demo DB
+path is `.tmp/dashboard-demo.sqlite`, and `rainrail start --demo` reads it as a
+SQLite operational store. The CLI prints both normal and explicit demo URLs:
+
+```text
+Dashboard demo: http://127.0.0.1:8787/dashboard?demo=1
+Dashboard demo API: http://127.0.0.1:8787/api/v1/overview?demo=1
+```
+
+Open the `?demo=1` dashboard URL. In demo mode, the dashboard API carries
+`demo=1` on same-origin `/api/v1/*` requests, bypasses local dashboard bearer
+auth only for the demo server, and shows a visible `Demo mode` badge. Requests
+without `demo=1` still use the configured dashboard auth rules.
+
+If you want to run the two steps manually:
+
+```sh
+node scripts/seed-dashboard-demo-db.mjs --database .tmp/dashboard-demo.sqlite
+RAINRAIL_DASHBOARD_DEMO=1 rainrail start --demo
+```
+
+Demo data is SQLite-backed, not a frontend fixture client. Demo command actions
+return a demo-only accepted response and do not dispatch to GitHub, Cloudflare,
+OpenClaw, or a live local runner.
+
 ## Auth scopes
 
 `dashboardAuth` supports three scopes. The local `rainrail start` startup flow
