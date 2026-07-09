@@ -58,7 +58,7 @@ export function createDashboardCardSandboxHost(
 ): DashboardCardSandboxHost {
   const timeoutMs = options.timeoutMs ?? 5000;
   const cardBaseUrl = options.cardBaseUrl;
-  if (cardBaseUrl.startsWith('//')) {
+  if (cardBaseUrl.startsWith('//') || cardBaseUrl.startsWith('/\\') || cardBaseUrl.startsWith('\\')) {
     throw new Error('Dashboard card sandbox card base URL must not be protocol-relative');
   }
   const allowedCapabilities = options.allowedCapabilities === undefined

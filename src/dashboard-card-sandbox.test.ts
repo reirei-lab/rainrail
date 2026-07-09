@@ -112,6 +112,16 @@ describe('dashboard card sandbox host', () => {
       cardBaseUrl: '//attacker.example/cards/',
       allowedCapabilities: ['dashboard:read'],
     })).toThrow(/card base URL must not be protocol-relative/u);
+
+    expect(() => createDashboardCardSandboxHost({
+      cardBaseUrl: '/\\attacker.example/cards/',
+      allowedCapabilities: ['dashboard:read'],
+    })).toThrow(/card base URL must not be protocol-relative/u);
+
+    expect(() => createDashboardCardSandboxHost({
+      cardBaseUrl: '\\\\attacker.example/cards/',
+      allowedCapabilities: ['dashboard:read'],
+    })).toThrow(/card base URL must not be protocol-relative/u);
   });
 
   it('rejects plugin identifiers that could escape the sandbox card base path', () => {

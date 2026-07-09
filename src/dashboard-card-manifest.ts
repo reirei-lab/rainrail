@@ -45,6 +45,13 @@ export function createDashboardCardProviderFromManifest(
     );
   }
 
+  if (!isNonEmptyString(manifest.version)) {
+    throw new DashboardCardRegistryError(
+      'Plugin manifest version must be a non-empty string',
+      'invalid_provider',
+    );
+  }
+
   if (manifest.dashboard !== undefined && !isPlainObject(manifest.dashboard)) {
     throw new DashboardCardRegistryError(
       'Plugin manifest dashboard must be a plain object',
@@ -52,7 +59,9 @@ export function createDashboardCardProviderFromManifest(
     );
   }
 
-  const manifestCards = manifest.dashboard?.cards ?? [];
+  const manifestCards = manifest.dashboard === undefined || manifest.dashboard.cards === undefined
+    ? []
+    : manifest.dashboard.cards;
   if (!Array.isArray(manifestCards)) {
     throw new DashboardCardRegistryError(
       'Plugin manifest dashboard.cards must be an array',

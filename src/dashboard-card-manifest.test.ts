@@ -115,8 +115,25 @@ describe('dashboard card plugin manifest contribution', () => {
   it('rejects malformed manifest dashboard card contributions before registration', () => {
     expect(() => createDashboardCardProviderFromManifest({
       name: 'github',
+      dashboard: { cards: [] },
+    } as unknown as DashboardPluginManifest)).toThrow(/manifest version must be a non-empty string/u);
+
+    expect(() => createDashboardCardProviderFromManifest({
+      name: 'github',
+      version: 1,
+      dashboard: { cards: [] },
+    } as unknown as DashboardPluginManifest)).toThrow(/manifest version must be a non-empty string/u);
+
+    expect(() => createDashboardCardProviderFromManifest({
+      name: 'github',
       version: '1.0.0',
       dashboard: { cards: 'queue' },
+    } as unknown as DashboardPluginManifest)).toThrow(/manifest dashboard\.cards must be an array/u);
+
+    expect(() => createDashboardCardProviderFromManifest({
+      name: 'github',
+      version: '1.0.0',
+      dashboard: { cards: null },
     } as unknown as DashboardPluginManifest)).toThrow(/manifest dashboard\.cards must be an array/u);
 
     expect(() => createDashboardCardProviderFromManifest({
