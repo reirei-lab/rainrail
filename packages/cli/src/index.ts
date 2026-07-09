@@ -2354,7 +2354,10 @@ function resolveStartOptions(
   if (envOperationalStore.error !== undefined) {
     return { error: envOperationalStore.error };
   }
-  const operationalStoreConfig = envOperationalStore.config ?? config.operationalStore;
+  const operationalStoreConfig = normalizeStartOperationalStoreConfigPath(
+    envOperationalStore.config ?? config.operationalStore,
+    project.root,
+  );
 
   return {
     options: {
@@ -2479,6 +2482,19 @@ function assertStartOperationalStorePath(
   if (kind === 'memory' && databasePath !== undefined) {
     throw new Error(`${label} must be omitted for memory stores`);
   }
+}
+
+function normalizeStartOperationalStoreConfigPath(
+  config: RainrailStartOperationalStoreConfig | undefined,
+  root: string,
+): RainrailStartOperationalStoreConfig | undefined {
+  if (config?.databasePath === undefined) {
+    return config;
+  }
+  return {
+    ...config,
+    databasePath: resolve(root, config.databasePath),
+  };
 }
 
 function parseStartConfigPort(value: unknown, label: string): number | { readonly message: string } {
@@ -5432,7 +5448,10 @@ function readLocalRainrailEventStoreJson(databasePath: string): LocalRainrailEve
   }
   const parsed = JSON.parse(readFileSync(databasePath, 'utf8')) as unknown;
   if (!isRecord(parsed) || !Array.isArray(parsed.events)) {
-    return [];
+    throw new Error(
+      'JSON operational store is not compatible with rainrail start local event storage. '
+        + 'Use kind "sqlite", kind "memory", or choose a separate JSON databasePath.',
+    );
   }
   return parsed.events.filter(isLocalRainrailEvent);
 }
@@ -5452,33 +5471,73 @@ function createSqliteLocalRainrailEventStore(databasePath: string, eventLimit: n
   const database = new DatabaseSync(databasePath);
   chmodSync(databasePath, 0o600);
   database.exec(`
-    CREATE TABLE IF NOT EXISTS local_events (
+    CREATE TABLE IF NOT EXISTS operational_events (
       id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      source_json TEXT NOT NULL,
+      delivery_json TEXT NOT NULL,
+      subject_json TEXT NOT NULL,
+      occurred_at TEXT NOT NULL,
       received_at TEXT NOT NULL,
-      body TEXT NOT NULL
+      payload_json TEXT NOT NULL,
+      raw_payload_reference_json TEXT NOT NULL,
+      links_json TEXT
     );
+    CREATE INDEX IF NOT EXISTS operational_events_received_at_idx
+      ON operational_events (received_at DESC, id DESC);
   `);
   const selectEvents = database.prepare(
-    'SELECT body FROM local_events ORDER BY received_at ASC, id ASC LIMIT ?',
+    `SELECT * FROM (
+      SELECT * FROM operational_events ORDER BY received_at DESC, id DESC LIMIT ?
+    ) ORDER BY received_at ASC, id ASC`,
   );
-  const deleteEvents = database.prepare('DELETE FROM local_events');
   const insertEvent = database.prepare(
-    'INSERT INTO local_events (id, received_at, body) VALUES (?, ?, ?)',
+    `INSERT INTO operational_events (
+      id, name, source_json, delivery_json, subject_json, occurred_at, received_at,
+      payload_json, raw_payload_reference_json, links_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      name = excluded.name,
+      source_json = excluded.source_json,
+      delivery_json = excluded.delivery_json,
+      subject_json = excluded.subject_json,
+      occurred_at = excluded.occurred_at,
+      received_at = excluded.received_at,
+      payload_json = excluded.payload_json,
+      raw_payload_reference_json = excluded.raw_payload_reference_json,
+      links_json = excluded.links_json`,
   );
 
   return {
     eventLimit,
     listEvents() {
       return selectEvents.all(eventLimit)
-        .map((row) => isRecord(row) && typeof row.body === 'string' ? JSON.parse(row.body) as unknown : undefined)
-        .filter(isLocalRainrailEvent);
+        .map(localRainrailEventFromOperationalRow)
+        .filter((event): event is LocalRainrailEvent => event !== undefined);
     },
     replaceEvents(nextEvents) {
       database.exec('BEGIN IMMEDIATE');
       try {
-        deleteEvents.run();
         for (const event of [...nextEvents].slice(-eventLimit)) {
-          insertEvent.run(event.id, event.receivedAt, JSON.stringify(event));
+          insertEvent.run(
+            event.id,
+            event.name,
+            JSON.stringify(event.source),
+            JSON.stringify({ id: event.deliveryId, receivedAt: event.receivedAt }),
+            JSON.stringify(event.subject),
+            event.occurredAt,
+            event.receivedAt,
+            JSON.stringify({
+              localEvent: {
+                status: event.status,
+                summary: event.summary,
+                workflowRunCount: event.workflowRunCount,
+                handlerRetryCount: event.handlerRetryCount,
+              },
+            }),
+            JSON.stringify({ kind: 'external-reference', reference: event.rawPayloadReference }),
+            JSON.stringify(event.links),
+          );
         }
         database.exec('COMMIT');
       } catch (error) {
@@ -5493,10 +5552,83 @@ function createSqliteLocalRainrailEventStore(databasePath: string, eventLimit: n
 }
 
 function expectStartStoreDatabasePath(config: RainrailStartOperationalStoreConfig, kind: 'sqlite' | 'json'): string {
-  if (config.databasePath === undefined) {
+  if (config.databasePath === undefined || config.databasePath.length === 0) {
     throw new Error(`operationalStoreConfig.databasePath is required for ${kind} stores`);
   }
   return config.databasePath;
+}
+
+function localRainrailEventFromOperationalRow(row: unknown): LocalRainrailEvent | undefined {
+  if (!isRecord(row)) {
+    return undefined;
+  }
+  const id = stringRowValue(row, 'id');
+  const name = stringRowValue(row, 'name');
+  const source = jsonRowValue<{ type?: unknown; name?: unknown }>(row, 'source_json');
+  const delivery = jsonRowValue<{ id?: unknown; receivedAt?: unknown }>(row, 'delivery_json');
+  const subject = jsonRowValue<{ type?: unknown; id?: unknown }>(row, 'subject_json');
+  const payload = jsonRowValue<{ localEvent?: unknown }>(row, 'payload_json');
+  const rawPayload = jsonRowValue<{ reference?: unknown }>(row, 'raw_payload_reference_json');
+  const links = jsonRowValue<{ self?: unknown }>(row, 'links_json');
+  const occurredAt = stringRowValue(row, 'occurred_at');
+  const receivedAt = stringRowValue(row, 'received_at');
+  if (
+    id === undefined
+    || name === undefined
+    || occurredAt === undefined
+    || receivedAt === undefined
+    || typeof source?.type !== 'string'
+    || typeof source.name !== 'string'
+    || typeof delivery?.id !== 'string'
+    || typeof subject?.type !== 'string'
+    || typeof subject.id !== 'string'
+  ) {
+    return undefined;
+  }
+  const localEvent = isRecord(payload?.localEvent) ? payload.localEvent : {};
+  return {
+    id,
+    type: 'event',
+    name,
+    status: typeof localEvent.status === 'string' ? localEvent.status : 'received',
+    summary: typeof localEvent.summary === 'string' ? localEvent.summary : `${source.name} event received`,
+    deliveryId: delivery.id,
+    rawPayloadReference: typeof rawPayload?.reference === 'string'
+      ? rawPayload.reference
+      : `local://events/${id}`,
+    workflowRunCount: typeof localEvent.workflowRunCount === 'number' ? localEvent.workflowRunCount : 0,
+    handlerRetryCount: typeof localEvent.handlerRetryCount === 'number' ? localEvent.handlerRetryCount : 0,
+    subject: {
+      type: subject.type,
+      id: subject.id,
+    },
+    occurredAt,
+    receivedAt,
+    source: {
+      type: source.type,
+      name: source.name,
+    },
+    links: {
+      self: typeof links?.self === 'string' ? links.self : `/api/v1/events/${encodeURIComponent(id)}`,
+    },
+  };
+}
+
+function stringRowValue(row: Record<string, unknown>, key: string): string | undefined {
+  const value = row[key];
+  return typeof value === 'string' ? value : undefined;
+}
+
+function jsonRowValue<T>(row: Record<string, unknown>, key: string): T | undefined {
+  const value = row[key];
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return undefined;
+  }
 }
 
 function nextLocalEventId(events: readonly LocalRainrailEvent[]): number {

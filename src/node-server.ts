@@ -231,7 +231,7 @@ function isStatusCodeError(error: unknown): error is { statusCode: number } {
 }
 
 function expectConfiguredDatabasePath(config: RainrailOperationalStoreConfig, kind: 'sqlite' | 'json'): string {
-  if (config.databasePath === undefined) {
+  if (config.databasePath === undefined || config.databasePath.length === 0) {
     throw new Error(`operationalStoreConfig.databasePath is required for ${kind} stores`);
   }
   return config.databasePath;

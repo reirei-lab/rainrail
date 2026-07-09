@@ -518,6 +518,12 @@ describe('Rainrail Node server', () => {
       databasePath: 'var/postgres.sqlite',
       eventLimit: 5,
     } as never)).toThrow('operationalStoreConfig.kind must be one of: sqlite, json, memory');
+
+    expect(() => createOperationalStoreFromConfig({
+      kind: 'sqlite',
+      databasePath: '',
+      eventLimit: 5,
+    })).toThrow('operationalStoreConfig.databasePath is required for sqlite stores');
   });
 
   it('closes an owned operational store when app creation validation fails', async () => {

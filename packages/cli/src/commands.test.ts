@@ -1215,7 +1215,7 @@ describe('Rainrail CLI built-in commands', () => {
       expect(result.stderr).toBe('');
       expect(startOptions?.operationalStoreConfig).toEqual({
         kind: 'sqlite',
-        databasePath: 'var/rainrail-operational.sqlite',
+        databasePath: join(projectRoot, 'var', 'rainrail-operational.sqlite'),
         eventLimit: 123,
       });
     });
@@ -1243,7 +1243,7 @@ describe('Rainrail CLI built-in commands', () => {
       expect(result.stderr).toBe('');
       expect(startOptions?.operationalStoreConfig).toEqual({
         kind: 'json',
-        databasePath: 'var/rainrail-operational.json',
+        databasePath: join(projectRoot, 'var', 'rainrail-operational.json'),
         eventLimit: 17,
       });
     });
@@ -2239,7 +2239,7 @@ describe('Rainrail CLI built-in commands', () => {
         operationalStore: {
           kind: 'sqlite',
           databasePath,
-          eventLimit: 10,
+          eventLimit: 3,
         },
         sourceBundles: [
           {
@@ -2266,21 +2266,31 @@ describe('Rainrail CLI built-in commands', () => {
       const first = await runRainrailCliAsync(['start'], { cwd: projectRoot });
       try {
         expect(first.exitCode).toBe(0);
-        const body = JSON.stringify({ action: 'opened' });
-        const accepted = await fetch(`http://127.0.0.1:${port}/webhooks/github`, {
-          method: 'POST',
-          headers: githubWebhookHeaders('secret', body, { delivery: 'delivery-sqlite-start', event: 'issues' }),
-          body,
-        });
-        expect(accepted.status).toBe(202);
+        for (const delivery of ['delivery-sqlite-start-1', 'delivery-sqlite-start-2', 'delivery-sqlite-start-3']) {
+          const body = JSON.stringify({ action: 'opened' });
+          const accepted = await fetch(`http://127.0.0.1:${port}/webhooks/github`, {
+            method: 'POST',
+            headers: githubWebhookHeaders('secret', body, { delivery, event: 'issues' }),
+            body,
+          });
+          expect(accepted.status).toBe(202);
+        }
 
         const overview = await fetch(`http://127.0.0.1:${port}/api/v1/overview`);
-        await expect(overview.json()).resolves.toMatchObject({ data: { counts: { events: 1 } } });
+        await expect(overview.json()).resolves.toMatchObject({ data: { counts: { events: 3 } } });
       } finally {
         await closeTestServer(first);
       }
 
-      await writeFile(configPath, startConfig(restartPort));
+      const limitedConfig = JSON.parse(startConfig(restartPort)) as Record<string, unknown>;
+      if (
+        typeof limitedConfig.operationalStore === 'object'
+        && limitedConfig.operationalStore !== null
+        && !Array.isArray(limitedConfig.operationalStore)
+      ) {
+        Object.assign(limitedConfig.operationalStore, { eventLimit: 1 });
+      }
+      await writeFile(configPath, `${JSON.stringify(limitedConfig, null, 2)}\n`);
       const second = await runRainrailCliAsync(['start'], { cwd: projectRoot });
       try {
         expect(second.exitCode).toBe(0);
@@ -2290,13 +2300,51 @@ describe('Rainrail CLI built-in commands', () => {
         const events = await fetch(`http://127.0.0.1:${restartPort}/api/v1/events`);
         await expect(events.json()).resolves.toMatchObject({
           data: [{
-            id: 'local-event-000001',
-            deliveryId: 'delivery-sqlite-start',
+            id: 'local-event-000003',
+            deliveryId: 'delivery-sqlite-start-3',
           }],
         });
       } finally {
         await closeTestServer(second);
       }
+    });
+  });
+
+  it('rejects incompatible JSON operational store files in local start', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'json-operational-start');
+      const port = await getFreePort();
+      const databasePath = join(projectRoot, 'var', 'rainrail-operational.json');
+      await mkdir(join(projectRoot, 'var'), { recursive: true });
+      await writeFile(databasePath, `${JSON.stringify({
+        events: {
+          existing: {
+            id: 'existing',
+          },
+        },
+        activityEvents: {},
+      }, null, 2)}\n`);
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        server: {
+          host: '127.0.0.1',
+          port,
+        },
+        operationalStore: {
+          kind: 'json',
+          databasePath,
+          eventLimit: 10,
+        },
+        sourceBundles: [],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+
+      const result = await runRainrailCliAsync(['start'], { cwd: projectRoot });
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('JSON operational store is not compatible with rainrail start local event storage');
+      await expect(readFile(databasePath, 'utf8')).resolves.toContain('"activityEvents"');
     });
   });
 

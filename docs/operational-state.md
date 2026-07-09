@@ -46,14 +46,16 @@ SQLite-backed local dashboard API の例:
 上の JSON config へ展開して `kind: "sqlite"` と
 `databasePath: "${RAINRAIL_OPERATIONAL_DB}"` を渡す。推奨 local path は
 `var/rainrail-operational.sqlite` である。focused unit test や embedding test では
-`kind: "memory"` を使うか、legacy adapter coverage 用に `kind: "json"` と一時
-`databasePath` を使える。`createRainrailNodeServer` は `operationalStoreConfig` を受け取り、
+`kind: "memory"` を使う。`kind: "json"` は local start 専用の一時 event file だけに使い、
+既存の `JsonFileOperationalStore` 形式を指している場合は上書き防止のため拒否する。
+`createRainrailNodeServer` は `operationalStoreConfig` を受け取り、
 `createOperationalStoreFromConfig` で作った store を shared HTTP app に差し込む。caller が
 既に store instance を持つ場合は従来通り `operationalStore` を直接渡す。
 `rainrail start` は `rainrail.config.json` の同じ `operationalStore` 設定を読み、
 `RainrailStartOptions.operationalStoreConfig` と default local dashboard server に渡す。
-そのため、local start の dashboard events は SQLite/JSON store から復元され、process restart
-後も local API で確認できる。
+SQLite の場合は shared `operational_events` table を読み書きするため、local start の
+dashboard events は process restart 後も local API で確認でき、`createRainrailNodeServer` が
+同じ DB に保存した event も復元対象になる。
 
 この SQLite config は local Node support のための operational state であり、Cloudflare Worker
 production storage の設定ではない。Worker deployment で使う durable storage は別の
