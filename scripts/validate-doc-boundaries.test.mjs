@@ -95,6 +95,7 @@ describe('product site information architecture', () => {
       'The public `createRainrailHttpApp` surface does not expose a generic `POST /publish` route',
       'Manual input and web chat are source adapters, not EEP Bridge responsibilities',
       'Command action audit attribution is a transport/core-adapter responsibility',
+      'Dashboard layout metadata such as `filteredItemCount` is also a provider-neutral',
     ]) {
       expect(coreBridgeBoundary).toContain(entry);
     }
