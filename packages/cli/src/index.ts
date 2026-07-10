@@ -1386,10 +1386,16 @@ function defaultPluginAliasResolver(alias: string): OfficialPluginMetadata | und
   return getOfficialPluginByAlias(alias);
 }
 
+const codexAppServerRuntimeProviderKey = 'codexAppServer';
+const codexAppServerRuntimeId = 'codex-app-server';
+const codexAppServerRuntimePlugin = '@rainrail/codex-app-server-runtime';
+
 function runPluginCommand(
   plugin: OfficialPluginMetadata,
   args: readonly string[],
   invocation: readonly string[],
+  options: SharedOptions,
+  environment: RainrailCliEnvironment,
 ): RainrailCliResult {
   if (isOfficialPluginHelpRequest(args)) {
     return {
@@ -1408,6 +1414,7 @@ function runPluginCommand(
     };
   }
 
+  const commandLength = pluginCommand.name.split(' ').length;
   if (isOfficialPluginCommandHelpRequest(pluginCommand, args)) {
     return {
       exitCode: 0,
@@ -1416,16 +1423,27 @@ function runPluginCommand(
     };
   }
 
-  if (pluginCommand.name === 'setup' && isOfficialBundledPlugin(plugin)) {
-    const commandLength = pluginCommand.name.split(' ').length;
-    if (args.length !== commandLength) {
-      return {
-        exitCode: 1,
-        stdout: '',
-        stderr: `Unknown rainrail ${invocation.join(' ')} command: ${args.join(' ')}\n\n${formatOfficialPluginHelp(plugin, invocation)}`,
-      };
-    }
+  if (args.length !== commandLength) {
+    return {
+      exitCode: 1,
+      stdout: '',
+      stderr: `Unknown rainrail ${invocation.join(' ')} command: ${args.join(' ')}\n\n${formatOfficialPluginHelp(plugin, invocation)}`,
+    };
+  }
 
+  if (plugin.alias === codexAppServerRuntimeId && pluginCommand.name === 'setup') {
+    return runCodexAppServerSetupCommand(options, environment);
+  }
+
+  if (plugin.alias === codexAppServerRuntimeId && pluginCommand.name === 'doctor') {
+    return runCodexAppServerDoctorCommand(options, environment);
+  }
+
+  if (plugin.alias === codexAppServerRuntimeId && pluginCommand.name === 'session test') {
+    return runCodexAppServerSessionTestCommand(options, environment);
+  }
+
+  if (pluginCommand.name === 'setup' && isOfficialBundledPlugin(plugin)) {
     return {
       exitCode: 0,
       stdout:
@@ -1439,6 +1457,469 @@ function runPluginCommand(
     stdout: '',
     stderr: `rainrail ${[...invocation, pluginCommand.name].join(' ')} requires plugin execution, which is not implemented yet.\n`,
   };
+}
+
+type CodexAppServerRawProviderConfig = {
+  readonly type?: unknown;
+  readonly enabled?: unknown;
+  readonly runtime?: unknown;
+  readonly plugin?: unknown;
+  readonly executor?: unknown;
+  readonly command?: unknown;
+  readonly home?: unknown;
+  readonly codexHome?: unknown;
+};
+
+type CodexAppServerConfigCheck = {
+  ok: boolean;
+  enabled: boolean;
+  runtime?: string;
+  plugin?: string;
+  executor?: string;
+  command?: string;
+  home?: string;
+  codexHome?: string;
+  error?: string;
+};
+
+type CodexCommandCheck = {
+  readonly ok: boolean;
+  readonly path?: string;
+  readonly version?: string;
+  readonly stderr?: string;
+  readonly remediation?: string;
+};
+
+type CodexSimpleCheck = {
+  readonly ok: boolean;
+  readonly stdout?: string;
+  readonly stderr?: string;
+  readonly remediation?: string;
+};
+
+type CodexAppServerReadiness = {
+  readonly binary: CodexCommandCheck;
+  readonly appServer: CodexSimpleCheck;
+  readonly login: CodexSimpleCheck;
+};
+
+function runCodexAppServerSetupCommand(
+  options: SharedOptions,
+  environment: RainrailCliEnvironment,
+): RainrailCliResult {
+  if (!options.yes) {
+    const nextAction = 'rainrail plugin codex-app-server setup --yes';
+    if (options.json) {
+      return {
+        exitCode: 0,
+        stdout: formatJson({ command: 'codex-app-server setup', completed: false, nextAction }),
+        stderr: '',
+      };
+    }
+    return {
+      exitCode: 0,
+      stdout: `Run \`${nextAction}\` to detect Codex App Server and update rainrail.config.json.\n`,
+      stderr: '',
+    };
+  }
+
+  const project = resolveProjectForCodexAppServerCommand(options, environment);
+  if ('error' in project) {
+    return formatCodexAppServerSetupResult(false, undefined, options, project.error);
+  }
+
+  const readiness = checkCodexAppServerReadiness(undefined, environment);
+  if (!codexAppServerReadinessOk(readiness)) {
+    return formatCodexAppServerSetupResult(false, readiness, options);
+  }
+
+  try {
+    writeCodexAppServerRuntimeConfig(project.project.configPath, readiness.binary.path ?? 'codex', environment);
+  } catch (error) {
+    return formatCodexAppServerSetupResult(
+      false,
+      readiness,
+      options,
+      error instanceof Error ? error.message : String(error),
+    );
+  }
+
+  return formatCodexAppServerSetupResult(true, readiness, options);
+}
+
+function runCodexAppServerDoctorCommand(
+  options: SharedOptions,
+  environment: RainrailCliEnvironment,
+): RainrailCliResult {
+  const project = resolveProjectForCodexAppServerCommand(options, environment);
+  if ('error' in project) {
+    return formatCodexAppServerDoctorResult(options, false, undefined, undefined, project.error);
+  }
+
+  const config = readCodexAppServerRuntimeConfig(project.project.configPath, environment);
+  if ('error' in config) {
+    return formatCodexAppServerDoctorResult(options, false, undefined, undefined, config.error);
+  }
+
+  const readiness = checkCodexAppServerReadiness(config.config.command, environment);
+  const ok = config.config.ok && codexAppServerReadinessOk(readiness);
+  return formatCodexAppServerDoctorResult(options, ok, config.config, readiness);
+}
+
+function runCodexAppServerSessionTestCommand(
+  options: SharedOptions,
+  environment: RainrailCliEnvironment,
+): RainrailCliResult {
+  const project = resolveProjectForCodexAppServerCommand(options, environment);
+  if ('error' in project) {
+    return formatCodexAppServerSessionResult(options, false, undefined, project.error);
+  }
+
+  const config = readCodexAppServerRuntimeConfig(project.project.configPath, environment);
+  if ('error' in config) {
+    return formatCodexAppServerSessionResult(options, false, undefined, config.error);
+  }
+
+  const readiness = checkCodexAppServerReadiness(config.config.command, environment);
+  const ok = config.config.ok && codexAppServerReadinessOk(readiness);
+  return formatCodexAppServerSessionResult(options, ok, readiness);
+}
+
+function resolveProjectForCodexAppServerCommand(
+  options: SharedOptions,
+  environment: RainrailCliEnvironment,
+): { readonly project: RainrailProject } | { readonly error: string } {
+  const cwd = environment.cwd === undefined ? process.cwd() : environment.cwd;
+  const fileSystem = getRainrailCliFileSystem(environment);
+  try {
+    const project = resolveRainrailProject(cwd, options, fileSystem);
+    if (project === undefined) {
+      return {
+        error:
+          'rainrail plugin codex-app-server requires a Rainrail project. Run it inside a directory with rainrail.config.json.',
+      };
+    }
+    return { project };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+function checkCodexAppServerReadiness(
+  configuredCommand: string | undefined,
+  environment: RainrailCliEnvironment,
+): CodexAppServerReadiness {
+  const commandRunner = getCommandRunner(environment);
+  const binary = configuredCommand === undefined
+    ? detectCodexBinary(commandRunner)
+    : checkConfiguredCodexBinary(configuredCommand, commandRunner);
+  const command = binary.path;
+  if (!binary.ok || command === undefined) {
+    return {
+      binary,
+      appServer: {
+        ok: false,
+        remediation: 'Install the Codex CLI and ensure `codex app-server --help` works.',
+      },
+      login: {
+        ok: false,
+        remediation: 'Run `codex login`, then re-run this Rainrail command.',
+      },
+    };
+  }
+
+  const appServer = runCodexCheck(command, ['app-server', '--help'], commandRunner);
+  const login = runCodexCheck(command, ['login', 'status'], commandRunner);
+  return {
+    binary,
+    appServer: appServer.ok
+      ? appServer
+      : {
+          ...appServer,
+          remediation: 'Upgrade Codex CLI to a version that supports `codex app-server`.',
+        },
+    login: login.ok
+      ? login
+      : {
+          ...login,
+          remediation: 'Run `codex login`, then re-run `rainrail plugin codex-app-server setup --yes`.',
+        },
+  };
+}
+
+function detectCodexBinary(commandRunner: CommandRunner): CodexCommandCheck {
+  const detected = commandRunner('sh', ['-c', 'command -v codex'], { stdio: 'pipe' });
+  const path = firstNonEmptyLine(toOutput(detected.stdout));
+  if ((detected.status ?? 1) !== 0 || path === undefined) {
+    return {
+      ok: false,
+      stderr: toOutput(detected.stderr),
+      remediation: 'Install the Codex CLI and make sure `codex` is on PATH.',
+    };
+  }
+  return checkConfiguredCodexBinary(path, commandRunner);
+}
+
+function checkConfiguredCodexBinary(command: string, commandRunner: CommandRunner): CodexCommandCheck {
+  const version = commandRunner(command, ['--version'], { stdio: 'pipe' });
+  if ((version.status ?? 1) !== 0) {
+    return {
+      ok: false,
+      path: command,
+      stderr: toOutput(version.stderr),
+      remediation: `Check that ${command} is executable and points to the Codex CLI.`,
+    };
+  }
+  return {
+    ok: true,
+    path: command,
+    version: stripTrailingNewline(toOutput(version.stdout)),
+  };
+}
+
+function runCodexCheck(
+  command: string,
+  args: readonly string[],
+  commandRunner: CommandRunner,
+): CodexSimpleCheck {
+  const result = commandRunner(command, args, { stdio: 'pipe' });
+  return {
+    ok: (result.status ?? 1) === 0,
+    stdout: stripTrailingNewline(toOutput(result.stdout)),
+    stderr: stripTrailingNewline(toOutput(result.stderr)),
+  };
+}
+
+function codexAppServerReadinessOk(readiness: CodexAppServerReadiness): boolean {
+  return readiness.binary.ok && readiness.appServer.ok && readiness.login.ok;
+}
+
+function writeCodexAppServerRuntimeConfig(
+  configPath: string,
+  command: string,
+  environment: RainrailCliEnvironment,
+): void {
+  const fileSystem = getRainrailCliFileSystem(environment);
+  const rawConfig = JSON.parse(fileSystem.readFileSync(configPath, 'utf8')) as unknown;
+  if (!isJsonRecord(rawConfig)) {
+    throw new Error('rainrail.config.json must contain a JSON object');
+  }
+  const runtimeProviders = isJsonRecord(rawConfig.runtimeProviders) ? rawConfig.runtimeProviders : {};
+  const previous = isJsonRecord(runtimeProviders[codexAppServerRuntimeProviderKey])
+    ? runtimeProviders[codexAppServerRuntimeProviderKey]
+    : {};
+  const env = environment.env ?? process.env;
+  const nextProvider: Record<string, unknown> = {
+    ...previous,
+    type: 'plugin',
+    enabled: true,
+    runtime: codexAppServerRuntimeId,
+    plugin: codexAppServerRuntimePlugin,
+    executor: codexAppServerRuntimeId,
+    command,
+  };
+  const home = firstNonEmptyString(env.HOME) ?? homedir();
+  if (home.length > 0) {
+    nextProvider.home = home;
+  }
+  const codexHome = firstNonEmptyString(env.CODEX_HOME) ?? (home.length > 0 ? join(home, '.codex') : undefined);
+  if (codexHome !== undefined) {
+    nextProvider.codexHome = codexHome;
+  }
+  runtimeProviders[codexAppServerRuntimeProviderKey] = nextProvider;
+  rawConfig.runtimeProviders = runtimeProviders;
+  fileSystem.writeFileSync(configPath, formatJson(rawConfig), { flag: 'w' });
+}
+
+function readCodexAppServerRuntimeConfig(
+  configPath: string,
+  environment: RainrailCliEnvironment,
+): { readonly config: CodexAppServerConfigCheck } | { readonly error: string } {
+  const fileSystem = getRainrailCliFileSystem(environment);
+  try {
+    const rawConfig = JSON.parse(fileSystem.readFileSync(configPath, 'utf8')) as unknown;
+    if (!isJsonRecord(rawConfig) || !isJsonRecord(rawConfig.runtimeProviders)) {
+      return { error: 'config.runtimeProviders.codexAppServer is not configured' };
+    }
+    const rawProvider = rawConfig.runtimeProviders[codexAppServerRuntimeProviderKey];
+    if (!isJsonRecord(rawProvider)) {
+      return { error: 'config.runtimeProviders.codexAppServer is not configured' };
+    }
+    return { config: normalizeCodexAppServerRuntimeConfig(rawProvider) };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+function normalizeCodexAppServerRuntimeConfig(
+  rawProvider: CodexAppServerRawProviderConfig,
+): CodexAppServerConfigCheck {
+  const config: CodexAppServerConfigCheck = {
+    ok: true,
+    enabled: rawProvider.enabled === true,
+  };
+  if (typeof rawProvider.runtime === 'string') config.runtime = rawProvider.runtime;
+  if (typeof rawProvider.plugin === 'string') config.plugin = rawProvider.plugin;
+  if (typeof rawProvider.executor === 'string') config.executor = rawProvider.executor;
+  const command = firstNonEmptyString(rawProvider.command);
+  if (command !== undefined) config.command = command;
+  if (typeof rawProvider.home === 'string') config.home = rawProvider.home;
+  if (typeof rawProvider.codexHome === 'string') config.codexHome = rawProvider.codexHome;
+  const problems: string[] = [];
+  if (rawProvider.type !== 'plugin') problems.push('type must be "plugin"');
+  if (config.enabled !== true) problems.push('enabled must be true');
+  if (config.runtime !== codexAppServerRuntimeId) problems.push('runtime must be "codex-app-server"');
+  if (config.plugin !== codexAppServerRuntimePlugin) {
+    problems.push('plugin must be "@rainrail/codex-app-server-runtime"');
+  }
+  if (config.executor !== codexAppServerRuntimeId) problems.push('executor must be "codex-app-server"');
+  if (config.command === undefined) problems.push('command must be a non-empty string');
+  if (problems.length === 0) {
+    return config;
+  }
+  return {
+    ...config,
+    ok: false,
+    error: `config.runtimeProviders.codexAppServer ${problems.join(', ')}`,
+  };
+}
+
+function formatCodexAppServerSetupResult(
+  completed: boolean,
+  readiness: CodexAppServerReadiness | undefined,
+  options: SharedOptions,
+  error?: string,
+): RainrailCliResult {
+  if (options.json) {
+    return {
+      exitCode: completed ? 0 : 1,
+      stdout: formatJson({
+        command: 'codex-app-server setup',
+        completed,
+        ...(readiness === undefined ? {} : { checks: readiness }),
+        ...(error === undefined ? {} : { error }),
+      }),
+      stderr: '',
+    };
+  }
+  if (completed) {
+    return {
+      exitCode: 0,
+      stdout: 'Codex App Server setup completed. Updated runtimeProviders.codexAppServer in rainrail.config.json.\n',
+      stderr: '',
+    };
+  }
+  return {
+    exitCode: 1,
+    stdout: '',
+    stderr: `${error ?? formatCodexAppServerReadinessFailure(readiness)}\n`,
+  };
+}
+
+function formatCodexAppServerDoctorResult(
+  options: SharedOptions,
+  ok: boolean,
+  config: CodexAppServerConfigCheck | undefined,
+  readiness: CodexAppServerReadiness | undefined,
+  error?: string,
+): RainrailCliResult {
+  if (options.json) {
+    return {
+      exitCode: ok ? 0 : 1,
+      stdout: formatJson({
+        command: 'codex-app-server doctor',
+        ok,
+        ...(config === undefined ? {} : { config }),
+        ...(readiness === undefined ? {} : { checks: readiness }),
+        ...(error === undefined ? {} : { error }),
+      }),
+      stderr: '',
+    };
+  }
+  if (ok) {
+    return {
+      exitCode: 0,
+      stdout: 'Codex App Server doctor passed.\n',
+      stderr: '',
+    };
+  }
+  return {
+    exitCode: 1,
+    stdout: '',
+    stderr: `${error ?? config?.error ?? formatCodexAppServerReadinessFailure(readiness)}\n`,
+  };
+}
+
+function formatCodexAppServerSessionResult(
+  options: SharedOptions,
+  ok: boolean,
+  readiness: CodexAppServerReadiness | undefined,
+  error?: string,
+): RainrailCliResult {
+  if (options.json) {
+    return {
+      exitCode: ok ? 0 : 1,
+      stdout: formatJson({
+        command: 'codex-app-server session test',
+        ok,
+        ...(readiness === undefined ? {} : { checks: readiness }),
+        ...(error === undefined ? {} : { error }),
+      }),
+      stderr: '',
+    };
+  }
+  if (ok) {
+    return {
+      exitCode: 0,
+      stdout: 'Codex App Server session smoke test passed.\n',
+      stderr: '',
+    };
+  }
+  return {
+    exitCode: 1,
+    stdout: '',
+    stderr: `${error ?? formatCodexAppServerReadinessFailure(readiness)}\n`,
+  };
+}
+
+function formatCodexAppServerReadinessFailure(
+  readiness: CodexAppServerReadiness | undefined,
+): string {
+  if (readiness === undefined) {
+    return 'Codex App Server readiness check failed.';
+  }
+  if (!readiness.binary.ok) {
+    return readiness.binary.remediation ?? 'Codex binary check failed.';
+  }
+  if (!readiness.appServer.ok) {
+    return readiness.appServer.remediation ?? 'Codex App Server readiness check failed.';
+  }
+  if (!readiness.login.ok) {
+    return readiness.login.remediation ?? 'Codex login check failed.';
+  }
+  return 'Codex App Server readiness check failed.';
+}
+
+function firstNonEmptyLine(value: string): string | undefined {
+  return value.split(/\r?\n/u).map((line) => line.trim()).find((line) => line.length > 0);
+}
+
+function firstNonEmptyString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
+}
+
+function getCommandRunner(environment: RainrailCliEnvironment): CommandRunner {
+  return environment.commandRunner ??
+    ((commandName, args, commandOptions) =>
+      spawnSync(commandName, args, {
+        cwd: commandOptions.cwd,
+        encoding: 'utf8',
+        stdio: commandOptions.stdio,
+      }));
+}
+
+function isJsonRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function isOfficialBundledPlugin(plugin: OfficialPluginMetadata): boolean {
@@ -1482,7 +1963,7 @@ export function runRainrailCli(
   if (command === undefined) {
     const officialPlugin = pluginAliasResolver(parsed.commandName);
     if (officialPlugin !== undefined) {
-      return runPluginCommand(officialPlugin, parsed.commandArgs, [officialPlugin.alias]);
+      return runPluginCommand(officialPlugin, parsed.commandArgs, [officialPlugin.alias], parsed.options, environment);
     }
 
     return {
@@ -1511,7 +1992,7 @@ export function runRainrailCli(
       };
     }
 
-    return runPluginCommand(plugin, parsed.commandArgs.slice(1), ['plugin', pluginName]);
+    return runPluginCommand(plugin, parsed.commandArgs.slice(1), ['plugin', pluginName], parsed.options, environment);
   }
 
   const pluginCollisionHint = getPluginCollisionHint(
@@ -4071,7 +4552,10 @@ function runSetupCommand(
       ? runPluginCommand(plugin, ['setup'], [
           'plugin',
           plugin.alias,
-        ])
+        ], setupOptions, {
+          ...environment,
+          cwd: project.root,
+        })
       : toCliResult(environment.commandRunner(invocation.command, setupArgs, {
           stdio: 'pipe',
           cwd: project.root,
