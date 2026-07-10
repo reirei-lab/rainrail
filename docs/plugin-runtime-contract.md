@@ -116,7 +116,10 @@ thread id、turn id、branch、task id を残す。default thread は自動 runt
 承認 request で止まらないよう `approvalPolicy: "never"` を使い、caller が
 `thread.approvalPolicy` で明示した場合だけ上書きできる。`never` 以外へ上書きする場合は
 `CodexAppServerRuntimeProviderRequestHandler` を `requestHandler` として渡し、server-initiated
-request を client が処理できるようにする。turn completion status は
+request を client が処理できるようにする。この request handler は `turn/start` response 後も
+`turn/completed` まで保持し、turn 実行中の承認/tool request も処理できるようにする。
+`thread` option に含まれる `undefined` field は default params を消さないよう merge 前に
+除外する。turn completion status は
 failed/error を `failed`、interrupted/cancelled/canceled を `canceled`、
 timeout/timedOut を `timed_out` に対応させ、その他の完了は `succeeded` として扱う。
 stuck turn は provider-level timeout で `timed_out` とし、実行中の caller

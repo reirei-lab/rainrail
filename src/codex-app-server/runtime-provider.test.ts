@@ -11,6 +11,7 @@ import {
   type CodexAppServerProtocolClient,
   type CodexAppServerRuntimeProviderClientFactory,
   type SpawnCodexAppServerProcess,
+  type CodexAppServerThreadStartParams,
   type CodexAppServerThreadStartResponse,
   type CodexAppServerTurnCompletedEvent,
   type CodexAppServerTurnStartResponse,
@@ -283,6 +284,72 @@ describe('createCodexAppServerRuntimeProvider', () => {
     expect(client.onRequest.mock.invocationCallOrder[0]).toBeLessThan(client.connect.mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER);
   });
 
+  it('keeps the request handler registered until the turn completes', async () => {
+    const client = new FakeCodexAppServerProtocolClient();
+    const completed = deferred<CodexAppServerTurnCompletedEvent>();
+    client.completedTurnPromise = completed.promise;
+    const unregisterRequestHandler = vi.fn();
+    client.onRequest.mockReturnValueOnce(unregisterRequestHandler);
+    const provider = createCodexAppServerRuntimeProvider({
+      enabled: true,
+      command: 'codex',
+      logDirectory: temporaryDirectory(),
+      thread: { approvalPolicy: 'on-request' },
+      requestHandler: vi.fn(),
+      clientFactory: () => ({ client, pid: 9315 }),
+    });
+
+    const started = provider.startRun(runtimeRequest());
+    await vi.waitFor(() => expect(client.waitForTurnCompleted).toHaveBeenCalledOnce());
+    expect(unregisterRequestHandler).not.toHaveBeenCalled();
+
+    completed.resolve({ threadId: 'thread-315', turn: { id: 'turn-315', status: 'completed' } });
+
+    await expect(started).resolves.toMatchObject({ status: 'succeeded' });
+    expect(unregisterRequestHandler).toHaveBeenCalledOnce();
+  });
+
+  it('records accepted turn ids before checking throwable post-start conditions', async () => {
+    const client = new FakeCodexAppServerProtocolClient();
+    const provider = createCodexAppServerRuntimeProvider({
+      enabled: true,
+      command: 'codex',
+      logDirectory: temporaryDirectory(),
+      clientFactory: () => ({
+        client,
+        pid: 9315,
+        logWriteError: () => client.startTurn.mock.calls.length > 0
+          ? new Error('Failed to write Codex App Server runtime log')
+          : undefined,
+      }),
+    });
+
+    await expect(provider.startRun(runtimeRequest())).resolves.toMatchObject({
+      status: 'failed',
+      metadata: {
+        threadId: 'thread-315',
+        turnId: 'turn-315',
+        error: 'Failed to write Codex App Server runtime log',
+      },
+    });
+  });
+
+  it('does not let undefined thread options erase runtime defaults', async () => {
+    const client = new FakeCodexAppServerProtocolClient();
+    const provider = createCodexAppServerRuntimeProvider({
+      enabled: true,
+      command: 'codex',
+      logDirectory: temporaryDirectory(),
+      thread: { approvalPolicy: undefined } as unknown as Partial<CodexAppServerThreadStartParams>,
+      clientFactory: () => ({ client, pid: 9315 }),
+    });
+
+    await expect(provider.startRun(runtimeRequest())).resolves.toMatchObject({ status: 'succeeded' });
+    expect(client.startThread).toHaveBeenCalledWith(expect.objectContaining({
+      approvalPolicy: 'never',
+    }));
+  });
+
   it('rejects startup errors before a turn is accepted so assignment can release the claim', async () => {
     const client = new FakeCodexAppServerProtocolClient();
     client.startThread.mockRejectedValueOnce(new Error('Codex App Server thread/start failed'));
@@ -498,4 +565,14 @@ function temporaryDirectory(): string {
 
 function statMode(path: string): number {
   return statSync(path).mode & 0o777;
+}
+
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void; reject: (error: Error) => void } {
+  let resolve: (value: T) => void = () => undefined;
+  let reject: (error: Error) => void = () => undefined;
+  const promise = new Promise<T>((innerResolve, innerReject) => {
+    resolve = innerResolve;
+    reject = innerReject;
+  });
+  return { promise, resolve, reject };
 }

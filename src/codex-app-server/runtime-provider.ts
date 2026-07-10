@@ -128,6 +128,7 @@ export async function startCodexAppServerRun(
   let runtimeClient: CodexAppServerRuntimeProviderClient | undefined;
   let threadId: string | undefined;
   let turnId: string | undefined;
+  let unregisterRequestHandler: (() => void) | undefined;
   const metadataBase = {
     logPath,
     stderrLogPath,
@@ -152,7 +153,7 @@ export async function startCodexAppServerRun(
     if (options.spawnProcess !== undefined) clientFactoryOptions.spawnProcess = options.spawnProcess;
     if (options.writeLogChunk !== undefined) clientFactoryOptions.writeLogChunk = options.writeLogChunk;
     runtimeClient = (options.clientFactory ?? createDefaultCodexAppServerRuntimeProviderClient)(clientFactoryOptions);
-    const unregisterRequestHandler = options.requestHandler === undefined
+    unregisterRequestHandler = options.requestHandler === undefined
       ? undefined
       : runtimeClient.client.onRequest(options.requestHandler);
 
@@ -173,9 +174,8 @@ export async function startCodexAppServerRun(
         text_elements: [],
       }],
     }), context?.signal);
-    unregisterRequestHandler?.();
-    throwIfCodexAppServerLogWriteFailed(runtimeClient);
     turnId = turn.turn.id;
+    throwIfCodexAppServerLogWriteFailed(runtimeClient);
     const completed = await waitForCodexTurn(runtimeClient.client, {
       threadId,
       turnId,
@@ -216,6 +216,7 @@ export async function startCodexAppServerRun(
       }),
     };
   } finally {
+    unregisterRequestHandler?.();
     await closeCodexAppServerRuntimeClient(runtimeClient, closeTimeoutMs);
     closeSync(outputFd);
     closeSync(stderrFd);
@@ -228,10 +229,21 @@ function codexAppServerThreadParams(options: CodexAppServerRuntimeProviderOption
     ephemeral: true,
     sessionStartSource: 'rainrail',
     threadSource: 'rainrail',
-    ...options.thread,
+    ...definedCodexThreadOptions(options.thread),
   };
   if (options.cwd !== undefined && threadParams.cwd === undefined) threadParams.cwd = options.cwd;
   return threadParams;
+}
+
+function definedCodexThreadOptions(
+  thread: Partial<CodexAppServerThreadStartParams> | undefined,
+): Partial<CodexAppServerThreadStartParams> {
+  if (thread === undefined) {
+    return {};
+  }
+  return Object.fromEntries(
+    Object.entries(thread).filter(([, value]) => value !== undefined),
+  ) as Partial<CodexAppServerThreadStartParams>;
 }
 
 function requiresCodexAppServerRequestHandler(threadParams: CodexAppServerThreadStartParams): boolean {
