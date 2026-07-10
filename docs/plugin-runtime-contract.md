@@ -14,6 +14,25 @@ EEP Bridge bundle is one source bundle: 現行実装では GitHub webhook と Cl
 同じ publish-to-core 経路へ束ねる。manual/chat source は EEP Bridge 由来ではないが、
 同じ `RainrailEventEnvelope`、`RainrailIntakeAdapter`、Workflow plugin contract を使う。
 
+公開 export inventory は `WorkflowPlugin` `PluginRuntimeContext`
+`RuntimeDispatcher` `createRuntimeDispatcher` `defineWorkflowPlugin`
+`createPluginLoader` `createRouteWorkflow` `createRouteLocalHandler`
+`routeRainrailEvent` `PullRequestCheck` `PullRequestReview`
+`PullRequestReviewTarget` `PullRequestReviewComment` `PullRequestMergeMethod`
+`GitHubPullRequestProvider` `AgentTaskIssue` `AgentTaskClaim` `AgentTask`
+`AgentTaskHandoffClient` `ReviewRequestWorkflowOptions`
+`TodoHandoffWorkflowOptions` `ChangeRequestWorkflowOptions`
+`CodexReviewWorkflowOptions` `CheckFailureWorkflowOptions`
+`ConflictCheckWorkflowOptions` `AutoMergeWorkflowOptions` `WorkflowResult`
+`createReviewRequestWorkflow` `createChangeRequestWorkflow`
+`createCodexReviewWorkflow` `createCheckFailureWorkflow`
+`createConflictCheckWorkflow` `createAutoMergeWorkflow`
+`handleReviewRequestEvent` `handleChangeRequestEvent` `handleCodexReviewEvent`
+`handleCheckFailureEvent` `handleConflictCheckEvent` `handleAutoMergeEvent`
+`allChecksPassed` `createTaskProviderPullRequestCommentHandoff`
+`GitHubAuthToken` `createGitHubTaskProvider` `createGitHubPullRequestProvider`
+`recordGitHubRateLimit` をこの contract で扱う。
+
 ## Event envelope
 
 `RainrailEventEnvelope` は `schemaVersion: "rainrail.event.v1"` を持つ。
@@ -375,6 +394,50 @@ entry を生成する。manifest の `dashboard.cards` は配列だけを許可�
 manifest だけで card catalog に contribution を登録でき、namespace 不一致や delimiter を含む
 card name は registry 登録前に `DashboardCardRegistryError` として扱われる。
 
+最小の plugin dashboard card contribution は次の形にする。
+
+```ts
+import {
+  createDashboardCardProviderFromManifest,
+  type DashboardPluginManifest,
+} from 'rainrail';
+
+const manifest: DashboardPluginManifest = {
+  name: 'github',
+  version: '1.0.0',
+  dashboard: {
+    cards: [{
+      name: 'queue',
+      title: 'GitHub queue',
+      description: 'Open issue and pull request queue.',
+      category: 'operations',
+      requiredCapabilities: ['dashboard:read', 'github:read'],
+      size: {
+        default: { columns: 3, rows: 2 },
+        min: { columns: 2, rows: 1 },
+        max: { columns: 6, rows: 4 },
+      },
+      settingsSchema: {
+        type: 'object',
+        properties: {
+          repository: { type: 'string' },
+        },
+        additionalProperties: false,
+      },
+    }],
+  },
+};
+
+export const githubDashboardCards = createDashboardCardProviderFromManifest(manifest);
+```
+
+この例の card id は `plugin:github.queue` になる。Dashboard layout は
+`DashboardLayoutItem.cardId` でこの id を参照し、operator が保存する card-specific
+settings は layout item の `config` にだけ入る。Plugin manifest や settings schema に
+provider credential、dashboard bearer token、secret 値は入れない。
+実際に typecheck される sample は `docs/examples/plugin-runtime.ts` の
+`issueSummaryManifest` と `issueSummaryCards` に置く。
+
 Plugin card の描画境界は `createDashboardCardSandboxHost()` が作る
 `DashboardCardSandboxFrame` を正とする。host は plugin card だけを iframe sandbox 対象にし、
 `sandbox: "allow-scripts"`、`referrerPolicy: "no-referrer"`、lazy loading の descriptor を返す。
@@ -418,6 +481,11 @@ mock task provider と mock runtime provider を `createRuntimeDispatcher` に�
 workflow test は外部 API なしで書ける。互換性のため dispatcher runtime context は
 provider/runtime 未指定でも構成できるが、その場合 handler に渡る provider/runtime は
 呼び出し時に明示的な unavailable error を返す。
+
+Workflow plugin と routing helper の公開 export inventory は
+`WorkflowPlugin`、`PluginRuntimeContext`、`RuntimeDispatcher`、
+`createRuntimeDispatcher`、`defineWorkflowPlugin`、`createPluginLoader`、
+`createRouteWorkflow`、`createRouteLocalHandler`、`routeRainrailEvent` とする。
 
 Workflow plugin は任意で `capabilities` と `timeoutMs` を宣言できる。
 `capabilities` は危険操作を呼ぶための宣言であり、宣言されていない plugin は
@@ -469,6 +537,9 @@ GitHub provider 実装の HTTP adapter behavior は `github-provider.test.ts`、
 `github-project.test.ts` で検証する。
 check rollup 判定は `allChecksPassed` に集約し、`success` に加えて
 `neutral` / `skipped` の完了も成功扱いにする。
+GitHub provider helper の公開 export inventory は `GitHubAuthToken`、
+`createGitHubTaskProvider`、`createGitHubPullRequestProvider`、
+`recordGitHubRateLimit` とする。
 
 ## Plugin loader と local handler
 

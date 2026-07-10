@@ -10,7 +10,12 @@ and workflow plugin working against Rainrail's public contract.
 
 - Understanding `defineSourcePlugin` and normalized envelopes.
 - Seeing how workflow plugins match events and call a runtime provider.
+- Copying a minimal `DashboardPluginManifest.dashboard.cards[]` contribution
+  for a plugin dashboard card.
 - Checking import paths when writing new examples or tests.
+
+For the dashboard card walkthrough, see
+[Add dashboard cards](/guides/dashboard-cards/).
 
 ## Source spec
 

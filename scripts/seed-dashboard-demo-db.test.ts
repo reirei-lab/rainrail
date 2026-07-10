@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 
+import { createDashboardCardRegistry, defineDashboardCard } from '../src/dashboard-card-registry.js';
+import { createDashboardCardSandboxHost } from '../src/dashboard-card-sandbox.js';
 import { createRainrailHttpApp } from '../src/http-app.js';
 import { SqliteOperationalStore } from '../src/operational-store.js';
 import type { RainrailIntakeAdapter } from '../src/intake-adapter.js';
@@ -229,6 +231,10 @@ describe('dashboard demo SQLite seed script', () => {
           expect.objectContaining({ id: 'sources-last-deliveries', tab: 'sources' }),
           expect.objectContaining({ id: 'queue-blocked-stale-claim', tab: 'queue' }),
           expect.objectContaining({ id: 'settings-retry-auth', tab: 'settings' }),
+          expect.objectContaining({ id: 'dashboard-cards-default-layout', tab: 'overview' }),
+          expect.objectContaining({ id: 'dashboard-cards-custom-plugin-layout', tab: 'overview' }),
+          expect.objectContaining({ id: 'dashboard-cards-plugin-failure-shell', tab: 'overview' }),
+          expect.objectContaining({ id: 'dashboard-cards-mobile-layout', tab: 'overview', viewport: 'mobile' }),
         ]);
         for (const scenario of dashboardDemoVrtScenarios) {
           expect(scenario.url).toMatch(/^\/(?:ja|en)\/dashboard\?demo=1\b/);
@@ -318,6 +324,165 @@ describe('dashboard demo SQLite seed script', () => {
           expect.objectContaining({ id: 'retry-policy', value: '2 retries pending' }),
           expect.objectContaining({ id: 'dashboard-auth', value: 'bearer token configured' }),
         ]));
+      } finally {
+        store.close();
+      }
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('backs dashboard card smoke and VRT states with layout, plugin failure, and mobile capture contracts', async () => {
+    const { databasePath, cleanup } = temporaryDatabasePath();
+    try {
+      expect(runSeed(databasePath).status).toBe(0);
+      const store = new SqliteOperationalStore({ databasePath, eventLimit: 25 });
+      try {
+        const registry = createDashboardCardRegistry();
+        registry.register(defineDashboardCard({
+          id: 'plugin:github.queue',
+          title: 'GitHub queue',
+          description: 'Open issue and pull request queue',
+          entry: { type: 'plugin', pluginName: 'github', cardName: 'queue' },
+          category: 'operations',
+          requiredCapabilities: ['dashboard:read', 'github:read'],
+          size: {
+            default: { columns: 3, rows: 2 },
+            min: { columns: 2, rows: 1 },
+            max: { columns: 6, rows: 4 },
+          },
+          settingsSchema: {
+            type: 'object',
+            properties: {
+              repository: { type: 'string' },
+            },
+            additionalProperties: false,
+          },
+        }));
+        const app = createRainrailHttpApp({
+          room: { fetch: () => Response.json({ ok: true }) },
+          publishToken: 'publish-token',
+          runtime: 'node',
+          dashboardAuth: {
+            readOnlyToken: 'read-token',
+            operatorToken: 'operator-token',
+            adminToken: 'admin-token',
+          },
+          operationalStore: store,
+          intakeAdapters: demoIntakeAdapters(),
+          taskQueue: demoTaskQueue(),
+          dashboardCardRegistry: registry,
+          dashboardCardCatalog: {
+            availableCapabilities: ['dashboard:read', 'github:read'],
+            enabledPlugins: ['github'],
+          },
+        });
+        const readHeaders = { authorization: 'Bearer read-token' };
+
+        const defaultLayout = await getJson(app, '/api/v1/dashboard/layout', readHeaders);
+        expect(defaultLayout.data).toMatchObject({
+          id: 'core.defaultLayout',
+          source: 'default',
+          filteredItemCount: 0,
+          items: expect.arrayContaining([
+            expect.objectContaining({ id: 'operational-totals', cardId: 'core.operationalTotals' }),
+            expect.objectContaining({ id: 'event-inbox', cardId: 'core.eventInbox' }),
+            expect.objectContaining({ id: 'operator-actions', cardId: 'core.operatorActions' }),
+          ]),
+        });
+
+        const cards = await getJson(app, '/api/v1/dashboard/cards', readHeaders);
+        expect(cards.data).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            definition: expect.objectContaining({
+              id: 'plugin:github.queue',
+              entry: { type: 'plugin', pluginName: 'github', cardName: 'queue' },
+              settingsSchema: expect.objectContaining({
+                properties: { repository: { type: 'string' } },
+              }),
+            }),
+            availability: { status: 'available' },
+          }),
+        ]));
+
+        const savedLayoutResponse = await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/layout', {
+          method: 'PUT',
+          headers: {
+            authorization: 'Bearer operator-token',
+            'content-type': 'application/json',
+            'x-rainrail-client': 'dashboard-vrt-smoke',
+            'x-request-id': 'request-dashboard-cards-vrt',
+          },
+          body: JSON.stringify({
+            items: [
+              { id: 'operational-totals', cardId: 'core.operationalTotals', x: 0, y: 0, columns: 8, rows: 2 },
+              {
+                id: 'github-queue',
+                cardId: 'plugin:github.queue',
+                x: 8,
+                y: 0,
+                columns: 3,
+                rows: 2,
+                config: { repository: 'reirei-lab/rainrail' },
+              },
+            ],
+          }),
+        }));
+        expect(savedLayoutResponse.status).toBe(200);
+        await expect(savedLayoutResponse.json()).resolves.toMatchObject({
+          data: {
+            id: 'user.dashboardLayout',
+            source: 'user',
+            items: [
+              expect.objectContaining({ id: 'operational-totals', cardId: 'core.operationalTotals' }),
+              expect.objectContaining({
+                id: 'github-queue',
+                cardId: 'plugin:github.queue',
+                config: { repository: 'reirei-lab/rainrail' },
+              }),
+            ],
+          },
+        });
+
+        const sandboxHost = createDashboardCardSandboxHost({
+          cardBaseUrl: '/dashboard/plugin-cards/',
+          allowedCapabilities: ['dashboard:read'],
+        });
+        await expect(sandboxHost.load({
+          id: 'plugin:github.queue',
+          title: 'GitHub queue',
+          entry: { type: 'plugin', pluginName: 'github', cardName: 'queue' },
+          category: 'operations',
+          requiredCapabilities: ['dashboard:read'],
+          size: { default: { columns: 3, rows: 2 } },
+        }, async () => {
+          throw new Error('simulated plugin card bundle failure');
+        })).resolves.toEqual({
+          status: 'error',
+          cardId: 'plugin:github.queue',
+          error: 'Plugin card failed to load',
+        });
+
+        expect(dashboardDemoVrtScenarios.filter((scenario) => scenario.id.startsWith('dashboard-cards-')))
+          .toEqual([
+            expect.objectContaining({
+              id: 'dashboard-cards-default-layout',
+              captureHints: expect.arrayContaining(['default core card layout']),
+            }),
+            expect.objectContaining({
+              id: 'dashboard-cards-custom-plugin-layout',
+              captureHints: expect.arrayContaining(['saved user layout', 'plugin card catalog entry']),
+            }),
+            expect.objectContaining({
+              id: 'dashboard-cards-plugin-failure-shell',
+              captureHints: expect.arrayContaining(['dashboard shell remains interactive']),
+            }),
+            expect.objectContaining({
+              id: 'dashboard-cards-mobile-layout',
+              viewport: 'mobile',
+              captureHints: expect.arrayContaining(['dashboard cards remain readable on narrow screens']),
+            }),
+          ]);
       } finally {
         store.close();
       }

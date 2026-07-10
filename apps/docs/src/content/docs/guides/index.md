@@ -10,6 +10,8 @@ the repository boundaries.
 
 - [Add a source adapter](/guides/source-adapter/) for new provider input.
 - [Add a workflow plugin](/guides/workflow-plugin/) for new routing behavior.
+- [Add dashboard cards](/guides/dashboard-cards/) for plugin card manifests,
+  saved layouts, sandbox rules, and smoke/VRT coverage.
 - [Run local delivery](/guides/local-delivery/) for publish and stream checks.
 
 Before changing a public payload, export, route, retry rule, or assignment

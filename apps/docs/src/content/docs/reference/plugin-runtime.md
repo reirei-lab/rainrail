@@ -13,11 +13,14 @@ The plugin runtime contract is the main extension surface for Rainrail.
   completion paths.
 - Dispatchers evaluate plugins against the envelope, runtime provider, and
   configured capability gates.
+- Plugin package manifests can contribute dashboard cards through
+  `dashboard.cards[]`; see [Add dashboard cards](/guides/dashboard-cards/).
 
 ## Compatibility rule
 
-Changes to event envelope fields, plugin hooks, runtime provider behavior, or
-dispatcher retry semantics should ship with tests and an updated source spec.
+Changes to event envelope fields, plugin hooks, dashboard card manifests,
+runtime provider behavior, or dispatcher retry semantics should ship with tests
+and an updated source spec.
 
 ## Source spec
 

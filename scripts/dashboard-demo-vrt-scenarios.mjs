@@ -11,6 +11,7 @@
  * @property {string} id
  * @property {DashboardDemoTab} tab
  * @property {string} url
+ * @property {'desktop' | 'mobile'} [viewport]
  * @property {string[]} captureHints
  */
 
@@ -87,5 +88,45 @@ export const dashboardDemoVrtScenarios = Object.freeze([
       'runtime and snapshot settings',
     ],
   },
+  {
+    id: 'dashboard-cards-default-layout',
+    tab: 'overview',
+    url: '/ja/dashboard?demo=1&tab=overview&panel=cards',
+    captureHints: [
+      'default core card layout',
+      'card picker with core cards',
+      'layout save controls idle state',
+    ],
+  },
+  {
+    id: 'dashboard-cards-custom-plugin-layout',
+    tab: 'overview',
+    url: '/ja/dashboard?demo=1&tab=overview&panel=cards&layout=custom',
+    captureHints: [
+      'saved user layout',
+      'plugin card catalog entry',
+      'per-card settings affordance',
+    ],
+  },
+  {
+    id: 'dashboard-cards-plugin-failure-shell',
+    tab: 'overview',
+    url: '/ja/dashboard?demo=1&tab=overview&panel=cards&pluginCardFailure=1',
+    captureHints: [
+      'unavailable plugin card warning',
+      'dashboard shell remains interactive',
+      'core cards still render beside failed plugin card',
+    ],
+  },
+  {
+    id: 'dashboard-cards-mobile-layout',
+    tab: 'overview',
+    url: '/ja/dashboard?demo=1&tab=overview&panel=cards',
+    viewport: 'mobile',
+    captureHints: [
+      'mobile single-column layout tools',
+      'card picker does not overlap controls',
+      'dashboard cards remain readable on narrow screens',
+    ],
+  },
 ]);
-
