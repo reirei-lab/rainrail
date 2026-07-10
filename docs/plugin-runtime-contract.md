@@ -82,7 +82,12 @@ wrapper の型は `CodexAppServerClientInfo`、`CodexAppServerInitializeParams`�
 `initialized` notification を送って handshake を完了する。`turn/completed` は公式 payload の
 `{ turn }` を受けられるよう `threadId` を必須にせず、完了通知が `startTurn()` resolve 前に
 届いても後続の `waitForTurnCompleted()` が拾えるよう turn id で直近完了を cache する。
-request timeout と transport close は待機中の turn completion を reject する。実 Codex CLI との非破壊 smoke は
+completion cache は race 回避用の短期 cache として上限を持ち、daemon/provider が長時間
+使い回されても turn summary を無期限には保持しない。request timeout は低レベル request を
+abort して pending state を掃除する。transport parse error などの非致命的な `onError` は
+監視用通知として扱い、turn completion 待機は timeout と transport close のみで reject する。
+`onTurnCompleted` handler の例外は observer failure として隔離し、受信済み completion の
+waiter 解決を妨げない。実 Codex CLI との非破壊 smoke は
 `RAINRAIL_CODEX_APP_SERVER_SMOKE=1` のときだけ `src/codex-app-server/smoke.test.ts` で
 ephemeral thread / read-only sandbox として実行する。
 

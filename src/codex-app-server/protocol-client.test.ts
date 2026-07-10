@@ -259,6 +259,95 @@ describe('Codex App Server protocol wrapper', () => {
     ]);
   });
 
+  it('keeps turn waiters alive after a non-fatal transport error', async () => {
+    const transport = new FakeTransport();
+    const client = createCodexAppServerProtocolClient({ transport });
+
+    await client.connect();
+    const completed = client.waitForTurnCompleted({ threadId: 'thread-1', turnId: 'turn-1' });
+    transport.emitError(new Error('Failed to parse Codex App Server stdio frame'));
+    transport.emitFrame({
+      method: 'turn/completed',
+      params: {
+        turn: {
+          id: 'turn-1',
+          status: 'completed',
+          items: [],
+          itemsView: { type: 'complete' },
+          error: null,
+          startedAt: 1,
+          completedAt: 2,
+          durationMs: 100,
+        },
+      },
+    });
+
+    await expect(completed).resolves.toMatchObject({ turn: { id: 'turn-1' } });
+  });
+
+  it('resolves waiters even when a turn completed handler throws', async () => {
+    const transport = new FakeTransport();
+    const client = createCodexAppServerProtocolClient({ transport });
+    client.onTurnCompleted(() => {
+      throw new Error('dashboard callback failed');
+    });
+
+    await client.connect();
+    const completed = client.waitForTurnCompleted({ threadId: 'thread-1', turnId: 'turn-1' });
+    expect(() => transport.emitFrame({
+      method: 'turn/completed',
+      params: {
+        turn: {
+          id: 'turn-1',
+          status: 'completed',
+          items: [],
+          itemsView: { type: 'complete' },
+          error: null,
+          startedAt: 1,
+          completedAt: 2,
+          durationMs: 100,
+        },
+      },
+    })).not.toThrow();
+
+    await expect(completed).resolves.toMatchObject({ turn: { id: 'turn-1' } });
+  });
+
+  it('evicts old turn completion cache entries', async () => {
+    vi.useFakeTimers();
+    try {
+      const transport = new FakeTransport();
+      const client = createCodexAppServerProtocolClient({ transport, requestTimeoutMs: 50 });
+
+      await client.connect();
+      for (let index = 1; index <= 33; index += 1) {
+        transport.emitFrame({
+          method: 'turn/completed',
+          params: {
+            turn: {
+              id: `turn-${index}`,
+              status: 'completed',
+              items: [],
+              itemsView: { type: 'complete' },
+              error: null,
+              startedAt: index,
+              completedAt: index + 1,
+              durationMs: 10,
+            },
+          },
+        });
+      }
+
+      const evicted = client.waitForTurnCompleted({ threadId: 'thread-1', turnId: 'turn-1' });
+      await vi.advanceTimersByTimeAsync(50);
+      await expect(evicted).rejects.toThrow('Timed out waiting for Codex App Server turn/completed');
+      await expect(client.waitForTurnCompleted({ threadId: 'thread-1', turnId: 'turn-33' }))
+        .resolves.toMatchObject({ turn: { id: 'turn-33' } });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('rejects waiting for turn completion on timeout and transport close', async () => {
     vi.useFakeTimers();
     try {

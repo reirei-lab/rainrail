@@ -229,6 +229,24 @@ describe('Codex App Server protocol client', () => {
     ]);
   });
 
+  it('removes pending requests when their AbortSignal fires', async () => {
+    const transport = new FakeTransport();
+    const client = createCodexAppServerClient({ transport });
+    const controller = new AbortController();
+
+    await client.connect();
+    const aborted = client.request('thread/start', undefined, { signal: controller.signal });
+    controller.abort();
+
+    await expect(aborted).rejects.toThrow('Codex App Server request aborted');
+
+    transport.emitFrame({ id: 1, result: { stale: true } });
+    const next = client.request('thread/start');
+    transport.emitFrame({ id: 2, result: { thread: { id: 'thread-2' } } });
+
+    await expect(next).resolves.toEqual({ thread: { id: 'thread-2' } });
+  });
+
   it('returns the pending request promise before transport send settles', async () => {
     const transport = new FakeTransport();
     let resolveSend: (() => void) | undefined;

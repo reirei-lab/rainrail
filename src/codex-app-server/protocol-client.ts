@@ -148,6 +148,7 @@ interface PendingTurnCompletion {
 }
 
 const defaultRequestTimeoutMs = 60_000;
+const maxCompletedTurnCacheEntries = 32;
 
 export function createCodexAppServerProtocolClient(
   options: CodexAppServerProtocolClientOptions,
@@ -168,7 +169,6 @@ class DefaultCodexAppServerProtocolClient implements CodexAppServerProtocolClien
     this.#requestTimeoutMs = options.requestTimeoutMs ?? defaultRequestTimeoutMs;
     this.#client.onNotification((frame) => this.#handleNotification(frame));
     this.#client.onClose(() => this.#rejectPendingTurnCompletions(new Error('Codex App Server transport closed')));
-    this.#client.onError((error) => this.#rejectPendingTurnCompletions(error));
   }
 
   connect(): Promise<void> {
@@ -231,7 +231,13 @@ class DefaultCodexAppServerProtocolClient implements CodexAppServerProtocolClien
   }
 
   #requestWithTimeout(method: string, params: unknown): Promise<unknown> {
-    return withTimeout(this.#client.request(method, params), this.#requestTimeoutMs, `Codex App Server ${method} timed out`);
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      controller.abort(new Error(`Codex App Server ${method} timed out`));
+    }, this.#requestTimeoutMs);
+    return this.#client.request(method, params, { signal: controller.signal }).finally(() => {
+      clearTimeout(timer);
+    });
   }
 
   #handleNotification(frame: CodexAppServerNotificationFrame): void {
@@ -244,12 +250,28 @@ class DefaultCodexAppServerProtocolClient implements CodexAppServerProtocolClien
     if (frame.method !== 'turn/completed') return;
     const event = parseTurnCompleted(frame.params);
     if (event === undefined) return;
-    this.#completedTurns.set(event.turn.id, event);
-    for (const handler of this.#turnCompletedHandlers) handler(event);
+    this.#cacheCompletedTurn(event);
     for (const pending of [...this.#pendingTurnCompletions]) {
       if (!eventMatchesTurnWaitTarget(event, pending)) continue;
       this.#removePendingTurnCompletion(pending);
       pending.resolve(event);
+    }
+    for (const handler of this.#turnCompletedHandlers) {
+      try {
+        handler(event);
+      } catch {
+        // Observer callbacks must not break turn lifecycle waiters.
+      }
+    }
+  }
+
+  #cacheCompletedTurn(event: CodexAppServerTurnCompletedEvent): void {
+    this.#completedTurns.delete(event.turn.id);
+    this.#completedTurns.set(event.turn.id, event);
+    while (this.#completedTurns.size > maxCompletedTurnCacheEntries) {
+      const oldestKey = this.#completedTurns.keys().next().value;
+      if (typeof oldestKey !== 'string') return;
+      this.#completedTurns.delete(oldestKey);
     }
   }
 
@@ -264,22 +286,6 @@ class DefaultCodexAppServerProtocolClient implements CodexAppServerProtocolClien
     if (pending.timer !== undefined) clearTimeout(pending.timer);
     this.#pendingTurnCompletions = this.#pendingTurnCompletions.filter((candidate) => candidate !== pending);
   }
-}
-
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(message)), timeoutMs);
-    promise.then(
-      (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      },
-      (error: unknown) => {
-        clearTimeout(timer);
-        reject(error instanceof Error ? error : new Error(String(error)));
-      },
-    );
-  });
 }
 
 function expectInitializeResponse(value: unknown): CodexAppServerInitializeResponse {

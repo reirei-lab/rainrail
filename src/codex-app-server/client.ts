@@ -40,7 +40,7 @@ export interface CodexAppServerTransport {
 export interface CodexAppServerClient {
   connect(): Promise<void>;
   close(): Promise<void>;
-  request(method: string, params?: unknown): Promise<unknown>;
+  request(method: string, params?: unknown, options?: { signal?: AbortSignal }): Promise<unknown>;
   notify(method: string, params?: unknown): Promise<void>;
   onNotification(handler: (frame: CodexAppServerNotificationFrame) => void): () => void;
   onError(handler: (error: Error) => void): () => void;
@@ -54,6 +54,7 @@ export interface CodexAppServerClientOptions {
 interface PendingRequest {
   resolve(value: unknown): void;
   reject(error: Error): void;
+  cleanup?: (() => void) | undefined;
 }
 
 export function createCodexAppServerClient(options: CodexAppServerClientOptions): CodexAppServerClient {
@@ -115,7 +116,12 @@ class DefaultCodexAppServerClient implements CodexAppServerClient {
     this.#handleClose();
   }
 
-  request(method: string, params?: unknown): Promise<unknown> {
+  request(method: string, params?: unknown, options?: { signal?: AbortSignal }): Promise<unknown> {
+    if (options?.signal?.aborted) {
+      const rejected = Promise.reject(abortErrorFromSignal(options.signal));
+      rejected.catch(() => undefined);
+      return rejected;
+    }
     const id = this.#nextRequestId++;
     const frame: CodexAppServerRequestFrame = { id, method };
     if (params !== undefined) frame.params = params;
@@ -126,14 +132,26 @@ class DefaultCodexAppServerClient implements CodexAppServerClient {
       this.#pending.set(id, pendingRequest);
     });
     pending.catch(() => undefined);
+    const signal = options?.signal;
+    if (signal !== undefined && pendingRequest !== undefined) {
+      const onAbort = () => {
+        if (!this.#pending.delete(id)) return;
+        pendingRequest?.cleanup?.();
+        pendingRequest?.reject(abortErrorFromSignal(signal));
+      };
+      signal.addEventListener('abort', onAbort, { once: true });
+      pendingRequest.cleanup = () => signal.removeEventListener('abort', onAbort);
+    }
     try {
       this.#transport.send(frame).catch((error: unknown) => {
         if (this.#pending.delete(id)) {
+          pendingRequest?.cleanup?.();
           pendingRequest?.reject(errorFromUnknown(error));
         }
       });
     } catch (error) {
       this.#pending.delete(id);
+      pendingRequest?.cleanup?.();
       pendingRequest?.reject(errorFromUnknown(error));
     }
     return pending;
@@ -184,6 +202,7 @@ class DefaultCodexAppServerClient implements CodexAppServerClient {
       return;
     }
     this.#pending.delete(frame.id);
+    pending.cleanup?.();
     if (frame.error !== undefined) {
       pending.reject(new CodexAppServerProtocolError(frame.error));
       return;
@@ -211,7 +230,10 @@ class DefaultCodexAppServerClient implements CodexAppServerClient {
     for (const unsubscribe of this.#unsubscribeTransport) unsubscribe();
     this.#unsubscribeTransport = [];
     const error = new Error('Codex App Server transport closed');
-    for (const pending of this.#pending.values()) pending.reject(error);
+    for (const pending of this.#pending.values()) {
+      pending.cleanup?.();
+      pending.reject(error);
+    }
     this.#pending.clear();
     for (const handler of this.#closeHandlers) handler();
   }
@@ -231,6 +253,11 @@ export class CodexAppServerProtocolError extends Error {
 
 function errorFromUnknown(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
+}
+
+function abortErrorFromSignal(signal: AbortSignal): Error {
+  if (signal.reason instanceof Error && signal.reason.name !== 'AbortError') return signal.reason;
+  return new Error('Codex App Server request aborted');
 }
 
 function isNotificationFrame(frame: CodexAppServerFrame): frame is CodexAppServerNotificationFrame {
