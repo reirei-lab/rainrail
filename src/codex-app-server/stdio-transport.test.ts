@@ -61,11 +61,29 @@ describe('stdio Codex App Server transport', () => {
     expect(stdin.writes).toEqual([`${JSON.stringify(frame)}\n`]);
   });
 
-  it('merges configured env overrides with the parent process environment', async () => {
+  it('passes an explicit env without leaking the parent process environment', async () => {
+    const { spawnProcess } = createChildProcessFixture();
+    const transport = createStdioCodexAppServerTransport({
+      command: 'codex-app-server',
+      env: { CODEX_APP_SERVER_TOKEN: 'test-token', PATH: '/custom/bin' },
+      spawnProcess,
+    });
+
+    await transport.connect();
+
+    const options = spawnProcess.mock.calls[0]?.[2];
+    expect(options?.env).toEqual({
+      PATH: '/custom/bin',
+      CODEX_APP_SERVER_TOKEN: 'test-token',
+    });
+  });
+
+  it('merges env overrides with the parent process environment when inheritance is explicit', async () => {
     const { spawnProcess } = createChildProcessFixture();
     const transport = createStdioCodexAppServerTransport({
       command: 'codex-app-server',
       env: { CODEX_APP_SERVER_TOKEN: 'test-token' },
+      inheritEnv: true,
       spawnProcess,
     });
 
@@ -73,8 +91,8 @@ describe('stdio Codex App Server transport', () => {
 
     const options = spawnProcess.mock.calls[0]?.[2];
     expect(options?.env).toMatchObject({
-      PATH: process.env.PATH,
       CODEX_APP_SERVER_TOKEN: 'test-token',
+      PATH: process.env.PATH,
     });
   });
 
@@ -159,9 +177,53 @@ describe('stdio Codex App Server transport', () => {
 
     transport.onClose(close);
     await transport.connect();
-    child.emit('exit', 0, null);
+    child.emit('close', 0, null);
 
     expect(close).toHaveBeenCalledOnce();
+  });
+
+  it('keeps stdout readable after exit until the child close event drains stdio', async () => {
+    const { child, spawnProcess, stdout } = createChildProcessFixture();
+    const transport = createStdioCodexAppServerTransport({ command: 'codex-app-server', spawnProcess });
+    const close = vi.fn();
+    const frames: CodexAppServerFrame[] = [];
+
+    transport.onClose(close);
+    transport.onFrame((frame) => frames.push(frame));
+    await transport.connect();
+    child.emit('exit', 0, null);
+    stdout.write('{"type":"notification","method":"session.complete"}\n');
+
+    expect(close).not.toHaveBeenCalled();
+    expect(frames).toEqual([{ type: 'notification', method: 'session.complete' }]);
+
+    child.emit('close', 0, null);
+
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it('waits for child close before resolving transport close', async () => {
+    const { child, spawnProcess } = createChildProcessFixture();
+    const transport = createStdioCodexAppServerTransport({ command: 'codex-app-server', spawnProcess });
+    const close = vi.fn();
+    let closeResolved = false;
+
+    transport.onClose(close);
+    await transport.connect();
+    const closePromise = transport.close().then(() => {
+      closeResolved = true;
+    });
+    await Promise.resolve();
+
+    expect(child.kill).toHaveBeenCalledOnce();
+    expect(close).not.toHaveBeenCalled();
+    expect(closeResolved).toBe(false);
+
+    child.emit('close', 0, null);
+    await closePromise;
+
+    expect(close).toHaveBeenCalledOnce();
+    expect(closeResolved).toBe(true);
   });
 
   it('does not close a reconnected child when the previous child exits late', async () => {
@@ -175,7 +237,9 @@ describe('stdio Codex App Server transport', () => {
 
     transport.onClose(close);
     await transport.connect();
-    await transport.close();
+    const closePromise = transport.close();
+    first.child.emit('close', 0, null);
+    await closePromise;
     await transport.connect();
     close.mockClear();
 
@@ -199,7 +263,9 @@ describe('stdio Codex App Server transport', () => {
     transport.onError((error) => errors.push(error.message));
     transport.onFrame((frame) => frames.push(frame));
     await transport.connect();
-    await transport.close();
+    const closePromise = transport.close();
+    first.child.emit('close', 0, null);
+    await closePromise;
     await transport.connect();
 
     first.stdout.write('{"type":"notification","method":"stale.output"}\n');
@@ -221,7 +287,9 @@ describe('stdio Codex App Server transport', () => {
 
     transport.onError((error) => errors.push(error.message));
     await transport.connect();
-    await transport.close();
+    const closePromise = transport.close();
+    first.child.emit('close', 0, null);
+    await closePromise;
     await transport.connect();
 
     first.child.emit('error', new Error('stale child error'));
@@ -243,7 +311,9 @@ describe('stdio Codex App Server transport', () => {
     transport.onFrame((frame) => frames.push(frame));
     await transport.connect();
     first.stdout.write('{"type":"notification","method":"partial"');
-    await transport.close();
+    const closePromise = transport.close();
+    first.child.emit('close', 0, null);
+    await closePromise;
     await transport.connect();
     second.stdout.write('{"type":"notification","method":"session.output"}\n');
 

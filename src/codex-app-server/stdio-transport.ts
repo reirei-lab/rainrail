@@ -10,6 +10,7 @@ export interface StdioCodexAppServerTransportOptions {
   args?: string[];
   cwd?: string;
   env?: Record<string, string | undefined>;
+  inheritEnv?: boolean;
   spawnProcess?: SpawnCodexAppServerProcess;
 }
 
@@ -46,6 +47,7 @@ class StdioCodexAppServerTransport implements CodexAppServerTransport {
   #closeHandlers: Array<() => void> = [];
   #closed = false;
   #connectPromise: Promise<void> | undefined;
+  #closePromise: Promise<void> | undefined;
 
   constructor(options: StdioCodexAppServerTransportOptions) {
     this.#options = options;
@@ -54,6 +56,9 @@ class StdioCodexAppServerTransport implements CodexAppServerTransport {
   async connect(): Promise<void> {
     if (this.#connectPromise !== undefined) {
       return this.#connectPromise;
+    }
+    if (this.#closePromise !== undefined) {
+      await this.#closePromise;
     }
     if (this.#child !== undefined) {
       return;
@@ -70,7 +75,9 @@ class StdioCodexAppServerTransport implements CodexAppServerTransport {
     const spawnProcess = this.#options.spawnProcess ?? defaultSpawnCodexAppServerProcess;
     const spawnOptions: Parameters<SpawnCodexAppServerProcess>[2] = { stdio: ['pipe', 'pipe', 'pipe'] };
     if (this.#options.cwd !== undefined) spawnOptions.cwd = this.#options.cwd;
-    if (this.#options.env !== undefined) spawnOptions.env = { ...process.env, ...this.#options.env };
+    if (this.#options.env !== undefined) {
+      spawnOptions.env = this.#options.inheritEnv ? { ...process.env, ...this.#options.env } : this.#options.env;
+    }
 
     const child = spawnProcess(this.#options.command, this.#options.args ?? [], spawnOptions);
     this.#child = child;
@@ -93,28 +100,32 @@ class StdioCodexAppServerTransport implements CodexAppServerTransport {
     child.on('error', (error: Error) => {
       if (this.#child === child) this.#emitError(error);
     });
-    child.on('exit', () => {
-      if (this.#child === child) this.#emitClose();
-    });
     child.on('close', () => {
-      if (this.#child === child) this.#emitClose();
+      if (this.#child === child) this.#emitClose(child);
     });
     try {
       await waitForInitialChildReadiness(child);
     } catch (error) {
-      if (this.#child === child) this.#emitClose();
+      if (this.#child === child) this.#emitClose(child);
       throw error;
     }
   }
 
   async close(): Promise<void> {
+    if (this.#closePromise !== undefined) {
+      return this.#closePromise;
+    }
     const child = this.#child;
     if (child === undefined) {
-      this.#emitClose();
+      this.#emitClose(undefined);
       return;
     }
+    const closePromise = waitForChildClose(child).finally(() => {
+      if (this.#closePromise === closePromise) this.#closePromise = undefined;
+    });
+    this.#closePromise = closePromise;
     child.kill();
-    this.#emitClose();
+    return closePromise;
   }
 
   async send(frame: CodexAppServerFrame): Promise<void> {
@@ -177,10 +188,10 @@ class StdioCodexAppServerTransport implements CodexAppServerTransport {
     for (const handler of this.#errorHandlers) handler(error);
   }
 
-  #emitClose(): void {
+  #emitClose(child: StdioCodexAppServerChildProcess | undefined): void {
     if (this.#closed) return;
     this.#closed = true;
-    this.#child = undefined;
+    if (child === undefined || this.#child === child) this.#child = undefined;
     this.#stdoutBuffer = '';
     this.#stdoutDecoder = new StringDecoder('utf8');
     for (const handler of this.#closeHandlers) handler();
@@ -228,6 +239,12 @@ function waitForInitialChildReadiness(child: StdioCodexAppServerChildProcess): P
       child.off('close', onClose);
       callback();
     }
+  });
+}
+
+function waitForChildClose(child: StdioCodexAppServerChildProcess): Promise<void> {
+  return new Promise((resolve) => {
+    child.once('close', () => resolve());
   });
 }
 
