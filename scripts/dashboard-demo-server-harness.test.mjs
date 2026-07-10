@@ -60,6 +60,11 @@ describe('dashboard demo server harness', () => {
             sourceType: 'chat',
             lastDelivery: expect.objectContaining({ id: 'evt_demo_manual_chat_001' }),
           }),
+          expect.objectContaining({
+            id: 'cloudflare-tail',
+            sourceType: 'cloudflare',
+            lastDelivery: expect.objectContaining({ id: 'evt_demo_cloudflare_tail_001' }),
+          }),
         ]),
       });
     } finally {
