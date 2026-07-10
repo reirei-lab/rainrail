@@ -188,6 +188,47 @@ describe('Codex App Server protocol client', () => {
     await expect(pending).rejects.toThrow('missing repository');
   });
 
+  it('rejects with numeric JSON-RPC protocol error codes', async () => {
+    const transport = new FakeTransport();
+    const client = createCodexAppServerClient({ transport });
+
+    await client.connect();
+    const pending = client.request('thread/start');
+
+    transport.emitFrame({
+      id: 1,
+      error: {
+        code: -32600,
+        message: 'Not initialized',
+      },
+    });
+
+    await expect(pending).rejects.toMatchObject({ code: -32600, message: 'Not initialized' });
+  });
+
+  it('responds to unhandled server requests with a JSON-RPC method-not-found error', async () => {
+    const transport = new FakeTransport();
+    const client = createCodexAppServerClient({ transport });
+
+    await client.connect();
+    transport.emitFrame({
+      id: 99,
+      method: 'command/exec/approval',
+      params: { approvalId: 'approval-1' },
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(transport.sent).toEqual([
+      {
+        id: 99,
+        error: {
+          code: -32601,
+          message: 'Codex App Server client has no handler for server request command/exec/approval',
+        },
+      },
+    ]);
+  });
+
   it('returns the pending request promise before transport send settles', async () => {
     const transport = new FakeTransport();
     let resolveSend: (() => void) | undefined;

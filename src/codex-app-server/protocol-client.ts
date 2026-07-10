@@ -69,7 +69,7 @@ export interface CodexAppServerThreadStartResponse {
 export interface CodexAppServerTextInput {
   type: 'text';
   text: string;
-  text_elements: unknown[];
+  text_elements?: unknown[];
 }
 
 export type CodexAppServerTurnInput =
@@ -118,7 +118,7 @@ export interface CodexAppServerAssistantDeltaEvent {
 }
 
 export interface CodexAppServerTurnCompletedEvent {
-  threadId: string;
+  threadId?: string;
   turn: CodexAppServerTurnSummary;
 }
 
@@ -161,6 +161,7 @@ class DefaultCodexAppServerProtocolClient implements CodexAppServerProtocolClien
   #assistantDeltaHandlers: Array<(event: CodexAppServerAssistantDeltaEvent) => void> = [];
   #turnCompletedHandlers: Array<(event: CodexAppServerTurnCompletedEvent) => void> = [];
   #pendingTurnCompletions: PendingTurnCompletion[] = [];
+  #completedTurns = new Map<string, CodexAppServerTurnCompletedEvent>();
 
   constructor(options: CodexAppServerProtocolClientOptions) {
     this.#client = createCodexAppServerClient(options);
@@ -179,7 +180,9 @@ class DefaultCodexAppServerProtocolClient implements CodexAppServerProtocolClien
   }
 
   async initialize(params: CodexAppServerInitializeParams): Promise<CodexAppServerInitializeResponse> {
-    return expectInitializeResponse(await this.#requestWithTimeout('initialize', params));
+    const response = expectInitializeResponse(await this.#requestWithTimeout('initialize', params));
+    await this.#client.notify('initialized');
+    return response;
   }
 
   async startThread(params: CodexAppServerThreadStartParams = {}): Promise<CodexAppServerThreadStartResponse> {
@@ -191,6 +194,10 @@ class DefaultCodexAppServerProtocolClient implements CodexAppServerProtocolClien
   }
 
   waitForTurnCompleted(target: CodexAppServerTurnWaitTarget): Promise<CodexAppServerTurnCompletedEvent> {
+    const cached = this.#completedTurns.get(target.turnId);
+    if (cached !== undefined && eventMatchesTurnWaitTarget(cached, target)) {
+      return Promise.resolve(cached);
+    }
     const pendingPromise = new Promise<CodexAppServerTurnCompletedEvent>((resolve, reject) => {
       const pending: PendingTurnCompletion = {
         threadId: target.threadId,
@@ -237,9 +244,10 @@ class DefaultCodexAppServerProtocolClient implements CodexAppServerProtocolClien
     if (frame.method !== 'turn/completed') return;
     const event = parseTurnCompleted(frame.params);
     if (event === undefined) return;
+    this.#completedTurns.set(event.turn.id, event);
     for (const handler of this.#turnCompletedHandlers) handler(event);
     for (const pending of [...this.#pendingTurnCompletions]) {
-      if (pending.threadId !== event.threadId || pending.turnId !== event.turn.id) continue;
+      if (!eventMatchesTurnWaitTarget(event, pending)) continue;
       this.#removePendingTurnCompletion(pending);
       pending.resolve(event);
     }
@@ -310,10 +318,13 @@ function parseAssistantDelta(value: unknown): CodexAppServerAssistantDeltaEvent 
 }
 
 function parseTurnCompleted(value: unknown): CodexAppServerTurnCompletedEvent | undefined {
-  if (!isRecord(value) || typeof value.threadId !== 'string') return undefined;
+  if (!isRecord(value)) return undefined;
   const turn = parseTurnSummary(value.turn);
   if (turn === undefined) return undefined;
-  return { threadId: value.threadId, turn };
+  if (typeof value.threadId === 'string') {
+    return { threadId: value.threadId, turn };
+  }
+  return { turn };
 }
 
 function expectThreadSummary(value: unknown, label: string): CodexAppServerThreadSummary {
@@ -344,4 +355,12 @@ function expectString(value: unknown, label: string): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function eventMatchesTurnWaitTarget(
+  event: CodexAppServerTurnCompletedEvent,
+  target: Pick<CodexAppServerTurnWaitTarget, 'threadId' | 'turnId'>,
+): boolean {
+  if (event.turn.id !== target.turnId) return false;
+  return event.threadId === undefined || event.threadId === target.threadId;
 }

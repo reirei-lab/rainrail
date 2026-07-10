@@ -7,7 +7,7 @@ export interface CodexAppServerRequestFrame {
 }
 
 export interface CodexAppServerResponseError {
-  code: string;
+  code: string | number;
   message: string;
   data?: unknown;
 }
@@ -173,6 +173,9 @@ class DefaultCodexAppServerClient implements CodexAppServerClient {
     }
 
     if (!isResponseFrame(frame)) {
+      if (isServerRequestFrame(frame)) {
+        this.#respondToUnhandledServerRequest(frame);
+      }
       return;
     }
 
@@ -192,6 +195,16 @@ class DefaultCodexAppServerClient implements CodexAppServerClient {
     for (const handler of this.#errorHandlers) handler(error);
   }
 
+  #respondToUnhandledServerRequest(frame: CodexAppServerRequestFrame): void {
+    this.#transport.send({
+      id: frame.id,
+      error: {
+        code: -32601,
+        message: `Codex App Server client has no handler for server request ${frame.method}`,
+      },
+    }).catch((error: unknown) => this.#handleError(errorFromUnknown(error)));
+  }
+
   #handleClose(): void {
     if (!this.#connected && this.#pending.size === 0 && this.#unsubscribeTransport.length === 0) return;
     this.#connected = false;
@@ -205,7 +218,7 @@ class DefaultCodexAppServerClient implements CodexAppServerClient {
 }
 
 export class CodexAppServerProtocolError extends Error {
-  readonly code: string;
+  readonly code: string | number;
   readonly data?: unknown;
 
   constructor(error: CodexAppServerResponseError) {
@@ -226,4 +239,8 @@ function isNotificationFrame(frame: CodexAppServerFrame): frame is CodexAppServe
 
 function isResponseFrame(frame: CodexAppServerFrame): frame is CodexAppServerResponseFrame {
   return 'id' in frame && !('method' in frame);
+}
+
+function isServerRequestFrame(frame: CodexAppServerFrame): frame is CodexAppServerRequestFrame {
+  return 'id' in frame && 'method' in frame && typeof frame.method === 'string';
 }

@@ -127,6 +127,9 @@ describe('Codex App Server protocol wrapper', () => {
         },
       },
       {
+        method: 'initialized',
+      },
+      {
         id: 2,
         method: 'thread/start',
         params: { cwd: '/repo', ephemeral: true },
@@ -174,6 +177,86 @@ describe('Codex App Server protocol wrapper', () => {
 
     expect(deltas).toEqual(['OK']);
     await expect(completed).resolves.toMatchObject({ turn: { id: 'turn-1', status: 'completed' } });
+  });
+
+  it('matches turn/completed without requiring threadId in the notification payload', async () => {
+    const transport = new FakeTransport();
+    const client = createCodexAppServerProtocolClient({ transport });
+
+    await client.connect();
+    const completed = client.waitForTurnCompleted({ threadId: 'thread-1', turnId: 'turn-1' });
+    transport.emitFrame({
+      method: 'turn/completed',
+      params: {
+        turn: {
+          id: 'turn-1',
+          status: 'completed',
+          items: [],
+          itemsView: { type: 'complete' },
+          error: null,
+          startedAt: 1,
+          completedAt: 2,
+          durationMs: 1000,
+        },
+      },
+    });
+
+    await expect(completed).resolves.toMatchObject({ turn: { id: 'turn-1', status: 'completed' } });
+  });
+
+  it('resolves waiters registered after a fast turn/completed notification', async () => {
+    const transport = new FakeTransport();
+    const client = createCodexAppServerProtocolClient({ transport });
+
+    await client.connect();
+    const turnStart = client.startTurn({
+      threadId: 'thread-1',
+      input: [{ type: 'text', text: 'reply ok' }],
+    });
+    transport.emitFrame({
+      id: 1,
+      result: {
+        turn: {
+          id: 'turn-1',
+          status: 'inProgress',
+          items: [],
+          itemsView: { type: 'complete' },
+          error: null,
+          startedAt: 1,
+          completedAt: null,
+          durationMs: null,
+        },
+      },
+    });
+    transport.emitFrame({
+      method: 'turn/completed',
+      params: {
+        turn: {
+          id: 'turn-1',
+          status: 'completed',
+          items: [],
+          itemsView: { type: 'complete' },
+          error: null,
+          startedAt: 1,
+          completedAt: 2,
+          durationMs: 100,
+        },
+      },
+    });
+
+    await expect(turnStart).resolves.toMatchObject({ turn: { id: 'turn-1' } });
+    await expect(client.waitForTurnCompleted({ threadId: 'thread-1', turnId: 'turn-1' }))
+      .resolves.toMatchObject({ turn: { id: 'turn-1', status: 'completed' } });
+    expect(transport.sent).toEqual([
+      {
+        id: 1,
+        method: 'turn/start',
+        params: {
+          threadId: 'thread-1',
+          input: [{ type: 'text', text: 'reply ok' }],
+        },
+      },
+    ]);
   });
 
   it('rejects waiting for turn completion on timeout and transport close', async () => {

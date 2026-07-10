@@ -270,7 +270,9 @@ function isCodexAppServerFrame(value: unknown): value is CodexAppServerFrame {
   if ('id' in value) {
     if (!isFrameId(value.id)) return false;
     if (value.error === undefined) return true;
-    return isRecord(value.error) && typeof value.error.code === 'string' && typeof value.error.message === 'string';
+    return isRecord(value.error)
+      && (typeof value.error.code === 'string' || typeof value.error.code === 'number')
+      && typeof value.error.message === 'string';
   }
   if ('method' in value) {
     return typeof value.method === 'string';
