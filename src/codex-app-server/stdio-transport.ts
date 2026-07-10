@@ -66,10 +66,12 @@ class StdioCodexAppServerTransport implements CodexAppServerTransport {
     this.#stdoutDecoder = new StringDecoder('utf8');
 
     child.stdout?.on('data', (chunk: Buffer | string) => {
+      if (this.#child !== child) return;
       const text = typeof chunk === 'string' ? chunk : this.#stdoutDecoder.write(chunk);
       this.#readStdoutChunk(text);
     });
     child.stdout?.on('end', () => {
+      if (this.#child !== child) return;
       this.#readStdoutChunk(this.#stdoutDecoder.end());
     });
     child.stderr?.on('data', () => {
@@ -84,6 +86,12 @@ class StdioCodexAppServerTransport implements CodexAppServerTransport {
     child.on('close', () => {
       if (this.#child === child) this.#emitClose();
     });
+    try {
+      await waitForInitialChildReadiness(child);
+    } catch (error) {
+      if (this.#child === child) this.#emitClose();
+      throw error;
+    }
   }
 
   async close(): Promise<void> {
@@ -172,6 +180,42 @@ function defaultSpawnCodexAppServerProcess(
   options: Parameters<SpawnCodexAppServerProcess>[2],
 ): StdioCodexAppServerChildProcess {
   return spawn(command, args, options) as StdioCodexAppServerChildProcess;
+}
+
+function waitForInitialChildReadiness(child: StdioCodexAppServerChildProcess): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const immediate = setImmediate(() => {
+      finish(() => resolve());
+    });
+    const onError = (error: Error) => {
+      finish(() => reject(error));
+    };
+    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+      finish(() => reject(new Error(
+        `Codex App Server process exited before stdio transport connected (code ${code ?? 'null'}, signal ${signal ?? 'null'})`,
+      )));
+    };
+    const onClose = (code: number | null, signal: NodeJS.Signals | null) => {
+      finish(() => reject(new Error(
+        `Codex App Server process closed before stdio transport connected (code ${code ?? 'null'}, signal ${signal ?? 'null'})`,
+      )));
+    };
+
+    child.once('error', onError);
+    child.once('exit', onExit);
+    child.once('close', onClose);
+
+    function finish(callback: () => void): void {
+      if (settled) return;
+      settled = true;
+      clearImmediate(immediate);
+      child.off('error', onError);
+      child.off('exit', onExit);
+      child.off('close', onClose);
+      callback();
+    }
+  });
 }
 
 function writeLine(stream: Writable, line: string): Promise<void> {

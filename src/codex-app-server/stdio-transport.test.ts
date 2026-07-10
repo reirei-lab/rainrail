@@ -169,6 +169,30 @@ describe('stdio Codex App Server transport', () => {
     expect(second.stdin.writes).toEqual(['{"type":"notification","method":"session.ping"}\n']);
   });
 
+  it('ignores stdout flushed by a previous child after reconnecting', async () => {
+    const first = createChildProcessFixture();
+    const second = createChildProcessFixture();
+    const spawnProcess = vi.fn<SpawnCodexAppServerProcess>()
+      .mockReturnValueOnce(first.child)
+      .mockReturnValueOnce(second.child);
+    const transport = createStdioCodexAppServerTransport({ command: 'codex-app-server', spawnProcess });
+    const errors: string[] = [];
+    const frames: CodexAppServerFrame[] = [];
+
+    transport.onError((error) => errors.push(error.message));
+    transport.onFrame((frame) => frames.push(frame));
+    await transport.connect();
+    await transport.close();
+    await transport.connect();
+
+    first.stdout.write('{"type":"notification","method":"stale.output"}\n');
+    first.stdout.write('{"type":"notification","method":"partial"');
+    second.stdout.write('{"type":"notification","method":"session.output"}\n');
+
+    expect(errors).toEqual([]);
+    expect(frames).toEqual([{ type: 'notification', method: 'session.output' }]);
+  });
+
   it('resets partial stdout framing state before reconnecting', async () => {
     const first = createChildProcessFixture();
     const second = createChildProcessFixture();
@@ -189,5 +213,30 @@ describe('stdio Codex App Server transport', () => {
 
     expect(errors).toEqual([]);
     expect(frames).toEqual([{ type: 'notification', method: 'session.output' }]);
+  });
+
+  it('rejects connect when the child emits an initial spawn error', async () => {
+    const { child } = createChildProcessFixture();
+    const spawnProcess = vi.fn<SpawnCodexAppServerProcess>(() => {
+      process.nextTick(() => child.emit('error', new Error('spawn ENOENT')));
+      return child;
+    });
+    const transport = createStdioCodexAppServerTransport({ command: 'missing-codex-app-server', spawnProcess });
+
+    await expect(transport.connect()).rejects.toThrow('spawn ENOENT');
+    await expect(transport.send({ type: 'notification', method: 'session.ping' })).rejects.toThrow(
+      'Codex App Server stdio transport is not connected',
+    );
+  });
+
+  it('rejects connect when the child exits before the initial spawn check completes', async () => {
+    const { child } = createChildProcessFixture();
+    const spawnProcess = vi.fn<SpawnCodexAppServerProcess>(() => {
+      process.nextTick(() => child.emit('exit', 127, null));
+      return child;
+    });
+    const transport = createStdioCodexAppServerTransport({ command: 'codex-app-server', spawnProcess });
+
+    await expect(transport.connect()).rejects.toThrow('exited before stdio transport connected');
   });
 });

@@ -72,6 +72,7 @@ class DefaultCodexAppServerClient implements CodexAppServerClient {
   #errorHandlers: Array<(error: Error) => void> = [];
   #closeHandlers: Array<() => void> = [];
   #unsubscribeTransport: Array<() => void> = [];
+  #connectPromise: Promise<void> | undefined;
 
   constructor(transport: CodexAppServerTransport) {
     this.#transport = transport;
@@ -79,6 +80,18 @@ class DefaultCodexAppServerClient implements CodexAppServerClient {
 
   async connect(): Promise<void> {
     if (this.#connected) return;
+    if (this.#connectPromise !== undefined) {
+      return this.#connectPromise;
+    }
+    this.#connectPromise = this.#connectTransport();
+    try {
+      await this.#connectPromise;
+    } finally {
+      this.#connectPromise = undefined;
+    }
+  }
+
+  async #connectTransport(): Promise<void> {
     const unsubscribeTransport = [
       this.#transport.onFrame((frame) => this.#handleFrame(frame)),
       this.#transport.onError((error) => this.#handleError(error)),

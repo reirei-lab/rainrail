@@ -129,6 +129,31 @@ describe('Codex App Server protocol client', () => {
     expect(notifications).toEqual([{ type: 'notification', method: 'session.output' }]);
   });
 
+  it('shares an in-flight connect so concurrent callers do not duplicate subscriptions', async () => {
+    const transport = new FakeTransport();
+    let resolveConnect: (() => void) | undefined;
+    transport.connect.mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => {
+        resolveConnect = resolve;
+      });
+    });
+    const client = createCodexAppServerClient({ transport });
+    const notifications: CodexAppServerFrame[] = [];
+
+    client.onNotification((frame) => {
+      notifications.push(frame);
+    });
+    const firstConnect = client.connect();
+    const secondConnect = client.connect();
+
+    expect(transport.connect).toHaveBeenCalledOnce();
+    resolveConnect?.();
+    await Promise.all([firstConnect, secondConnect]);
+    transport.emitFrame({ type: 'notification', method: 'session.output' });
+
+    expect(notifications).toEqual([{ type: 'notification', method: 'session.output' }]);
+  });
+
   it('rejects the matching request when a protocol error response arrives', async () => {
     const transport = new FakeTransport();
     const client = createCodexAppServerClient({ transport });
