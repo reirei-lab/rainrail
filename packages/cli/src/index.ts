@@ -1531,7 +1531,7 @@ function runCodexAppServerSetupCommand(
   environment: RainrailCliEnvironment,
 ): RainrailCliResult {
   if (!options.yes) {
-    const nextAction = 'rainrail plugin codex-app-server setup --yes';
+    const nextAction = formatCodexAppServerSetupNextAction(options);
     if (options.json) {
       return {
         exitCode: 0,
@@ -1747,9 +1747,16 @@ function writeCodexAppServerRuntimeConfig(
 ): void {
   const fileSystem = getRainrailCliFileSystem(environment);
   const raw = fileSystem.readFileSync(configPath, 'utf8');
-  const runtimeProviders = readRawRuntimeProvidersObject(raw) ?? {};
-  const previous = isJsonRecord(runtimeProviders[codexAppServerRuntimeProviderKey])
-    ? runtimeProviders[codexAppServerRuntimeProviderKey]
+  const rawRuntimeProviders = readRawRuntimeProvidersObject(raw);
+  if (rawRuntimeProviders === undefined && hasRuntimeProvidersProperty(raw)) {
+    throw new Error(
+      'config.runtimeProviders must be a JSON object without unresolved env fragments before codex-app-server setup can update it',
+    );
+  }
+  const runtimeProviders = rawRuntimeProviders ?? {};
+  const providerKey = findCodexAppServerRuntimeProviderKey(runtimeProviders) ?? codexAppServerRuntimeProviderKey;
+  const previous = isJsonRecord(runtimeProviders[providerKey])
+    ? runtimeProviders[providerKey]
     : {};
   const env = environment.env ?? process.env;
   const nextProvider: Record<string, unknown> = {
@@ -1769,7 +1776,7 @@ function writeCodexAppServerRuntimeConfig(
   if (codexHome !== undefined) {
     nextProvider.codexHome = codexHome;
   }
-  runtimeProviders[codexAppServerRuntimeProviderKey] = nextProvider;
+  runtimeProviders[providerKey] = nextProvider;
   fileSystem.writeFileSync(configPath, formatConfigWithRuntimeProviders(raw, runtimeProviders), { flag: 'w' });
 }
 
@@ -1780,11 +1787,12 @@ function readCodexAppServerRuntimeConfig(
   const fileSystem = getRainrailCliFileSystem(environment);
   try {
     const rawConfig = fileSystem.readFileSync(configPath, 'utf8');
-    const runtimeProviders = readRawRuntimeProvidersObject(rawConfig);
+    const runtimeProviders = readExpandedRuntimeProvidersObject(rawConfig, environment.env ?? process.env);
     if (runtimeProviders === undefined) {
       return { error: 'config.runtimeProviders.codexAppServer is not configured' };
     }
-    const rawProvider = runtimeProviders[codexAppServerRuntimeProviderKey];
+    const providerKey = findCodexAppServerRuntimeProviderKey(runtimeProviders) ?? codexAppServerRuntimeProviderKey;
+    const rawProvider = runtimeProviders[providerKey];
     if (!isJsonRecord(rawProvider)) {
       return { error: 'config.runtimeProviders.codexAppServer is not configured' };
     }
@@ -1792,6 +1800,37 @@ function readCodexAppServerRuntimeConfig(
   } catch (error) {
     return { error: error instanceof Error ? error.message : String(error) };
   }
+}
+
+function readExpandedRuntimeProvidersObject(
+  raw: string,
+  env: Record<string, string | undefined>,
+): Record<string, unknown> | undefined {
+  try {
+    const value = JSON.parse(expandConfigEnv(raw, env)) as unknown;
+    return isJsonRecord(value) && isJsonRecord(value.runtimeProviders) ? value.runtimeProviders : undefined;
+  } catch {
+    const objectStart = findRuntimeProvidersObjectStart(raw);
+    if (objectStart === undefined) {
+      return undefined;
+    }
+    const objectEnd = findJsonObjectEnd(raw, objectStart);
+    if (objectEnd === undefined) {
+      return undefined;
+    }
+    try {
+      const value = JSON.parse(expandConfigEnv(raw.slice(objectStart, objectEnd + 1), env)) as unknown;
+      return isJsonRecord(value) ? value : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+}
+
+function findCodexAppServerRuntimeProviderKey(runtimeProviders: Record<string, unknown>): string | undefined {
+  return Object.entries(runtimeProviders).find(([, provider]) =>
+    isJsonRecord(provider) && provider.runtime === codexAppServerRuntimeId
+  )?.[0];
 }
 
 function readRawRuntimeProvidersObject(raw: string): Record<string, unknown> | undefined {
@@ -2009,6 +2048,7 @@ function getCommandRunner(environment: RainrailCliEnvironment): CommandRunner {
       spawnSync(commandName, args, {
         cwd: commandOptions.cwd,
         encoding: 'utf8',
+        env: commandOptions.env,
         stdio: commandOptions.stdio,
       }));
 }
@@ -4880,10 +4920,19 @@ function insertTopLevelRuntimeProviders(raw: string, runtimeProviders: Record<st
   if (objectStart < 0) {
     throw new Error('config must be an object');
   }
+  const objectEnd = raw.lastIndexOf('}');
+  if (objectEnd < objectStart) {
+    throw new Error('config must be an object');
+  }
   const afterStart = raw.slice(objectStart + 1);
   const newline = afterStart.startsWith('\r\n') ? '\r\n' : afterStart.startsWith('\n') ? '\n' : '';
-  const rest = newline.length === 0 ? afterStart : afterStart.slice(newline.length);
+  const body = raw.slice(objectStart + 1, objectEnd);
+  const hasExistingProperties = body.trim().length > 0;
   const property = `"runtimeProviders": ${JSON.stringify(runtimeProviders, null, 2).replaceAll('\n', `${newline}  `)}`;
+  if (!hasExistingProperties) {
+    return `${raw.slice(0, objectStart + 1)}${newline}  ${property}${newline}${raw.slice(objectEnd)}`;
+  }
+  const rest = newline.length === 0 ? afterStart : afterStart.slice(newline.length);
   return `${raw.slice(0, objectStart + 1)}${newline}  ${property},${newline}${rest}`;
 }
 
@@ -5209,6 +5258,17 @@ function formatSetupNextAction(
     ...formatForwardedTargetOptions(options),
     'setup',
     ...(includePluginArguments ? plugins.map((plugin) => plugin.alias) : []),
+    '--yes',
+  ].map(shellQuoteArgument).join(' ');
+}
+
+function formatCodexAppServerSetupNextAction(options: Pick<SharedOptions, 'config' | 'profile'>): string {
+  return [
+    'rainrail',
+    ...formatForwardedTargetOptions(options),
+    'plugin',
+    'codex-app-server',
+    'setup',
     '--yes',
   ].map(shellQuoteArgument).join(' ');
 }
