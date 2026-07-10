@@ -24,6 +24,7 @@ export * from './manual-chat.js';
 export * from './mention-draft.js';
 export * from './node-server.js';
 export * from './codex-activity.js';
+export * from './codex-app-server/index.js';
 export * from './operational-runner.js';
 export * from './operational-store.js';
 export * from './plugin-loader.js';

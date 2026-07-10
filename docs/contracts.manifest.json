@@ -286,6 +286,56 @@
       }
     },
     {
+      "id": "codex-app-server-client-transport",
+      "title": "Codex App Server client transport boundary",
+      "sources": [
+        "src/codex-app-server/index.ts"
+      ],
+      "docs": [
+        "docs/plugin-runtime-contract.md"
+      ],
+      "tests": [
+        "src/codex-app-server/client.test.ts",
+        "src/codex-app-server/stdio-transport.test.ts"
+      ],
+      "publicExports": [
+        "CodexAppServerFrameId",
+        "CodexAppServerRequestFrame",
+        "CodexAppServerResponseError",
+        "CodexAppServerResponseFrame",
+        "CodexAppServerNotificationFrame",
+        "CodexAppServerFrame",
+        "CodexAppServerTransport",
+        "CodexAppServerClient",
+        "CodexAppServerClientOptions",
+        "createCodexAppServerClient",
+        "CodexAppServerProtocolError",
+        "StdioCodexAppServerTransportOptions",
+        "SpawnCodexAppServerProcess",
+        "StdioCodexAppServerChildProcess",
+        "createStdioCodexAppServerTransport",
+        "WebSocketCodexAppServerTransportConfig"
+      ],
+      "publicExportKinds": {
+        "CodexAppServerFrameId": "type",
+        "CodexAppServerRequestFrame": "type",
+        "CodexAppServerResponseError": "type",
+        "CodexAppServerResponseFrame": "type",
+        "CodexAppServerNotificationFrame": "type",
+        "CodexAppServerFrame": "type",
+        "CodexAppServerTransport": "type",
+        "CodexAppServerClient": "type",
+        "CodexAppServerClientOptions": "type",
+        "createCodexAppServerClient": "value",
+        "CodexAppServerProtocolError": "value",
+        "StdioCodexAppServerTransportOptions": "type",
+        "SpawnCodexAppServerProcess": "type",
+        "StdioCodexAppServerChildProcess": "type",
+        "createStdioCodexAppServerTransport": "value",
+        "WebSocketCodexAppServerTransportConfig": "type"
+      }
+    },
+    {
       "id": "event-delivery",
       "title": "Core event delivery",
       "sources": [
