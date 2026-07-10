@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.5.0](https://github.com/reirei-lab/rainrail/compare/release/0.4.1...release/0.5.0) (2026-07-10)
+
+
+### Features
+
+* add dashboard card layout API ([#291](https://github.com/reirei-lab/rainrail/issues/291)) ([26ebaf6](https://github.com/reirei-lab/rainrail/commit/26ebaf6a42ca29d602cc1416c090a656709f1d4d))
+* add dashboard card registry contract ([#290](https://github.com/reirei-lab/rainrail/issues/290)) ([a2ab5c3](https://github.com/reirei-lab/rainrail/commit/a2ab5c38a37627152c7eb6905502c0c569c1bdec))
+* add dashboard card settings bridge ([#297](https://github.com/reirei-lab/rainrail/issues/297)) ([fd40962](https://github.com/reirei-lab/rainrail/commit/fd4096278571a2fe05ff9efb6d0ad0728b3b0bc8))
+* add dashboard demo sqlite seed ([#289](https://github.com/reirei-lab/rainrail/issues/289)) ([9ac2789](https://github.com/reirei-lab/rainrail/commit/9ac278996eddf61be92e5ebf9bc2772a18163603))
+* add dashboard plugin card manifest sandbox ([#295](https://github.com/reirei-lab/rainrail/issues/295)) ([cf16978](https://github.com/reirei-lab/rainrail/commit/cf169782109e842c61bfba1e0122dfbbf9d30b15))
+* add dispatch CLI skeleton ([#264](https://github.com/reirei-lab/rainrail/issues/264)) ([d1b4e70](https://github.com/reirei-lab/rainrail/commit/d1b4e700f69102b857e23ea6a4a261db8ccb0646))
+* add editable dashboard card layout ([#298](https://github.com/reirei-lab/rainrail/issues/298)) ([bf31727](https://github.com/reirei-lab/rainrail/commit/bf31727cd94b6e70b38ca080dd8d081fb95aed99))
+* add seeded dashboard demo mode ([#294](https://github.com/reirei-lab/rainrail/issues/294)) ([19b88ed](https://github.com/reirei-lab/rainrail/commit/19b88edc1bc407449ebf77350ce2cf29be992dca))
+* add SQLite operational store ([#276](https://github.com/reirei-lab/rainrail/issues/276)) ([5813e02](https://github.com/reirei-lab/rainrail/commit/5813e02b970e907b1639e344c7cb98879a3583f8))
+* dispatch CLI messages as Rainrail events ([#266](https://github.com/reirei-lab/rainrail/issues/266)) ([4556206](https://github.com/reirei-lab/rainrail/commit/4556206a9907493e96914200726f740e1e135b05))
+* dispatch JSON event envelopes from CLI ([#267](https://github.com/reirei-lab/rainrail/issues/267)) ([fabd79e](https://github.com/reirei-lab/rainrail/commit/fabd79e4868cd356317c2db8ae78bca957bb14e5))
+* wire local sqlite operational store config ([#288](https://github.com/reirei-lab/rainrail/issues/288)) ([8523df4](https://github.com/reirei-lab/rainrail/commit/8523df4cd02c40a1ef4d0661b41feb6f3bbd6ca0))
+* wire standalone rainrail dispatch ([#279](https://github.com/reirei-lab/rainrail/issues/279)) ([dc96d67](https://github.com/reirei-lab/rainrail/commit/dc96d673392fb7804cc5835e1b9d77628d72aa3a))
+
 ## [0.4.1](https://github.com/reirei-lab/rainrail/compare/release/0.4.0...release/0.4.1) (2026-07-08)
 
 
