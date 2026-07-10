@@ -229,6 +229,7 @@ describe('Rainrail CLI built-in commands', () => {
     expect(result.stdout).toContain('  github');
     expect(result.stdout).toContain('  cloudflare');
     expect(result.stdout).toContain('  openclaw');
+    expect(result.stdout).toContain('  codex-app-server');
   });
 
   it('prints dispatch command help', () => {
@@ -5309,10 +5310,12 @@ describe('Rainrail CLI built-in commands', () => {
       'github',
       'cloudflare',
       'openclaw',
+      'codex-app-server',
     ]);
     expect(getOfficialPluginByAlias('gh')?.alias).toBe('github');
     expect(getOfficialPluginByAlias('cf')?.alias).toBe('cloudflare');
     expect(getOfficialPluginByAlias('oc')?.alias).toBe('openclaw');
+    expect(getOfficialPluginByAlias('cas')?.alias).toBe('codex-app-server');
     expect(getOfficialPluginByAlias('__proto__')).toBeUndefined();
   });
 
@@ -5337,6 +5340,24 @@ describe('Rainrail CLI built-in commands', () => {
     expect(result.stderr).toBe('');
     expect(result.stdout).toContain('Usage: rainrail github webhook add <owner/repo>');
     expect(result.stdout).toContain('Register a GitHub webhook endpoint for a repository.');
+  });
+
+  it('prints Codex App Server help from official plugin metadata', () => {
+    const help = runRainrailCli(['codex-app-server', 'help']);
+    const sessionHelp = runRainrailCli(['cas', 'session', 'test', 'help']);
+
+    expect(help.exitCode).toBe(0);
+    expect(help.stderr).toBe('');
+    expect(help.stdout).toContain('Usage: rainrail codex-app-server <command>');
+    expect(help.stdout).toContain('Codex App Server official plugin');
+    expect(help.stdout).toContain('Aliases: codex-app-server, cas');
+    expect(help.stdout).toContain('  setup');
+    expect(help.stdout).toContain('  doctor');
+    expect(help.stdout).toContain('  session test');
+    expect(sessionHelp.exitCode).toBe(0);
+    expect(sessionHelp.stderr).toBe('');
+    expect(sessionHelp.stdout).toContain('Usage: rainrail codex-app-server session test [options]');
+    expect(sessionHelp.stdout).toContain('Run a non-destructive Codex App Server session connectivity check.');
   });
 
   it('prints canonical plugin command help from canonical plugin routing', () => {
@@ -5511,6 +5532,7 @@ describe('Rainrail CLI built-in commands', () => {
       expect(result.stdout).toContain('  github');
       expect(result.stdout).toContain('  cloudflare');
       expect(result.stdout).toContain('  openclaw');
+      expect(result.stdout).toContain('  codex-app-server');
       expect(result.stdout).toContain('Run `rainrail setup --yes` to install and set up all official plugins.');
       await expect(readFile(join(projectRoot, 'rainrail.lock'), 'utf8')).resolves.toContain(
         '"plugins": []',
@@ -5530,6 +5552,7 @@ describe('Rainrail CLI built-in commands', () => {
       expect(result.stdout).toContain('  github');
       expect(result.stdout).not.toContain('  cloudflare');
       expect(result.stdout).not.toContain('  openclaw');
+      expect(result.stdout).not.toContain('  codex-app-server');
       expect(result.stdout).toContain('Run `rainrail setup github --yes` to install and set up selected official plugins.');
     });
   });
@@ -5583,6 +5606,8 @@ describe('Rainrail CLI built-in commands', () => {
       expect(result.stdout).toContain('plugin cloudflare setup --yes complete');
       expect(result.stdout).toContain('Added official plugin openclaw@0.1.0');
       expect(result.stdout).toContain('plugin openclaw setup --yes complete');
+      expect(result.stdout).toContain('Added official plugin codex-app-server@0.1.0');
+      expect(result.stdout).toContain('plugin codex-app-server setup --yes complete');
       expect(calls).toEqual([
         {
           command: '/opt/rainrail/bin/rainrail',
@@ -5599,8 +5624,14 @@ describe('Rainrail CLI built-in commands', () => {
           args: ['plugin', 'openclaw', 'setup', '--yes'],
           options: { stdio: 'pipe', cwd: projectRoot },
         },
+        {
+          command: '/opt/rainrail/bin/rainrail',
+          args: ['plugin', 'codex-app-server', 'setup', '--yes'],
+          options: { stdio: 'pipe', cwd: projectRoot },
+        },
       ]);
       const lockfile = await readFile(join(projectRoot, 'rainrail.lock'), 'utf8');
+      expect(lockfile).toContain('"name": "codex-app-server"');
       expect(lockfile).toContain('"name": "cloudflare"');
       expect(lockfile).toContain('"name": "github"');
       expect(lockfile).toContain('"name": "openclaw"');
@@ -6100,7 +6131,7 @@ describe('Rainrail CLI built-in commands', () => {
       const projectRoot = await initRainrailProject(directory, 'my-agent-ops');
       const calls: Array<{ args: readonly string[] }> = [];
 
-      const result = runRainrailCli(['--yes', 'setup', 'gh', 'oc'], {
+      const result = runRainrailCli(['--yes', 'setup', 'gh', 'cas'], {
         cwd: projectRoot,
         currentBinPath: '/opt/rainrail/bin/rainrail',
         commandRunner: (_command, args) => {
@@ -6112,12 +6143,13 @@ describe('Rainrail CLI built-in commands', () => {
       expect(result.exitCode).toBe(0);
       expect(calls.map((call) => call.args)).toEqual([
         ['plugin', 'github', 'setup', '--yes'],
-        ['plugin', 'openclaw', 'setup', '--yes'],
+        ['plugin', 'codex-app-server', 'setup', '--yes'],
       ]);
       const lockfile = await readFile(join(projectRoot, 'rainrail.lock'), 'utf8');
+      expect(lockfile).toContain('"name": "codex-app-server"');
       expect(lockfile).toContain('"name": "github"');
       expect(lockfile).not.toContain('"name": "cloudflare"');
-      expect(lockfile).toContain('"name": "openclaw"');
+      expect(lockfile).not.toContain('"name": "openclaw"');
     });
   });
 
@@ -7252,9 +7284,9 @@ describe('Rainrail CLI built-in commands', () => {
     await withTempDirectory(async (directory) => {
       const projectRoot = await initRainrailProject(directory, 'my-agent-ops');
 
-      expect(runRainrailCli(['plugins', 'add', 'github'], { cwd: projectRoot })).toEqual({
+      expect(runRainrailCli(['plugins', 'add', 'codex-app-server'], { cwd: projectRoot })).toEqual({
         exitCode: 0,
-        stdout: 'Added official plugin github@0.1.0\n',
+        stdout: 'Added official plugin codex-app-server@0.1.0\n',
         stderr: '',
       });
 
@@ -7264,38 +7296,38 @@ describe('Rainrail CLI built-in commands', () => {
           project: { name: 'my-agent-ops' },
           plugins: [
             {
-              name: 'github',
+              name: 'codex-app-server',
               version: '0.1.0',
-              resolvedSource: 'official:github@0.1.0',
+              resolvedSource: 'official:codex-app-server@0.1.0',
             },
           ],
         }, null, 2)}\n`,
       );
       await expect(
-        readFile(join(projectRoot, '.rainrail', 'plugins', 'github', 'plugin.json'), 'utf8'),
+        readFile(join(projectRoot, '.rainrail', 'plugins', 'codex-app-server', 'plugin.json'), 'utf8'),
       ).resolves.toBe(
         `${JSON.stringify({
-          name: 'github',
+          name: 'codex-app-server',
           version: '0.1.0',
-          resolvedSource: 'official:github@0.1.0',
+          resolvedSource: 'official:codex-app-server@0.1.0',
         }, null, 2)}\n`,
       );
 
       expect(runRainrailCli(['plugins', 'list'], { cwd: join(projectRoot, '.rainrail') })).toEqual({
         exitCode: 0,
-        stdout: 'github@0.1.0 official:github@0.1.0\n',
+        stdout: 'codex-app-server@0.1.0 official:codex-app-server@0.1.0\n',
         stderr: '',
       });
 
-      expect(runRainrailCli(['plugins', 'remove', 'github'], { cwd: projectRoot })).toEqual({
+      expect(runRainrailCli(['plugins', 'remove', 'codex-app-server'], { cwd: projectRoot })).toEqual({
         exitCode: 0,
-        stdout: 'Removed official plugin github\n',
+        stdout: 'Removed official plugin codex-app-server\n',
         stderr: '',
       });
       await expect(readFile(join(projectRoot, 'rainrail.lock'), 'utf8')).resolves.toContain(
         '"plugins": []',
       );
-      await expect(stat(join(projectRoot, '.rainrail', 'plugins', 'github'))).rejects.toThrow();
+      await expect(stat(join(projectRoot, '.rainrail', 'plugins', 'codex-app-server'))).rejects.toThrow();
     });
   });
 
