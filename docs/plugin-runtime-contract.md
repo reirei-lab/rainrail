@@ -71,7 +71,8 @@ transport error として通知し、後続の valid frame は処理を続ける
 runtime provider から直接 protocol method 名や event shape を扱わないよう、
 `createCodexAppServerProtocolClient` は `CodexAppServerProtocolClientOptions` から
 `CodexAppServerProtocolClient` を作り、`initialize`、`thread/start`、`turn/start` の
-最小 wrapper と `turn/completed` 待機、`item/agentMessage/delta` 購読を公開する。
+最小 wrapper と server-initiated request handler、`turn/completed` 待機、
+`item/agentMessage/delta` 購読を公開する。
 wrapper の型は `CodexAppServerClientInfo`、`CodexAppServerInitializeParams`、
 `CodexAppServerInitializeResponse`、`CodexAppServerThreadStartParams`、
 `CodexAppServerThreadSummary`、`CodexAppServerThreadStartResponse`、
@@ -88,10 +89,13 @@ completion cache は race 回避用の短期 cache として上限を持ち、da
 使い回されても turn summary を無期限には保持しない。request timeout は低レベル request を
 abort して pending state を掃除する。transport parse error などの非致命的な `onError` は
 監視用通知として扱い、turn completion 待機は timeout と transport close のみで reject する。
-`onAssistantDelta` と `onTurnCompleted` handler の例外は observer failure として隔離し、
+server-initiated request は protocol wrapper の `onRequest()` からも扱えるようにし、
+承認や MCP elicitation を含む turn を caller が継続できるようにする。`undefined` handler result は
+JSON-RPC response の `result` field が落ちないよう `null` に正規化する。`onAssistantDelta` と
+`onTurnCompleted` handler の例外は observer failure として隔離し、
 受信済み stream event や completion の waiter 解決を妨げない。実 Codex CLI との非破壊 smoke は
 `RAINRAIL_CODEX_APP_SERVER_SMOKE=1` のときだけ `src/codex-app-server/smoke.test.ts` で
-ephemeral thread / `readOnly` sandbox として実行する。
+ephemeral thread / `read-only` sandbox として実行する。
 
 LAN remote 用の境界は `WebSocketCodexAppServerTransportConfig` で先に固定する。
 現時点では `type: "websocket"`、`endpoint`、任意の `headers`、`tokenEnv`、

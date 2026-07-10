@@ -33,7 +33,7 @@ describe.skipIf(!runSmoke)('Codex App Server smoke', () => {
         cwd,
         ephemeral: true,
         approvalPolicy: 'never',
-        sandbox: 'readOnly',
+        sandbox: 'read-only',
       });
       expect(thread.thread.id).toEqual(expect.any(String));
 

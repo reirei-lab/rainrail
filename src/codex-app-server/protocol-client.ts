@@ -3,6 +3,7 @@ import {
   type CodexAppServerClient,
   type CodexAppServerClientOptions,
   type CodexAppServerNotificationFrame,
+  type CodexAppServerRequestFrame,
 } from './client.js';
 
 export interface CodexAppServerProtocolClientOptions extends CodexAppServerClientOptions {
@@ -135,6 +136,7 @@ export interface CodexAppServerProtocolClient {
   startThread(params?: CodexAppServerThreadStartParams): Promise<CodexAppServerThreadStartResponse>;
   startTurn(params: CodexAppServerTurnStartParams): Promise<CodexAppServerTurnStartResponse>;
   waitForTurnCompleted(target: CodexAppServerTurnWaitTarget): Promise<CodexAppServerTurnCompletedEvent>;
+  onRequest(handler: (frame: CodexAppServerRequestFrame) => unknown | Promise<unknown>): () => void;
   onAssistantDelta(handler: (event: CodexAppServerAssistantDeltaEvent) => void): () => void;
   onTurnCompleted(handler: (event: CodexAppServerTurnCompletedEvent) => void): () => void;
 }
@@ -214,6 +216,10 @@ class DefaultCodexAppServerProtocolClient implements CodexAppServerProtocolClien
     });
     pendingPromise.catch(() => undefined);
     return pendingPromise;
+  }
+
+  onRequest(handler: (frame: CodexAppServerRequestFrame) => unknown | Promise<unknown>): () => void {
+    return this.#client.onRequest(handler);
   }
 
   onAssistantDelta(handler: (event: CodexAppServerAssistantDeltaEvent) => void): () => void {

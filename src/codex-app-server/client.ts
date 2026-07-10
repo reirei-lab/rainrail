@@ -238,7 +238,7 @@ class DefaultCodexAppServerClient implements CodexAppServerClient {
 
     try {
       const result = await handler(frame);
-      await this.#sendResponse({ id: frame.id, result });
+      await this.#sendResponse({ id: frame.id, result: result ?? null });
     } catch (error) {
       await this.#sendResponse({
         id: frame.id,

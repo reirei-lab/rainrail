@@ -304,6 +304,28 @@ describe('Codex App Server protocol client', () => {
     ]);
   });
 
+  it('normalizes undefined server request handler results to JSON-RPC null results', async () => {
+    const transport = new FakeTransport();
+    const client = createCodexAppServerClient({ transport });
+
+    client.onRequest(() => undefined);
+
+    await client.connect();
+    transport.emitFrame({
+      id: 99,
+      method: 'command/exec/approval',
+      params: { approvalId: 'approval-1' },
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(transport.sent).toEqual([
+      {
+        id: 99,
+        result: null,
+      },
+    ]);
+  });
+
   it('removes pending requests when their AbortSignal fires', async () => {
     const transport = new FakeTransport();
     const client = createCodexAppServerClient({ transport });

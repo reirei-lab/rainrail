@@ -171,6 +171,39 @@ describe('Codex App Server protocol wrapper', () => {
     expect(transport.sent).toContainEqual({ method: 'initialized' });
   });
 
+  it('exposes server request handlers through the protocol wrapper', async () => {
+    const transport = new FakeTransport();
+    const client = createCodexAppServerProtocolClient({ transport });
+    const handledRequests: CodexAppServerFrame[] = [];
+
+    client.onRequest((frame) => {
+      handledRequests.push(frame);
+      return { decision: 'approved' };
+    });
+
+    await client.connect();
+    transport.emitFrame({
+      id: 99,
+      method: 'command/exec/approval',
+      params: { approvalId: 'approval-1' },
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(handledRequests).toEqual([
+      {
+        id: 99,
+        method: 'command/exec/approval',
+        params: { approvalId: 'approval-1' },
+      },
+    ]);
+    expect(transport.sent).toEqual([
+      {
+        id: 99,
+        result: { decision: 'approved' },
+      },
+    ]);
+  });
+
   it('collects assistant deltas and resolves when the matching turn completes', async () => {
     const transport = new FakeTransport();
     const client = createCodexAppServerProtocolClient({ transport });
