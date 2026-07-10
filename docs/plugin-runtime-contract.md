@@ -40,13 +40,19 @@ PR lifecycle / routing / GitHub helper の部分的な公開 export inventory �
 Codex App Server protocol client は protocol parsing と transport implementation を分ける。
 `CodexAppServerTransport` は `connect()`、`close()`、`send(frame)`、
 `onFrame()`、`onError()`、`onClose()` だけを持つ小さい境界で、client は
-`CodexAppServerFrame` の request/response/notification をこの境界越しに扱う。
+`CodexAppServerFrame` の request/response/notification をこの境界越しに扱う。wire
+format は `codex app-server generate-ts` の `ClientRequest` / `ServerNotification` と
+実 stdio probe に合わせ、request は `id` と `method`、response は `id` と
+`result` または `error`、notification は `method` と任意の `params` を持つ JSON line とする。
 `createCodexAppServerClient` は `CodexAppServerClientOptions` の injected transport だけに
 依存し、`CodexAppServerClient` として `request()`、`notify()`、
-`onNotification()` を公開する。request id は client が割り当て、
+`onRequest()`、`onNotification()` を公開する。request id は client が割り当て、
 `CodexAppServerResponseError` を含む response は `CodexAppServerProtocolError` として
-該当 request だけを reject する。transport close は pending request をまとめて reject
-し、notification は request/response matching から独立して handler へ渡す。
+該当 request だけを reject する。JSON-RPC error code は string と number の両方を受ける。
+server-initiated request は登録済み `onRequest()` handler が result response を返せるようにし、
+handler がない場合だけ JSON-RPC `-32601` response を返して server を待機させない。handler 例外は
+JSON-RPC `-32603` response に変換する。transport close は pending request をまとめて reject し、
+notification は request/response matching から独立して handler へ渡す。
 
 protocol frame 型は `CodexAppServerFrameId`、`CodexAppServerRequestFrame`、
 `CodexAppServerResponseFrame`、`CodexAppServerNotificationFrame`、
@@ -61,6 +67,38 @@ transport error として通知し、後続の valid frame は処理を続ける
 `close()` は child process に終了シグナルを送り、stdio drain 後の child `close` event を
 待ってから transport close を通知する。child `exit` event だけでは stdout/stderr drain が
 完了したとは扱わない。
+
+runtime provider から直接 protocol method 名や event shape を扱わないよう、
+`createCodexAppServerProtocolClient` は `CodexAppServerProtocolClientOptions` から
+`CodexAppServerProtocolClient` を作り、`initialize`、`thread/start`、`turn/start` の
+最小 wrapper と server-initiated request handler、`turn/completed` 待機、
+`item/agentMessage/delta` 購読を公開する。
+wrapper の型は `CodexAppServerClientInfo`、`CodexAppServerInitializeParams`、
+`CodexAppServerInitializeResponse`、`CodexAppServerThreadStartParams`、
+`CodexAppServerThreadSummary`、`CodexAppServerThreadStartResponse`、
+`CodexAppServerTextInput`、`CodexAppServerTurnInput`、
+`CodexAppServerTurnStartParams`、`CodexAppServerTurnSummary`、
+`CodexAppServerTurnStartResponse`、`CodexAppServerTurnWaitTarget`、
+`CodexAppServerTurnCompletedEvent`、`CodexAppServerAssistantDeltaEvent` などの固定された
+最小型とし、生成 protocol 全体は vendoring しない。`initialize` 成功後は client から
+`initialized` notification を送って handshake を完了する。`initialize` response の `codexHome` は
+公式 App Server の必須 field ではないため optional として扱う。`initialize` params の
+`clientInfo.title` と `capabilities` も wire schema の必須 field ではないため optional とする。
+`turn/completed` は公式 payload の
+`{ turn }` を受けられるよう `threadId` を必須にせず、完了通知が `startTurn()` resolve 前に
+届いても後続の `waitForTurnCompleted()` が拾えるよう turn id で直近完了を cache する。
+completion cache は race 回避用の短期 cache として上限を持ち、daemon/provider が長時間
+使い回されても turn summary を無期限には保持しない。request timeout は低レベル request を
+abort して pending state を掃除する。transport parse error などの非致命的な `onError` は
+監視用通知として扱い、turn completion 待機は timeout と transport close のみで reject する。
+server-initiated request は protocol wrapper の `onRequest()` からも扱えるようにし、
+承認や MCP elicitation を含む turn を caller が継続できるようにする。`undefined` handler result は
+JSON-RPC response の `result` field が落ちないよう `null` に正規化する。`onAssistantDelta` と
+`onTurnCompleted` handler の例外は observer failure として隔離し、
+受信済み stream event や completion の waiter 解決を妨げない。実 Codex CLI との非破壊 smoke は
+`RAINRAIL_CODEX_APP_SERVER_SMOKE=1` のときだけ `src/codex-app-server/smoke.test.ts` で
+ephemeral thread / `readOnly` sandbox として実行し、古い app-server が camelCase sandbox shorthand を
+拒否した場合だけ legacy `read-only` に再試行する。
 
 LAN remote 用の境界は `WebSocketCodexAppServerTransportConfig` で先に固定する。
 現時点では `type: "websocket"`、`endpoint`、任意の `headers`、`tokenEnv`、

@@ -290,6 +290,7 @@
       "title": "Codex App Server client transport boundary",
       "sources": [
         "src/codex-app-server/client.ts",
+        "src/codex-app-server/protocol-client.ts",
         "src/codex-app-server/stdio-transport.ts",
         "src/codex-app-server/websocket-transport.ts"
       ],
@@ -298,6 +299,8 @@
       ],
       "tests": [
         "src/codex-app-server/client.test.ts",
+        "src/codex-app-server/protocol-client.test.ts",
+        "src/codex-app-server/smoke.test.ts",
         "src/codex-app-server/stdio-transport.test.ts"
       ],
       "publicExports": [
@@ -316,7 +319,24 @@
         "SpawnCodexAppServerProcess",
         "StdioCodexAppServerChildProcess",
         "createStdioCodexAppServerTransport",
-        "WebSocketCodexAppServerTransportConfig"
+        "WebSocketCodexAppServerTransportConfig",
+        "CodexAppServerProtocolClientOptions",
+        "CodexAppServerClientInfo",
+        "CodexAppServerInitializeParams",
+        "CodexAppServerInitializeResponse",
+        "CodexAppServerThreadStartParams",
+        "CodexAppServerThreadSummary",
+        "CodexAppServerThreadStartResponse",
+        "CodexAppServerTextInput",
+        "CodexAppServerTurnInput",
+        "CodexAppServerTurnStartParams",
+        "CodexAppServerTurnSummary",
+        "CodexAppServerTurnStartResponse",
+        "CodexAppServerAssistantDeltaEvent",
+        "CodexAppServerTurnCompletedEvent",
+        "CodexAppServerTurnWaitTarget",
+        "CodexAppServerProtocolClient",
+        "createCodexAppServerProtocolClient"
       ],
       "publicExportKinds": {
         "CodexAppServerFrameId": "type",
@@ -334,7 +354,24 @@
         "SpawnCodexAppServerProcess": "type",
         "StdioCodexAppServerChildProcess": "type",
         "createStdioCodexAppServerTransport": "value",
-        "WebSocketCodexAppServerTransportConfig": "type"
+        "WebSocketCodexAppServerTransportConfig": "type",
+        "CodexAppServerProtocolClientOptions": "type",
+        "CodexAppServerClientInfo": "type",
+        "CodexAppServerInitializeParams": "type",
+        "CodexAppServerInitializeResponse": "type",
+        "CodexAppServerThreadStartParams": "type",
+        "CodexAppServerThreadSummary": "type",
+        "CodexAppServerThreadStartResponse": "type",
+        "CodexAppServerTextInput": "type",
+        "CodexAppServerTurnInput": "type",
+        "CodexAppServerTurnStartParams": "type",
+        "CodexAppServerTurnSummary": "type",
+        "CodexAppServerTurnStartResponse": "type",
+        "CodexAppServerAssistantDeltaEvent": "type",
+        "CodexAppServerTurnCompletedEvent": "type",
+        "CodexAppServerTurnWaitTarget": "type",
+        "CodexAppServerProtocolClient": "type",
+        "createCodexAppServerProtocolClient": "value"
       }
     },
     {

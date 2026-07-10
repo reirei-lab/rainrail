@@ -1,27 +1,24 @@
 export type CodexAppServerFrameId = string | number;
 
 export interface CodexAppServerRequestFrame {
-  type: 'request';
   id: CodexAppServerFrameId;
   method: string;
   params?: unknown;
 }
 
 export interface CodexAppServerResponseError {
-  code: string;
+  code: string | number;
   message: string;
   data?: unknown;
 }
 
 export interface CodexAppServerResponseFrame {
-  type: 'response';
   id: CodexAppServerFrameId;
   result?: unknown;
   error?: CodexAppServerResponseError;
 }
 
 export interface CodexAppServerNotificationFrame {
-  type: 'notification';
   method: string;
   params?: unknown;
 }
@@ -43,8 +40,9 @@ export interface CodexAppServerTransport {
 export interface CodexAppServerClient {
   connect(): Promise<void>;
   close(): Promise<void>;
-  request(method: string, params?: unknown): Promise<unknown>;
+  request(method: string, params?: unknown, options?: { signal?: AbortSignal }): Promise<unknown>;
   notify(method: string, params?: unknown): Promise<void>;
+  onRequest(handler: (frame: CodexAppServerRequestFrame) => unknown | Promise<unknown>): () => void;
   onNotification(handler: (frame: CodexAppServerNotificationFrame) => void): () => void;
   onError(handler: (error: Error) => void): () => void;
   onClose(handler: () => void): () => void;
@@ -57,6 +55,7 @@ export interface CodexAppServerClientOptions {
 interface PendingRequest {
   resolve(value: unknown): void;
   reject(error: Error): void;
+  cleanup?: (() => void) | undefined;
 }
 
 export function createCodexAppServerClient(options: CodexAppServerClientOptions): CodexAppServerClient {
@@ -68,6 +67,7 @@ class DefaultCodexAppServerClient implements CodexAppServerClient {
   readonly #pending = new Map<CodexAppServerFrameId, PendingRequest>();
   #nextRequestId = 1;
   #connected = false;
+  #requestHandlers: Array<(frame: CodexAppServerRequestFrame) => unknown | Promise<unknown>> = [];
   #notificationHandlers: Array<(frame: CodexAppServerNotificationFrame) => void> = [];
   #errorHandlers: Array<(error: Error) => void> = [];
   #closeHandlers: Array<() => void> = [];
@@ -118,9 +118,14 @@ class DefaultCodexAppServerClient implements CodexAppServerClient {
     this.#handleClose();
   }
 
-  request(method: string, params?: unknown): Promise<unknown> {
+  request(method: string, params?: unknown, options?: { signal?: AbortSignal }): Promise<unknown> {
+    if (options?.signal?.aborted) {
+      const rejected = Promise.reject(abortErrorFromSignal(options.signal));
+      rejected.catch(() => undefined);
+      return rejected;
+    }
     const id = this.#nextRequestId++;
-    const frame: CodexAppServerRequestFrame = { id, type: 'request', method };
+    const frame: CodexAppServerRequestFrame = { id, method };
     if (params !== undefined) frame.params = params;
 
     let pendingRequest: PendingRequest | undefined;
@@ -129,23 +134,42 @@ class DefaultCodexAppServerClient implements CodexAppServerClient {
       this.#pending.set(id, pendingRequest);
     });
     pending.catch(() => undefined);
+    const signal = options?.signal;
+    if (signal !== undefined && pendingRequest !== undefined) {
+      const onAbort = () => {
+        if (!this.#pending.delete(id)) return;
+        pendingRequest?.cleanup?.();
+        pendingRequest?.reject(abortErrorFromSignal(signal));
+      };
+      signal.addEventListener('abort', onAbort, { once: true });
+      pendingRequest.cleanup = () => signal.removeEventListener('abort', onAbort);
+    }
     try {
       this.#transport.send(frame).catch((error: unknown) => {
         if (this.#pending.delete(id)) {
+          pendingRequest?.cleanup?.();
           pendingRequest?.reject(errorFromUnknown(error));
         }
       });
     } catch (error) {
       this.#pending.delete(id);
+      pendingRequest?.cleanup?.();
       pendingRequest?.reject(errorFromUnknown(error));
     }
     return pending;
   }
 
   async notify(method: string, params?: unknown): Promise<void> {
-    const frame: CodexAppServerNotificationFrame = { type: 'notification', method };
+    const frame: CodexAppServerNotificationFrame = { method };
     if (params !== undefined) frame.params = params;
     await this.#transport.send(frame);
+  }
+
+  onRequest(handler: (frame: CodexAppServerRequestFrame) => unknown | Promise<unknown>): () => void {
+    this.#requestHandlers.push(handler);
+    return () => {
+      this.#requestHandlers = this.#requestHandlers.filter((registered) => registered !== handler);
+    };
   }
 
   onNotification(handler: (frame: CodexAppServerNotificationFrame) => void): () => void {
@@ -170,12 +194,15 @@ class DefaultCodexAppServerClient implements CodexAppServerClient {
   }
 
   #handleFrame(frame: CodexAppServerFrame): void {
-    if (frame.type === 'notification') {
+    if (isNotificationFrame(frame)) {
       for (const handler of this.#notificationHandlers) handler(frame);
       return;
     }
 
-    if (frame.type !== 'response') {
+    if (!isResponseFrame(frame)) {
+      if (isServerRequestFrame(frame)) {
+        void this.#handleServerRequest(frame);
+      }
       return;
     }
 
@@ -184,6 +211,7 @@ class DefaultCodexAppServerClient implements CodexAppServerClient {
       return;
     }
     this.#pending.delete(frame.id);
+    pending.cleanup?.();
     if (frame.error !== undefined) {
       pending.reject(new CodexAppServerProtocolError(frame.error));
       return;
@@ -195,20 +223,58 @@ class DefaultCodexAppServerClient implements CodexAppServerClient {
     for (const handler of this.#errorHandlers) handler(error);
   }
 
+  async #handleServerRequest(frame: CodexAppServerRequestFrame): Promise<void> {
+    const handler = this.#requestHandlers.at(-1);
+    if (handler === undefined) {
+      await this.#sendResponse({
+        id: frame.id,
+        error: {
+          code: -32601,
+          message: `Codex App Server client has no handler for server request ${frame.method}`,
+        },
+      });
+      return;
+    }
+
+    try {
+      const result = await handler(frame);
+      await this.#sendResponse({ id: frame.id, result: result ?? null });
+    } catch (error) {
+      await this.#sendResponse({
+        id: frame.id,
+        error: {
+          code: -32603,
+          message: errorFromUnknown(error).message,
+        },
+      });
+    }
+  }
+
+  async #sendResponse(frame: CodexAppServerResponseFrame): Promise<void> {
+    try {
+      await this.#transport.send(frame);
+    } catch (error) {
+      this.#handleError(errorFromUnknown(error));
+    }
+  }
+
   #handleClose(): void {
     if (!this.#connected && this.#pending.size === 0 && this.#unsubscribeTransport.length === 0) return;
     this.#connected = false;
     for (const unsubscribe of this.#unsubscribeTransport) unsubscribe();
     this.#unsubscribeTransport = [];
     const error = new Error('Codex App Server transport closed');
-    for (const pending of this.#pending.values()) pending.reject(error);
+    for (const pending of this.#pending.values()) {
+      pending.cleanup?.();
+      pending.reject(error);
+    }
     this.#pending.clear();
     for (const handler of this.#closeHandlers) handler();
   }
 }
 
 export class CodexAppServerProtocolError extends Error {
-  readonly code: string;
+  readonly code: string | number;
   readonly data?: unknown;
 
   constructor(error: CodexAppServerResponseError) {
@@ -221,4 +287,21 @@ export class CodexAppServerProtocolError extends Error {
 
 function errorFromUnknown(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
+}
+
+function abortErrorFromSignal(signal: AbortSignal): Error {
+  if (signal.reason instanceof Error && signal.reason.name !== 'AbortError') return signal.reason;
+  return new Error('Codex App Server request aborted');
+}
+
+function isNotificationFrame(frame: CodexAppServerFrame): frame is CodexAppServerNotificationFrame {
+  return !('id' in frame) && typeof frame.method === 'string';
+}
+
+function isResponseFrame(frame: CodexAppServerFrame): frame is CodexAppServerResponseFrame {
+  return 'id' in frame && !('method' in frame);
+}
+
+function isServerRequestFrame(frame: CodexAppServerFrame): frame is CodexAppServerRequestFrame {
+  return 'id' in frame && 'method' in frame && typeof frame.method === 'string';
 }
