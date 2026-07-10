@@ -374,6 +374,9 @@ describe('dashboard demo SQLite seed script', () => {
             availableCapabilities: ['dashboard:read', 'github:read'],
             enabledPlugins: ['github'],
           },
+          dashboardDefaultLayout: [
+            { id: 'operational-totals', cardId: 'core.operationalTotals', x: 0, y: 0, columns: 8, rows: 2 },
+          ],
         });
         const readHeaders = { authorization: 'Bearer read-token' };
 
@@ -382,11 +385,9 @@ describe('dashboard demo SQLite seed script', () => {
           id: 'core.defaultLayout',
           source: 'default',
           filteredItemCount: 0,
-          items: expect.arrayContaining([
+          items: [
             expect.objectContaining({ id: 'operational-totals', cardId: 'core.operationalTotals' }),
-            expect.objectContaining({ id: 'event-inbox', cardId: 'core.eventInbox' }),
-            expect.objectContaining({ id: 'operator-actions', cardId: 'core.operatorActions' }),
-          ]),
+          ],
         });
 
         const cards = await getJson(app, '/api/v1/dashboard/cards', readHeaders);

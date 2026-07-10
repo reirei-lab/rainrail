@@ -107,12 +107,10 @@ API resource, and checks the VRT scenario manifest in
 `scripts/dashboard-demo-vrt-scenarios.mjs`. The manifest pins the dashboard tab
 states to capture later with Playwright: overview, retrying events, failed
 workflow runs, running task actions, source delivery status, blocked stale
-claims, settings, default dashboard card layout, custom dashboard card layout,
-plugin card failure isolation, and the mobile card layout. The VRT manifest
-only lists states that can be reached by opening the recorded URL directly;
-custom saved layouts and plugin-card failure are covered by the smoke test's
-API and sandbox assertions until a browser runner can perform pre-capture
-setup steps.
+claims, settings, default dashboard card layout, and the mobile card layout.
+Custom saved dashboard card layouts and plugin-card failure isolation are
+smoke-only checks today; they are covered by API and sandbox assertions until a
+browser runner can perform pre-capture setup steps.
 
 ## Dashboard cards
 
@@ -126,7 +124,8 @@ layout API:
 - `PUT /api/v1/dashboard/layout` saves a full user layout and requires an
   operator or admin dashboard token.
 - `PATCH /api/v1/dashboard/layout/items/:itemId/config` saves settings for one
-  visible card without dropping hidden saved plugin cards.
+  visible card without dropping hidden saved plugin cards. It also requires an
+  operator or admin dashboard token.
 
 The local `rainrail start` CLI catalog currently exposes
 `core.operationalTotals` as its Core card and uses it in the default local
@@ -153,12 +152,14 @@ Dashboard card config must stay JSON-serializable and must not contain tokens,
 secrets, passwords, or credential-looking keys. The API rejects sensitive config
 keys before persistence.
 
-Plugin card rendering stays behind the sandbox host described in
-[plugin runtime contract](plugin-runtime-contract.md). The sandbox creates an
-iframe with `sandbox="allow-scripts"`, no `allow-same-origin`, no referrer, and
+The sandbox host contract for plugin-card rendering is described in
+[plugin runtime contract](plugin-runtime-contract.md). The current local
+dashboard renders card catalog/layout metadata; it does not yet load plugin
+bundles into iframes. When an iframe renderer is wired, the sandbox descriptor
+must use `sandbox="allow-scripts"`, no `allow-same-origin`, no referrer, and
 only read-only bridge capabilities such as `dashboard:read` or `*:read`.
-Workflow capabilities such as `runtime:start`, merge, or secret access are not
-exposed to the iframe bridge. If one plugin card bundle fails to load, the
+Workflow capabilities such as `runtime:start`, merge, or secret access must not
+be exposed to the iframe bridge. If one plugin card bundle fails to load, the
 dashboard shell, Core cards, and other plugin cards should remain usable.
 
 The focused smoke/VRT baseline for dashboard cards is:

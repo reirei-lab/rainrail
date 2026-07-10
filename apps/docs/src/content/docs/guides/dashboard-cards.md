@@ -14,7 +14,7 @@ plugin cards in one operator layout.
 - `PUT /api/v1/dashboard/layout` saves the full user layout and requires an
   operator or admin dashboard token.
 - `PATCH /api/v1/dashboard/layout/items/:itemId/config` saves settings for one
-  visible card.
+  visible card and also requires an operator or admin dashboard token.
 
 The local `rainrail start` CLI catalog currently exposes
 `core.operationalTotals` as its Core card. The shared HTTP app contract also
@@ -70,11 +70,13 @@ lives in
 
 ## Sandbox and capabilities
 
-Plugin card rendering runs through the dashboard card sandbox host. The host
-creates an iframe with `sandbox="allow-scripts"`, no `allow-same-origin`, no
-referrer, and only read-only bridge capabilities such as `dashboard:read` or
-`*:read`. Workflow capabilities such as `runtime:start`, merge, or secret
-access are not exposed to plugin card frames.
+The dashboard card sandbox host is the contract for plugin-card iframe
+rendering. The current local dashboard renders card catalog/layout metadata; it
+does not yet load plugin bundles into iframes. When an iframe renderer is wired,
+the host must create a frame with `sandbox="allow-scripts"`, no
+`allow-same-origin`, no referrer, and only read-only bridge capabilities such as
+`dashboard:read` or `*:read`. Workflow capabilities such as `runtime:start`,
+merge, or secret access are not exposed to plugin card frames.
 
 If one plugin card fails to load, the sandbox reports that card as failed
 without taking down the dashboard shell, Core cards, or other cards.
