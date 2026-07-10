@@ -1737,7 +1737,7 @@ function findCommandOnPath(
     for (const candidateName of candidateNames) {
       const candidate = join(directory, candidateName);
       try {
-        if (fileSystem.statSync(candidate).isFile()) {
+        if (isExecutableCommandPath(candidate, fileSystem)) {
           return candidate;
         }
       } catch {
@@ -1746,6 +1746,17 @@ function findCommandOnPath(
     }
   }
   return undefined;
+}
+
+function isExecutableCommandPath(path: string, fileSystem: RainrailCliFileSystem): boolean {
+  const stat = fileSystem.statSync(path);
+  if (!stat.isFile()) {
+    return false;
+  }
+  if (process.platform === 'win32' || /\.(?:bat|cmd|com|exe)$/iu.test(path)) {
+    return true;
+  }
+  return (stat.mode & 0o111) !== 0;
 }
 
 function commandCandidateNames(command: string, env: Record<string, string | undefined>): readonly string[] {
@@ -1772,7 +1783,7 @@ function checkConfiguredCodexBinary(
   commandRunner: CommandRunner,
   env: Record<string, string | undefined>,
 ): CodexCommandCheck {
-  const version = commandRunner(command, ['--version'], { stdio: 'pipe', env });
+  const version = runCodexCommand(command, ['--version'], commandRunner, { stdio: 'pipe', env });
   if ((version.status ?? 1) !== 0) {
     return {
       ok: false,
@@ -1794,12 +1805,39 @@ function runCodexCheck(
   commandRunner: CommandRunner,
   env: Record<string, string | undefined>,
 ): CodexSimpleCheck {
-  const result = commandRunner(command, args, { stdio: 'pipe', env });
+  const result = runCodexCommand(command, args, commandRunner, { stdio: 'pipe', env });
   return {
     ok: (result.status ?? 1) === 0,
     stdout: stripTrailingNewline(toOutput(result.stdout)),
     stderr: stripTrailingNewline(toOutput(result.stderr)),
   };
+}
+
+function runCodexCommand(
+  command: string,
+  args: readonly string[],
+  commandRunner: CommandRunner,
+  options: CommandRunnerOptions,
+): CommandRunnerResult {
+  if (isWindowsCommandShim(command)) {
+    return commandRunner('cmd.exe', ['/d', '/s', '/c', formatWindowsCommandLine(command, args)], options);
+  }
+  return commandRunner(command, args, options);
+}
+
+function isWindowsCommandShim(command: string): boolean {
+  return /\.(?:bat|cmd)$/iu.test(command);
+}
+
+function formatWindowsCommandLine(command: string, args: readonly string[]): string {
+  return [quoteWindowsCommandArgument(command), ...args.map(quoteWindowsCommandArgument)].join(' ');
+}
+
+function quoteWindowsCommandArgument(argument: string): string {
+  if (/^[A-Za-z0-9_./:@%+=,-]+$/u.test(argument)) {
+    return argument;
+  }
+  return `"${argument.replaceAll('"', '\\"')}"`;
 }
 
 function checkCodexAppServerSessionSmoke(
@@ -1808,13 +1846,27 @@ function checkCodexAppServerSessionSmoke(
   cwd: string,
   environment: RainrailCliEnvironment,
 ): CodexSimpleCheck {
+  const firstAttempt = checkCodexAppServerSessionSmokeWithSandbox(command, readinessOptions, cwd, environment, 'readOnly');
+  if (!firstAttempt.ok && isLegacySandboxNameErrorOutput(firstAttempt.stdout, firstAttempt.stderr)) {
+    return checkCodexAppServerSessionSmokeWithSandbox(command, readinessOptions, cwd, environment, 'read-only');
+  }
+  return firstAttempt;
+}
+
+function checkCodexAppServerSessionSmokeWithSandbox(
+  command: string,
+  readinessOptions: CodexAppServerReadinessOptions,
+  cwd: string,
+  environment: RainrailCliEnvironment,
+  sandbox: 'readOnly' | 'read-only',
+): CodexSimpleCheck {
   const commandRunner = getCommandRunner(environment);
   const env = createCodexCommandEnvironment(readinessOptions, environment);
-  const result = commandRunner(command, ['app-server', '--listen', 'stdio://'], {
+  const result = runCodexCommand(command, ['app-server', '--listen', 'stdio://'], commandRunner, {
     stdio: 'pipe',
     cwd,
     env,
-    input: formatCodexAppServerSessionSmokeInput(cwd),
+    input: formatCodexAppServerSessionSmokeInput(cwd, sandbox),
     timeoutMs: 15_000,
   });
   const stdout = stripTrailingNewline(toOutput(result.stdout));
@@ -1859,7 +1911,12 @@ function checkCodexAppServerSessionSmoke(
   return { ok: true, stdout, stderr };
 }
 
-function formatCodexAppServerSessionSmokeInput(cwd: string): string {
+function isLegacySandboxNameErrorOutput(stdout?: string, stderr?: string): boolean {
+  const output = `${stdout ?? ''}\n${stderr ?? ''}`;
+  return output.includes('unknown variant `readOnly`') || output.includes('invalid sandbox');
+}
+
+function formatCodexAppServerSessionSmokeInput(cwd: string, sandbox: 'readOnly' | 'read-only'): string {
   return [
     {
       id: 1,
@@ -1881,7 +1938,7 @@ function formatCodexAppServerSessionSmokeInput(cwd: string): string {
         cwd,
         ephemeral: true,
         approvalPolicy: 'never',
-        sandbox: 'readOnly',
+        sandbox,
       },
     },
   ].map((frame) => JSON.stringify(frame)).join('\n') + '\n';
@@ -1955,8 +2012,10 @@ function writeCodexAppServerRuntimeConfig(
       'config.runtimeProviders must be a JSON object without unresolved env fragments before codex-app-server setup can update it',
     );
   }
+  const env = environment.env ?? process.env;
   const runtimeProviders = rawRuntimeProviders ?? {};
-  const providerKeys = findCodexAppServerRuntimeProviderKeys(runtimeProviders);
+  const expandedRuntimeProviders = readExpandedRuntimeProvidersObject(raw, env) ?? runtimeProviders;
+  const providerKeys = findCodexAppServerRuntimeProviderKeys(expandedRuntimeProviders);
   if (providerKeys.length > 1) {
     throw new Error('config.runtimeProviders contains duplicate runtime "codex-app-server"');
   }
@@ -1964,7 +2023,6 @@ function writeCodexAppServerRuntimeConfig(
   const previous = isJsonRecord(runtimeProviders[providerKey])
     ? runtimeProviders[providerKey]
     : {};
-  const env = environment.env ?? process.env;
   const nextProvider: Record<string, unknown> = {
     ...previous,
     type: 'plugin',
@@ -2104,8 +2162,10 @@ function normalizeCodexAppServerRuntimeConfig(
   if (typeof rawProvider.runtime === 'string') config.runtime = rawProvider.runtime;
   if (typeof rawProvider.plugin === 'string') config.plugin = rawProvider.plugin;
   if (typeof rawProvider.executor === 'string') config.executor = rawProvider.executor;
-  const command = firstNonEmptyString(rawProvider.command);
-  if (command !== undefined) config.command = command;
+  if ('command' in rawProvider) {
+    const command = firstNonEmptyString(rawProvider.command);
+    if (command !== undefined) config.command = command;
+  }
   if (typeof rawProvider.home === 'string') config.home = rawProvider.home;
   if (typeof rawProvider.codexHome === 'string') config.codexHome = rawProvider.codexHome;
   const problems: string[] = [];
@@ -2117,6 +2177,9 @@ function normalizeCodexAppServerRuntimeConfig(
   }
   if (config.executor !== undefined && config.executor !== codexAppServerRuntimeId) {
     problems.push('executor must be "codex-app-server"');
+  }
+  if ('command' in rawProvider && config.command === undefined) {
+    problems.push('command must be a non-empty string when configured');
   }
   if (problems.length === 0) {
     return config;
