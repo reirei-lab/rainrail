@@ -78,19 +78,38 @@ export function createAgentAssignmentRuntimeFromProvider(
     workflow: options.workflow,
     agentId: options.agentId,
     sessionKeyPrefix: options.sessionKeyPrefix,
-    dispatchAgent: async ({ task, workflow }) => options.runtime.startRun({
-      workflow,
-      event: options.event,
-      task,
-      requestedBy: options.requestedBy,
-      inputs: {
-        agentSessionId: task.agentSessionId,
-        branchName: task.branchName,
-        issue: task.issue,
-      },
-    }),
+    dispatchAgent: async ({ task, workflow }) => {
+      const run = await options.runtime.startRun({
+        workflow,
+        event: options.event,
+        task,
+        requestedBy: options.requestedBy,
+        inputs: {
+          agentSessionId: task.agentSessionId,
+          branchName: task.branchName,
+          issue: task.issue,
+        },
+      });
+      throwIfTerminalRuntimeStartFailure(run);
+      return run;
+    },
   };
 }
+
+function throwIfTerminalRuntimeStartFailure(run: RuntimeRun): void {
+  if (!terminalRuntimeStartFailureStatuses.has(run.status)) {
+    return;
+  }
+  throw new Error(`Runtime provider ${run.provider} returned terminal start failure ${run.status} for run ${run.id}`);
+}
+
+const terminalRuntimeStartFailureStatuses = new Set<RuntimeRunStatus>([
+  'failed',
+  'canceled',
+  'stopped',
+  'timed_out',
+  'compaction_failed',
+]);
 
 export function createOpenClawRuntimeProvider(options: OpenClawRuntimeProviderOptions): RuntimeProvider {
   return {

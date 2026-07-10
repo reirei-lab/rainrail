@@ -291,6 +291,7 @@
       "sources": [
         "src/codex-app-server/client.ts",
         "src/codex-app-server/protocol-client.ts",
+        "src/codex-app-server/runtime-provider.ts",
         "src/codex-app-server/stdio-transport.ts",
         "src/codex-app-server/websocket-transport.ts"
       ],
@@ -300,6 +301,7 @@
       "tests": [
         "src/codex-app-server/client.test.ts",
         "src/codex-app-server/protocol-client.test.ts",
+        "src/codex-app-server/runtime-provider.test.ts",
         "src/codex-app-server/smoke.test.ts",
         "src/codex-app-server/stdio-transport.test.ts"
       ],
@@ -336,7 +338,15 @@
         "CodexAppServerTurnCompletedEvent",
         "CodexAppServerTurnWaitTarget",
         "CodexAppServerProtocolClient",
-        "createCodexAppServerProtocolClient"
+        "createCodexAppServerProtocolClient",
+        "CodexAppServerRuntimeProviderOptions",
+        "CodexAppServerRuntimeProviderLogWriter",
+        "CodexAppServerRuntimeProviderRequestHandler",
+        "CodexAppServerRuntimeProviderClientFactory",
+        "CodexAppServerRuntimeProviderClientFactoryOptions",
+        "CodexAppServerRuntimeProviderClient",
+        "createCodexAppServerRuntimeProvider",
+        "startCodexAppServerRun"
       ],
       "publicExportKinds": {
         "CodexAppServerFrameId": "type",
@@ -371,7 +381,15 @@
         "CodexAppServerTurnCompletedEvent": "type",
         "CodexAppServerTurnWaitTarget": "type",
         "CodexAppServerProtocolClient": "type",
-        "createCodexAppServerProtocolClient": "value"
+        "createCodexAppServerProtocolClient": "value",
+        "CodexAppServerRuntimeProviderOptions": "type",
+        "CodexAppServerRuntimeProviderLogWriter": "type",
+        "CodexAppServerRuntimeProviderRequestHandler": "type",
+        "CodexAppServerRuntimeProviderClientFactory": "type",
+        "CodexAppServerRuntimeProviderClientFactoryOptions": "type",
+        "CodexAppServerRuntimeProviderClient": "type",
+        "createCodexAppServerRuntimeProvider": "value",
+        "startCodexAppServerRun": "value"
       }
     },
     {

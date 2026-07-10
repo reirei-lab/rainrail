@@ -61,6 +61,8 @@ protocol frame 型は `CodexAppServerFrameId`、`CodexAppServerRequestFrame`、
 `command`、`args`、`cwd`、`env` から child process を起動し、stdin/stdout の
 JSON line framing だけを担当する。`env` を指定した場合はその値を child process の
 完全な環境として扱い、親 process の環境を混ぜる場合だけ `inheritEnv: true` を明示する。
+`env` を省略しても `inheritEnv: false` が明示された場合は空の environment を spawn に渡し、
+Node の既定環境継承で secret が子 process へ漏れないようにする。
 test や別 supervisor は `SpawnCodexAppServerProcess` と
 `StdioCodexAppServerChildProcess` を差し替えられる。stdout の parse error は
 transport error として通知し、後続の valid frame は処理を続ける。stdio transport の
@@ -104,6 +106,50 @@ LAN remote 用の境界は `WebSocketCodexAppServerTransportConfig` で先に固
 現時点では `type: "websocket"`、`endpoint`、任意の `headers`、`tokenEnv`、
 `reconnect` policy を config/type として持つだけで、pairing、token rotation、
 remote daemon supervisor、pool scheduling は後続 issue の責務とする。
+
+Codex App Server runtime provider は `CodexAppServerRuntimeProviderOptions` から
+`createCodexAppServerRuntimeProvider()` を作り、低レベル helper として
+`startCodexAppServerRun()` も公開する。初期版では `1 task = 1 app-server process = 1 thread`
+として stdio transport だけを扱う。`startRun()` は capability gate の背後で
+`codex app-server --listen stdio://` 相当を起動し、`initialize`、`thread/start`、
+`turn/start`、`turn/completed` を順に実行する。stdout/stderr は protocol transport とは
+別に private log file へ mirror し、run metadata には log path、stderr log path、pid、
+thread id、turn id、branch、task id を残す。default thread は自動 runtime として
+承認 request で止まらないよう `approvalPolicy: "never"` を使い、caller が
+`thread.approvalPolicy` で明示した場合だけ上書きできる。`never` 以外へ上書きする場合は
+`CodexAppServerRuntimeProviderRequestHandler` を `requestHandler` として渡し、server-initiated
+request を client が処理できるようにする。この request handler は `turn/start` response 後も
+`turn/completed` まで保持し、turn 実行中の承認/tool request も処理できるようにする。
+`thread` option に含まれる `undefined` field は default params を消さないよう merge 前に
+除外し、`approvalPolicy: null` も既定の `never` を消さないよう除外する。turn completion status は
+failed/error を `failed`、interrupted/cancelled/canceled を `canceled`、
+timeout/timedOut を `timed_out` に対応させる。`turn.error` が非 null の completion は
+status が欠落または未知でも `failed` とする。Codex turn summary の final text や payload text から
+`Outcome: needs_human` / `Outcome: split_recommended` が取れた場合は runtime status に反映し、
+`Outcome: implemented` / `Outcome: updated_issue` は成功完了として扱う。その他の完了だけを
+`succeeded` として扱う。
+stuck turn は provider-level timeout で `timed_out` とし、実行中の caller
+`AbortSignal` は即座に `canceled` として扱い、どちらも app-server process を
+`close()` 経由で cleanup する。`close()` は `closeTimeoutMs` で上限を設け、stuck process
+cleanup が runtime result 返却を無期限にブロックしないようにする。close timeout 後は
+stdout/stderr log mirror を無効化し、対応 transport が提供する場合は強制 kill fallback を呼ぶ。
+turn が受理される前の
+connect/initialize/thread/start/turn/start 失敗または startup 中の abort は assignment が
+claim を release できるよう reject する。runtime log path は symlink component に加えて
+未正規化の `..` parent directory segment も拒否し、private log 書き込みが想定外の親 path へ
+逸れないようにする。既存 log path は open 前に `lstat` し、regular file 以外なら拒否して
+FIFO などの特殊ファイルで startup が block しないようにする。
+`CodexAppServerRuntimeProviderClientFactory`、
+`CodexAppServerRuntimeProviderClientFactoryOptions`、`CodexAppServerRuntimeProviderClient`
+は test や別 supervisor が protocol client、pid、spawn/log wiring を差し替えるための
+injection point とする。`CodexAppServerRuntimeProviderLogWriter` は stdio mirror 書き込みを
+test などで差し替えるための injection point で、default の log write failure は stream
+listener から投げず runtime failure として観測する。`resumeRun()` は disabled provider では
+`startRun()` と同じく reject する。初期版の enabled provider では resume 未対応として
+`needs_human` と `resumeSupported: false` metadata を返す。
+`createAgentAssignmentRuntimeFromProvider()` は runtime provider が `failed`、`canceled`、
+`stopped`、`timed_out`、`compaction_failed` の terminal start failure を返した場合に throw し、
+Project claim finalize ではなく assignment 側の release/retry 経路に戻す。
 
 ## Event envelope
 
