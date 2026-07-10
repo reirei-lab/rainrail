@@ -2398,7 +2398,8 @@ describe('Rainrail CLI built-in commands', () => {
               { id: 'event-inbox', cardId: 'core.eventInbox', x: 0, y: 0, columns: 8, rows: 8 },
               { id: 'workflow-runs', cardId: 'core.workflowRuns', x: 0, y: 8, columns: 4, rows: 6 },
               { id: 'agent-tasks', cardId: 'core.agentTasks', x: 4, y: 8, columns: 4, rows: 6 },
-              { id: 'legacy-overview', cardId: 'core.overview', x: 8, y: 8, columns: 4, rows: 3 },
+              { id: 'legacy-overview', cardId: 'core.overview', x: 8, y: 8, columns: 4, rows: 2 },
+              { id: 'legacy-recent-events', cardId: 'core.recentEvents', x: 8, y: 10, columns: 4, rows: 2 },
             ],
           }),
         });
@@ -2408,7 +2409,7 @@ describe('Rainrail CLI built-in commands', () => {
             action: 'dashboard_layout_update',
             status: 'preview',
             dryRun: true,
-            result: { itemCount: 4 },
+            result: { itemCount: 5 },
           },
         });
 
@@ -4589,7 +4590,8 @@ describe('Rainrail CLI built-in commands', () => {
         cwd: projectRoot,
         serverStarter: () => ({ stop: () => undefined }),
       });
-      expect(duplicateName.exitCode).toBe(0);
+      expect(duplicateName.exitCode).toBe(1);
+      expect(duplicateName.stderr).toContain('config source name/sourceType pairs must be unique: github-local (github)');
     });
   });
 

@@ -2301,12 +2301,18 @@ function parseLocalSourceMaxBodyBytes(value: unknown): number {
 
 function dedupeLocalSources(sources: readonly RainrailLocalSource[]): RainrailLocalSource[] {
   const endpoints = new Set<string>();
+  const sourceKeys = new Set<string>();
   const deduped: RainrailLocalSource[] = [];
   for (const source of sources) {
     if (endpoints.has(source.endpoint)) {
       throw new Error(`config endpoints must be unique: ${source.endpoint}`);
     }
+    const sourceKey = `${source.name}\u0000${source.sourceType}`;
+    if (sourceKeys.has(sourceKey)) {
+      throw new Error(`config source name/sourceType pairs must be unique: ${source.name} (${source.sourceType})`);
+    }
     endpoints.add(source.endpoint);
+    sourceKeys.add(sourceKey);
     deduped.push(source);
   }
   return deduped;
@@ -5461,9 +5467,23 @@ const localDashboardCardDefinitions: readonly LocalDashboardCardDefinition[] = [
     category: 'operations',
     requiredCapabilities: ['dashboard:read'],
     size: {
-      default: { columns: 4, rows: 3 },
-      min: { columns: 3, rows: 2 },
-      max: { columns: 8, rows: 6 },
+      default: { columns: 4, rows: 2 },
+      min: { columns: 2, rows: 1 },
+      max: { columns: 8, rows: 4 },
+    },
+    settingsSchema: localDashboardSettingsSchema,
+  },
+  {
+    id: 'core.recentEvents',
+    title: 'Recent events',
+    description: 'Legacy dashboard recent-events card id kept for saved layout compatibility.',
+    entry: { type: 'core', name: 'recentEvents' },
+    category: 'events',
+    requiredCapabilities: ['dashboard:read'],
+    size: {
+      default: { columns: 4, rows: 2 },
+      min: { columns: 2, rows: 1 },
+      max: { columns: 8, rows: 4 },
     },
     settingsSchema: localDashboardSettingsSchema,
   },
