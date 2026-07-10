@@ -181,6 +181,12 @@ describe('dashboard app shell', () => {
     expect(dashboardApp).toContain('list.replaceChildren()');
   });
 
+  it('keeps sidebar tab selection responsive before operational data loads', () => {
+    expect(dashboardApp).toContain('function updateTabButtons()');
+    expect(dashboardApp).toMatch(/function renderCurrentList\(\): void \{\s+ensureVisibleDashboardTab\(\);\s+updateTabButtons\(\);\s+if \(list === null \|\| detail === null\) return;/);
+    expect(dashboardApp).toMatch(/if \(latestData === undefined\) \{[\s\S]*?renderPlaceholderDetail\(emptyDetailMessage\(selectedTab\)\);/);
+  });
+
   it('clears rendered operational data before switching connection targets', () => {
     expect(dashboardApp).toContain('resetDashboardData();');
     expect(dashboardApp).toMatch(/client = createDashboardClient\(token, apiBaseUrl\);[\s\S]*?resetDashboardData\(\);[\s\S]*?void refresh\(\);/);
