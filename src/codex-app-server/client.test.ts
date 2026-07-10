@@ -192,6 +192,46 @@ describe('Codex App Server protocol client', () => {
     await expect(pending).rejects.toThrow('missing repository');
   });
 
+  it('returns the pending request promise before transport send settles', async () => {
+    const transport = new FakeTransport();
+    let resolveSend: (() => void) | undefined;
+    const unhandledRejections: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => {
+      unhandledRejections.push(reason);
+    };
+    transport.send.mockImplementationOnce(async (frame: CodexAppServerFrame) => {
+      transport.sent.push(frame);
+      transport.emitFrame({
+        id: 1,
+        type: 'response',
+        error: {
+          code: 'fast_failure',
+          message: 'response arrived before send settled',
+        },
+      });
+      await new Promise<void>((resolve) => {
+        resolveSend = resolve;
+      });
+    });
+    const client = createCodexAppServerClient({ transport });
+
+    process.on('unhandledRejection', onUnhandledRejection);
+    let result: Promise<unknown> | undefined;
+    try {
+      await client.connect();
+      result = client.request('session.start');
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(unhandledRejections).toEqual([]);
+      resolveSend?.();
+
+      await expect(result).rejects.toThrow('response arrived before send settled');
+    } finally {
+      process.off('unhandledRejection', onUnhandledRejection);
+      resolveSend?.();
+      if (result !== undefined) await result.catch(() => undefined);
+    }
+  });
+
   it('sends notifications without allocating request ids', async () => {
     const transport = new FakeTransport();
     const client = createCodexAppServerClient({ transport });

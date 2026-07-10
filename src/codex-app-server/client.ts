@@ -118,19 +118,26 @@ class DefaultCodexAppServerClient implements CodexAppServerClient {
     this.#handleClose();
   }
 
-  async request(method: string, params?: unknown): Promise<unknown> {
+  request(method: string, params?: unknown): Promise<unknown> {
     const id = this.#nextRequestId++;
     const frame: CodexAppServerRequestFrame = { id, type: 'request', method };
     if (params !== undefined) frame.params = params;
 
+    let pendingRequest: PendingRequest | undefined;
     const pending = new Promise<unknown>((resolve, reject) => {
-      this.#pending.set(id, { resolve, reject });
+      pendingRequest = { resolve, reject };
+      this.#pending.set(id, pendingRequest);
     });
+    pending.catch(() => undefined);
     try {
-      await this.#transport.send(frame);
+      this.#transport.send(frame).catch((error: unknown) => {
+        if (this.#pending.delete(id)) {
+          pendingRequest?.reject(errorFromUnknown(error));
+        }
+      });
     } catch (error) {
       this.#pending.delete(id);
-      throw error;
+      pendingRequest?.reject(errorFromUnknown(error));
     }
     return pending;
   }
@@ -210,4 +217,8 @@ export class CodexAppServerProtocolError extends Error {
     this.code = error.code;
     if (error.data !== undefined) this.data = error.data;
   }
+}
+
+function errorFromUnknown(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
 }

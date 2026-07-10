@@ -55,10 +55,27 @@ describe('stdio Codex App Server transport', () => {
 
     expect(spawnProcess).toHaveBeenCalledWith('codex-app-server', ['--stdio'], {
       cwd: '/repo',
-      env: { NODE_ENV: 'test' },
+      env: expect.objectContaining({ NODE_ENV: 'test' }),
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     expect(stdin.writes).toEqual([`${JSON.stringify(frame)}\n`]);
+  });
+
+  it('merges configured env overrides with the parent process environment', async () => {
+    const { spawnProcess } = createChildProcessFixture();
+    const transport = createStdioCodexAppServerTransport({
+      command: 'codex-app-server',
+      env: { CODEX_APP_SERVER_TOKEN: 'test-token' },
+      spawnProcess,
+    });
+
+    await transport.connect();
+
+    const options = spawnProcess.mock.calls[0]?.[2];
+    expect(options?.env).toMatchObject({
+      PATH: process.env.PATH,
+      CODEX_APP_SERVER_TOKEN: 'test-token',
+    });
   });
 
   it('parses newline-delimited stdout frames independently of chunk boundaries', async () => {
@@ -246,6 +263,26 @@ describe('stdio Codex App Server transport', () => {
     await expect(transport.send({ type: 'notification', method: 'session.ping' })).rejects.toThrow(
       'Codex App Server stdio transport is not connected',
     );
+  });
+
+  it('shares the same initial spawn failure with concurrent connect callers', async () => {
+    const { child } = createChildProcessFixture();
+    const spawnProcess = vi.fn<SpawnCodexAppServerProcess>(() => {
+      process.nextTick(() => child.emit('error', new Error('spawn ENOENT')));
+      return child;
+    });
+    const transport = createStdioCodexAppServerTransport({ command: 'missing-codex-app-server', spawnProcess });
+
+    const firstConnect = transport.connect();
+    const secondConnect = transport.connect();
+    const results = await Promise.allSettled([firstConnect, secondConnect]);
+
+    expect(spawnProcess).toHaveBeenCalledOnce();
+    expect(results).toHaveLength(2);
+    expect(results[0]?.status).toBe('rejected');
+    expect(results[1]?.status).toBe('rejected');
+    if (results[0]?.status === 'rejected') expect(results[0].reason).toEqual(expect.any(Error));
+    if (results[1]?.status === 'rejected') expect(results[1].reason).toEqual(expect.any(Error));
   });
 
   it('rejects connect when the child exits before the initial spawn check completes', async () => {

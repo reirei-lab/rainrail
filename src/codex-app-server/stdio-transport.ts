@@ -45,19 +45,32 @@ class StdioCodexAppServerTransport implements CodexAppServerTransport {
   #errorHandlers: Array<(error: Error) => void> = [];
   #closeHandlers: Array<() => void> = [];
   #closed = false;
+  #connectPromise: Promise<void> | undefined;
 
   constructor(options: StdioCodexAppServerTransportOptions) {
     this.#options = options;
   }
 
   async connect(): Promise<void> {
+    if (this.#connectPromise !== undefined) {
+      return this.#connectPromise;
+    }
     if (this.#child !== undefined) {
       return;
     }
+    this.#connectPromise = this.#connectChild();
+    try {
+      await this.#connectPromise;
+    } finally {
+      this.#connectPromise = undefined;
+    }
+  }
+
+  async #connectChild(): Promise<void> {
     const spawnProcess = this.#options.spawnProcess ?? defaultSpawnCodexAppServerProcess;
     const spawnOptions: Parameters<SpawnCodexAppServerProcess>[2] = { stdio: ['pipe', 'pipe', 'pipe'] };
     if (this.#options.cwd !== undefined) spawnOptions.cwd = this.#options.cwd;
-    if (this.#options.env !== undefined) spawnOptions.env = this.#options.env;
+    if (this.#options.env !== undefined) spawnOptions.env = { ...process.env, ...this.#options.env };
 
     const child = spawnProcess(this.#options.command, this.#options.args ?? [], spawnOptions);
     this.#child = child;
