@@ -36,6 +36,17 @@ Run a minimal first-use smoke test in a disposable directory:
     rainrail openclaw help
     rainrail openclaw session test help
 
+If you want Rainrail to dispatch work through Codex CLI App Server instead of
+OpenClaw, add the optional Codex runtime plugin inside the initialized project:
+
+    rainrail setup codex-app-server --yes
+    rainrail plugin codex-app-server doctor
+    rainrail plugin codex-app-server session test
+
+The Codex App Server plugin is not required for users who do not run Codex. It
+adds a separate `codex-app-server` runtime provider entry and does not install,
+replace, or proxy the OpenClaw plugin.
+
 `rainrail start` starts the local harness server for the dashboard API, event
 stream, and any configured local intake endpoints. It does not start or manage
 the Cloudflare Worker EEP Bridge; Worker deployment and always-on ingress live

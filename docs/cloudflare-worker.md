@@ -97,6 +97,57 @@ plugin runtime id を置いて登録する。たとえば `runtimeProviders.code
 を `codex-app-server` にした場合、bundle source は `runtime: "codex-app-server"` で
 参照できる。未登録の runtime id は config parse 時に拒否される。
 
+Codex CLI の App Server を runtime provider として使う場合は、`codex-app-server`
+official plugin を project-local に setup してから同じ runtime id を config で参照する。
+これは Codex を実行する host のための plugin であり、Codex を使わない Worker / Node
+deployment では不要である。初期 provider は experimental な
+`codex app-server --listen stdio://` に依存し、1 task ごとに app-server process と
+thread を作る。WebSocket remote transport、shared daemon、process pool は後続方針であり、
+この config 例では有効にならない。
+
+```json
+{
+  "sourceBundles": [
+    {
+      "type": "eep-bridge",
+      "name": "worker-ingress",
+      "sources": [
+        {
+          "type": "manual-chat",
+          "name": "codex-chat",
+          "sourceType": "chat",
+          "runtime": "codex-app-server"
+        }
+      ]
+    }
+  ],
+  "runtimeProviders": {
+    "codexAppServer": {
+      "type": "plugin",
+      "enabled": true,
+      "runtime": "codex-app-server",
+      "plugin": "@rainrail/codex-app-server-runtime",
+      "executor": "codex-app-server",
+      "command": "${CODEX_BIN}",
+      "home": "${CODEX_HOME_PARENT}",
+      "codexHome": "${CODEX_HOME}"
+    }
+  }
+}
+```
+
+`command`、`home`、`codexHome` は Codex App Server plugin の doctor / session test と
+runtime execution が使う実行環境である。Core の source bundle parser は runtime id 解決に
+必要な `type`、`enabled`、`runtime`、`plugin`、`executor` を読む。Codex plugin CLI は同じ
+`rainrail.config.json` の raw provider entry から `command`、`home`、`codexHome` も読み、
+Codex check process の `HOME` / `CODEX_HOME` に渡す。これらは secret 値ではないが、
+`HOME` / `CODEX_HOME` 配下には Codex CLI の login state や settings が存在し得る。
+shared runner では dedicated directory を使い、token や credential 値そのものは config、
+`.dev.vars`、Worker vars に書かない。local Node server でも `rainrail.config.json` に同じ
+`runtimeProviders.codexAppServer` と source `runtime: "codex-app-server"` を置けば同じ
+runtime id を参照できる。Worker config と local Node config の違いは transport / hosting
+であり、runtime provider id の解決規則は同じである。
+
 `manual-chat` は同じ config model で source/runtime の対応を表現するための entry として
 置ける。現時点の Worker EEP Bridge bundle は GitHub webhook と Cloudflare tail の
 intake adapter を生成し、manual/chat の実 ingress adapter は別 source adapter が入った時点で

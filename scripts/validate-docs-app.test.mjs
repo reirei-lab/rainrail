@@ -235,6 +235,16 @@ describe('Starlight documentation app', () => {
       );
       expect(readDocsPage(slug)).toContain('Source spec');
     }
+
+    const pluginRuntimeReference = readDocsPage('reference/plugin-runtime');
+    expect(pluginRuntimeReference).toContain('Codex App Server runtime');
+    expect(pluginRuntimeReference).toContain('rainrail setup codex-app-server --yes');
+    expect(pluginRuntimeReference).toContain('CODEX_HOME');
+    expect(pluginRuntimeReference).toContain('process pooling');
+
+    const pluginRuntimeExample = readDocsPage('examples/plugin-runtime');
+    expect(pluginRuntimeExample).toContain('runtimeProviders.codexAppServer');
+    expect(pluginRuntimeExample).toContain('Users who do not run Codex do not need');
   });
 
   it('keeps rainrail.dev/docs as a gateway to docs.rainrail.dev instead of repo-only docs', () => {

@@ -48,7 +48,21 @@ rainrail.lock
 
 The generated config uses the current directory name as the project name.
 
-## 3. Start the local harness when ready
+## 3. Add optional runtime plugins
+
+If you want Rainrail to start Codex CLI through Codex App Server, run:
+
+```sh
+rainrail setup codex-app-server --yes
+rainrail plugin codex-app-server doctor
+rainrail plugin codex-app-server session test
+```
+
+This optional plugin writes a `runtimeProviders.codexAppServer` entry using the
+`codex-app-server` runtime id. It is only for Codex CLI App Server users; skip
+it when your project uses OpenClaw or another runtime provider.
+
+## 4. Start the local harness when ready
 
 ```sh
 rainrail start

@@ -103,6 +103,28 @@ unimplemented plugin execution placeholder. That no-op setup route accepts only
 the setup command itself; extra plugin-specific arguments are rejected so typos
 are not reported as successful configuration.
 
+`codex-app-server` is an optional official runtime provider plugin for users who
+want Rainrail to start Codex CLI through the experimental Codex App Server
+stdio protocol. Users who only run OpenClaw, GitHub, Cloudflare, or a different
+runtime do not need it. `rainrail setup codex-app-server --yes` installs the
+project-local plugin, detects the `codex` command, verifies `codex --version`,
+`codex app-server --help`, and `codex login status`, then writes or updates the
+matching `runtimeProviders.codexAppServer` entry in `rainrail.config.json`.
+When a project already has a plugin runtime whose `runtime` is
+`codex-app-server`, setup updates that entry instead of creating a duplicate
+provider key.
+
+The generated provider uses the runtime id `codex-app-server`, plugin package
+`@rainrail/codex-app-server-runtime`, and executor `codex-app-server`. It may
+also record `command`, `home`, and `codexHome` when those values are configured
+or discovered. `home` maps to `HOME` and `codexHome` maps to `CODEX_HOME` for
+doctor/session checks and later runtime execution. Keep those directories on a
+dedicated runner profile when the Codex login state should not share the
+operator's default shell profile. The initial session test is intentionally
+stdio-only: it launches `codex app-server --listen stdio://`, performs a
+non-destructive initialize/thread-start smoke check, and does not validate
+future WebSocket, remote daemon, or process-pool behavior.
+
 If any install or setup step fails, setup stops at that step and returns the
 step exit code. Earlier successful install state is left in place so rerunning
 the same setup command can repair or continue from the first incomplete step.
