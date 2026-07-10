@@ -962,22 +962,14 @@ function dashboardV1LayoutResponse(options: RainrailHttpAppOptions): Response {
   if (stored !== undefined) {
     const catalog = dashboardCardCatalog(options);
     return jsonResponse({
-      data: {
-        id: stored.id,
-        source: 'user',
-        updatedAt: stored.updatedAt,
-        items: filterDashboardLayoutItems(stored.items, catalog),
-      },
+      data: dashboardLayoutResponseData(stored.id, 'user', stored.updatedAt, stored.items, catalog),
     });
   }
 
+  const catalog = dashboardCardCatalog(options);
+  const items = dashboardDefaultLayout(options);
   return jsonResponse({
-    data: {
-      id: DEFAULT_DASHBOARD_LAYOUT_ID,
-      source: 'default',
-      updatedAt: null,
-      items: filterDashboardLayoutItems(dashboardDefaultLayout(options), dashboardCardCatalog(options)),
-    },
+    data: dashboardLayoutResponseData(DEFAULT_DASHBOARD_LAYOUT_ID, 'default', null, items, catalog),
   });
 }
 
@@ -1096,10 +1088,7 @@ async function handleDashboardLayoutUpdateRequest(
 
   return commandResponse({
     data: {
-      id: USER_DASHBOARD_LAYOUT_ID,
-      source: 'user',
-      updatedAt: saved.updatedAt,
-      items: saved.items,
+      ...dashboardLayoutResponseData(USER_DASHBOARD_LAYOUT_ID, 'user', saved.updatedAt, saved.items, dashboardCardCatalog(options)),
       auditId,
       ...(auditWarning === undefined ? {} : { auditWarning }),
     },
@@ -1199,10 +1188,7 @@ async function handleDashboardLayoutItemConfigUpdateRequest(
 
   return commandResponse({
     data: {
-      id: USER_DASHBOARD_LAYOUT_ID,
-      source: 'user',
-      updatedAt: saved.updatedAt,
-      items: filterDashboardLayoutItems(saved.items, catalog),
+      ...dashboardLayoutResponseData(USER_DASHBOARD_LAYOUT_ID, 'user', saved.updatedAt, saved.items, catalog),
       auditId,
       ...(auditWarning === undefined ? {} : { auditWarning }),
     },
@@ -1236,6 +1222,29 @@ function dashboardCardRegistry(options: RainrailHttpAppOptions): DashboardCardRe
 
 function dashboardDefaultLayout(options: RainrailHttpAppOptions): DashboardLayoutItem[] {
   return jsonClone([...(options.dashboardDefaultLayout ?? DEFAULT_DASHBOARD_LAYOUT)]);
+}
+
+function dashboardLayoutResponseData(
+  id: string,
+  source: 'default' | 'user',
+  updatedAt: string | null,
+  items: readonly DashboardLayoutItem[],
+  catalog: DashboardCardCatalogEntry[],
+): {
+  id: string;
+  source: 'default' | 'user';
+  updatedAt: string | null;
+  filteredItemCount: number;
+  items: DashboardLayoutItem[];
+} {
+  const filteredItems = filterDashboardLayoutItems(items, catalog);
+  return {
+    id,
+    source,
+    updatedAt,
+    filteredItemCount: items.length - filteredItems.length,
+    items: filteredItems,
+  };
 }
 
 function parseDashboardLayoutItems(
@@ -1286,6 +1295,9 @@ function parseDashboardLayoutItems(
         response: jsonResponse({ error: 'dashboard_card_size_out_of_range', itemId: id, cardId }, { status: 400 }),
       };
     }
+    if (x + columns > 12) {
+      return { ok: false, response: jsonResponse({ error: 'invalid_dashboard_layout_item', itemId: id }, { status: 400 }) };
+    }
 
     const config = item.config;
     if (config !== undefined && (!isPlainRecord(config) || !isJsonSerializableValue(config))) {
@@ -1295,7 +1307,7 @@ function parseDashboardLayoutItems(
       return { ok: false, response: jsonResponse({ error: 'sensitive_dashboard_card_config', itemId: id, cardId }, { status: 400 }) };
     }
 
-    items.push({
+    const parsedItem = {
       id,
       cardId,
       x,
@@ -1303,10 +1315,21 @@ function parseDashboardLayoutItems(
       columns,
       rows,
       ...(config === undefined ? {} : { config: jsonClone(config as Record<string, unknown>) }),
-    });
+    };
+    if (items.some((item) => dashboardLayoutItemsOverlap(item, parsedItem))) {
+      return { ok: false, response: jsonResponse({ error: 'overlapping_dashboard_layout_item', itemId: id }, { status: 400 }) };
+    }
+    items.push(parsedItem);
   }
 
   return { ok: true, items };
+}
+
+function dashboardLayoutItemsOverlap(left: DashboardLayoutItem, right: DashboardLayoutItem): boolean {
+  return left.x < right.x + right.columns
+    && left.x + left.columns > right.x
+    && left.y < right.y + right.rows
+    && left.y + left.rows > right.y;
 }
 
 function filterDashboardLayoutItems(
@@ -1320,6 +1343,7 @@ function filterDashboardLayoutItems(
     if (!parsed.ok) continue;
     const [parsedItem] = parsed.items;
     if (parsedItem === undefined || seenItemIds.has(parsedItem.id)) continue;
+    if (filtered.some((existing) => dashboardLayoutItemsOverlap(existing, parsedItem))) continue;
     seenItemIds.add(parsedItem.id);
     filtered.push(parsedItem);
   }

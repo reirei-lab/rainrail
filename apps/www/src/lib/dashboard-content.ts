@@ -214,6 +214,35 @@ export type DashboardAppCopy = {
     empty: string;
     noFields: string;
   };
+  cardLayout: {
+    title: string;
+    description: string;
+    pickerTitle: string;
+    searchPlaceholder: string;
+    searchLabel: string;
+    categoryLabel: string;
+    providerLabel: string;
+    allCategories: string;
+    allProviders: string;
+    gridLabel: string;
+    add: string;
+    hide: string;
+    remove: string;
+    settings: string;
+    open: string;
+    resize: string;
+    move: string;
+    unavailable: string;
+    tooWide: string;
+    unknownDashboardCard: string;
+    empty: string;
+    saving: string;
+    saved: string;
+    failed: string;
+    hiddenCardsWarning: string;
+    moveBlocked: string;
+    resizeBlocked: string;
+  };
 };
 
 export const getDashboardHref = (locale: Locale): string => `/${locale}/dashboard`;
@@ -373,6 +402,35 @@ const englishApp: DashboardAppCopy = {
     empty: 'No dashboard cards in the current layout.',
     noFields: 'This card has no configurable fields.',
   },
+  cardLayout: {
+    title: 'Dashboard layout',
+    description: 'Pick cards, then drag, resize, remove, and save the operator layout.',
+    pickerTitle: 'Card picker',
+    searchPlaceholder: 'Search category / provider / plugin',
+    searchLabel: 'Search dashboard cards by category, provider, or plugin name',
+    categoryLabel: 'Filter cards by category',
+    providerLabel: 'Filter cards by provider',
+    allCategories: 'All categories',
+    allProviders: 'All providers',
+    gridLabel: 'Editable dashboard card layout',
+    add: 'Add card',
+    hide: 'Hide',
+    remove: 'Remove',
+    settings: 'Settings',
+    open: 'Open',
+    resize: 'Resize',
+    move: 'Move',
+    unavailable: 'Unavailable',
+    tooWide: 'This card does not fit the 12-column dashboard grid.',
+    unknownDashboardCard: 'Unknown dashboard card',
+    empty: 'No cards in this layout yet.',
+    saving: 'Saving dashboard layout',
+    saved: 'Dashboard layout saved',
+    failed: 'Dashboard layout save failed',
+    hiddenCardsWarning: 'Hidden cards may be omitted by this save. Re-enable missing plugin cards before editing this saved layout.',
+    moveBlocked: 'Move would place a card outside the grid or overlap another card.',
+    resizeBlocked: 'Resize would overlap another card.',
+  },
 };
 
 export const fallbackDashboardAppCopy: DashboardAppCopy = englishApp;
@@ -531,6 +589,35 @@ const japaneseApp: DashboardAppCopy = {
     invalid: '無効なカード設定を修正してから保存してください。',
     empty: '現在のレイアウトに dashboard card がありません。',
     noFields: 'このカードに設定項目はありません。',
+  },
+  cardLayout: {
+    title: 'Dashboard レイアウト',
+    description: 'カードを選び、ドラッグ、サイズ変更、削除を保存できます。',
+    pickerTitle: 'カードピッカー',
+    searchPlaceholder: 'category / provider / plugin を検索',
+    searchLabel: 'category、provider、plugin name で dashboard card を検索',
+    categoryLabel: 'カテゴリでカードを絞り込み',
+    providerLabel: 'provider でカードを絞り込み',
+    allCategories: 'すべてのカテゴリ',
+    allProviders: 'すべての provider',
+    gridLabel: '編集可能な dashboard card レイアウト',
+    add: 'カード追加',
+    hide: '非表示',
+    remove: '削除',
+    settings: '設定',
+    open: '表示',
+    resize: 'サイズ変更',
+    move: '移動',
+    unavailable: '利用不可',
+    tooWide: 'このカードは12列の dashboard grid に収まりません。',
+    unknownDashboardCard: '不明な dashboard card',
+    empty: 'このレイアウトにはまだカードがありません。',
+    saving: 'Dashboard レイアウトを保存中',
+    saved: 'Dashboard レイアウトを保存しました',
+    failed: 'Dashboard レイアウトの保存に失敗しました',
+    hiddenCardsWarning: '非表示のカードが保存から除外される可能性があります。非表示の plugin card を再度有効にしてから保存してください。',
+    moveBlocked: '移動するとカードが grid 外へ出るか別のカードと重なります。',
+    resizeBlocked: 'サイズ変更すると別のカードと重なります。',
   },
 };
 

@@ -112,7 +112,13 @@ export interface DashboardCardCatalogEntry {
     id: string;
     title: string;
     description?: string;
+    entry: { type: 'core'; name: string } | { type: 'plugin'; pluginName: string; cardName: string };
     category: string;
+    size: {
+      default: { columns: number; rows: number };
+      min?: { columns: number; rows: number };
+      max?: { columns: number; rows: number };
+    };
     settingsSchema?: {
       type: 'object';
       properties?: Record<string, unknown>;
@@ -143,6 +149,7 @@ export interface DashboardLayout {
     id: string;
     source: 'default' | 'user';
     updatedAt: string | null;
+    filteredItemCount?: number;
     items: DashboardLayoutItem[];
   };
 }

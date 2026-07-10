@@ -80,6 +80,26 @@ const dashboardCopy = JSON.stringify(content.app);
       <div class="dashboard-state" data-state="error">{content.shell.states.unavailable}</div>
       <div class="dashboard-state" data-state="auth-missing">{content.shell.states.authMissing}</div>
 
+      <section class="dashboard-layout-tools" aria-label={content.app.cardLayout.title}>
+        <div>
+          <h2>{content.app.cardLayout.title}</h2>
+          <p>{content.app.cardLayout.description}</p>
+        </div>
+        <div class="dashboard-card-picker" aria-label={content.app.cardLayout.pickerTitle}>
+          <input data-card-picker-search type="search" autocomplete="off" placeholder={content.app.cardLayout.searchPlaceholder} aria-label={content.app.cardLayout.searchLabel} />
+          <select data-card-picker-category aria-label={content.app.cardLayout.categoryLabel}>
+            <option value="">{content.app.cardLayout.allCategories}</option>
+          </select>
+          <select data-card-picker-provider aria-label={content.app.cardLayout.providerLabel}>
+            <option value="">{content.app.cardLayout.allProviders}</option>
+          </select>
+          <div class="dashboard-card-picker-list" data-card-picker-list></div>
+        </div>
+      </section>
+
+      <section class="dashboard-layout-grid" data-dashboard-layout-grid aria-label={content.app.cardLayout.gridLabel}></section>
+      <div class="dashboard-layout-status" data-dashboard-layout-status aria-live="polite"></div>
+
       <section class="dashboard-stats dashboard-overview-grid" data-dashboard-stats data-dashboard-core-card="core.operationalTotals" aria-label={content.shell.statsLabel}>
         <div class="dashboard-stat"><span>{content.app.stats.events}</span><strong>0</strong></div>
         <div class="dashboard-stat"><span>{content.app.stats.activeRuns}</span><strong>0</strong></div>

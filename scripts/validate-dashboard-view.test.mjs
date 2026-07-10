@@ -303,11 +303,117 @@ describe('dashboard operational views', () => {
     expect(dashboardApp).toContain('delete config[name]');
     expect(dashboardApp).toContain("currentValue !== null");
     expect(dashboardApp).toContain('cardSettingsDirty');
+    expect(dashboardApp).toContain('cardSettingsSaving');
     expect(dashboardApp).toContain('if (cardSettingsDirty && options.quiet) return;');
+    expect(dashboardApp).toContain('if (dashboardLayoutSaving) return;');
+    expect(dashboardApp).toContain("if (latestData?.layout.source === 'user' && !dashboardCoreCardIsVisible(cardId)) return;");
+    expect(dashboardApp).toContain('const activeClient = client;');
+    expect(dashboardApp).toContain('await activeClient.saveDashboardLayoutItemConfig(selectedLayoutItem.id, config);');
+    expect(dashboardApp).toContain('action.disabled = dashboardLayoutSaving || cardSettingsSaving || !enabled');
     expect(dashboardApp).toContain('void refresh({ quiet: true });');
     expect(dashboardApp).not.toContain('await refresh({ quiet: true });');
     expect(dashboardContent).toContain('Card settings');
     expect(dashboardContent).toContain('カード設定');
+  });
+
+  it('renders a card picker and editable dashboard layout grid', () => {
+    for (const marker of [
+      'data-card-picker-search',
+      'data-card-picker-category',
+      'data-card-picker-provider',
+      'data-card-picker-list',
+      'data-dashboard-layout-grid',
+      'data-dashboard-layout-status',
+    ]) {
+      expect(localizedDashboardPage).toContain(marker);
+    }
+
+    for (const marker of [
+      'renderDashboardLayout()',
+      'applyDashboardLayoutVisibility()',
+      'dashboardCoreCardElements',
+      'dashboardCoreCardIsVisible',
+      'dashboardCoreCardLayoutIds',
+      'ensureVisibleDashboardTab',
+      'renderCardPicker()',
+      'saveDashboardLayoutItems',
+      'discardInFlightDashboardRefreshes',
+      'filteredItemCount',
+      'draggable = true',
+      'dragend',
+      'application/x-rainrail-dashboard-layout-item',
+      'hasDashboardLayoutDragPayload',
+      'data-layout-item-id',
+      'data-dashboard-card-id',
+      'data-dashboard-card-menu',
+      'data-dashboard-card-resize',
+      'data-action-permission',
+      'removeDashboardLayoutItem',
+      'moveDashboardLayoutItem',
+      'movedDashboardLayoutItems',
+      'isFirstLayoutItem',
+      'resizeDashboardLayoutItem',
+      'nextDashboardLayoutResizeCandidate',
+      'effectiveMaxColumns',
+      'createDashboardLayoutItem',
+      'dashboardCardGridInitialSize',
+      'dashboardCardCanBeAdded',
+      'unknownDashboardCard',
+      'cardAvailabilityLabel',
+      'copy.cardLayout.open',
+      'dashboardLayoutSaving',
+      'isOperatorModeEnabled()',
+      'currentLayoutCardIds',
+      'hasUnavailableDashboardCards',
+      'layoutFilteredItemCountIsUnknown',
+      'layoutSaveWouldDropHiddenCards',
+      'dashboardLayoutItemInGridBounds',
+      'dashboardLayoutItemsOverlap',
+      'dashboardLayoutItemBounds',
+    ]) {
+      expect(dashboardApp).toContain(marker);
+    }
+
+    expect(dashboardApp.indexOf('syncCardPickerFilters(latestData.cards);')).toBeLessThan(
+      dashboardApp.indexOf("const categoryFilter = cardPickerCategory?.value ?? '';"),
+    );
+
+    expect(dashboardClient).toContain('entry: { type:');
+    expect(dashboardClient).toContain('size: {');
+    expect(dashboardApp).toContain('category / provider / plugin');
+    expect(dashboardApp).toContain('activeClient.saveDashboardLayout(items)');
+    expect(dashboardApp).toContain("article.style.setProperty('--dashboard-card-row-start', String(Math.max(1, item.y + 1)));");
+    expect(dashboardApp).toContain("article.style.setProperty('--dashboard-card-rows', String(Math.max(1, item.rows)));");
+    expect(dashboardApp).not.toContain('clampDashboardCardSize(item.y + 1, 1, 99)');
+    expect(dashboardApp).not.toContain('clampDashboardCardSize(item.rows, 1, 12)');
+    expect(dashboardApp).toContain("element.hidden = latestData !== undefined && latestData.layout.source === 'user' && cardId !== undefined && !dashboardCoreCardIsVisible(cardId);");
+    expect(dashboardApp).toContain('!dashboardCoreCardIsVisible(cardId)');
+    expect(dashboardApp).toContain("new Set(['core.eventInbox', 'core.recentEvents'])");
+    expect(dashboardApp).toContain('if (dashboardLayoutSaving) return;');
+    expect(dashboardApp).toContain('if (cardSettingsSaving) return;');
+    expect(dashboardApp).toContain('discardInFlightDashboardRefreshes(activeClient);');
+    expect(dashboardApp).toContain('if (client !== activeClient) return;');
+    expect(dashboardApp).toContain('renderCardSettingsPicker({ quiet: true });\n      renderCurrentList();');
+    expect(dashboardApp).toContain('renderCardSettingsPicker({ quiet: true });');
+    expect(dashboardApp).not.toContain('setDashboardLayoutStatus(copy.cardLayout.saved);');
+    expect(dashboardApp).not.toContain('return dashboardTabForCard(cardId) === undefined ? copy.cardLayout.settings : copy.cardLayout.move;');
+    expect(dashboardContent).toContain('Card picker');
+    expect(dashboardContent).toContain('カードピッカー');
+    expect(dashboardContent).toContain("open: 'Open'");
+    expect(dashboardContent).toContain("open: '表示'");
+    expect(dashboardContent).toContain('Hidden cards may be omitted');
+    expect(dashboardContent).toContain('非表示のカードが保存から除外される可能性があります。');
+    expect(dashboardContent).not.toContain("hiddenCardsWarning: 'Hidden cards may be omitted by this save。");
+    expect(dashboardContent).toContain('Move would place a card outside the grid');
+    expect(globalStyles).toContain('.dashboard-layout-grid');
+    expect(globalStyles).toContain('grid-template-columns: repeat(12, minmax(0, 1fr))');
+    expect(globalStyles).toContain('grid-auto-rows: 88px');
+    expect(globalStyles).toContain('grid-column: var(--dashboard-card-column-start) / span var(--dashboard-card-columns)');
+    expect(globalStyles).toContain('grid-row: var(--dashboard-card-row-start) / span var(--dashboard-card-rows)');
+    expect(globalStyles).toContain('min-height: calc(var(--dashboard-card-rows) * 88px)');
+    expect(globalStyles).toContain('.dashboard-card-picker-list');
+    expect(globalStyles).toContain('@media (max-width: 900px)');
+    expect(globalStyles).toContain('--dashboard-card-columns: 1');
   });
 
   it('does not mark the whole dashboard empty just because Event Inbox filters hide rows', () => {

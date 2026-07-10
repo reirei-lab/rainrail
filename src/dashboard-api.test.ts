@@ -103,8 +103,9 @@ describe('Rainrail dashboard API', () => {
     expect(cardIds).toContain('core.recentEvents');
 
     const layoutBody = await (await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/layout', { headers }))).json() as {
-      data: { items: Array<{ cardId: string }> };
+      data: { filteredItemCount: number; items: Array<{ cardId: string }> };
     };
+    expect(layoutBody.data.filteredItemCount).toBe(0);
     expect(layoutBody.data.items.map((item) => item.cardId)).toEqual(['core.overview', 'core.recentEvents']);
     operationalStore.close();
   });
@@ -154,6 +155,7 @@ describe('Rainrail dashboard API', () => {
           id: 'core.defaultLayout',
           source: 'default',
           updatedAt: null,
+          filteredItemCount: 0,
           items: [{
             id: 'recent-events',
             cardId: 'core.recentEvents',
@@ -210,6 +212,18 @@ describe('Rainrail dashboard API', () => {
     const registry = createDashboardCardRegistry();
     registry.register(recentEventsCard);
     registry.register(queueCard);
+    registry.register({
+      id: 'plugin:github.wideDashboardCard',
+      title: 'Wide dashboard card',
+      entry: { type: 'plugin', pluginName: 'github', cardName: 'wideDashboardCard' },
+      category: 'operations',
+      requiredCapabilities: ['dashboard:read', 'github:read'],
+      size: {
+        default: { columns: 12, rows: 2 },
+        min: { columns: 2, rows: 1 },
+        max: { columns: 16, rows: 4 },
+      },
+    });
     const operationalStore = new RainrailOperationalStore({
       databasePath: ':memory:',
       eventLimit: 10,
@@ -296,6 +310,37 @@ describe('Rainrail dashboard API', () => {
     }));
     expect(duplicateItem.status).toBe(400);
     await expect(duplicateItem.json()).resolves.toEqual({ error: 'duplicate_dashboard_layout_item', itemId: 'dup' });
+
+    const overlappingItem = await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/layout', {
+      method: 'PUT',
+      headers: { authorization: 'Bearer operator-token', 'content-type': 'application/json' },
+      body: JSON.stringify({
+        items: [
+          { id: 'recent-events', cardId: 'core.recentEvents', x: 0, y: 0, columns: 4, rows: 2 },
+          { id: 'queue', cardId: 'plugin:github.queue', x: 3, y: 1, columns: 3, rows: 2 },
+        ],
+      }),
+    }));
+    expect(overlappingItem.status).toBe(400);
+    await expect(overlappingItem.json()).resolves.toEqual({
+      error: 'overlapping_dashboard_layout_item',
+      itemId: 'queue',
+    });
+
+    const outOfGridItem = await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/layout', {
+      method: 'PUT',
+      headers: { authorization: 'Bearer operator-token', 'content-type': 'application/json' },
+      body: JSON.stringify({
+        items: [
+          { id: 'wide', cardId: 'plugin:github.wideDashboardCard', x: 8, y: 0, columns: 8, rows: 2 },
+        ],
+      }),
+    }));
+    expect(outOfGridItem.status).toBe(400);
+    await expect(outOfGridItem.json()).resolves.toEqual({
+      error: 'invalid_dashboard_layout_item',
+      itemId: 'wide',
+    });
 
     const saved = await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/layout', {
       method: 'PUT',
@@ -470,7 +515,7 @@ describe('Rainrail dashboard API', () => {
     });
     operationalStore.saveDashboardLayout([
       { id: 'recent-events', cardId: 'core.recentEvents', x: 0, y: 0, columns: 4, rows: 2 },
-      { id: 'queue', cardId: 'plugin:github.queue', x: 4, y: 0, columns: 3, rows: 2 },
+      { id: 'queue', cardId: 'plugin:github.queue', x: 3, y: 1, columns: 3, rows: 2 },
       { id: 'missing', cardId: 'plugin:github.missing', x: 0, y: 2, columns: 3, rows: 2 },
     ]);
     const app = createTestApp({
@@ -492,6 +537,7 @@ describe('Rainrail dashboard API', () => {
       data: {
         id: 'user.dashboardLayout',
         source: 'user',
+        filteredItemCount: 2,
         items: [{ id: 'recent-events', cardId: 'core.recentEvents' }],
       },
     });
