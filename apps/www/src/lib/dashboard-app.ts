@@ -510,11 +510,11 @@ if (root !== null) {
     for (const action of operatorActions) {
       const agentAction = action.dataset.agentAction;
       if (agentAction === undefined) {
-        action.disabled = !enabled;
+        action.disabled = dashboardLayoutSaving || !enabled;
         continue;
       }
       const needsSelectedTask = agentAction !== 'terminate-all';
-      action.disabled = !enabled || (needsSelectedTask && selectedAgentTaskId === undefined);
+      action.disabled = dashboardLayoutSaving || !enabled || (needsSelectedTask && selectedAgentTaskId === undefined);
     }
   }
 
@@ -1037,6 +1037,7 @@ if (root !== null) {
     const activeClient = client;
     discardInFlightDashboardRefreshes(activeClient);
     dashboardLayoutSaving = true;
+    setOperatorActionsEnabled(isOperatorModeEnabled());
     setDashboardLayoutStatus(copy.cardLayout.saving);
     renderDashboardLayout();
     renderCardPicker();
@@ -1057,6 +1058,7 @@ if (root !== null) {
       setDashboardLayoutStatus(error instanceof RainrailDashboardApiError ? `${copy.cardLayout.failed}: ${error.code}` : copy.cardLayout.failed);
     } finally {
       dashboardLayoutSaving = false;
+      setOperatorActionsEnabled(isOperatorModeEnabled());
       renderDashboardLayout();
       renderCardPicker();
     }
@@ -1102,10 +1104,18 @@ if (root !== null) {
   }
 
   function layoutSaveWouldDropHiddenCards(): boolean {
+    const filteredItemCount = latestData?.layout.filteredItemCount;
     return latestData !== undefined
       && latestData.layout.source === 'user'
-      && ((latestData.layout.filteredItemCount ?? 0) > 0
+      && (layoutFilteredItemCountIsUnknown()
+        || (filteredItemCount !== undefined && filteredItemCount > 0)
         || hasUnavailableDashboardCards(latestData.cards, currentLayoutCardIds()));
+  }
+
+  function layoutFilteredItemCountIsUnknown(): boolean {
+    return latestData !== undefined
+      && latestData.layout.source === 'user'
+      && latestData.layout.filteredItemCount === undefined;
   }
 
   function compareDashboardLayoutItems(a: DashboardLayoutItem, b: DashboardLayoutItem): number {
@@ -1314,6 +1324,7 @@ if (root !== null) {
       setCardSettingsStatus(copy.command.connectFirst);
       return;
     }
+    if (dashboardLayoutSaving) return;
 
     const selectedLayoutItem = latestData.layout.items.find((item) => item.id === cardSettingsSelect.value);
     if (selectedLayoutItem === undefined) {

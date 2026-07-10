@@ -304,6 +304,8 @@ describe('dashboard operational views', () => {
     expect(dashboardApp).toContain("currentValue !== null");
     expect(dashboardApp).toContain('cardSettingsDirty');
     expect(dashboardApp).toContain('if (cardSettingsDirty && options.quiet) return;');
+    expect(dashboardApp).toContain('if (dashboardLayoutSaving) return;');
+    expect(dashboardApp).toContain('action.disabled = dashboardLayoutSaving || !enabled');
     expect(dashboardApp).toContain('void refresh({ quiet: true });');
     expect(dashboardApp).not.toContain('await refresh({ quiet: true });');
     expect(dashboardContent).toContain('Card settings');
@@ -353,6 +355,7 @@ describe('dashboard operational views', () => {
       'isOperatorModeEnabled()',
       'currentLayoutCardIds',
       'hasUnavailableDashboardCards',
+      'layoutFilteredItemCountIsUnknown',
       'layoutSaveWouldDropHiddenCards',
       'dashboardLayoutItemInGridBounds',
       'dashboardLayoutItemsOverlap',
@@ -377,6 +380,8 @@ describe('dashboard operational views', () => {
     expect(dashboardContent).toContain("open: 'Open'");
     expect(dashboardContent).toContain("open: '表示'");
     expect(dashboardContent).toContain('Hidden cards may be omitted');
+    expect(dashboardContent).toContain('非表示のカードが保存から除外される可能性があります。');
+    expect(dashboardContent).not.toContain("hiddenCardsWarning: 'Hidden cards may be omitted by this save。");
     expect(dashboardContent).toContain('Move would place a card outside the grid');
     expect(globalStyles).toContain('.dashboard-layout-grid');
     expect(globalStyles).toContain('grid-template-columns: repeat(12, minmax(0, 1fr))');

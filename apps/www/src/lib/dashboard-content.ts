@@ -615,7 +615,7 @@ const japaneseApp: DashboardAppCopy = {
     saving: 'Dashboard レイアウトを保存中',
     saved: 'Dashboard レイアウトを保存しました',
     failed: 'Dashboard レイアウトの保存に失敗しました',
-    hiddenCardsWarning: 'Hidden cards may be omitted by this save。非表示の plugin card を再度有効にしてから保存してください。',
+    hiddenCardsWarning: '非表示のカードが保存から除外される可能性があります。非表示の plugin card を再度有効にしてから保存してください。',
     moveBlocked: '移動するとカードが grid 外へ出るか別のカードと重なります。',
     resizeBlocked: 'サイズ変更すると別のカードと重なります。',
   },
