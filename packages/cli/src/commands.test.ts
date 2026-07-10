@@ -1,6 +1,6 @@
 import { writeFileSync as realWriteFileSync } from 'node:fs';
 import { createHmac } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import net from 'node:net';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -78,6 +78,28 @@ async function initRainrailProject(parentDirectory: string, projectName: string)
   await mkdir(projectRoot, { recursive: true });
   expect(runRainrailCli(['init', '--yes'], { cwd: projectRoot }).exitCode).toBe(0);
   return projectRoot;
+}
+
+function codexAppServerSessionSmokeStdout(): string {
+  return [
+    JSON.stringify({
+      id: 1,
+      result: {
+        userAgent: 'codex-cli/0.139.0',
+        platformFamily: 'unix',
+        platformOs: 'darwin',
+      },
+    }),
+    JSON.stringify({
+      id: 2,
+      result: {
+        thread: {
+          id: 'thread_smoke',
+        },
+      },
+    }),
+    '',
+  ].join('\n');
 }
 
 async function getFreePort(host = '127.0.0.1'): Promise<number> {
@@ -5450,6 +5472,1167 @@ describe('Rainrail CLI built-in commands', () => {
     expect(result.stderr).toContain('Unknown rainrail plugin github command: setup typo');
   });
 
+  it('preserves official plugin commands that accept positional arguments', () => {
+    const result = runRainrailCli(['github', 'webhook', 'add', 'reirei-lab/rainrail']);
+
+    expect(result.exitCode).toBe(2);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('rainrail github webhook add requires plugin execution');
+    expect(result.stderr).not.toContain('Unknown rainrail github command');
+  });
+
+  it('sets up Codex App Server runtime provider config without storing secrets', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'codex-runtime');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      const calls: Array<{ command: string; args: readonly string[] }> = [];
+
+      const result = runRainrailCli(['plugin', 'codex-app-server', 'setup', '--yes'], {
+        cwd: projectRoot,
+        env: {
+          HOME: '/Users/reirei',
+          CODEX_HOME: '/Users/reirei/.codex-work',
+        },
+        commandRunner: (command, args) => {
+          calls.push({ command, args });
+          if (command === 'sh' && args.join(' ') === '-c command -v codex') {
+            return { status: 0, stdout: '/opt/homebrew/bin/codex\n', stderr: '' };
+          }
+          if (command === '/opt/homebrew/bin/codex' && args.join(' ') === '--version') {
+            return { status: 0, stdout: 'codex-cli 0.139.0\n', stderr: '' };
+          }
+          if (command === '/opt/homebrew/bin/codex' && args.join(' ') === 'app-server --help') {
+            return { status: 0, stdout: 'Usage: codex app-server --listen stdio://\n', stderr: '' };
+          }
+          if (command === '/opt/homebrew/bin/codex' && args.join(' ') === 'login status') {
+            return { status: 0, stdout: 'Logged in\n', stderr: '' };
+          }
+          return { status: 1, stdout: '', stderr: 'unexpected command\n' };
+        },
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+      expect(result.stdout).toContain('Codex App Server setup completed.');
+      expect(calls.map((call) => [call.command, call.args])).toEqual([
+        ['sh', ['-c', 'command -v codex']],
+        ['/opt/homebrew/bin/codex', ['--version']],
+        ['/opt/homebrew/bin/codex', ['app-server', '--help']],
+        ['/opt/homebrew/bin/codex', ['login', 'status']],
+      ]);
+      const config = JSON.parse(await readFile(configPath, 'utf8')) as {
+        runtimeProviders?: {
+          codexAppServer?: Record<string, unknown>;
+        };
+      };
+      expect(config.runtimeProviders?.codexAppServer).toEqual({
+        type: 'plugin',
+        enabled: true,
+        runtime: 'codex-app-server',
+        plugin: '@rainrail/codex-app-server-runtime',
+        executor: 'codex-app-server',
+        command: '/opt/homebrew/bin/codex',
+        home: '/Users/reirei',
+        codexHome: '/Users/reirei/.codex-work',
+      });
+      expect(JSON.stringify(config)).not.toMatch(/token|secret|password|credential/iu);
+    });
+  });
+
+  it('returns Codex App Server setup readiness as JSON for automation', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'codex-runtime-json');
+
+      const result = runRainrailCli(['--json', 'plugin', 'codex-app-server', 'setup', '--yes'], {
+        cwd: projectRoot,
+        env: { HOME: '/Users/reirei' },
+        commandRunner: (command, args) => {
+          if (command === 'sh' && args.join(' ') === '-c command -v codex') {
+            return { status: 0, stdout: '/usr/local/bin/codex\n', stderr: '' };
+          }
+          if (command === '/usr/local/bin/codex' && args.join(' ') === '--version') {
+            return { status: 0, stdout: 'codex-cli 0.139.0\n', stderr: '' };
+          }
+          if (command === '/usr/local/bin/codex' && args.join(' ') === 'app-server --help') {
+            return { status: 0, stdout: 'app-server help\n', stderr: '' };
+          }
+          if (command === '/usr/local/bin/codex' && args.join(' ') === 'login status') {
+            return { status: 1, stdout: '', stderr: 'not logged in\n' };
+          }
+          return { status: 1, stdout: '', stderr: 'unexpected command\n' };
+        },
+      });
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toBe('');
+      expect(JSON.parse(result.stdout) as unknown).toMatchObject({
+        command: 'codex-app-server setup',
+        completed: false,
+        checks: {
+          binary: { ok: true, path: '/usr/local/bin/codex' },
+          appServer: { ok: true },
+          login: {
+            ok: false,
+            remediation: 'Run `codex login`, then re-run `rainrail plugin codex-app-server setup --yes`.',
+          },
+        },
+      });
+    });
+  });
+
+  it('preserves unrelated env fragments while writing Codex App Server setup config', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'codex-runtime-fragmented-config');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      await writeFile(configPath, [
+        '{',
+        '  "project": { "name": "codex-runtime-fragmented-config" },',
+        '  "sourceBundles": [],',
+        '  "sources": ${RAINRAIL_SOURCES},',
+        '  "taskProviders": ${TASK_PROVIDERS},',
+        '  "runtimeProviders": {}',
+        '}',
+      ].join('\n'));
+
+      const result = runRainrailCli(['plugin', 'codex-app-server', 'setup', '--yes'], {
+        cwd: projectRoot,
+        env: {
+          HOME: '/Users/reirei',
+          CODEX_HOME: '/Users/reirei/.codex',
+          RAINRAIL_SOURCES: '[]',
+          TASK_PROVIDERS: '{}',
+        },
+        commandRunner: (command, args) => {
+          if (command === 'sh' && args.join(' ') === '-c command -v codex') {
+            return { status: 0, stdout: '/opt/homebrew/bin/codex\n', stderr: '' };
+          }
+          if (command === '/opt/homebrew/bin/codex' && args.join(' ') === '--version') {
+            return { status: 0, stdout: 'codex-cli 0.139.0\n', stderr: '' };
+          }
+          if (command === '/opt/homebrew/bin/codex' && args.join(' ') === 'app-server --help') {
+            return { status: 0, stdout: 'app-server help\n', stderr: '' };
+          }
+          if (command === '/opt/homebrew/bin/codex' && args.join(' ') === 'login status') {
+            return { status: 0, stdout: 'Logged in\n', stderr: '' };
+          }
+          return { status: 1, stdout: '', stderr: 'unexpected command\n' };
+        },
+      });
+      const rawConfig = await readFile(configPath, 'utf8');
+      const parseableConfig = JSON.parse(
+        rawConfig
+          .replace('${RAINRAIL_SOURCES}', '[]')
+          .replace('${TASK_PROVIDERS}', '{}'),
+      ) as { runtimeProviders?: { codexAppServer?: Record<string, unknown> } };
+
+      expect(result.exitCode).toBe(0);
+      expect(rawConfig).toContain('"sources": ${RAINRAIL_SOURCES}');
+      expect(rawConfig).toContain('"taskProviders": ${TASK_PROVIDERS}');
+      expect(parseableConfig.runtimeProviders?.codexAppServer).toMatchObject({
+        type: 'plugin',
+        enabled: true,
+        runtime: 'codex-app-server',
+        plugin: '@rainrail/codex-app-server-runtime',
+      });
+    });
+  });
+
+  it('does not overwrite runtimeProviders that contain env fragments during Codex App Server setup', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'codex-runtime-provider-fragment');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      await writeFile(configPath, [
+        '{',
+        '  "project": { "name": "codex-runtime-provider-fragment" },',
+        '  "runtimeProviders": {',
+        '    "openclaw": ${OPENCLAW_RUNTIME_PROVIDER}',
+        '  }',
+        '}',
+      ].join('\n'));
+
+      const result = runRainrailCli(['--json', 'plugin', 'codex-app-server', 'setup', '--yes'], {
+        cwd: projectRoot,
+        env: {
+          HOME: '/Users/reirei',
+          CODEX_HOME: '/Users/reirei/.codex',
+          OPENCLAW_RUNTIME_PROVIDER: JSON.stringify({
+            type: 'plugin',
+            runtime: 'openclaw',
+            plugin: '@rainrail/openclaw-runtime',
+          }),
+        },
+        commandRunner: (command, args) => {
+          if (command === 'sh' && args.join(' ') === '-c command -v codex') {
+            return { status: 0, stdout: '/opt/homebrew/bin/codex\n', stderr: '' };
+          }
+          if (command === '/opt/homebrew/bin/codex' && args.join(' ') === '--version') {
+            return { status: 0, stdout: 'codex-cli 0.139.0\n', stderr: '' };
+          }
+          if (command === '/opt/homebrew/bin/codex' && args.join(' ') === 'app-server --help') {
+            return { status: 0, stdout: 'app-server help\n', stderr: '' };
+          }
+          if (command === '/opt/homebrew/bin/codex' && args.join(' ') === 'login status') {
+            return { status: 0, stdout: 'Logged in\n', stderr: '' };
+          }
+          return { status: 1, stdout: '', stderr: 'unexpected command\n' };
+        },
+      });
+      const rawConfig = await readFile(configPath, 'utf8');
+
+      expect(result.exitCode).toBe(1);
+      expect(JSON.parse(result.stdout) as unknown).toMatchObject({
+        completed: false,
+        error: 'config.runtimeProviders must be a JSON object without unresolved env fragments before codex-app-server setup can update it',
+      });
+      expect(rawConfig).toContain('"openclaw": ${OPENCLAW_RUNTIME_PROVIDER}');
+      expect(rawConfig).not.toContain('codexAppServer');
+    });
+  });
+
+  it('reuses an existing Codex App Server runtime provider key during setup', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'codex-runtime-existing-key');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      await writeFile(configPath, `${JSON.stringify({
+        project: { name: 'codex-runtime-existing-key' },
+        runtimeProviders: {
+          codexRuntime: {
+            type: 'plugin',
+            enabled: false,
+            runtime: 'codex-app-server',
+            plugin: '@rainrail/codex-app-server-runtime',
+          },
+        },
+      }, null, 2)}\n`);
+
+      const result = runRainrailCli(['plugin', 'codex-app-server', 'setup', '--yes'], {
+        cwd: projectRoot,
+        env: {
+          HOME: '/Users/reirei',
+          CODEX_HOME: '/Users/reirei/.codex',
+        },
+        commandRunner: (command, args) => {
+          if (command === 'sh' && args.join(' ') === '-c command -v codex') {
+            return { status: 0, stdout: '/opt/homebrew/bin/codex\n', stderr: '' };
+          }
+          if (command === '/opt/homebrew/bin/codex' && args.join(' ') === '--version') {
+            return { status: 0, stdout: 'codex-cli 0.139.0\n', stderr: '' };
+          }
+          if (command === '/opt/homebrew/bin/codex' && args.join(' ') === 'app-server --help') {
+            return { status: 0, stdout: 'app-server help\n', stderr: '' };
+          }
+          if (command === '/opt/homebrew/bin/codex' && args.join(' ') === 'login status') {
+            return { status: 0, stdout: 'Logged in\n', stderr: '' };
+          }
+          return { status: 1, stdout: '', stderr: 'unexpected command\n' };
+        },
+      });
+      const config = JSON.parse(await readFile(configPath, 'utf8')) as {
+        runtimeProviders?: {
+          codexRuntime?: Record<string, unknown>;
+          codexAppServer?: Record<string, unknown>;
+        };
+      };
+
+      expect(result.exitCode).toBe(0);
+      expect(config.runtimeProviders?.codexAppServer).toBeUndefined();
+      expect(config.runtimeProviders?.codexRuntime).toMatchObject({
+        enabled: true,
+        runtime: 'codex-app-server',
+        command: '/opt/homebrew/bin/codex',
+        home: '/Users/reirei',
+        codexHome: '/Users/reirei/.codex',
+      });
+    });
+  });
+
+  it('writes parseable Codex App Server setup config when runtimeProviders is missing from an empty object', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'codex-runtime-empty-config');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      await writeFile(configPath, '{}\n');
+
+      const result = runRainrailCli(['plugin', 'codex-app-server', 'setup', '--yes'], {
+        cwd: projectRoot,
+        env: { HOME: '/Users/reirei' },
+        commandRunner: (command, args) => {
+          if (command === 'sh' && args.join(' ') === '-c command -v codex') {
+            return { status: 0, stdout: '/opt/homebrew/bin/codex\n', stderr: '' };
+          }
+          if (command === '/opt/homebrew/bin/codex' && args.join(' ') === '--version') {
+            return { status: 0, stdout: 'codex-cli 0.139.0\n', stderr: '' };
+          }
+          if (command === '/opt/homebrew/bin/codex' && args.join(' ') === 'app-server --help') {
+            return { status: 0, stdout: 'app-server help\n', stderr: '' };
+          }
+          if (command === '/opt/homebrew/bin/codex' && args.join(' ') === 'login status') {
+            return { status: 0, stdout: 'Logged in\n', stderr: '' };
+          }
+          return { status: 1, stdout: '', stderr: 'unexpected command\n' };
+        },
+      });
+      const config = JSON.parse(await readFile(configPath, 'utf8')) as {
+        runtimeProviders?: { codexAppServer?: Record<string, unknown> };
+      };
+
+      expect(result.exitCode).toBe(0);
+      expect(config.runtimeProviders?.codexAppServer?.runtime).toBe('codex-app-server');
+    });
+  });
+
+  it('records Codex App Server HOME and CODEX_HOME candidates without requiring CODEX_HOME', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'codex-runtime-home-candidate');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+
+      const result = runRainrailCli(['plugin', 'codex-app-server', 'setup', '--yes'], {
+        cwd: projectRoot,
+        env: { HOME: '/Users/reirei' },
+        commandRunner: (command, args) => {
+          if (command === 'sh' && args.join(' ') === '-c command -v codex') {
+            return { status: 0, stdout: '/opt/homebrew/bin/codex\n', stderr: '' };
+          }
+          if (command === '/opt/homebrew/bin/codex' && args.join(' ') === '--version') {
+            return { status: 0, stdout: 'codex-cli 0.139.0\n', stderr: '' };
+          }
+          if (command === '/opt/homebrew/bin/codex' && args.join(' ') === 'app-server --help') {
+            return { status: 0, stdout: 'app-server help\n', stderr: '' };
+          }
+          if (command === '/opt/homebrew/bin/codex' && args.join(' ') === 'login status') {
+            return { status: 0, stdout: 'Logged in\n', stderr: '' };
+          }
+          return { status: 1, stdout: '', stderr: 'unexpected command\n' };
+        },
+      });
+
+      expect(result.exitCode).toBe(0);
+      const config = JSON.parse(await readFile(configPath, 'utf8')) as {
+        runtimeProviders?: {
+          codexAppServer?: {
+            home?: string;
+            codexHome?: string;
+          };
+        };
+      };
+      expect(config.runtimeProviders?.codexAppServer?.home).toBe('/Users/reirei');
+      expect(config.runtimeProviders?.codexAppServer?.codexHome).toBe('/Users/reirei/.codex');
+    });
+  });
+
+  it('reports missing Codex binary and unsupported app-server versions with remediation', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'codex-runtime-errors');
+
+      const missingBinary = runRainrailCli(['--json', 'plugin', 'codex-app-server', 'setup', '--yes'], {
+        cwd: projectRoot,
+        env: { PATH: '' },
+        commandRunner: (command, args) => {
+          if (command === 'sh' && args.join(' ') === '-c command -v codex') {
+            return { status: 1, stdout: '', stderr: 'codex not found\n' };
+          }
+          return { status: 1, stdout: '', stderr: 'unexpected command\n' };
+        },
+      });
+      expect(missingBinary.exitCode).toBe(1);
+      expect(JSON.parse(missingBinary.stdout) as unknown).toMatchObject({
+        completed: false,
+        checks: {
+          binary: {
+            ok: false,
+            remediation: 'Install the Codex CLI and make sure `codex` is on PATH.',
+          },
+          appServer: {
+            ok: false,
+            remediation: 'Install the Codex CLI and ensure `codex app-server --help` works.',
+          },
+        },
+      });
+
+      const unsupportedAppServer = runRainrailCli(['--json', 'plugin', 'codex-app-server', 'setup', '--yes'], {
+        cwd: projectRoot,
+        env: { PATH: '' },
+        commandRunner: (command, args) => {
+          if (command === 'sh' && args.join(' ') === '-c command -v codex') {
+            return { status: 0, stdout: '/usr/local/bin/codex\n', stderr: '' };
+          }
+          if (command === '/usr/local/bin/codex' && args.join(' ') === '--version') {
+            return { status: 0, stdout: 'codex-cli 0.120.0\n', stderr: '' };
+          }
+          if (command === '/usr/local/bin/codex' && args.join(' ') === 'app-server --help') {
+            return { status: 2, stdout: '', stderr: 'unrecognized subcommand app-server\n' };
+          }
+          if (command === '/usr/local/bin/codex' && args.join(' ') === 'login status') {
+            return { status: 0, stdout: 'Logged in\n', stderr: '' };
+          }
+          return { status: 1, stdout: '', stderr: 'unexpected command\n' };
+        },
+      });
+      expect(unsupportedAppServer.exitCode).toBe(1);
+      expect(JSON.parse(unsupportedAppServer.stdout) as unknown).toMatchObject({
+        completed: false,
+        checks: {
+          binary: { ok: true, path: '/usr/local/bin/codex', version: 'codex-cli 0.120.0' },
+          appServer: {
+            ok: false,
+            remediation: 'Upgrade Codex CLI to a version that supports `codex app-server`.',
+          },
+        },
+      });
+    });
+  });
+
+  it('detects Codex from PATH without relying on a POSIX shell', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'codex-runtime-path-detection');
+      const binDirectory = join(directory, 'bin');
+      const codexPath = join(binDirectory, 'codex.exe');
+      await mkdir(binDirectory);
+      await writeFile(codexPath, '');
+      await chmod(codexPath, 0o755);
+
+      const result = runRainrailCli(['--json', 'plugin', 'codex-app-server', 'setup', '--yes'], {
+        cwd: projectRoot,
+        env: {
+          HOME: '/Users/reirei',
+          PATH: binDirectory,
+          PATHEXT: '.EXE',
+        },
+        commandRunner: (command, args) => {
+          if (command === codexPath && args.join(' ') === '--version') {
+            return { status: 0, stdout: 'codex-cli 0.139.0\n', stderr: '' };
+          }
+          if (command === codexPath && args.join(' ') === 'app-server --help') {
+            return { status: 0, stdout: 'app-server help\n', stderr: '' };
+          }
+          if (command === codexPath && args.join(' ') === 'login status') {
+            return { status: 0, stdout: 'Logged in\n', stderr: '' };
+          }
+          return { status: 1, stdout: '', stderr: `unexpected command ${command} ${args.join(' ')}\n` };
+        },
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(JSON.parse(result.stdout) as unknown).toMatchObject({
+        checks: {
+          binary: {
+            ok: true,
+            path: codexPath,
+          },
+        },
+      });
+    });
+  });
+
+  it('skips non-executable POSIX Codex PATH candidates', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'codex-runtime-path-executable');
+      const staleBinDirectory = join(directory, 'stale-bin');
+      const validBinDirectory = join(directory, 'valid-bin');
+      const staleCodexPath = join(staleBinDirectory, 'codex');
+      const validCodexPath = join(validBinDirectory, 'codex');
+      await mkdir(staleBinDirectory);
+      await mkdir(validBinDirectory);
+      await writeFile(staleCodexPath, '');
+      await writeFile(validCodexPath, '');
+      await chmod(staleCodexPath, 0o644);
+      await chmod(validCodexPath, 0o755);
+
+      const result = runRainrailCli(['--json', 'plugin', 'codex-app-server', 'setup', '--yes'], {
+        cwd: projectRoot,
+        env: {
+          HOME: '/Users/reirei',
+          PATH: `${staleBinDirectory}:${validBinDirectory}`,
+        },
+        commandRunner: (command, args) => {
+          if (command === validCodexPath && args.join(' ') === '--version') {
+            return { status: 0, stdout: 'codex-cli 0.139.0\n', stderr: '' };
+          }
+          if (command === validCodexPath && args.join(' ') === 'app-server --help') {
+            return { status: 0, stdout: 'app-server help\n', stderr: '' };
+          }
+          if (command === validCodexPath && args.join(' ') === 'login status') {
+            return { status: 0, stdout: 'Logged in\n', stderr: '' };
+          }
+          return { status: command === staleCodexPath ? 126 : 1, stdout: '', stderr: 'unexpected command\n' };
+        },
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(JSON.parse(result.stdout) as unknown).toMatchObject({
+        checks: {
+          binary: {
+            ok: true,
+            path: validCodexPath,
+          },
+        },
+      });
+    });
+  });
+
+  it('runs Windows command shims through cmd.exe', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'codex-runtime-cmd-shim');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      await writeFile(configPath, `${JSON.stringify({
+        project: { name: 'codex-runtime-cmd-shim' },
+        runtimeProviders: {
+          codexAppServer: {
+            type: 'plugin',
+            enabled: true,
+            runtime: 'codex-app-server',
+            plugin: '@rainrail/codex-app-server-runtime',
+            command: 'C:\\Program Files\\Codex\\codex.cmd',
+          },
+        },
+      }, null, 2)}\n`);
+      const commands: Array<{ command: string; args: readonly string[] }> = [];
+
+      const result = runRainrailCli(['--json', 'plugin', 'codex-app-server', 'doctor'], {
+        cwd: projectRoot,
+        commandRunner: (command, args) => {
+          commands.push({ command, args });
+          if (command === 'cmd.exe' && args.at(-1)?.includes(' --version')) {
+            return { status: 0, stdout: 'codex-cli 0.139.0\n', stderr: '' };
+          }
+          if (command === 'cmd.exe' && args.at(-1)?.includes(' app-server --help')) {
+            return { status: 0, stdout: 'app-server help\n', stderr: '' };
+          }
+          if (command === 'cmd.exe' && args.at(-1)?.includes(' login status')) {
+            return { status: 0, stdout: 'Logged in\n', stderr: '' };
+          }
+          return { status: 1, stdout: '', stderr: 'unexpected command\n' };
+        },
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(commands).toEqual([
+        {
+          command: 'cmd.exe',
+          args: ['/d', '/s', '/c', '"C:\\Program Files\\Codex\\codex.cmd" --version'],
+        },
+        {
+          command: 'cmd.exe',
+          args: ['/d', '/s', '/c', '"C:\\Program Files\\Codex\\codex.cmd" app-server --help'],
+        },
+        {
+          command: 'cmd.exe',
+          args: ['/d', '/s', '/c', '"C:\\Program Files\\Codex\\codex.cmd" login status'],
+        },
+      ]);
+    });
+  });
+
+  it('runs Codex App Server doctor and session test checks', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'codex-runtime-doctor');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      await writeFile(configPath, `${JSON.stringify({
+        project: { name: 'codex-runtime-doctor' },
+        runtimeProviders: {
+          codexAppServer: {
+            type: 'plugin',
+            enabled: true,
+            runtime: 'codex-app-server',
+            plugin: '@rainrail/codex-app-server-runtime',
+            executor: 'codex-app-server',
+            command: '/opt/codex/bin/codex',
+            home: '/Users/reirei',
+            codexHome: '/Users/reirei/.codex',
+          },
+        },
+      }, null, 2)}\n`);
+      const calls: Array<{
+        command: string;
+        args: readonly string[];
+        env?: Record<string, string | undefined>;
+      }> = [];
+      const commandRunner = (
+        command: string,
+        args: readonly string[],
+        options: { readonly env?: Record<string, string | undefined> },
+      ) => {
+        calls.push(options.env === undefined ? { command, args } : { command, args, env: options.env });
+        if (command === '/opt/codex/bin/codex' && args.join(' ') === '--version') {
+          return { status: 0, stdout: 'codex-cli 0.139.0\n', stderr: '' };
+        }
+        if (command === '/opt/codex/bin/codex' && args.join(' ') === 'app-server --help') {
+          return { status: 0, stdout: 'app-server --listen stdio://\n', stderr: '' };
+        }
+        if (command === '/opt/codex/bin/codex' && args.join(' ') === 'login status') {
+          return { status: 0, stdout: 'Logged in\n', stderr: '' };
+        }
+        if (command === '/opt/codex/bin/codex' && args.join(' ') === 'app-server --listen stdio://') {
+          return { status: 0, stdout: codexAppServerSessionSmokeStdout(), stderr: '' };
+        }
+        return { status: 1, stdout: '', stderr: 'unexpected command\n' };
+      };
+
+      const doctor = runRainrailCli(['--json', 'plugin', 'codex-app-server', 'doctor'], {
+        cwd: projectRoot,
+        commandRunner,
+      });
+      const session = runRainrailCli(['plugin', 'codex-app-server', 'session', 'test'], {
+        cwd: projectRoot,
+        commandRunner,
+      });
+
+      expect(doctor.exitCode).toBe(0);
+      expect(doctor.stderr).toBe('');
+      expect(JSON.parse(doctor.stdout) as unknown).toMatchObject({
+        command: 'codex-app-server doctor',
+        ok: true,
+        config: {
+          enabled: true,
+          runtime: 'codex-app-server',
+          plugin: '@rainrail/codex-app-server-runtime',
+          executor: 'codex-app-server',
+        },
+        checks: {
+          binary: { ok: true, path: '/opt/codex/bin/codex' },
+          appServer: { ok: true },
+          login: { ok: true },
+        },
+      });
+      expect(session.exitCode).toBe(0);
+      expect(session.stderr).toBe('');
+      expect(session.stdout).toContain('Codex App Server session smoke test passed.');
+      expect(calls.map((call) => call.args.join(' '))).toEqual([
+        '--version',
+        'app-server --help',
+        'login status',
+        '--version',
+        'app-server --help',
+        'login status',
+        'app-server --listen stdio://',
+      ]);
+      expect(calls.every((call) =>
+        call.env?.HOME === '/Users/reirei' && call.env.CODEX_HOME === '/Users/reirei/.codex'
+      )).toBe(true);
+    });
+  });
+
+  it('passes configured Codex home values to the default Codex check runner', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'codex-runtime-default-runner-env');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      const codexScript = join(directory, 'codex-env-check');
+      await writeFile(codexScript, [
+        '#!/bin/sh',
+        'if [ "$1" = "--version" ]; then',
+        '  echo "codex-cli 0.139.0"',
+        '  exit 0',
+        'fi',
+        'if [ "$1" = "app-server" ] && [ "$2" = "--help" ]; then',
+        '  echo "app-server help"',
+        '  exit 0',
+        'fi',
+        'if [ "$1" = "login" ] && [ "$2" = "status" ]; then',
+        '  test "$HOME" = "/Users/configured" && test "$CODEX_HOME" = "/Users/configured/.codex-work"',
+        '  exit $?',
+        'fi',
+        'exit 1',
+      ].join('\n'));
+      await chmod(codexScript, 0o755);
+      await writeFile(configPath, `${JSON.stringify({
+        project: { name: 'codex-runtime-default-runner-env' },
+        runtimeProviders: {
+          codexAppServer: {
+            type: 'plugin',
+            enabled: true,
+            runtime: 'codex-app-server',
+            plugin: '@rainrail/codex-app-server-runtime',
+            command: codexScript,
+            home: '/Users/configured',
+            codexHome: '/Users/configured/.codex-work',
+          },
+        },
+      }, null, 2)}\n`);
+
+      const result = runRainrailCli(['--json', 'plugin', 'codex-app-server', 'doctor'], {
+        cwd: projectRoot,
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(JSON.parse(result.stdout) as unknown).toMatchObject({
+        ok: true,
+        checks: {
+          login: { ok: true },
+        },
+      });
+    });
+  });
+
+  it('expands env references before Codex App Server doctor and session test checks', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'codex-runtime-env-config');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      await writeFile(configPath, [
+        '{',
+        '  "project": { "name": "codex-runtime-env-config" },',
+        '  "runtimeProviders": {',
+        '    "codexAppServer": {',
+        '      "type": "plugin",',
+        '      "enabled": true,',
+        '      "runtime": "codex-app-server",',
+        '      "plugin": "@rainrail/codex-app-server-runtime",',
+        '      "command": "${CODEX_BIN}",',
+        '      "home": "${CODEX_HOME_PARENT}",',
+        '      "codexHome": "${CODEX_HOME}"',
+        '    }',
+        '  }',
+        '}',
+      ].join('\n'));
+      const calls: Array<{ command: string; env?: Record<string, string | undefined> }> = [];
+      const commandRunner = (
+        command: string,
+        args: readonly string[],
+        options: { readonly env?: Record<string, string | undefined> },
+      ) => {
+        calls.push(options.env === undefined ? { command } : { command, env: options.env });
+        if (command === '/opt/codex/bin/codex' && args.join(' ') === '--version') {
+          return { status: 0, stdout: 'codex-cli 0.139.0\n', stderr: '' };
+        }
+        if (command === '/opt/codex/bin/codex' && args.join(' ') === 'app-server --help') {
+          return { status: 0, stdout: 'app-server help\n', stderr: '' };
+        }
+        if (command === '/opt/codex/bin/codex' && args.join(' ') === 'login status') {
+          return { status: 0, stdout: 'Logged in\n', stderr: '' };
+        }
+        if (command === '/opt/codex/bin/codex' && args.join(' ') === 'app-server --listen stdio://') {
+          return { status: 0, stdout: codexAppServerSessionSmokeStdout(), stderr: '' };
+        }
+        return { status: 1, stdout: '', stderr: `unexpected command ${command}\n` };
+      };
+      const env = {
+        CODEX_BIN: '/opt/codex/bin/codex',
+        CODEX_HOME_PARENT: '/Users/reirei',
+        CODEX_HOME: '/Users/reirei/.codex-work',
+      };
+
+      const doctor = runRainrailCli(['--json', 'plugin', 'codex-app-server', 'doctor'], {
+        cwd: projectRoot,
+        env,
+        commandRunner,
+      });
+      const session = runRainrailCli(['--json', 'plugin', 'codex-app-server', 'session', 'test'], {
+        cwd: projectRoot,
+        env,
+        commandRunner,
+      });
+
+      expect(doctor.exitCode).toBe(0);
+      expect(session.exitCode).toBe(0);
+      expect(calls.every((call) => call.command === '/opt/codex/bin/codex')).toBe(true);
+      expect(calls.every((call) =>
+        call.env?.HOME === '/Users/reirei' && call.env.CODEX_HOME === '/Users/reirei/.codex-work'
+      )).toBe(true);
+    });
+  });
+
+  it('accepts minimal valid Codex App Server runtime config in doctor and session test', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'codex-runtime-minimal-config');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      await writeFile(configPath, `${JSON.stringify({
+        project: { name: 'codex-runtime-minimal-config' },
+        runtimeProviders: {
+          codexAppServer: {
+            type: 'plugin',
+            enabled: true,
+            runtime: 'codex-app-server',
+            plugin: '@rainrail/codex-app-server-runtime',
+          },
+        },
+      }, null, 2)}\n`);
+
+      const commandRunner = (command: string, args: readonly string[]) => {
+        if (command === 'sh' && args.join(' ') === '-c command -v codex') {
+          return { status: 0, stdout: '/opt/homebrew/bin/codex\n', stderr: '' };
+        }
+        if (command === '/opt/homebrew/bin/codex' && args.join(' ') === '--version') {
+          return { status: 0, stdout: 'codex-cli 0.139.0\n', stderr: '' };
+        }
+        if (command === '/opt/homebrew/bin/codex' && args.join(' ') === 'app-server --help') {
+          return { status: 0, stdout: 'app-server help\n', stderr: '' };
+        }
+        if (command === '/opt/homebrew/bin/codex' && args.join(' ') === 'login status') {
+          return { status: 0, stdout: 'Logged in\n', stderr: '' };
+        }
+        if (command === '/opt/homebrew/bin/codex' && args.join(' ') === 'app-server --listen stdio://') {
+          return { status: 0, stdout: codexAppServerSessionSmokeStdout(), stderr: '' };
+        }
+        return { status: 1, stdout: '', stderr: 'unexpected command\n' };
+      };
+
+      const doctor = runRainrailCli(['--json', 'plugin', 'codex-app-server', 'doctor'], {
+        cwd: projectRoot,
+        commandRunner,
+      });
+      const session = runRainrailCli(['--json', 'plugin', 'codex-app-server', 'session', 'test'], {
+        cwd: projectRoot,
+        commandRunner,
+      });
+
+      expect(doctor.exitCode).toBe(0);
+      expect(JSON.parse(doctor.stdout) as unknown).toMatchObject({
+        ok: true,
+        config: {
+          ok: true,
+          runtime: 'codex-app-server',
+          plugin: '@rainrail/codex-app-server-runtime',
+        },
+        checks: {
+          binary: { path: '/opt/homebrew/bin/codex' },
+        },
+      });
+      expect(session.exitCode).toBe(0);
+      expect(JSON.parse(session.stdout) as unknown).toMatchObject({ ok: true });
+    });
+  });
+
+  it('fails Codex App Server session test when the stdio session smoke check fails', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'codex-runtime-session-failure');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      await writeFile(configPath, `${JSON.stringify({
+        project: { name: 'codex-runtime-session-failure' },
+        runtimeProviders: {
+          codexAppServer: {
+            type: 'plugin',
+            enabled: true,
+            runtime: 'codex-app-server',
+            plugin: '@rainrail/codex-app-server-runtime',
+            command: '/opt/codex/bin/codex',
+          },
+        },
+      }, null, 2)}\n`);
+
+      const result = runRainrailCli(['--json', 'plugin', 'codex-app-server', 'session', 'test'], {
+        cwd: projectRoot,
+        commandRunner: (command, args) => {
+          if (command === '/opt/codex/bin/codex' && args.join(' ') === '--version') {
+            return { status: 0, stdout: 'codex-cli 0.139.0\n', stderr: '' };
+          }
+          if (command === '/opt/codex/bin/codex' && args.join(' ') === 'app-server --help') {
+            return { status: 0, stdout: 'app-server help\n', stderr: '' };
+          }
+          if (command === '/opt/codex/bin/codex' && args.join(' ') === 'login status') {
+            return { status: 0, stdout: 'Logged in\n', stderr: '' };
+          }
+          if (command === '/opt/codex/bin/codex' && args.join(' ') === 'app-server --listen stdio://') {
+            return {
+              status: 0,
+              stdout: `${JSON.stringify({
+                id: 1,
+                result: {
+                  userAgent: 'codex-cli/0.139.0',
+                  platformFamily: 'unix',
+                  platformOs: 'darwin',
+                },
+              })}\n`,
+              stderr: '',
+            };
+          }
+          return { status: 1, stdout: '', stderr: 'unexpected command\n' };
+        },
+      });
+
+      expect(result.exitCode).toBe(1);
+      expect(JSON.parse(result.stdout) as unknown).toMatchObject({
+        command: 'codex-app-server session test',
+        ok: false,
+        checks: {
+          session: {
+            ok: false,
+          },
+        },
+        error: 'Codex App Server session smoke check did not receive a successful thread/start response.',
+      });
+    });
+  });
+
+  it('retries Codex App Server session test with the legacy read-only sandbox name', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'codex-runtime-legacy-sandbox');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      await writeFile(configPath, `${JSON.stringify({
+        project: { name: 'codex-runtime-legacy-sandbox' },
+        runtimeProviders: {
+          codexAppServer: {
+            type: 'plugin',
+            enabled: true,
+            runtime: 'codex-app-server',
+            plugin: '@rainrail/codex-app-server-runtime',
+            command: '/opt/codex/bin/codex',
+          },
+        },
+      }, null, 2)}\n`);
+      const sessionInputs: string[] = [];
+
+      const result = runRainrailCli(['--json', 'plugin', 'codex-app-server', 'session', 'test'], {
+        cwd: projectRoot,
+        commandRunner: (command, args, options) => {
+          if (command === '/opt/codex/bin/codex' && args.join(' ') === '--version') {
+            return { status: 0, stdout: 'codex-cli 0.139.0\n', stderr: '' };
+          }
+          if (command === '/opt/codex/bin/codex' && args.join(' ') === 'app-server --help') {
+            return { status: 0, stdout: 'app-server help\n', stderr: '' };
+          }
+          if (command === '/opt/codex/bin/codex' && args.join(' ') === 'login status') {
+            return { status: 0, stdout: 'Logged in\n', stderr: '' };
+          }
+          if (command === '/opt/codex/bin/codex' && args.join(' ') === 'app-server --listen stdio://') {
+            sessionInputs.push(options.input ?? '');
+            if (options.input?.includes('"sandbox":"readOnly"')) {
+              return {
+                status: 0,
+                stdout: [
+                  JSON.stringify({
+                    id: 1,
+                    result: {
+                      userAgent: 'codex-cli/0.139.0',
+                      platformFamily: 'unix',
+                      platformOs: 'darwin',
+                    },
+                  }),
+                  JSON.stringify({
+                    id: 2,
+                    error: {
+                      code: -32602,
+                      message: 'unknown variant `readOnly`, expected `read-only`',
+                    },
+                  }),
+                  '',
+                ].join('\n'),
+                stderr: '',
+              };
+            }
+            return { status: 0, stdout: codexAppServerSessionSmokeStdout(), stderr: '' };
+          }
+          return { status: 1, stdout: '', stderr: 'unexpected command\n' };
+        },
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(JSON.parse(result.stdout) as unknown).toMatchObject({ ok: true });
+      expect(sessionInputs).toHaveLength(2);
+      expect(sessionInputs[0]).toContain('"sandbox":"readOnly"');
+      expect(sessionInputs[1]).toContain('"sandbox":"read-only"');
+    });
+  });
+
+  it('returns config errors for duplicate Codex App Server runtime ids', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'codex-runtime-duplicate-id');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      await writeFile(configPath, `${JSON.stringify({
+        project: { name: 'codex-runtime-duplicate-id' },
+        runtimeProviders: {
+          codexAppServer: {
+            type: 'plugin',
+            enabled: true,
+            runtime: 'codex-app-server',
+            plugin: '@rainrail/codex-app-server-runtime',
+          },
+          duplicateCodex: {
+            type: 'plugin',
+            enabled: true,
+            runtime: 'codex-app-server',
+            plugin: '@rainrail/codex-app-server-runtime',
+          },
+        },
+      }, null, 2)}\n`);
+
+      const doctor = runRainrailCli(['--json', 'plugin', 'codex-app-server', 'doctor'], {
+        cwd: projectRoot,
+        commandRunner: () => ({ status: 0, stdout: '', stderr: '' }),
+      });
+      const session = runRainrailCli(['--json', 'plugin', 'codex-app-server', 'session', 'test'], {
+        cwd: projectRoot,
+        commandRunner: () => ({ status: 0, stdout: '', stderr: '' }),
+      });
+
+      expect(doctor.exitCode).toBe(1);
+      expect(JSON.parse(doctor.stdout) as unknown).toMatchObject({
+        ok: false,
+        error: 'config.runtimeProviders contains duplicate runtime "codex-app-server"',
+      });
+      expect(session.exitCode).toBe(1);
+      expect(JSON.parse(session.stdout) as unknown).toMatchObject({
+        ok: false,
+        error: 'config.runtimeProviders contains duplicate runtime "codex-app-server"',
+      });
+    });
+  });
+
+  it('reuses Codex App Server providers whose runtime id is configured through env', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'codex-runtime-env-provider-key');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      await writeFile(configPath, [
+        '{',
+        '  "project": { "name": "codex-runtime-env-provider-key" },',
+        '  "runtimeProviders": {',
+        '    "codexRuntime": {',
+        '      "type": "plugin",',
+        '      "enabled": false,',
+        '      "runtime": "${CODEX_RUNTIME}",',
+        '      "plugin": "@rainrail/codex-app-server-runtime"',
+        '    }',
+        '  }',
+        '}',
+      ].join('\n'));
+
+      const result = runRainrailCli(['plugin', 'codex-app-server', 'setup', '--yes'], {
+        cwd: projectRoot,
+        env: {
+          HOME: '/Users/reirei',
+          CODEX_RUNTIME: 'codex-app-server',
+        },
+        commandRunner: (command, args) => {
+          if (command === 'sh' && args.join(' ') === '-c command -v codex') {
+            return { status: 0, stdout: '/opt/homebrew/bin/codex\n', stderr: '' };
+          }
+          if (command === '/opt/homebrew/bin/codex' && args.join(' ') === '--version') {
+            return { status: 0, stdout: 'codex-cli 0.139.0\n', stderr: '' };
+          }
+          if (command === '/opt/homebrew/bin/codex' && args.join(' ') === 'app-server --help') {
+            return { status: 0, stdout: 'app-server help\n', stderr: '' };
+          }
+          if (command === '/opt/homebrew/bin/codex' && args.join(' ') === 'login status') {
+            return { status: 0, stdout: 'Logged in\n', stderr: '' };
+          }
+          return { status: 1, stdout: '', stderr: 'unexpected command\n' };
+        },
+      });
+      const config = JSON.parse(await readFile(configPath, 'utf8')) as {
+        runtimeProviders?: {
+          codexRuntime?: Record<string, unknown>;
+          codexAppServer?: Record<string, unknown>;
+        };
+      };
+
+      expect(result.exitCode).toBe(0);
+      expect(config.runtimeProviders?.codexAppServer).toBeUndefined();
+      expect(config.runtimeProviders?.codexRuntime).toMatchObject({
+        enabled: true,
+        runtime: 'codex-app-server',
+        command: '/opt/homebrew/bin/codex',
+      });
+    });
+  });
+
+  it('returns config errors for empty configured Codex commands instead of falling back to PATH', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'codex-runtime-empty-command');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      await writeFile(configPath, [
+        '{',
+        '  "project": { "name": "codex-runtime-empty-command" },',
+        '  "runtimeProviders": {',
+        '    "codexAppServer": {',
+        '      "type": "plugin",',
+        '      "enabled": true,',
+        '      "runtime": "codex-app-server",',
+        '      "plugin": "@rainrail/codex-app-server-runtime",',
+        '      "command": "${CODEX_BIN}"',
+        '    }',
+        '  }',
+        '}',
+      ].join('\n'));
+
+      const doctor = runRainrailCli(['--json', 'plugin', 'codex-app-server', 'doctor'], {
+        cwd: projectRoot,
+        env: { PATH: '' },
+        commandRunner: (command, args) => {
+          if (command === 'sh' && args.join(' ') === '-c command -v codex') {
+            return { status: 0, stdout: '/opt/homebrew/bin/codex\n', stderr: '' };
+          }
+          return { status: 0, stdout: 'ok\n', stderr: '' };
+        },
+      });
+      const session = runRainrailCli(['--json', 'plugin', 'codex-app-server', 'session', 'test'], {
+        cwd: projectRoot,
+        env: { PATH: '' },
+        commandRunner: () => ({ status: 0, stdout: 'ok\n', stderr: '' }),
+      });
+
+      expect(doctor.exitCode).toBe(1);
+      expect(JSON.parse(doctor.stdout) as unknown).toMatchObject({
+        ok: false,
+        config: {
+          error: 'config.runtimeProviders.codexAppServer command must be a non-empty string when configured',
+        },
+      });
+      expect(session.exitCode).toBe(1);
+      expect(JSON.parse(session.stdout) as unknown).toMatchObject({
+        ok: false,
+        error: 'config.runtimeProviders.codexAppServer command must be a non-empty string when configured',
+      });
+    });
+  });
+
+  it('returns config errors from Codex App Server doctor and session test', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'codex-runtime-bad-config');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      await writeFile(configPath, `${JSON.stringify({
+        project: { name: 'codex-runtime-bad-config' },
+        runtimeProviders: {
+          codexAppServer: {
+            type: 'plugin',
+            enabled: true,
+            runtime: 'codex-app-server',
+            plugin: '@rainrail/wrong-runtime',
+          },
+        },
+      }, null, 2)}\n`);
+
+      const commandRunner = (command: string, args: readonly string[]) => {
+        if (command === 'sh' && args.join(' ') === '-c command -v codex') {
+          return { status: 0, stdout: '/opt/homebrew/bin/codex\n', stderr: '' };
+        }
+        if (command === '/opt/homebrew/bin/codex' && args.join(' ') === '--version') {
+          return { status: 0, stdout: 'codex-cli 0.139.0\n', stderr: '' };
+        }
+        if (command === '/opt/homebrew/bin/codex' && args.join(' ') === 'app-server --help') {
+          return { status: 0, stdout: 'app-server help\n', stderr: '' };
+        }
+        if (command === '/opt/homebrew/bin/codex' && args.join(' ') === 'login status') {
+          return { status: 0, stdout: 'Logged in\n', stderr: '' };
+        }
+        return { status: 1, stdout: '', stderr: 'unexpected command\n' };
+      };
+
+      const doctor = runRainrailCli(['--json', 'plugin', 'codex-app-server', 'doctor'], {
+        cwd: projectRoot,
+        commandRunner,
+      });
+      const session = runRainrailCli(['--json', 'plugin', 'codex-app-server', 'session', 'test'], {
+        cwd: projectRoot,
+        commandRunner,
+      });
+
+      expect(doctor.exitCode).toBe(1);
+      expect(doctor.stderr).toBe('');
+      expect(JSON.parse(doctor.stdout) as unknown).toMatchObject({
+        command: 'codex-app-server doctor',
+        ok: false,
+        config: {
+          ok: false,
+          error: 'config.runtimeProviders.codexAppServer plugin must be "@rainrail/codex-app-server-runtime"',
+        },
+      });
+      expect(session.exitCode).toBe(1);
+      expect(session.stderr).toBe('');
+      expect(JSON.parse(session.stdout) as unknown).toMatchObject({
+        command: 'codex-app-server session test',
+        ok: false,
+        error: 'config.runtimeProviders.codexAppServer plugin must be "@rainrail/codex-app-server-runtime"',
+      });
+    });
+  });
+
   it('keeps built-in commands ahead of plugin aliases and points verbose callers to canonical plugin form', () => {
     const result = runRainrailCli(['--verbose', 'plugins', 'run'], {
       pluginAliasResolver: (alias) => alias === 'plugins'
@@ -6279,6 +7462,70 @@ describe('Rainrail CLI built-in commands', () => {
       expect(JSON.parse(result.stdout) as unknown).toMatchObject({
         plugins: ['github'],
         nextAction: `rainrail --config ${configPath} --profile ci setup github --yes`,
+      });
+    });
+  });
+
+  it('includes target options in Codex App Server setup JSON preview nextAction', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'target-codex-project');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+
+      const result = runRainrailCli([
+        '--json',
+        '--config',
+        configPath,
+        '--profile',
+        'ci',
+        'plugin',
+        'codex-app-server',
+        'setup',
+      ], { cwd: directory });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+      expect(JSON.parse(result.stdout) as unknown).toMatchObject({
+        command: 'codex-app-server setup',
+        completed: false,
+        nextAction: `rainrail --config ${configPath} --profile ci plugin codex-app-server setup --yes`,
+      });
+    });
+  });
+
+  it('forwards relative setup config paths as absolute paths to bundled plugin setup', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'target-relative-codex-project');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      const relativeConfig = 'target-relative-codex-project/rainrail.config.json';
+      const calls: Array<{ command: string; args: readonly string[]; cwd?: string }> = [];
+
+      const result = runRainrailCli([
+        '--config',
+        relativeConfig,
+        'setup',
+        'codex-app-server',
+        '--yes',
+      ], {
+        cwd: directory,
+        currentBinPath: '/opt/rainrail/bin/rainrail',
+        commandRunner: (command, args, options) => {
+          calls.push(options.cwd === undefined ? { command, args } : { command, args, cwd: options.cwd });
+          return { status: 0, stdout: 'codex setup ok\n', stderr: '' };
+        },
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(calls).toContainEqual({
+        command: '/opt/rainrail/bin/rainrail',
+        args: [
+          'plugin',
+          'codex-app-server',
+          'setup',
+          '--config',
+          configPath,
+          '--yes',
+        ],
+        cwd: projectRoot,
       });
     });
   });
