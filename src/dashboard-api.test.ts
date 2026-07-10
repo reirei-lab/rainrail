@@ -212,6 +212,18 @@ describe('Rainrail dashboard API', () => {
     const registry = createDashboardCardRegistry();
     registry.register(recentEventsCard);
     registry.register(queueCard);
+    registry.register({
+      id: 'plugin:github.wideDashboardCard',
+      title: 'Wide dashboard card',
+      entry: { type: 'plugin', pluginName: 'github', cardName: 'wideDashboardCard' },
+      category: 'operations',
+      requiredCapabilities: ['dashboard:read', 'github:read'],
+      size: {
+        default: { columns: 12, rows: 2 },
+        min: { columns: 2, rows: 1 },
+        max: { columns: 16, rows: 4 },
+      },
+    });
     const operationalStore = new RainrailOperationalStore({
       databasePath: ':memory:',
       eventLimit: 10,
@@ -313,6 +325,21 @@ describe('Rainrail dashboard API', () => {
     await expect(overlappingItem.json()).resolves.toEqual({
       error: 'overlapping_dashboard_layout_item',
       itemId: 'queue',
+    });
+
+    const outOfGridItem = await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/layout', {
+      method: 'PUT',
+      headers: { authorization: 'Bearer operator-token', 'content-type': 'application/json' },
+      body: JSON.stringify({
+        items: [
+          { id: 'wide', cardId: 'plugin:github.wideDashboardCard', x: 8, y: 0, columns: 8, rows: 2 },
+        ],
+      }),
+    }));
+    expect(outOfGridItem.status).toBe(400);
+    await expect(outOfGridItem.json()).resolves.toEqual({
+      error: 'invalid_dashboard_layout_item',
+      itemId: 'wide',
     });
 
     const saved = await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/layout', {

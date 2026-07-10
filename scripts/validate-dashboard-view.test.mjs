@@ -330,6 +330,7 @@ describe('dashboard operational views', () => {
       'applyDashboardLayoutVisibility()',
       'dashboardCoreCardElements',
       'dashboardCoreCardIsVisible',
+      'dashboardCoreCardLayoutIds',
       'ensureVisibleDashboardTab',
       'renderCardPicker()',
       'saveDashboardLayoutItems',
@@ -377,8 +378,12 @@ describe('dashboard operational views', () => {
     expect(dashboardClient).toContain('size: {');
     expect(dashboardApp).toContain('category / provider / plugin');
     expect(dashboardApp).toContain('activeClient.saveDashboardLayout(items)');
+    expect(dashboardApp).toContain("element.hidden = latestData !== undefined && latestData.layout.source === 'user' && cardId !== undefined && !dashboardCoreCardIsVisible(cardId);");
+    expect(dashboardApp).toContain('!dashboardCoreCardIsVisible(cardId)');
+    expect(dashboardApp).toContain("new Set(['core.eventInbox', 'core.recentEvents'])");
     expect(dashboardApp).toContain('if (dashboardLayoutSaving) return;');
     expect(dashboardApp).toContain('discardInFlightDashboardRefreshes(activeClient);');
+    expect(dashboardApp).toContain('renderCardSettingsPicker({ quiet: true });\n      renderCurrentList();');
     expect(dashboardApp).toContain('renderCardSettingsPicker({ quiet: true });');
     expect(dashboardApp).not.toContain('setDashboardLayoutStatus(copy.cardLayout.saved);');
     expect(dashboardApp).not.toContain('return dashboardTabForCard(cardId) === undefined ? copy.cardLayout.settings : copy.cardLayout.move;');

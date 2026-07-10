@@ -2376,6 +2376,39 @@ describe('Rainrail CLI built-in commands', () => {
           },
         });
 
+        const dryRunLayoutSave = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout`, {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json', 'x-request-id': 'request-local-layout-preview' },
+          body: JSON.stringify({
+            dryRun: true,
+            items: [{
+              id: 'preview-operational-totals',
+              cardId: 'core.operationalTotals',
+              x: 0,
+              y: 0,
+              columns: 4,
+              rows: 1,
+            }],
+          }),
+        });
+        expect(dryRunLayoutSave.status).toBe(200);
+        expect(dryRunLayoutSave.headers.get('x-request-id')).toBe('request-local-layout-preview');
+        await expect(dryRunLayoutSave.json()).resolves.toMatchObject({
+          data: {
+            id: 'user.dashboardLayout',
+            source: 'user',
+            dryRun: true,
+            items: [{ id: 'preview-operational-totals' }],
+          },
+        });
+        const layoutAfterDryRun = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout`);
+        await expect(layoutAfterDryRun.json()).resolves.toMatchObject({
+          data: {
+            id: 'user.dashboardLayout',
+            items: [{ id: 'operational-totals', config: { density: 'compact' } }],
+          },
+        });
+
         const invalidLayoutSave = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout`, {
           method: 'PUT',
           headers: { 'content-type': 'application/json' },

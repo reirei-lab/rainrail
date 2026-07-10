@@ -6745,6 +6745,22 @@ async function handleLocalDashboardLayoutUpdateRequest(
     return;
   }
 
+  if (body.value.dryRun === true) {
+    writeJsonResponse(response, 200, {
+      data: {
+        id: 'user.dashboardLayout',
+        source: 'user',
+        updatedAt: null,
+        filteredItemCount: 0,
+        dryRun: true,
+        items: localCloneDashboardLayout(parsed.items),
+      },
+    }, request, {
+      'X-Request-ID': requestId,
+    });
+    return;
+  }
+
   const saved = state.eventStore?.saveDashboardLayout?.(parsed.items);
   state.dashboardLayout = localCloneDashboardLayout(saved?.items ?? parsed.items);
   state.dashboardLayoutUpdatedAt = saved?.updatedAt ?? new Date().toISOString();

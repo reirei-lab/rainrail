@@ -1295,6 +1295,9 @@ function parseDashboardLayoutItems(
         response: jsonResponse({ error: 'dashboard_card_size_out_of_range', itemId: id, cardId }, { status: 400 }),
       };
     }
+    if (x + columns > 12) {
+      return { ok: false, response: jsonResponse({ error: 'invalid_dashboard_layout_item', itemId: id }, { status: 400 }) };
+    }
 
     const config = item.config;
     if (config !== undefined && (!isPlainRecord(config) || !isJsonSerializableValue(config))) {

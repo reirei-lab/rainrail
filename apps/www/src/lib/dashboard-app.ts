@@ -1063,6 +1063,7 @@ if (root !== null) {
       renderDashboardLayout();
       renderCardPicker();
       renderCardSettingsPicker({ quiet: true });
+      renderCurrentList();
     } catch (error) {
       setDashboardLayoutStatus(error instanceof RainrailDashboardApiError ? `${copy.cardLayout.failed}: ${error.code}` : copy.cardLayout.failed);
     } finally {
@@ -1255,10 +1256,9 @@ if (root !== null) {
   }
 
   function applyDashboardLayoutVisibility(): void {
-    const visibleCardIds = new Set(latestData?.layout.items.map((item) => item.cardId) ?? []);
     for (const element of dashboardCoreCardElements) {
       const cardId = element.dataset.dashboardCoreCard;
-      element.hidden = latestData !== undefined && cardId !== undefined && !visibleCardIds.has(cardId);
+      element.hidden = latestData !== undefined && latestData.layout.source === 'user' && cardId !== undefined && !dashboardCoreCardIsVisible(cardId);
     }
     ensureVisibleDashboardTab();
   }
