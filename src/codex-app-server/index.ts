@@ -45,3 +45,13 @@ export type {
   CodexAppServerTurnSummary,
   CodexAppServerTurnWaitTarget,
 } from './protocol-client.js';
+export {
+  createCodexAppServerRuntimeProvider,
+  startCodexAppServerRun,
+} from './runtime-provider.js';
+export type {
+  CodexAppServerRuntimeProviderClient,
+  CodexAppServerRuntimeProviderClientFactory,
+  CodexAppServerRuntimeProviderClientFactoryOptions,
+  CodexAppServerRuntimeProviderOptions,
+} from './runtime-provider.js';

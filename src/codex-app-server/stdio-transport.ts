@@ -25,6 +25,7 @@ export type SpawnCodexAppServerProcess = (
 ) => StdioCodexAppServerChildProcess;
 
 export interface StdioCodexAppServerChildProcess extends EventEmitter {
+  pid?: number | undefined;
   stdin: Writable | null;
   stdout: Readable | null;
   stderr?: Readable | null;

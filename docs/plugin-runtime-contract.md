@@ -105,6 +105,23 @@ LAN remote 用の境界は `WebSocketCodexAppServerTransportConfig` で先に固
 `reconnect` policy を config/type として持つだけで、pairing、token rotation、
 remote daemon supervisor、pool scheduling は後続 issue の責務とする。
 
+Codex App Server runtime provider は `CodexAppServerRuntimeProviderOptions` から
+`createCodexAppServerRuntimeProvider()` を作り、低レベル helper として
+`startCodexAppServerRun()` も公開する。初期版では `1 task = 1 app-server process = 1 thread`
+として stdio transport だけを扱う。`startRun()` は capability gate の背後で
+`codex app-server --listen stdio://` 相当を起動し、`initialize`、`thread/start`、
+`turn/start`、`turn/completed` を順に実行する。stdout/stderr は protocol transport とは
+別に private log file へ mirror し、run metadata には log path、stderr log path、pid、
+thread id、turn id、branch、task id を残す。turn completion status は failed/error を
+`failed`、cancelled/canceled を `canceled`、timeout/timedOut を `timed_out` に対応させ、
+その他の完了は `succeeded` として扱う。stuck turn は provider-level timeout で
+`timed_out` とし、app-server process は `close()` 経由で cleanup する。
+`CodexAppServerRuntimeProviderClientFactory`、
+`CodexAppServerRuntimeProviderClientFactoryOptions`、`CodexAppServerRuntimeProviderClient`
+は test や別 supervisor が protocol client、pid、spawn/log wiring を差し替えるための
+injection point とする。`resumeRun()` は初期版では未対応で、`needs_human` と
+`resumeSupported: false` metadata を返す。
+
 ## Event envelope
 
 `RainrailEventEnvelope` は `schemaVersion: "rainrail.event.v1"` を持つ。
