@@ -142,5 +142,7 @@ jobs:
           path: |
             playwright-report/dashboard/
             test-results/dashboard/
+            test-results/dashboard/screenshots/
+            test-results/dashboard/screenshots/dashboard-demo-screenshot-manifest.json
           if-no-files-found: ignore
           retention-days: 7

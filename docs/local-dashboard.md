@@ -141,6 +141,21 @@ environment so each run uses the seeded temporary SQLite DB. Always call
 directory are removed. No real GitHub, Cloudflare, or operator token is needed.
 Failure artifacts are written under `test-results/dashboard/`, and the HTML
 report is written under `playwright-report/dashboard/`.
+The E2E run also captures every entry in
+`scripts/dashboard-demo-vrt-scenarios.mjs` as named screenshots under
+`test-results/dashboard/screenshots/`, with
+`dashboard-demo-screenshot-manifest.json` mapping scenario IDs, viewport
+variants, URLs, and capture hints to each PNG. Pull Request CI uploads those
+files in the `dashboard-e2e-artifacts` artifact.
+
+Keep these captures as inspection artifacts until the paths and rendering are
+stable across the self-hosted and GitHub-hosted runners. Move to strict visual
+snapshot comparison only after the capture manifest has stayed unchanged for
+the dashboard states being protected, screenshots no longer include local
+machine-specific content, and expected UI changes have an explicit review step
+for updating baselines. At that point, add a separate comparison step that
+checks the named screenshots against reviewed baselines while keeping this
+artifact upload for debugging failed comparisons.
 
 ```js
 import { startDashboardDemoServerHarness } from './scripts/dashboard-demo-server-harness.mjs';
