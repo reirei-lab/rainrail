@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
+  type CodexAppServerProtocolClient,
+  type CodexAppServerThreadStartResponse,
   createCodexAppServerProtocolClient,
   createStdioCodexAppServerTransport,
 } from './index.js';
@@ -29,12 +31,7 @@ describe.skipIf(!runSmoke)('Codex App Server smoke', () => {
       });
       expect(initialized.userAgent).toContain('rainrail-smoke');
 
-      const thread = await client.startThread({
-        cwd,
-        ephemeral: true,
-        approvalPolicy: 'never',
-        sandbox: 'read-only',
-      });
+      const thread = await startSmokeThread(client, cwd);
       expect(thread.thread.id).toEqual(expect.any(String));
 
       const turn = await client.startTurn({
@@ -61,3 +58,31 @@ describe.skipIf(!runSmoke)('Codex App Server smoke', () => {
     }
   }, 130_000);
 });
+
+async function startSmokeThread(
+  client: CodexAppServerProtocolClient,
+  cwd: string,
+): Promise<CodexAppServerThreadStartResponse> {
+  try {
+    return await client.startThread({
+      cwd,
+      ephemeral: true,
+      approvalPolicy: 'never',
+      sandbox: 'readOnly',
+    });
+  } catch (error) {
+    if (!isLegacySandboxNameError(error)) throw error;
+    return client.startThread({
+      cwd,
+      ephemeral: true,
+      approvalPolicy: 'never',
+      sandbox: 'read-only',
+    });
+  }
+}
+
+function isLegacySandboxNameError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return error.message.includes('unknown variant `readOnly`') ||
+    error.message.includes('invalid sandbox');
+}

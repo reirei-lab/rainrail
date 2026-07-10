@@ -171,6 +171,38 @@ describe('Codex App Server protocol wrapper', () => {
     expect(transport.sent).toContainEqual({ method: 'initialized' });
   });
 
+  it('allows initialize params without optional title or capabilities', async () => {
+    const transport = new FakeTransport();
+    const client = createCodexAppServerProtocolClient({ transport });
+
+    await client.connect();
+    const initialize = client.initialize({
+      clientInfo: { name: 'rainrail', version: '0.2.0' },
+    });
+    transport.emitFrame({
+      id: 1,
+      result: {
+        userAgent: 'codex-cli/0.139.0',
+        platformFamily: 'unix',
+        platformOs: 'macos',
+      },
+    });
+
+    await expect(initialize).resolves.toMatchObject({ userAgent: 'codex-cli/0.139.0' });
+    expect(transport.sent).toEqual([
+      {
+        id: 1,
+        method: 'initialize',
+        params: {
+          clientInfo: { name: 'rainrail', version: '0.2.0' },
+        },
+      },
+      {
+        method: 'initialized',
+      },
+    ]);
+  });
+
   it('exposes server request handlers through the protocol wrapper', async () => {
     const transport = new FakeTransport();
     const client = createCodexAppServerProtocolClient({ transport });

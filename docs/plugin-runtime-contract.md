@@ -82,7 +82,9 @@ wrapper の型は `CodexAppServerClientInfo`、`CodexAppServerInitializeParams`�
 `CodexAppServerTurnCompletedEvent`、`CodexAppServerAssistantDeltaEvent` などの固定された
 最小型とし、生成 protocol 全体は vendoring しない。`initialize` 成功後は client から
 `initialized` notification を送って handshake を完了する。`initialize` response の `codexHome` は
-公式 App Server の必須 field ではないため optional として扱う。`turn/completed` は公式 payload の
+公式 App Server の必須 field ではないため optional として扱う。`initialize` params の
+`clientInfo.title` と `capabilities` も wire schema の必須 field ではないため optional とする。
+`turn/completed` は公式 payload の
 `{ turn }` を受けられるよう `threadId` を必須にせず、完了通知が `startTurn()` resolve 前に
 届いても後続の `waitForTurnCompleted()` が拾えるよう turn id で直近完了を cache する。
 completion cache は race 回避用の短期 cache として上限を持ち、daemon/provider が長時間
@@ -95,7 +97,8 @@ JSON-RPC response の `result` field が落ちないよう `null` に正規化�
 `onTurnCompleted` handler の例外は observer failure として隔離し、
 受信済み stream event や completion の waiter 解決を妨げない。実 Codex CLI との非破壊 smoke は
 `RAINRAIL_CODEX_APP_SERVER_SMOKE=1` のときだけ `src/codex-app-server/smoke.test.ts` で
-ephemeral thread / `read-only` sandbox として実行する。
+ephemeral thread / `readOnly` sandbox として実行し、古い app-server が camelCase sandbox shorthand を
+拒否した場合だけ legacy `read-only` に再試行する。
 
 LAN remote 用の境界は `WebSocketCodexAppServerTransportConfig` で先に固定する。
 現時点では `type: "websocket"`、`endpoint`、任意の `headers`、`tokenEnv`、

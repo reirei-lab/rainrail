@@ -12,13 +12,13 @@ export interface CodexAppServerProtocolClientOptions extends CodexAppServerClien
 
 export interface CodexAppServerClientInfo {
   name: string;
-  title: string | null;
+  title?: string | null;
   version: string;
 }
 
 export interface CodexAppServerInitializeParams {
   clientInfo: CodexAppServerClientInfo;
-  capabilities: Record<string, unknown> | null;
+  capabilities?: Record<string, unknown> | null;
 }
 
 export interface CodexAppServerInitializeResponse {
