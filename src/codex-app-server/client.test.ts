@@ -154,6 +154,25 @@ describe('Codex App Server protocol client', () => {
     expect(notifications).toEqual([{ type: 'notification', method: 'session.output' }]);
   });
 
+  it('does not mark the client connected when close happens before connect resolves', async () => {
+    const transport = new FakeTransport();
+    let resolveConnect: (() => void) | undefined;
+    transport.connect.mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => {
+        resolveConnect = resolve;
+      });
+    });
+    const client = createCodexAppServerClient({ transport });
+
+    const pendingConnect = client.connect();
+    await client.close();
+    resolveConnect?.();
+    await pendingConnect;
+    await client.connect();
+
+    expect(transport.connect).toHaveBeenCalledTimes(2);
+  });
+
   it('rejects the matching request when a protocol error response arrives', async () => {
     const transport = new FakeTransport();
     const client = createCodexAppServerClient({ transport });

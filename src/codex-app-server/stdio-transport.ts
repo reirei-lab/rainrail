@@ -78,7 +78,7 @@ class StdioCodexAppServerTransport implements CodexAppServerTransport {
       // Drain stderr so a chatty app server cannot fill the pipe and block stdout responses.
     });
     child.on('error', (error: Error) => {
-      this.#emitError(error);
+      if (this.#child === child) this.#emitError(error);
     });
     child.on('exit', () => {
       if (this.#child === child) this.#emitClose();

@@ -193,6 +193,25 @@ describe('stdio Codex App Server transport', () => {
     expect(frames).toEqual([{ type: 'notification', method: 'session.output' }]);
   });
 
+  it('ignores errors emitted by a previous child after reconnecting', async () => {
+    const first = createChildProcessFixture();
+    const second = createChildProcessFixture();
+    const spawnProcess = vi.fn<SpawnCodexAppServerProcess>()
+      .mockReturnValueOnce(first.child)
+      .mockReturnValueOnce(second.child);
+    const transport = createStdioCodexAppServerTransport({ command: 'codex-app-server', spawnProcess });
+    const errors: string[] = [];
+
+    transport.onError((error) => errors.push(error.message));
+    await transport.connect();
+    await transport.close();
+    await transport.connect();
+
+    first.child.emit('error', new Error('stale child error'));
+
+    expect(errors).toEqual([]);
+  });
+
   it('resets partial stdout framing state before reconnecting', async () => {
     const first = createChildProcessFixture();
     const second = createChildProcessFixture();

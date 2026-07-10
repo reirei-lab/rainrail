@@ -107,6 +107,9 @@ class DefaultCodexAppServerClient implements CodexAppServerClient {
       }
       throw error;
     }
+    if (this.#unsubscribeTransport !== unsubscribeTransport) {
+      return;
+    }
     this.#connected = true;
   }
 
@@ -186,7 +189,7 @@ class DefaultCodexAppServerClient implements CodexAppServerClient {
   }
 
   #handleClose(): void {
-    if (!this.#connected && this.#pending.size === 0) return;
+    if (!this.#connected && this.#pending.size === 0 && this.#unsubscribeTransport.length === 0) return;
     this.#connected = false;
     for (const unsubscribe of this.#unsubscribeTransport) unsubscribe();
     this.#unsubscribeTransport = [];
