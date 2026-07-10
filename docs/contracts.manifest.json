@@ -289,7 +289,9 @@
       "id": "codex-app-server-client-transport",
       "title": "Codex App Server client transport boundary",
       "sources": [
-        "src/codex-app-server/index.ts"
+        "src/codex-app-server/client.ts",
+        "src/codex-app-server/stdio-transport.ts",
+        "src/codex-app-server/websocket-transport.ts"
       ],
       "docs": [
         "docs/plugin-runtime-contract.md"

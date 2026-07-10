@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import type { EventEmitter } from 'node:events';
 import type { Readable, Writable } from 'node:stream';
+import { StringDecoder } from 'node:string_decoder';
 
 import type { CodexAppServerFrame, CodexAppServerTransport } from './client.js';
 
@@ -39,6 +40,7 @@ class StdioCodexAppServerTransport implements CodexAppServerTransport {
   readonly #options: StdioCodexAppServerTransportOptions;
   #child: StdioCodexAppServerChildProcess | undefined;
   #stdoutBuffer = '';
+  #stdoutDecoder = new StringDecoder('utf8');
   #frameHandlers: Array<(frame: CodexAppServerFrame) => void> = [];
   #errorHandlers: Array<(error: Error) => void> = [];
   #closeHandlers: Array<() => void> = [];
@@ -60,18 +62,27 @@ class StdioCodexAppServerTransport implements CodexAppServerTransport {
     const child = spawnProcess(this.#options.command, this.#options.args ?? [], spawnOptions);
     this.#child = child;
     this.#closed = false;
+    this.#stdoutBuffer = '';
+    this.#stdoutDecoder = new StringDecoder('utf8');
 
     child.stdout?.on('data', (chunk: Buffer | string) => {
-      this.#readStdoutChunk(chunk.toString());
+      const text = typeof chunk === 'string' ? chunk : this.#stdoutDecoder.write(chunk);
+      this.#readStdoutChunk(text);
+    });
+    child.stdout?.on('end', () => {
+      this.#readStdoutChunk(this.#stdoutDecoder.end());
+    });
+    child.stderr?.on('data', () => {
+      // Drain stderr so a chatty app server cannot fill the pipe and block stdout responses.
     });
     child.on('error', (error: Error) => {
       this.#emitError(error);
     });
     child.on('exit', () => {
-      this.#emitClose();
+      if (this.#child === child) this.#emitClose();
     });
     child.on('close', () => {
-      this.#emitClose();
+      if (this.#child === child) this.#emitClose();
     });
   }
 
@@ -149,6 +160,8 @@ class StdioCodexAppServerTransport implements CodexAppServerTransport {
     if (this.#closed) return;
     this.#closed = true;
     this.#child = undefined;
+    this.#stdoutBuffer = '';
+    this.#stdoutDecoder = new StringDecoder('utf8');
     for (const handler of this.#closeHandlers) handler();
   }
 }

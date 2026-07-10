@@ -110,6 +110,25 @@ describe('Codex App Server protocol client', () => {
     await expect(pending).rejects.toThrow('Codex App Server transport closed');
   });
 
+  it('removes transport subscriptions when connect fails so retry delivery is not duplicated', async () => {
+    const transport = new FakeTransport();
+    transport.connect
+      .mockRejectedValueOnce(new Error('temporary connect failure'))
+      .mockResolvedValueOnce(undefined);
+    const client = createCodexAppServerClient({ transport });
+    const notifications: CodexAppServerFrame[] = [];
+
+    client.onNotification((frame) => {
+      notifications.push(frame);
+    });
+
+    await expect(client.connect()).rejects.toThrow('temporary connect failure');
+    await client.connect();
+    transport.emitFrame({ type: 'notification', method: 'session.output' });
+
+    expect(notifications).toEqual([{ type: 'notification', method: 'session.output' }]);
+  });
+
   it('rejects the matching request when a protocol error response arrives', async () => {
     const transport = new FakeTransport();
     const client = createCodexAppServerClient({ transport });

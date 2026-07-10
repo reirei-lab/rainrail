@@ -79,12 +79,21 @@ class DefaultCodexAppServerClient implements CodexAppServerClient {
 
   async connect(): Promise<void> {
     if (this.#connected) return;
-    this.#unsubscribeTransport = [
+    const unsubscribeTransport = [
       this.#transport.onFrame((frame) => this.#handleFrame(frame)),
       this.#transport.onError((error) => this.#handleError(error)),
       this.#transport.onClose(() => this.#handleClose()),
     ];
-    await this.#transport.connect();
+    this.#unsubscribeTransport = unsubscribeTransport;
+    try {
+      await this.#transport.connect();
+    } catch (error) {
+      for (const unsubscribe of unsubscribeTransport) unsubscribe();
+      if (this.#unsubscribeTransport === unsubscribeTransport) {
+        this.#unsubscribeTransport = [];
+      }
+      throw error;
+    }
     this.#connected = true;
   }
 

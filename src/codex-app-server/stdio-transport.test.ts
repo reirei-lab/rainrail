@@ -87,6 +87,37 @@ describe('stdio Codex App Server transport', () => {
     ]);
   });
 
+  it('drains stderr so verbose child logs cannot block protocol responses', async () => {
+    const { spawnProcess, stderr } = createChildProcessFixture();
+    const transport = createStdioCodexAppServerTransport({ command: 'codex-app-server', spawnProcess });
+
+    await transport.connect();
+    stderr.write('warning: noisy app server log\n');
+
+    expect(stderr.readableLength).toBe(0);
+  });
+
+  it('decodes stdout with streaming UTF-8 state across chunk boundaries', async () => {
+    const { spawnProcess, stdout } = createChildProcessFixture();
+    const transport = createStdioCodexAppServerTransport({ command: 'codex-app-server', spawnProcess });
+    const frames: CodexAppServerFrame[] = [];
+    const line = Buffer.from('{"type":"notification","method":"session.output","params":{"text":"こんにちは"}}\n');
+    const splitInsideMultibyteCharacter = line.indexOf(Buffer.from('ん')) + 1;
+
+    transport.onFrame((frame) => frames.push(frame));
+    await transport.connect();
+    stdout.write(line.subarray(0, splitInsideMultibyteCharacter));
+    stdout.write(line.subarray(splitInsideMultibyteCharacter));
+
+    expect(frames).toEqual([
+      {
+        type: 'notification',
+        method: 'session.output',
+        params: { text: 'こんにちは' },
+      },
+    ]);
+  });
+
   it('emits parse errors without closing the transport or dropping later valid frames', async () => {
     const { spawnProcess, stdout } = createChildProcessFixture();
     const transport = createStdioCodexAppServerTransport({ command: 'codex-app-server', spawnProcess });
@@ -114,5 +145,49 @@ describe('stdio Codex App Server transport', () => {
     child.emit('exit', 0, null);
 
     expect(close).toHaveBeenCalledOnce();
+  });
+
+  it('does not close a reconnected child when the previous child exits late', async () => {
+    const first = createChildProcessFixture();
+    const second = createChildProcessFixture();
+    const spawnProcess = vi.fn<SpawnCodexAppServerProcess>()
+      .mockReturnValueOnce(first.child)
+      .mockReturnValueOnce(second.child);
+    const transport = createStdioCodexAppServerTransport({ command: 'codex-app-server', spawnProcess });
+    const close = vi.fn();
+
+    transport.onClose(close);
+    await transport.connect();
+    await transport.close();
+    await transport.connect();
+    close.mockClear();
+
+    first.child.emit('exit', 0, null);
+    await transport.send({ type: 'notification', method: 'session.ping' });
+
+    expect(close).not.toHaveBeenCalled();
+    expect(second.stdin.writes).toEqual(['{"type":"notification","method":"session.ping"}\n']);
+  });
+
+  it('resets partial stdout framing state before reconnecting', async () => {
+    const first = createChildProcessFixture();
+    const second = createChildProcessFixture();
+    const spawnProcess = vi.fn<SpawnCodexAppServerProcess>()
+      .mockReturnValueOnce(first.child)
+      .mockReturnValueOnce(second.child);
+    const transport = createStdioCodexAppServerTransport({ command: 'codex-app-server', spawnProcess });
+    const errors: string[] = [];
+    const frames: CodexAppServerFrame[] = [];
+
+    transport.onError((error) => errors.push(error.message));
+    transport.onFrame((frame) => frames.push(frame));
+    await transport.connect();
+    first.stdout.write('{"type":"notification","method":"partial"');
+    await transport.close();
+    await transport.connect();
+    second.stdout.write('{"type":"notification","method":"session.output"}\n');
+
+    expect(errors).toEqual([]);
+    expect(frames).toEqual([{ type: 'notification', method: 'session.output' }]);
   });
 });
