@@ -7,6 +7,9 @@ const packageJson = JSON.parse(
 const tsconfig = JSON.parse(
   readFileSync(new URL('../tsconfig.json', import.meta.url), 'utf8'),
 );
+const e2eTsconfig = JSON.parse(
+  readFileSync(new URL('../tsconfig.e2e.json', import.meta.url), 'utf8'),
+);
 const workspace = readFileSync(
   new URL('../pnpm-workspace.yaml', import.meta.url),
   'utf8',
@@ -31,6 +34,10 @@ const startDashboardDemoScript = readFileSync(
   new URL('./start-dashboard-demo.mjs', import.meta.url),
   'utf8',
 );
+const dashboardE2eConfig = readFileSync(
+  new URL('../playwright.dashboard.config.ts', import.meta.url),
+  'utf8',
+);
 
 describe('package scripts used by pull request CI', () => {
   it('builds repository scripts, the product site, docs site, and CLI package from the root command', () => {
@@ -46,7 +53,7 @@ describe('package scripts used by pull request CI', () => {
 
   it('typechecks JavaScript automation scripts through tsconfig', () => {
     expect(packageJson.scripts.typecheck).toBe(
-      'tsc --noEmit && pnpm --filter @rainrail/cli typecheck',
+      'tsc --noEmit && tsc -p tsconfig.e2e.json --noEmit && pnpm --filter @rainrail/cli typecheck',
     );
     expect(packageJson.scripts['docs:check']).toContain(
       'node scripts/check-docs-routes.mjs',
@@ -73,9 +80,24 @@ describe('package scripts used by pull request CI', () => {
     expect(packageJson.scripts['demo:dashboard:smoke']).toBe(
       'vitest run scripts/seed-dashboard-demo-db.test.ts',
     );
+    expect(packageJson.scripts['e2e:dashboard']).toBe(
+      'pnpm --filter www build && pnpm --filter @rainrail/cli build && playwright test --config playwright.dashboard.config.ts',
+    );
+    expect(e2eTsconfig.extends).toBe('./tsconfig.json');
+    expect(e2eTsconfig.compilerOptions.lib).toEqual(['ESNext', 'DOM', 'DOM.Iterable']);
+    expect(e2eTsconfig.include).toContain('e2e/**/*.ts');
+    expect(e2eTsconfig.include).toContain('playwright.dashboard.config.ts');
+    expect(packageJson.devDependencies['@playwright/test']).toMatch(/^\^/);
+    expect(dashboardE2eConfig).toContain("testDir: './e2e/dashboard'");
+    expect(dashboardE2eConfig).not.toContain('webServer');
+    expect(dashboardE2eConfig).toContain("trace: 'on-first-retry'");
+    expect(dashboardE2eConfig).toContain("screenshot: 'only-on-failure'");
+    expect(dashboardE2eConfig).toContain("video: 'retain-on-failure'");
     expect(startDashboardDemoScript).toContain("'.tmp', 'dashboard-demo'");
     expect(startDashboardDemoScript).toContain("runRequiredPnpm(['--filter', 'www', 'build'])");
     expect(startDashboardDemoScript).toContain("runRequiredPnpm(['--filter', '@rainrail/cli', 'build'])");
+    expect(startDashboardDemoScript).toContain("'packages', 'cli', 'dist', 'bin', 'rainrail.js'");
+    expect(startDashboardDemoScript).toContain('process.execPath');
     expect(startDashboardDemoScript).toContain('rainrail.config.json');
     expect(startDashboardDemoScript).toContain("'--config'");
     expect(startDashboardDemoScript).toContain("'--demo'");

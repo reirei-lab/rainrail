@@ -2,6 +2,8 @@ node_modules/
 dist/
 .astro/
 .tmp/
+playwright-report/
+test-results/
 .dev.vars*
 .env*
 .wrangler/

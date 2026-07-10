@@ -164,6 +164,7 @@ describe('dashboard app shell', () => {
     if (contract === undefined) throw new Error('local-dashboard-start contract missing');
     expect(contract.sources).toContain('scripts/dashboard-demo-vrt-scenarios.mjs');
     expect(contract.tests).toContain('scripts/seed-dashboard-demo-db.test.ts');
+    expect(contract.tests).toContain('e2e/dashboard/dashboard-smoke.spec.ts');
   });
 
   it('documents polling as the MVP live update strategy in code and UI affordances', () => {

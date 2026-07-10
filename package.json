@@ -21,15 +21,17 @@
     "docs:smoke": "node scripts/smoke-cloudflare-docs.mjs",
     "demo:dashboard": "node scripts/start-dashboard-demo.mjs",
     "demo:dashboard:smoke": "vitest run scripts/seed-dashboard-demo-db.test.ts",
+    "e2e:dashboard": "pnpm --filter www build && pnpm --filter @rainrail/cli build && playwright test --config playwright.dashboard.config.ts",
     "pages:build": "pnpm --filter www build",
     "pages:deploy:preview": "pnpm pages:build && wrangler pages deploy apps/www/dist --project-name rainrail-www --branch \"${RAINRAIL_PAGES_BRANCH:-preview}\"",
     "pages:deploy:production": "pnpm pages:build && wrangler pages deploy apps/www/dist --project-name rainrail-www --branch main",
     "pages:smoke": "node scripts/smoke-cloudflare-pages.mjs",
     "release:cli": "node scripts/package-cli-release.mjs",
     "test": "vitest run scripts src packages",
-    "typecheck": "tsc --noEmit && pnpm --filter @rainrail/cli typecheck"
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.e2e.json --noEmit && pnpm --filter @rainrail/cli typecheck"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.1",
     "@types/node": "^26.1.0",
     "typescript": "^6.0.3",
     "vitest": "^4.1.9",

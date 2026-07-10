@@ -18,7 +18,7 @@ describe('pull request CI workflow', () => {
     expect(workflow).not.toMatch(/^ {2}issues: write$/m);
     expect(workflow).not.toMatch(/^ {2}pull-requests: write$/m);
     expect(workflow).not.toContain('deployments: write');
-    expect(workflow.match(/persist-credentials: false/g)).toHaveLength(2);
+    expect(workflow.match(/persist-credentials: false/g)).toHaveLength(3);
   });
 
   it('uses self-hosted only for trusted pull requests with pnpm cached by lockfile', () => {
@@ -38,6 +38,17 @@ describe('pull request CI workflow', () => {
     expect(workflow).toMatch(/^ {6}- name: Run docs checks\n {8}run: pnpm docs:check\n {8}env:\n {10}DOCS_DRIFT_CHANGED_FROM: origin\/\$\{\{ github\.base_ref \}\}$/m);
     expect(workflow).toMatch(/^ {6}- name: Run tests\n {8}run: pnpm test$/m);
     expect(workflow).toMatch(/^ {6}- name: Run build\n {8}env:\n {10}PUBLIC_RAINRAIL_OPERATIONAL_API_URL: \$\{\{ vars\.RAINRAIL_OPERATIONAL_API_URL \}\}\n {8}run: pnpm build$/m);
+  });
+
+  it('runs dashboard E2E in a separate job with browser setup and failure artifacts', () => {
+    expect(workflow).toMatch(/^ {2}dashboard-e2e:\n {4}name: Dashboard E2E\n {4}needs: validate$/m);
+    expect(workflow).toMatch(/^ {6}- name: Install Playwright browser\n {8}run: pnpm exec playwright install --with-deps chromium$/m);
+    expect(workflow).toMatch(/^ {6}- name: Run dashboard E2E\n {8}run: pnpm e2e:dashboard$/m);
+    expect(workflow).toMatch(/^ {6}- name: Upload dashboard E2E artifacts\n {8}if: \$\{\{ always\(\) \}\}\n {8}uses: actions\/upload-artifact@v4/m);
+    expect(workflow).toContain('name: dashboard-e2e-artifacts');
+    expect(workflow).toContain('playwright-report/dashboard/');
+    expect(workflow).toContain('test-results/dashboard/');
+    expect(workflow).toContain('retention-days: 7');
   });
 
   it('uploads the product site build artifact for trusted preview deploys without secrets', () => {

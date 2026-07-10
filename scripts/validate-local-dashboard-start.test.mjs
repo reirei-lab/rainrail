@@ -171,6 +171,7 @@ describe('local dashboard start documentation', () => {
           tests: expect.arrayContaining([
             'scripts/validate-local-dashboard-start.test.mjs',
             'scripts/validate-dashboard-shell.test.mjs',
+            'e2e/dashboard/dashboard-smoke.spec.ts',
             'scripts/dashboard-demo-server-harness.test.mjs',
             'packages/cli/src/commands.test.ts',
             'src/dashboard-api.test.ts',

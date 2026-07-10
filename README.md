@@ -140,6 +140,7 @@ separate steps so failures identify the command that failed:
 - `pnpm docs:check`
 - `pnpm test`
 - `pnpm build`
+- `pnpm e2e:dashboard` in a separate Dashboard E2E job
 
 ## Cloudflare Worker
 

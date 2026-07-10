@@ -112,8 +112,24 @@ Custom saved dashboard card layouts and plugin-card failure isolation are
 smoke-only checks today; they are covered by API and sandbox assertions until a
 browser runner can perform pre-capture setup steps.
 
-For browser E2E tests that need a disposable server instead of the long-running
-manual demo command, import `startDashboardDemoServerHarness` from
+## Browser E2E smoke
+
+The dashboard browser smoke test uses Playwright against the seeded SQLite demo
+server. Install dependencies and the Chromium browser once on a local machine:
+
+```sh
+pnpm install --frozen-lockfile
+pnpm exec playwright install chromium
+```
+
+Then run the focused dashboard E2E command from the repository root:
+
+```sh
+pnpm e2e:dashboard
+```
+
+The command builds the product dashboard and CLI package, then runs Playwright
+against a disposable server from `startDashboardDemoServerHarness` in
 `scripts/dashboard-demo-server-harness.mjs`. The harness creates a fresh
 temporary directory and SQLite DB for every run, seeds it with
 `scripts/seed-dashboard-demo-db.mjs`, starts the built Rainrail CLI server on a
@@ -122,7 +138,9 @@ random localhost port with the built `apps/www` dashboard assets, and returns
 operational-store and legacy SSE bearer-token overrides from the spawned server
 environment so each run uses the seeded temporary SQLite DB. Always call
 `cleanup()` from test teardown so the server process, DB files, and temporary
-directory are removed.
+directory are removed. No real GitHub, Cloudflare, or operator token is needed.
+Failure artifacts are written under `test-results/dashboard/`, and the HTML
+report is written under `playwright-report/dashboard/`.
 
 ```js
 import { startDashboardDemoServerHarness } from './scripts/dashboard-demo-server-harness.mjs';
