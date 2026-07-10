@@ -2395,10 +2395,13 @@ describe('Rainrail CLI built-in commands', () => {
         expect(dryRunLayoutSave.headers.get('x-request-id')).toBe('request-local-layout-preview');
         await expect(dryRunLayoutSave.json()).resolves.toMatchObject({
           data: {
-            id: 'user.dashboardLayout',
-            source: 'user',
+            action: 'dashboard_layout_update',
+            targetType: 'dashboard_layout',
+            targetId: 'user.dashboardLayout',
+            status: 'preview',
             dryRun: true,
-            items: [{ id: 'preview-operational-totals' }],
+            auditId: 'request-local-layout-preview',
+            result: { itemCount: 1 },
           },
         });
         const layoutAfterDryRun = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout`);

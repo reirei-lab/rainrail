@@ -6748,12 +6748,13 @@ async function handleLocalDashboardLayoutUpdateRequest(
   if (body.value.dryRun === true) {
     writeJsonResponse(response, 200, {
       data: {
-        id: 'user.dashboardLayout',
-        source: 'user',
-        updatedAt: null,
-        filteredItemCount: 0,
+        action: 'dashboard_layout_update',
+        targetType: 'dashboard_layout',
+        targetId: 'user.dashboardLayout',
+        status: 'preview',
         dryRun: true,
-        items: localCloneDashboardLayout(parsed.items),
+        auditId: requestId,
+        result: { itemCount: parsed.items.length },
       },
     }, request, {
       'X-Request-ID': requestId,

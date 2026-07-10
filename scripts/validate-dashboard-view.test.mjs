@@ -303,10 +303,11 @@ describe('dashboard operational views', () => {
     expect(dashboardApp).toContain('delete config[name]');
     expect(dashboardApp).toContain("currentValue !== null");
     expect(dashboardApp).toContain('cardSettingsDirty');
+    expect(dashboardApp).toContain('cardSettingsSaving');
     expect(dashboardApp).toContain('if (cardSettingsDirty && options.quiet) return;');
     expect(dashboardApp).toContain('if (dashboardLayoutSaving) return;');
     expect(dashboardApp).toContain('if (!dashboardCoreCardIsVisible(cardId))');
-    expect(dashboardApp).toContain('action.disabled = dashboardLayoutSaving || !enabled');
+    expect(dashboardApp).toContain('action.disabled = dashboardLayoutSaving || cardSettingsSaving || !enabled');
     expect(dashboardApp).toContain('void refresh({ quiet: true });');
     expect(dashboardApp).not.toContain('await refresh({ quiet: true });');
     expect(dashboardContent).toContain('Card settings');
@@ -350,6 +351,7 @@ describe('dashboard operational views', () => {
       'movedDashboardLayoutItems',
       'isFirstLayoutItem',
       'resizeDashboardLayoutItem',
+      'nextDashboardLayoutResizeCandidate',
       'effectiveMaxColumns',
       'createDashboardLayoutItem',
       'dashboardCardGridInitialSize',
@@ -378,10 +380,15 @@ describe('dashboard operational views', () => {
     expect(dashboardClient).toContain('size: {');
     expect(dashboardApp).toContain('category / provider / plugin');
     expect(dashboardApp).toContain('activeClient.saveDashboardLayout(items)');
+    expect(dashboardApp).toContain("article.style.setProperty('--dashboard-card-row-start', String(Math.max(1, item.y + 1)));");
+    expect(dashboardApp).toContain("article.style.setProperty('--dashboard-card-rows', String(Math.max(1, item.rows)));");
+    expect(dashboardApp).not.toContain('clampDashboardCardSize(item.y + 1, 1, 99)');
+    expect(dashboardApp).not.toContain('clampDashboardCardSize(item.rows, 1, 12)');
     expect(dashboardApp).toContain("element.hidden = latestData !== undefined && latestData.layout.source === 'user' && cardId !== undefined && !dashboardCoreCardIsVisible(cardId);");
     expect(dashboardApp).toContain('!dashboardCoreCardIsVisible(cardId)');
     expect(dashboardApp).toContain("new Set(['core.eventInbox', 'core.recentEvents'])");
     expect(dashboardApp).toContain('if (dashboardLayoutSaving) return;');
+    expect(dashboardApp).toContain('if (cardSettingsSaving) return;');
     expect(dashboardApp).toContain('discardInFlightDashboardRefreshes(activeClient);');
     expect(dashboardApp).toContain('renderCardSettingsPicker({ quiet: true });\n      renderCurrentList();');
     expect(dashboardApp).toContain('renderCardSettingsPicker({ quiet: true });');

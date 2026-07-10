@@ -103,6 +103,7 @@ if (root !== null) {
   let selectedDetailRowId: string | undefined;
   let selectedAgentTaskId: string | undefined;
   let cardSettingsDirty = false;
+  let cardSettingsSaving = false;
   let dashboardLayoutSaving = false;
   let layoutMutationSequence = 0;
 
@@ -259,7 +260,7 @@ if (root !== null) {
       setState('auth-missing', copy.status.authMissing);
       return;
     }
-    if (dashboardLayoutSaving) return;
+    if (dashboardLayoutSaving || cardSettingsSaving) return;
     if (options.quiet && refreshInFlightClient === client) return;
 
     const activeClient = client;
@@ -517,11 +518,11 @@ if (root !== null) {
     for (const action of operatorActions) {
       const agentAction = action.dataset.agentAction;
       if (agentAction === undefined) {
-        action.disabled = dashboardLayoutSaving || !enabled;
+        action.disabled = dashboardLayoutSaving || cardSettingsSaving || !enabled;
         continue;
       }
       const needsSelectedTask = agentAction !== 'terminate-all';
-      action.disabled = dashboardLayoutSaving || !enabled || (needsSelectedTask && selectedAgentTaskId === undefined);
+      action.disabled = dashboardLayoutSaving || cardSettingsSaving || !enabled || (needsSelectedTask && selectedAgentTaskId === undefined);
     }
   }
 
@@ -796,9 +797,9 @@ if (root !== null) {
     article.setAttribute('data-dashboard-card-id', item.cardId);
     article.draggable = true;
     article.style.setProperty('--dashboard-card-column-start', String(clampDashboardCardSize(item.x + 1, 1, DASHBOARD_GRID_COLUMNS)));
-    article.style.setProperty('--dashboard-card-row-start', String(clampDashboardCardSize(item.y + 1, 1, 99)));
+    article.style.setProperty('--dashboard-card-row-start', String(Math.max(1, item.y + 1)));
     article.style.setProperty('--dashboard-card-columns', String(clampDashboardCardSize(item.columns, 1, DASHBOARD_GRID_COLUMNS)));
-    article.style.setProperty('--dashboard-card-rows', String(clampDashboardCardSize(item.rows, 1, 12)));
+    article.style.setProperty('--dashboard-card-rows', String(Math.max(1, item.rows)));
 
     article.addEventListener('dragstart', (event) => {
       if (!canEditDashboardLayout()) {
@@ -1010,15 +1011,8 @@ if (root !== null) {
       const min = entry?.definition.size.min ?? { columns: 1, rows: 1 };
       const max = entry?.definition.size.max ?? { columns: DASHBOARD_GRID_COLUMNS, rows: 12 };
       const effectiveMaxColumns = Math.min(max.columns, DASHBOARD_GRID_COLUMNS);
-      const nextColumns = item.columns >= effectiveMaxColumns ? min.columns : item.columns + 1;
-      const nextRows = item.rows >= max.rows ? min.rows : item.rows + 1;
-      const candidate = {
-        ...item,
-        columns: clampDashboardCardSize(nextColumns, min.columns, effectiveMaxColumns),
-        rows: clampDashboardCardSize(nextRows, min.rows, max.rows),
-      };
-      const overlaps = currentItems.some((other) => other.id !== item.id && dashboardLayoutItemsOverlap(candidate, other));
-      if (overlaps || candidate.x + candidate.columns > DASHBOARD_GRID_COLUMNS) {
+      const candidate = nextDashboardLayoutResizeCandidate(item, currentItems, min, { columns: effectiveMaxColumns, rows: max.rows });
+      if (candidate === undefined) {
         blockedByOverlap = true;
         return item;
       }
@@ -1031,12 +1025,60 @@ if (root !== null) {
     return saveDashboardLayoutItems(items);
   }
 
+  function nextDashboardLayoutResizeCandidate(
+    item: DashboardLayoutItem,
+    currentItems: DashboardLayoutItem[],
+    min: { columns: number; rows: number },
+    max: { columns: number; rows: number },
+  ): DashboardLayoutItem | undefined {
+    const candidateSizes = uniqueDashboardLayoutSizes([
+      [nextDashboardLayoutSizeValue(item.columns, min.columns, max.columns), nextDashboardLayoutSizeValue(item.rows, min.rows, max.rows)],
+      [nextDashboardLayoutSizeValue(item.columns, min.columns, max.columns), item.rows],
+      [item.columns, nextDashboardLayoutSizeValue(item.rows, min.rows, max.rows)],
+      ...dashboardLayoutSizeCycle(item.columns, min.columns, max.columns).map((columns) => [columns, item.rows] as const),
+      ...dashboardLayoutSizeCycle(item.rows, min.rows, max.rows).map((rows) => [item.columns, rows] as const),
+    ]);
+
+    for (const [columns, rows] of candidateSizes) {
+      if (columns === item.columns && rows === item.rows) continue;
+      const candidate = { ...item, columns, rows };
+      if (!dashboardLayoutItemInGridBounds(candidate)) continue;
+      if (currentItems.some((other) => other.id !== item.id && dashboardLayoutItemsOverlap(candidate, other))) continue;
+      return candidate;
+    }
+    return undefined;
+  }
+
+  function nextDashboardLayoutSizeValue(current: number, min: number, max: number): number {
+    return current >= max ? min : clampDashboardCardSize(current + 1, min, max);
+  }
+
+  function dashboardLayoutSizeCycle(current: number, min: number, max: number): readonly number[] {
+    const values: number[] = [];
+    for (let value = current + 1; value <= max; value += 1) values.push(value);
+    for (let value = min; value < current; value += 1) values.push(value);
+    return values;
+  }
+
+  function uniqueDashboardLayoutSizes(sizes: readonly (readonly [number, number])[]): Array<readonly [number, number]> {
+    const seen = new Set<string>();
+    const unique: Array<readonly [number, number]> = [];
+    for (const [columns, rows] of sizes) {
+      const key = `${columns}:${rows}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      unique.push([columns, rows]);
+    }
+    return unique;
+  }
+
   async function saveDashboardLayoutItems(items: DashboardLayoutItem[]): Promise<void> {
     if (client === undefined || latestData === undefined) {
       setDashboardLayoutStatus(copy.command.connectFirst);
       return;
     }
     if (!canEditDashboardLayout()) return;
+    if (cardSettingsSaving) return;
     if (layoutSaveWouldDropHiddenCards()) {
       setDashboardLayoutStatus(copy.cardLayout.hiddenCardsWarning);
       return;
@@ -1091,7 +1133,7 @@ if (root !== null) {
   }
 
   function canEditDashboardLayout(): boolean {
-    return isOperatorModeEnabled() && !dashboardLayoutSaving;
+    return isOperatorModeEnabled() && !dashboardLayoutSaving && !cardSettingsSaving;
   }
 
   function hasDashboardLayoutDragPayload(dataTransfer: DataTransfer | null): boolean {
@@ -1389,15 +1431,26 @@ if (root !== null) {
     }
 
     const config = mergeCardSettingsConfig(selectedLayoutItem.config, renderedConfig.config);
+    cardSettingsSaving = true;
+    setOperatorActionsEnabled(isOperatorModeEnabled());
+    renderDashboardLayout();
+    renderCardPicker();
+    let saved = false;
     try {
       await client.saveDashboardLayoutItemConfig(selectedLayoutItem.id, config);
       updateLatestCardSettingsConfig(selectedLayoutItem.id, config);
       cardSettingsDirty = false;
       markCardSettingsFormClean(cardSettingsForm);
       setCardSettingsStatus(copy.cardSettings.saved);
-      void refresh({ quiet: true });
+      saved = true;
     } catch (error) {
       setCardSettingsStatus(error instanceof RainrailDashboardApiError ? `${copy.cardSettings.failed}: ${error.code}` : copy.cardSettings.failed);
+    } finally {
+      cardSettingsSaving = false;
+      setOperatorActionsEnabled(isOperatorModeEnabled());
+      renderDashboardLayout();
+      renderCardPicker();
+      if (saved) void refresh({ quiet: true });
     }
   }
 
