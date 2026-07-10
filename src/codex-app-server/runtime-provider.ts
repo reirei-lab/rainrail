@@ -192,10 +192,11 @@ export async function startCodexAppServerRun(
     });
     throwIfCodexAppServerLogWriteFailed(runtimeClient);
     const completionStatus = stringValue(completed.turn.status);
+    const outcome = outcomeFromCodexTurn(completed);
     return {
       id: threadId,
       provider: 'codex',
-      status: runtimeStatusFromCodexTurn(completed),
+      status: runtimeStatusFromCodexTurn(completed, outcome),
       metadata: metadataWithDefinedValues({
         ...metadataBase,
         pid: runtimeClient.pid,
@@ -203,6 +204,7 @@ export async function startCodexAppServerRun(
         turnId,
         sessionId: thread.thread.sessionId,
         completionStatus,
+        outcome,
       }),
     };
   } catch (error) {
@@ -250,7 +252,11 @@ function definedCodexThreadOptions(
     return {};
   }
   return Object.fromEntries(
-    Object.entries(thread).filter(([, value]) => value !== undefined),
+    Object.entries(thread).filter(([key, value]) => {
+      if (value === undefined) return false;
+      if (key === 'approvalPolicy' && value === null) return false;
+      return true;
+    }),
   ) as Partial<CodexAppServerThreadStartParams>;
 }
 
@@ -421,14 +427,59 @@ async function waitForCodexTurn(
   }
 }
 
-function runtimeStatusFromCodexTurn(event: CodexAppServerTurnCompletedEvent): RuntimeRunStatus {
+function runtimeStatusFromCodexTurn(
+  event: CodexAppServerTurnCompletedEvent,
+  outcome = outcomeFromCodexTurn(event),
+): RuntimeRunStatus {
   if (event.turn.error !== undefined && event.turn.error !== null) return 'failed';
   const status = normalize(stringValue(event.turn.status));
   if (status === 'failed' || status === 'error') return 'failed';
   if (status === 'canceled' || status === 'cancelled' || status === 'interrupted') return 'canceled';
   if (status === 'timedout' || status === 'timed_out' || status === 'timeout') return 'timed_out';
   if (status === 'stopped') return 'stopped';
+  if (outcome === 'needs_human' || outcome === 'split_recommended') return outcome;
   return 'succeeded';
+}
+
+type CodexRuntimeOutcome = 'implemented' | 'updated_issue' | 'needs_human' | 'split_recommended';
+
+function outcomeFromCodexTurn(event: CodexAppServerTurnCompletedEvent): CodexRuntimeOutcome | undefined {
+  let outcome: CodexRuntimeOutcome | undefined;
+  for (const text of textValuesFromCodexTurn(event.turn)) {
+    const outcomes = [...text.matchAll(/\bOutcome:\s*(implemented|updated_issue|needs_human|split_recommended)\b/g)];
+    const latest = outcomes.at(-1)?.[1] as CodexRuntimeOutcome | undefined;
+    if (latest !== undefined) {
+      outcome = latest;
+    }
+  }
+  return outcome;
+}
+
+function textValuesFromCodexTurn(turn: { items?: unknown; itemsView?: unknown }): string[] {
+  return [
+    ...textValuesFromUnknown(turn.items),
+    ...textValuesFromUnknown(turn.itemsView),
+  ];
+}
+
+function textValuesFromUnknown(value: unknown): string[] {
+  if (typeof value === 'string') {
+    return [value];
+  }
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => textValuesFromUnknown(item));
+  }
+  if (!isRecord(value)) {
+    return [];
+  }
+  return [
+    stringValue(value.text),
+    stringValue(value.finalAssistantVisibleText),
+    stringValue(value.finalAssistantRawText),
+    ...textValuesFromUnknown(value.payloads),
+    ...textValuesFromUnknown(value.items),
+    ...textValuesFromUnknown(value.content),
+  ].filter((text): text is string => text !== undefined);
 }
 
 function promptForRuntimeTask(task: RuntimeAgentTaskInput): string {

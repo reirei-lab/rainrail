@@ -61,6 +61,8 @@ protocol frame 型は `CodexAppServerFrameId`、`CodexAppServerRequestFrame`、
 `command`、`args`、`cwd`、`env` から child process を起動し、stdin/stdout の
 JSON line framing だけを担当する。`env` を指定した場合はその値を child process の
 完全な環境として扱い、親 process の環境を混ぜる場合だけ `inheritEnv: true` を明示する。
+`env` を省略しても `inheritEnv: false` が明示された場合は空の environment を spawn に渡し、
+Node の既定環境継承で secret が子 process へ漏れないようにする。
 test や別 supervisor は `SpawnCodexAppServerProcess` と
 `StdioCodexAppServerChildProcess` を差し替えられる。stdout の parse error は
 transport error として通知し、後続の valid frame は処理を続ける。stdio transport の
@@ -119,10 +121,13 @@ thread id、turn id、branch、task id を残す。default thread は自動 runt
 request を client が処理できるようにする。この request handler は `turn/start` response 後も
 `turn/completed` まで保持し、turn 実行中の承認/tool request も処理できるようにする。
 `thread` option に含まれる `undefined` field は default params を消さないよう merge 前に
-除外する。turn completion status は
+除外し、`approvalPolicy: null` も既定の `never` を消さないよう除外する。turn completion status は
 failed/error を `failed`、interrupted/cancelled/canceled を `canceled`、
 timeout/timedOut を `timed_out` に対応させる。`turn.error` が非 null の completion は
-status が欠落または未知でも `failed` とし、その他の完了だけを `succeeded` として扱う。
+status が欠落または未知でも `failed` とする。Codex turn summary の final text や payload text から
+`Outcome: needs_human` / `Outcome: split_recommended` が取れた場合は runtime status に反映し、
+`Outcome: implemented` / `Outcome: updated_issue` は成功完了として扱う。その他の完了だけを
+`succeeded` として扱う。
 stuck turn は provider-level timeout で `timed_out` とし、実行中の caller
 `AbortSignal` は即座に `canceled` として扱い、どちらも app-server process を
 `close()` 経由で cleanup する。`close()` は `closeTimeoutMs` で上限を設け、stuck process

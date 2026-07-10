@@ -78,6 +78,8 @@ class StdioCodexAppServerTransport implements CodexAppServerTransport {
     if (this.#options.cwd !== undefined) spawnOptions.cwd = this.#options.cwd;
     if (this.#options.env !== undefined) {
       spawnOptions.env = this.#options.inheritEnv ? { ...process.env, ...this.#options.env } : this.#options.env;
+    } else if (this.#options.inheritEnv === false) {
+      spawnOptions.env = {};
     }
 
     const child = spawnProcess(this.#options.command, this.#options.args ?? [], spawnOptions);

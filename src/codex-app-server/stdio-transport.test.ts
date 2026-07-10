@@ -77,6 +77,20 @@ describe('stdio Codex App Server transport', () => {
     });
   });
 
+  it('passes an empty env when inheritance is explicitly disabled without overrides', async () => {
+    const { spawnProcess } = createChildProcessFixture();
+    const transport = createStdioCodexAppServerTransport({
+      command: 'codex-app-server',
+      inheritEnv: false,
+      spawnProcess,
+    });
+
+    await transport.connect();
+
+    const options = spawnProcess.mock.calls[0]?.[2];
+    expect(options?.env).toEqual({});
+  });
+
   it('merges env overrides with the parent process environment when inheritance is explicit', async () => {
     const { spawnProcess } = createChildProcessFixture();
     const transport = createStdioCodexAppServerTransport({

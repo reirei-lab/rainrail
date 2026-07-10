@@ -160,6 +160,39 @@ describe('createCodexAppServerRuntimeProvider', () => {
     });
   });
 
+  it.each([
+    ['needs_human', 'needs_human'],
+    ['split_recommended', 'split_recommended'],
+    ['implemented', 'succeeded'],
+    ['updated_issue', 'succeeded'],
+  ] as const)('maps Codex Outcome %s to runtime status %s', async (outcome, runtimeStatus) => {
+    const client = new FakeCodexAppServerProtocolClient();
+    client.completedTurn = {
+      threadId: 'thread-315',
+      turn: {
+        id: 'turn-315',
+        status: 'completed',
+        items: [
+          { text: '古いメモ: Outcome: needs_human' },
+          { text: `作業結果です。\n\nOutcome: ${outcome}` },
+        ],
+      },
+    };
+    const provider = createCodexAppServerRuntimeProvider({
+      enabled: true,
+      command: 'codex',
+      logDirectory: temporaryDirectory(),
+      clientFactory: () => ({ client, pid: 9315 }),
+    });
+
+    await expect(provider.startRun(runtimeRequest())).resolves.toMatchObject({
+      status: runtimeStatus,
+      metadata: {
+        outcome,
+      },
+    });
+  });
+
   it('marks stuck turns as timed out and closes the app-server process', async () => {
     vi.useFakeTimers();
     const client = new FakeCodexAppServerProtocolClient();
@@ -400,6 +433,22 @@ describe('createCodexAppServerRuntimeProvider', () => {
       command: 'codex',
       logDirectory: temporaryDirectory(),
       thread: { approvalPolicy: undefined } as unknown as Partial<CodexAppServerThreadStartParams>,
+      clientFactory: () => ({ client, pid: 9315 }),
+    });
+
+    await expect(provider.startRun(runtimeRequest())).resolves.toMatchObject({ status: 'succeeded' });
+    expect(client.startThread).toHaveBeenCalledWith(expect.objectContaining({
+      approvalPolicy: 'never',
+    }));
+  });
+
+  it('does not let null approval policy erase the non-interactive default', async () => {
+    const client = new FakeCodexAppServerProtocolClient();
+    const provider = createCodexAppServerRuntimeProvider({
+      enabled: true,
+      command: 'codex',
+      logDirectory: temporaryDirectory(),
+      thread: { approvalPolicy: null },
       clientFactory: () => ({ client, pid: 9315 }),
     });
 
