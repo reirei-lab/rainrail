@@ -2388,6 +2388,29 @@ describe('Rainrail CLI built-in commands', () => {
           },
         });
 
+        const sharedCatalogSizedLayoutSave = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout`, {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json', 'x-request-id': 'request-local-shared-catalog-layout' },
+          body: JSON.stringify({
+            dryRun: true,
+            items: [
+              { id: 'event-inbox', cardId: 'core.eventInbox', x: 0, y: 0, columns: 8, rows: 8 },
+              { id: 'workflow-runs', cardId: 'core.workflowRuns', x: 0, y: 8, columns: 4, rows: 6 },
+              { id: 'agent-tasks', cardId: 'core.agentTasks', x: 4, y: 8, columns: 4, rows: 6 },
+              { id: 'legacy-overview', cardId: 'core.overview', x: 8, y: 8, columns: 4, rows: 3 },
+            ],
+          }),
+        });
+        expect(sharedCatalogSizedLayoutSave.status).toBe(200);
+        await expect(sharedCatalogSizedLayoutSave.json()).resolves.toMatchObject({
+          data: {
+            action: 'dashboard_layout_update',
+            status: 'preview',
+            dryRun: true,
+            result: { itemCount: 4 },
+          },
+        });
+
         const dryRunLayoutSave = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout`, {
           method: 'PUT',
           headers: { 'content-type': 'application/json', 'x-request-id': 'request-local-layout-preview' },
@@ -4565,8 +4588,7 @@ describe('Rainrail CLI built-in commands', () => {
         cwd: projectRoot,
         serverStarter: () => ({ stop: () => undefined }),
       });
-      expect(duplicateName.exitCode).toBe(1);
-      expect(duplicateName.stderr).toContain('config source names must be unique');
+      expect(duplicateName.exitCode).toBe(0);
     });
   });
 
@@ -4730,6 +4752,152 @@ describe('Rainrail CLI built-in commands', () => {
             type: 'source',
             lastDelivery: { id: 'local-event-000001' },
           },
+        });
+      } finally {
+        await closeTestServer(result);
+      }
+    });
+  });
+
+  it('keeps duplicate local source names visible with unique source row ids', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'duplicate-source-names');
+      const port = await getFreePort();
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        server: { host: '127.0.0.1', port },
+        sourceBundles: [{
+          type: 'eep-bridge',
+          name: 'local',
+          sources: [
+            {
+              type: 'github-webhook',
+              name: 'shared-local',
+              sourceType: 'github',
+              provider: 'github',
+              webhookSecret: 'secret',
+              endpoint: '/webhooks/github',
+            },
+            {
+              type: 'manual-chat',
+              name: 'shared-local',
+              sourceType: 'manual',
+              endpoint: '/manual',
+            },
+          ],
+        }],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+
+      const result = await runRainrailCliAsync(['start'], { cwd: projectRoot });
+      try {
+        expect(result.exitCode).toBe(0);
+        const body = '{}';
+        expect((await fetch(`http://127.0.0.1:${port}/webhooks/github`, {
+          method: 'POST',
+          headers: githubWebhookHeaders('secret', body),
+          body,
+        })).status).toBe(202);
+        expect((await fetch(`http://127.0.0.1:${port}/manual`, { method: 'POST', body })).status).toBe(202);
+
+        const sources = await fetch(`http://127.0.0.1:${port}/api/v1/sources`);
+        const sourcesBody = await sources.json() as {
+          data: Array<{ id: string; name: string; sourceType: string; links: { self: string }; lastDelivery?: { id: string } }>;
+        };
+        expect(sourcesBody.data).toEqual([
+          expect.objectContaining({
+            id: 'shared-local:0',
+            name: 'shared-local',
+            sourceType: 'github',
+            lastDelivery: expect.objectContaining({ id: 'local-event-000001' }),
+          }),
+          expect.objectContaining({
+            id: 'shared-local:1',
+            name: 'shared-local',
+            sourceType: 'manual',
+            lastDelivery: expect.objectContaining({ id: 'local-event-000002' }),
+          }),
+        ]);
+
+        const githubSources = await fetch(`http://127.0.0.1:${port}/api/v1/sources?filter[source]=github`);
+        await expect(githubSources.json()).resolves.toMatchObject({
+          data: [expect.objectContaining({ id: 'shared-local:0', sourceType: 'github' })],
+          page: { nextCursor: null },
+        });
+
+        const manualDetail = await fetch(`http://127.0.0.1:${port}${sourcesBody.data[1]?.links.self}`);
+        await expect(manualDetail.json()).resolves.toMatchObject({
+          data: {
+            id: 'shared-local:1',
+            sourceType: 'manual',
+            lastDelivery: { id: 'local-event-000002' },
+          },
+        });
+      } finally {
+        await closeTestServer(result);
+      }
+    });
+  });
+
+  it('limits local source last delivery lookups to the restored event snapshot', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'source-last-delivery-limit');
+      const port = await getFreePort();
+      const databasePath = join(projectRoot, '.rainrail', 'operational.sqlite');
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        server: { host: '127.0.0.1', port },
+        operationalStore: {
+          kind: 'sqlite',
+          databasePath,
+          eventLimit: 1,
+        },
+        sourceBundles: [{
+          type: 'eep-bridge',
+          name: 'local',
+          sources: [
+            {
+              type: 'github-webhook',
+              name: 'github-local',
+              sourceType: 'github',
+              provider: 'github',
+              webhookSecret: 'secret',
+              endpoint: '/webhooks/github',
+            },
+            {
+              type: 'manual-chat',
+              name: 'manual-local',
+              sourceType: 'manual',
+              endpoint: '/manual',
+            },
+          ],
+        }],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+
+      const result = await runRainrailCliAsync(['start'], { cwd: projectRoot });
+      try {
+        expect(result.exitCode).toBe(0);
+        const body = '{}';
+        expect((await fetch(`http://127.0.0.1:${port}/webhooks/github`, {
+          method: 'POST',
+          headers: githubWebhookHeaders('secret', body, { delivery: 'delivery-github' }),
+          body,
+        })).status).toBe(202);
+        expect((await fetch(`http://127.0.0.1:${port}/manual`, { method: 'POST', body })).status).toBe(202);
+
+        const sources = await fetch(`http://127.0.0.1:${port}/api/v1/sources`);
+        await expect(sources.json()).resolves.toMatchObject({
+          data: [
+            expect.not.objectContaining({ lastDelivery: expect.any(Object) }),
+            expect.objectContaining({
+              name: 'manual-local',
+              sourceType: 'manual',
+              lastDelivery: expect.objectContaining({ id: 'local-event-000002' }),
+            }),
+          ],
         });
       } finally {
         await closeTestServer(result);

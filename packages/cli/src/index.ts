@@ -2301,17 +2301,12 @@ function parseLocalSourceMaxBodyBytes(value: unknown): number {
 
 function dedupeLocalSources(sources: readonly RainrailLocalSource[]): RainrailLocalSource[] {
   const endpoints = new Set<string>();
-  const names = new Set<string>();
   const deduped: RainrailLocalSource[] = [];
   for (const source of sources) {
     if (endpoints.has(source.endpoint)) {
       throw new Error(`config endpoints must be unique: ${source.endpoint}`);
     }
-    if (names.has(source.name)) {
-      throw new Error(`config source names must be unique: ${source.name}`);
-    }
     endpoints.add(source.endpoint);
-    names.add(source.name);
     deduped.push(source);
   }
   return deduped;
@@ -5362,50 +5357,50 @@ const localDashboardCardDefinitions: readonly LocalDashboardCardDefinition[] = [
   },
   {
     id: 'core.eventInbox',
-    title: 'Event inbox',
-    description: 'Normalized source events, deliveries, retries, and workflow matches.',
+    title: 'Event Inbox',
+    description: 'Filtered event deliveries with publish results and workflow matches.',
     entry: { type: 'core', name: 'eventInbox' },
     category: 'events',
     requiredCapabilities: ['dashboard:read'],
     size: {
       default: { columns: 8, rows: 4 },
       min: { columns: 4, rows: 2 },
-      max: { columns: 12, rows: 6 },
+      max: { columns: 12, rows: 8 },
     },
     settingsSchema: localDashboardSettingsSchema,
   },
   {
     id: 'core.workflowRuns',
-    title: 'Workflow runs',
-    description: 'Workflow outcomes, source links, and retry-focused detail rows.',
+    title: 'Workflow Runs',
+    description: 'Workflow run rows and detail records.',
     entry: { type: 'core', name: 'workflowRuns' },
     category: 'workflows',
     requiredCapabilities: ['dashboard:read'],
     size: {
       default: { columns: 4, rows: 3 },
       min: { columns: 3, rows: 2 },
-      max: { columns: 8, rows: 5 },
+      max: { columns: 8, rows: 6 },
     },
     settingsSchema: localDashboardSettingsSchema,
   },
   {
     id: 'core.agentTasks',
-    title: 'Agent tasks',
-    description: 'Running, completed, and blocked agent task state.',
+    title: 'Agent Tasks',
+    description: 'Agent task status, timelines, logs, and Codex activity.',
     entry: { type: 'core', name: 'agentTasks' },
     category: 'agents',
     requiredCapabilities: ['dashboard:read'],
     size: {
       default: { columns: 4, rows: 3 },
       min: { columns: 3, rows: 2 },
-      max: { columns: 8, rows: 5 },
+      max: { columns: 8, rows: 6 },
     },
     settingsSchema: localDashboardSettingsSchema,
   },
   {
     id: 'core.sources',
     title: 'Sources',
-    description: 'Configured source bundles, transports, auth state, and last delivery.',
+    description: 'Configured source bundles, health, and source metadata.',
     entry: { type: 'core', name: 'sources' },
     category: 'sources',
     requiredCapabilities: ['dashboard:read'],
@@ -5433,7 +5428,7 @@ const localDashboardCardDefinitions: readonly LocalDashboardCardDefinition[] = [
   {
     id: 'core.settings',
     title: 'Settings',
-    description: 'Runtime, retry, auth, and audit settings.',
+    description: 'Read-only operational settings and local dashboard configuration.',
     entry: { type: 'core', name: 'settings' },
     category: 'settings',
     requiredCapabilities: ['dashboard:read'],
@@ -5446,15 +5441,29 @@ const localDashboardCardDefinitions: readonly LocalDashboardCardDefinition[] = [
   },
   {
     id: 'core.operatorActions',
-    title: 'Operator actions',
-    description: 'Resume, reset, terminate, and queue command controls.',
+    title: 'Operator Actions',
+    description: 'Scoped resume, reset, terminate, and queue operation controls.',
     entry: { type: 'core', name: 'operatorActions' },
-    category: 'operations',
+    category: 'operators',
     requiredCapabilities: ['dashboard:read'],
     size: {
       default: { columns: 4, rows: 2 },
       min: { columns: 2, rows: 1 },
       max: { columns: 8, rows: 4 },
+    },
+    settingsSchema: localDashboardSettingsSchema,
+  },
+  {
+    id: 'core.overview',
+    title: 'Overview',
+    description: 'Legacy dashboard overview card id kept for saved layout compatibility.',
+    entry: { type: 'core', name: 'overview' },
+    category: 'operations',
+    requiredCapabilities: ['dashboard:read'],
+    size: {
+      default: { columns: 4, rows: 3 },
+      min: { columns: 3, rows: 2 },
+      max: { columns: 8, rows: 6 },
     },
     settingsSchema: localDashboardSettingsSchema,
   },
@@ -7453,22 +7462,22 @@ type LocalSourceRow = {
   };
 };
 
-type LocalSourceLastDelivery = NonNullable<LocalSourceRow['lastDelivery']>;
-
 function localSourceRows(
   sources: readonly RainrailLocalSource[],
   state: LocalRainrailServerState,
   options: { readonly includeHistorySources?: boolean } = {},
 ): readonly LocalSourceRow[] {
-  const operationalEvents = state.eventStore?.listOperationalEvents?.() ?? [];
-  const rows = new Map<string, LocalSourceRow>();
-  for (const source of sources) {
+  const rows: LocalSourceRow[] = [];
+  const duplicateSourceNames = duplicateLocalSourceNames(sources.map((source) => source.name));
+  const reservedSourceRowIds = new Set(sources.map((source) => source.name));
+  const assignedSourceRowIds = new Set<string>();
+  for (const [index, source] of sources.entries()) {
     const latestEvent = [...state.events]
       .reverse()
       .find((event) => event.source.name === source.name && event.source.type === source.sourceType);
-    const latestOperationalEvent = latestOperationalEventForSource(operationalEvents, source.name, source.sourceType);
+    const id = localSourceRowId(source.name, index, duplicateSourceNames, reservedSourceRowIds, assignedSourceRowIds);
     const row = {
-      id: source.name,
+      id,
       type: 'source',
       status: 'configured',
       sourceType: source.sourceType,
@@ -7476,17 +7485,10 @@ function localSourceRows(
       endpoint: source.endpoint,
       transport: source.transport,
       auth: { status: source.authConfigured ? 'configured' : 'not configured' },
-      links: { self: `/api/v1/sources/${encodeURIComponent(source.name)}` },
+      links: { self: `/api/v1/sources/${encodeURIComponent(id)}` },
     } satisfies Omit<LocalSourceRow, 'lastDelivery'>;
-    if (latestOperationalEvent !== undefined) {
-      rows.set(source.name, {
-        ...row,
-        lastDelivery: localOperationalSourceLastDelivery(latestOperationalEvent),
-      });
-      continue;
-    }
     if (latestEvent !== undefined) {
-      rows.set(source.name, {
+      rows.push({
         ...row,
         lastDelivery: {
           id: latestEvent.id,
@@ -7498,45 +7500,66 @@ function localSourceRows(
       });
       continue;
     }
-    rows.set(source.name, row);
+    rows.push(row);
   }
 
-  if (options.includeHistorySources !== true) return [...rows.values()];
+  if (options.includeHistorySources !== true) return rows;
 
-  for (const event of operationalEvents) {
-    if (rows.has(event.source.name)) continue;
-    rows.set(event.source.name, {
-      id: event.source.name,
+  const observedEvents = [...state.events].reverse();
+  const observedSourceNames = duplicateLocalSourceNames([...sources.map((source) => source.name), ...observedEvents.map((event) => event.source.name)]);
+  for (const [index, event] of observedEvents.entries()) {
+    if (rows.some((row) => row.name === event.source.name && row.sourceType === event.source.type)) continue;
+    const id = localSourceRowId(event.source.name, sources.length + index, observedSourceNames, reservedSourceRowIds, assignedSourceRowIds);
+    rows.push({
+      id,
       type: 'source',
       status: 'observed',
       sourceType: event.source.type,
       name: event.source.name,
       transport: 'event-store',
       auth: { status: 'not configured' },
-      links: { self: `/api/v1/sources/${encodeURIComponent(event.source.name)}` },
-      lastDelivery: localOperationalSourceLastDelivery(event),
+      links: { self: `/api/v1/sources/${encodeURIComponent(id)}` },
+      lastDelivery: {
+        id: event.id,
+        status: event.status,
+        occurredAt: event.occurredAt,
+        receivedAt: event.receivedAt,
+        links: event.links,
+      },
     });
   }
 
-  return [...rows.values()];
+  return rows;
 }
 
-function latestOperationalEventForSource(
-  events: readonly LocalOperationalEvent[],
-  sourceName: string,
-  sourceType: string,
-): LocalOperationalEvent | undefined {
-  return events.find((event) => event.source.name === sourceName && event.source.type === sourceType);
+function duplicateLocalSourceNames(values: readonly string[]): Set<string> {
+  const seen = new Set<string>();
+  const duplicates = new Set<string>();
+  for (const value of values) {
+    if (seen.has(value)) {
+      duplicates.add(value);
+    } else {
+      seen.add(value);
+    }
+  }
+  return duplicates;
 }
 
-function localOperationalSourceLastDelivery(event: LocalOperationalEvent): LocalSourceLastDelivery {
-  return {
-    id: event.delivery.id,
-    status: 'received',
-    occurredAt: event.occurredAt,
-    receivedAt: event.receivedAt,
-    links: { self: `/api/v1/events/${encodeURIComponent(event.id)}` },
-  };
+function localSourceRowId(
+  name: string,
+  index: number,
+  duplicateSourceNames: Set<string>,
+  reservedSourceRowIds: Set<string>,
+  assignedSourceRowIds: Set<string>,
+): string {
+  let candidate = duplicateSourceNames.has(name) ? `${name}:${index}` : name;
+  let suffix = 1;
+  while (assignedSourceRowIds.has(candidate) || (candidate !== name && reservedSourceRowIds.has(candidate))) {
+    candidate = `${name}:${index}:${suffix}`;
+    suffix += 1;
+  }
+  assignedSourceRowIds.add(candidate);
+  return candidate;
 }
 
 function filterLocalSources(sources: readonly LocalSourceRow[], url: URL): readonly LocalSourceRow[] {
