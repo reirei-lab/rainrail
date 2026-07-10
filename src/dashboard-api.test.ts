@@ -299,6 +299,22 @@ describe('Rainrail dashboard API', () => {
     expect(duplicateItem.status).toBe(400);
     await expect(duplicateItem.json()).resolves.toEqual({ error: 'duplicate_dashboard_layout_item', itemId: 'dup' });
 
+    const overlappingItem = await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/layout', {
+      method: 'PUT',
+      headers: { authorization: 'Bearer operator-token', 'content-type': 'application/json' },
+      body: JSON.stringify({
+        items: [
+          { id: 'recent-events', cardId: 'core.recentEvents', x: 0, y: 0, columns: 4, rows: 2 },
+          { id: 'queue', cardId: 'plugin:github.queue', x: 3, y: 1, columns: 3, rows: 2 },
+        ],
+      }),
+    }));
+    expect(overlappingItem.status).toBe(400);
+    await expect(overlappingItem.json()).resolves.toEqual({
+      error: 'overlapping_dashboard_layout_item',
+      itemId: 'queue',
+    });
+
     const saved = await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/layout', {
       method: 'PUT',
       headers: {

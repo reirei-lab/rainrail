@@ -305,6 +305,7 @@ describe('dashboard operational views', () => {
     expect(dashboardApp).toContain('cardSettingsDirty');
     expect(dashboardApp).toContain('if (cardSettingsDirty && options.quiet) return;');
     expect(dashboardApp).toContain('if (dashboardLayoutSaving) return;');
+    expect(dashboardApp).toContain('if (!dashboardCoreCardIsVisible(cardId))');
     expect(dashboardApp).toContain('action.disabled = dashboardLayoutSaving || !enabled');
     expect(dashboardApp).toContain('void refresh({ quiet: true });');
     expect(dashboardApp).not.toContain('await refresh({ quiet: true });');
@@ -326,6 +327,10 @@ describe('dashboard operational views', () => {
 
     for (const marker of [
       'renderDashboardLayout()',
+      'applyDashboardLayoutVisibility()',
+      'dashboardCoreCardElements',
+      'dashboardCoreCardIsVisible',
+      'ensureVisibleDashboardTab',
       'renderCardPicker()',
       'saveDashboardLayoutItems',
       'discardInFlightDashboardRefreshes',
@@ -372,6 +377,8 @@ describe('dashboard operational views', () => {
     expect(dashboardClient).toContain('size: {');
     expect(dashboardApp).toContain('category / provider / plugin');
     expect(dashboardApp).toContain('activeClient.saveDashboardLayout(items)');
+    expect(dashboardApp).toContain('if (dashboardLayoutSaving) return;');
+    expect(dashboardApp).toContain('discardInFlightDashboardRefreshes(activeClient);');
     expect(dashboardApp).toContain('renderCardSettingsPicker({ quiet: true });');
     expect(dashboardApp).not.toContain('setDashboardLayoutStatus(copy.cardLayout.saved);');
     expect(dashboardApp).not.toContain('return dashboardTabForCard(cardId) === undefined ? copy.cardLayout.settings : copy.cardLayout.move;');

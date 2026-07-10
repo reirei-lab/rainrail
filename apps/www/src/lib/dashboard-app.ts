@@ -88,6 +88,7 @@ if (root !== null) {
   const dashboardLayoutStatus = root.querySelector<HTMLElement>('[data-dashboard-layout-status]');
   const demoIndicator = root.querySelector<HTMLElement>('[data-demo-indicator]');
   const tabButtons = Array.from(root.querySelectorAll<HTMLButtonElement>('[data-dashboard-tab]'));
+  const dashboardCoreCardElements = Array.from(root.querySelectorAll<HTMLElement>('[data-dashboard-core-card]'));
 
   let client: RainrailDashboardApiClient | undefined;
   const initialDashboardState = initialDashboardStateFromUrl(new URLSearchParams(window.location.search));
@@ -207,6 +208,8 @@ if (root !== null) {
   for (const button of tabButtons) {
     button.addEventListener('click', () => {
       const tab = button.dataset.dashboardTab;
+      const cardId = button.dataset.dashboardCoreCard;
+      if (!dashboardCoreCardIsVisible(cardId)) return;
       if (isDashboardTab(tab)) {
         selectedTab = tab;
         renderCurrentList();
@@ -256,6 +259,7 @@ if (root !== null) {
       setState('auth-missing', copy.status.authMissing);
       return;
     }
+    if (dashboardLayoutSaving) return;
     if (options.quiet && refreshInFlightClient === client) return;
 
     const activeClient = client;
@@ -281,6 +285,7 @@ if (root !== null) {
       latestData = nextData;
       lastUpdatedAt = Date.now();
       scheduleStaleCheck();
+      applyDashboardLayoutVisibility();
       renderStats(latestData.overview);
       renderDashboardLayout();
       renderCardPicker();
@@ -304,6 +309,7 @@ if (root !== null) {
   function renderCurrentList(): void {
     if (latestData === undefined || list === null || detail === null) return;
 
+    ensureVisibleDashboardTab();
     for (const button of tabButtons) {
       button.ariaPressed = String(button.dataset.dashboardTab === selectedTab);
     }
@@ -467,6 +473,7 @@ if (root !== null) {
     setDashboardLayoutStatus('');
     if (cardSettingsSelect !== null) cardSettingsSelect.replaceChildren();
     if (cardSettingsForm !== null) cardSettingsForm.replaceChildren();
+    applyDashboardLayoutVisibility();
     renderPlaceholderDetail(copy.placeholder.selectStream);
   }
 
@@ -1044,6 +1051,7 @@ if (root !== null) {
     try {
       const response = await activeClient.saveDashboardLayout(items);
       if (client !== activeClient) return;
+      discardInFlightDashboardRefreshes(activeClient);
       latestData = {
         ...latestData,
         layout: response.data,
@@ -1051,6 +1059,7 @@ if (root !== null) {
       setDashboardLayoutStatus(response.data.auditWarning === undefined
         ? copy.cardLayout.saved
         : formatCommandResponse('accepted', response.data.auditId, response.data.auditWarning, copy));
+      applyDashboardLayoutVisibility();
       renderDashboardLayout();
       renderCardPicker();
       renderCardSettingsPicker({ quiet: true });
@@ -1243,6 +1252,47 @@ if (root !== null) {
 
   function dashboardCardShortcutLabel(cardId: string): string {
     return dashboardTabForCard(cardId) === undefined ? copy.cardLayout.settings : copy.cardLayout.open;
+  }
+
+  function applyDashboardLayoutVisibility(): void {
+    const visibleCardIds = new Set(latestData?.layout.items.map((item) => item.cardId) ?? []);
+    for (const element of dashboardCoreCardElements) {
+      const cardId = element.dataset.dashboardCoreCard;
+      element.hidden = latestData !== undefined && cardId !== undefined && !visibleCardIds.has(cardId);
+    }
+    ensureVisibleDashboardTab();
+  }
+
+  function dashboardCoreCardIsVisible(cardId: string | undefined): boolean {
+    if (latestData === undefined || cardId === undefined) return true;
+    const layoutCardIds = dashboardCoreCardLayoutIds(cardId);
+    return latestData.layout.items.some((item) => layoutCardIds.has(item.cardId));
+  }
+
+  function ensureVisibleDashboardTab(): void {
+    const selectedCardId = dashboardCardIdForTab(selectedTab);
+    if (selectedCardId === undefined || dashboardCoreCardIsVisible(selectedCardId)) return;
+    const nextTabButton = tabButtons.find((button) => isDashboardTab(button.dataset.dashboardTab)
+      && dashboardCoreCardIsVisible(button.dataset.dashboardCoreCard));
+    if (nextTabButton !== undefined && isDashboardTab(nextTabButton.dataset.dashboardTab)) {
+      selectedTab = nextTabButton.dataset.dashboardTab;
+    }
+  }
+
+  function dashboardCardIdForTab(tab: DashboardTab): string | undefined {
+    if (tab === 'events') return 'core.eventInbox';
+    if (tab === 'workflow-runs') return 'core.workflowRuns';
+    if (tab === 'agent-tasks') return 'core.agentTasks';
+    if (tab === 'sources') return 'core.sources';
+    if (tab === 'queue') return 'core.queue';
+    if (tab === 'settings') return 'core.settings';
+    return undefined;
+  }
+
+  function dashboardCoreCardLayoutIds(cardId: string): Set<string> {
+    if (cardId === 'core.eventInbox') return new Set(['core.eventInbox', 'core.recentEvents']);
+    if (cardId === 'core.operationalTotals') return new Set(['core.operationalTotals', 'core.overview']);
+    return new Set([cardId]);
   }
 
   function renderCardSettingsPicker(options: { quiet?: boolean } = {}): void {

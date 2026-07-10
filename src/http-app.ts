@@ -1304,7 +1304,7 @@ function parseDashboardLayoutItems(
       return { ok: false, response: jsonResponse({ error: 'sensitive_dashboard_card_config', itemId: id, cardId }, { status: 400 }) };
     }
 
-    items.push({
+    const parsedItem = {
       id,
       cardId,
       x,
@@ -1312,10 +1312,21 @@ function parseDashboardLayoutItems(
       columns,
       rows,
       ...(config === undefined ? {} : { config: jsonClone(config as Record<string, unknown>) }),
-    });
+    };
+    if (items.some((item) => dashboardLayoutItemsOverlap(item, parsedItem))) {
+      return { ok: false, response: jsonResponse({ error: 'overlapping_dashboard_layout_item', itemId: id }, { status: 400 }) };
+    }
+    items.push(parsedItem);
   }
 
   return { ok: true, items };
+}
+
+function dashboardLayoutItemsOverlap(left: DashboardLayoutItem, right: DashboardLayoutItem): boolean {
+  return left.x < right.x + right.columns
+    && left.x + left.columns > right.x
+    && left.y < right.y + right.rows
+    && left.y + left.rows > right.y;
 }
 
 function filterDashboardLayoutItems(
