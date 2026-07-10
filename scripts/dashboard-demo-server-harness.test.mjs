@@ -53,12 +53,17 @@ describe('dashboard demo server harness', () => {
           expect.objectContaining({
             id: 'github-webhook',
             sourceType: 'github',
-            lastDelivery: expect.objectContaining({ id: 'evt_demo_github_issue_272' }),
+            lastDelivery: expect.objectContaining({ id: 'gh-delivery-demo-001' }),
           }),
           expect.objectContaining({
             id: 'manual-chat',
             sourceType: 'chat',
-            lastDelivery: expect.objectContaining({ id: 'evt_demo_manual_chat_001' }),
+            lastDelivery: expect.objectContaining({ id: 'chat-delivery-demo-001' }),
+          }),
+          expect.objectContaining({
+            id: 'cloudflare-tail',
+            sourceType: 'cloudflare',
+            lastDelivery: expect.objectContaining({ id: 'cf-tail-demo-001' }),
           }),
         ]),
       });

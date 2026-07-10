@@ -145,7 +145,7 @@ describe('dashboard app shell', () => {
   });
 
   it('hydrates dashboard demo VRT state from URL parameters', () => {
-    expect(dashboardDemoVrtScenarios).toContain('tab=events&event=evt_demo_github_issue_272');
+    expect(dashboardDemoVrtScenarios).toContain('tab=events&source=github&event=evt_demo_github_issue_272');
     expect(dashboardDemoVrtScenarios).toContain('tab=workflow-runs&status=failed&run=act_demo_workflow_failed_retry');
     expect(dashboardDemoVrtScenarios).toContain('tab=agent-tasks&task=agent_task_demo_running');
     expect(dashboardDemoVrtScenarios).toContain('tab=queue&status=blocked');

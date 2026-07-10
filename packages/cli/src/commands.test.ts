@@ -2324,13 +2324,22 @@ describe('Rainrail CLI built-in commands', () => {
         const cards = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/cards`);
         expect(cards.status).toBe(200);
         await expect(cards.json()).resolves.toMatchObject({
-          data: [{
-            definition: {
-              id: 'core.operationalTotals',
-              settingsSchema: { type: 'object' },
-            },
-            availability: { status: 'available' },
-          }],
+          data: expect.arrayContaining([
+            expect.objectContaining({
+              definition: expect.objectContaining({
+                id: 'core.operationalTotals',
+                settingsSchema: expect.objectContaining({ type: 'object' }),
+              }),
+              availability: { status: 'available' },
+            }),
+            expect.objectContaining({
+              definition: expect.objectContaining({
+                id: 'core.eventInbox',
+                settingsSchema: expect.objectContaining({ type: 'object' }),
+              }),
+              availability: { status: 'available' },
+            }),
+          ]),
         });
 
         const layout = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout`);
@@ -2340,7 +2349,10 @@ describe('Rainrail CLI built-in commands', () => {
             id: 'core.defaultLayout',
             source: 'default',
             updatedAt: null,
-            items: [{ id: 'operational-totals', cardId: 'core.operationalTotals' }],
+            items: expect.arrayContaining([
+              expect.objectContaining({ id: 'operational-totals', cardId: 'core.operationalTotals' }),
+              expect.objectContaining({ id: 'event-inbox', cardId: 'core.eventInbox' }),
+            ]),
           },
         });
 
@@ -2581,7 +2593,10 @@ describe('Rainrail CLI built-in commands', () => {
             id: 'core.defaultLayout',
             source: 'default',
             updatedAt: null,
-            items: [{ id: 'operational-totals' }],
+            items: expect.arrayContaining([
+              expect.objectContaining({ id: 'operational-totals' }),
+              expect.objectContaining({ id: 'event-inbox' }),
+            ]),
           },
         });
         const layoutBody = await (await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout`)).text();
