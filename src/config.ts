@@ -12,7 +12,7 @@ export interface SourceBundleSourceConfig {
   name: string;
   sourceType: RainrailEventSourceType;
   provider?: keyof TaskProviderConfig;
-  runtime?: keyof RuntimeProviderConfig;
+  runtime?: string;
   webhookSecret?: string;
   endpoint?: `/${string}`;
   maxBodyBytes?: number;
@@ -40,12 +40,21 @@ export interface OpenClawRuntimeProviderConfig {
   logDirectory: string;
 }
 
+export interface PluginRuntimeProviderConfig {
+  type: 'plugin';
+  enabled: boolean;
+  runtime: string;
+  plugin: string;
+  executor?: string;
+}
+
 export interface TaskProviderConfig {
   github: GitHubAuthConfig;
 }
 
 export interface RuntimeProviderConfig {
   openclaw: OpenClawRuntimeProviderConfig;
+  [providerKey: string]: OpenClawRuntimeProviderConfig | PluginRuntimeProviderConfig;
 }
 
 export interface RainrailServerConfig {
@@ -106,15 +115,16 @@ export function parseConfig(value: unknown): RainrailConfig {
     throw new Error('config must be an object');
   }
   const operationalStore = parseOperationalStore(value.operationalStore);
+  const runtimeProviders = parseRuntimeProviders(value.runtimeProviders);
 
   return {
     server: parseServer(value.server),
     dashboardAuth: parseDashboardAuth(value.dashboardAuth),
     operationalStore,
-    sourceBundles: parseSourceBundles(value.sourceBundles),
+    sourceBundles: parseSourceBundles(value.sourceBundles, collectRuntimeProviderIds(runtimeProviders)),
     sources: parseSources(value.sources),
     taskProviders: parseTaskProviders(value.taskProviders),
-    runtimeProviders: parseRuntimeProviders(value.runtimeProviders),
+    runtimeProviders,
   };
 }
 
@@ -192,19 +202,19 @@ function parseOperationalStore(value: unknown): RainrailOperationalStoreConfig |
   };
 }
 
-function parseSourceBundles(value: unknown): SourceBundleConfig[] {
+function parseSourceBundles(value: unknown, runtimeProviderIds: ReadonlySet<string>): SourceBundleConfig[] {
   if (value === undefined) {
     return [];
   }
   if (!Array.isArray(value)) {
     throw new Error('config.sourceBundles must be an array');
   }
-  const bundles = value.map((bundle, index) => parseSourceBundle(bundle, `config.sourceBundles[${index}]`));
+  const bundles = value.map((bundle, index) => parseSourceBundle(bundle, `config.sourceBundles[${index}]`, runtimeProviderIds));
   assertUniqueBundleNames(bundles, 'config.sourceBundles');
   return bundles;
 }
 
-function parseSourceBundle(value: unknown, path: string): SourceBundleConfig {
+function parseSourceBundle(value: unknown, path: string, runtimeProviderIds: ReadonlySet<string>): SourceBundleConfig {
   if (!isRecord(value)) {
     throw new Error(`${path} must be an object`);
   }
@@ -212,21 +222,29 @@ function parseSourceBundle(value: unknown, path: string): SourceBundleConfig {
   const bundle: SourceBundleConfig = {
     type: parseSourceBundleType(value.type, `${path}.type`),
     name: parseRequiredString(value.name, `${path}.name`),
-    sources: parseSourceBundleSources(value.sources, `${path}.sources`),
+    sources: parseSourceBundleSources(value.sources, `${path}.sources`, runtimeProviderIds),
   };
 
   assertUniqueNames(bundle.sources, `${path}.sources`);
   return bundle;
 }
 
-function parseSourceBundleSources(value: unknown, path: string): SourceBundleSourceConfig[] {
+function parseSourceBundleSources(
+  value: unknown,
+  path: string,
+  runtimeProviderIds: ReadonlySet<string>,
+): SourceBundleSourceConfig[] {
   if (!Array.isArray(value)) {
     throw new Error(`${path} must be an array`);
   }
-  return value.map((source, index) => parseSourceBundleSource(source, `${path}[${index}]`));
+  return value.map((source, index) => parseSourceBundleSource(source, `${path}[${index}]`, runtimeProviderIds));
 }
 
-function parseSourceBundleSource(value: unknown, path: string): SourceBundleSourceConfig {
+function parseSourceBundleSource(
+  value: unknown,
+  path: string,
+  runtimeProviderIds: ReadonlySet<string>,
+): SourceBundleSourceConfig {
   if (!isRecord(value)) {
     throw new Error(`${path} must be an object`);
   }
@@ -237,7 +255,7 @@ function parseSourceBundleSource(value: unknown, path: string): SourceBundleSour
     sourceType: parseSourceEventType(value.sourceType, `${path}.sourceType`),
   };
   const provider = parseOptionalProviderName(value.provider, `${path}.provider`);
-  const runtime = parseOptionalRuntimeName(value.runtime, `${path}.runtime`);
+  const runtime = parseOptionalRuntimeName(value.runtime, `${path}.runtime`, runtimeProviderIds);
   const webhookSecret = parseOptionalString(value.webhookSecret, `${path}.webhookSecret`);
   const endpoint = parseOptionalEndpoint(value.endpoint, `${path}.endpoint`);
   const maxBodyBytes = parseOptionalNonNegativeNumber(value.maxBodyBytes, `${path}.maxBodyBytes`);
@@ -351,12 +369,16 @@ function parseOptionalProviderName(value: unknown, path: string): keyof TaskProv
   return provider;
 }
 
-function parseOptionalRuntimeName(value: unknown, path: string): keyof RuntimeProviderConfig | undefined {
+function parseOptionalRuntimeName(
+  value: unknown,
+  path: string,
+  runtimeProviderIds: ReadonlySet<string>,
+): string | undefined {
   if (value === undefined) {
     return undefined;
   }
   const runtime = parseRequiredString(value, path);
-  if (runtime !== 'openclaw') {
+  if (!runtimeProviderIds.has(runtime)) {
     throw new Error(`${path} must reference a configured runtime provider`);
   }
   return runtime;
@@ -426,9 +448,17 @@ function parseRuntimeProviders(value: unknown): RuntimeProviderConfig {
   if (!isRecord(value)) {
     throw new Error('config.runtimeProviders must be an object');
   }
-  return {
+  const config: RuntimeProviderConfig = {
     openclaw: parseOpenClawRuntimeProvider(value.openclaw),
   };
+  for (const [providerKey, providerValue] of Object.entries(value)) {
+    if (providerKey === 'openclaw') {
+      continue;
+    }
+    config[providerKey] = parsePluginRuntimeProvider(providerValue, `config.runtimeProviders.${providerKey}`);
+  }
+  assertUniqueRuntimeProviderIds(config);
+  return config;
 }
 
 function parseOpenClawRuntimeProvider(value: unknown): OpenClawRuntimeProviderConfig {
@@ -453,6 +483,61 @@ function parseOpenClawRuntimeProvider(value: unknown): OpenClawRuntimeProviderCo
     logDirectory: parseOptionalString(value.logDirectory, 'config.runtimeProviders.openclaw.logDirectory')
       ?? defaultOpenClawRuntimeProviderConfig.logDirectory,
   };
+}
+
+function parsePluginRuntimeProvider(value: unknown, path: string): PluginRuntimeProviderConfig {
+  if (!isRecord(value)) {
+    throw new Error(`${path} must be an object`);
+  }
+  const type = parseRequiredString(value.type, `${path}.type`);
+  if (type !== 'plugin') {
+    throw new Error(`${path}.type must be one of: plugin`);
+  }
+
+  const provider: PluginRuntimeProviderConfig = {
+    type: 'plugin',
+    enabled: parseOptionalBoolean(value.enabled, `${path}.enabled`) ?? false,
+    runtime: parseRequiredString(value.runtime, `${path}.runtime`),
+    plugin: parseRequiredString(value.plugin, `${path}.plugin`),
+  };
+  const executor = parseOptionalString(value.executor, `${path}.executor`);
+  if (executor !== undefined) {
+    provider.executor = executor;
+  }
+  return provider;
+}
+
+function collectRuntimeProviderIds(config: RuntimeProviderConfig): Set<string> {
+  const ids = new Set<string>(['openclaw']);
+  for (const provider of Object.values(config)) {
+    if (isPluginRuntimeProviderConfig(provider)) {
+      ids.add(provider.runtime);
+    }
+  }
+  return ids;
+}
+
+function assertUniqueRuntimeProviderIds(config: RuntimeProviderConfig): void {
+  const seen = new Map<string, string>([['openclaw', 'openclaw']]);
+  for (const [providerKey, provider] of Object.entries(config)) {
+    if (!isPluginRuntimeProviderConfig(provider)) {
+      continue;
+    }
+    const previous = seen.get(provider.runtime);
+    if (previous !== undefined) {
+      throw new Error(
+        `config.runtimeProviders.${providerKey}.runtime must not duplicate runtime provider id ` +
+          `"${provider.runtime}" from config.runtimeProviders.${previous}`,
+      );
+    }
+    seen.set(provider.runtime, providerKey);
+  }
+}
+
+function isPluginRuntimeProviderConfig(
+  provider: OpenClawRuntimeProviderConfig | PluginRuntimeProviderConfig,
+): provider is PluginRuntimeProviderConfig {
+  return 'type' in provider && provider.type === 'plugin';
 }
 
 function parseGitHubAuthConfig(value: unknown, path: string): GitHubAuthConfig {

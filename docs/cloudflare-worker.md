@@ -92,6 +92,11 @@ Cloudflare Workers Secrets に登録しておく。
 }
 ```
 
+追加 runtime provider は `runtimeProviders.<canonicalKey>` に `type: "plugin"` と
+plugin runtime id を置いて登録する。たとえば `runtimeProviders.codexAppServer.runtime`
+を `codex-app-server` にした場合、bundle source は `runtime: "codex-app-server"` で
+参照できる。未登録の runtime id は config parse 時に拒否される。
+
 `manual-chat` は同じ config model で source/runtime の対応を表現するための entry として
 置ける。現時点の Worker EEP Bridge bundle は GitHub webhook と Cloudflare tail の
 intake adapter を生成し、manual/chat の実 ingress adapter は別 source adapter が入った時点で

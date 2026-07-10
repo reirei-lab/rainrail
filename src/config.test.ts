@@ -486,6 +486,100 @@ describe('parseConfig', () => {
     });
   });
 
+  it('parses plugin runtime providers and lets source bundles reference their runtime id', () => {
+    const config = parseConfig({
+      sourceBundles: [
+        {
+          type: 'eep-bridge',
+          name: 'plugin-ingress',
+          sources: [
+            {
+              type: 'manual-chat',
+              name: 'codex-chat',
+              sourceType: 'chat',
+              runtime: 'codex-app-server',
+            },
+          ],
+        },
+      ],
+      runtimeProviders: {
+        codexAppServer: {
+          type: 'plugin',
+          enabled: true,
+          runtime: 'codex-app-server',
+          plugin: '@rainrail/codex-app-server-runtime',
+          executor: 'codex-app-server',
+        },
+      },
+    });
+
+    expect(config.sourceBundles[0]?.sources[0]?.runtime).toBe('codex-app-server');
+    expect(config.runtimeProviders.openclaw.enabled).toBe(false);
+    expect(config.runtimeProviders.codexAppServer).toEqual({
+      type: 'plugin',
+      enabled: true,
+      runtime: 'codex-app-server',
+      plugin: '@rainrail/codex-app-server-runtime',
+      executor: 'codex-app-server',
+    });
+  });
+
+  it('rejects plugin runtime provider configs without a plugin runtime id', () => {
+    expectConfigError({
+      runtimeProviders: {
+        codexAppServer: {
+          type: 'plugin',
+          plugin: '@rainrail/codex-app-server-runtime',
+        },
+      },
+    }, 'config.runtimeProviders.codexAppServer.runtime must be a non-empty string');
+  });
+
+  it('rejects source bundle runtime ids that are not configured', () => {
+    expectConfigError({
+      sourceBundles: [
+        {
+          type: 'eep-bridge',
+          name: 'plugin-ingress',
+          sources: [
+            {
+              type: 'manual-chat',
+              name: 'codex-chat',
+              sourceType: 'chat',
+              runtime: 'missing-runtime',
+            },
+          ],
+        },
+      ],
+      runtimeProviders: {
+        codexAppServer: {
+          type: 'plugin',
+          enabled: true,
+          runtime: 'codex-app-server',
+          plugin: '@rainrail/codex-app-server-runtime',
+        },
+      },
+    }, 'config.sourceBundles[0].sources[0].runtime must reference a configured runtime provider');
+  });
+
+  it('rejects duplicate plugin runtime ids', () => {
+    expectConfigError({
+      runtimeProviders: {
+        codexAppServer: {
+          type: 'plugin',
+          runtime: 'codex-app-server',
+          plugin: '@rainrail/codex-app-server-runtime',
+        },
+        codexMirror: {
+          type: 'plugin',
+          runtime: 'codex-app-server',
+          plugin: '@rainrail/codex-mirror-runtime',
+        },
+      },
+    }, 'config.runtimeProviders.codexMirror.runtime must not duplicate runtime provider id ' +
+      '"codex-app-server" from config.runtimeProviders.codexAppServer');
+  });
+
   it.each([0, 0.5])('allows finite non-negative timeoutSeconds boundary value %s', (timeoutSeconds) => {
     expect(parseConfig({
       runtimeProviders: {
