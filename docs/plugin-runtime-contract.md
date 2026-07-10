@@ -112,15 +112,22 @@ Codex App Server runtime provider は `CodexAppServerRuntimeProviderOptions` か
 `codex app-server --listen stdio://` 相当を起動し、`initialize`、`thread/start`、
 `turn/start`、`turn/completed` を順に実行する。stdout/stderr は protocol transport とは
 別に private log file へ mirror し、run metadata には log path、stderr log path、pid、
-thread id、turn id、branch、task id を残す。turn completion status は failed/error を
-`failed`、cancelled/canceled を `canceled`、timeout/timedOut を `timed_out` に対応させ、
-その他の完了は `succeeded` として扱う。stuck turn は provider-level timeout で
-`timed_out` とし、app-server process は `close()` 経由で cleanup する。
+thread id、turn id、branch、task id を残す。default thread は自動 runtime として
+承認 request で止まらないよう `approvalPolicy: "never"` を使い、caller が
+`thread.approvalPolicy` で明示した場合だけ上書きできる。turn completion status は
+failed/error を `failed`、interrupted/cancelled/canceled を `canceled`、
+timeout/timedOut を `timed_out` に対応させ、その他の完了は `succeeded` として扱う。
+stuck turn は provider-level timeout で `timed_out` とし、実行中の caller
+`AbortSignal` は即座に `canceled` として扱い、どちらも app-server process を
+`close()` 経由で cleanup する。turn が受理される前の connect/initialize/thread/start/
+turn/start 失敗は assignment が claim を release できるよう reject する。
 `CodexAppServerRuntimeProviderClientFactory`、
 `CodexAppServerRuntimeProviderClientFactoryOptions`、`CodexAppServerRuntimeProviderClient`
 は test や別 supervisor が protocol client、pid、spawn/log wiring を差し替えるための
-injection point とする。`resumeRun()` は初期版では未対応で、`needs_human` と
-`resumeSupported: false` metadata を返す。
+injection point とする。`CodexAppServerRuntimeProviderLogWriter` は stdio mirror 書き込みを
+test などで差し替えるための injection point で、default の log write failure は stream
+listener から投げず runtime failure として観測する。`resumeRun()` は初期版では未対応で、
+`needs_human` と `resumeSupported: false` metadata を返す。
 
 ## Event envelope
 

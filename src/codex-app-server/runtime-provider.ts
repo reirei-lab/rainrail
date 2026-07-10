@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
-import { chmodSync, closeSync, constants, fchmodSync, fstatSync, lstatSync, mkdirSync, openSync, writeSync } from 'node:fs';
+import { chmodSync, closeSync, constants, fchmodSync, fstatSync, lstatSync, mkdirSync, openSync } from 'node:fs';
+import * as fs from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 
 import type { RuntimeProvider, RuntimeProviderContext, RuntimeRun, RuntimeRunRequest, RuntimeRunStatus } from '../runtime-provider.js';
@@ -27,8 +28,11 @@ export interface CodexAppServerRuntimeProviderOptions {
   requestTimeoutMs?: number | undefined;
   thread?: Partial<CodexAppServerThreadStartParams> | undefined;
   spawnProcess?: SpawnCodexAppServerProcess | undefined;
+  writeLogChunk?: CodexAppServerRuntimeProviderLogWriter | undefined;
   clientFactory?: CodexAppServerRuntimeProviderClientFactory | undefined;
 }
+
+export type CodexAppServerRuntimeProviderLogWriter = (fd: number, chunk: Buffer | string) => void;
 
 export type CodexAppServerRuntimeProviderClientFactory = (
   options: CodexAppServerRuntimeProviderClientFactoryOptions,
@@ -45,12 +49,14 @@ export interface CodexAppServerRuntimeProviderClientFactoryOptions {
   stderrLogPath: string;
   stdoutFd: number;
   stderrFd: number;
+  writeLogChunk?: CodexAppServerRuntimeProviderLogWriter | undefined;
   spawnProcess?: SpawnCodexAppServerProcess | undefined;
 }
 
 export interface CodexAppServerRuntimeProviderClient {
   client: CodexAppServerProtocolClient;
   pid?: number | undefined;
+  logWriteError?: (() => Error | undefined) | undefined;
 }
 
 type RuntimeAgentTaskInput = {
@@ -132,6 +138,7 @@ export async function startCodexAppServerRun(
     if (options.env !== undefined) clientFactoryOptions.env = options.env;
     if (options.inheritEnv !== undefined) clientFactoryOptions.inheritEnv = options.inheritEnv;
     if (options.spawnProcess !== undefined) clientFactoryOptions.spawnProcess = options.spawnProcess;
+    if (options.writeLogChunk !== undefined) clientFactoryOptions.writeLogChunk = options.writeLogChunk;
     runtimeClient = (options.clientFactory ?? createDefaultCodexAppServerRuntimeProviderClient)(clientFactoryOptions);
 
     await runtimeClient.client.connect();
@@ -139,7 +146,9 @@ export async function startCodexAppServerRun(
       clientInfo: { name: 'rainrail', title: 'Rainrail', version: '0.5.0' },
       capabilities: null,
     });
+    throwIfCodexAppServerLogWriteFailed(runtimeClient);
     const threadParams: CodexAppServerThreadStartParams = {
+      approvalPolicy: 'never',
       ephemeral: true,
       sessionStartSource: 'rainrail',
       threadSource: 'rainrail',
@@ -147,6 +156,7 @@ export async function startCodexAppServerRun(
     };
     if (options.cwd !== undefined && threadParams.cwd === undefined) threadParams.cwd = options.cwd;
     const thread = await runtimeClient.client.startThread(threadParams);
+    throwIfCodexAppServerLogWriteFailed(runtimeClient);
     threadId = thread.thread.id;
     const turn = await runtimeClient.client.startTurn({
       threadId,
@@ -156,8 +166,15 @@ export async function startCodexAppServerRun(
         text_elements: [],
       }],
     });
+    throwIfCodexAppServerLogWriteFailed(runtimeClient);
     turnId = turn.turn.id;
-    const completed = await waitForCodexTurn(runtimeClient.client, { threadId, turnId, timeoutMs: turnTimeoutMs });
+    const completed = await waitForCodexTurn(runtimeClient.client, {
+      threadId,
+      turnId,
+      timeoutMs: turnTimeoutMs,
+      signal: context?.signal,
+    });
+    throwIfCodexAppServerLogWriteFailed(runtimeClient);
     const completionStatus = stringValue(completed.turn.status);
     return {
       id: threadId,
@@ -173,6 +190,9 @@ export async function startCodexAppServerRun(
       }),
     };
   } catch (error) {
+    if (turnId === undefined) {
+      throw error;
+    }
     const status = isTimeoutError(error) ? 'timed_out' : isAbortError(error) ? 'canceled' : 'failed';
     return {
       id: threadId ?? task.agentSessionId ?? task.id,
@@ -198,14 +218,16 @@ function createDefaultCodexAppServerRuntimeProviderClient(
   options: CodexAppServerRuntimeProviderClientFactoryOptions,
 ): CodexAppServerRuntimeProviderClient {
   let pid: number | undefined;
+  let logWriteError: Error | undefined;
   const spawnProcess: SpawnCodexAppServerProcess = (command, args, spawnOptions) => {
     const child = (options.spawnProcess ?? defaultSpawnCodexAppServerProcess)(command, args, spawnOptions);
     pid = child.pid;
+    const writeLogChunk = options.writeLogChunk ?? writeCodexAppServerLogChunk;
     child.stdout?.on('data', (chunk: Buffer | string) => {
-      writeLogChunk(options.stdoutFd, chunk);
+      logWriteError ??= captureLogWriteError(() => writeLogChunk(options.stdoutFd, chunk));
     });
     child.stderr?.on('data', (chunk: Buffer | string) => {
-      writeLogChunk(options.stderrFd, chunk);
+      logWriteError ??= captureLogWriteError(() => writeLogChunk(options.stderrFd, chunk));
     });
     return child;
   };
@@ -226,32 +248,67 @@ function createDefaultCodexAppServerRuntimeProviderClient(
     get pid() {
       return pid;
     },
+    logWriteError: () => logWriteError,
   };
 }
 
-function writeLogChunk(fd: number, chunk: Buffer | string): void {
+function writeCodexAppServerLogChunk(fd: number, chunk: Buffer | string): void {
   if (typeof chunk === 'string') {
-    writeSync(fd, chunk);
+    fs.writeSync(fd, chunk);
     return;
   }
-  writeSync(fd, chunk, 0, chunk.byteLength);
+  fs.writeSync(fd, chunk, 0, chunk.byteLength);
+}
+
+function captureLogWriteError(write: () => void): Error | undefined {
+  try {
+    write();
+    return undefined;
+  } catch (error) {
+    return new Error('Failed to write Codex App Server runtime log', {
+      cause: error,
+    });
+  }
+}
+
+function throwIfCodexAppServerLogWriteFailed(runtimeClient: CodexAppServerRuntimeProviderClient): void {
+  const error = runtimeClient.logWriteError?.();
+  if (error !== undefined) {
+    throw error;
+  }
 }
 
 async function waitForCodexTurn(
   client: CodexAppServerProtocolClient,
-  target: { threadId: string; turnId: string; timeoutMs: number },
+  target: { threadId: string; turnId: string; timeoutMs: number; signal?: AbortSignal | undefined },
 ): Promise<CodexAppServerTurnCompletedEvent> {
   let timer: NodeJS.Timeout | undefined;
+  let abortListener: (() => void) | undefined;
   try {
     return await Promise.race([
       client.waitForTurnCompleted(target),
       new Promise<never>((_, reject) => {
         timer = setTimeout(() => reject(new Error('Codex App Server turn timed out')), target.timeoutMs);
       }),
+      new Promise<never>((_, reject) => {
+        const signal = target.signal;
+        if (signal === undefined) {
+          return;
+        }
+        if (signal.aborted) {
+          reject(abortReason(signal));
+          return;
+        }
+        abortListener = () => reject(abortReason(signal));
+        signal.addEventListener('abort', abortListener, { once: true });
+      }),
     ]);
   } finally {
     if (timer !== undefined) {
       clearTimeout(timer);
+    }
+    if (target.signal !== undefined && abortListener !== undefined) {
+      target.signal.removeEventListener('abort', abortListener);
     }
   }
 }
@@ -259,7 +316,7 @@ async function waitForCodexTurn(
 function runtimeStatusFromCodexTurn(event: CodexAppServerTurnCompletedEvent): RuntimeRunStatus {
   const status = normalize(stringValue(event.turn.status));
   if (status === 'failed' || status === 'error') return 'failed';
-  if (status === 'canceled' || status === 'cancelled') return 'canceled';
+  if (status === 'canceled' || status === 'cancelled' || status === 'interrupted') return 'canceled';
   if (status === 'timedout' || status === 'timed_out' || status === 'timeout') return 'timed_out';
   if (status === 'stopped') return 'stopped';
   return 'succeeded';
@@ -411,8 +468,12 @@ function shortHash(value: string): string {
 
 function throwIfAborted(signal: AbortSignal | undefined): void {
   if (signal?.aborted) {
-    throw signal.reason instanceof Error ? signal.reason : new Error('Codex App Server runtime provider aborted');
+    throw abortReason(signal);
   }
+}
+
+function abortReason(signal: AbortSignal): Error {
+  return signal.reason instanceof Error ? signal.reason : new Error('Codex App Server runtime provider aborted');
 }
 
 function isTimeoutError(error: unknown): boolean {

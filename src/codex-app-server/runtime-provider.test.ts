@@ -1,6 +1,8 @@
+import { EventEmitter } from 'node:events';
 import { mkdirSync, rmSync, statSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { PassThrough } from 'node:stream';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -8,6 +10,7 @@ import {
   createCodexAppServerRuntimeProvider,
   type CodexAppServerProtocolClient,
   type CodexAppServerRuntimeProviderClientFactory,
+  type SpawnCodexAppServerProcess,
   type CodexAppServerThreadStartResponse,
   type CodexAppServerTurnCompletedEvent,
   type CodexAppServerTurnStartResponse,
@@ -18,6 +21,7 @@ const temporaryDirectories: string[] = [];
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
   temporaryDirectories.splice(0).forEach((directory) => rmSync(directory, { recursive: true, force: true }));
 });
 
@@ -71,6 +75,7 @@ describe('createCodexAppServerRuntimeProvider', () => {
     });
     expect(client.startThread).toHaveBeenCalledWith(expect.objectContaining({
       cwd: '/repo',
+      approvalPolicy: 'never',
       ephemeral: true,
       sessionStartSource: 'rainrail',
       threadSource: 'rainrail',
@@ -99,6 +104,7 @@ describe('createCodexAppServerRuntimeProvider', () => {
     ['failed', 'failed'],
     ['error', 'failed'],
     ['cancelled', 'canceled'],
+    ['interrupted', 'canceled'],
     ['timedOut', 'timed_out'],
   ] as const)('maps completed turn status %s to runtime status %s', async (turnStatus, runtimeStatus) => {
     const client = new FakeCodexAppServerProtocolClient();
@@ -141,6 +147,74 @@ describe('createCodexAppServerRuntimeProvider', () => {
       },
     });
     expect(client.close).toHaveBeenCalledOnce();
+  });
+
+  it('cancels a running turn immediately when the caller signal aborts', async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const client = new FakeCodexAppServerProtocolClient();
+    client.completedTurnPromise = new Promise(() => undefined);
+    const provider = createCodexAppServerRuntimeProvider({
+      enabled: true,
+      command: 'codex',
+      logDirectory: temporaryDirectory(),
+      turnTimeoutMs: 30 * 60 * 1000,
+      clientFactory: () => ({ client, pid: 9315 }),
+    });
+
+    const started = provider.startRun(runtimeRequest(), { signal: controller.signal });
+    await vi.advanceTimersByTimeAsync(1);
+    controller.abort(new Error('workflow aborted'));
+    await vi.advanceTimersByTimeAsync(1);
+
+    await expect(started).resolves.toMatchObject({
+      status: 'canceled',
+      metadata: {
+        error: 'workflow aborted',
+      },
+    });
+    expect(client.close).toHaveBeenCalledOnce();
+  });
+
+  it('rejects startup errors before a turn is accepted so assignment can release the claim', async () => {
+    const client = new FakeCodexAppServerProtocolClient();
+    client.startThread.mockRejectedValueOnce(new Error('Codex App Server thread/start failed'));
+    const provider = createCodexAppServerRuntimeProvider({
+      enabled: true,
+      command: 'codex',
+      logDirectory: temporaryDirectory(),
+      clientFactory: () => ({ client, pid: 9315 }),
+    });
+
+    await expect(provider.startRun(runtimeRequest())).rejects.toThrow('Codex App Server thread/start failed');
+    expect(client.close).toHaveBeenCalledOnce();
+  });
+
+  it('captures app-server log write failures without throwing from stream data listeners', async () => {
+    const writeLogChunk = vi.fn(() => {
+      const error = new Error('ENOSPC: no space left on device');
+      (error as NodeJS.ErrnoException).code = 'ENOSPC';
+      throw error;
+    });
+    const child = new FakeStdioCodexAppServerChildProcess();
+    const spawnProcess = vi.fn<SpawnCodexAppServerProcess>(() => child);
+    const provider = createCodexAppServerRuntimeProvider({
+      enabled: true,
+      command: 'codex',
+      logDirectory: temporaryDirectory(),
+      spawnProcess,
+      writeLogChunk,
+    });
+
+    const started = provider.startRun(runtimeRequest());
+    child.respondToNextRequest({
+      userAgent: 'codex-cli/0.139.0',
+      platformFamily: 'unix',
+      platformOs: 'macos',
+    });
+
+    await expect(started).rejects.toThrow('Failed to write Codex App Server runtime log');
+    expect(child.kill).toHaveBeenCalledOnce();
   });
 
   it('rejects symlinked runtime log path components before starting app-server', async () => {
@@ -222,6 +296,38 @@ class FakeCodexAppServerProtocolClient implements CodexAppServerProtocolClient {
   onRequest = vi.fn(() => () => undefined);
   onAssistantDelta = vi.fn(() => () => undefined);
   onTurnCompleted = vi.fn(() => () => undefined);
+}
+
+class FakeStdioCodexAppServerChildProcess extends EventEmitter {
+  pid = 9315;
+  stdin = new PassThrough();
+  stdout = new PassThrough();
+  stderr = new PassThrough();
+  kill = vi.fn(() => {
+    this.emit('close', 0, null);
+    return true;
+  });
+
+  constructor() {
+    super();
+    this.stdin.on('data', (chunk: Buffer) => {
+      const frame = JSON.parse(chunk.toString('utf8')) as { id?: string | number; method?: string };
+      if (frame.method === 'initialized') {
+        return;
+      }
+      const response = this.#responses.shift();
+      if (response === undefined || frame.id === undefined) {
+        return;
+      }
+      this.stdout.write(`${JSON.stringify({ id: frame.id, result: response })}\n`);
+    });
+  }
+
+  readonly #responses: unknown[] = [];
+
+  respondToNextRequest(result: unknown): void {
+    this.#responses.push(result);
+  }
 }
 
 function runtimeRequest(overrides: { taskId?: string } = {}) {
