@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { mkdirSync, rmSync, statSync, symlinkSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -174,6 +175,30 @@ describe('createCodexAppServerRuntimeProvider', () => {
       },
     });
     expect(client.close).toHaveBeenCalledOnce();
+  });
+
+  it('disables stale log mirroring and force kills after close timeout', async () => {
+    vi.useFakeTimers();
+    const client = new FakeCodexAppServerProtocolClient();
+    client.completedTurnPromise = new Promise(() => undefined);
+    client.close.mockImplementationOnce(() => new Promise(() => undefined));
+    const stopLogMirroring = vi.fn();
+    const forceKill = vi.fn();
+    const provider = createCodexAppServerRuntimeProvider({
+      enabled: true,
+      command: 'codex',
+      logDirectory: temporaryDirectory(),
+      turnTimeoutMs: 1_000,
+      closeTimeoutMs: 250,
+      clientFactory: () => ({ client, pid: 9315, stopLogMirroring, forceKill }),
+    });
+
+    const started = provider.startRun(runtimeRequest());
+    await vi.advanceTimersByTimeAsync(1_251);
+
+    await expect(started).resolves.toMatchObject({ status: 'timed_out' });
+    expect(stopLogMirroring).toHaveBeenCalledOnce();
+    expect(forceKill).toHaveBeenCalledOnce();
   });
 
   it('cancels a running turn immediately when the caller signal aborts', async () => {
@@ -439,6 +464,25 @@ describe('createCodexAppServerRuntimeProvider', () => {
     expect(clientFactory).not.toHaveBeenCalled();
   });
 
+  it('rejects pre-existing non-regular log files before opening them', async () => {
+    const clientFactory = vi.fn<CodexAppServerRuntimeProviderClientFactory>(() => ({
+      client: new FakeCodexAppServerProtocolClient(),
+      pid: 9315,
+    }));
+    const logDirectory = temporaryDirectory();
+    execFileSync('mkfifo', [runtimeLogPath(logDirectory)]);
+    const provider = createCodexAppServerRuntimeProvider({
+      enabled: true,
+      command: 'codex',
+      logDirectory,
+      clientFactory,
+    });
+
+    await expect(provider.startRun(runtimeRequest())).rejects.toThrow(/regular file/i);
+
+    expect(clientFactory).not.toHaveBeenCalled();
+  });
+
   it('returns an explicit unsupported resume result for the initial provider version', async () => {
     const provider = createCodexAppServerRuntimeProvider({
       enabled: true,
@@ -565,6 +609,31 @@ function temporaryDirectory(): string {
 
 function statMode(path: string): number {
   return statSync(path).mode & 0o777;
+}
+
+function runtimeLogPath(logDirectory: string): string {
+  const task = runtimeRequest().task;
+  return join(logDirectory, `${boundedSafeFileName(task.id, 72)}-${shortHash([
+    'project-issue-selection',
+    'delivery-315',
+    task.id,
+    task.branchName,
+  ].join(':'))}.log`);
+}
+
+function boundedSafeFileName(value: string, maxLength: number): string {
+  const normalized = value.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
+  const safe = normalized.length === 0 ? 'run' : normalized;
+  return safe.length <= maxLength ? safe : safe.slice(0, maxLength).replace(/[-._]+$/g, '');
+}
+
+function shortHash(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
 }
 
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void; reject: (error: Error) => void } {

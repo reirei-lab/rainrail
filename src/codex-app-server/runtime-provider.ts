@@ -63,6 +63,8 @@ export interface CodexAppServerRuntimeProviderClient {
   client: CodexAppServerProtocolClient;
   pid?: number | undefined;
   logWriteError?: (() => Error | undefined) | undefined;
+  stopLogMirroring?: (() => void) | undefined;
+  forceKill?: (() => void) | undefined;
 }
 
 type RuntimeAgentTaskInput = {
@@ -255,14 +257,19 @@ function createDefaultCodexAppServerRuntimeProviderClient(
 ): CodexAppServerRuntimeProviderClient {
   let pid: number | undefined;
   let logWriteError: Error | undefined;
+  let mirrorLogs = true;
+  let childProcess: StdioCodexAppServerChildProcess | undefined;
   const spawnProcess: SpawnCodexAppServerProcess = (command, args, spawnOptions) => {
     const child = (options.spawnProcess ?? defaultSpawnCodexAppServerProcess)(command, args, spawnOptions);
+    childProcess = child;
     pid = child.pid;
     const writeLogChunk = options.writeLogChunk ?? writeCodexAppServerLogChunk;
     child.stdout?.on('data', (chunk: Buffer | string) => {
+      if (!mirrorLogs) return;
       logWriteError ??= captureLogWriteError(() => writeLogChunk(options.stdoutFd, chunk));
     });
     child.stderr?.on('data', (chunk: Buffer | string) => {
+      if (!mirrorLogs) return;
       logWriteError ??= captureLogWriteError(() => writeLogChunk(options.stderrFd, chunk));
     });
     return child;
@@ -285,6 +292,12 @@ function createDefaultCodexAppServerRuntimeProviderClient(
       return pid;
     },
     logWriteError: () => logWriteError,
+    stopLogMirroring: () => {
+      mirrorLogs = false;
+    },
+    forceKill: () => {
+      childProcess?.kill('SIGKILL');
+    },
   };
 }
 
@@ -351,7 +364,11 @@ async function closeCodexAppServerRuntimeClient(
     await Promise.race([
       closePromise,
       new Promise<void>((resolve) => {
-        timer = setTimeout(resolve, timeoutMs);
+        timer = setTimeout(() => {
+          runtimeClient.stopLogMirroring?.();
+          runtimeClient.forceKill?.();
+          resolve();
+        }, timeoutMs);
       }),
     ]);
   } catch {
@@ -483,7 +500,8 @@ function openPrivateLogFile(path: string): number {
   assertNoParentDirectorySegments(path);
   const directory = dirname(path);
   assertNoSymlinkPathComponents(nearestExistingPathComponent(directory), directory);
-  const fd = openSync(path, constants.O_CREAT | constants.O_APPEND | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600);
+  assertExistingLogPathIsRegularFile(path);
+  const fd = openSync(path, constants.O_CREAT | constants.O_APPEND | constants.O_WRONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK, 0o600);
   try {
     const stat = fstatSync(fd);
     if (!stat.isFile()) {
@@ -493,6 +511,23 @@ function openPrivateLogFile(path: string): number {
     return fd;
   } catch (error) {
     closeSync(fd);
+    throw error;
+  }
+}
+
+function assertExistingLogPathIsRegularFile(path: string): void {
+  try {
+    const stat = lstatSync(path);
+    if (stat.isSymbolicLink()) {
+      throw new Error(`Codex App Server runtime log path must not be a symlink: ${path}`);
+    }
+    if (!stat.isFile()) {
+      throw new Error(`Codex App Server runtime log path must be a regular file: ${path}`);
+    }
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+      return;
+    }
     throw error;
   }
 }

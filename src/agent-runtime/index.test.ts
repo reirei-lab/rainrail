@@ -93,6 +93,66 @@ describe('createAgentAssignmentRuntimeFromProvider', () => {
       }),
     }));
   });
+
+  it('rejects terminal runtime failures so assignment claims can be released', async () => {
+    const startRun = vi.fn(async () => ({
+      id: 'run:mock-failed',
+      provider: 'codex' as const,
+      status: 'failed' as const,
+      metadata: { threadId: 'thread-315', turnId: 'turn-315' },
+    }));
+    const event = createEventEnvelope({
+      source: { type: 'github', name: 'github-project', repository: 'reirei-lab/rainrail' },
+      name: 'github.issue',
+      delivery: { id: 'delivery-315', receivedAt: '2026-07-10T14:44:17.000Z' },
+      occurredAt: '2026-07-10T14:44:17.000Z',
+      subject: { type: 'issue', id: '315' },
+      payload: { action: 'queued' },
+      rawPayload: { kind: 'external-reference', reference: 'github://issues/315' },
+    });
+
+    const runtime = createAgentAssignmentRuntimeFromProvider({
+      runtime: {
+        name: 'mock-codex',
+        kind: 'runtime-provider',
+        startRun,
+      },
+      event,
+      runId: 'run-315',
+      workflow: 'project-issue-selection',
+      agentId: 'main',
+      sessionKeyPrefix: 'rainrail',
+      requestedBy: 'reirei-agent',
+    });
+
+    await expect(runtime.dispatchAgent({
+      workflow: runtime.workflow,
+      runId: runtime.runId,
+      issue: {
+        id: 'item_315',
+        contentId: 'issue_node_315',
+        contentType: 'Issue',
+        title: 'Codex runtime',
+        state: 'OPEN',
+        status: 'Todo',
+        assigneeLogins: ['reirei-agent'],
+        repository: 'reirei-lab/rainrail',
+        number: 315,
+        url: 'https://github.com/reirei-lab/rainrail/issues/315',
+      },
+      task: {
+        id: 'agent_task_reirei-lab-rainrail_315',
+        title: 'Codex runtime',
+        agentSessionId: 'agent:main:rainrail-agent_task_reirei-lab-rainrail_315-run-315',
+        branchName: 'agent/reirei-lab-rainrail-315',
+        issue: {
+          id: 'item_315',
+          title: 'Codex runtime',
+          assigneeLogins: ['reirei-agent'],
+        },
+      },
+    })).rejects.toThrow('Runtime provider codex returned terminal start failure failed for run run:mock-failed');
+  });
 });
 
 describe('createOpenClawRuntimeProvider', () => {
