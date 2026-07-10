@@ -35,6 +35,38 @@ PR lifecycle / routing / GitHub helper の部分的な公開 export inventory �
 `recordGitHubRateLimit` とする。Plugin runtime contract 全体の公開 export 範囲は、
 この節だけではなく `docs/contracts.manifest.json` の `plugin-runtime.publicExports` を正とする。
 
+## Codex App Server client transport boundary
+
+Codex App Server protocol client は protocol parsing と transport implementation を分ける。
+`CodexAppServerTransport` は `connect()`、`close()`、`send(frame)`、
+`onFrame()`、`onError()`、`onClose()` だけを持つ小さい境界で、client は
+`CodexAppServerFrame` の request/response/notification をこの境界越しに扱う。
+`createCodexAppServerClient` は `CodexAppServerClientOptions` の injected transport だけに
+依存し、`CodexAppServerClient` として `request()`、`notify()`、
+`onNotification()` を公開する。request id は client が割り当て、
+`CodexAppServerResponseError` を含む response は `CodexAppServerProtocolError` として
+該当 request だけを reject する。transport close は pending request をまとめて reject
+し、notification は request/response matching から独立して handler へ渡す。
+
+protocol frame 型は `CodexAppServerFrameId`、`CodexAppServerRequestFrame`、
+`CodexAppServerResponseFrame`、`CodexAppServerNotificationFrame`、
+`CodexAppServerFrame` とする。初期 transport は
+`createStdioCodexAppServerTransport` で、`StdioCodexAppServerTransportOptions` の
+`command`、`args`、`cwd`、`env` から child process を起動し、stdin/stdout の
+JSON line framing だけを担当する。`env` を指定した場合はその値を child process の
+完全な環境として扱い、親 process の環境を混ぜる場合だけ `inheritEnv: true` を明示する。
+test や別 supervisor は `SpawnCodexAppServerProcess` と
+`StdioCodexAppServerChildProcess` を差し替えられる。stdout の parse error は
+transport error として通知し、後続の valid frame は処理を続ける。stdio transport の
+`close()` は child process に終了シグナルを送り、stdio drain 後の child `close` event を
+待ってから transport close を通知する。child `exit` event だけでは stdout/stderr drain が
+完了したとは扱わない。
+
+LAN remote 用の境界は `WebSocketCodexAppServerTransportConfig` で先に固定する。
+現時点では `type: "websocket"`、`endpoint`、任意の `headers`、`tokenEnv`、
+`reconnect` policy を config/type として持つだけで、pairing、token rotation、
+remote daemon supervisor、pool scheduling は後続 issue の責務とする。
+
 ## Event envelope
 
 `RainrailEventEnvelope` は `schemaVersion: "rainrail.event.v1"` を持つ。
