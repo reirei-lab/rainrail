@@ -232,8 +232,6 @@ describe('dashboard demo SQLite seed script', () => {
           expect.objectContaining({ id: 'queue-blocked-stale-claim', tab: 'queue' }),
           expect.objectContaining({ id: 'settings-retry-auth', tab: 'settings' }),
           expect.objectContaining({ id: 'dashboard-cards-default-layout', tab: 'overview' }),
-          expect.objectContaining({ id: 'dashboard-cards-custom-plugin-layout', tab: 'overview' }),
-          expect.objectContaining({ id: 'dashboard-cards-plugin-failure-shell', tab: 'overview' }),
           expect.objectContaining({ id: 'dashboard-cards-mobile-layout', tab: 'overview', viewport: 'mobile' }),
         ]);
         for (const scenario of dashboardDemoVrtScenarios) {
@@ -468,14 +466,6 @@ describe('dashboard demo SQLite seed script', () => {
             expect.objectContaining({
               id: 'dashboard-cards-default-layout',
               captureHints: expect.arrayContaining(['default core card layout']),
-            }),
-            expect.objectContaining({
-              id: 'dashboard-cards-custom-plugin-layout',
-              captureHints: expect.arrayContaining(['saved user layout', 'plugin card catalog entry']),
-            }),
-            expect.objectContaining({
-              id: 'dashboard-cards-plugin-failure-shell',
-              captureHints: expect.arrayContaining(['dashboard shell remains interactive']),
             }),
             expect.objectContaining({
               id: 'dashboard-cards-mobile-layout',

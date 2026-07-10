@@ -16,11 +16,14 @@ plugin cards in one operator layout.
 - `PATCH /api/v1/dashboard/layout/items/:itemId/config` saves settings for one
   visible card.
 
-Core cards use ids such as `core.operationalTotals`, `core.eventInbox`,
-`core.workflowRuns`, `core.agentTasks`, `core.sources`, `core.queue`,
-`core.settings`, and `core.operatorActions`. Plugin cards use ids such as
-`plugin:github.queue`. Saved layouts reference both kinds through the same
-`cardId` field.
+The local `rainrail start` CLI catalog currently exposes
+`core.operationalTotals` as its Core card. The shared HTTP app contract also
+has tests for the broader Core card registry used by dashboard API consumers:
+`core.eventInbox`, `core.workflowRuns`, `core.agentTasks`, `core.sources`,
+`core.queue`, `core.settings`, `core.operatorActions`, and legacy ids
+`core.overview` and `core.recentEvents`. Plugin cards use ids such as
+`plugin:github.queue`. Saved layouts reference available Core and plugin cards
+through the same `cardId` field.
 
 ## Minimal plugin card
 
@@ -92,8 +95,9 @@ pnpm demo:dashboard:smoke
 ```
 
 The check validates seeded SQLite API data, default layout, a saved custom
-layout with a plugin card, plugin card load failure isolation, and the VRT
-scenario manifest entries for desktop and mobile card states.
+layout with a plugin card through the shared HTTP app contract, plugin card
+load failure isolation, and the VRT scenario manifest entries for directly
+reachable desktop and mobile card states.
 
 ## Source specs
 

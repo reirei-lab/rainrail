@@ -14,7 +14,8 @@ EEP Bridge bundle is one source bundle: 現行実装では GitHub webhook と Cl
 同じ publish-to-core 経路へ束ねる。manual/chat source は EEP Bridge 由来ではないが、
 同じ `RainrailEventEnvelope`、`RainrailIntakeAdapter`、Workflow plugin contract を使う。
 
-公開 export inventory は `WorkflowPlugin` `PluginRuntimeContext`
+PR lifecycle / routing / GitHub helper の部分的な公開 export inventory は
+`WorkflowPlugin` `PluginRuntimeContext`
 `RuntimeDispatcher` `createRuntimeDispatcher` `defineWorkflowPlugin`
 `createPluginLoader` `createRouteWorkflow` `createRouteLocalHandler`
 `routeRainrailEvent` `PullRequestCheck` `PullRequestReview`
@@ -31,7 +32,8 @@ EEP Bridge bundle is one source bundle: 現行実装では GitHub webhook と Cl
 `handleCheckFailureEvent` `handleConflictCheckEvent` `handleAutoMergeEvent`
 `allChecksPassed` `createTaskProviderPullRequestCommentHandoff`
 `GitHubAuthToken` `createGitHubTaskProvider` `createGitHubPullRequestProvider`
-`recordGitHubRateLimit` をこの contract で扱う。
+`recordGitHubRateLimit` とする。Plugin runtime contract 全体の公開 export 範囲は、
+この節だけではなく `docs/contracts.manifest.json` の `plugin-runtime.publicExports` を正とする。
 
 ## Event envelope
 

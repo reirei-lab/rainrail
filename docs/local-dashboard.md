@@ -108,7 +108,11 @@ API resource, and checks the VRT scenario manifest in
 states to capture later with Playwright: overview, retrying events, failed
 workflow runs, running task actions, source delivery status, blocked stale
 claims, settings, default dashboard card layout, custom dashboard card layout,
-plugin card failure isolation, and the mobile card layout.
+plugin card failure isolation, and the mobile card layout. The VRT manifest
+only lists states that can be reached by opening the recorded URL directly;
+custom saved layouts and plugin-card failure are covered by the smoke test's
+API and sandbox assertions until a browser runner can perform pre-capture
+setup steps.
 
 ## Dashboard cards
 
@@ -124,14 +128,16 @@ layout API:
 - `PATCH /api/v1/dashboard/layout/items/:itemId/config` saves settings for one
   visible card without dropping hidden saved plugin cards.
 
-Core cards are Rainrail-owned dashboard surfaces such as
+The local `rainrail start` CLI catalog currently exposes
+`core.operationalTotals` as its Core card and uses it in the default local
+layout. The shared HTTP app contract also has tests for the broader Core card
+registry used by dashboard API consumers:
 `core.operationalTotals`, `core.eventInbox`, `core.workflowRuns`,
-`core.agentTasks`, `core.sources`, `core.queue`, `core.settings`, and
-`core.operatorActions`. They render with the dashboard shell and keep the same
-auth, polling, stale-data, and operator-action behavior as the older fixed
-dashboard tabs. Legacy saved-layout ids `core.overview` and
-`core.recentEvents` remain in the catalog for compatibility, but new default
-layouts should prefer the newer Core card ids.
+`core.agentTasks`, `core.sources`, `core.queue`, `core.settings`,
+`core.operatorActions`, plus legacy saved-layout ids `core.overview` and
+`core.recentEvents`. Do not document a Core card as available from
+`rainrail start` until `packages/cli/src/index.ts` includes it in
+`localDashboardCardDefinitions`.
 
 Plugin cards use ids like `plugin:github.queue` and appear in the same card
 picker when the plugin is enabled and its declared read capabilities are
@@ -162,9 +168,9 @@ pnpm demo:dashboard:smoke
 ```
 
 That check verifies the seeded SQLite API data, the default layout, a saved
-custom layout containing a plugin card, sandbox load failure isolation, and the
-VRT capture manifest entries for default, custom, failure, and mobile card
-states.
+custom layout containing a plugin card through the shared HTTP app contract,
+sandbox load failure isolation, and the VRT capture manifest entries for
+directly reachable default and mobile card states.
 
 ## Auth scopes
 

@@ -91,7 +91,7 @@ export const dashboardDemoVrtScenarios = Object.freeze([
   {
     id: 'dashboard-cards-default-layout',
     tab: 'overview',
-    url: '/ja/dashboard?demo=1&tab=overview&panel=cards',
+    url: '/ja/dashboard?demo=1&tab=overview',
     captureHints: [
       'default core card layout',
       'card picker with core cards',
@@ -99,29 +99,9 @@ export const dashboardDemoVrtScenarios = Object.freeze([
     ],
   },
   {
-    id: 'dashboard-cards-custom-plugin-layout',
-    tab: 'overview',
-    url: '/ja/dashboard?demo=1&tab=overview&panel=cards&layout=custom',
-    captureHints: [
-      'saved user layout',
-      'plugin card catalog entry',
-      'per-card settings affordance',
-    ],
-  },
-  {
-    id: 'dashboard-cards-plugin-failure-shell',
-    tab: 'overview',
-    url: '/ja/dashboard?demo=1&tab=overview&panel=cards&pluginCardFailure=1',
-    captureHints: [
-      'unavailable plugin card warning',
-      'dashboard shell remains interactive',
-      'core cards still render beside failed plugin card',
-    ],
-  },
-  {
     id: 'dashboard-cards-mobile-layout',
     tab: 'overview',
-    url: '/ja/dashboard?demo=1&tab=overview&panel=cards',
+    url: '/ja/dashboard?demo=1&tab=overview',
     viewport: 'mobile',
     captureHints: [
       'mobile single-column layout tools',
