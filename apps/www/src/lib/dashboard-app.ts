@@ -308,11 +308,15 @@ if (root !== null) {
   }
 
   function renderCurrentList(): void {
-    if (latestData === undefined || list === null || detail === null) return;
-
     ensureVisibleDashboardTab();
-    for (const button of tabButtons) {
-      button.ariaPressed = String(button.dataset.dashboardTab === selectedTab);
+    updateTabButtons();
+    if (list === null || detail === null) return;
+
+    if (latestData === undefined) {
+      list.replaceChildren();
+      clearSelectedDetail();
+      renderPlaceholderDetail(emptyDetailMessage(selectedTab));
+      return;
     }
 
     const rows = selectedRows(latestData);
@@ -327,6 +331,12 @@ if (root !== null) {
       ?? rows.find((row) => row.id === preferredDetailRowId())
       ?? rows[0]!;
     void renderDetail(target);
+  }
+
+  function updateTabButtons(): void {
+    for (const button of tabButtons) {
+      button.ariaPressed = String(button.dataset.dashboardTab === selectedTab);
+    }
   }
 
   function rowButton(row: DashboardRow): HTMLButtonElement {
