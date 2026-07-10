@@ -70,6 +70,11 @@ describe('local dashboard start documentation', () => {
       'multi-user actor management',
       'handler-backed local runtime execution for operator/admin mutations',
       'demo-only accepted response',
+      'startDashboardDemoServerHarness',
+      'baseUrl',
+      'built `apps/www` dashboard assets',
+      'legacy SSE bearer-token overrides',
+      'server process, DB files, and temporary',
       'https://github.com/reirei-lab/rainrail/issues/228',
       'https://github.com/reirei-lab/rainrail/issues/230',
       'https://github.com/reirei-lab/rainrail/issues/231',
@@ -156,6 +161,7 @@ describe('local dashboard start documentation', () => {
             'apps/www/src/lib/dashboard-client.ts',
             'apps/www/src/lib/dashboard-app.ts',
             'apps/www/src/lib/dashboard-content.ts',
+            'scripts/dashboard-demo-server-harness.mjs',
           ]),
           docs: expect.arrayContaining([
             'docs/local-dashboard.md',
@@ -165,6 +171,7 @@ describe('local dashboard start documentation', () => {
           tests: expect.arrayContaining([
             'scripts/validate-local-dashboard-start.test.mjs',
             'scripts/validate-dashboard-shell.test.mjs',
+            'scripts/dashboard-demo-server-harness.test.mjs',
             'packages/cli/src/commands.test.ts',
             'src/dashboard-api.test.ts',
           ]),
