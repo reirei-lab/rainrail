@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.6.0](https://github.com/reirei-lab/rainrail/compare/release/0.5.0...release/0.6.0) (2026-07-10)
+
+
+### Features
+
+* add Codex App Server runtime provider ([#325](https://github.com/reirei-lab/rainrail/issues/325)) ([f1e7285](https://github.com/reirei-lab/rainrail/commit/f1e7285f851924ad1e635b7fbb78714693017820))
+* add Codex App Server setup checks ([#326](https://github.com/reirei-lab/rainrail/issues/326)) ([8f1eca6](https://github.com/reirei-lab/rainrail/commit/8f1eca61b95c6b784fc6295d660c17866d81644b))
+* **cli:** add Codex App Server official plugin ([#322](https://github.com/reirei-lab/rainrail/issues/322)) ([fb4143e](https://github.com/reirei-lab/rainrail/commit/fb4143e5eb0c77a737afe58410112a520821e1c9))
+* Codex App Server client transport boundary ([#321](https://github.com/reirei-lab/rainrail/issues/321)) ([54850fa](https://github.com/reirei-lab/rainrail/commit/54850faf53a894978439700014707f8598665fc4))
+* support plugin runtime provider config ([#320](https://github.com/reirei-lab/rainrail/issues/320)) ([0d46862](https://github.com/reirei-lab/rainrail/commit/0d46862df26b8bb268c69220b6ef156b3c42a22f))
+
+
+### Bug Fixes
+
+* keep dashboard sidebar tabs responsive ([#300](https://github.com/reirei-lab/rainrail/issues/300)) ([dc24240](https://github.com/reirei-lab/rainrail/commit/dc24240471857eec136ec043b2cfc2ec9812e7f8))
+
 ## [0.5.0](https://github.com/reirei-lab/rainrail/compare/release/0.4.1...release/0.5.0) (2026-07-10)
 
 
