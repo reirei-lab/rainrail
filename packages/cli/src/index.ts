@@ -7461,7 +7461,7 @@ function parseLocalDashboardLayoutUpdateItems(value: unknown): LocalDashboardLay
       }
     }
 
-    items.push({
+    const item = {
       id,
       cardId,
       x,
@@ -7469,10 +7469,25 @@ function parseLocalDashboardLayoutUpdateItems(value: unknown): LocalDashboardLay
       columns,
       rows,
       ...(config === undefined ? {} : { config: localCloneRecord(config) }),
-    });
+    };
+    if (items.some((existing) => localDashboardLayoutItemsOverlap(existing, item))) {
+      return { ok: false, status: 400, body: { error: 'overlapping_dashboard_layout_item', itemId: id } };
+    }
+
+    items.push(item);
   }
 
   return { ok: true, items };
+}
+
+function localDashboardLayoutItemsOverlap(
+  left: LocalDashboardLayoutItem,
+  right: LocalDashboardLayoutItem,
+): boolean {
+  return left.x < right.x + right.columns
+    && left.x + left.columns > right.x
+    && left.y < right.y + right.rows
+    && left.y + left.rows > right.y;
 }
 
 function localDashboardGridInteger(value: unknown): number | undefined {

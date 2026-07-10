@@ -229,6 +229,7 @@ export type DashboardAppCopy = {
     hide: string;
     remove: string;
     settings: string;
+    open: string;
     resize: string;
     move: string;
     unavailable: string;
@@ -416,6 +417,7 @@ const englishApp: DashboardAppCopy = {
     hide: 'Hide',
     remove: 'Remove',
     settings: 'Settings',
+    open: 'Open',
     resize: 'Resize',
     move: 'Move',
     unavailable: 'Unavailable',
@@ -603,6 +605,7 @@ const japaneseApp: DashboardAppCopy = {
     hide: '非表示',
     remove: '削除',
     settings: '設定',
+    open: '表示',
     resize: 'サイズ変更',
     move: '移動',
     unavailable: '利用不可',

@@ -326,6 +326,7 @@ describe('dashboard operational views', () => {
       'renderDashboardLayout()',
       'renderCardPicker()',
       'saveDashboardLayoutItems',
+      'discardInFlightDashboardRefreshes',
       'filteredItemCount',
       'draggable = true',
       'dragend',
@@ -341,11 +342,13 @@ describe('dashboard operational views', () => {
       'movedDashboardLayoutItems',
       'isFirstLayoutItem',
       'resizeDashboardLayoutItem',
+      'effectiveMaxColumns',
       'createDashboardLayoutItem',
       'dashboardCardGridInitialSize',
       'dashboardCardCanBeAdded',
       'unknownDashboardCard',
       'cardAvailabilityLabel',
+      'copy.cardLayout.open',
       'dashboardLayoutSaving',
       'isOperatorModeEnabled()',
       'currentLayoutCardIds',
@@ -366,9 +369,13 @@ describe('dashboard operational views', () => {
     expect(dashboardClient).toContain('size: {');
     expect(dashboardApp).toContain('category / provider / plugin');
     expect(dashboardApp).toContain('activeClient.saveDashboardLayout(items)');
+    expect(dashboardApp).toContain('renderCardSettingsPicker({ quiet: true });');
     expect(dashboardApp).not.toContain('setDashboardLayoutStatus(copy.cardLayout.saved);');
+    expect(dashboardApp).not.toContain('return dashboardTabForCard(cardId) === undefined ? copy.cardLayout.settings : copy.cardLayout.move;');
     expect(dashboardContent).toContain('Card picker');
     expect(dashboardContent).toContain('カードピッカー');
+    expect(dashboardContent).toContain("open: 'Open'");
+    expect(dashboardContent).toContain("open: '表示'");
     expect(dashboardContent).toContain('Hidden cards may be omitted');
     expect(dashboardContent).toContain('Move would place a card outside the grid');
     expect(globalStyles).toContain('.dashboard-layout-grid');

@@ -2393,6 +2393,36 @@ describe('Rainrail CLI built-in commands', () => {
         expect(invalidLayoutSave.status).toBe(400);
         await expect(invalidLayoutSave.json()).resolves.toEqual({ error: 'unknown_dashboard_card', cardId: 'core.unknown' });
 
+        const overlappingLayoutSave = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout`, {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            items: [
+              {
+                id: 'operational-totals',
+                cardId: 'core.operationalTotals',
+                x: 0,
+                y: 0,
+                columns: 8,
+                rows: 2,
+              },
+              {
+                id: 'overlapping-operational-totals',
+                cardId: 'core.operationalTotals',
+                x: 0,
+                y: 0,
+                columns: 8,
+                rows: 2,
+              },
+            ],
+          }),
+        });
+        expect(overlappingLayoutSave.status).toBe(400);
+        await expect(overlappingLayoutSave.json()).resolves.toEqual({
+          error: 'overlapping_dashboard_layout_item',
+          itemId: 'overlapping-operational-totals',
+        });
+
         const layoutConfigPreflight = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout/items/operational-totals/config`, {
           method: 'OPTIONS',
         });

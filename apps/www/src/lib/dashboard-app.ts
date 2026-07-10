@@ -1002,11 +1002,12 @@ if (root !== null) {
       const entry = cardsById.get(item.cardId);
       const min = entry?.definition.size.min ?? { columns: 1, rows: 1 };
       const max = entry?.definition.size.max ?? { columns: DASHBOARD_GRID_COLUMNS, rows: 12 };
-      const nextColumns = item.columns >= max.columns ? min.columns : item.columns + 1;
+      const effectiveMaxColumns = Math.min(max.columns, DASHBOARD_GRID_COLUMNS);
+      const nextColumns = item.columns >= effectiveMaxColumns ? min.columns : item.columns + 1;
       const nextRows = item.rows >= max.rows ? min.rows : item.rows + 1;
       const candidate = {
         ...item,
-        columns: clampDashboardCardSize(nextColumns, min.columns, Math.min(max.columns, DASHBOARD_GRID_COLUMNS)),
+        columns: clampDashboardCardSize(nextColumns, min.columns, effectiveMaxColumns),
         rows: clampDashboardCardSize(nextRows, min.rows, max.rows),
       };
       const overlaps = currentItems.some((other) => other.id !== item.id && dashboardLayoutItemsOverlap(candidate, other));
@@ -1034,6 +1035,7 @@ if (root !== null) {
       return;
     }
     const activeClient = client;
+    discardInFlightDashboardRefreshes(activeClient);
     dashboardLayoutSaving = true;
     setDashboardLayoutStatus(copy.cardLayout.saving);
     renderDashboardLayout();
@@ -1050,7 +1052,7 @@ if (root !== null) {
         : formatCommandResponse('accepted', response.data.auditId, response.data.auditWarning, copy));
       renderDashboardLayout();
       renderCardPicker();
-      renderCardSettingsPicker();
+      renderCardSettingsPicker({ quiet: true });
     } catch (error) {
       setDashboardLayoutStatus(error instanceof RainrailDashboardApiError ? `${copy.cardLayout.failed}: ${error.code}` : copy.cardLayout.failed);
     } finally {
@@ -1082,6 +1084,13 @@ if (root !== null) {
 
   function hasDashboardLayoutDragPayload(dataTransfer: DataTransfer | null): boolean {
     return dataTransfer !== null && Array.from(dataTransfer.types).includes(DASHBOARD_LAYOUT_DRAG_MIME);
+  }
+
+  function discardInFlightDashboardRefreshes(activeClient: RainrailDashboardApiClient): void {
+    if (refreshInFlightClient === activeClient) {
+      refreshSequence += 1;
+      refreshInFlightClient = undefined;
+    }
   }
 
   function currentLayoutCardIds(): Set<string> {
@@ -1223,7 +1232,7 @@ if (root !== null) {
   }
 
   function dashboardCardShortcutLabel(cardId: string): string {
-    return dashboardTabForCard(cardId) === undefined ? copy.cardLayout.settings : copy.cardLayout.move;
+    return dashboardTabForCard(cardId) === undefined ? copy.cardLayout.settings : copy.cardLayout.open;
   }
 
   function renderCardSettingsPicker(options: { quiet?: boolean } = {}): void {
