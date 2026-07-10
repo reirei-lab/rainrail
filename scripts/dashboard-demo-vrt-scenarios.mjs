@@ -1,10 +1,9 @@
 /**
  * Stable capture targets for SQLite-backed dashboard demo review.
  *
- * The repository does not ship a browser/VRT runner yet. Keep this manifest
- * deterministic so a future Playwright job can capture the same dashboard
- * states without rediscovering which records exercise retries, stale claims,
- * command audit rows, and each dashboard tab.
+ * Keep this manifest deterministic so Playwright can capture the same
+ * dashboard states without rediscovering which records exercise retries, stale
+ * claims, command audit rows, and each dashboard tab.
  *
  * @typedef {'overview' | 'events' | 'workflow-runs' | 'agent-tasks' | 'sources' | 'queue' | 'settings'} DashboardDemoTab
  * @typedef DashboardDemoVrtScenario

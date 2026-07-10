@@ -38,6 +38,14 @@ const dashboardE2eConfig = readFileSync(
   new URL('../playwright.dashboard.config.ts', import.meta.url),
   'utf8',
 );
+const dashboardSmokeSpec = readFileSync(
+  new URL('../e2e/dashboard/dashboard-smoke.spec.ts', import.meta.url),
+  'utf8',
+);
+const prCiWorkflow = readFileSync(
+  new URL('../.github/workflows/pr-ci.yml', import.meta.url),
+  'utf8',
+);
 
 describe('package scripts used by pull request CI', () => {
   it('builds repository scripts, the product site, docs site, and CLI package from the root command', () => {
@@ -93,6 +101,10 @@ describe('package scripts used by pull request CI', () => {
     expect(dashboardE2eConfig).toContain("trace: 'on-first-retry'");
     expect(dashboardE2eConfig).toContain("screenshot: 'only-on-failure'");
     expect(dashboardE2eConfig).toContain("video: 'retain-on-failure'");
+    expect(dashboardSmokeSpec).toContain('dashboard-demo-screenshot-manifest.json');
+    expect(dashboardSmokeSpec).toContain('dashboardDemoVrtScenarios');
+    expect(prCiWorkflow).toContain('test-results/dashboard/screenshots/');
+    expect(prCiWorkflow).toContain('dashboard-demo-screenshot-manifest.json');
     expect(startDashboardDemoScript).toContain("'.tmp', 'dashboard-demo'");
     expect(startDashboardDemoScript).toContain("runRequiredPnpm(['--filter', 'www', 'build'])");
     expect(startDashboardDemoScript).toContain("runRequiredPnpm(['--filter', '@rainrail/cli', 'build'])");

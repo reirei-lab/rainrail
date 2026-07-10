@@ -48,6 +48,8 @@ describe('pull request CI workflow', () => {
     expect(workflow).toContain('name: dashboard-e2e-artifacts');
     expect(workflow).toContain('playwright-report/dashboard/');
     expect(workflow).toContain('test-results/dashboard/');
+    expect(workflow).toContain('test-results/dashboard/screenshots/');
+    expect(workflow).toContain('test-results/dashboard/screenshots/dashboard-demo-screenshot-manifest.json');
     expect(workflow).toContain('retention-days: 7');
   });
 

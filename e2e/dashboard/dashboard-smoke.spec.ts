@@ -1,3 +1,6 @@
+import { mkdir, stat, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+
 import { expect, test, type Locator } from '@playwright/test';
 
 import { startDashboardDemoServerHarness } from '../../scripts/dashboard-demo-server-harness.mjs';
@@ -35,6 +38,15 @@ type ScenarioExpectation = {
   excludedRows?: readonly string[];
   detail: readonly string[];
   controls?: readonly { selector: string; value: string }[];
+};
+
+type ScenarioCapture = {
+  id: string;
+  tab: string;
+  url: string;
+  viewport: 'desktop' | 'mobile';
+  captureHints: readonly string[];
+  screenshot: string;
 };
 
 const scenarioExpectations: Record<string, ScenarioExpectation> = {
@@ -128,6 +140,65 @@ const scenarioExpectations: Record<string, ScenarioExpectation> = {
 const seededTabScenarios = dashboardDemoVrtScenarios.filter(
   (scenario) => scenario.id in scenarioExpectations,
 );
+
+test('captures dashboard demo screenshots from the scenario manifest', async ({ page }) => {
+  const screenshotDir = join(process.cwd(), 'test-results', 'dashboard', 'screenshots');
+  await mkdir(screenshotDir, { recursive: true });
+
+  const captures: ScenarioCapture[] = [];
+
+  for (const scenario of dashboardDemoVrtScenarios) {
+    const viewport = scenario.viewport ?? 'desktop';
+    await test.step(`${scenario.id} (${viewport})`, async () => {
+      await page.setViewportSize(viewport === 'mobile'
+        ? { width: 390, height: 844 }
+        : { width: 1440, height: 1000 });
+
+      const url = new URL(scenario.url, dashboardBaseUrl);
+      await page.goto(url.href);
+
+      await expect(page.getByRole('heading', { level: 1, name: /Rainrail (Operations|運用)/i })).toBeVisible();
+      await expect(page.locator('[data-demo-indicator]')).toBeVisible();
+      await expect(page.locator(`[data-dashboard-tab="${scenario.tab}"]`)).toHaveAttribute('aria-pressed', 'true');
+      await expect(page.locator('[data-status-text]')).toContainText(/Live operational state|運用状態/i);
+
+      const expectations = scenarioExpectations[scenario.id];
+      if (expectations !== undefined) {
+        const list = page.locator('[data-dashboard-list]');
+        await expect(list.locator('button').first()).toBeVisible();
+        for (const rowText of expectations.rows) {
+          await expect(list).toContainText(rowText);
+        }
+        for (const detailText of expectations.detail) {
+          await expect(page.locator('[data-dashboard-detail]')).toContainText(detailText);
+        }
+      } else {
+        await expect(page.locator('[data-dashboard-layout-grid]')).toBeVisible();
+        await expect(page.locator('[data-card-picker-list]')).not.toBeEmpty();
+      }
+
+      const screenshotFileName = `${scenario.id}-${viewport}.png`;
+      const screenshotPath = join(screenshotDir, screenshotFileName);
+      await page.screenshot({ path: screenshotPath, fullPage: true });
+      await expect.poll(async () => (await stat(screenshotPath)).size).toBeGreaterThan(1024);
+
+      captures.push({
+        id: scenario.id,
+        tab: scenario.tab,
+        url: scenario.url,
+        viewport,
+        captureHints: scenario.captureHints,
+        screenshot: screenshotFileName,
+      });
+    });
+  }
+
+  await writeFile(
+    join(screenshotDir, 'dashboard-demo-screenshot-manifest.json'),
+    `${JSON.stringify({ captures }, null, 2)}\n`,
+  );
+  expect(captures).toHaveLength(dashboardDemoVrtScenarios.length);
+});
 
 for (const scenario of seededTabScenarios) {
   test(`renders seeded dashboard scenario: ${scenario.id}`, async ({ page }) => {
