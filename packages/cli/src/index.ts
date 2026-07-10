@@ -5411,7 +5411,7 @@ const localDashboardCardDefinitions: readonly LocalDashboardCardDefinition[] = [
     requiredCapabilities: ['dashboard:read'],
     size: {
       default: { columns: 4, rows: 2 },
-      min: { columns: 3, rows: 2 },
+      min: { columns: 2, rows: 1 },
       max: { columns: 8, rows: 4 },
     },
     settingsSchema: localDashboardSettingsSchema,
@@ -5425,7 +5425,7 @@ const localDashboardCardDefinitions: readonly LocalDashboardCardDefinition[] = [
     requiredCapabilities: ['dashboard:read'],
     size: {
       default: { columns: 4, rows: 2 },
-      min: { columns: 3, rows: 2 },
+      min: { columns: 2, rows: 1 },
       max: { columns: 8, rows: 4 },
     },
     settingsSchema: localDashboardSettingsSchema,
@@ -5439,7 +5439,7 @@ const localDashboardCardDefinitions: readonly LocalDashboardCardDefinition[] = [
     requiredCapabilities: ['dashboard:read'],
     size: {
       default: { columns: 4, rows: 2 },
-      min: { columns: 3, rows: 2 },
+      min: { columns: 2, rows: 1 },
       max: { columns: 8, rows: 4 },
     },
     settingsSchema: localDashboardSettingsSchema,
@@ -5453,7 +5453,7 @@ const localDashboardCardDefinitions: readonly LocalDashboardCardDefinition[] = [
     requiredCapabilities: ['dashboard:read'],
     size: {
       default: { columns: 4, rows: 2 },
-      min: { columns: 3, rows: 2 },
+      min: { columns: 2, rows: 1 },
       max: { columns: 8, rows: 4 },
     },
     settingsSchema: localDashboardSettingsSchema,
@@ -6691,7 +6691,7 @@ async function handleLocalRainrailRequest(
     }
     writeLocalCollectionResponse(
       response,
-      filterLocalSources(localSourceRows(options.sources, state), url),
+      filterLocalSources(localSourceRows(options.sources, state, { includeHistorySources: options.demoMode === true }), url),
       url,
       request,
       (row) => typeof row.name === 'string' ? row.name : row.id,
@@ -6704,7 +6704,7 @@ async function handleLocalRainrailRequest(
     const sourceId = safeDecodeURIComponent(sourceDetailMatch[1] ?? '');
     const row = sourceId === undefined
       ? undefined
-      : localSourceRows(options.sources, state).find((source) => source.id === sourceId);
+      : localSourceRows(options.sources, state, { includeHistorySources: options.demoMode === true }).find((source) => source.id === sourceId);
     if (row === undefined) {
       writeJsonResponse(response, 404, { error: 'source_not_found' }, request);
       return;
@@ -7437,7 +7437,7 @@ function isLocalRainrailEvent(value: unknown): value is LocalRainrailEvent {
 type LocalSourceRow = {
   readonly id: string;
   readonly type: 'source';
-  readonly status: 'configured';
+  readonly status: string;
   readonly sourceType: string;
   readonly name: string;
   readonly endpoint?: string;
@@ -7458,6 +7458,7 @@ type LocalSourceLastDelivery = NonNullable<LocalSourceRow['lastDelivery']>;
 function localSourceRows(
   sources: readonly RainrailLocalSource[],
   state: LocalRainrailServerState,
+  options: { readonly includeHistorySources?: boolean } = {},
 ): readonly LocalSourceRow[] {
   const operationalEvents = state.eventStore?.listOperationalEvents?.() ?? [];
   const rows = new Map<string, LocalSourceRow>();
@@ -7500,12 +7501,14 @@ function localSourceRows(
     rows.set(source.name, row);
   }
 
-  for (const event of [...operationalEvents].reverse()) {
+  if (options.includeHistorySources !== true) return [...rows.values()];
+
+  for (const event of operationalEvents) {
     if (rows.has(event.source.name)) continue;
     rows.set(event.source.name, {
       id: event.source.name,
       type: 'source',
-      status: 'configured',
+      status: 'observed',
       sourceType: event.source.type,
       name: event.source.name,
       transport: 'event-store',
@@ -7523,7 +7526,7 @@ function latestOperationalEventForSource(
   sourceName: string,
   sourceType: string,
 ): LocalOperationalEvent | undefined {
-  return [...events].reverse().find((event) => event.source.name === sourceName && event.source.type === sourceType);
+  return events.find((event) => event.source.name === sourceName && event.source.type === sourceType);
 }
 
 function localOperationalSourceLastDelivery(event: LocalOperationalEvent): LocalSourceLastDelivery {
@@ -7562,7 +7565,7 @@ function localSettingsRows(options: RainrailStartOptions, state: LocalRainrailSe
     { id: 'auto-start', type: 'setting', status: 'read-only', label: 'Auto-start', value: 'not configured' },
     { id: 'retry-policy', type: 'setting', status: 'read-only', label: 'Retry policy', value: retryCount === 1 ? '1 retry pending' : `${retryCount} retries pending` },
     { id: 'operational-snapshot-limit', type: 'setting', status: 'read-only', label: 'Operational snapshot limit', value: `${operationalSnapshotLimit} events` },
-    { id: 'dashboard-auth', type: 'setting', status: 'read-only', label: 'Dashboard auth', value: hasAnyDashboardAuthToken(options.dashboardAuth) || options.demoMode ? 'bearer token configured' : 'not configured' },
+    { id: 'dashboard-auth', type: 'setting', status: 'read-only', label: 'Dashboard auth', value: hasAnyDashboardAuthToken(options.dashboardAuth) ? 'bearer token configured' : 'not configured' },
     { id: 'runtime', type: 'setting', status: 'read-only', label: 'Runtime', value: 'node' },
   ];
 }
