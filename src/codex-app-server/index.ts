@@ -55,4 +55,5 @@ export type {
   CodexAppServerRuntimeProviderClientFactoryOptions,
   CodexAppServerRuntimeProviderLogWriter,
   CodexAppServerRuntimeProviderOptions,
+  CodexAppServerRuntimeProviderRequestHandler,
 } from './runtime-provider.js';

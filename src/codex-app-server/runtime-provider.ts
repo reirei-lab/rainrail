@@ -10,6 +10,7 @@ import {
   type CodexAppServerThreadStartParams,
   type CodexAppServerTurnCompletedEvent,
 } from './protocol-client.js';
+import type { CodexAppServerRequestFrame } from './client.js';
 import {
   createStdioCodexAppServerTransport,
   type SpawnCodexAppServerProcess,
@@ -26,13 +27,18 @@ export interface CodexAppServerRuntimeProviderOptions {
   logDirectory: string;
   turnTimeoutMs?: number | undefined;
   requestTimeoutMs?: number | undefined;
+  closeTimeoutMs?: number | undefined;
   thread?: Partial<CodexAppServerThreadStartParams> | undefined;
+  requestHandler?: CodexAppServerRuntimeProviderRequestHandler | undefined;
   spawnProcess?: SpawnCodexAppServerProcess | undefined;
   writeLogChunk?: CodexAppServerRuntimeProviderLogWriter | undefined;
   clientFactory?: CodexAppServerRuntimeProviderClientFactory | undefined;
 }
 
 export type CodexAppServerRuntimeProviderLogWriter = (fd: number, chunk: Buffer | string) => void;
+export type CodexAppServerRuntimeProviderRequestHandler = (
+  frame: CodexAppServerRequestFrame,
+) => unknown | Promise<unknown>;
 
 export type CodexAppServerRuntimeProviderClientFactory = (
   options: CodexAppServerRuntimeProviderClientFactoryOptions,
@@ -75,6 +81,7 @@ type RuntimeAgentTaskInput = {
 const defaultCodexAppServerArgs = ['app-server', '--listen', 'stdio://'];
 const defaultTurnTimeoutMs = 30 * 60 * 1000;
 const defaultRequestTimeoutMs = 60_000;
+const defaultCloseTimeoutMs = 5_000;
 
 export function createCodexAppServerRuntimeProvider(options: CodexAppServerRuntimeProviderOptions): RuntimeProvider {
   return {
@@ -107,6 +114,12 @@ export async function startCodexAppServerRun(
   throwIfAborted(context?.signal);
 
   const task = runtimeAgentTaskInput(request.task);
+  const turnTimeoutMs = options.turnTimeoutMs ?? defaultTurnTimeoutMs;
+  const closeTimeoutMs = options.closeTimeoutMs ?? defaultCloseTimeoutMs;
+  const threadParams = codexAppServerThreadParams(options);
+  if (requiresCodexAppServerRequestHandler(threadParams) && options.requestHandler === undefined) {
+    throw new Error('Codex App Server runtime provider requires a request handler when approvalPolicy is not never');
+  }
   ensurePrivateLogDirectory(options.logDirectory);
   const logName = `${boundedSafeFileName(task.id, 72)}-${shortHash(`${request.workflow}:${request.event.delivery.id}:${task.id}:${task.branchName ?? ''}`)}`;
   const logPath = join(options.logDirectory, `${logName}.log`);
@@ -115,7 +128,6 @@ export async function startCodexAppServerRun(
   let runtimeClient: CodexAppServerRuntimeProviderClient | undefined;
   let threadId: string | undefined;
   let turnId: string | undefined;
-  const turnTimeoutMs = options.turnTimeoutMs ?? defaultTurnTimeoutMs;
   const metadataBase = {
     logPath,
     stderrLogPath,
@@ -140,32 +152,28 @@ export async function startCodexAppServerRun(
     if (options.spawnProcess !== undefined) clientFactoryOptions.spawnProcess = options.spawnProcess;
     if (options.writeLogChunk !== undefined) clientFactoryOptions.writeLogChunk = options.writeLogChunk;
     runtimeClient = (options.clientFactory ?? createDefaultCodexAppServerRuntimeProviderClient)(clientFactoryOptions);
+    const unregisterRequestHandler = options.requestHandler === undefined
+      ? undefined
+      : runtimeClient.client.onRequest(options.requestHandler);
 
-    await runtimeClient.client.connect();
-    await runtimeClient.client.initialize({
+    await awaitAbortable(runtimeClient.client.connect(), context?.signal);
+    await awaitAbortable(runtimeClient.client.initialize({
       clientInfo: { name: 'rainrail', title: 'Rainrail', version: '0.5.0' },
       capabilities: null,
-    });
+    }), context?.signal);
     throwIfCodexAppServerLogWriteFailed(runtimeClient);
-    const threadParams: CodexAppServerThreadStartParams = {
-      approvalPolicy: 'never',
-      ephemeral: true,
-      sessionStartSource: 'rainrail',
-      threadSource: 'rainrail',
-      ...options.thread,
-    };
-    if (options.cwd !== undefined && threadParams.cwd === undefined) threadParams.cwd = options.cwd;
-    const thread = await runtimeClient.client.startThread(threadParams);
+    const thread = await awaitAbortable(runtimeClient.client.startThread(threadParams), context?.signal);
     throwIfCodexAppServerLogWriteFailed(runtimeClient);
     threadId = thread.thread.id;
-    const turn = await runtimeClient.client.startTurn({
+    const turn = await awaitAbortable(runtimeClient.client.startTurn({
       threadId,
       input: [{
         type: 'text',
         text: promptForRuntimeTask(task),
         text_elements: [],
       }],
-    });
+    }), context?.signal);
+    unregisterRequestHandler?.();
     throwIfCodexAppServerLogWriteFailed(runtimeClient);
     turnId = turn.turn.id;
     const completed = await waitForCodexTurn(runtimeClient.client, {
@@ -208,10 +216,26 @@ export async function startCodexAppServerRun(
       }),
     };
   } finally {
-    await runtimeClient?.client.close().catch(() => undefined);
+    await closeCodexAppServerRuntimeClient(runtimeClient, closeTimeoutMs);
     closeSync(outputFd);
     closeSync(stderrFd);
   }
+}
+
+function codexAppServerThreadParams(options: CodexAppServerRuntimeProviderOptions): CodexAppServerThreadStartParams {
+  const threadParams: CodexAppServerThreadStartParams = {
+    approvalPolicy: 'never',
+    ephemeral: true,
+    sessionStartSource: 'rainrail',
+    threadSource: 'rainrail',
+    ...options.thread,
+  };
+  if (options.cwd !== undefined && threadParams.cwd === undefined) threadParams.cwd = options.cwd;
+  return threadParams;
+}
+
+function requiresCodexAppServerRequestHandler(threadParams: CodexAppServerThreadStartParams): boolean {
+  return threadParams.approvalPolicy !== undefined && threadParams.approvalPolicy !== null && threadParams.approvalPolicy !== 'never';
 }
 
 function createDefaultCodexAppServerRuntimeProviderClient(
@@ -275,6 +299,55 @@ function throwIfCodexAppServerLogWriteFailed(runtimeClient: CodexAppServerRuntim
   const error = runtimeClient.logWriteError?.();
   if (error !== undefined) {
     throw error;
+  }
+}
+
+async function awaitAbortable<T>(promise: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (signal === undefined) {
+    return promise;
+  }
+  if (signal.aborted) {
+    throw abortReason(signal);
+  }
+  let abortListener: (() => void) | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        abortListener = () => reject(abortReason(signal));
+        signal.addEventListener('abort', abortListener, { once: true });
+      }),
+    ]);
+  } finally {
+    if (abortListener !== undefined) {
+      signal.removeEventListener('abort', abortListener);
+    }
+  }
+}
+
+async function closeCodexAppServerRuntimeClient(
+  runtimeClient: CodexAppServerRuntimeProviderClient | undefined,
+  timeoutMs: number,
+): Promise<void> {
+  if (runtimeClient === undefined) {
+    return;
+  }
+  const closePromise = runtimeClient.client.close();
+  closePromise.catch(() => undefined);
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    await Promise.race([
+      closePromise,
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, timeoutMs);
+      }),
+    ]);
+  } catch {
+    // Cleanup failure must not mask the runtime result or startup error.
+  } finally {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
   }
 }
 
@@ -369,6 +442,7 @@ function issueFieldsFromValue(value: Record<string, unknown>): RuntimeAgentTaskI
 }
 
 function ensurePrivateLogDirectory(directory: string): void {
+  assertNoParentDirectorySegments(directory);
   const nearestExistingPath = nearestExistingPathComponent(directory);
   assertNoSymlinkPathComponents(nearestExistingPath, directory);
   mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -394,6 +468,7 @@ function openPrivateLogFiles(logPath: string, stderrLogPath: string): { outputFd
 }
 
 function openPrivateLogFile(path: string): number {
+  assertNoParentDirectorySegments(path);
   const directory = dirname(path);
   assertNoSymlinkPathComponents(nearestExistingPathComponent(directory), directory);
   const fd = openSync(path, constants.O_CREAT | constants.O_APPEND | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600);
@@ -407,6 +482,12 @@ function openPrivateLogFile(path: string): number {
   } catch (error) {
     closeSync(fd);
     throw error;
+  }
+}
+
+function assertNoParentDirectorySegments(path: string): void {
+  if (path.split(/[\\/]+/).includes('..')) {
+    throw new Error('Codex App Server runtime log path must not include parent directory segments');
   }
 }
 
@@ -473,7 +554,12 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
 }
 
 function abortReason(signal: AbortSignal): Error {
-  return signal.reason instanceof Error ? signal.reason : new Error('Codex App Server runtime provider aborted');
+  const message = signal.reason instanceof Error
+    ? signal.reason.message
+    : typeof signal.reason === 'string'
+      ? signal.reason
+      : 'Codex App Server runtime provider aborted';
+  return new CodexAppServerRuntimeAbortError(message, { cause: signal.reason });
 }
 
 function isTimeoutError(error: unknown): boolean {
@@ -482,6 +568,10 @@ function isTimeoutError(error: unknown): boolean {
 
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && (error.name === 'AbortError' || /aborted/i.test(error.message));
+}
+
+class CodexAppServerRuntimeAbortError extends Error {
+  override name = 'AbortError';
 }
 
 function normalize(value: string | undefined): string | undefined {

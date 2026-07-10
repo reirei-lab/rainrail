@@ -114,13 +114,19 @@ Codex App Server runtime provider は `CodexAppServerRuntimeProviderOptions` か
 別に private log file へ mirror し、run metadata には log path、stderr log path、pid、
 thread id、turn id、branch、task id を残す。default thread は自動 runtime として
 承認 request で止まらないよう `approvalPolicy: "never"` を使い、caller が
-`thread.approvalPolicy` で明示した場合だけ上書きできる。turn completion status は
+`thread.approvalPolicy` で明示した場合だけ上書きできる。`never` 以外へ上書きする場合は
+`CodexAppServerRuntimeProviderRequestHandler` を `requestHandler` として渡し、server-initiated
+request を client が処理できるようにする。turn completion status は
 failed/error を `failed`、interrupted/cancelled/canceled を `canceled`、
 timeout/timedOut を `timed_out` に対応させ、その他の完了は `succeeded` として扱う。
 stuck turn は provider-level timeout で `timed_out` とし、実行中の caller
 `AbortSignal` は即座に `canceled` として扱い、どちらも app-server process を
-`close()` 経由で cleanup する。turn が受理される前の connect/initialize/thread/start/
-turn/start 失敗は assignment が claim を release できるよう reject する。
+`close()` 経由で cleanup する。`close()` は `closeTimeoutMs` で上限を設け、stuck process
+cleanup が runtime result 返却を無期限にブロックしないようにする。turn が受理される前の
+connect/initialize/thread/start/turn/start 失敗または startup 中の abort は assignment が
+claim を release できるよう reject する。runtime log path は symlink component に加えて
+未正規化の `..` parent directory segment も拒否し、private log 書き込みが想定外の親 path へ
+逸れないようにする。
 `CodexAppServerRuntimeProviderClientFactory`、
 `CodexAppServerRuntimeProviderClientFactoryOptions`、`CodexAppServerRuntimeProviderClient`
 は test や別 supervisor が protocol client、pid、spawn/log wiring を差し替えるための

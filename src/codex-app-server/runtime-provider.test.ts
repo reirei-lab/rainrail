@@ -149,6 +149,32 @@ describe('createCodexAppServerRuntimeProvider', () => {
     expect(client.close).toHaveBeenCalledOnce();
   });
 
+  it('does not block timeout results on a stuck app-server close', async () => {
+    vi.useFakeTimers();
+    const client = new FakeCodexAppServerProtocolClient();
+    client.completedTurnPromise = new Promise(() => undefined);
+    client.close.mockImplementationOnce(() => new Promise(() => undefined));
+    const provider = createCodexAppServerRuntimeProvider({
+      enabled: true,
+      command: 'codex',
+      logDirectory: temporaryDirectory(),
+      turnTimeoutMs: 1_000,
+      closeTimeoutMs: 250,
+      clientFactory: () => ({ client, pid: 9315 }),
+    });
+
+    const started = provider.startRun(runtimeRequest());
+    await vi.advanceTimersByTimeAsync(1_251);
+
+    await expect(started).resolves.toMatchObject({
+      status: 'timed_out',
+      metadata: {
+        timeoutMs: 1_000,
+      },
+    });
+    expect(client.close).toHaveBeenCalledOnce();
+  });
+
   it('cancels a running turn immediately when the caller signal aborts', async () => {
     vi.useFakeTimers();
     const controller = new AbortController();
@@ -163,17 +189,98 @@ describe('createCodexAppServerRuntimeProvider', () => {
     });
 
     const started = provider.startRun(runtimeRequest(), { signal: controller.signal });
-    await vi.advanceTimersByTimeAsync(1);
-    controller.abort(new Error('workflow aborted'));
-    await vi.advanceTimersByTimeAsync(1);
-
-    await expect(started).resolves.toMatchObject({
+    const expectation = expect(started).resolves.toMatchObject({
       status: 'canceled',
       metadata: {
         error: 'workflow aborted',
       },
     });
+    await vi.advanceTimersByTimeAsync(1);
+    controller.abort(new Error('workflow aborted'));
+    await vi.advanceTimersByTimeAsync(1);
+
+    await expectation;
     expect(client.close).toHaveBeenCalledOnce();
+  });
+
+  it('classifies caller aborts as canceled without depending on the abort reason text', async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const client = new FakeCodexAppServerProtocolClient();
+    client.completedTurnPromise = new Promise(() => undefined);
+    const provider = createCodexAppServerRuntimeProvider({
+      enabled: true,
+      command: 'codex',
+      logDirectory: temporaryDirectory(),
+      clientFactory: () => ({ client, pid: 9315 }),
+    });
+
+    const started = provider.startRun(runtimeRequest(), { signal: controller.signal });
+    const expectation = expect(started).resolves.toMatchObject({
+      status: 'canceled',
+      metadata: {
+        error: 'manual cancel',
+      },
+    });
+    await vi.advanceTimersByTimeAsync(1);
+    controller.abort(new Error('manual cancel'));
+    await vi.advanceTimersByTimeAsync(1);
+
+    await expectation;
+  });
+
+  it('aborts startup handshakes immediately and closes the app-server process', async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const client = new FakeCodexAppServerProtocolClient();
+    client.initialize.mockImplementationOnce(() => new Promise(() => undefined));
+    const provider = createCodexAppServerRuntimeProvider({
+      enabled: true,
+      command: 'codex',
+      logDirectory: temporaryDirectory(),
+      clientFactory: () => ({ client, pid: 9315 }),
+    });
+
+    const started = provider.startRun(runtimeRequest(), { signal: controller.signal });
+    const expectation = expect(started).rejects.toThrow('startup canceled');
+    await vi.advanceTimersByTimeAsync(1);
+    controller.abort(new Error('startup canceled'));
+    await vi.advanceTimersByTimeAsync(1);
+
+    await expectation;
+    expect(client.close).toHaveBeenCalledOnce();
+  });
+
+  it('requires a request handler when approval policy allows app-server requests', async () => {
+    const client = new FakeCodexAppServerProtocolClient();
+    const provider = createCodexAppServerRuntimeProvider({
+      enabled: true,
+      command: 'codex',
+      logDirectory: temporaryDirectory(),
+      thread: { approvalPolicy: 'on-request' },
+      clientFactory: () => ({ client, pid: 9315 }),
+    });
+
+    await expect(provider.startRun(runtimeRequest())).rejects.toThrow(/request handler/i);
+    expect(client.connect).not.toHaveBeenCalled();
+  });
+
+  it('registers the configured request handler before starting non-never approval runs', async () => {
+    const client = new FakeCodexAppServerProtocolClient();
+    const requestHandler = vi.fn();
+    const provider = createCodexAppServerRuntimeProvider({
+      enabled: true,
+      command: 'codex',
+      logDirectory: temporaryDirectory(),
+      thread: { approvalPolicy: 'on-request' },
+      requestHandler,
+      clientFactory: () => ({ client, pid: 9315 }),
+    });
+
+    await expect(provider.startRun(runtimeRequest())).resolves.toMatchObject({ status: 'succeeded' });
+
+    expect(client.onRequest).toHaveBeenCalledWith(requestHandler);
+    expect(client.onRequest.mock.invocationCallOrder[0]).toBeLessThan(client.connect.mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER);
   });
 
   it('rejects startup errors before a turn is accepted so assignment can release the claim', async () => {
@@ -237,6 +344,30 @@ describe('createCodexAppServerRuntimeProvider', () => {
     });
 
     await expect(provider.startRun(runtimeRequest())).rejects.toThrow(/symlink/i);
+
+    expect(clientFactory).not.toHaveBeenCalled();
+  });
+
+  it('rejects parent directory traversal in runtime log paths before symlink checks', async () => {
+    const clientFactory = vi.fn<CodexAppServerRuntimeProviderClientFactory>(() => ({
+      client: new FakeCodexAppServerProtocolClient(),
+      pid: 9315,
+    }));
+    const root = join(process.cwd(), `.rainrail-codex-runtime-${crypto.randomUUID()}`);
+    temporaryDirectories.push(root);
+    const targetDirectory = join(root, 'actual-logs');
+    const linkedComponent = join(root, 'linked-component');
+    const logDirectory = `${linkedComponent}/../logs`;
+    mkdirSync(targetDirectory, { recursive: true });
+    symlinkSync(targetDirectory, linkedComponent, 'dir');
+    const provider = createCodexAppServerRuntimeProvider({
+      enabled: true,
+      command: 'codex',
+      logDirectory,
+      clientFactory,
+    });
+
+    await expect(provider.startRun(runtimeRequest())).rejects.toThrow(/parent directory/i);
 
     expect(clientFactory).not.toHaveBeenCalled();
   });
