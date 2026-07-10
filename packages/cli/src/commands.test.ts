@@ -3007,6 +3007,36 @@ describe('Rainrail CLI built-in commands', () => {
         encoding: 'utf8',
       });
       expect(seed.status).toBe(0);
+      withSqliteDatabase(databasePath, (database) => {
+        const row = database.prepare('SELECT * FROM operational_events WHERE id = ?')
+          .get('evt_demo_cloudflare_tail_001') as {
+            name: string;
+            source_json: string;
+            delivery_json: string;
+            subject_json: string;
+            payload_json: string;
+            raw_payload_reference_json: string;
+          };
+        const delivery = JSON.parse(row.delivery_json) as { id: string; receivedAt: string };
+        const rawPayloadReference = JSON.parse(row.raw_payload_reference_json) as { reference: string };
+        database.prepare(`
+          INSERT INTO operational_events (
+            id, name, source_json, delivery_json, subject_json, occurred_at, received_at,
+            payload_json, raw_payload_reference_json, links_json
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          'evt_demo_cloudflare_tail_002',
+          row.name,
+          row.source_json,
+          JSON.stringify({ ...delivery, id: 'cf-tail-demo-002', receivedAt: '2026-07-09T04:53:10.000Z' }),
+          row.subject_json,
+          '2026-07-09T04:53:02.000Z',
+          '2026-07-09T04:53:10.000Z',
+          row.payload_json,
+          JSON.stringify({ ...rawPayloadReference, reference: 'cloudflare://tails/cf-tail-demo-002' }),
+          JSON.stringify({ self: '/api/v1/events/evt_demo_cloudflare_tail_002' }),
+        );
+      });
 
       const result = await runRainrailCliAsync(['start', '--demo'], { cwd: projectRoot });
       try {
@@ -3018,7 +3048,7 @@ describe('Rainrail CLI built-in commands', () => {
         await expect(overview.json()).resolves.toMatchObject({
           data: {
             counts: {
-              events: 3,
+              events: 4,
               activityEvents: 4,
               agentTasks: 3,
               commandResults: 3,
@@ -3040,6 +3070,19 @@ describe('Rainrail CLI built-in commands', () => {
           const body = await response.json() as { data?: unknown[] };
           expect(body.data?.length, path).toBeGreaterThan(0);
         }
+
+        const sources = await fetch(`http://127.0.0.1:${port}/api/v1/sources?demo=1`);
+        await expect(sources.json()).resolves.toMatchObject({
+          data: expect.arrayContaining([
+            expect.objectContaining({
+              id: 'cloudflare-tail',
+              sourceType: 'cloudflare',
+              status: 'observed',
+              links: { self: '/api/v1/sources/cloudflare-tail' },
+              lastDelivery: expect.objectContaining({ id: 'evt_demo_cloudflare_tail_002' }),
+            }),
+          ]),
+        });
 
         const protectedOverview = await fetch(`http://127.0.0.1:${port}/api/v1/overview`);
         expect(protectedOverview.status).toBe(401);

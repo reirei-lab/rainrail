@@ -7526,9 +7526,17 @@ function localSourceRows(
   if (options.includeHistorySources !== true) return rows;
 
   const observedEvents = [...state.events].reverse();
-  const observedSourceNames = duplicateLocalSourceNames([...sources.map((source) => source.name), ...observedEvents.map((event) => event.source.name)]);
-  for (const [index, event] of observedEvents.entries()) {
+  const observedSources: LocalRainrailEvent[] = [];
+  const observedSourceKeys = new Set<string>();
+  for (const event of observedEvents) {
     if (rows.some((row) => row.name === event.source.name && row.sourceType === event.source.type)) continue;
+    const sourceKey = `${event.source.name}\u0000${event.source.type}`;
+    if (observedSourceKeys.has(sourceKey)) continue;
+    observedSourceKeys.add(sourceKey);
+    observedSources.push(event);
+  }
+  const observedSourceNames = duplicateLocalSourceNames([...sources.map((source) => source.name), ...observedSources.map((event) => event.source.name)]);
+  for (const [index, event] of observedSources.entries()) {
     const id = localSourceRowId(event.source.name, sources.length + index, observedSourceNames, reservedSourceRowIds, assignedSourceRowIds);
     rows.push({
       id,
