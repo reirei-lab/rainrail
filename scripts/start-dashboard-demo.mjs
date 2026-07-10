@@ -10,6 +10,7 @@ const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const demoRoot = resolve(repositoryRoot, '.tmp', 'dashboard-demo');
 const configPath = resolve(demoRoot, 'rainrail.config.json');
 const databasePath = resolve(repositoryRoot, '.tmp', 'dashboard-demo.sqlite');
+const cliEntrypoint = resolve(repositoryRoot, 'packages', 'cli', 'dist', 'bin', 'rainrail.js');
 
 runRequiredPnpm(['--filter', 'www', 'build']);
 runRequiredPnpm(['--filter', '@rainrail/cli', 'build']);
@@ -45,11 +46,8 @@ writeFileSync(configPath, `${JSON.stringify({
   runtimeProviders: {},
 }, null, 2)}\n`, { mode: 0o600 });
 
-const result = spawnSync('pnpm', [
-  '--filter',
-  '@rainrail/cli',
-  'exec',
-  'rainrail',
+const result = spawnSync(process.execPath, [
+  cliEntrypoint,
   '--config',
   configPath,
   'start',

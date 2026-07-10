@@ -112,6 +112,28 @@ Custom saved dashboard card layouts and plugin-card failure isolation are
 smoke-only checks today; they are covered by API and sandbox assertions until a
 browser runner can perform pre-capture setup steps.
 
+## Browser E2E smoke
+
+The dashboard browser smoke test uses Playwright against the seeded SQLite demo
+server. Install dependencies and the Chromium browser once on a local machine:
+
+```sh
+pnpm install --frozen-lockfile
+pnpm exec playwright install chromium
+```
+
+Then run the focused dashboard E2E command from the repository root:
+
+```sh
+pnpm e2e:dashboard
+```
+
+The Playwright config starts `pnpm demo:dashboard` as its web server and opens
+`http://127.0.0.1:8787/en/dashboard?demo=1`, so no real GitHub, Cloudflare, or
+operator token is needed. Failure artifacts are written under
+`test-results/dashboard/`, and the HTML report is written under
+`playwright-report/dashboard/`.
+
 ## Dashboard cards
 
 The dashboard card surface is driven by the same-origin card catalog and user
