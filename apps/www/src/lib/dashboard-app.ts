@@ -210,7 +210,7 @@ if (root !== null) {
     button.addEventListener('click', () => {
       const tab = button.dataset.dashboardTab;
       const cardId = button.dataset.dashboardCoreCard;
-      if (!dashboardCoreCardIsVisible(cardId)) return;
+      if (latestData?.layout.source === 'user' && !dashboardCoreCardIsVisible(cardId)) return;
       if (isDashboardTab(tab)) {
         selectedTab = tab;
         renderCurrentList();
@@ -1417,6 +1417,7 @@ if (root !== null) {
       return;
     }
     if (dashboardLayoutSaving) return;
+    const activeClient = client;
 
     const selectedLayoutItem = latestData.layout.items.find((item) => item.id === cardSettingsSelect.value);
     if (selectedLayoutItem === undefined) {
@@ -1431,13 +1432,16 @@ if (root !== null) {
     }
 
     const config = mergeCardSettingsConfig(selectedLayoutItem.config, renderedConfig.config);
+    discardInFlightDashboardRefreshes(activeClient);
     cardSettingsSaving = true;
     setOperatorActionsEnabled(isOperatorModeEnabled());
     renderDashboardLayout();
     renderCardPicker();
     let saved = false;
     try {
-      await client.saveDashboardLayoutItemConfig(selectedLayoutItem.id, config);
+      await activeClient.saveDashboardLayoutItemConfig(selectedLayoutItem.id, config);
+      if (client !== activeClient) return;
+      discardInFlightDashboardRefreshes(activeClient);
       updateLatestCardSettingsConfig(selectedLayoutItem.id, config);
       cardSettingsDirty = false;
       markCardSettingsFormClean(cardSettingsForm);

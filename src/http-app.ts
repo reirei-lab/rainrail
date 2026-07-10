@@ -1343,6 +1343,7 @@ function filterDashboardLayoutItems(
     if (!parsed.ok) continue;
     const [parsedItem] = parsed.items;
     if (parsedItem === undefined || seenItemIds.has(parsedItem.id)) continue;
+    if (filtered.some((existing) => dashboardLayoutItemsOverlap(existing, parsedItem))) continue;
     seenItemIds.add(parsedItem.id);
     filtered.push(parsedItem);
   }

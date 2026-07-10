@@ -306,7 +306,9 @@ describe('dashboard operational views', () => {
     expect(dashboardApp).toContain('cardSettingsSaving');
     expect(dashboardApp).toContain('if (cardSettingsDirty && options.quiet) return;');
     expect(dashboardApp).toContain('if (dashboardLayoutSaving) return;');
-    expect(dashboardApp).toContain('if (!dashboardCoreCardIsVisible(cardId))');
+    expect(dashboardApp).toContain("if (latestData?.layout.source === 'user' && !dashboardCoreCardIsVisible(cardId)) return;");
+    expect(dashboardApp).toContain('const activeClient = client;');
+    expect(dashboardApp).toContain('await activeClient.saveDashboardLayoutItemConfig(selectedLayoutItem.id, config);');
     expect(dashboardApp).toContain('action.disabled = dashboardLayoutSaving || cardSettingsSaving || !enabled');
     expect(dashboardApp).toContain('void refresh({ quiet: true });');
     expect(dashboardApp).not.toContain('await refresh({ quiet: true });');
@@ -390,6 +392,7 @@ describe('dashboard operational views', () => {
     expect(dashboardApp).toContain('if (dashboardLayoutSaving) return;');
     expect(dashboardApp).toContain('if (cardSettingsSaving) return;');
     expect(dashboardApp).toContain('discardInFlightDashboardRefreshes(activeClient);');
+    expect(dashboardApp).toContain('if (client !== activeClient) return;');
     expect(dashboardApp).toContain('renderCardSettingsPicker({ quiet: true });\n      renderCurrentList();');
     expect(dashboardApp).toContain('renderCardSettingsPicker({ quiet: true });');
     expect(dashboardApp).not.toContain('setDashboardLayoutStatus(copy.cardLayout.saved);');

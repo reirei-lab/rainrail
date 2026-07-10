@@ -515,7 +515,7 @@ describe('Rainrail dashboard API', () => {
     });
     operationalStore.saveDashboardLayout([
       { id: 'recent-events', cardId: 'core.recentEvents', x: 0, y: 0, columns: 4, rows: 2 },
-      { id: 'queue', cardId: 'plugin:github.queue', x: 4, y: 0, columns: 3, rows: 2 },
+      { id: 'queue', cardId: 'plugin:github.queue', x: 3, y: 1, columns: 3, rows: 2 },
       { id: 'missing', cardId: 'plugin:github.missing', x: 0, y: 2, columns: 3, rows: 2 },
     ]);
     const app = createTestApp({
