@@ -81,7 +81,7 @@ describe('package scripts used by pull request CI', () => {
       'vitest run scripts/seed-dashboard-demo-db.test.ts',
     );
     expect(packageJson.scripts['e2e:dashboard']).toBe(
-      'playwright test --config playwright.dashboard.config.ts',
+      'pnpm --filter www build && pnpm --filter @rainrail/cli build && playwright test --config playwright.dashboard.config.ts',
     );
     expect(e2eTsconfig.extends).toBe('./tsconfig.json');
     expect(e2eTsconfig.compilerOptions.lib).toEqual(['ESNext', 'DOM', 'DOM.Iterable']);
@@ -89,8 +89,7 @@ describe('package scripts used by pull request CI', () => {
     expect(e2eTsconfig.include).toContain('playwright.dashboard.config.ts');
     expect(packageJson.devDependencies['@playwright/test']).toMatch(/^\^/);
     expect(dashboardE2eConfig).toContain("testDir: './e2e/dashboard'");
-    expect(dashboardE2eConfig).toContain("command: 'pnpm demo:dashboard'");
-    expect(dashboardE2eConfig).toContain("url: 'http://127.0.0.1:8787/en/dashboard?demo=1'");
+    expect(dashboardE2eConfig).not.toContain('webServer');
     expect(dashboardE2eConfig).toContain("trace: 'on-first-retry'");
     expect(dashboardE2eConfig).toContain("screenshot: 'only-on-failure'");
     expect(dashboardE2eConfig).toContain("video: 'retain-on-failure'");

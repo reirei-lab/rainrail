@@ -1,7 +1,22 @@
 import { expect, test } from '@playwright/test';
 
+import { startDashboardDemoServerHarness } from '../../scripts/dashboard-demo-server-harness.mjs';
+
+let dashboardBaseUrl = '';
+let cleanupDashboardDemoServer: (() => Promise<void>) | undefined;
+
+test.beforeAll(async () => {
+  const harness = await startDashboardDemoServerHarness();
+  dashboardBaseUrl = harness.baseUrl;
+  cleanupDashboardDemoServer = harness.cleanup;
+});
+
+test.afterAll(async () => {
+  await cleanupDashboardDemoServer?.();
+});
+
 test('loads the seeded dashboard demo and navigates core records', async ({ page }) => {
-  await page.goto('/en/dashboard?demo=1');
+  await page.goto(`${dashboardBaseUrl}/en/dashboard?demo=1`);
 
   await expect(page.getByRole('heading', { level: 1, name: /Rainrail Operations/i })).toBeVisible();
   await expect(page.locator('[data-demo-indicator]')).toBeVisible();

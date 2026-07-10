@@ -11,16 +11,9 @@ export default defineConfig({
     ['html', { outputFolder: 'playwright-report/dashboard', open: 'never' }],
   ],
   use: {
-    baseURL: 'http://127.0.0.1:8787',
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',
-  },
-  webServer: {
-    command: 'pnpm demo:dashboard',
-    url: 'http://127.0.0.1:8787/en/dashboard?demo=1',
-    reuseExistingServer: !process.env.CI,
-    timeout: 120_000,
   },
   projects: [
     {

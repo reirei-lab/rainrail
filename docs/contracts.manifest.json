@@ -388,7 +388,8 @@
         "apps/www/src/lib/dashboard-client.ts",
         "apps/www/src/lib/dashboard-app.ts",
         "apps/www/src/lib/dashboard-content.ts",
-        "scripts/dashboard-demo-vrt-scenarios.mjs"
+        "scripts/dashboard-demo-vrt-scenarios.mjs",
+        "scripts/dashboard-demo-server-harness.mjs"
       ],
       "docs": [
         "docs/local-dashboard.md",
@@ -401,6 +402,7 @@
         "scripts/validate-dashboard-shell.test.mjs",
         "scripts/seed-dashboard-demo-db.test.ts",
         "e2e/dashboard/dashboard-smoke.spec.ts",
+        "scripts/dashboard-demo-server-harness.test.mjs",
         "packages/cli/src/commands.test.ts",
         "src/dashboard-api.test.ts"
       ],

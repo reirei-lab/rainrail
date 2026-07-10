@@ -128,11 +128,34 @@ Then run the focused dashboard E2E command from the repository root:
 pnpm e2e:dashboard
 ```
 
-The Playwright config starts `pnpm demo:dashboard` as its web server and opens
-`http://127.0.0.1:8787/en/dashboard?demo=1`, so no real GitHub, Cloudflare, or
-operator token is needed. Failure artifacts are written under
-`test-results/dashboard/`, and the HTML report is written under
-`playwright-report/dashboard/`.
+The command builds the product dashboard and CLI package, then runs Playwright
+against a disposable server from `startDashboardDemoServerHarness` in
+`scripts/dashboard-demo-server-harness.mjs`. The harness creates a fresh
+temporary directory and SQLite DB for every run, seeds it with
+`scripts/seed-dashboard-demo-db.mjs`, starts the built Rainrail CLI server on a
+random localhost port with the built `apps/www` dashboard assets, and returns
+`baseUrl` for Playwright. It fixes demo-mode environment variables and removes
+operational-store and legacy SSE bearer-token overrides from the spawned server
+environment so each run uses the seeded temporary SQLite DB. Always call
+`cleanup()` from test teardown so the server process, DB files, and temporary
+directory are removed. No real GitHub, Cloudflare, or operator token is needed.
+Failure artifacts are written under `test-results/dashboard/`, and the HTML
+report is written under `playwright-report/dashboard/`.
+
+```js
+import { startDashboardDemoServerHarness } from './scripts/dashboard-demo-server-harness.mjs';
+
+// Prepare once in the test job:
+// pnpm --filter www build
+// pnpm --filter @rainrail/cli exec tsc -p tsconfig.build.json
+
+const harness = await startDashboardDemoServerHarness();
+try {
+  await page.goto(`${harness.baseUrl}/en/dashboard?demo=1`);
+} finally {
+  await harness.cleanup();
+}
+```
 
 ## Dashboard cards
 
