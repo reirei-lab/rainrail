@@ -79,6 +79,7 @@ describe('product site information architecture', () => {
       'cloudflare-worker.md',
       'cloudflare-pages.md',
       'repo-test-coverage-matrix.md',
+      'codex-app-server',
     ]) {
       expect(docsIndex).toContain(entry);
     }
@@ -148,5 +149,33 @@ describe('product site information architecture', () => {
     expect(readme).toContain('rainrail version');
     expect(readme).toContain('rainrail update check');
     expect(docsIndex).toContain('CLI update check and version commands');
+  });
+
+  it('keeps Codex App Server runtime docs tied to setup and public examples', () => {
+    const manifest = JSON.parse(contractsManifest);
+    expect(manifest.contracts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'codex-app-server-client-transport',
+          docs: expect.arrayContaining([
+            'docs/plugin-runtime-contract.md',
+            'docs/project-local-layout.md',
+            'docs/cloudflare-worker.md',
+            'docs/examples/plugin-runtime.ts',
+            'apps/docs/src/content/docs/reference/plugin-runtime.md',
+            'apps/docs/src/content/docs/examples/plugin-runtime.md',
+          ]),
+        }),
+      ]),
+    );
+
+    for (const entry of [
+      'experimental な Codex App Server API',
+      'Codex CLI を使わないユーザー',
+      '`HOME` と `CODEX_HOME`',
+      'OpenClaw plugin は OpenClaw session',
+    ]) {
+      expect(pluginRuntimeContract).toContain(entry);
+    }
   });
 });

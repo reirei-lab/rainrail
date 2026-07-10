@@ -325,7 +325,7 @@ const english = {
           {
             title: 'Runtime provider',
             body:
-              'The adapter for starting or resuming agent runs in OpenClaw, devteam, Codex, or another execution backend without exposing runtime secrets to workflows.',
+              'The adapter for starting or resuming agent runs in OpenClaw, devteam, Codex App Server, or another execution backend without exposing runtime secrets to workflows.',
           },
           {
             title: 'Task and queue providers',
@@ -435,7 +435,7 @@ const english = {
           {
             title: '3. Agent run',
             body:
-              'A workflow plugin requests an agent run through the runtime provider, passing deterministic issue, branch, and session inputs.',
+              'A workflow plugin requests an agent run through the runtime provider, such as OpenClaw or the optional codex-app-server plugin, passing deterministic issue, branch, and session inputs.',
           },
           {
             title: '4. Pull request',
@@ -813,7 +813,7 @@ const japanese = {
           {
             title: 'Runtime provider',
             body:
-              'OpenClaw、devteam、Codex などの execution backend で agent run を開始または再開する adapter です。runtime secret は workflow に露出させません。',
+              'OpenClaw、devteam、Codex App Server などの execution backend で agent run を開始または再開する adapter です。runtime secret は workflow に露出させません。',
           },
           {
             title: 'Task and queue providers',
@@ -923,7 +923,7 @@ const japanese = {
           {
             title: '3. Agent run',
             body:
-              'workflow plugin が runtime provider に agent run を依頼し、deterministic な issue、branch、session input を渡します。',
+              'workflow plugin が OpenClaw や任意の codex-app-server plugin などの runtime provider に agent run を依頼し、deterministic な issue、branch、session input を渡します。',
           },
           {
             title: '4. Pull request',

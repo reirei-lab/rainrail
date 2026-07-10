@@ -231,6 +231,7 @@ describe('product site concepts, guides, and examples', () => {
       'Source bundle',
       'Workflow plugin',
       'Runtime provider',
+      'Codex App Server',
       'Bridge room',
     ]) {
       expect(siteContent).toContain(term);
@@ -287,11 +288,16 @@ describe('product site concepts, guides, and examples', () => {
       'cat rainrail.config.json',
       'rainrail openclaw help',
       'rainrail openclaw session test help',
+      'rainrail setup codex-app-server --yes',
+      'rainrail plugin codex-app-server doctor',
+      'rainrail plugin codex-app-server session test',
     ]) {
       expect(readme).toContain(command);
     }
 
     expect(readme).toContain('Node.js 20 or newer');
+    expect(readme).toContain('adds a separate `codex-app-server` runtime provider entry');
+    expect(readme).toContain('replace, or proxy the OpenClaw plugin');
     expect(siteContent).not.toContain('less install.sh');
     expect(siteContent).not.toContain('bash install.sh');
     expect(siteContent).not.toContain('Usage: rainrail github');
@@ -311,6 +317,7 @@ describe('product site concepts, guides, and examples', () => {
       'Manual or chat message',
       'Project queue',
       'agent run',
+      'codex-app-server plugin',
       'pull request',
       'review',
       'merge',

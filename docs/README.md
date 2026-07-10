@@ -59,4 +59,5 @@ to the public docs IA and to selected GitHub-only engineering notes.
 ## Examples
 
 - [Plugin runtime sample](examples/plugin-runtime.ts): compact source plugin
-  and workflow plugin sample that exercises the public runtime contract.
+  and workflow plugin sample that exercises the public runtime contract,
+  including the optional `codex-app-server` runtime provider config shape.

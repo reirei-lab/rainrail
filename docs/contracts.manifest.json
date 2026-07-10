@@ -296,7 +296,12 @@
         "src/codex-app-server/websocket-transport.ts"
       ],
       "docs": [
-        "docs/plugin-runtime-contract.md"
+        "docs/plugin-runtime-contract.md",
+        "docs/project-local-layout.md",
+        "docs/cloudflare-worker.md",
+        "docs/examples/plugin-runtime.ts",
+        "apps/docs/src/content/docs/reference/plugin-runtime.md",
+        "apps/docs/src/content/docs/examples/plugin-runtime.md"
       ],
       "tests": [
         "src/codex-app-server/client.test.ts",

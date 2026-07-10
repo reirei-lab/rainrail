@@ -110,7 +110,10 @@ remote daemon supervisor、pool scheduling は後続 issue の責務とする。
 Codex App Server runtime provider は `CodexAppServerRuntimeProviderOptions` から
 `createCodexAppServerRuntimeProvider()` を作り、低レベル helper として
 `startCodexAppServerRun()` も公開する。初期版では `1 task = 1 app-server process = 1 thread`
-として stdio transport だけを扱う。`startRun()` は capability gate の背後で
+として stdio transport だけを扱う。experimental な Codex App Server API に依存するため、
+Codex CLI を使わないユーザーはこの runtime provider plugin を install / setup しなくてよい。
+WebSocket / LAN remote transport と long-lived process pool は interface だけを先に固定し、
+運用で使う接続方式と pool scheduling は後続 issue の責務とする。`startRun()` は capability gate の背後で
 `codex app-server --listen stdio://` 相当を起動し、`initialize`、`thread/start`、
 `turn/start`、`turn/completed` を順に実行する。stdout/stderr は protocol transport とは
 別に private log file へ mirror し、run metadata には log path、stderr log path、pid、
@@ -128,6 +131,19 @@ status が欠落または未知でも `failed` とする。Codex turn summary �
 `Outcome: needs_human` / `Outcome: split_recommended` が取れた場合は runtime status に反映し、
 `Outcome: implemented` / `Outcome: updated_issue` は成功完了として扱う。その他の完了だけを
 `succeeded` として扱う。
+
+実プロセス起動時は `command`、`args`、`cwd`、`env`、`inheritEnv` を runtime provider
+config から渡す。`HOME` と `CODEX_HOME` は Codex auth / settings / session state を
+決めるため、プロジェクトや supervisor が既定 HOME と別の Codex profile を使う場合は
+runtime provider config に明示する。Rainrail は secret 値を log や audit metadata に
+保存しないが、Codex CLI 側の HOME / CODEX_HOME 配下には認証状態が存在し得るため、
+shared runner では専用 directory を使う。`codex-app-server` plugin の setup / doctor /
+session test は `codex --version`、`codex app-server --help`、`codex login status`、
+stdio smoke を確認するための CLI surface であり、OpenClaw runtime provider の代替として
+同じ `runtimeProviders` registry に追加される。OpenClaw plugin は OpenClaw session
+起動用、Codex App Server plugin は Codex CLI app-server 起動用で、片方がもう片方を
+install したり proxy したりしない。
+
 stuck turn は provider-level timeout で `timed_out` とし、実行中の caller
 `AbortSignal` は即座に `canceled` として扱い、どちらも app-server process を
 `close()` 経由で cleanup する。`close()` は `closeTimeoutMs` で上限を設け、stuck process
