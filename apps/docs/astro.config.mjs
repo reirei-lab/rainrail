@@ -40,6 +40,7 @@ export default defineConfig({
             { label: 'Overview', slug: 'guides' },
             { label: 'Add a source adapter', slug: 'guides/source-adapter' },
             { label: 'Add a workflow plugin', slug: 'guides/workflow-plugin' },
+            { label: 'Add dashboard cards', slug: 'guides/dashboard-cards' },
             { label: 'Run local delivery', slug: 'guides/local-delivery' },
           ],
         },

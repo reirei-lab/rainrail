@@ -107,7 +107,71 @@ API resource, and checks the VRT scenario manifest in
 `scripts/dashboard-demo-vrt-scenarios.mjs`. The manifest pins the dashboard tab
 states to capture later with Playwright: overview, retrying events, failed
 workflow runs, running task actions, source delivery status, blocked stale
-claims, and settings.
+claims, settings, default dashboard card layout, and the mobile card layout.
+Custom saved dashboard card layouts and plugin-card failure isolation are
+smoke-only checks today; they are covered by API and sandbox assertions until a
+browser runner can perform pre-capture setup steps.
+
+## Dashboard cards
+
+The dashboard card surface is driven by the same-origin card catalog and user
+layout API:
+
+- `GET /api/v1/dashboard/cards` returns Core and plugin card definitions with
+  availability.
+- `GET /api/v1/dashboard/layout` returns the default Core layout until an
+  operator saves a user layout.
+- `PUT /api/v1/dashboard/layout` saves a full user layout and requires an
+  operator or admin dashboard token.
+- `PATCH /api/v1/dashboard/layout/items/:itemId/config` saves settings for one
+  visible card without dropping hidden saved plugin cards. It also requires an
+  operator or admin dashboard token.
+
+The local `rainrail start` CLI catalog currently exposes
+`core.operationalTotals` as its Core card and uses it in the default local
+layout. The shared HTTP app contract also has tests for the broader Core card
+registry used by dashboard API consumers:
+`core.operationalTotals`, `core.eventInbox`, `core.workflowRuns`,
+`core.agentTasks`, `core.sources`, `core.queue`, `core.settings`,
+`core.operatorActions`, plus legacy saved-layout ids `core.overview` and
+`core.recentEvents`. Do not document a Core card as available from
+`rainrail start` until `packages/cli/src/index.ts` includes it in
+`localDashboardCardDefinitions`.
+
+Plugin cards use ids like `plugin:github.queue` and appear in the same card
+picker when the plugin is enabled and its declared read capabilities are
+available. A plugin card can be visible in the catalog as unavailable instead
+of disappearing. The catalog uses unavailable states for disabled plugins,
+missing capabilities, and entry resolution failures so an operator can see why
+a saved layout changed.
+
+The card picker groups cards by category and provider/plugin name. Adding a
+card creates a layout item with the card's default size. Saving the layout
+persists card ids, grid positions, size, and optional per-card `config` only.
+Dashboard card config must stay JSON-serializable and must not contain tokens,
+secrets, passwords, or credential-looking keys. The API rejects sensitive config
+keys before persistence.
+
+The sandbox host contract for plugin-card rendering is described in
+[plugin runtime contract](plugin-runtime-contract.md). The current local
+dashboard renders card catalog/layout metadata; it does not yet load plugin
+bundles into iframes. When an iframe renderer is wired, the sandbox descriptor
+must use `sandbox="allow-scripts"`, no `allow-same-origin`, no referrer, and
+only read-only bridge capabilities such as `dashboard:read` or `*:read`.
+Workflow capabilities such as `runtime:start`, merge, or secret access must not
+be exposed to the iframe bridge. If one plugin card bundle fails to load, the
+dashboard shell, Core cards, and other plugin cards should remain usable.
+
+The focused smoke/VRT baseline for dashboard cards is:
+
+```sh
+pnpm demo:dashboard:smoke
+```
+
+That check verifies the seeded SQLite API data, the default layout, a saved
+custom layout containing a plugin card through the shared HTTP app contract,
+sandbox load failure isolation, and the VRT capture manifest entries for
+directly reachable default and mobile card states.
 
 ## Auth scopes
 
