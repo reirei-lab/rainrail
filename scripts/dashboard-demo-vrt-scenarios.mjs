@@ -30,7 +30,7 @@ export const dashboardDemoVrtScenarios = Object.freeze([
   {
     id: 'events-handler-retry-detail',
     tab: 'events',
-    url: '/ja/dashboard?demo=1&tab=events&event=evt_demo_github_issue_272',
+    url: '/ja/dashboard?demo=1&tab=events&source=github&event=evt_demo_github_issue_272',
     captureHints: [
       'GitHub issue event',
       'handler retry count',

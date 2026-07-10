@@ -2325,13 +2325,22 @@ describe('Rainrail CLI built-in commands', () => {
         const cards = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/cards`);
         expect(cards.status).toBe(200);
         await expect(cards.json()).resolves.toMatchObject({
-          data: [{
-            definition: {
-              id: 'core.operationalTotals',
-              settingsSchema: { type: 'object' },
-            },
-            availability: { status: 'available' },
-          }],
+          data: expect.arrayContaining([
+            expect.objectContaining({
+              definition: expect.objectContaining({
+                id: 'core.operationalTotals',
+                settingsSchema: expect.objectContaining({ type: 'object' }),
+              }),
+              availability: { status: 'available' },
+            }),
+            expect.objectContaining({
+              definition: expect.objectContaining({
+                id: 'core.eventInbox',
+                settingsSchema: expect.objectContaining({ type: 'object' }),
+              }),
+              availability: { status: 'available' },
+            }),
+          ]),
         });
 
         const layout = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout`);
@@ -2341,7 +2350,10 @@ describe('Rainrail CLI built-in commands', () => {
             id: 'core.defaultLayout',
             source: 'default',
             updatedAt: null,
-            items: [{ id: 'operational-totals', cardId: 'core.operationalTotals' }],
+            items: expect.arrayContaining([
+              expect.objectContaining({ id: 'operational-totals', cardId: 'core.operationalTotals' }),
+              expect.objectContaining({ id: 'event-inbox', cardId: 'core.eventInbox' }),
+            ]),
           },
         });
 
@@ -2374,6 +2386,30 @@ describe('Rainrail CLI built-in commands', () => {
             source: 'user',
             updatedAt: expect.not.stringMatching(/^1970-01-01/u),
             items: [{ id: 'operational-totals', config: { density: 'compact' } }],
+          },
+        });
+
+        const sharedCatalogSizedLayoutSave = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout`, {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json', 'x-request-id': 'request-local-shared-catalog-layout' },
+          body: JSON.stringify({
+            dryRun: true,
+            items: [
+              { id: 'event-inbox', cardId: 'core.eventInbox', x: 0, y: 0, columns: 8, rows: 8 },
+              { id: 'workflow-runs', cardId: 'core.workflowRuns', x: 0, y: 8, columns: 4, rows: 6 },
+              { id: 'agent-tasks', cardId: 'core.agentTasks', x: 4, y: 8, columns: 4, rows: 6 },
+              { id: 'legacy-overview', cardId: 'core.overview', x: 8, y: 8, columns: 4, rows: 2 },
+              { id: 'legacy-recent-events', cardId: 'core.recentEvents', x: 8, y: 10, columns: 4, rows: 2 },
+            ],
+          }),
+        });
+        expect(sharedCatalogSizedLayoutSave.status).toBe(200);
+        await expect(sharedCatalogSizedLayoutSave.json()).resolves.toMatchObject({
+          data: {
+            action: 'dashboard_layout_update',
+            status: 'preview',
+            dryRun: true,
+            result: { itemCount: 5 },
           },
         });
 
@@ -2582,7 +2618,10 @@ describe('Rainrail CLI built-in commands', () => {
             id: 'core.defaultLayout',
             source: 'default',
             updatedAt: null,
-            items: [{ id: 'operational-totals' }],
+            items: expect.arrayContaining([
+              expect.objectContaining({ id: 'operational-totals' }),
+              expect.objectContaining({ id: 'event-inbox' }),
+            ]),
           },
         });
         const layoutBody = await (await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout`)).text();
@@ -2968,6 +3007,36 @@ describe('Rainrail CLI built-in commands', () => {
         encoding: 'utf8',
       });
       expect(seed.status).toBe(0);
+      withSqliteDatabase(databasePath, (database) => {
+        const row = database.prepare('SELECT * FROM operational_events WHERE id = ?')
+          .get('evt_demo_cloudflare_tail_001') as {
+            name: string;
+            source_json: string;
+            delivery_json: string;
+            subject_json: string;
+            payload_json: string;
+            raw_payload_reference_json: string;
+          };
+        const delivery = JSON.parse(row.delivery_json) as { id: string; receivedAt: string };
+        const rawPayloadReference = JSON.parse(row.raw_payload_reference_json) as { reference: string };
+        database.prepare(`
+          INSERT INTO operational_events (
+            id, name, source_json, delivery_json, subject_json, occurred_at, received_at,
+            payload_json, raw_payload_reference_json, links_json
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          'evt_demo_cloudflare_tail_002',
+          row.name,
+          row.source_json,
+          JSON.stringify({ ...delivery, id: 'cf-tail-demo-002', receivedAt: '2026-07-09T04:53:10.000Z' }),
+          row.subject_json,
+          '2026-07-09T04:53:02.000Z',
+          '2026-07-09T04:53:10.000Z',
+          row.payload_json,
+          JSON.stringify({ ...rawPayloadReference, reference: 'cloudflare://tails/cf-tail-demo-002' }),
+          JSON.stringify({ self: '/api/v1/events/evt_demo_cloudflare_tail_002' }),
+        );
+      });
 
       const result = await runRainrailCliAsync(['start', '--demo'], { cwd: projectRoot });
       try {
@@ -2979,7 +3048,7 @@ describe('Rainrail CLI built-in commands', () => {
         await expect(overview.json()).resolves.toMatchObject({
           data: {
             counts: {
-              events: 3,
+              events: 4,
               activityEvents: 4,
               agentTasks: 3,
               commandResults: 3,
@@ -3001,6 +3070,19 @@ describe('Rainrail CLI built-in commands', () => {
           const body = await response.json() as { data?: unknown[] };
           expect(body.data?.length, path).toBeGreaterThan(0);
         }
+
+        const sources = await fetch(`http://127.0.0.1:${port}/api/v1/sources?demo=1`);
+        await expect(sources.json()).resolves.toMatchObject({
+          data: expect.arrayContaining([
+            expect.objectContaining({
+              id: 'cloudflare-tail',
+              sourceType: 'cloudflare',
+              status: 'observed',
+              links: { self: '/api/v1/sources/cloudflare-tail' },
+              lastDelivery: expect.objectContaining({ id: 'evt_demo_cloudflare_tail_002' }),
+            }),
+          ]),
+        });
 
         const protectedOverview = await fetch(`http://127.0.0.1:${port}/api/v1/overview`);
         expect(protectedOverview.status).toBe(401);
@@ -4552,7 +4634,7 @@ describe('Rainrail CLI built-in commands', () => {
         serverStarter: () => ({ stop: () => undefined }),
       });
       expect(duplicateName.exitCode).toBe(1);
-      expect(duplicateName.stderr).toContain('config source names must be unique');
+      expect(duplicateName.stderr).toContain('config source name/sourceType pairs must be unique: github-local (github)');
     });
   });
 
@@ -4716,6 +4798,152 @@ describe('Rainrail CLI built-in commands', () => {
             type: 'source',
             lastDelivery: { id: 'local-event-000001' },
           },
+        });
+      } finally {
+        await closeTestServer(result);
+      }
+    });
+  });
+
+  it('keeps duplicate local source names visible with unique source row ids', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'duplicate-source-names');
+      const port = await getFreePort();
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        server: { host: '127.0.0.1', port },
+        sourceBundles: [{
+          type: 'eep-bridge',
+          name: 'local',
+          sources: [
+            {
+              type: 'github-webhook',
+              name: 'shared-local',
+              sourceType: 'github',
+              provider: 'github',
+              webhookSecret: 'secret',
+              endpoint: '/webhooks/github',
+            },
+            {
+              type: 'manual-chat',
+              name: 'shared-local',
+              sourceType: 'manual',
+              endpoint: '/manual',
+            },
+          ],
+        }],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+
+      const result = await runRainrailCliAsync(['start'], { cwd: projectRoot });
+      try {
+        expect(result.exitCode).toBe(0);
+        const body = '{}';
+        expect((await fetch(`http://127.0.0.1:${port}/webhooks/github`, {
+          method: 'POST',
+          headers: githubWebhookHeaders('secret', body),
+          body,
+        })).status).toBe(202);
+        expect((await fetch(`http://127.0.0.1:${port}/manual`, { method: 'POST', body })).status).toBe(202);
+
+        const sources = await fetch(`http://127.0.0.1:${port}/api/v1/sources`);
+        const sourcesBody = await sources.json() as {
+          data: Array<{ id: string; name: string; sourceType: string; links: { self: string }; lastDelivery?: { id: string } }>;
+        };
+        expect(sourcesBody.data).toEqual([
+          expect.objectContaining({
+            id: 'shared-local:0',
+            name: 'shared-local',
+            sourceType: 'github',
+            lastDelivery: expect.objectContaining({ id: 'local-event-000001' }),
+          }),
+          expect.objectContaining({
+            id: 'shared-local:1',
+            name: 'shared-local',
+            sourceType: 'manual',
+            lastDelivery: expect.objectContaining({ id: 'local-event-000002' }),
+          }),
+        ]);
+
+        const githubSources = await fetch(`http://127.0.0.1:${port}/api/v1/sources?filter[source]=github`);
+        await expect(githubSources.json()).resolves.toMatchObject({
+          data: [expect.objectContaining({ id: 'shared-local:0', sourceType: 'github' })],
+          page: { nextCursor: null },
+        });
+
+        const manualDetail = await fetch(`http://127.0.0.1:${port}${sourcesBody.data[1]?.links.self}`);
+        await expect(manualDetail.json()).resolves.toMatchObject({
+          data: {
+            id: 'shared-local:1',
+            sourceType: 'manual',
+            lastDelivery: { id: 'local-event-000002' },
+          },
+        });
+      } finally {
+        await closeTestServer(result);
+      }
+    });
+  });
+
+  it('limits local source last delivery lookups to the restored event snapshot', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'source-last-delivery-limit');
+      const port = await getFreePort();
+      const databasePath = join(projectRoot, '.rainrail', 'operational.sqlite');
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        server: { host: '127.0.0.1', port },
+        operationalStore: {
+          kind: 'sqlite',
+          databasePath,
+          eventLimit: 1,
+        },
+        sourceBundles: [{
+          type: 'eep-bridge',
+          name: 'local',
+          sources: [
+            {
+              type: 'github-webhook',
+              name: 'github-local',
+              sourceType: 'github',
+              provider: 'github',
+              webhookSecret: 'secret',
+              endpoint: '/webhooks/github',
+            },
+            {
+              type: 'manual-chat',
+              name: 'manual-local',
+              sourceType: 'manual',
+              endpoint: '/manual',
+            },
+          ],
+        }],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+
+      const result = await runRainrailCliAsync(['start'], { cwd: projectRoot });
+      try {
+        expect(result.exitCode).toBe(0);
+        const body = '{}';
+        expect((await fetch(`http://127.0.0.1:${port}/webhooks/github`, {
+          method: 'POST',
+          headers: githubWebhookHeaders('secret', body, { delivery: 'delivery-github' }),
+          body,
+        })).status).toBe(202);
+        expect((await fetch(`http://127.0.0.1:${port}/manual`, { method: 'POST', body })).status).toBe(202);
+
+        const sources = await fetch(`http://127.0.0.1:${port}/api/v1/sources`);
+        await expect(sources.json()).resolves.toMatchObject({
+          data: [
+            expect.not.objectContaining({ lastDelivery: expect.any(Object) }),
+            expect.objectContaining({
+              name: 'manual-local',
+              sourceType: 'manual',
+              lastDelivery: expect.objectContaining({ id: 'local-event-000002' }),
+            }),
+          ],
         });
       } finally {
         await closeTestServer(result);
