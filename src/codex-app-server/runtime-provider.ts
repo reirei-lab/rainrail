@@ -90,18 +90,24 @@ export function createCodexAppServerRuntimeProvider(options: CodexAppServerRunti
     name: 'codex',
     kind: 'runtime-provider',
     startRun: async (request, context) => startCodexAppServerRun(options, request, context),
-    resumeRun: async (request) => ({
-      id: request.attemptId,
-      provider: 'codex',
-      status: 'needs_human',
-      metadata: {
-        attemptId: request.attemptId,
-        taskId: request.task.id,
-        branchName: request.task.branchName,
-        resumeSupported: false,
-        error: 'Codex App Server runtime provider does not support resumeRun in the initial implementation',
-      },
-    }),
+    resumeRun: async (request, context) => {
+      if (!options.enabled) {
+        throw new Error('Codex App Server runtime provider is disabled');
+      }
+      throwIfAborted(context?.signal);
+      return {
+        id: request.attemptId,
+        provider: 'codex',
+        status: 'needs_human',
+        metadata: {
+          attemptId: request.attemptId,
+          taskId: request.task.id,
+          branchName: request.task.branchName,
+          resumeSupported: false,
+          error: 'Codex App Server runtime provider does not support resumeRun in the initial implementation',
+        },
+      };
+    },
   };
 }
 
@@ -416,6 +422,7 @@ async function waitForCodexTurn(
 }
 
 function runtimeStatusFromCodexTurn(event: CodexAppServerTurnCompletedEvent): RuntimeRunStatus {
+  if (event.turn.error !== undefined && event.turn.error !== null) return 'failed';
   const status = normalize(stringValue(event.turn.status));
   if (status === 'failed' || status === 'error') return 'failed';
   if (status === 'canceled' || status === 'cancelled' || status === 'interrupted') return 'canceled';

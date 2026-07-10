@@ -41,6 +41,19 @@ describe('createCodexAppServerRuntimeProvider', () => {
     expect(clientFactory).not.toHaveBeenCalled();
   });
 
+  it('keeps Codex App Server resume behind the enabled capability gate', async () => {
+    const provider = createCodexAppServerRuntimeProvider({
+      enabled: false,
+      command: 'codex',
+      logDirectory: temporaryDirectory(),
+      clientFactory: () => ({ client: new FakeCodexAppServerProtocolClient(), pid: 9315 }),
+    });
+
+    await expect(provider.resumeRun?.(runtimeResumeRequest())).rejects.toThrow(
+      'Codex App Server runtime provider is disabled',
+    );
+  });
+
   it('starts one app-server process, thread, and task turn with operational metadata', async () => {
     const client = new FakeCodexAppServerProtocolClient();
     client.threadResponse = { thread: { id: 'thread-315', sessionId: 'session-315' } };
@@ -123,6 +136,27 @@ describe('createCodexAppServerRuntimeProvider', () => {
       metadata: {
         completionStatus: turnStatus,
       },
+    });
+  });
+
+  it('marks completed turns with error payloads as failed even when status is missing', async () => {
+    const client = new FakeCodexAppServerProtocolClient();
+    client.completedTurn = {
+      threadId: 'thread-315',
+      turn: {
+        id: 'turn-315',
+        error: { message: 'tool execution failed' },
+      },
+    };
+    const provider = createCodexAppServerRuntimeProvider({
+      enabled: true,
+      command: 'codex',
+      logDirectory: temporaryDirectory(),
+      clientFactory: () => ({ client, pid: 9315 }),
+    });
+
+    await expect(provider.startRun(runtimeRequest())).resolves.toMatchObject({
+      status: 'failed',
     });
   });
 
@@ -491,19 +525,7 @@ describe('createCodexAppServerRuntimeProvider', () => {
       clientFactory: () => ({ client: new FakeCodexAppServerProtocolClient(), pid: 9315 }),
     });
 
-    await expect(provider.resumeRun?.({
-      run: { id: 'thread-315', provider: 'codex', status: 'running' },
-      task: {
-        id: 'agent_task_reirei-lab-rainrail_315',
-        title: 'Codex App Server RuntimeProvider',
-        agentSessionId: 'thread-315',
-        branchName: 'agent/reirei-lab-rainrail-315-codex-app-server-runtimeprovider',
-        logPath: '/tmp/thread-315.log',
-        resumeAttempts: [],
-      },
-      attemptId: 'attempt-1',
-      requestedBy: 'reirei-agent',
-    })).resolves.toMatchObject({
+    await expect(provider.resumeRun?.(runtimeResumeRequest())).resolves.toMatchObject({
       id: 'attempt-1',
       provider: 'codex',
       status: 'needs_human',
@@ -597,6 +619,22 @@ function runtimeRequest(overrides: { taskId?: string } = {}) {
         url: 'https://github.com/reirei-lab/rainrail/issues/315',
       },
     },
+  };
+}
+
+function runtimeResumeRequest() {
+  return {
+    run: { id: 'thread-315', provider: 'codex' as const, status: 'running' as const },
+    task: {
+      id: 'agent_task_reirei-lab-rainrail_315',
+      title: 'Codex App Server RuntimeProvider',
+      agentSessionId: 'thread-315',
+      branchName: 'agent/reirei-lab-rainrail-315-codex-app-server-runtimeprovider',
+      logPath: '/tmp/thread-315.log',
+      resumeAttempts: [],
+    },
+    attemptId: 'attempt-1',
+    requestedBy: 'reirei-agent',
   };
 }
 
