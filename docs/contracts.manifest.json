@@ -400,6 +400,7 @@
         "scripts/validate-dashboard-view.test.mjs",
         "scripts/validate-dashboard-shell.test.mjs",
         "scripts/seed-dashboard-demo-db.test.ts",
+        "e2e/dashboard/dashboard-smoke.spec.ts",
         "packages/cli/src/commands.test.ts",
         "src/dashboard-api.test.ts"
       ],

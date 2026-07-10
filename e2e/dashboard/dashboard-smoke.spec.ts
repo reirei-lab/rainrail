@@ -8,7 +8,7 @@ test('loads the seeded dashboard demo and navigates core records', async ({ page
   await expect(page.locator('[data-status-text]')).toContainText(/Live operational state/i);
   await expect(page.locator('[data-dashboard-stats] strong').first()).not.toHaveText('0');
 
-  await page.getByRole('button', { name: /Event Inbox/i }).click();
+  await page.locator('[data-dashboard-tab="events"]').click();
   await expect(page.locator('[data-dashboard-list] button').first()).toBeVisible();
   await page.locator('[data-dashboard-list] button').first().click();
   await expect(page.locator('[data-dashboard-detail]')).toContainText(/github|manual|cloudflare|system/i);

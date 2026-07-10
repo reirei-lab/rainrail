@@ -28,7 +28,7 @@
     "pages:smoke": "node scripts/smoke-cloudflare-pages.mjs",
     "release:cli": "node scripts/package-cli-release.mjs",
     "test": "vitest run scripts src packages",
-    "typecheck": "tsc --noEmit && pnpm --filter @rainrail/cli typecheck"
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.e2e.json --noEmit && pnpm --filter @rainrail/cli typecheck"
   },
   "devDependencies": {
     "@playwright/test": "^1.61.1",

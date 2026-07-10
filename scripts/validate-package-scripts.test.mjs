@@ -7,6 +7,9 @@ const packageJson = JSON.parse(
 const tsconfig = JSON.parse(
   readFileSync(new URL('../tsconfig.json', import.meta.url), 'utf8'),
 );
+const e2eTsconfig = JSON.parse(
+  readFileSync(new URL('../tsconfig.e2e.json', import.meta.url), 'utf8'),
+);
 const workspace = readFileSync(
   new URL('../pnpm-workspace.yaml', import.meta.url),
   'utf8',
@@ -50,7 +53,7 @@ describe('package scripts used by pull request CI', () => {
 
   it('typechecks JavaScript automation scripts through tsconfig', () => {
     expect(packageJson.scripts.typecheck).toBe(
-      'tsc --noEmit && pnpm --filter @rainrail/cli typecheck',
+      'tsc --noEmit && tsc -p tsconfig.e2e.json --noEmit && pnpm --filter @rainrail/cli typecheck',
     );
     expect(packageJson.scripts['docs:check']).toContain(
       'node scripts/check-docs-routes.mjs',
@@ -80,6 +83,10 @@ describe('package scripts used by pull request CI', () => {
     expect(packageJson.scripts['e2e:dashboard']).toBe(
       'playwright test --config playwright.dashboard.config.ts',
     );
+    expect(e2eTsconfig.extends).toBe('./tsconfig.json');
+    expect(e2eTsconfig.compilerOptions.lib).toEqual(['ESNext', 'DOM', 'DOM.Iterable']);
+    expect(e2eTsconfig.include).toContain('e2e/**/*.ts');
+    expect(e2eTsconfig.include).toContain('playwright.dashboard.config.ts');
     expect(packageJson.devDependencies['@playwright/test']).toMatch(/^\^/);
     expect(dashboardE2eConfig).toContain("testDir: './e2e/dashboard'");
     expect(dashboardE2eConfig).toContain("command: 'pnpm demo:dashboard'");
