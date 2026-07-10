@@ -15,7 +15,7 @@ import {
 } from 'node:fs';
 import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
-import { basename, dirname, extname, join, normalize, parse, resolve, sep } from 'node:path';
+import { basename, delimiter, dirname, extname, join, normalize, parse, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   OFFICIAL_PLUGIN_CATALOG,
@@ -189,6 +189,8 @@ export type CommandRunnerOptions = {
   readonly stdio: 'inherit' | 'pipe';
   readonly cwd?: string;
   readonly env?: Record<string, string | undefined>;
+  readonly input?: string;
+  readonly timeoutMs?: number;
 };
 
 export type CommandRunner = (
@@ -1520,6 +1522,10 @@ type CodexAppServerReadiness = {
   readonly login: CodexSimpleCheck;
 };
 
+type CodexAppServerSessionChecks = CodexAppServerReadiness & {
+  readonly session: CodexSimpleCheck;
+};
+
 type CodexAppServerReadinessOptions = {
   readonly command?: string;
   readonly home?: string;
@@ -1604,8 +1610,26 @@ function runCodexAppServerSessionTestCommand(
   }
 
   const readiness = checkCodexAppServerReadiness(config.config, environment);
-  const ok = config.config.ok && codexAppServerReadinessOk(readiness);
-  return formatCodexAppServerSessionResult(options, ok, readiness, config.config.ok ? undefined : config.config.error);
+  if (!config.config.ok || !codexAppServerReadinessOk(readiness)) {
+    return formatCodexAppServerSessionResult(
+      options,
+      false,
+      readiness,
+      config.config.ok ? undefined : config.config.error,
+    );
+  }
+  const session = checkCodexAppServerSessionSmoke(
+    readiness.binary.path ?? config.config.command ?? 'codex',
+    config.config,
+    project.project.root,
+    environment,
+  );
+  return formatCodexAppServerSessionResult(
+    options,
+    session.ok,
+    { ...readiness, session },
+    session.ok ? undefined : session.remediation,
+  );
 }
 
 function resolveProjectForCodexAppServerCommand(
@@ -1633,9 +1657,10 @@ function checkCodexAppServerReadiness(
   environment: RainrailCliEnvironment,
 ): CodexAppServerReadiness {
   const commandRunner = getCommandRunner(environment);
+  const fileSystem = getRainrailCliFileSystem(environment);
   const commandEnv = createCodexCommandEnvironment(readinessOptions, environment);
   const binary = readinessOptions.command === undefined
-    ? detectCodexBinary(commandRunner, commandEnv)
+    ? detectCodexBinary(commandRunner, commandEnv, fileSystem)
     : checkConfiguredCodexBinary(readinessOptions.command, commandRunner, commandEnv);
   const command = binary.path;
   if (!binary.ok || command === undefined) {
@@ -1674,17 +1699,72 @@ function checkCodexAppServerReadiness(
 function detectCodexBinary(
   commandRunner: CommandRunner,
   env: Record<string, string | undefined>,
+  fileSystem: RainrailCliFileSystem,
 ): CodexCommandCheck {
-  const detected = commandRunner('sh', ['-c', 'command -v codex'], { stdio: 'pipe', env });
-  const path = firstNonEmptyLine(toOutput(detected.stdout));
-  if ((detected.status ?? 1) !== 0 || path === undefined) {
+  const path = findCommandOnPath('codex', env, fileSystem) ?? detectCodexBinaryWithShell(commandRunner, env);
+  if (path === undefined) {
     return {
       ok: false,
-      stderr: toOutput(detected.stderr),
       remediation: 'Install the Codex CLI and make sure `codex` is on PATH.',
     };
   }
   return checkConfiguredCodexBinary(path, commandRunner, env);
+}
+
+function detectCodexBinaryWithShell(
+  commandRunner: CommandRunner,
+  env: Record<string, string | undefined>,
+): string | undefined {
+  const detected = process.platform === 'win32'
+    ? commandRunner('where.exe', ['codex'], { stdio: 'pipe', env })
+    : commandRunner('sh', ['-c', 'command -v codex'], { stdio: 'pipe', env });
+  return (detected.status ?? 1) === 0 ? firstNonEmptyLine(toOutput(detected.stdout)) : undefined;
+}
+
+function findCommandOnPath(
+  command: string,
+  env: Record<string, string | undefined>,
+  fileSystem: RainrailCliFileSystem,
+): string | undefined {
+  const pathValue = firstNonEmptyString(env.PATH) ?? firstNonEmptyString(env.Path);
+  if (pathValue === undefined) {
+    return undefined;
+  }
+  const pathSeparator = process.platform === 'win32' ? ';' : delimiter;
+  const candidateNames = commandCandidateNames(command, env);
+  for (const directory of pathValue.split(pathSeparator)) {
+    if (directory.length === 0) continue;
+    for (const candidateName of candidateNames) {
+      const candidate = join(directory, candidateName);
+      try {
+        if (fileSystem.statSync(candidate).isFile()) {
+          return candidate;
+        }
+      } catch {
+        // Keep searching PATH.
+      }
+    }
+  }
+  return undefined;
+}
+
+function commandCandidateNames(command: string, env: Record<string, string | undefined>): readonly string[] {
+  const names = new Set<string>([command]);
+  const pathExt = firstNonEmptyString(env.PATHEXT);
+  const extensions = process.platform === 'win32' || pathExt !== undefined
+    ? (pathExt ?? '.COM;.EXE;.BAT;.CMD')
+      .split(';')
+      .map((extension) => extension.trim())
+      .filter((extension) => extension.length > 0)
+    : [];
+  for (const extension of extensions) {
+    names.add(`${command}${extension.toLowerCase()}`);
+    names.add(`${command}${extension.toUpperCase()}`);
+  }
+  if (process.platform !== 'win32') {
+    names.add(`${command}.exe`);
+  }
+  return [...names];
 }
 
 function checkConfiguredCodexBinary(
@@ -1722,6 +1802,128 @@ function runCodexCheck(
   };
 }
 
+function checkCodexAppServerSessionSmoke(
+  command: string,
+  readinessOptions: CodexAppServerReadinessOptions,
+  cwd: string,
+  environment: RainrailCliEnvironment,
+): CodexSimpleCheck {
+  const commandRunner = getCommandRunner(environment);
+  const env = createCodexCommandEnvironment(readinessOptions, environment);
+  const result = commandRunner(command, ['app-server', '--listen', 'stdio://'], {
+    stdio: 'pipe',
+    cwd,
+    env,
+    input: formatCodexAppServerSessionSmokeInput(cwd),
+    timeoutMs: 15_000,
+  });
+  const stdout = stripTrailingNewline(toOutput(result.stdout));
+  const stderr = stripTrailingNewline(toOutput(result.stderr));
+  if ((result.status ?? 1) !== 0) {
+    return {
+      ok: false,
+      stdout,
+      stderr,
+      remediation: stderr.length > 0
+        ? stderr
+        : 'Codex App Server session smoke check failed before completing initialize and thread/start.',
+    };
+  }
+  const frames = parseCodexAppServerJsonLines(stdout);
+  if (frames === undefined) {
+    return {
+      ok: false,
+      stdout,
+      stderr,
+      remediation: 'Codex App Server session smoke check returned invalid JSON-RPC output.',
+    };
+  }
+  const initialize = findCodexAppServerResponseFrame(frames, 1);
+  if (!codexAppServerResponseOk(initialize)) {
+    return {
+      ok: false,
+      stdout,
+      stderr,
+      remediation: 'Codex App Server session smoke check did not receive a successful initialize response.',
+    };
+  }
+  const thread = findCodexAppServerResponseFrame(frames, 2);
+  if (!codexAppServerThreadStartResponseOk(thread)) {
+    return {
+      ok: false,
+      stdout,
+      stderr,
+      remediation: 'Codex App Server session smoke check did not receive a successful thread/start response.',
+    };
+  }
+  return { ok: true, stdout, stderr };
+}
+
+function formatCodexAppServerSessionSmokeInput(cwd: string): string {
+  return [
+    {
+      id: 1,
+      method: 'initialize',
+      params: {
+        clientInfo: {
+          name: 'rainrail-cli',
+          title: 'Rainrail CLI',
+          version: '0.0.0',
+        },
+        capabilities: null,
+      },
+    },
+    { method: 'initialized' },
+    {
+      id: 2,
+      method: 'thread/start',
+      params: {
+        cwd,
+        ephemeral: true,
+        approvalPolicy: 'never',
+        sandbox: 'readOnly',
+      },
+    },
+  ].map((frame) => JSON.stringify(frame)).join('\n') + '\n';
+}
+
+function parseCodexAppServerJsonLines(stdout: string): readonly Record<string, unknown>[] | undefined {
+  const frames: Record<string, unknown>[] = [];
+  for (const line of stdout.split(/\r?\n/u)) {
+    const trimmed = line.trim();
+    if (trimmed.length === 0) continue;
+    try {
+      const value = JSON.parse(trimmed) as unknown;
+      if (!isJsonRecord(value)) {
+        return undefined;
+      }
+      frames.push(value);
+    } catch {
+      return undefined;
+    }
+  }
+  return frames;
+}
+
+function findCodexAppServerResponseFrame(
+  frames: readonly Record<string, unknown>[],
+  id: number,
+): Record<string, unknown> | undefined {
+  return frames.find((frame) => frame.id === id);
+}
+
+function codexAppServerResponseOk(frame: Record<string, unknown> | undefined): boolean {
+  return frame !== undefined && frame.error === undefined && frame.result !== undefined;
+}
+
+function codexAppServerThreadStartResponseOk(frame: Record<string, unknown> | undefined): boolean {
+  if (frame === undefined || !codexAppServerResponseOk(frame) || !isJsonRecord(frame.result)) {
+    return false;
+  }
+  const result = frame.result;
+  return isJsonRecord(result.thread) && firstNonEmptyString(result.thread.id) !== undefined;
+}
+
 function createCodexCommandEnvironment(
   readinessOptions: CodexAppServerReadinessOptions,
   environment: RainrailCliEnvironment,
@@ -1754,7 +1956,11 @@ function writeCodexAppServerRuntimeConfig(
     );
   }
   const runtimeProviders = rawRuntimeProviders ?? {};
-  const providerKey = findCodexAppServerRuntimeProviderKey(runtimeProviders) ?? codexAppServerRuntimeProviderKey;
+  const providerKeys = findCodexAppServerRuntimeProviderKeys(runtimeProviders);
+  if (providerKeys.length > 1) {
+    throw new Error('config.runtimeProviders contains duplicate runtime "codex-app-server"');
+  }
+  const providerKey = providerKeys[0] ?? codexAppServerRuntimeProviderKey;
   const previous = isJsonRecord(runtimeProviders[providerKey])
     ? runtimeProviders[providerKey]
     : {};
@@ -1791,7 +1997,11 @@ function readCodexAppServerRuntimeConfig(
     if (runtimeProviders === undefined) {
       return { error: 'config.runtimeProviders.codexAppServer is not configured' };
     }
-    const providerKey = findCodexAppServerRuntimeProviderKey(runtimeProviders) ?? codexAppServerRuntimeProviderKey;
+    const providerKeys = findCodexAppServerRuntimeProviderKeys(runtimeProviders);
+    if (providerKeys.length > 1) {
+      return { error: 'config.runtimeProviders contains duplicate runtime "codex-app-server"' };
+    }
+    const providerKey = providerKeys[0] ?? codexAppServerRuntimeProviderKey;
     const rawProvider = runtimeProviders[providerKey];
     if (!isJsonRecord(rawProvider)) {
       return { error: 'config.runtimeProviders.codexAppServer is not configured' };
@@ -1827,10 +2037,10 @@ function readExpandedRuntimeProvidersObject(
   }
 }
 
-function findCodexAppServerRuntimeProviderKey(runtimeProviders: Record<string, unknown>): string | undefined {
-  return Object.entries(runtimeProviders).find(([, provider]) =>
+function findCodexAppServerRuntimeProviderKeys(runtimeProviders: Record<string, unknown>): readonly string[] {
+  return Object.entries(runtimeProviders).filter(([, provider]) =>
     isJsonRecord(provider) && provider.runtime === codexAppServerRuntimeId
-  )?.[0];
+  ).map(([key]) => key);
 }
 
 function readRawRuntimeProvidersObject(raw: string): Record<string, unknown> | undefined {
@@ -1987,7 +2197,7 @@ function formatCodexAppServerDoctorResult(
 function formatCodexAppServerSessionResult(
   options: SharedOptions,
   ok: boolean,
-  readiness: CodexAppServerReadiness | undefined,
+  readiness: CodexAppServerReadiness | CodexAppServerSessionChecks | undefined,
   error?: string,
 ): RainrailCliResult {
   if (options.json) {
@@ -2049,7 +2259,9 @@ function getCommandRunner(environment: RainrailCliEnvironment): CommandRunner {
         cwd: commandOptions.cwd,
         encoding: 'utf8',
         env: commandOptions.env,
+        input: commandOptions.input,
         stdio: commandOptions.stdio,
+        timeout: commandOptions.timeoutMs,
       }));
 }
 
