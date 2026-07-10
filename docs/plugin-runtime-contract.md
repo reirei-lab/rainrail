@@ -666,10 +666,51 @@ dispatcher の結果返却も止めない。audit sink が未設定の場合、d
 
 Rainrail の config は provider 境界ごとに分ける。`sources` は GitHub webhook
 などの event input、`taskProviders.github` は GitHub API 用の auth、
-`runtimeProviders.openclaw` は agent runtime 起動設定を持つ。`sourceBundles` は
-EEP Bridge bundle、GitHub webhook、Cloudflare tail、manual/chat source などの
-組み立てを明示する。bundle source は `provider` と `runtime` に既知 provider 名を
-参照として持ち、Core app / Worker は config からどの intake adapter を登録するか追える。
+`runtimeProviders` は agent runtime 起動設定または plugin runtime 定義を持つ。
+既存互換のため `runtimeProviders.openclaw` は省略時も default 設定として作られ、
+bundle source は引き続き `runtime: "openclaw"` で参照できる。
+`sourceBundles` は EEP Bridge bundle、GitHub webhook、Cloudflare tail、
+manual/chat source などの組み立てを明示する。bundle source は `provider` と
+`runtime` に既知 provider 名または plugin runtime id を参照として持ち、
+Core app / Worker は config からどの intake adapter を登録するか追える。
+
+plugin runtime provider は `runtimeProviders.<canonicalKey>` に `type: "plugin"`、
+`runtime`、`plugin`、任意の `executor` を持つ。`canonicalKey` は config 内の
+管理名で、source bundle から参照する値は `runtime` の文字列である。たとえば
+Codex App Server runtime を追加する場合は `runtimeProviders.codexAppServer.runtime`
+を `codex-app-server` にし、bundle source は `runtime: "codex-app-server"` を
+指定する。`sourceBundles[].sources[].runtime` が `openclaw` でも登録済み plugin
+runtime id でもない場合、config parse は明確な error で拒否する。同じ runtime id を
+複数 provider が宣言することも拒否する。
+
+```json
+{
+  "sourceBundles": [
+    {
+      "type": "eep-bridge",
+      "name": "plugin-ingress",
+      "sources": [
+        {
+          "type": "manual-chat",
+          "name": "codex-chat",
+          "sourceType": "chat",
+          "runtime": "codex-app-server"
+        }
+      ]
+    }
+  ],
+  "runtimeProviders": {
+    "codexAppServer": {
+      "type": "plugin",
+      "enabled": true,
+      "runtime": "codex-app-server",
+      "plugin": "@rainrail/codex-app-server-runtime",
+      "executor": "codex-app-server"
+    }
+  }
+}
+```
+
 環境変数は `${NAME}` 形式で JSON parse 前に展開し、値は JSON string content として
 エスケープする。secret 値そのものではなく、運用では環境変数や secret 名を
 config に渡す。Worker の `RAINRAIL_CONFIG_JSON` では `webhookSecret` に secret 名を
