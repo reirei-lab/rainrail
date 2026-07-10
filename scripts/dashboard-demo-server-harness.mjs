@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -9,6 +9,16 @@ import { seedDashboardDemoDatabase } from './seed-dashboard-demo-db.mjs';
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const defaultCliBinPath = resolve(repositoryRoot, 'packages', 'cli', 'dist', 'bin', 'rainrail.js');
+const defaultDashboardAssetRoot = resolve(repositoryRoot, 'apps', 'www', 'dist');
+const dashboardEnvOverrides = {
+  RAINRAIL_DASHBOARD_DEMO: '1',
+};
+const dashboardEnvDeletes = [
+  'RAINRAIL_OPERATIONAL_STORE',
+  'RAINRAIL_OPERATIONAL_DB',
+  'RAINRAIL_OPERATIONAL_EVENT_LIMIT',
+  'SSE_BEARER_TOKEN',
+];
 
 /**
  * Starts a disposable Rainrail dashboard demo server for E2E tests.
@@ -19,27 +29,29 @@ const defaultCliBinPath = resolve(repositoryRoot, 'packages', 'cli', 'dist', 'bi
  *
  * @param {{
  *   cliBinPath?: string;
+ *   dashboardAssetRoot?: string;
+ *   env?: Record<string, string | undefined>;
  *   host?: string;
  *   timeoutMs?: number;
  * }} [options]
  */
 export async function startDashboardDemoServerHarness(options = {}) {
-  const host = options.host ?? '127.0.0.1';
+  const host = normalizeBindHost(options.host ?? '127.0.0.1');
   const timeoutMs = options.timeoutMs ?? 10_000;
   const cliBinPath = options.cliBinPath ?? defaultCliBinPath;
+  const dashboardAssetRoot = options.dashboardAssetRoot ?? defaultDashboardAssetRoot;
   if (!existsSync(cliBinPath)) {
     throw new Error(`Rainrail CLI build is missing at ${cliBinPath}; run pnpm --filter @rainrail/cli exec tsc -p tsconfig.build.json first.`);
   }
+  assertDashboardAssets(dashboardAssetRoot);
 
   const root = mkdtempSync(join(tmpdir(), 'rainrail-dashboard-demo-'));
   const databasePath = join(root, 'dashboard-demo.sqlite');
   const configPath = join(root, 'rainrail.config.json');
-  const dashboardAssetRoot = join(root, 'dashboard-assets');
   const port = await allocateLocalPort(host);
-  const baseUrl = `http://${host}:${port}`;
+  const baseUrl = formatDashboardDemoBaseUrl(host, port);
 
   seedDashboardDemoDatabase({ databasePath });
-  writeDemoDashboardAssets(dashboardAssetRoot);
   writeDemoConfig(configPath, { databasePath, host, port });
 
   const child = spawn(process.execPath, [
@@ -54,11 +66,7 @@ export async function startDashboardDemoServerHarness(options = {}) {
     String(port),
   ], {
     cwd: repositoryRoot,
-    env: {
-      ...process.env,
-      RAINRAIL_DASHBOARD_DEMO: '1',
-      RAINRAIL_DASHBOARD_DIST_DIR: dashboardAssetRoot,
-    },
+    env: dashboardDemoServerEnv(options.env ?? process.env, dashboardAssetRoot),
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
@@ -95,9 +103,60 @@ export async function startDashboardDemoServerHarness(options = {}) {
     root,
     databasePath,
     configPath,
+    dashboardAssetRoot,
     process: child,
     cleanup,
   };
+}
+
+/**
+ * @param {string} host
+ * @param {number} port
+ */
+export function formatDashboardDemoBaseUrl(host, port) {
+  return `http://${formatUrlHost(host)}:${port}`;
+}
+
+/**
+ * @param {string} host
+ */
+function formatUrlHost(host) {
+  if (host.startsWith('[') && host.endsWith(']')) return host;
+  return host.includes(':') ? `[${host}]` : host;
+}
+
+/**
+ * @param {string} host
+ */
+function normalizeBindHost(host) {
+  return host.startsWith('[') && host.endsWith(']') ? host.slice(1, -1) : host;
+}
+
+/**
+ * @param {Record<string, string | undefined>} sourceEnv
+ * @param {string} dashboardAssetRoot
+ */
+function dashboardDemoServerEnv(sourceEnv, dashboardAssetRoot) {
+  /** @type {Record<string, string | undefined>} */
+  const env = {
+    ...sourceEnv,
+    ...dashboardEnvOverrides,
+    RAINRAIL_DASHBOARD_DIST_DIR: dashboardAssetRoot,
+  };
+  for (const key of dashboardEnvDeletes) {
+    delete env[key];
+  }
+  return env;
+}
+
+/**
+ * @param {string} dashboardAssetRoot
+ */
+function assertDashboardAssets(dashboardAssetRoot) {
+  const dashboardIndex = join(dashboardAssetRoot, 'en', 'dashboard', 'index.html');
+  if (!existsSync(dashboardIndex)) {
+    throw new Error(`Rainrail dashboard assets are missing at ${dashboardAssetRoot}; run pnpm --filter www build first.`);
+  }
 }
 
 /**
@@ -112,7 +171,18 @@ function writeDemoConfig(configPath, options) {
       databasePath: options.databasePath,
       eventLimit: 250,
     },
-    sourceBundles: [],
+    sourceBundles: [{
+      type: 'eep-bridge',
+      name: 'demo-eep',
+      sources: [{
+        type: 'github-webhook',
+        name: 'github-webhook',
+        sourceType: 'github',
+        provider: 'github',
+        webhookSecret: 'demo-webhook-secret',
+        endpoint: '/webhooks/github',
+      }],
+    }],
     sources: [
       {
         type: 'manual-chat',
@@ -124,27 +194,6 @@ function writeDemoConfig(configPath, options) {
     taskProviders: {},
     runtimeProviders: {},
   }, null, 2)}\n`, { mode: 0o600 });
-}
-
-/**
- * @param {string} assetRoot
- */
-function writeDemoDashboardAssets(assetRoot) {
-  const html = [
-    '<!doctype html>',
-    '<html lang="en">',
-    '<head><meta charset="utf-8"><title>Rainrail Dashboard Demo</title></head>',
-    '<body data-api-base-url="" data-auth-required="false">',
-    '<main id="dashboard-root">Rainrail Dashboard Demo</main>',
-    '</body>',
-    '</html>',
-    '',
-  ].join('\n');
-  for (const locale of ['en', 'ja']) {
-    const directory = join(assetRoot, locale, 'dashboard');
-    mkdirSync(directory, { recursive: true });
-    writeFileSync(join(directory, 'index.html'), html, { mode: 0o600 });
-  }
 }
 
 /**
