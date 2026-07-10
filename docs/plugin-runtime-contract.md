@@ -40,7 +40,10 @@ PR lifecycle / routing / GitHub helper の部分的な公開 export inventory �
 Codex App Server protocol client は protocol parsing と transport implementation を分ける。
 `CodexAppServerTransport` は `connect()`、`close()`、`send(frame)`、
 `onFrame()`、`onError()`、`onClose()` だけを持つ小さい境界で、client は
-`CodexAppServerFrame` の request/response/notification をこの境界越しに扱う。
+`CodexAppServerFrame` の request/response/notification をこの境界越しに扱う。wire
+format は `codex app-server generate-ts` の `ClientRequest` / `ServerNotification` と
+実 stdio probe に合わせ、request は `id` と `method`、response は `id` と
+`result` または `error`、notification は `method` と任意の `params` を持つ JSON line とする。
 `createCodexAppServerClient` は `CodexAppServerClientOptions` の injected transport だけに
 依存し、`CodexAppServerClient` として `request()`、`notify()`、
 `onNotification()` を公開する。request id は client が割り当て、
@@ -61,6 +64,22 @@ transport error として通知し、後続の valid frame は処理を続ける
 `close()` は child process に終了シグナルを送り、stdio drain 後の child `close` event を
 待ってから transport close を通知する。child `exit` event だけでは stdout/stderr drain が
 完了したとは扱わない。
+
+runtime provider から直接 protocol method 名や event shape を扱わないよう、
+`createCodexAppServerProtocolClient` は `CodexAppServerProtocolClientOptions` から
+`CodexAppServerProtocolClient` を作り、`initialize`、`thread/start`、`turn/start` の
+最小 wrapper と `turn/completed` 待機、`item/agentMessage/delta` 購読を公開する。
+wrapper の型は `CodexAppServerClientInfo`、`CodexAppServerInitializeParams`、
+`CodexAppServerInitializeResponse`、`CodexAppServerThreadStartParams`、
+`CodexAppServerThreadSummary`、`CodexAppServerThreadStartResponse`、
+`CodexAppServerTextInput`、`CodexAppServerTurnInput`、
+`CodexAppServerTurnStartParams`、`CodexAppServerTurnSummary`、
+`CodexAppServerTurnStartResponse`、`CodexAppServerTurnWaitTarget`、
+`CodexAppServerTurnCompletedEvent`、`CodexAppServerAssistantDeltaEvent` などの固定された
+最小型とし、生成 protocol 全体は vendoring しない。request timeout と transport close は
+待機中の turn completion を reject する。実 Codex CLI との非破壊 smoke は
+`RAINRAIL_CODEX_APP_SERVER_SMOKE=1` のときだけ `src/codex-app-server/smoke.test.ts` で
+ephemeral thread / read-only sandbox として実行する。
 
 LAN remote 用の境界は `WebSocketCodexAppServerTransportConfig` で先に固定する。
 現時点では `type: "websocket"`、`endpoint`、任意の `headers`、`tokenEnv`、

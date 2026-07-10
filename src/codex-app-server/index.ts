@@ -24,3 +24,24 @@ export type {
 export type {
   WebSocketCodexAppServerTransportConfig,
 } from './websocket-transport.js';
+export {
+  createCodexAppServerProtocolClient,
+} from './protocol-client.js';
+export type {
+  CodexAppServerAssistantDeltaEvent,
+  CodexAppServerClientInfo,
+  CodexAppServerInitializeParams,
+  CodexAppServerInitializeResponse,
+  CodexAppServerProtocolClient,
+  CodexAppServerProtocolClientOptions,
+  CodexAppServerTextInput,
+  CodexAppServerThreadStartParams,
+  CodexAppServerThreadStartResponse,
+  CodexAppServerThreadSummary,
+  CodexAppServerTurnCompletedEvent,
+  CodexAppServerTurnInput,
+  CodexAppServerTurnStartParams,
+  CodexAppServerTurnStartResponse,
+  CodexAppServerTurnSummary,
+  CodexAppServerTurnWaitTarget,
+} from './protocol-client.js';

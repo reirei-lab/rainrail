@@ -1,7 +1,6 @@
 export type CodexAppServerFrameId = string | number;
 
 export interface CodexAppServerRequestFrame {
-  type: 'request';
   id: CodexAppServerFrameId;
   method: string;
   params?: unknown;
@@ -14,14 +13,12 @@ export interface CodexAppServerResponseError {
 }
 
 export interface CodexAppServerResponseFrame {
-  type: 'response';
   id: CodexAppServerFrameId;
   result?: unknown;
   error?: CodexAppServerResponseError;
 }
 
 export interface CodexAppServerNotificationFrame {
-  type: 'notification';
   method: string;
   params?: unknown;
 }
@@ -120,7 +117,7 @@ class DefaultCodexAppServerClient implements CodexAppServerClient {
 
   request(method: string, params?: unknown): Promise<unknown> {
     const id = this.#nextRequestId++;
-    const frame: CodexAppServerRequestFrame = { id, type: 'request', method };
+    const frame: CodexAppServerRequestFrame = { id, method };
     if (params !== undefined) frame.params = params;
 
     let pendingRequest: PendingRequest | undefined;
@@ -143,7 +140,7 @@ class DefaultCodexAppServerClient implements CodexAppServerClient {
   }
 
   async notify(method: string, params?: unknown): Promise<void> {
-    const frame: CodexAppServerNotificationFrame = { type: 'notification', method };
+    const frame: CodexAppServerNotificationFrame = { method };
     if (params !== undefined) frame.params = params;
     await this.#transport.send(frame);
   }
@@ -170,12 +167,12 @@ class DefaultCodexAppServerClient implements CodexAppServerClient {
   }
 
   #handleFrame(frame: CodexAppServerFrame): void {
-    if (frame.type === 'notification') {
+    if (isNotificationFrame(frame)) {
       for (const handler of this.#notificationHandlers) handler(frame);
       return;
     }
 
-    if (frame.type !== 'response') {
+    if (!isResponseFrame(frame)) {
       return;
     }
 
@@ -221,4 +218,12 @@ export class CodexAppServerProtocolError extends Error {
 
 function errorFromUnknown(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
+}
+
+function isNotificationFrame(frame: CodexAppServerFrame): frame is CodexAppServerNotificationFrame {
+  return !('id' in frame) && typeof frame.method === 'string';
+}
+
+function isResponseFrame(frame: CodexAppServerFrame): frame is CodexAppServerResponseFrame {
+  return 'id' in frame && !('method' in frame);
 }

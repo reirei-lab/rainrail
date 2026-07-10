@@ -261,18 +261,18 @@ function writeLine(stream: Writable, line: string): Promise<void> {
 }
 
 function isCodexAppServerFrame(value: unknown): value is CodexAppServerFrame {
-  if (!isRecord(value) || typeof value.type !== 'string') {
+  if (!isRecord(value)) {
     return false;
   }
-  if (value.type === 'request') {
+  if ('id' in value && 'method' in value) {
     return isFrameId(value.id) && typeof value.method === 'string';
   }
-  if (value.type === 'response') {
+  if ('id' in value) {
     if (!isFrameId(value.id)) return false;
     if (value.error === undefined) return true;
     return isRecord(value.error) && typeof value.error.code === 'string' && typeof value.error.message === 'string';
   }
-  if (value.type === 'notification') {
+  if ('method' in value) {
     return typeof value.method === 'string';
   }
   return false;

@@ -45,7 +45,6 @@ describe('stdio Codex App Server transport', () => {
     });
     const frame: CodexAppServerFrame = {
       id: 1,
-      type: 'request',
       method: 'session.start',
       params: { repository: 'reirei-lab/rainrail' },
     };
@@ -104,19 +103,17 @@ describe('stdio Codex App Server transport', () => {
     transport.onFrame((frame) => frames.push(frame));
     await transport.connect();
 
-    stdout.write('{"type":"notification","method":"session.');
-    stdout.write('output","params":{"text":"one"}}\n{"id":1,"type":"response","result":');
+    stdout.write('{"method":"session.');
+    stdout.write('output","params":{"text":"one"}}\n{"id":1,"result":');
     stdout.write('{"ok":true}}\n');
 
     expect(frames).toEqual([
       {
-        type: 'notification',
         method: 'session.output',
         params: { text: 'one' },
       },
       {
         id: 1,
-        type: 'response',
         result: { ok: true },
       },
     ]);
@@ -136,7 +133,7 @@ describe('stdio Codex App Server transport', () => {
     const { spawnProcess, stdout } = createChildProcessFixture();
     const transport = createStdioCodexAppServerTransport({ command: 'codex-app-server', spawnProcess });
     const frames: CodexAppServerFrame[] = [];
-    const line = Buffer.from('{"type":"notification","method":"session.output","params":{"text":"こんにちは"}}\n');
+    const line = Buffer.from('{"method":"session.output","params":{"text":"こんにちは"}}\n');
     const splitInsideMultibyteCharacter = line.indexOf(Buffer.from('ん')) + 1;
 
     transport.onFrame((frame) => frames.push(frame));
@@ -146,7 +143,6 @@ describe('stdio Codex App Server transport', () => {
 
     expect(frames).toEqual([
       {
-        type: 'notification',
         method: 'session.output',
         params: { text: 'こんにちは' },
       },
@@ -164,10 +160,10 @@ describe('stdio Codex App Server transport', () => {
     await transport.connect();
 
     stdout.write('{not json}\n');
-    stdout.write('{"type":"notification","method":"session.output"}\n');
+    stdout.write('{"method":"session.output"}\n');
 
     expect(errors).toEqual(['Failed to parse Codex App Server stdio frame']);
-    expect(frames).toEqual([{ type: 'notification', method: 'session.output' }]);
+    expect(frames).toEqual([{ method: 'session.output' }]);
   });
 
   it('emits close when the child process exits', async () => {
@@ -192,10 +188,10 @@ describe('stdio Codex App Server transport', () => {
     transport.onFrame((frame) => frames.push(frame));
     await transport.connect();
     child.emit('exit', 0, null);
-    stdout.write('{"type":"notification","method":"session.complete"}\n');
+    stdout.write('{"method":"session.complete"}\n');
 
     expect(close).not.toHaveBeenCalled();
-    expect(frames).toEqual([{ type: 'notification', method: 'session.complete' }]);
+    expect(frames).toEqual([{ method: 'session.complete' }]);
 
     child.emit('close', 0, null);
 
@@ -244,10 +240,10 @@ describe('stdio Codex App Server transport', () => {
     close.mockClear();
 
     first.child.emit('exit', 0, null);
-    await transport.send({ type: 'notification', method: 'session.ping' });
+    await transport.send({ method: 'session.ping' });
 
     expect(close).not.toHaveBeenCalled();
-    expect(second.stdin.writes).toEqual(['{"type":"notification","method":"session.ping"}\n']);
+    expect(second.stdin.writes).toEqual(['{"method":"session.ping"}\n']);
   });
 
   it('ignores stdout flushed by a previous child after reconnecting', async () => {
@@ -268,12 +264,12 @@ describe('stdio Codex App Server transport', () => {
     await closePromise;
     await transport.connect();
 
-    first.stdout.write('{"type":"notification","method":"stale.output"}\n');
-    first.stdout.write('{"type":"notification","method":"partial"');
-    second.stdout.write('{"type":"notification","method":"session.output"}\n');
+    first.stdout.write('{"method":"stale.output"}\n');
+    first.stdout.write('{"method":"partial"');
+    second.stdout.write('{"method":"session.output"}\n');
 
     expect(errors).toEqual([]);
-    expect(frames).toEqual([{ type: 'notification', method: 'session.output' }]);
+    expect(frames).toEqual([{ method: 'session.output' }]);
   });
 
   it('ignores errors emitted by a previous child after reconnecting', async () => {
@@ -310,15 +306,15 @@ describe('stdio Codex App Server transport', () => {
     transport.onError((error) => errors.push(error.message));
     transport.onFrame((frame) => frames.push(frame));
     await transport.connect();
-    first.stdout.write('{"type":"notification","method":"partial"');
+    first.stdout.write('{"method":"partial"');
     const closePromise = transport.close();
     first.child.emit('close', 0, null);
     await closePromise;
     await transport.connect();
-    second.stdout.write('{"type":"notification","method":"session.output"}\n');
+    second.stdout.write('{"method":"session.output"}\n');
 
     expect(errors).toEqual([]);
-    expect(frames).toEqual([{ type: 'notification', method: 'session.output' }]);
+    expect(frames).toEqual([{ method: 'session.output' }]);
   });
 
   it('rejects connect when the child emits an initial spawn error', async () => {
@@ -330,7 +326,7 @@ describe('stdio Codex App Server transport', () => {
     const transport = createStdioCodexAppServerTransport({ command: 'missing-codex-app-server', spawnProcess });
 
     await expect(transport.connect()).rejects.toThrow('spawn ENOENT');
-    await expect(transport.send({ type: 'notification', method: 'session.ping' })).rejects.toThrow(
+    await expect(transport.send({ method: 'session.ping' })).rejects.toThrow(
       'Codex App Server stdio transport is not connected',
     );
   });

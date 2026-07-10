@@ -62,13 +62,12 @@ describe('Codex App Server protocol client', () => {
     expect(transport.sent).toEqual([
       {
         id: 1,
-        type: 'request',
         method: 'session.start',
         params: { repository: 'reirei-lab/rainrail' },
       },
     ]);
 
-    transport.emitFrame({ id: 1, type: 'response', result: { sessionId: 'session-1' } });
+    transport.emitFrame({ id: 1, result: { sessionId: 'session-1' } });
 
     await expect(result).resolves.toEqual({ sessionId: 'session-1' });
   });
@@ -84,14 +83,12 @@ describe('Codex App Server protocol client', () => {
     await client.connect();
 
     transport.emitFrame({
-      type: 'notification',
       method: 'session.output',
       params: { text: 'hello' },
     });
 
     expect(notifications).toEqual([
       {
-        type: 'notification',
         method: 'session.output',
         params: { text: 'hello' },
       },
@@ -124,9 +121,9 @@ describe('Codex App Server protocol client', () => {
 
     await expect(client.connect()).rejects.toThrow('temporary connect failure');
     await client.connect();
-    transport.emitFrame({ type: 'notification', method: 'session.output' });
+    transport.emitFrame({ method: 'session.output' });
 
-    expect(notifications).toEqual([{ type: 'notification', method: 'session.output' }]);
+    expect(notifications).toEqual([{ method: 'session.output' }]);
   });
 
   it('shares an in-flight connect so concurrent callers do not duplicate subscriptions', async () => {
@@ -149,9 +146,9 @@ describe('Codex App Server protocol client', () => {
     expect(transport.connect).toHaveBeenCalledOnce();
     resolveConnect?.();
     await Promise.all([firstConnect, secondConnect]);
-    transport.emitFrame({ type: 'notification', method: 'session.output' });
+    transport.emitFrame({ method: 'session.output' });
 
-    expect(notifications).toEqual([{ type: 'notification', method: 'session.output' }]);
+    expect(notifications).toEqual([{ method: 'session.output' }]);
   });
 
   it('does not mark the client connected when close happens before connect resolves', async () => {
@@ -182,7 +179,6 @@ describe('Codex App Server protocol client', () => {
 
     transport.emitFrame({
       id: 1,
-      type: 'response',
       error: {
         code: 'invalid_request',
         message: 'missing repository',
@@ -203,7 +199,6 @@ describe('Codex App Server protocol client', () => {
       transport.sent.push(frame);
       transport.emitFrame({
         id: 1,
-        type: 'response',
         error: {
           code: 'fast_failure',
           message: 'response arrived before send settled',
@@ -242,13 +237,11 @@ describe('Codex App Server protocol client', () => {
 
     expect(transport.sent).toEqual([
       {
-        type: 'notification',
         method: 'session.cancel',
         params: { sessionId: 'session-1' },
       },
       {
         id: 1,
-        type: 'request',
         method: 'session.start',
       },
     ]);

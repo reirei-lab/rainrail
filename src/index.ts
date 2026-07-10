@@ -25,6 +25,7 @@ export * from './mention-draft.js';
 export * from './node-server.js';
 export * from './codex-activity.js';
 export * from './codex-app-server/client.js';
+export * from './codex-app-server/protocol-client.js';
 export * from './codex-app-server/stdio-transport.js';
 export * from './codex-app-server/websocket-transport.js';
 export * from './operational-runner.js';
