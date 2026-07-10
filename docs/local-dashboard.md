@@ -112,6 +112,26 @@ Custom saved dashboard card layouts and plugin-card failure isolation are
 smoke-only checks today; they are covered by API and sandbox assertions until a
 browser runner can perform pre-capture setup steps.
 
+For browser E2E tests that need a disposable server instead of the long-running
+manual demo command, import `startDashboardDemoServerHarness` from
+`scripts/dashboard-demo-server-harness.mjs`. The harness creates a fresh
+temporary directory and SQLite DB for every run, seeds it with
+`scripts/seed-dashboard-demo-db.mjs`, starts the built Rainrail CLI server on a
+random localhost port with deterministic dashboard assets, and returns
+`baseUrl` for Playwright. Always call `cleanup()` from test teardown so the
+server process, DB files, and temporary directory are removed.
+
+```js
+import { startDashboardDemoServerHarness } from './scripts/dashboard-demo-server-harness.mjs';
+
+const harness = await startDashboardDemoServerHarness();
+try {
+  await page.goto(`${harness.baseUrl}/en/dashboard?demo=1`);
+} finally {
+  await harness.cleanup();
+}
+```
+
 ## Dashboard cards
 
 The dashboard card surface is driven by the same-origin card catalog and user
