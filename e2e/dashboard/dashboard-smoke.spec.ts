@@ -30,7 +30,9 @@ test('loads the seeded dashboard demo and navigates core records', async ({ page
 });
 
 test('keeps sidebar tabs clickable before operational data is loaded', async ({ page }) => {
+  let apiRequests = 0;
   await page.route('**/api/v1/**', async (route) => {
+    apiRequests += 1;
     await route.fulfill({
       status: 503,
       contentType: 'application/json',
@@ -55,12 +57,14 @@ test('keeps sidebar tabs clickable before operational data is loaded', async ({ 
   for (const viewport of viewports) {
     await test.step(viewport.name, async () => {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
-      await page.goto(`${dashboardBaseUrl}/en/dashboard`);
+      const apiRequestsBeforeNavigation = apiRequests;
+      await page.goto(`${dashboardBaseUrl}/en/dashboard?demo=1`);
 
       await expect(page.getByRole('heading', { level: 1, name: /Rainrail Operations/i })).toBeVisible();
       await expect(page.locator('[data-token-input]')).toHaveValue('');
       expect(await page.evaluate(() => sessionStorage.getItem('rainrail-dashboard-token'))).toBeNull();
       await expect(page.locator('[data-status-text]')).toContainText(/Operational API unavailable/i);
+      expect(apiRequests).toBeGreaterThan(apiRequestsBeforeNavigation);
       await expect(page.locator('[data-dashboard-list]')).toBeEmpty();
 
       for (const tabName of tabNames) {
