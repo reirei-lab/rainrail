@@ -46,12 +46,13 @@ format は `codex app-server generate-ts` の `ClientRequest` / `ServerNotificat
 `result` または `error`、notification は `method` と任意の `params` を持つ JSON line とする。
 `createCodexAppServerClient` は `CodexAppServerClientOptions` の injected transport だけに
 依存し、`CodexAppServerClient` として `request()`、`notify()`、
-`onNotification()` を公開する。request id は client が割り当て、
+`onRequest()`、`onNotification()` を公開する。request id は client が割り当て、
 `CodexAppServerResponseError` を含む response は `CodexAppServerProtocolError` として
 該当 request だけを reject する。JSON-RPC error code は string と number の両方を受ける。
-server-initiated request が届いた時点で handler がない場合は JSON-RPC `-32601` response を返し、
-server を待機させない。transport close は pending request をまとめて reject し、notification は
-request/response matching から独立して handler へ渡す。
+server-initiated request は登録済み `onRequest()` handler が result response を返せるようにし、
+handler がない場合だけ JSON-RPC `-32601` response を返して server を待機させない。handler 例外は
+JSON-RPC `-32603` response に変換する。transport close は pending request をまとめて reject し、
+notification は request/response matching から独立して handler へ渡す。
 
 protocol frame 型は `CodexAppServerFrameId`、`CodexAppServerRequestFrame`、
 `CodexAppServerResponseFrame`、`CodexAppServerNotificationFrame`、
@@ -79,17 +80,18 @@ wrapper の型は `CodexAppServerClientInfo`、`CodexAppServerInitializeParams`�
 `CodexAppServerTurnStartResponse`、`CodexAppServerTurnWaitTarget`、
 `CodexAppServerTurnCompletedEvent`、`CodexAppServerAssistantDeltaEvent` などの固定された
 最小型とし、生成 protocol 全体は vendoring しない。`initialize` 成功後は client から
-`initialized` notification を送って handshake を完了する。`turn/completed` は公式 payload の
+`initialized` notification を送って handshake を完了する。`initialize` response の `codexHome` は
+公式 App Server の必須 field ではないため optional として扱う。`turn/completed` は公式 payload の
 `{ turn }` を受けられるよう `threadId` を必須にせず、完了通知が `startTurn()` resolve 前に
 届いても後続の `waitForTurnCompleted()` が拾えるよう turn id で直近完了を cache する。
 completion cache は race 回避用の短期 cache として上限を持ち、daemon/provider が長時間
 使い回されても turn summary を無期限には保持しない。request timeout は低レベル request を
 abort して pending state を掃除する。transport parse error などの非致命的な `onError` は
 監視用通知として扱い、turn completion 待機は timeout と transport close のみで reject する。
-`onTurnCompleted` handler の例外は observer failure として隔離し、受信済み completion の
-waiter 解決を妨げない。実 Codex CLI との非破壊 smoke は
+`onAssistantDelta` と `onTurnCompleted` handler の例外は observer failure として隔離し、
+受信済み stream event や completion の waiter 解決を妨げない。実 Codex CLI との非破壊 smoke は
 `RAINRAIL_CODEX_APP_SERVER_SMOKE=1` のときだけ `src/codex-app-server/smoke.test.ts` で
-ephemeral thread / read-only sandbox として実行する。
+ephemeral thread / `readOnly` sandbox として実行する。
 
 LAN remote 用の境界は `WebSocketCodexAppServerTransportConfig` で先に固定する。
 現時点では `type: "websocket"`、`endpoint`、任意の `headers`、`tokenEnv`、

@@ -229,6 +229,81 @@ describe('Codex App Server protocol client', () => {
     ]);
   });
 
+  it('lets callers handle server requests and falls back after unregistering the handler', async () => {
+    const transport = new FakeTransport();
+    const client = createCodexAppServerClient({ transport });
+    const handledRequests: CodexAppServerFrame[] = [];
+
+    const unsubscribe = client.onRequest((frame) => {
+      handledRequests.push(frame);
+      return { decision: 'approved' };
+    });
+
+    await client.connect();
+    transport.emitFrame({
+      id: 99,
+      method: 'command/exec/approval',
+      params: { approvalId: 'approval-1' },
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    unsubscribe();
+    transport.emitFrame({
+      id: 100,
+      method: 'tool/requestUserInput',
+      params: { prompt: 'continue?' },
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(handledRequests).toEqual([
+      {
+        id: 99,
+        method: 'command/exec/approval',
+        params: { approvalId: 'approval-1' },
+      },
+    ]);
+    expect(transport.sent).toEqual([
+      {
+        id: 99,
+        result: { decision: 'approved' },
+      },
+      {
+        id: 100,
+        error: {
+          code: -32601,
+          message: 'Codex App Server client has no handler for server request tool/requestUserInput',
+        },
+      },
+    ]);
+  });
+
+  it('turns server request handler failures into JSON-RPC error responses', async () => {
+    const transport = new FakeTransport();
+    const client = createCodexAppServerClient({ transport });
+
+    client.onRequest(() => {
+      throw new Error('approval backend failed');
+    });
+
+    await client.connect();
+    transport.emitFrame({
+      id: 99,
+      method: 'command/exec/approval',
+      params: { approvalId: 'approval-1' },
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(transport.sent).toEqual([
+      {
+        id: 99,
+        error: {
+          code: -32603,
+          message: 'approval backend failed',
+        },
+      },
+    ]);
+  });
+
   it('removes pending requests when their AbortSignal fires', async () => {
     const transport = new FakeTransport();
     const client = createCodexAppServerClient({ transport });

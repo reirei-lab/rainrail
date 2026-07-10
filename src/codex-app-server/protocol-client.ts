@@ -22,7 +22,7 @@ export interface CodexAppServerInitializeParams {
 
 export interface CodexAppServerInitializeResponse {
   userAgent: string;
-  codexHome: string;
+  codexHome?: string;
   platformFamily: string;
   platformOs: string;
 }
@@ -244,7 +244,13 @@ class DefaultCodexAppServerProtocolClient implements CodexAppServerProtocolClien
     if (frame.method === 'item/agentMessage/delta') {
       const event = parseAssistantDelta(frame.params);
       if (event === undefined) return;
-      for (const handler of this.#assistantDeltaHandlers) handler(event);
+      for (const handler of this.#assistantDeltaHandlers) {
+        try {
+          handler(event);
+        } catch {
+          // Observer callbacks must not break turn lifecycle waiters.
+        }
+      }
       return;
     }
     if (frame.method !== 'turn/completed') return;
@@ -290,12 +296,15 @@ class DefaultCodexAppServerProtocolClient implements CodexAppServerProtocolClien
 
 function expectInitializeResponse(value: unknown): CodexAppServerInitializeResponse {
   const record = expectRecord(value, 'initialize response');
-  return {
+  const response: CodexAppServerInitializeResponse = {
     userAgent: expectString(record.userAgent, 'initialize response userAgent'),
-    codexHome: expectString(record.codexHome, 'initialize response codexHome'),
     platformFamily: expectString(record.platformFamily, 'initialize response platformFamily'),
     platformOs: expectString(record.platformOs, 'initialize response platformOs'),
   };
+  if (record.codexHome !== undefined) {
+    response.codexHome = expectString(record.codexHome, 'initialize response codexHome');
+  }
+  return response;
 }
 
 function expectThreadStartResponse(value: unknown): CodexAppServerThreadStartResponse {

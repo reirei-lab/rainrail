@@ -42,6 +42,7 @@ export interface CodexAppServerClient {
   close(): Promise<void>;
   request(method: string, params?: unknown, options?: { signal?: AbortSignal }): Promise<unknown>;
   notify(method: string, params?: unknown): Promise<void>;
+  onRequest(handler: (frame: CodexAppServerRequestFrame) => unknown | Promise<unknown>): () => void;
   onNotification(handler: (frame: CodexAppServerNotificationFrame) => void): () => void;
   onError(handler: (error: Error) => void): () => void;
   onClose(handler: () => void): () => void;
@@ -66,6 +67,7 @@ class DefaultCodexAppServerClient implements CodexAppServerClient {
   readonly #pending = new Map<CodexAppServerFrameId, PendingRequest>();
   #nextRequestId = 1;
   #connected = false;
+  #requestHandlers: Array<(frame: CodexAppServerRequestFrame) => unknown | Promise<unknown>> = [];
   #notificationHandlers: Array<(frame: CodexAppServerNotificationFrame) => void> = [];
   #errorHandlers: Array<(error: Error) => void> = [];
   #closeHandlers: Array<() => void> = [];
@@ -163,6 +165,13 @@ class DefaultCodexAppServerClient implements CodexAppServerClient {
     await this.#transport.send(frame);
   }
 
+  onRequest(handler: (frame: CodexAppServerRequestFrame) => unknown | Promise<unknown>): () => void {
+    this.#requestHandlers.push(handler);
+    return () => {
+      this.#requestHandlers = this.#requestHandlers.filter((registered) => registered !== handler);
+    };
+  }
+
   onNotification(handler: (frame: CodexAppServerNotificationFrame) => void): () => void {
     this.#notificationHandlers.push(handler);
     return () => {
@@ -192,7 +201,7 @@ class DefaultCodexAppServerClient implements CodexAppServerClient {
 
     if (!isResponseFrame(frame)) {
       if (isServerRequestFrame(frame)) {
-        this.#respondToUnhandledServerRequest(frame);
+        void this.#handleServerRequest(frame);
       }
       return;
     }
@@ -214,14 +223,39 @@ class DefaultCodexAppServerClient implements CodexAppServerClient {
     for (const handler of this.#errorHandlers) handler(error);
   }
 
-  #respondToUnhandledServerRequest(frame: CodexAppServerRequestFrame): void {
-    this.#transport.send({
-      id: frame.id,
-      error: {
-        code: -32601,
-        message: `Codex App Server client has no handler for server request ${frame.method}`,
-      },
-    }).catch((error: unknown) => this.#handleError(errorFromUnknown(error)));
+  async #handleServerRequest(frame: CodexAppServerRequestFrame): Promise<void> {
+    const handler = this.#requestHandlers.at(-1);
+    if (handler === undefined) {
+      await this.#sendResponse({
+        id: frame.id,
+        error: {
+          code: -32601,
+          message: `Codex App Server client has no handler for server request ${frame.method}`,
+        },
+      });
+      return;
+    }
+
+    try {
+      const result = await handler(frame);
+      await this.#sendResponse({ id: frame.id, result });
+    } catch (error) {
+      await this.#sendResponse({
+        id: frame.id,
+        error: {
+          code: -32603,
+          message: errorFromUnknown(error).message,
+        },
+      });
+    }
+  }
+
+  async #sendResponse(frame: CodexAppServerResponseFrame): Promise<void> {
+    try {
+      await this.#transport.send(frame);
+    } catch (error) {
+      this.#handleError(errorFromUnknown(error));
+    }
   }
 
   #handleClose(): void {

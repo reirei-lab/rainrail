@@ -145,6 +145,32 @@ describe('Codex App Server protocol wrapper', () => {
     ]);
   });
 
+  it('accepts initialize responses without optional codexHome', async () => {
+    const transport = new FakeTransport();
+    const client = createCodexAppServerProtocolClient({ transport });
+
+    await client.connect();
+    const initialize = client.initialize({
+      clientInfo: { name: 'rainrail', title: 'Rainrail', version: '0.2.0' },
+      capabilities: null,
+    });
+    transport.emitFrame({
+      id: 1,
+      result: {
+        userAgent: 'codex-cli/0.139.0',
+        platformFamily: 'unix',
+        platformOs: 'macos',
+      },
+    });
+
+    await expect(initialize).resolves.toEqual({
+      userAgent: 'codex-cli/0.139.0',
+      platformFamily: 'unix',
+      platformOs: 'macos',
+    });
+    expect(transport.sent).toContainEqual({ method: 'initialized' });
+  });
+
   it('collects assistant deltas and resolves when the matching turn completes', async () => {
     const transport = new FakeTransport();
     const client = createCodexAppServerProtocolClient({ transport });
@@ -309,6 +335,39 @@ describe('Codex App Server protocol wrapper', () => {
         },
       },
     })).not.toThrow();
+
+    await expect(completed).resolves.toMatchObject({ turn: { id: 'turn-1' } });
+  });
+
+  it('keeps turn waiters alive when an assistant delta handler throws', async () => {
+    const transport = new FakeTransport();
+    const client = createCodexAppServerProtocolClient({ transport });
+
+    client.onAssistantDelta(() => {
+      throw new Error('stream renderer failed');
+    });
+
+    await client.connect();
+    const completed = client.waitForTurnCompleted({ threadId: 'thread-1', turnId: 'turn-1' });
+    expect(() => transport.emitFrame({
+      method: 'item/agentMessage/delta',
+      params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'item-1', delta: 'OK' },
+    })).not.toThrow();
+    transport.emitFrame({
+      method: 'turn/completed',
+      params: {
+        turn: {
+          id: 'turn-1',
+          status: 'completed',
+          items: [],
+          itemsView: { type: 'complete' },
+          error: null,
+          startedAt: 1,
+          completedAt: 2,
+          durationMs: 100,
+        },
+      },
+    });
 
     await expect(completed).resolves.toMatchObject({ turn: { id: 'turn-1' } });
   });
