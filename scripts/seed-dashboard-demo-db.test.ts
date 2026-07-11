@@ -235,7 +235,7 @@ describe('dashboard demo SQLite seed script', () => {
           expect.objectContaining({ id: 'dashboard-cards-mobile-layout', tab: 'overview', viewport: 'mobile' }),
         ]);
         for (const scenario of dashboardDemoVrtScenarios) {
-          expect(scenario.url).toMatch(/^\/(?:ja|en)\/dashboard\?demo=1\b/);
+          expect(scenario.url).toMatch(/^\/(?:ja|en)\/dashboard(?:\/[a-z-]+)?\?demo=1\b/);
           expect(scenario.captureHints.length).toBeGreaterThan(0);
         }
 

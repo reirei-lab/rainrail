@@ -4,11 +4,13 @@ import { getDefaultLocaleDashboardRedirect } from '../../lib/redirects';
 
 export function getStaticPaths() {
   return getDashboardRoutes()
-    .filter((route) => route.slug !== undefined)
-    .map((route) => ({
-      params: { view: route.slug },
-      props: { view: route.slug },
-    }));
+    .flatMap((route) => {
+      const routeViews = route.slug === undefined ? [] : [route.slug, ...(route.aliases ?? [])];
+      return routeViews.map((view) => ({
+        params: { view },
+        props: { view },
+      }));
+    });
 }
 
 type Props = {
