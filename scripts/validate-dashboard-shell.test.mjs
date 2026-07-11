@@ -253,6 +253,21 @@ describe('dashboard app shell', () => {
     expect(dashboardControllers).toContain("if (request.tab === 'events')");
   });
 
+  it('keeps shell stats backed by overview counts while page controllers skip inactive collections', () => {
+    expect(dashboardApp).toContain('statItem(copy.stats.sources, counts.sources ?? latestData?.sources.length ?? 0)');
+    expect(dashboardApp).toContain('statItem(copy.stats.queue, counts.queue ?? latestData?.queue.length ?? 0)');
+    expect(dashboardControllers).toContain('sources: []');
+    expect(dashboardControllers).toContain('queue: []');
+  });
+
+  it('refreshes active-page collections after client-side dashboard tab changes', () => {
+    expect(dashboardApp).toContain('let tabChangedDuringLayoutVisibility = false;');
+    expect(dashboardApp).toContain('if (tabChangedDuringLayoutVisibility) {');
+    expect(dashboardApp).toContain('void refresh({ quiet: true });');
+    expect(dashboardApp).toContain('selectedTab = tab;');
+    expect(dashboardApp).toContain('void refresh();');
+  });
+
   it('models event repository under source like the v1 API compact row', () => {
     expect(dashboardClient).toContain('source?: { type?: string; name?: string; repository?: string }');
     expect(dashboardClient).not.toContain('source?: string');

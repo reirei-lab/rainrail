@@ -675,16 +675,22 @@ function dashboardEventDetailResponse(eventId: string, options: RainrailHttpAppO
   return jsonResponse(event);
 }
 
-function dashboardV1OverviewResponse(options: RainrailHttpAppOptions): Response {
+async function dashboardV1OverviewResponse(options: RainrailHttpAppOptions): Promise<Response> {
   const store = options.operationalStore;
   if (store === undefined) {
     return jsonResponse({ error: 'operational_store_not_configured' }, { status: 503 });
   }
 
   const snapshot = store.snapshot({ hideSkippedActivityEvents: true });
+  const sourceRows = dashboardV1SourceRows(options, store);
+  const queueRows = await dashboardV1QueueRows(options, snapshot);
   return jsonResponse({
     data: {
-      counts: snapshot.counts,
+      counts: {
+        ...snapshot.counts,
+        sources: sourceRows.length,
+        queue: queueRows.length,
+      },
       warnings: snapshot.warnings,
       recentActivity: store.listActivityEvents({ hideSkippedActivityEvents: true })
         .filter(isWorkflowRunActivity)
@@ -862,17 +868,7 @@ function dashboardV1SourcesResponse(url: URL, options: RainrailHttpAppOptions): 
     return jsonResponse({ error: 'unsupported_sort', sort }, { status: 400 });
   }
 
-  const latestBySource = latestEventBySourceName(store.listEvents());
-  const adapters = options.intakeAdapters ?? [];
-  const duplicateSourceNames = duplicateValues(adapters.map((adapter) => adapter.name));
-  const reservedSourceRowIds = new Set(adapters.map((adapter) => adapter.name));
-  const assignedSourceRowIds = new Set<string>();
-  const rows = adapters
-    .map((adapter, index) => intakeAdapterToSourceRow(
-      adapter,
-      latestBySource.get(adapter.name),
-      sourceRowId(adapter.name, index, duplicateSourceNames, reservedSourceRowIds, assignedSourceRowIds),
-    ))
+  const rows = dashboardV1SourceRows(options, store)
     .filter((row) => matchesOptionalFilter(row.sourceType, url.searchParams.get('filter[source]')));
   const page = pageRows(rows, collection.limit, collection.cursor, (row) => row.name);
   if (!page.ok) return page.response;
@@ -897,11 +893,7 @@ async function dashboardV1QueueResponse(url: URL, options: RainrailHttpAppOption
   }
 
   const snapshot = store.snapshot();
-  const tasks = store.listAgentTasks();
-  const staleWarningsByTaskId = new Map(snapshot.warnings.staleProjectClaims.map((warning) => [warning.taskId, warning]));
-  const taskRows = tasks.map((task) => agentTaskToQueueRow(task, staleWarningsByTaskId.get(task.id)));
-  const projectIssueRows = await projectIssueQueueRows(options.taskQueue, tasks, staleWarningsByTaskId);
-  const allRows = sortQueueRows([...taskRows, ...projectIssueRows]);
+  const allRows = await dashboardV1QueueRows(options, snapshot);
   const rows = allRows
     .filter((row) => matchesOptionalFilter(row.status, url.searchParams.get('filter[status]')));
   const page = pageRows(rows, collection.limit, collection.cursor, queueCursorValue);
@@ -1577,6 +1569,19 @@ function latestEventBySourceName(events: StoredOperationalEvent[]): Map<string, 
   return latest;
 }
 
+function dashboardV1SourceRows(options: RainrailHttpAppOptions, store: OperationalStore) {
+  const latestBySource = latestEventBySourceName(store.listEvents());
+  const adapters = options.intakeAdapters ?? [];
+  const duplicateSourceNames = duplicateValues(adapters.map((adapter) => adapter.name));
+  const reservedSourceRowIds = new Set(adapters.map((adapter) => adapter.name));
+  const assignedSourceRowIds = new Set<string>();
+  return adapters.map((adapter, index) => intakeAdapterToSourceRow(
+    adapter,
+    latestBySource.get(adapter.name),
+    sourceRowId(adapter.name, index, duplicateSourceNames, reservedSourceRowIds, assignedSourceRowIds),
+  ));
+}
+
 function intakeAdapterToSourceRow(adapter: RainrailIntakeAdapter, latestEvent: StoredOperationalEvent | undefined, id = adapter.name) {
   const route = adapter.routes?.[0];
   const sourceType = adapter.source?.type ?? latestEvent?.source.type ?? 'system';
@@ -1649,6 +1654,16 @@ function agentTaskToQueueRow(task: StoredAgentTask, staleWarning: StoredStalePro
       ...(task.projectClaim === undefined ? {} : { releaseStatus: task.projectClaim.status }),
     }),
   };
+}
+
+async function dashboardV1QueueRows(options: RainrailHttpAppOptions, snapshot: ReturnType<OperationalStore['snapshot']>) {
+  const store = options.operationalStore;
+  if (store === undefined) return [];
+  const tasks = store.listAgentTasks();
+  const staleWarningsByTaskId = new Map(snapshot.warnings.staleProjectClaims.map((warning) => [warning.taskId, warning]));
+  const taskRows = tasks.map((task) => agentTaskToQueueRow(task, staleWarningsByTaskId.get(task.id)));
+  const projectIssueRows = await projectIssueQueueRows(options.taskQueue, tasks, staleWarningsByTaskId);
+  return sortQueueRows([...taskRows, ...projectIssueRows]);
 }
 
 async function projectIssueQueueRows(

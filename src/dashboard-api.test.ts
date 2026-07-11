@@ -1003,7 +1003,7 @@ describe('Rainrail dashboard API', () => {
     expect(overview.status).toBe(200);
     await expect(overview.json()).resolves.toMatchObject({
       data: {
-        counts: { events: 2, activityEvents: 6, agentTasks: 1, eventHandlerRetries: 1 },
+        counts: { events: 2, activityEvents: 6, agentTasks: 1, eventHandlerRetries: 1, sources: 1, queue: 1 },
         warnings: { staleProjectClaims: [] },
         recentActivity: [{ id: workflow.id, summary: 'review-request plugin completed' }],
       },
