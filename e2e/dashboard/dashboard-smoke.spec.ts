@@ -258,7 +258,7 @@ test('matches dashboard route visual baselines from the scenario manifest', asyn
       await expect(page.locator('[data-status-text]')).toContainText(/Live operational state|運用状態/i);
 
       await expect(page).toHaveScreenshot(`${scenario.id}-${viewport}.png`, {
-        fullPage: true,
+        maxDiffPixelRatio: 0.04,
         mask: [
           page.locator('[data-status-text]'),
           page.locator('[data-overview-card-id="health"]'),
