@@ -670,6 +670,8 @@ if (root !== null) {
     if (detail === null) return;
 
     const record = objectRecord(loaded.data.record);
+    const sourceEventId = stringRecordValue(record.sourceEventId) ?? row.sourceEventId;
+    const sourceEventHref = workflowRunSourceEventHref(sourceEventId);
     detail.innerHTML = `
       <div class="dashboard-detail-heading">
         <span>workflow-run</span>
@@ -678,7 +680,9 @@ if (root !== null) {
       <h2>${escapeHtml(rowTitle(row))}</h2>
       <dl>
         <div><dt>${escapeHtml(copy.detailLabels.humanSummary)}</dt><dd>${escapeHtml(stringRecordValue(record.summary) ?? rowTitle(row))}</dd></div>
-        <div><dt>${escapeHtml(copy.detailLabels.sourceEvent)}</dt><dd>${escapeHtml(stringRecordValue(record.sourceEventId) ?? row.sourceEventId ?? copy.placeholders.notAvailable)}</dd></div>
+        <div><dt>${escapeHtml(copy.detailLabels.sourceEvent)}</dt><dd>${sourceEventHref === undefined
+          ? escapeHtml(sourceEventId ?? copy.placeholders.notAvailable)
+          : `<a href="${escapeHtml(sourceEventHref)}" data-source-event-link>${escapeHtml(sourceEventId!)}</a>`}</dd></div>
         <div><dt>${escapeHtml(copy.detailLabels.actionAudit)}</dt><dd>${escapeHtml(`${stringRecordValue(record.actionType) ?? copy.placeholders.notAvailable} / ${stringRecordValue(record.outcome) ?? row.status}`)}</dd></div>
         <div><dt>${escapeHtml(copy.detailLabels.retrySchedule)}</dt><dd>${escapeHtml(row.status === 'failed' ? copy.detailHints.checkHandlerRetryRows : copy.placeholders.notAvailable)}</dd></div>
       </dl>
@@ -687,6 +691,18 @@ if (root !== null) {
         <pre>${escapeHtml(JSON.stringify(record, null, 2))}</pre>
       </section>
     `;
+  }
+
+  function workflowRunSourceEventHref(sourceEventId: string | undefined): string | undefined {
+    if (sourceEventId === undefined || sourceEventId === '') return undefined;
+
+    const target = new URL(window.location.href);
+    target.pathname = target.pathname.replace(/\/dashboard(?:\/[^/?#]+)?$/, '/dashboard/events');
+    target.searchParams.delete('run');
+    target.searchParams.delete('status');
+    target.searchParams.delete('tab');
+    target.searchParams.set('event', sourceEventId);
+    return `${target.pathname}${target.search}${target.hash}`;
   }
 
   function renderAgentTaskDetail(row: DashboardAgentTask, loaded: DashboardDetail): void {

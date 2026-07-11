@@ -48,10 +48,10 @@ describe('dashboard operational views', () => {
   });
 
   it('localizes dashboard shell labels and browser-rendered UI messages', () => {
-    for (const label of ['Overview', 'Event Inbox', 'Workflow Runs', 'Agent Tasks']) {
+    for (const label of ['Overview', 'Event Inbox', 'Runs', 'Agent Tasks']) {
       expect(dashboardContent).toContain(label);
     }
-    for (const label of ['概要', 'イベント受信箱', 'ワークフロー実行', 'エージェントタスク']) {
+    for (const label of ['概要', 'イベント受信箱', '実行履歴', 'エージェントタスク']) {
       expect(dashboardContent).toContain(label);
     }
 
@@ -146,12 +146,19 @@ describe('dashboard operational views', () => {
     expect(dashboardApp).not.toContain("'all running tasks'");
   });
 
-  it('names the Overview, Event Inbox, Workflow Runs, and Agent Tasks work surfaces', () => {
-    for (const label of ['Overview', 'Event Inbox', 'Workflow Runs', 'Agent Tasks']) {
+  it('names the Overview, Event Inbox, Runs, and Agent Tasks work surfaces', () => {
+    for (const label of ['Overview', 'Event Inbox', 'Runs', 'Agent Tasks', '実行履歴']) {
       expect(dashboardContent).toContain(label);
     }
 
     expect(dashboardLayout).toContain('data-dashboard-tab={route.id}');
+  });
+
+  it('links workflow run details back to the source event context', () => {
+    expect(dashboardApp).toContain('workflowRunSourceEventHref');
+    expect(dashboardApp).toContain('data-source-event-link');
+    expect(dashboardApp).toContain("target.pathname = target.pathname.replace(/\\/dashboard(?:\\/[^/?#]+)?$/, '/dashboard/events')");
+    expect(dashboardApp).toContain("target.searchParams.set('event', sourceEventId)");
   });
 
   it('marks existing standard surfaces as core dashboard cards', () => {

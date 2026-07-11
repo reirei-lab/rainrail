@@ -102,7 +102,8 @@ describe('dashboard app shell', () => {
   it('defines dashboard route URLs for each primary dashboard view', () => {
     expect(dashboardContent).toContain("export type DashboardRouteId = 'overview' | 'events' | 'workflow-runs' | 'agent-tasks' | 'sources' | 'queue' | 'settings'");
     expect(dashboardContent).toContain("slug: 'events'");
-    expect(dashboardContent).toContain("slug: 'workflow-runs'");
+    expect(dashboardContent).toContain("slug: 'runs'");
+    expect(dashboardContent).not.toContain("slug: 'workflow-runs'");
     expect(dashboardContent).toContain("slug: 'agent-tasks'");
     expect(sitemapRoute).toContain("getDashboardHref(locale, route.id)");
     expect(dashboardContent).toContain("return `/${locale}/dashboard/${route.slug}`;");
@@ -190,7 +191,7 @@ describe('dashboard app shell', () => {
 
   it('hydrates dashboard demo VRT state from URL parameters', () => {
     expect(dashboardDemoVrtScenarios).toContain('tab=events&source=github&event=evt_demo_github_issue_272');
-    expect(dashboardDemoVrtScenarios).toContain('tab=workflow-runs&status=failed&run=act_demo_workflow_failed_retry');
+    expect(dashboardDemoVrtScenarios).toContain('/ja/dashboard/runs?demo=1&status=failed&run=act_demo_workflow_failed_retry');
     expect(dashboardDemoVrtScenarios).toContain('tab=agent-tasks&task=agent_task_demo_running');
     expect(dashboardDemoVrtScenarios).toContain('tab=queue&status=blocked');
     expect(dashboardApp).toContain('initialDashboardStateFromUrl');

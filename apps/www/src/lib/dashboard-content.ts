@@ -10,7 +10,7 @@ export type DashboardRoute = {
 const dashboardRoutes: readonly DashboardRoute[] = [
   { id: 'overview' },
   { id: 'events', slug: 'events' },
-  { id: 'workflow-runs', slug: 'workflow-runs' },
+  { id: 'workflow-runs', slug: 'runs' },
   { id: 'agent-tasks', slug: 'agent-tasks' },
   { id: 'sources', slug: 'sources' },
   { id: 'queue', slug: 'queue' },
@@ -705,7 +705,7 @@ const dashboardContent = {
       tabs: {
         overview: 'Overview',
         events: 'Event Inbox',
-        workflowRuns: 'Workflow Runs',
+        workflowRuns: 'Runs',
         agentTasks: 'Agent Tasks',
         sources: 'Sources',
         queue: 'Queue',
@@ -763,7 +763,7 @@ const dashboardContent = {
       tabs: {
         overview: '概要',
         events: 'イベント受信箱',
-        workflowRuns: 'ワークフロー実行',
+        workflowRuns: '実行履歴',
         agentTasks: 'エージェントタスク',
         sources: '入力元',
         queue: 'キュー',

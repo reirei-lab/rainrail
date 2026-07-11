@@ -39,7 +39,7 @@ export const dashboardDemoVrtScenarios = Object.freeze([
   {
     id: 'workflow-runs-failed-retry',
     tab: 'workflow-runs',
-    url: '/ja/dashboard?demo=1&tab=workflow-runs&status=failed&run=act_demo_workflow_failed_retry',
+    url: '/ja/dashboard/runs?demo=1&status=failed&run=act_demo_workflow_failed_retry',
     captureHints: [
       'failed workflow row',
       'retry-oriented summary',

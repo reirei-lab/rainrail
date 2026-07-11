@@ -38,7 +38,7 @@ test('drops legacy tab query when navigating to a routed dashboard view', async 
 
   await page.locator('[data-dashboard-tab="workflow-runs"]').click();
 
-  await expect(page).toHaveURL(/\/en\/dashboard\/workflow-runs\?demo=1$/);
+  await expect(page).toHaveURL(/\/en\/dashboard\/runs\?demo=1$/);
   await expect(page.locator('[data-dashboard-tab="workflow-runs"]')).toHaveAttribute('aria-current', 'page');
   await expect(page.locator('[data-dashboard-tab="workflow-runs"]')).toHaveAttribute('aria-pressed', 'true');
   await expect(page.locator('[data-dashboard-tab="events"]')).toHaveAttribute('aria-pressed', 'false');
@@ -46,9 +46,9 @@ test('drops legacy tab query when navigating to a routed dashboard view', async 
 });
 
 test('prefers routed dashboard view over legacy tab query on initial load', async ({ page }) => {
-  await page.goto(`${dashboardBaseUrl}/en/dashboard/workflow-runs?demo=1&tab=events`);
+  await page.goto(`${dashboardBaseUrl}/en/dashboard/runs?demo=1&tab=events`);
 
-  await expect(page).toHaveURL(/\/en\/dashboard\/workflow-runs\?demo=1&tab=events$/);
+  await expect(page).toHaveURL(/\/en\/dashboard\/runs\?demo=1&tab=events$/);
   await expect(page.locator('[data-dashboard-tab="workflow-runs"]')).toHaveAttribute('aria-current', 'page');
   await expect(page.locator('[data-dashboard-tab="workflow-runs"]')).toHaveAttribute('aria-pressed', 'true');
   await expect(page.locator('[data-dashboard-tab="events"]')).toHaveAttribute('aria-pressed', 'false');
