@@ -115,6 +115,7 @@ export type DashboardAppCopy = {
     events: string;
     activeRuns: string;
     retryingHandlers: string;
+    commandResults: string;
     providerStatus: string;
     agentTasks: string;
     sources: string;
@@ -248,6 +249,7 @@ export type DashboardAppCopy = {
     empty: string;
     noRecentActivity: string;
     noWarnings: string;
+    warningCount: string;
     todoHealth: string;
     cards: Record<'health' | 'counts' | 'recentActivity' | 'warnings', { title: string; description: string }>;
   };
@@ -338,6 +340,7 @@ const englishApp: DashboardAppCopy = {
     events: 'Events',
     activeRuns: 'Active runs',
     retryingHandlers: 'Retrying handlers',
+    commandResults: 'Command results',
     providerStatus: 'Provider status',
     agentTasks: 'Agent tasks',
     sources: 'Sources',
@@ -471,6 +474,7 @@ const englishApp: DashboardAppCopy = {
     empty: 'No Overview cards are visible.',
     noRecentActivity: 'No recent activity.',
     noWarnings: 'No warnings.',
+    warningCount: 'Warnings',
     todoHealth: 'TODO: expose component health in the overview API.',
     cards: {
       health: { title: 'Health', description: 'API response freshness and dashboard connection state.' },
@@ -549,6 +553,7 @@ const japaneseApp: DashboardAppCopy = {
     events: 'イベント',
     activeRuns: '実行中ワークフロー',
     retryingHandlers: 'リトライ中ハンドラー',
+    commandResults: 'コマンド結果',
     providerStatus: 'プロバイダー状態',
     agentTasks: 'エージェントタスク',
     sources: '入力元',
@@ -682,6 +687,7 @@ const japaneseApp: DashboardAppCopy = {
     empty: '表示中の概要カードはありません。',
     noRecentActivity: '最近の活動はありません。',
     noWarnings: '警告はありません。',
+    warningCount: '警告',
     todoHealth: 'TODO: overview API でコンポーネント別 health を公開する。',
     cards: {
       health: { title: '稼働状況', description: 'API 応答の新しさと dashboard 接続状態。' },

@@ -477,11 +477,13 @@ describe('dashboard operational views', () => {
       'setOverviewCardVisibility',
       'moveOverviewCard',
       'overviewWarningCount',
+      'overviewWarningSummary',
       'renderOverviewCards()',
       'copy.overviewCards.todoHealth',
     ]) {
       expect(dashboardApp).toContain(marker);
     }
+    expect(dashboardApp).toMatch(/setState\('error', message\);\s+renderOverviewCards\(\);/);
 
     for (const marker of [
       'Health',

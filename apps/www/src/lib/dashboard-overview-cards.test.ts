@@ -6,6 +6,7 @@ import {
   overviewCountLabel,
   overviewCardRegistry,
   overviewHealthStatusLabel,
+  overviewWarningSummary,
   parseOverviewCardLayout,
   serializeOverviewCardLayout,
   setOverviewCardVisibility,
@@ -118,6 +119,7 @@ describe('dashboard overview cards', () => {
       events: 'イベント',
       activeRuns: '実行中ワークフロー',
       retryingHandlers: 'リトライ中ハンドラー',
+      commandResults: 'コマンド結果',
       providerStatus: 'プロバイダー状態',
       agentTasks: 'エージェントタスク',
       sources: '入力元',
@@ -127,10 +129,29 @@ describe('dashboard overview cards', () => {
     expect(overviewCountLabel('events', labels)).toBe('イベント');
     expect(overviewCountLabel('activityEvents', labels)).toBe('実行中ワークフロー');
     expect(overviewCountLabel('eventHandlerRetries', labels)).toBe('リトライ中ハンドラー');
+    expect(overviewCountLabel('commandResults', labels)).toBe('コマンド結果');
     expect(overviewCountLabel('providers', labels)).toBe('プロバイダー状態');
     expect(overviewCountLabel('agentTasks', labels)).toBe('エージェントタスク');
     expect(overviewCountLabel('sources', labels)).toBe('入力元');
     expect(overviewCountLabel('queue', labels)).toBe('キュー');
     expect(overviewCountLabel('customMetric', labels)).toBe('customMetric');
+  });
+
+  it('summarizes stale project claim warnings without raw keys or JSON', () => {
+    expect(overviewWarningSummary([{ taskId: 'task-1' }, { taskId: 'task-2' }], {
+      staleProjectClaim: '古い Project 取得状態',
+      warningCount: '警告',
+    })).toEqual({
+      label: '古い Project 取得状態',
+      value: '2',
+      detail: '警告 2',
+    });
+
+    const summary = overviewWarningSummary([], {
+      staleProjectClaim: 'stale project claim',
+      warningCount: 'warnings',
+    });
+    expect(summary.detail).not.toContain('staleProjectClaims');
+    expect(summary.detail).not.toContain('{');
   });
 });

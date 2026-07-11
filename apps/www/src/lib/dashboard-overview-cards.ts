@@ -28,10 +28,22 @@ export interface OverviewCountLabels {
   events: string;
   activeRuns: string;
   retryingHandlers: string;
+  commandResults: string;
   providerStatus: string;
   agentTasks: string;
   sources: string;
   queue: string;
+}
+
+export interface OverviewWarningLabels {
+  staleProjectClaim: string;
+  warningCount: string;
+}
+
+export interface OverviewWarningSummary {
+  label: string;
+  value: string;
+  detail: string;
 }
 
 export const overviewCardRegistry: readonly OverviewCardDefinition[] = [
@@ -141,11 +153,24 @@ export function overviewCountLabel(key: string, labels: OverviewCountLabels): st
   if (key === 'events') return labels.events;
   if (key === 'activityEvents') return labels.activeRuns;
   if (key === 'eventHandlerRetries') return labels.retryingHandlers;
+  if (key === 'commandResults') return labels.commandResults;
   if (key === 'providers') return labels.providerStatus;
   if (key === 'agentTasks') return labels.agentTasks;
   if (key === 'sources') return labels.sources;
   if (key === 'queue') return labels.queue;
   return key;
+}
+
+export function overviewWarningSummary(
+  staleProjectClaims: readonly unknown[],
+  labels: OverviewWarningLabels,
+): OverviewWarningSummary {
+  const count = staleProjectClaims.length;
+  return {
+    label: labels.staleProjectClaim,
+    value: String(count),
+    detail: `${labels.warningCount} ${count}`,
+  };
 }
 
 function isOverviewCardId(value: unknown, registryIds: Set<OverviewCardId>): value is OverviewCardId {

@@ -21,6 +21,7 @@ import {
   overviewCardRegistry,
   overviewHealthStatusLabel,
   overviewWarningCount,
+  overviewWarningSummary,
   parseOverviewCardLayout,
   serializeOverviewCardLayout,
   setOverviewCardVisibility,
@@ -325,6 +326,7 @@ if (root !== null) {
         ? copy.status.authRejected
         : copy.status.unavailable;
       setState('error', message);
+      renderOverviewCards();
     } finally {
       clearRefreshInFlight(activeClient, activeRefreshId);
       if (refreshAfterCurrent && client === activeClient) {
@@ -583,6 +585,7 @@ if (root !== null) {
       events: copy.stats.events,
       activeRuns: copy.stats.activeRuns,
       retryingHandlers: copy.stats.retryingHandlers,
+      commandResults: copy.stats.commandResults,
       providerStatus: copy.stats.providerStatus,
       agentTasks: copy.stats.agentTasks,
       sources: copy.stats.sources,
@@ -612,9 +615,13 @@ if (root !== null) {
     const warningCount = overviewWarningCount(overview);
     if (warningCount === 0) return [overviewNote(copy.overviewCards.noWarnings)];
     const staleClaims = overview.data.warnings.staleProjectClaims ?? [];
+    const summary = overviewWarningSummary(staleClaims, {
+      staleProjectClaim: copy.rowMeta.staleProjectClaim,
+      warningCount: copy.overviewCards.warningCount,
+    });
     return [
-      overviewMetric('staleProjectClaims', String(warningCount)),
-      overviewNote(JSON.stringify(staleClaims.slice(0, 3))),
+      overviewMetric(summary.label, summary.value),
+      overviewNote(summary.detail),
     ];
   }
 
