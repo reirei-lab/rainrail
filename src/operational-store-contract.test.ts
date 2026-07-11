@@ -81,6 +81,10 @@ class InMemoryContractStore implements OperationalStore {
     return 100;
   }
 
+  countEventSourceTypes(): number {
+    return new Set([...this.#events.values()].map((event) => event.source.type)).size;
+  }
+
   listEvents(): StoredOperationalEvent[] {
     return [...this.#events.values()];
   }

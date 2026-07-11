@@ -160,6 +160,8 @@ describe('local dashboard start documentation', () => {
             'apps/www/src/pages/[locale]/dashboard.astro',
             'apps/www/src/lib/dashboard-client.ts',
             'apps/www/src/lib/dashboard-app.ts',
+            'apps/www/src/lib/dashboard-controllers.ts',
+            'apps/www/src/lib/dashboard-session.ts',
             'apps/www/src/lib/dashboard-content.ts',
             'scripts/dashboard-demo-server-harness.mjs',
           ]),

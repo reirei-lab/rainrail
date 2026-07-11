@@ -226,6 +226,7 @@ export interface OperationalStore {
   recordEvent<TPayload>(event: RainrailEventEnvelope<TPayload>): StoredOperationalEvent<TPayload>;
   getEvent(id: string): StoredOperationalEvent | undefined;
   eventLimit(): number;
+  countEventSourceTypes(): number;
   listEvents(options?: ListOperationalStoreEventsOptions): StoredOperationalEvent[];
   recordActivityEvent(input: RecordActivityEventInput): StoredActivityEvent;
   getActivityEvent(id: string): StoredActivityEvent | undefined;
@@ -303,6 +304,11 @@ export class JsonFileOperationalStore implements OperationalStore {
   eventLimit(): number {
     this.#assertOpen();
     return this.#eventLimit;
+  }
+
+  countEventSourceTypes(): number {
+    this.#assertOpen();
+    return new Set(Object.values(this.#data.events).map((event) => event.source.type)).size;
   }
 
   listEvents(options: ListOperationalStoreEventsOptions = {}): StoredOperationalEvent[] {
@@ -699,11 +705,12 @@ export class SqliteOperationalStore implements OperationalStore {
     const sanitizedEnvelope = eventEnvelopeWithoutRawPayload(stored.envelope);
     this.#database.prepare(`
       INSERT INTO operational_events (
-        id, name, source_json, delivery_json, subject_json, occurred_at, received_at,
+        id, name, source_type, source_json, delivery_json, subject_json, occurred_at, received_at,
         payload_json, raw_payload_reference_json, links_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         name = excluded.name,
+        source_type = excluded.source_type,
         source_json = excluded.source_json,
         delivery_json = excluded.delivery_json,
         subject_json = excluded.subject_json,
@@ -715,6 +722,7 @@ export class SqliteOperationalStore implements OperationalStore {
     `).run(
       stored.id,
       stored.name,
+      stored.source.type,
       toJsonText(stored.source),
       toJsonText(stored.delivery),
       toJsonText(stored.subject),
@@ -738,6 +746,12 @@ export class SqliteOperationalStore implements OperationalStore {
   eventLimit(): number {
     this.#assertOpen();
     return this.#eventLimit;
+  }
+
+  countEventSourceTypes(): number {
+    this.#assertOpen();
+    const row = this.#database.prepare('SELECT COUNT(DISTINCT source_type) AS count FROM operational_events').get();
+    return requiredNumber(row, 'count');
   }
 
   listEvents(options: ListOperationalStoreEventsOptions = {}): StoredOperationalEvent[] {
@@ -1265,6 +1279,7 @@ export class SqliteOperationalStore implements OperationalStore {
       CREATE TABLE IF NOT EXISTS operational_events (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
+        source_type TEXT NOT NULL,
         source_json TEXT NOT NULL,
         delivery_json TEXT NOT NULL,
         subject_json TEXT NOT NULL,
@@ -1364,6 +1379,8 @@ export class SqliteOperationalStore implements OperationalStore {
       'raw_payload_reference_json',
       `TEXT NOT NULL DEFAULT '${toJsonText(redactedRawPayloadReference()).replaceAll("'", "''")}'`,
     );
+    this.#addColumnIfMissing('operational_events', 'source_type', `TEXT NOT NULL DEFAULT 'unknown'`);
+    this.#backfillOperationalEventSourceTypes();
     this.#protectDatabaseFiles();
   }
 
@@ -1377,6 +1394,18 @@ export class SqliteOperationalStore implements OperationalStore {
     const rows = this.#database.prepare(`PRAGMA table_info(${tableName})`).all();
     if (rows.some((row) => rowValue(row, 'name') === columnName)) return;
     this.#database.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
+    this.#protectDatabaseFiles();
+  }
+
+  #backfillOperationalEventSourceTypes(): void {
+    const rows = this.#database.prepare('SELECT id, source_json FROM operational_events WHERE source_type = ?').all('unknown');
+    if (rows.length === 0) return;
+
+    const update = this.#database.prepare('UPDATE operational_events SET source_type = ? WHERE id = ?');
+    for (const row of rows) {
+      const source = fromJsonText<RainrailEventEnvelope['source']>(requiredString(row, 'source_json'));
+      update.run(source.type, requiredString(row, 'id'));
+    }
     this.#protectDatabaseFiles();
   }
 

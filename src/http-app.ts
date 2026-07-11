@@ -682,14 +682,14 @@ async function dashboardV1OverviewResponse(options: RainrailHttpAppOptions): Pro
   }
 
   const snapshot = store.snapshot({ hideSkippedActivityEvents: true });
-  const sourceRows = dashboardV1SourceRows(options, store);
+  const sourceCount = options.intakeAdapters?.length ?? 0;
   const queueRows = dashboardV1LocalQueueRows(options, snapshot);
   return jsonResponse({
     data: {
       counts: {
         ...snapshot.counts,
-        providers: new Set(store.listEvents().map((event) => event.source.type)).size,
-        sources: sourceRows.length,
+        providers: store.countEventSourceTypes(),
+        sources: sourceCount,
         queue: queueRows.length,
       },
       warnings: snapshot.warnings,

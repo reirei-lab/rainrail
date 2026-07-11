@@ -208,6 +208,8 @@ describe('dashboard app shell', () => {
     expect(contract).toBeDefined();
     if (contract === undefined) throw new Error('local-dashboard-start contract missing');
     expect(contract.sources).toContain('scripts/dashboard-demo-vrt-scenarios.mjs');
+    expect(contract.sources).toContain('apps/www/src/lib/dashboard-controllers.ts');
+    expect(contract.sources).toContain('apps/www/src/lib/dashboard-session.ts');
     expect(contract.tests).toContain('scripts/seed-dashboard-demo-db.test.ts');
     expect(contract.tests).toContain('e2e/dashboard/dashboard-smoke.spec.ts');
   });

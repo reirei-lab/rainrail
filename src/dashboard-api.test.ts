@@ -981,6 +981,7 @@ describe('Rainrail dashboard API', () => {
       logPath: 'var/log/rainrail-110.log',
       pid: 2468,
     });
+    const sourceTypeCount = vi.spyOn(operationalStore, 'countEventSourceTypes');
     const listProjectIssues = vi.fn(async () => [{
       id: 'PVTI_STOPPED',
       title: 'Stopped task claim',
@@ -1002,6 +1003,7 @@ describe('Rainrail dashboard API', () => {
       headers: { authorization: 'Bearer events-token' },
     }));
     expect(overview.status).toBe(200);
+    expect(sourceTypeCount).toHaveBeenCalledTimes(1);
     await expect(overview.json()).resolves.toMatchObject({
       data: {
         counts: { events: 2, activityEvents: 6, agentTasks: 1, eventHandlerRetries: 1, sources: 1, queue: 1, providers: 1 },
