@@ -5,13 +5,14 @@ export type DashboardRouteId = 'overview' | 'events' | 'workflow-runs' | 'agent-
 export type DashboardRoute = {
   id: DashboardRouteId;
   slug?: string;
+  aliases?: string[];
 };
 
 const dashboardRoutes: readonly DashboardRoute[] = [
   { id: 'overview' },
   { id: 'events', slug: 'events' },
   { id: 'workflow-runs', slug: 'workflow-runs' },
-  { id: 'agent-tasks', slug: 'agent-tasks' },
+  { id: 'agent-tasks', slug: 'tasks', aliases: ['agent-tasks'] },
   { id: 'sources', slug: 'sources' },
   { id: 'queue', slug: 'queue' },
   { id: 'settings', slug: 'settings' },
@@ -56,6 +57,7 @@ export type DashboardContent = {
     workflowMatches: string;
     recordsLabel: string;
     actionsLabel: string;
+    tasksActionsLabel: string;
     commandButtons: {
       resume: string;
       reset: string;
@@ -265,7 +267,7 @@ export type DashboardAppCopy = {
 export const getDashboardRoutes = (): readonly DashboardRoute[] => dashboardRoutes;
 
 export const getDashboardRouteBySlug = (slug?: string): DashboardRoute | undefined =>
-  dashboardRoutes.find((route) => route.slug === slug);
+  dashboardRoutes.find((route) => route.slug === slug || route.aliases?.includes(slug ?? '') === true);
 
 export const getDashboardHref = (locale: Locale, routeId: DashboardRouteId = 'overview'): string => {
   const route = dashboardRoutes.find((entry) => entry.id === routeId);
@@ -695,6 +697,7 @@ const dashboardContent = {
       workflowMatches: 'Workflow matches',
       recordsLabel: 'Operational records',
       actionsLabel: 'Operator actions',
+      tasksActionsLabel: 'Agent task operator actions',
       commandButtons: {
         resume: 'Resume selected',
         reset: 'Reset claim',
@@ -753,6 +756,7 @@ const dashboardContent = {
       workflowMatches: '一致ワークフロー',
       recordsLabel: '運用レコード',
       actionsLabel: '操作',
+      tasksActionsLabel: 'エージェントタスク操作',
       commandButtons: {
         resume: '選択中を再開',
         reset: 'claim をリセット',
