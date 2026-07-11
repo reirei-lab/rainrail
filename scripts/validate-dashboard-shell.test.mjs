@@ -9,6 +9,14 @@ const localizedDashboardPage = readFileSync(
   new URL('../apps/www/src/pages/[locale]/dashboard.astro', import.meta.url),
   'utf8',
 );
+const localizedDashboardRoutePage = readFileSync(
+  new URL('../apps/www/src/pages/[locale]/dashboard/[view].astro', import.meta.url),
+  'utf8',
+);
+const dashboardLayout = readFileSync(
+  new URL('../apps/www/src/layouts/DashboardLayout.astro', import.meta.url),
+  'utf8',
+);
 const dashboardContent = readFileSync(
   new URL('../apps/www/src/lib/dashboard-content.ts', import.meta.url),
   'utf8',
@@ -25,6 +33,11 @@ const globalStyles = readFileSync(
   new URL('../apps/www/src/styles/global.css', import.meta.url),
   'utf8',
 );
+const sitemapRoute = readFileSync(
+  new URL('../apps/www/src/pages/sitemap.xml.ts', import.meta.url),
+  'utf8',
+);
+const dashboardShellSource = localizedDashboardPage + localizedDashboardRoutePage + dashboardLayout;
 const cloudflarePagesDocs = readFileSync(
   new URL('../docs/cloudflare-pages.md', import.meta.url),
   'utf8',
@@ -41,33 +54,52 @@ const contractsManifest = JSON.parse(
 describe('dashboard app shell', () => {
   it('places the operational dashboard under a dedicated app shell route', () => {
     expect(dashboardPage).toContain("getDefaultLocaleRedirect('dashboard')");
-    expect(localizedDashboardPage).toContain('data-dashboard-app');
-    expect(localizedDashboardPage).toContain('data-state="auth-missing"');
-    expect(localizedDashboardPage).toContain('data-state="loading"');
-    expect(localizedDashboardPage).toContain('data-state="empty"');
-    expect(localizedDashboardPage).toContain('data-state="error"');
-    expect(localizedDashboardPage).toContain('data-stale-indicator');
-    expect(localizedDashboardPage).toContain('data-action-permission="operator"');
+    expect(dashboardShellSource).toContain('data-dashboard-app');
+    expect(dashboardShellSource).toContain('data-state="auth-missing"');
+    expect(dashboardShellSource).toContain('data-state="loading"');
+    expect(dashboardShellSource).toContain('data-state="empty"');
+    expect(dashboardShellSource).toContain('data-state="error"');
+    expect(dashboardShellSource).toContain('data-stale-indicator');
+    expect(dashboardShellSource).toContain('data-action-permission="operator"');
     expect(dashboardContent).toContain('Rainrail Operations');
     expect(dashboardContent).toContain('Rainrail 運用');
   });
 
   it('renders dashboard language switcher links to equivalent dashboard locale pages', () => {
-    const dashboardLayout = readFileSync(
-      new URL('../apps/www/src/layouts/DashboardLayout.astro', import.meta.url),
-      'utf8',
-    );
-
     expect(dashboardLayout).toContain('language-switcher');
-    expect(dashboardLayout).toContain('getDashboardHref(targetLocale)');
+    expect(dashboardLayout).toContain('getDashboardHref(targetLocale, activeRoute)');
     expect(dashboardLayout).toContain('data-locale-choice={targetLocale}');
     expect(dashboardLayout).toContain('languagePreferenceKey');
     expect(dashboardLayout).toContain('window.localStorage?.setItem(languagePreferenceKey, locale)');
   });
 
+  it('uses DashboardLayout as the shared route shell with link-based navigation', () => {
+    expect(localizedDashboardPage).toContain("activeRoute=\"overview\"");
+    expect(localizedDashboardRoutePage).toContain('getDashboardRoutes()');
+    expect(localizedDashboardRoutePage).toContain('getDashboardRouteBySlug(view)');
+    expect(localizedDashboardRoutePage).toContain('activeRoute={route.id}');
+    expect(dashboardLayout).toContain('data-dashboard-app');
+    expect(dashboardLayout).toContain('dashboardRoutes.map');
+    expect(dashboardLayout).toContain('href={getDashboardHref(locale, route.id)}');
+    expect(dashboardLayout).toContain('aria-current={route.id === activeRoute ? \'page\' : undefined}');
+    expect(dashboardLayout).not.toContain('<button type="button" data-dashboard-tab="overview"');
+    expect(localizedDashboardPage).not.toContain('<aside class="dashboard-sidebar"');
+    expect(localizedDashboardRoutePage).not.toContain('<aside class="dashboard-sidebar"');
+  });
+
+  it('defines dashboard route URLs for each primary dashboard view', () => {
+    expect(dashboardContent).toContain("export type DashboardRouteId = 'overview' | 'events' | 'workflow-runs' | 'agent-tasks' | 'sources' | 'queue' | 'settings'");
+    expect(dashboardContent).toContain("slug: 'events'");
+    expect(dashboardContent).toContain("slug: 'workflow-runs'");
+    expect(dashboardContent).toContain("slug: 'agent-tasks'");
+    expect(sitemapRoute).toContain("getDashboardHref(locale, route.id)");
+    expect(dashboardContent).toContain("return `/${locale}/dashboard/${route.slug}`;");
+  });
+
   it('adds Sources, Queue, and Settings views for operator context', () => {
     for (const tab of ['sources', 'queue', 'settings']) {
-      expect(localizedDashboardPage).toContain(`data-dashboard-tab="${tab}"`);
+      expect(dashboardLayout).toContain('data-dashboard-tab={route.id}');
+      expect(dashboardContent).toContain(`${tab}:`);
     }
 
     for (const method of ['sources()', 'queue(', 'settings()']) {
@@ -117,8 +149,8 @@ describe('dashboard app shell', () => {
 
   it('defaults the dashboard API client to same-origin unless Pages injects an explicit API URL', () => {
     expect(localizedDashboardPage).toContain("const apiBaseUrl = import.meta.env.PUBLIC_RAINRAIL_OPERATIONAL_API_URL ?? '';");
-    expect(localizedDashboardPage).toContain('data-api-base-url={apiBaseUrl}');
-    expect(localizedDashboardPage).toContain('data-auth-required="true"');
+    expect(dashboardShellSource).toContain('data-api-base-url={apiBaseUrl}');
+    expect(dashboardShellSource).toContain('data-auth-required="true"');
     expect(dashboardClient).toContain("this.baseUrl = options.baseUrl ?? '';");
     expect(dashboardClient).toContain('fetch(`${this.baseUrl}${this.pathWithDemoMode(path)}`');
     expect(dashboardApp).toContain("const authRequired = !demoAuthBypass && appRoot.dataset.authRequired !== 'false';");
@@ -171,7 +203,7 @@ describe('dashboard app shell', () => {
     expect(dashboardClient).toContain('pollIntervalMs');
     expect(dashboardClient).toContain('30000');
     expect(dashboardApp).toContain('setInterval');
-    expect(localizedDashboardPage).toContain('data-live-strategy="polling"');
+    expect(dashboardShellSource).toContain('data-live-strategy="polling"');
   });
 
   it('clears rendered operational data when auth is cleared', () => {

@@ -1,19 +1,46 @@
 ---
 import '../styles/global.css';
-import { getDashboardHref } from '../lib/dashboard-content';
+import {
+  getDashboardContent,
+  getDashboardHref,
+  getDashboardRoutes,
+  type DashboardRouteId,
+} from '../lib/dashboard-content';
 import { defaultLocale, getOgLocale, supportedLocales, type Locale } from '../lib/i18n';
 
 interface Props {
   title: string;
   description: string;
   locale: Locale;
+  activeRoute?: DashboardRouteId;
+  dashboardCopy: string;
+  apiBaseUrl: string;
 }
 
-const { title, description, locale } = Astro.props;
+const { title, description, locale, activeRoute = 'overview', dashboardCopy, apiBaseUrl } = Astro.props;
+const content = getDashboardContent(locale);
+const dashboardRoutes = getDashboardRoutes();
+const dashboardCoreCardByRoute: Partial<Record<DashboardRouteId, string>> = {
+  events: 'core.eventInbox',
+  'workflow-runs': 'core.workflowRuns',
+  'agent-tasks': 'core.agentTasks',
+  sources: 'core.sources',
+  queue: 'core.queue',
+  settings: 'core.settings',
+};
+const dashboardRouteLabels = {
+  overview: content.shell.tabs.overview,
+  events: content.shell.tabs.events,
+  'workflow-runs': content.shell.tabs.workflowRuns,
+  'agent-tasks': content.shell.tabs.agentTasks,
+  sources: content.shell.tabs.sources,
+  queue: content.shell.tabs.queue,
+  settings: content.shell.tabs.settings,
+} as const satisfies Record<DashboardRouteId, string>;
 const pageTitle = `${title} - Rainrail`;
 const ogLocale = getOgLocale(locale);
 const canonicalHref =
-  Astro.site ? new URL(getDashboardHref(locale), Astro.site).toString() : getDashboardHref(locale);
+  Astro.site ? new URL(getDashboardHref(locale, activeRoute), Astro.site).toString() : getDashboardHref(locale, activeRoute);
 const hreflangs = [...supportedLocales, 'x-default'] as const;
 const alternates = Object.fromEntries(
   hreflangs.map((hreflang) => {
@@ -22,8 +49,8 @@ const alternates = Object.fromEntries(
     return [
       hreflang,
       Astro.site
-        ? new URL(getDashboardHref(targetLocale), Astro.site).toString()
-        : getDashboardHref(targetLocale),
+        ? new URL(getDashboardHref(targetLocale, activeRoute), Astro.site).toString()
+        : getDashboardHref(targetLocale, activeRoute),
     ];
   }),
 );
@@ -68,7 +95,7 @@ const languagePreferenceKey = 'rainrail.locale';
       <div class="dashboard-language-switcher language-switcher" aria-label={languageSwitcherLabel}>
         {supportedLocales.map((targetLocale) => (
           <a
-            href={getDashboardHref(targetLocale)}
+            href={getDashboardHref(targetLocale, activeRoute)}
             data-locale-choice={targetLocale}
             aria-current={targetLocale === locale ? 'true' : undefined}
           >
@@ -76,7 +103,37 @@ const languagePreferenceKey = 'rainrail.locale';
           </a>
         ))}
       </div>
-      <slot />
+      <section
+        class="dashboard-shell"
+        data-dashboard-app
+        data-dashboard-copy={dashboardCopy}
+        data-api-base-url={apiBaseUrl}
+        data-auth-required="true"
+        data-state="auth-missing"
+        data-live-strategy="polling"
+        data-active-dashboard-route={activeRoute}
+      >
+        <aside class="dashboard-sidebar" aria-label={content.shell.navLabel}>
+          <a class="dashboard-brand" href={content.shell.brandHref} aria-label={content.shell.brandLabel}>Rainrail</a>
+          <nav>
+            {dashboardRoutes.map((route) => (
+              <a
+                href={getDashboardHref(locale, route.id)}
+                data-dashboard-tab={route.id}
+                data-dashboard-core-card={dashboardCoreCardByRoute[route.id]}
+                aria-current={route.id === activeRoute ? 'page' : undefined}
+              >
+                {dashboardRouteLabels[route.id]}
+              </a>
+            ))}
+          </nav>
+          <label class="dashboard-permission">
+            <input type="checkbox" data-permission-toggle />
+            {content.shell.operatorControls}
+          </label>
+        </aside>
+        <slot />
+      </section>
     </main>
     <script is:inline define:vars={{ languagePreferenceKey }}>
       document.querySelectorAll('[data-locale-choice]').forEach((link) => {

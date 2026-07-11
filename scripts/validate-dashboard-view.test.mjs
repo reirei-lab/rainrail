@@ -9,6 +9,10 @@ const localizedDashboardPage = readFileSync(
   new URL('../apps/www/src/pages/[locale]/dashboard.astro', import.meta.url),
   'utf8',
 );
+const dashboardLayout = readFileSync(
+  new URL('../apps/www/src/layouts/DashboardLayout.astro', import.meta.url),
+  'utf8',
+);
 const dashboardContent = readFileSync(
   new URL('../apps/www/src/lib/dashboard-content.ts', import.meta.url),
   'utf8',
@@ -143,21 +147,28 @@ describe('dashboard operational views', () => {
       expect(dashboardContent).toContain(label);
     }
 
-    expect(localizedDashboardPage).toContain('data-dashboard-tab="agent-tasks"');
+    expect(dashboardLayout).toContain('data-dashboard-tab={route.id}');
   });
 
   it('marks existing standard surfaces as core dashboard cards', () => {
     for (const marker of [
       'data-dashboard-core-card="core.operationalTotals"',
+      'data-dashboard-core-card="core.operatorActions"',
+    ]) {
+      expect(localizedDashboardPage).toContain(marker);
+    }
+
+    for (const marker of [
       'data-dashboard-core-card="core.eventInbox"',
       'data-dashboard-core-card="core.workflowRuns"',
       'data-dashboard-core-card="core.agentTasks"',
       'data-dashboard-core-card="core.sources"',
       'data-dashboard-core-card="core.queue"',
       'data-dashboard-core-card="core.settings"',
-      'data-dashboard-core-card="core.operatorActions"',
     ]) {
-      expect(localizedDashboardPage).toContain(marker);
+      const cardId = marker.match(/"([^"]+)"/)?.[1];
+      expect(cardId).toBeDefined();
+      expect(dashboardLayout).toContain(cardId);
     }
   });
 

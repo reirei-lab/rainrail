@@ -87,11 +87,14 @@ if (root !== null) {
   const dashboardLayoutGrid = root.querySelector<HTMLElement>('[data-dashboard-layout-grid]');
   const dashboardLayoutStatus = root.querySelector<HTMLElement>('[data-dashboard-layout-status]');
   const demoIndicator = root.querySelector<HTMLElement>('[data-demo-indicator]');
-  const tabButtons = Array.from(root.querySelectorAll<HTMLButtonElement>('[data-dashboard-tab]'));
+  const tabButtons = Array.from(root.querySelectorAll<HTMLAnchorElement>('[data-dashboard-tab]'));
   const dashboardCoreCardElements = Array.from(root.querySelectorAll<HTMLElement>('[data-dashboard-core-card]'));
 
   let client: RainrailDashboardApiClient | undefined;
-  const initialDashboardState = initialDashboardStateFromUrl(new URLSearchParams(window.location.search));
+  const initialDashboardState = initialDashboardStateFromUrl(
+    new URLSearchParams(window.location.search),
+    appRoot.dataset.activeDashboardRoute,
+  );
   let selectedTab: DashboardTab = initialDashboardState.tab;
   let latestData: DashboardData | undefined;
   let lastUpdatedAt = 0;
@@ -335,7 +338,11 @@ if (root !== null) {
 
   function updateTabButtons(): void {
     for (const button of tabButtons) {
-      button.ariaPressed = String(button.dataset.dashboardTab === selectedTab);
+      if (button.dataset.dashboardTab === selectedTab) {
+        button.setAttribute('aria-current', 'page');
+      } else {
+        button.removeAttribute('aria-current');
+      }
     }
   }
 
@@ -1652,9 +1659,10 @@ function isDashboardTab(value: string | undefined): value is DashboardTab {
     || value === 'settings';
 }
 
-function initialDashboardStateFromUrl(params: URLSearchParams): DashboardInitialState {
+function initialDashboardStateFromUrl(params: URLSearchParams, routeTabParam?: string): DashboardInitialState {
   const tabParam = params.get('tab') ?? undefined;
-  const tab = isDashboardTab(tabParam) ? tabParam : 'overview';
+  const routeTab = isDashboardTab(routeTabParam) ? routeTabParam : 'overview';
+  const tab = isDashboardTab(tabParam) ? tabParam : routeTab;
   const status = params.get('status') ?? undefined;
 
   return {

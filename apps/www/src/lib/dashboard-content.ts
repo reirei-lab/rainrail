@@ -1,5 +1,22 @@
 import { getLocaleHref, type Locale } from './i18n.js';
 
+export type DashboardRouteId = 'overview' | 'events' | 'workflow-runs' | 'agent-tasks' | 'sources' | 'queue' | 'settings';
+
+export type DashboardRoute = {
+  id: DashboardRouteId;
+  slug?: string;
+};
+
+const dashboardRoutes: readonly DashboardRoute[] = [
+  { id: 'overview' },
+  { id: 'events', slug: 'events' },
+  { id: 'workflow-runs', slug: 'workflow-runs' },
+  { id: 'agent-tasks', slug: 'agent-tasks' },
+  { id: 'sources', slug: 'sources' },
+  { id: 'queue', slug: 'queue' },
+  { id: 'settings', slug: 'settings' },
+] as const satisfies readonly DashboardRoute[];
+
 export type DashboardContent = {
   meta: {
     title: string;
@@ -245,7 +262,24 @@ export type DashboardAppCopy = {
   };
 };
 
-export const getDashboardHref = (locale: Locale): string => `/${locale}/dashboard`;
+export const getDashboardRoutes = (): readonly DashboardRoute[] => dashboardRoutes;
+
+export const getDashboardRouteBySlug = (slug?: string): DashboardRoute | undefined =>
+  dashboardRoutes.find((route) => route.slug === slug);
+
+export const getDashboardHref = (locale: Locale, routeId: DashboardRouteId = 'overview'): string => {
+  const route = dashboardRoutes.find((entry) => entry.id === routeId);
+
+  if (route === undefined) {
+    throw new RangeError(`Unsupported dashboard route: ${routeId}`);
+  }
+
+  if (route.slug === undefined) {
+    return `/${locale}/dashboard`;
+  }
+
+  return `/${locale}/dashboard/${route.slug}`;
+};
 
 const englishApp: DashboardAppCopy = {
   status: {
