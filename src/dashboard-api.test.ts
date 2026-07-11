@@ -981,19 +981,21 @@ describe('Rainrail dashboard API', () => {
       logPath: 'var/log/rainrail-110.log',
       pid: 2468,
     });
+    const sourceTypeCount = vi.spyOn(operationalStore, 'countEventSourceTypes');
+    const listProjectIssues = vi.fn(async () => [{
+      id: 'PVTI_STOPPED',
+      title: 'Stopped task claim',
+      status: 'Todo',
+      state: 'OPEN',
+      assigneeLogins: ['reirei-agent'],
+      repository: 'reirei-lab/rainrail',
+      number: 116,
+    }]);
     const app = createTestApp({
       eventsBearerToken: 'events-token',
       operationalStore,
       taskQueue: {
-        listProjectIssues: async () => [{
-          id: 'PVTI_STOPPED',
-          title: 'Stopped task claim',
-          status: 'Todo',
-          state: 'OPEN',
-          assigneeLogins: ['reirei-agent'],
-          repository: 'reirei-lab/rainrail',
-          number: 116,
-        }],
+        listProjectIssues,
       },
     });
 
@@ -1001,13 +1003,15 @@ describe('Rainrail dashboard API', () => {
       headers: { authorization: 'Bearer events-token' },
     }));
     expect(overview.status).toBe(200);
+    expect(sourceTypeCount).toHaveBeenCalledTimes(1);
     await expect(overview.json()).resolves.toMatchObject({
       data: {
-        counts: { events: 2, activityEvents: 6, agentTasks: 1, eventHandlerRetries: 1 },
+        counts: { events: 2, activityEvents: 6, agentTasks: 1, eventHandlerRetries: 1, sources: 1, queue: 1, providers: 1 },
         warnings: { staleProjectClaims: [] },
         recentActivity: [{ id: workflow.id, summary: 'review-request plugin completed' }],
       },
     });
+    expect(listProjectIssues).not.toHaveBeenCalled();
 
     const events = await app.fetch(new Request('https://rainrail.local/api/v1/events?limit=1', {
       headers: { authorization: 'Bearer events-token' },

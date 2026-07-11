@@ -1,11 +1,10 @@
 import {
   RainrailDashboardApiClient,
   RainrailDashboardApiError,
-  type DashboardCardCatalogEntry,
   type DashboardAgentTask,
+  type DashboardCardCatalogEntry,
   type DashboardDetail,
   type DashboardEvent,
-  type DashboardLayout,
   type DashboardLayoutItem,
   type DashboardOverview,
   type DashboardQueueItem,
@@ -14,22 +13,20 @@ import {
   type DashboardWorkflowRun,
 } from './dashboard-client';
 import { fallbackDashboardAppCopy, type DashboardAppCopy } from './dashboard-content';
+import { fetchDashboardDataForTab, type DashboardData, type DashboardTab } from './dashboard-controllers';
+import {
+  API_BASE_URL_STORAGE_KEY,
+  OPERATOR_STORAGE_KEY,
+  TOKEN_STORAGE_KEY,
+  createDashboardPollingController,
+  createSafeStorage,
+  isDashboardAuthError,
+  isLoopbackDashboardHost,
+  normalizeApiBaseUrl,
+} from './dashboard-session';
 
-type DashboardTab = 'overview' | 'events' | 'workflow-runs' | 'agent-tasks' | 'sources' | 'queue' | 'settings';
 type DashboardRow = DashboardEvent | DashboardWorkflowRun | DashboardAgentTask | DashboardSource | DashboardQueueItem | DashboardSetting;
 type DashboardAction = 'resume' | 'reset' | 'terminate' | 'terminate-all';
-
-interface DashboardData {
-  overview: DashboardOverview;
-  events: DashboardEvent[];
-  workflowRuns: DashboardWorkflowRun[];
-  agentTasks: DashboardAgentTask[];
-  sources: DashboardSource[];
-  queue: DashboardQueueItem[];
-  settings: DashboardSetting[];
-  cards: DashboardCardCatalogEntry[];
-  layout: DashboardLayout['data'];
-}
 
 interface DashboardInitialState {
   tab: DashboardTab;
@@ -45,9 +42,6 @@ interface DashboardInitialState {
   };
 }
 
-const TOKEN_STORAGE_KEY = 'rainrail-dashboard-token';
-const API_BASE_URL_STORAGE_KEY = 'rainrail-dashboard-api-base-url';
-const OPERATOR_STORAGE_KEY = 'rainrail-dashboard-operator';
 const STALE_AFTER_MS = 45000;
 const DASHBOARD_GRID_COLUMNS = 12;
 const DASHBOARD_LAYOUT_DRAG_MIME = 'application/x-rainrail-dashboard-layout-item';
@@ -99,7 +93,7 @@ if (root !== null) {
   let latestData: DashboardData | undefined;
   let lastUpdatedAt = 0;
   let staleTimer: number | undefined;
-  let pollTimer: number | undefined;
+  const polling = createDashboardPollingController(window);
   let refreshInFlightClient: RainrailDashboardApiClient | undefined;
   let refreshSequence = 0;
   let detailRequestSequence = 0;
@@ -109,6 +103,7 @@ if (root !== null) {
   let cardSettingsSaving = false;
   let dashboardLayoutSaving = false;
   let layoutMutationSequence = 0;
+  let tabChangedDuringLayoutVisibility = false;
 
   const storedToken = sessionStore.get(TOKEN_STORAGE_KEY) ?? '';
   const storedApiBaseUrl = sessionStore.get(API_BASE_URL_STORAGE_KEY) ?? appRoot.dataset.apiBaseUrl ?? '';
@@ -273,27 +268,28 @@ if (root !== null) {
     const activeClient = client;
     const activeRefreshId = ++refreshSequence;
     refreshInFlightClient = activeClient;
+    let refreshAfterCurrent = false;
 
     if (!options.quiet) setState('loading', copy.status.loading);
 
     try {
-      const nextData = {
-        overview: await activeClient.overview(),
-        events: (await activeClient.events(currentEventFilters())).data,
-        workflowRuns: (await activeClient.workflowRuns(currentWorkflowRunFilters())).data,
-        agentTasks: (await activeClient.agentTasks(currentAgentTaskFilters())).data,
-        sources: (await activeClient.sources()).data,
-        queue: (await activeClient.queue(currentQueueFilters())).data,
-        settings: (await activeClient.settings()).data,
-        cards: (await activeClient.dashboardCards()).data,
-        layout: (await activeClient.dashboardLayout()).data,
-      };
+      const nextData = await fetchDashboardDataForTab(activeClient, {
+        tab: selectedTab,
+        eventFilters: currentEventFilters(),
+        workflowRunFilters: currentWorkflowRunFilters(),
+        agentTaskFilters: currentAgentTaskFilters(),
+        queueFilters: currentQueueFilters(),
+      });
       if (!isCurrentRefresh(activeClient, activeRefreshId)) return;
 
       latestData = nextData;
       lastUpdatedAt = Date.now();
       scheduleStaleCheck();
+      tabChangedDuringLayoutVisibility = false;
       applyDashboardLayoutVisibility();
+      if (tabChangedDuringLayoutVisibility) {
+        refreshAfterCurrent = true;
+      }
       renderStats(latestData.overview);
       renderDashboardLayout();
       renderCardPicker();
@@ -311,6 +307,9 @@ if (root !== null) {
       setState('error', message);
     } finally {
       clearRefreshInFlight(activeClient, activeRefreshId);
+      if (refreshAfterCurrent && client === activeClient) {
+        void refresh({ quiet: true });
+      }
     }
   }
 
@@ -429,10 +428,10 @@ if (root !== null) {
       statItem(copy.stats.events, counts.events ?? 0),
       statItem(copy.stats.activeRuns, counts.activityEvents ?? 0),
       statItem(copy.stats.retryingHandlers, counts.eventHandlerRetries ?? 0),
-      statItem(copy.stats.providerStatus, providerCount(latestData?.events ?? [])),
+      statItem(copy.stats.providerStatus, counts.providers ?? providerCount(latestData?.events ?? [])),
       statItem(copy.stats.agentTasks, counts.agentTasks ?? 0),
-      statItem(copy.stats.sources, latestData?.sources.length ?? 0),
-      statItem(copy.stats.queue, latestData?.queue.length ?? 0),
+      statItem(copy.stats.sources, counts.sources ?? latestData?.sources.length ?? 0),
+      statItem(copy.stats.queue, counts.queue ?? latestData?.queue.length ?? 0),
     ]);
   }
 
@@ -535,17 +534,11 @@ if (root !== null) {
   }
 
   function startPolling(nextClient: RainrailDashboardApiClient): void {
-    stopPolling();
-    pollTimer = window.setInterval(() => {
-      void refresh({ quiet: true });
-    }, nextClient.pollIntervalMs);
+    polling.start(nextClient, () => refresh({ quiet: true }));
   }
 
   function stopPolling(): void {
-    if (pollTimer !== undefined) {
-      window.clearInterval(pollTimer);
-      pollTimer = undefined;
-    }
+    polling.stop();
   }
 
   function setOperatorActionsEnabled(enabled: boolean): void {
@@ -915,6 +908,7 @@ if (root !== null) {
       const tab = dashboardTabForCard(definition.id);
       if (tab !== undefined) {
         selectedTab = tab;
+        void refresh();
         renderCurrentList();
       } else {
         selectCardSettingsItem(item.id);
@@ -1120,6 +1114,7 @@ if (root !== null) {
     const activeClient = client;
     discardInFlightDashboardRefreshes(activeClient);
     dashboardLayoutSaving = true;
+    let refreshAfterSave = false;
     setOperatorActionsEnabled(isOperatorModeEnabled());
     setDashboardLayoutStatus(copy.cardLayout.saving);
     renderDashboardLayout();
@@ -1135,7 +1130,7 @@ if (root !== null) {
       setDashboardLayoutStatus(response.data.auditWarning === undefined
         ? copy.cardLayout.saved
         : formatCommandResponse('accepted', response.data.auditId, response.data.auditWarning, copy));
-      applyDashboardLayoutVisibility();
+      refreshAfterSave = applyDashboardLayoutVisibility();
       renderDashboardLayout();
       renderCardPicker();
       renderCardSettingsPicker({ quiet: true });
@@ -1147,6 +1142,9 @@ if (root !== null) {
       setOperatorActionsEnabled(isOperatorModeEnabled());
       renderDashboardLayout();
       renderCardPicker();
+      if (refreshAfterSave && client === activeClient) {
+        void refresh({ quiet: true });
+      }
     }
   }
 
@@ -1331,12 +1329,16 @@ if (root !== null) {
     return dashboardTabForCard(cardId) === undefined ? copy.cardLayout.settings : copy.cardLayout.open;
   }
 
-  function applyDashboardLayoutVisibility(): void {
+  function applyDashboardLayoutVisibility(): boolean {
+    const previousTab = selectedTab;
     for (const element of dashboardCoreCardElements) {
       const cardId = element.dataset.dashboardCoreCard;
       element.hidden = latestData !== undefined && latestData.layout.source === 'user' && cardId !== undefined && !dashboardCoreCardIsVisible(cardId);
     }
     ensureVisibleDashboardTab();
+    const tabChanged = previousTab !== selectedTab;
+    tabChangedDuringLayoutVisibility = tabChangedDuringLayoutVisibility || tabChanged;
+    return tabChanged;
   }
 
   function dashboardCoreCardIsVisible(cardId: string | undefined): boolean {
@@ -1592,78 +1594,6 @@ function invalidCardSettingsConfig(input: HTMLInputElement, value: number): bool
   return !input.validity.valid
     || !Number.isFinite(value)
     || (input.dataset.cardSettingValueType === 'integer' && !Number.isInteger(value));
-}
-
-interface SafeStorage {
-  get(key: string): string | undefined;
-  set(key: string, value: string): void;
-  remove(key: string): void;
-}
-
-function createSafeStorage(getStorage: () => Storage): SafeStorage {
-  const memoryStorage = new Map<string, string>();
-
-  function storage(): Storage | undefined {
-    try {
-      const candidate = getStorage();
-      const probeKey = 'rainrail-dashboard-storage-probe';
-      candidate.setItem(probeKey, '1');
-      candidate.removeItem(probeKey);
-      return candidate;
-    } catch {
-      return undefined;
-    }
-  }
-
-  return {
-    get(key) {
-      const target = storage();
-      if (target === undefined) return memoryStorage.get(key);
-
-      try {
-        return target.getItem(key) ?? undefined;
-      } catch {
-        return memoryStorage.get(key);
-      }
-    },
-    set(key, value) {
-      const target = storage();
-      if (target === undefined) {
-        memoryStorage.set(key, value);
-        return;
-      }
-
-      try {
-        target.setItem(key, value);
-      } catch {
-        memoryStorage.set(key, value);
-      }
-    },
-    remove(key) {
-      memoryStorage.delete(key);
-      const target = storage();
-      if (target === undefined) return;
-
-      try {
-        target.removeItem(key);
-      } catch {
-        // The fallback is already cleared.
-      }
-    },
-  };
-}
-
-function normalizeApiBaseUrl(value: string): string {
-  return value.trim().replace(/\/+$/, '');
-}
-
-function isLoopbackDashboardHost(hostname: string): boolean {
-  return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]' || hostname === '::1';
-}
-
-function isDashboardAuthError(error: unknown): boolean {
-  return error instanceof RainrailDashboardApiError
-    && (error.status === 401 || error.status === 403 || error.code === 'invalid_bearer_token');
 }
 
 function isDashboardTab(value: string | undefined): value is DashboardTab {

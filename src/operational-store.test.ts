@@ -230,6 +230,7 @@ describe('RainrailOperationalStore', () => {
       }
 
       const reopened = new SqliteOperationalStore({ databasePath, eventLimit: 10, now: fixedClock() });
+      expect(reopened.countEventSourceTypes()).toBe(1);
       expect(reopened.snapshot()).toMatchObject({
         counts: {
           events: 1,
@@ -250,6 +251,16 @@ describe('RainrailOperationalStore', () => {
     } finally {
       cleanup();
     }
+  });
+
+  it('counts distinct event source types without listing event rows', () => {
+    const store = new RainrailOperationalStore({ databasePath: ':memory:', eventLimit: 10, now: fixedClock() });
+    store.recordEvent(fixtureEvent('delivery-github-1', 'github.issue', 'github'));
+    store.recordEvent(fixtureEvent('delivery-github-2', 'github.pull_request', 'github'));
+    store.recordEvent(fixtureEvent('delivery-cloudflare-1', 'cloudflare.tail', 'cloudflare'));
+
+    expect(store.countEventSourceTypes()).toBe(2);
+    store.close();
   });
 
   it('preserves safe inline-redacted raw payload references for dashboard tracing', () => {
@@ -724,15 +735,25 @@ describe('RainrailOperationalStore', () => {
   });
 });
 
-function fixtureEvent(deliveryId: string, name: 'github.issue' | 'github.pull_request') {
+function fixtureEvent(
+  deliveryId: string,
+  name: 'github.issue' | 'github.pull_request' | 'cloudflare.tail',
+  sourceType = 'github',
+) {
+  const subjectType = name === 'github.issue'
+    ? 'issue'
+    : name === 'github.pull_request'
+      ? 'pull_request'
+      : 'tail';
+
   return createEventEnvelope({
-    source: { type: 'github', name: 'github-webhook', repository: 'reirei-lab/rainrail' },
+    source: { type: sourceType, name: `${sourceType}-source`, repository: 'reirei-lab/rainrail' },
     name,
     delivery: { id: deliveryId, receivedAt: '2026-07-02T00:00:00.000Z' },
     occurredAt: '2026-07-02T00:00:00.000Z',
-    subject: { type: name === 'github.issue' ? 'issue' : 'pull_request', id: '25' },
+    subject: { type: subjectType, id: '25' },
     payload: { action: 'opened' },
-    rawPayload: { kind: 'external-reference', reference: `github://deliveries/${deliveryId}` },
+    rawPayload: { kind: 'external-reference', reference: `${sourceType}://deliveries/${deliveryId}` },
   });
 }
 
