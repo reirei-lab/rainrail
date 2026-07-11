@@ -113,7 +113,7 @@ jobs:
   dashboard-e2e:
     name: Dashboard E2E
     needs: validate
-    runs-on: ${{ github.event.pull_request.head.repo.full_name == github.repository && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.pull_request.author_association) && 'self-hosted' || 'ubuntu-latest' }}
+    runs-on: ubuntu-24.04
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
