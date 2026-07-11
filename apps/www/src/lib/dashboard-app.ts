@@ -428,7 +428,7 @@ if (root !== null) {
       statItem(copy.stats.events, counts.events ?? 0),
       statItem(copy.stats.activeRuns, counts.activityEvents ?? 0),
       statItem(copy.stats.retryingHandlers, counts.eventHandlerRetries ?? 0),
-      statItem(copy.stats.providerStatus, providerCount(latestData?.events ?? [])),
+      statItem(copy.stats.providerStatus, counts.providers ?? providerCount(latestData?.events ?? [])),
       statItem(copy.stats.agentTasks, counts.agentTasks ?? 0),
       statItem(copy.stats.sources, counts.sources ?? latestData?.sources.length ?? 0),
       statItem(copy.stats.queue, counts.queue ?? latestData?.queue.length ?? 0),
@@ -1114,6 +1114,7 @@ if (root !== null) {
     const activeClient = client;
     discardInFlightDashboardRefreshes(activeClient);
     dashboardLayoutSaving = true;
+    let refreshAfterSave = false;
     setOperatorActionsEnabled(isOperatorModeEnabled());
     setDashboardLayoutStatus(copy.cardLayout.saving);
     renderDashboardLayout();
@@ -1129,7 +1130,7 @@ if (root !== null) {
       setDashboardLayoutStatus(response.data.auditWarning === undefined
         ? copy.cardLayout.saved
         : formatCommandResponse('accepted', response.data.auditId, response.data.auditWarning, copy));
-      applyDashboardLayoutVisibility();
+      refreshAfterSave = applyDashboardLayoutVisibility();
       renderDashboardLayout();
       renderCardPicker();
       renderCardSettingsPicker({ quiet: true });
@@ -1141,6 +1142,9 @@ if (root !== null) {
       setOperatorActionsEnabled(isOperatorModeEnabled());
       renderDashboardLayout();
       renderCardPicker();
+      if (refreshAfterSave && client === activeClient) {
+        void refresh({ quiet: true });
+      }
     }
   }
 
@@ -1325,14 +1329,16 @@ if (root !== null) {
     return dashboardTabForCard(cardId) === undefined ? copy.cardLayout.settings : copy.cardLayout.open;
   }
 
-  function applyDashboardLayoutVisibility(): void {
+  function applyDashboardLayoutVisibility(): boolean {
     const previousTab = selectedTab;
     for (const element of dashboardCoreCardElements) {
       const cardId = element.dataset.dashboardCoreCard;
       element.hidden = latestData !== undefined && latestData.layout.source === 'user' && cardId !== undefined && !dashboardCoreCardIsVisible(cardId);
     }
     ensureVisibleDashboardTab();
-    tabChangedDuringLayoutVisibility = tabChangedDuringLayoutVisibility || previousTab !== selectedTab;
+    const tabChanged = previousTab !== selectedTab;
+    tabChangedDuringLayoutVisibility = tabChangedDuringLayoutVisibility || tabChanged;
+    return tabChanged;
   }
 
   function dashboardCoreCardIsVisible(cardId: string | undefined): boolean {

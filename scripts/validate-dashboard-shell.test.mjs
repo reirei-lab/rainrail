@@ -254,15 +254,19 @@ describe('dashboard app shell', () => {
   });
 
   it('keeps shell stats backed by overview counts while page controllers skip inactive collections', () => {
+    expect(dashboardApp).toContain('statItem(copy.stats.providerStatus, counts.providers ?? providerCount(latestData?.events ?? []))');
     expect(dashboardApp).toContain('statItem(copy.stats.sources, counts.sources ?? latestData?.sources.length ?? 0)');
     expect(dashboardApp).toContain('statItem(copy.stats.queue, counts.queue ?? latestData?.queue.length ?? 0)');
+    expect(dashboardApp).not.toContain('statItem(copy.stats.providerStatus, providerCount(latestData?.events ?? [])),');
     expect(dashboardControllers).toContain('sources: []');
     expect(dashboardControllers).toContain('queue: []');
   });
 
   it('refreshes active-page collections after client-side dashboard tab changes', () => {
     expect(dashboardApp).toContain('let tabChangedDuringLayoutVisibility = false;');
+    expect(dashboardApp).toContain('let refreshAfterSave = false;');
     expect(dashboardApp).toContain('if (tabChangedDuringLayoutVisibility) {');
+    expect(dashboardApp).toContain('refreshAfterSave = applyDashboardLayoutVisibility();');
     expect(dashboardApp).toContain('void refresh({ quiet: true });');
     expect(dashboardApp).toContain('selectedTab = tab;');
     expect(dashboardApp).toContain('void refresh();');

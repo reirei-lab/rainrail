@@ -683,11 +683,12 @@ async function dashboardV1OverviewResponse(options: RainrailHttpAppOptions): Pro
 
   const snapshot = store.snapshot({ hideSkippedActivityEvents: true });
   const sourceRows = dashboardV1SourceRows(options, store);
-  const queueRows = await dashboardV1QueueRows(options, snapshot);
+  const queueRows = dashboardV1LocalQueueRows(options, snapshot);
   return jsonResponse({
     data: {
       counts: {
         ...snapshot.counts,
+        providers: new Set(store.listEvents().map((event) => event.source.type)).size,
         sources: sourceRows.length,
         queue: queueRows.length,
       },
@@ -1657,13 +1658,21 @@ function agentTaskToQueueRow(task: StoredAgentTask, staleWarning: StoredStalePro
 }
 
 async function dashboardV1QueueRows(options: RainrailHttpAppOptions, snapshot: ReturnType<OperationalStore['snapshot']>) {
+  const taskRows = dashboardV1LocalQueueRows(options, snapshot);
+  const store = options.operationalStore;
+  if (store === undefined) return taskRows;
+  const tasks = store.listAgentTasks();
+  const staleWarningsByTaskId = new Map(snapshot.warnings.staleProjectClaims.map((warning) => [warning.taskId, warning]));
+  const projectIssueRows = await projectIssueQueueRows(options.taskQueue, tasks, staleWarningsByTaskId);
+  return sortQueueRows([...taskRows, ...projectIssueRows]);
+}
+
+function dashboardV1LocalQueueRows(options: RainrailHttpAppOptions, snapshot: ReturnType<OperationalStore['snapshot']>) {
   const store = options.operationalStore;
   if (store === undefined) return [];
   const tasks = store.listAgentTasks();
   const staleWarningsByTaskId = new Map(snapshot.warnings.staleProjectClaims.map((warning) => [warning.taskId, warning]));
-  const taskRows = tasks.map((task) => agentTaskToQueueRow(task, staleWarningsByTaskId.get(task.id)));
-  const projectIssueRows = await projectIssueQueueRows(options.taskQueue, tasks, staleWarningsByTaskId);
-  return sortQueueRows([...taskRows, ...projectIssueRows]);
+  return sortQueueRows(tasks.map((task) => agentTaskToQueueRow(task, staleWarningsByTaskId.get(task.id))));
 }
 
 async function projectIssueQueueRows(
