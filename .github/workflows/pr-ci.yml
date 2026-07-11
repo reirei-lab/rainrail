@@ -48,6 +48,14 @@ jobs:
       - name: Run tests
         run: pnpm test
 
+      - name: Run Codex App Server smoke test
+        if: >-
+          github.event.pull_request.head.repo.full_name == github.repository &&
+          contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.pull_request.author_association)
+        run: pnpm exec vitest run src/codex-app-server/smoke.test.ts
+        env:
+          RAINRAIL_CODEX_APP_SERVER_SMOKE: '1'
+
       - name: Run build
         env:
           PUBLIC_RAINRAIL_OPERATIONAL_API_URL: ${{ vars.RAINRAIL_OPERATIONAL_API_URL }}

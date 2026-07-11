@@ -6351,7 +6351,7 @@ describe('Rainrail CLI built-in commands', () => {
     });
   });
 
-  it('retries Codex App Server session test with the legacy read-only sandbox name', async () => {
+  it('retries Codex App Server session test with the legacy camelCase sandbox name', async () => {
     await withTempDirectory(async (directory) => {
       const projectRoot = await initRainrailProject(directory, 'codex-runtime-legacy-sandbox');
       const configPath = join(projectRoot, 'rainrail.config.json');
@@ -6383,7 +6383,7 @@ describe('Rainrail CLI built-in commands', () => {
           }
           if (command === '/opt/codex/bin/codex' && args.join(' ') === 'app-server --listen stdio://') {
             sessionInputs.push(options.input ?? '');
-            if (options.input?.includes('"sandbox":"readOnly"')) {
+            if (options.input?.includes('"sandbox":"read-only"')) {
               return {
                 status: 0,
                 stdout: [
@@ -6399,7 +6399,7 @@ describe('Rainrail CLI built-in commands', () => {
                     id: 2,
                     error: {
                       code: -32602,
-                      message: 'unknown variant `readOnly`, expected `read-only`',
+                      message: 'unknown variant `read-only`, expected `readOnly`',
                     },
                   }),
                   '',
@@ -6416,8 +6416,8 @@ describe('Rainrail CLI built-in commands', () => {
       expect(result.exitCode).toBe(0);
       expect(JSON.parse(result.stdout) as unknown).toMatchObject({ ok: true });
       expect(sessionInputs).toHaveLength(2);
-      expect(sessionInputs[0]).toContain('"sandbox":"readOnly"');
-      expect(sessionInputs[1]).toContain('"sandbox":"read-only"');
+      expect(sessionInputs[0]).toContain('"sandbox":"read-only"');
+      expect(sessionInputs[1]).toContain('"sandbox":"readOnly"');
     });
   });
 

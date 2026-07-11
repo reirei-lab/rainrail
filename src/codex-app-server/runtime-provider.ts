@@ -237,8 +237,6 @@ function codexAppServerThreadParams(options: CodexAppServerRuntimeProviderOption
   const threadParams: CodexAppServerThreadStartParams = {
     approvalPolicy: 'never',
     ephemeral: true,
-    sessionStartSource: 'rainrail',
-    threadSource: 'rainrail',
     ...definedCodexThreadOptions(options.thread),
   };
   if (options.cwd !== undefined && threadParams.cwd === undefined) threadParams.cwd = options.cwd;
