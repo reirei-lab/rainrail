@@ -9,6 +9,10 @@ const localizedDashboardPage = readFileSync(
   new URL('../apps/www/src/pages/[locale]/dashboard.astro', import.meta.url),
   'utf8',
 );
+const localizedDashboardRoutePage = readFileSync(
+  new URL('../apps/www/src/pages/[locale]/dashboard/[view].astro', import.meta.url),
+  'utf8',
+);
 const dashboardLayout = readFileSync(
   new URL('../apps/www/src/layouts/DashboardLayout.astro', import.meta.url),
   'utf8',
@@ -161,10 +165,10 @@ describe('dashboard operational views', () => {
   it('marks existing standard surfaces as core dashboard cards', () => {
     for (const marker of [
       'data-dashboard-core-card="core.operationalTotals"',
-      'data-dashboard-core-card="core.operatorActions"',
     ]) {
       expect(localizedDashboardPage).toContain(marker);
     }
+    expect(localizedDashboardRoutePage).toContain('data-dashboard-core-card="core.operatorActions"');
 
     for (const marker of [
       'data-dashboard-core-card="core.eventInbox"',
@@ -264,8 +268,11 @@ describe('dashboard operational views', () => {
       'data-agent-action="terminate-all"',
       'data-command-status',
     ]) {
-      expect(localizedDashboardPage).toContain(marker);
+      expect(localizedDashboardRoutePage).toContain(marker);
+      expect(localizedDashboardPage).not.toContain(marker);
     }
+    expect(localizedDashboardRoutePage).toContain("route.id === 'agent-tasks'");
+    expect(localizedDashboardRoutePage).toContain('content.shell.tasksActionsLabel');
 
     for (const method of [
       'resumeAgentTask',

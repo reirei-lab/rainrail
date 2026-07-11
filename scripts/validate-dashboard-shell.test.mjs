@@ -68,7 +68,6 @@ describe('dashboard app shell', () => {
     expect(dashboardShellSource).toContain('data-state="empty"');
     expect(dashboardShellSource).toContain('data-state="error"');
     expect(dashboardShellSource).toContain('data-stale-indicator');
-    expect(dashboardShellSource).toContain('data-action-permission="operator"');
     expect(dashboardContent).toContain('Rainrail Operations');
     expect(dashboardContent).toContain('Rainrail 運用');
   });
@@ -103,7 +102,12 @@ describe('dashboard app shell', () => {
     expect(dashboardContent).toContain("export type DashboardRouteId = 'overview' | 'events' | 'workflow-runs' | 'agent-tasks' | 'sources' | 'queue' | 'settings'");
     expect(dashboardContent).toContain("slug: 'events'");
     expect(dashboardContent).toContain("slug: 'workflow-runs'");
-    expect(dashboardContent).toContain("slug: 'agent-tasks'");
+    expect(dashboardContent).toContain("slug: 'tasks'");
+    expect(dashboardContent).toContain("aliases: ['agent-tasks']");
+    expect(dashboardContent).not.toContain("slug: 'agent-tasks'");
+    expect(localizedDashboardRoutePage).toContain('const routeViews = route.slug === undefined ? [] : [route.slug, ...(route.aliases ?? [])];');
+    expect(localizedDashboardRoutePage).toContain('params: { locale, view }');
+    expect(localizedDashboardRoutePage).toContain('props: { locale, view }');
     expect(sitemapRoute).toContain("getDashboardHref(locale, route.id)");
     expect(dashboardContent).toContain("return `/${locale}/dashboard/${route.slug}`;");
   });
@@ -191,7 +195,7 @@ describe('dashboard app shell', () => {
   it('hydrates dashboard demo VRT state from URL parameters', () => {
     expect(dashboardDemoVrtScenarios).toContain('tab=events&source=github&event=evt_demo_github_issue_272');
     expect(dashboardDemoVrtScenarios).toContain('tab=workflow-runs&status=failed&run=act_demo_workflow_failed_retry');
-    expect(dashboardDemoVrtScenarios).toContain('tab=agent-tasks&task=agent_task_demo_running');
+    expect(dashboardDemoVrtScenarios).toContain('/ja/dashboard/tasks?demo=1&task=agent_task_demo_running');
     expect(dashboardDemoVrtScenarios).toContain('tab=queue&status=blocked');
     expect(dashboardApp).toContain('initialDashboardStateFromUrl');
     expect(dashboardApp).toContain('let selectedTab: DashboardTab = initialDashboardState.tab;');

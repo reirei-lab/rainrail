@@ -134,14 +134,6 @@ const dashboardCopy = JSON.stringify(content.app);
         </article>
       </section>
 
-      <section class="dashboard-actions" data-dashboard-core-card="core.operatorActions" aria-label={content.shell.actionsLabel}>
-        <button type="button" class="dashboard-action" data-agent-action="resume" data-action-permission="operator" disabled>{content.shell.commandButtons.resume}</button>
-        <button type="button" class="dashboard-action" data-agent-action="reset" data-action-permission="operator" disabled>{content.shell.commandButtons.reset}</button>
-        <button type="button" class="dashboard-action" data-agent-action="terminate" data-action-permission="operator" disabled>{content.shell.commandButtons.terminate}</button>
-        <button type="button" class="dashboard-action danger" data-agent-action="terminate-all" data-action-permission="operator" disabled>{content.shell.commandButtons.terminateAll}</button>
-        <span class="dashboard-command-status" data-command-status aria-live="polite"></span>
-      </section>
-
       <section class="dashboard-card-settings" aria-label={content.app.cardSettings.title}>
         <label>
           {content.app.cardSettings.card}
