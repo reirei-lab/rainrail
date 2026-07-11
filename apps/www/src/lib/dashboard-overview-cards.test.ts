@@ -3,7 +3,9 @@ import {
   OVERVIEW_CARD_STORAGE_KEY,
   createDefaultOverviewCardLayout,
   moveOverviewCard,
+  overviewCountLabel,
   overviewCardRegistry,
+  overviewHealthStatusLabel,
   parseOverviewCardLayout,
   serializeOverviewCardLayout,
   setOverviewCardVisibility,
@@ -90,5 +92,45 @@ describe('dashboard overview cards', () => {
       { id: 'counts', visible: false },
       { id: 'health', visible: true },
     ]);
+  });
+
+  it('labels overview health without hiding unavailable or auth states', () => {
+    const labels = {
+      ready: 'Live operational state',
+      empty: 'No operational records yet',
+      error: 'Operational API unavailable',
+      authMissing: 'Bearer token required',
+      loading: 'Loading operational state',
+      connected: 'Connected',
+    };
+
+    expect(overviewHealthStatusLabel('ready', labels)).toBe('Live operational state');
+    expect(overviewHealthStatusLabel('empty', labels)).toBe('No operational records yet');
+    expect(overviewHealthStatusLabel('error', labels)).toBe('Operational API unavailable');
+    expect(overviewHealthStatusLabel('error', labels, 'Token rejected by operational API')).toBe('Token rejected by operational API');
+    expect(overviewHealthStatusLabel('auth-missing', labels)).toBe('Bearer token required');
+    expect(overviewHealthStatusLabel('loading', labels)).toBe('Loading operational state');
+    expect(overviewHealthStatusLabel('custom', labels)).toBe('Connected');
+  });
+
+  it('maps overview count API keys to localized dashboard stat labels', () => {
+    const labels = {
+      events: 'イベント',
+      activeRuns: '実行中ワークフロー',
+      retryingHandlers: 'リトライ中ハンドラー',
+      providerStatus: 'プロバイダー状態',
+      agentTasks: 'エージェントタスク',
+      sources: '入力元',
+      queue: 'キュー',
+    };
+
+    expect(overviewCountLabel('events', labels)).toBe('イベント');
+    expect(overviewCountLabel('activityEvents', labels)).toBe('実行中ワークフロー');
+    expect(overviewCountLabel('eventHandlerRetries', labels)).toBe('リトライ中ハンドラー');
+    expect(overviewCountLabel('providers', labels)).toBe('プロバイダー状態');
+    expect(overviewCountLabel('agentTasks', labels)).toBe('エージェントタスク');
+    expect(overviewCountLabel('sources', labels)).toBe('入力元');
+    expect(overviewCountLabel('queue', labels)).toBe('キュー');
+    expect(overviewCountLabel('customMetric', labels)).toBe('customMetric');
   });
 });

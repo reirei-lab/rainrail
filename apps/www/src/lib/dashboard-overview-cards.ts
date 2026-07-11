@@ -15,6 +15,25 @@ export interface OverviewCardLayoutItem {
   visible: boolean;
 }
 
+export interface OverviewHealthStatusLabels {
+  ready: string;
+  empty: string;
+  error: string;
+  authMissing: string;
+  loading: string;
+  connected: string;
+}
+
+export interface OverviewCountLabels {
+  events: string;
+  activeRuns: string;
+  retryingHandlers: string;
+  providerStatus: string;
+  agentTasks: string;
+  sources: string;
+  queue: string;
+}
+
 export const overviewCardRegistry: readonly OverviewCardDefinition[] = [
   {
     id: 'health',
@@ -103,6 +122,30 @@ export function moveOverviewCard(
 
 export function overviewWarningCount(overview: DashboardOverview): number {
   return overview.data.warnings.staleProjectClaims?.length ?? 0;
+}
+
+export function overviewHealthStatusLabel(
+  dashboardState: string | undefined,
+  labels: OverviewHealthStatusLabels,
+  currentStatusMessage?: string,
+): string {
+  if (dashboardState === 'ready') return labels.ready;
+  if (dashboardState === 'empty') return labels.empty;
+  if (dashboardState === 'error') return currentStatusMessage ?? labels.error;
+  if (dashboardState === 'auth-missing') return labels.authMissing;
+  if (dashboardState === 'loading') return labels.loading;
+  return labels.connected;
+}
+
+export function overviewCountLabel(key: string, labels: OverviewCountLabels): string {
+  if (key === 'events') return labels.events;
+  if (key === 'activityEvents') return labels.activeRuns;
+  if (key === 'eventHandlerRetries') return labels.retryingHandlers;
+  if (key === 'providers') return labels.providerStatus;
+  if (key === 'agentTasks') return labels.agentTasks;
+  if (key === 'sources') return labels.sources;
+  if (key === 'queue') return labels.queue;
+  return key;
 }
 
 function isOverviewCardId(value: unknown, registryIds: Set<OverviewCardId>): value is OverviewCardId {

@@ -17,7 +17,9 @@ import { fetchDashboardDataForTab, type DashboardData, type DashboardTab } from 
 import {
   OVERVIEW_CARD_STORAGE_KEY,
   moveOverviewCard,
+  overviewCountLabel,
   overviewCardRegistry,
+  overviewHealthStatusLabel,
   overviewWarningCount,
   parseOverviewCardLayout,
   serializeOverviewCardLayout,
@@ -556,8 +558,17 @@ if (root !== null) {
   }
 
   function overviewHealthCardBody(): HTMLElement[] {
+    const healthStatus = overviewHealthStatusLabel(appRoot.dataset.state, {
+      ready: copy.status.ready,
+      empty: copy.status.empty,
+      error: copy.status.unavailable,
+      authMissing: copy.status.authMissing,
+      loading: copy.status.loading,
+      connected: copy.overviewCards.connected,
+    }, statusText?.textContent ?? undefined);
+
     return [
-      overviewMetric(copy.overviewCards.connected, appRoot.dataset.state === 'ready' ? copy.status.ready : copy.overviewCards.connected),
+      overviewMetric(copy.overviewCards.connected, healthStatus),
       overviewMetric(copy.overviewCards.lastRefresh, lastUpdatedAt === 0 ? copy.placeholders.notAvailable : new Date(lastUpdatedAt).toLocaleString()),
       overviewNote(copy.overviewCards.todoHealth),
     ];
@@ -568,7 +579,15 @@ if (root !== null) {
     if (entries.length === 0) return [overviewNote(copy.placeholders.none)];
     const grid = document.createElement('div');
     grid.className = 'dashboard-overview-card-metrics';
-    grid.append(...entries.map(([label, value]) => overviewMetric(label, String(value))));
+    grid.append(...entries.map(([label, value]) => overviewMetric(overviewCountLabel(label, {
+      events: copy.stats.events,
+      activeRuns: copy.stats.activeRuns,
+      retryingHandlers: copy.stats.retryingHandlers,
+      providerStatus: copy.stats.providerStatus,
+      agentTasks: copy.stats.agentTasks,
+      sources: copy.stats.sources,
+      queue: copy.stats.queue,
+    }), String(value))));
     return [grid];
   }
 
