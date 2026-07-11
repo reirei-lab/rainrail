@@ -1,4 +1,5 @@
 import {
+  RainrailDashboardApiError,
   type DashboardAgentTask,
   type DashboardCardCatalogEntry,
   type DashboardCollection,
@@ -70,9 +71,13 @@ export async function fetchDashboardDataForTab(
   if (request.tab === 'events') {
     data.events = (await client.events(request.eventFilters)).data;
     if (request.eventDetailId !== undefined && !data.events.some((event) => event.id === request.eventDetailId)) {
-      const detail = await client.eventDetail(request.eventDetailId);
-      if (detail.data.compact !== undefined) {
-        data.events = [detail.data.compact, ...data.events];
+      try {
+        const detail = await client.eventDetail(request.eventDetailId);
+        if (detail.data.compact !== undefined) {
+          data.events = [detail.data.compact, ...data.events];
+        }
+      } catch (error) {
+        if (!isEventDetailNotFound(error)) throw error;
       }
     }
   } else if (request.tab === 'workflow-runs') {
@@ -90,4 +95,10 @@ export async function fetchDashboardDataForTab(
   }
 
   return data;
+}
+
+function isEventDetailNotFound(error: unknown): boolean {
+  return error instanceof RainrailDashboardApiError
+    && error.status === 404
+    && error.code === 'event_not_found';
 }

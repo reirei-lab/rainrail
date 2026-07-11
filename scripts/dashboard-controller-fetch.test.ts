@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { RainrailDashboardApiError } from '../apps/www/src/lib/dashboard-client';
 import { fetchDashboardDataForTab, type DashboardTab } from '../apps/www/src/lib/dashboard-controllers';
 
 describe('dashboard page controllers', () => {
@@ -76,6 +77,51 @@ describe('dashboard page controllers', () => {
     expect(data.events.map((event) => event.id)).toEqual(['evt_recent']);
   });
 
+  it('keeps the Events collection usable when a deep-linked event no longer exists', async () => {
+    const client = fakeDashboardClient({
+      events: [{ id: 'evt_recent', type: 'event', status: 'received', summary: 'recent event' }],
+      eventDetailErrors: {
+        evt_missing: new RainrailDashboardApiError(404, 'event_not_found'),
+      },
+    });
+
+    const data = await fetchDashboardDataForTab(client, {
+      tab: 'events',
+      eventFilters: {},
+      workflowRunFilters: {},
+      agentTaskFilters: {},
+      queueFilters: {},
+      eventDetailId: 'evt_missing',
+    });
+
+    expect(client.calls).toEqual([
+      'overview',
+      'dashboardCards',
+      'dashboardLayout',
+      'events::',
+      'eventDetail:evt_missing',
+    ]);
+    expect(data.events.map((event) => event.id)).toEqual(['evt_recent']);
+  });
+
+  it('still surfaces non-not-found event detail failures', async () => {
+    const client = fakeDashboardClient({
+      events: [{ id: 'evt_recent', type: 'event', status: 'received', summary: 'recent event' }],
+      eventDetailErrors: {
+        evt_forbidden: new RainrailDashboardApiError(403, 'dashboard_forbidden'),
+      },
+    });
+
+    await expect(fetchDashboardDataForTab(client, {
+      tab: 'events',
+      eventFilters: {},
+      workflowRunFilters: {},
+      agentTaskFilters: {},
+      queueFilters: {},
+      eventDetailId: 'evt_forbidden',
+    })).rejects.toMatchObject({ status: 403, code: 'dashboard_forbidden' });
+  });
+
   it.each<[
     DashboardTab,
     string[],
@@ -103,6 +149,7 @@ describe('dashboard page controllers', () => {
 type FakeDashboardClientOptions = {
   events?: Array<{ id: string; type: 'event'; status: string; summary: string }>;
   eventDetails?: Record<string, { id: string; type: 'event'; status: string; summary: string }>;
+  eventDetailErrors?: Record<string, Error>;
 };
 
 function fakeDashboardClient(options: FakeDashboardClientOptions = {}) {
@@ -127,6 +174,8 @@ function fakeDashboardClient(options: FakeDashboardClientOptions = {}) {
     },
     async eventDetail(id: string) {
       calls.push(`eventDetail:${id}`);
+      const error = options.eventDetailErrors?.[id];
+      if (error !== undefined) throw error;
       return {
         data: {
           id,
