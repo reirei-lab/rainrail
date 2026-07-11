@@ -359,6 +359,7 @@ if (root !== null) {
     if (target.origin !== window.location.origin || target.search !== '') return;
 
     target.search = window.location.search;
+    target.searchParams.delete('tab');
     link.href = target.href;
   }
 

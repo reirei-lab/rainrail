@@ -33,6 +33,18 @@ test('loads the seeded dashboard demo and navigates core records', async ({ page
   await expect(page.locator('[data-dashboard-detail]')).toContainText(/github|manual|cloudflare|system/i);
 });
 
+test('drops legacy tab query when navigating to a routed dashboard view', async ({ page }) => {
+  await page.goto(`${dashboardBaseUrl}/en/dashboard?demo=1&tab=events`);
+
+  await page.locator('[data-dashboard-tab="workflow-runs"]').click();
+
+  await expect(page).toHaveURL(/\/en\/dashboard\/workflow-runs\?demo=1$/);
+  await expect(page.locator('[data-dashboard-tab="workflow-runs"]')).toHaveAttribute('aria-current', 'page');
+  await expect(page.locator('[data-dashboard-tab="workflow-runs"]')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('[data-dashboard-tab="events"]')).toHaveAttribute('aria-pressed', 'false');
+  await expect(page.locator('[data-dashboard-list]')).toContainText('Cloudflare tail issue report failed and scheduled retry');
+});
+
 type ScenarioExpectation = {
   rows: readonly string[];
   excludedRows?: readonly string[];
