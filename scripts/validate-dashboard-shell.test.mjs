@@ -290,5 +290,6 @@ describe('dashboard app shell', () => {
     expect(globalStyles).toContain('@media (max-width: 900px)');
     expect(globalStyles).toContain('.dashboard-two-pane');
     expect(globalStyles).toContain('grid-template-columns: 1fr');
+    expect(globalStyles).toContain('.dashboard-sidebar nav a:not([hidden])');
   });
 });

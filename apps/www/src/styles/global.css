@@ -613,8 +613,11 @@ h3 {
   gap: 6px;
 }
 
-.dashboard-sidebar nav a {
+.dashboard-sidebar nav a:not([hidden]) {
   display: flex;
+}
+
+.dashboard-sidebar nav a {
   align-items: center;
   min-height: 38px;
   border: 1px solid transparent;
