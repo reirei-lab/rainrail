@@ -25,6 +25,14 @@ const dashboardClient = readFileSync(
   new URL('../apps/www/src/lib/dashboard-client.ts', import.meta.url),
   'utf8',
 );
+const dashboardControllers = readFileSync(
+  new URL('../apps/www/src/lib/dashboard-controllers.ts', import.meta.url),
+  'utf8',
+);
+const dashboardSession = readFileSync(
+  new URL('../apps/www/src/lib/dashboard-session.ts', import.meta.url),
+  'utf8',
+);
 const dashboardApp = readFileSync(
   new URL('../apps/www/src/lib/dashboard-app.ts', import.meta.url),
   'utf8',
@@ -110,10 +118,10 @@ describe('dashboard app shell', () => {
       expect(dashboardClient).toContain(method);
     }
 
-    expect(dashboardApp).toContain("type DashboardTab = 'overview' | 'events' | 'workflow-runs' | 'agent-tasks' | 'sources' | 'queue' | 'settings'");
-    expect(dashboardApp).toContain('sources: (await activeClient.sources()).data');
-    expect(dashboardApp).toContain('queue: (await activeClient.queue(currentQueueFilters())).data');
-    expect(dashboardApp).toContain('settings: (await activeClient.settings()).data');
+    expect(dashboardControllers).toContain("export type DashboardTab = 'overview' | 'events' | 'workflow-runs' | 'agent-tasks' | 'sources' | 'queue' | 'settings'");
+    expect(dashboardControllers).toContain('data.sources = (await client.sources()).data');
+    expect(dashboardControllers).toContain('data.queue = (await client.queue(request.queueFilters)).data');
+    expect(dashboardControllers).toContain('data.settings = (await client.settings()).data');
     expect(dashboardContent).toContain("sourceBundles: ['EEP Bridge', 'GitHub webhook', 'Cloudflare tail'");
     expect(dashboardContent).toContain("queueSignals: ['upcoming issue', 'blocked reason', 'in-progress count'");
     expect(dashboardContent).toContain("settingsSignals: ['max concurrency', 'auto-start', 'retry policy'");
@@ -172,7 +180,7 @@ describe('dashboard app shell', () => {
     expect(dashboardApp).toContain("new URLSearchParams(window.location.search).get('demo') === '1'");
     expect(dashboardApp).toContain('const demoAuthBypass = demoMode && isLoopbackDashboardHost(window.location.hostname);');
     expect(dashboardApp).toContain("const authRequired = !demoAuthBypass && appRoot.dataset.authRequired !== 'false';");
-    expect(dashboardApp).toContain('function isLoopbackDashboardHost');
+    expect(dashboardSession).toContain('function isLoopbackDashboardHost');
     expect(dashboardApp).toContain('demoIndicator.hidden = !demoMode');
     expect(dashboardApp).toContain('isOperatorModeEnabled');
     expect(dashboardClient).toContain('demoMode?: boolean');
@@ -187,9 +195,10 @@ describe('dashboard app shell', () => {
     expect(dashboardDemoVrtScenarios).toContain('tab=queue&status=blocked');
     expect(dashboardApp).toContain('initialDashboardStateFromUrl');
     expect(dashboardApp).toContain('let selectedTab: DashboardTab = initialDashboardState.tab;');
-    expect(dashboardApp).toContain('workflowRuns: (await activeClient.workflowRuns(currentWorkflowRunFilters())).data');
-    expect(dashboardApp).toContain('agentTasks: (await activeClient.agentTasks(currentAgentTaskFilters())).data');
-    expect(dashboardApp).toContain('queue: (await activeClient.queue(currentQueueFilters())).data');
+    expect(dashboardApp).toContain('fetchDashboardDataForTab(activeClient');
+    expect(dashboardControllers).toContain('data.workflowRuns = (await client.workflowRuns(request.workflowRunFilters)).data');
+    expect(dashboardControllers).toContain('data.agentTasks = (await client.agentTasks(request.agentTaskFilters)).data');
+    expect(dashboardControllers).toContain('data.queue = (await client.queue(request.queueFilters)).data');
     expect(dashboardApp).toContain('preferredDetailRowId()');
     expect(dashboardClient).toContain("params.set('filter[status]', filters.status)");
   });
@@ -206,7 +215,8 @@ describe('dashboard app shell', () => {
   it('documents polling as the MVP live update strategy in code and UI affordances', () => {
     expect(dashboardClient).toContain('pollIntervalMs');
     expect(dashboardClient).toContain('30000');
-    expect(dashboardApp).toContain('setInterval');
+    expect(dashboardSession).toContain('setInterval');
+    expect(dashboardApp).toContain('createDashboardPollingController');
     expect(dashboardShellSource).toContain('data-live-strategy="polling"');
   });
 
@@ -237,8 +247,10 @@ describe('dashboard app shell', () => {
     expect(dashboardApp).toContain('clearRefreshInFlight(activeClient, activeRefreshId)');
     expect(dashboardApp).toContain('isCurrentRefresh(activeClient, activeRefreshId)');
     expect(dashboardApp).toContain('if (client !== activeClient) return false;');
-    expect(dashboardApp).toContain('overview: await activeClient.overview()');
-    expect(dashboardApp).toContain('events: (await activeClient.events(currentEventFilters())).data');
+    expect(dashboardApp).toContain('fetchDashboardDataForTab(activeClient');
+    expect(dashboardControllers).toContain('const overview = await client.overview()');
+    expect(dashboardControllers).toContain('data.events = (await client.events(request.eventFilters)).data');
+    expect(dashboardControllers).toContain("if (request.tab === 'events')");
   });
 
   it('models event repository under source like the v1 API compact row', () => {
@@ -250,9 +262,9 @@ describe('dashboard app shell', () => {
 
   it('keeps dashboard initialization usable when browser storage is blocked', () => {
     expect(dashboardApp).toContain('createSafeStorage');
-    expect(dashboardApp).toContain('memoryStorage');
-    expect(dashboardApp).toContain('try {');
-    expect(dashboardApp).toContain('catch {');
+    expect(dashboardSession).toContain('memoryStorage');
+    expect(dashboardSession).toContain('try {');
+    expect(dashboardSession).toContain('catch {');
     expect(dashboardApp).toContain('const sessionStore = createSafeStorage');
     expect(dashboardApp).toContain('const localStore = createSafeStorage');
     expect(dashboardApp).not.toContain('sessionStorage.getItem');
@@ -261,9 +273,9 @@ describe('dashboard app shell', () => {
 
   it('treats missing and invalid bearer tokens as auth errors', () => {
     expect(dashboardApp).toContain('isDashboardAuthError');
-    expect(dashboardApp).toContain('error.status === 401');
-    expect(dashboardApp).toContain('error.status === 403');
-    expect(dashboardApp).toContain("error.code === 'invalid_bearer_token'");
+    expect(dashboardSession).toContain('error.status === 401');
+    expect(dashboardSession).toContain('error.status === 403');
+    expect(dashboardSession).toContain("error.code === 'invalid_bearer_token'");
   });
 
   it('renders dashboard stat counts without trusting runtime API values as HTML', () => {

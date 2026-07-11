@@ -25,6 +25,10 @@ const dashboardClient = readFileSync(
   new URL('../apps/www/src/lib/dashboard-client.ts', import.meta.url),
   'utf8',
 );
+const dashboardControllers = readFileSync(
+  new URL('../apps/www/src/lib/dashboard-controllers.ts', import.meta.url),
+  'utf8',
+);
 const globalStyles = readFileSync(
   new URL('../apps/www/src/styles/global.css', import.meta.url),
   'utf8',
@@ -293,8 +297,11 @@ describe('dashboard operational views', () => {
       'saveDashboardLayoutItemConfig',
     ]) {
       expect(dashboardClient).toContain(method);
-      expect(dashboardApp).toContain(method);
     }
+    expect(dashboardControllers).toContain('dashboardCards()');
+    expect(dashboardControllers).toContain('dashboardLayout()');
+    expect(dashboardApp).toContain('saveDashboardLayout');
+    expect(dashboardApp).toContain('saveDashboardLayoutItemConfig');
 
     expect(dashboardClient).toContain('DashboardLayoutUpdateResponse');
     expect(dashboardClient).toContain('/api/v1/dashboard/layout/items/${encodeURIComponent(itemId)}/config');
