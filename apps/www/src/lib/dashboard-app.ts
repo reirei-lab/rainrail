@@ -1679,7 +1679,7 @@ function isDashboardTab(value: string | undefined): value is DashboardTab {
 function initialDashboardStateFromUrl(params: URLSearchParams, routeTabParam?: string): DashboardInitialState {
   const tabParam = params.get('tab') ?? undefined;
   const routeTab = isDashboardTab(routeTabParam) ? routeTabParam : 'overview';
-  const tab = isDashboardTab(tabParam) ? tabParam : routeTab;
+  const tab = routeTab === 'overview' && isDashboardTab(tabParam) ? tabParam : routeTab;
   const status = params.get('status') ?? undefined;
 
   return {
