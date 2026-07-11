@@ -10,3 +10,15 @@
 /docs/ https://docs.rainrail.dev/ 301
 /dashboard /en/dashboard 301
 /dashboard/ /en/dashboard 301
+/dashboard/events /en/dashboard/events 301
+/dashboard/events/ /en/dashboard/events 301
+/dashboard/workflow-runs /en/dashboard/workflow-runs 301
+/dashboard/workflow-runs/ /en/dashboard/workflow-runs 301
+/dashboard/agent-tasks /en/dashboard/agent-tasks 301
+/dashboard/agent-tasks/ /en/dashboard/agent-tasks 301
+/dashboard/sources /en/dashboard/sources 301
+/dashboard/sources/ /en/dashboard/sources 301
+/dashboard/queue /en/dashboard/queue 301
+/dashboard/queue/ /en/dashboard/queue 301
+/dashboard/settings /en/dashboard/settings 301
+/dashboard/settings/ /en/dashboard/settings 301

@@ -17,6 +17,7 @@ type Props = {
 
 const { view } = Astro.props as Props;
 const redirect = getDefaultLocaleDashboardRedirect(view);
+const redirectHref = redirect.href;
 ---
 
 <!doctype html>
@@ -30,5 +31,15 @@ const redirect = getDefaultLocaleDashboardRedirect(view);
   </head>
   <body>
     <a href={redirect.href}>{redirect.body}</a>
+    <script is:inline define:vars={{ redirectHref }}>
+      function appendCurrentLocationQuery(href) {
+        const target = new URL(href, window.location.href);
+        target.search = window.location.search;
+        target.hash = window.location.hash;
+        return target.href;
+      }
+
+      window.location.replace(appendCurrentLocationQuery(redirectHref));
+    </script>
   </body>
 </html>
