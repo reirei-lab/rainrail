@@ -33,7 +33,7 @@ describe('Cloudflare Pages product site deploys', () => {
     expect(docs).toContain('workflow_run');
     expect(docs).toContain('workflow_dispatch');
     expect(docs).toContain('RAINRAIL_PAGES_URL=https://<pages-host> pnpm pages:smoke');
-    expect(docs).toContain('smoke script は `/`, `/en/docs`, `/en/how-it-works` を GET');
+    expect(docs).toContain('smoke script は `/`, `/en/docs`, `/en/how-it-works`, `/en/dashboard`, `/en/dashboard/events`, `/en/dashboard/runs`, `/en/dashboard/tasks`, `/en/dashboard/sources`, `/en/dashboard/queue`, `/en/dashboard/settings` を GET');
   });
 
   it('ships a smoke script that validates product routes without mutating production', () => {
@@ -50,6 +50,15 @@ describe('Cloudflare Pages product site deploys', () => {
     expect(smokeScript).toContain('Start with the overview, then jump into the contracts.');
     expect(smokeScript).toContain("path: '/en/how-it-works'");
     expect(smokeScript).toContain('One route from provider events to agent execution.');
+    expect(smokeScript).toContain("path: '/en/dashboard'");
+    expect(smokeScript).toContain('Rainrail Operations');
+    expect(smokeScript).toContain("path: '/en/dashboard/events'");
+    expect(smokeScript).toContain('Event Inbox');
+    expect(smokeScript).toContain("path: '/en/dashboard/runs'");
+    expect(smokeScript).toContain("path: '/en/dashboard/tasks'");
+    expect(smokeScript).toContain("path: '/en/dashboard/sources'");
+    expect(smokeScript).toContain("path: '/en/dashboard/queue'");
+    expect(smokeScript).toContain("path: '/en/dashboard/settings'");
   });
 
   it('deploys pull request previews from a trusted workflow_run artifact', () => {

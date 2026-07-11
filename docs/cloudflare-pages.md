@@ -19,6 +19,9 @@ GitHub Actions と手元の Wrangler deploy には Cloudflare API credential が
   `/api/v1/*` を提供し、operational store が構成済みの origin を指定する。未設定の場合、
   dashboard の入力欄から Operational API URL を指定して同じ session 内で利用する。既存の
   Cloudflare Worker deployment を指定する場合は、先に Worker 側で operational store を接続する。
+  URL 別 dashboard route である `/en/dashboard`, `/en/dashboard/events`, `/en/dashboard/runs`,
+  `/en/dashboard/tasks`, `/en/dashboard/sources`, `/en/dashboard/queue`, `/en/dashboard/settings`
+  も同じ build-time value を読む。
 
 GitHub Actions は secrets が未設定の場合でも build または artifact download まで実行し、
 deploy だけを skip する。これにより preview / production の buildability は PR 上で確認できる。
@@ -108,7 +111,7 @@ deploy 後は公開 URL を指定して product site の主要 route が HTML �
 RAINRAIL_PAGES_URL=https://<pages-host> pnpm pages:smoke
 ```
 
-smoke script は `/`, `/en/docs`, `/en/how-it-works` を GET し、`text/html` と route 固有の hero 文言を確認する。
+smoke script は `/`, `/en/docs`, `/en/how-it-works`, `/en/dashboard`, `/en/dashboard/events`, `/en/dashboard/runs`, `/en/dashboard/tasks`, `/en/dashboard/sources`, `/en/dashboard/queue`, `/en/dashboard/settings` を GET し、`text/html` と route 固有の文言を確認する。
 
 docs site は `HEAD` request で主要 route が HTML を返すことを確認する。
 

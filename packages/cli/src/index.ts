@@ -3557,6 +3557,15 @@ function formatStartOutput(options: RainrailStartOptions): string {
     `  ${source.name} (${source.sourceType}): ${baseUrl}${source.endpoint}`
   );
   const dashboardAuthRows = formatDashboardAuthRows(options.dashboardAuth, options.configPath);
+  const dashboardRoutes = [
+    '/en/dashboard/events',
+    '/en/dashboard/runs',
+    '/en/dashboard/tasks',
+    '/en/dashboard/sources',
+    '/en/dashboard/queue',
+    '/en/dashboard/settings',
+  ];
+  const dashboardDemoRoutes = dashboardRoutes.map((route) => `${route}?demo=1`);
   return [
     'Rainrail local harness server starting',
     `Workspace: ${options.root}`,
@@ -3565,7 +3574,9 @@ function formatStartOutput(options: RainrailStartOptions): string {
     `Port: ${options.port}`,
     `Health: ${baseUrl}/healthz`,
     `Dashboard: ${baseUrl}/dashboard`,
+    `Dashboard routes: ${dashboardRoutes.join(', ')}`,
     ...(options.demoMode ? [`Dashboard demo: ${baseUrl}/dashboard?demo=1`] : []),
+    ...(options.demoMode ? [`Dashboard demo routes: ${dashboardDemoRoutes.join(', ')}`] : []),
     `Dashboard API: ${baseUrl}/api/v1/overview`,
     ...(options.demoMode ? [`Dashboard demo API: ${baseUrl}/api/v1/overview?demo=1`] : []),
     ...dashboardAuthRows,
