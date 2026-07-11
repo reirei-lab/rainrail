@@ -68,7 +68,9 @@ export async function fetchDashboardDataForTab(
     layout,
   };
 
-  if (request.tab === 'events') {
+  if (request.tab === 'overview') {
+    data.agentTasks = (await client.agentTasks(request.agentTaskFilters)).data;
+  } else if (request.tab === 'events') {
     data.events = (await client.events(request.eventFilters)).data;
     const eventDetailId = request.eventDetailId?.trim();
     if (eventDetailId !== undefined && eventDetailId !== '' && !data.events.some((event) => event.id === eventDetailId)) {
@@ -91,8 +93,6 @@ export async function fetchDashboardDataForTab(
     data.queue = (await client.queue(request.queueFilters)).data;
   } else if (request.tab === 'settings') {
     data.settings = (await client.settings()).data;
-  } else {
-    data.agentTasks = (await client.agentTasks(request.agentTaskFilters)).data;
   }
 
   return data;

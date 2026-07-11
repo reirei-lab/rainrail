@@ -77,6 +77,17 @@ const dashboardCopy = JSON.stringify(content.app);
       <section class="dashboard-layout-grid" data-dashboard-layout-grid aria-label={content.app.cardLayout.gridLabel}></section>
       <div class="dashboard-layout-status" data-dashboard-layout-status aria-live="polite"></div>
 
+      <section class="dashboard-overview-card-panel" data-overview-card-panel aria-label={content.app.overviewCards.title}>
+        <div class="dashboard-overview-card-panel-heading">
+          <div>
+            <h2>{content.app.overviewCards.title}</h2>
+            <p>{content.app.overviewCards.description}</p>
+          </div>
+        </div>
+        <div class="dashboard-overview-card-controls" data-overview-card-controls aria-label={content.app.overviewCards.controlsLabel}></div>
+        <div class="dashboard-overview-card-board" data-overview-card-board aria-label={content.app.overviewCards.boardLabel}></div>
+      </section>
+
       <section class="dashboard-stats dashboard-overview-grid" data-dashboard-stats data-dashboard-core-card="core.operationalTotals" aria-label={content.shell.statsLabel}>
         <div class="dashboard-stat"><span>{content.app.stats.events}</span><strong>0</strong></div>
         <div class="dashboard-stat"><span>{content.app.stats.activeRuns}</span><strong>0</strong></div>

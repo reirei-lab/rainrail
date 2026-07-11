@@ -41,6 +41,10 @@ const dashboardControllers = readFileSync(
   new URL('../apps/www/src/lib/dashboard-controllers.ts', import.meta.url),
   'utf8',
 );
+const dashboardOverviewCards = readFileSync(
+  new URL('../apps/www/src/lib/dashboard-overview-cards.ts', import.meta.url),
+  'utf8',
+);
 const globalStyles = readFileSync(
   new URL('../apps/www/src/styles/global.css', import.meta.url),
   'utf8',
@@ -475,6 +479,62 @@ describe('dashboard operational views', () => {
     expect(globalStyles).toContain('.dashboard-card-picker-list');
     expect(globalStyles).toContain('@media (max-width: 900px)');
     expect(globalStyles).toContain('--dashboard-card-columns: 1');
+  });
+
+  it('renders customizable Overview cards with local ordering controls', () => {
+    for (const marker of [
+      'data-overview-card-panel',
+      'data-overview-card-controls',
+      'data-overview-card-board',
+      'content.app.overviewCards.controlsLabel',
+    ]) {
+      expect(localizedDashboardPage).toContain(marker);
+    }
+    expect(localizedDashboardPage).toContain('activeRoute="overview"');
+    expect(localizedDashboardPage).not.toContain('data-overview-card-panel hidden');
+
+    for (const marker of [
+      "OVERVIEW_CARD_STORAGE_KEY = 'rainrail-dashboard-overview-card-layout'",
+      'overviewCardRegistry',
+      'createDefaultOverviewCardLayout',
+      'parseOverviewCardLayout',
+      'serializeOverviewCardLayout',
+      'setOverviewCardVisibility',
+      'moveOverviewCard',
+      'overviewWarningCount',
+    ]) {
+      expect(dashboardOverviewCards).toContain(marker);
+    }
+
+    for (const marker of [
+      'parseOverviewCardLayout(localStore.get(OVERVIEW_CARD_STORAGE_KEY), overviewCardRegistry)',
+      'serializeOverviewCardLayout(overviewCardLayout)',
+      'setOverviewCardVisibility',
+      'moveOverviewCard',
+      'overviewWarningCount',
+      'overviewWarningSummary',
+      'renderOverviewCards()',
+      'copy.overviewCards.todoHealth',
+    ]) {
+      expect(dashboardApp).toContain(marker);
+    }
+    expect(dashboardApp).toMatch(/setState\('error', message\);\s+renderOverviewCards\(\);/);
+
+    for (const marker of [
+      'Health',
+      'Counts',
+      'Recent activity',
+      'Warnings',
+      'TODO: expose component health in the overview API.',
+      'TODO: overview API でコンポーネント別 health を公開する。',
+    ]) {
+      expect(dashboardContent).toContain(marker);
+    }
+
+    expect(dashboardControllers).toContain("request.tab === 'overview'");
+    expect(globalStyles).toContain('.dashboard-overview-card-panel');
+    expect(globalStyles).toContain('.dashboard-overview-card-controls');
+    expect(globalStyles).toContain('.dashboard-overview-card-board');
   });
 
   it('does not mark the whole dashboard empty just because Event Inbox filters hide rows', () => {

@@ -930,6 +930,179 @@ h3 {
   font-size: 0.86rem;
 }
 
+.dashboard-overview-card-panel[hidden] {
+  display: none;
+}
+
+.dashboard-overview-card-panel {
+  display: grid;
+  gap: 12px;
+  border-bottom: 1px solid var(--line);
+  padding: 16px 0;
+}
+
+.dashboard-overview-card-panel-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.dashboard-overview-card-panel-heading h2 {
+  margin: 0 0 6px;
+  font-size: 1.18rem;
+}
+
+.dashboard-overview-card-panel-heading p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.dashboard-overview-card-controls {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.dashboard-overview-card-control {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 9px;
+  background: #fbfcfa;
+}
+
+.dashboard-overview-card-control label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.dashboard-overview-card-control strong,
+.dashboard-overview-card-control span {
+  overflow-wrap: anywhere;
+}
+
+.dashboard-overview-card-control span,
+.dashboard-overview-card-heading span,
+.dashboard-overview-card-metric span {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 720;
+  text-transform: uppercase;
+}
+
+.dashboard-overview-card-control div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.dashboard-overview-card-control button {
+  min-height: 30px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0 8px;
+  background: var(--surface);
+  color: var(--accent-strong);
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 720;
+}
+
+.dashboard-overview-card-control button:disabled {
+  color: var(--muted);
+  opacity: 0.55;
+}
+
+.dashboard-overview-card-board {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  color: var(--muted);
+}
+
+.dashboard-overview-card {
+  display: grid;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfa;
+  overflow: hidden;
+}
+
+.dashboard-overview-card-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  border-bottom: 1px solid var(--line);
+  padding: 10px;
+}
+
+.dashboard-overview-card-heading strong {
+  display: block;
+  margin-top: 2px;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.dashboard-overview-card-body {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+  color: var(--text);
+}
+
+.dashboard-overview-card-body p {
+  margin: 0;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.dashboard-overview-card-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.dashboard-overview-card-metric {
+  min-width: 0;
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+
+.dashboard-overview-card-metric strong {
+  display: block;
+  margin-top: 2px;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.dashboard-overview-card-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding-left: 18px;
+}
+
+.dashboard-overview-card-list li {
+  min-width: 0;
+}
+
+.dashboard-overview-card-list strong,
+.dashboard-overview-card-list span {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.dashboard-overview-card-list span {
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.78rem;
+}
+
 .dashboard-stats {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
@@ -1241,6 +1414,8 @@ h3 {
   .dashboard-layout-tools,
   .dashboard-card-picker,
   .dashboard-card-picker-list,
+  .dashboard-overview-card-controls,
+  .dashboard-overview-card-board,
   .dashboard-layout-grid {
     grid-template-columns: 1fr;
   }
