@@ -13,6 +13,10 @@ const localizedDashboardRoutePage = readFileSync(
   new URL('../apps/www/src/pages/[locale]/dashboard/[view].astro', import.meta.url),
   'utf8',
 );
+const dashboardRouteRedirectPage = readFileSync(
+  new URL('../apps/www/src/pages/dashboard/[view].astro', import.meta.url),
+  'utf8',
+);
 const dashboardLayout = readFileSync(
   new URL('../apps/www/src/layouts/DashboardLayout.astro', import.meta.url),
   'utf8',
@@ -104,8 +108,18 @@ describe('dashboard app shell', () => {
     expect(dashboardContent).toContain("slug: 'events'");
     expect(dashboardContent).toContain("slug: 'workflow-runs'");
     expect(dashboardContent).toContain("slug: 'agent-tasks'");
+    expect(dashboardContent).toContain("slug: 'sources'");
+    expect(dashboardContent).toContain("slug: 'queue'");
+    expect(dashboardContent).toContain("slug: 'settings'");
     expect(sitemapRoute).toContain("getDashboardHref(locale, route.id)");
     expect(dashboardContent).toContain("return `/${locale}/dashboard/${route.slug}`;");
+  });
+
+  it('redirects non-localized dashboard view URLs to the default locale view pages', () => {
+    expect(dashboardRouteRedirectPage).toContain('getDashboardRoutes()');
+    expect(dashboardRouteRedirectPage).toContain('getDashboardRouteBySlug(view)');
+    expect(dashboardRouteRedirectPage).toContain('getDefaultLocaleDashboardRedirect(route.id)');
+    expect(dashboardRouteRedirectPage).toContain('params: { view: route.slug }');
   });
 
   it('adds Sources, Queue, and Settings views for operator context', () => {
