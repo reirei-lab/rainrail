@@ -12,7 +12,7 @@ const dashboardRoutes: readonly DashboardRoute[] = [
   { id: 'overview' },
   { id: 'events', slug: 'events' },
   { id: 'workflow-runs', slug: 'runs', aliases: ['workflow-runs'] },
-  { id: 'agent-tasks', slug: 'agent-tasks' },
+  { id: 'agent-tasks', slug: 'tasks', aliases: ['agent-tasks'] },
   { id: 'sources', slug: 'sources' },
   { id: 'queue', slug: 'queue' },
   { id: 'settings', slug: 'settings' },
@@ -57,6 +57,7 @@ export type DashboardContent = {
     workflowMatches: string;
     recordsLabel: string;
     actionsLabel: string;
+    tasksActionsLabel: string;
     commandButtons: {
       resume: string;
       reset: string;
@@ -699,6 +700,7 @@ const dashboardContent = {
       workflowMatches: 'Workflow matches',
       recordsLabel: 'Operational records',
       actionsLabel: 'Operator actions',
+      tasksActionsLabel: 'Agent task operator actions',
       commandButtons: {
         resume: 'Resume selected',
         reset: 'Reset claim',
@@ -757,6 +759,7 @@ const dashboardContent = {
       workflowMatches: '一致ワークフロー',
       recordsLabel: '運用レコード',
       actionsLabel: '操作',
+      tasksActionsLabel: 'エージェントタスク操作',
       commandButtons: {
         resume: '選択中を再開',
         reset: 'claim をリセット',
