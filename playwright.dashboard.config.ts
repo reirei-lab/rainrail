@@ -17,6 +17,7 @@ export default defineConfig({
   },
   expect: {
     toHaveScreenshot: {
+      // Dashboard E2E runs on ubuntu-latest so VRT baselines stay tied to one OS.
       pathTemplate: '{snapshotDir}/{testFileDir}/{testFileName}-snapshots/{arg}{-projectName}{ext}',
     },
   },
