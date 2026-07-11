@@ -15,6 +15,11 @@ export default defineConfig({
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',
   },
+  expect: {
+    toHaveScreenshot: {
+      pathTemplate: '{snapshotDir}/{testFileDir}/{testFileName}-snapshots/{arg}{-projectName}{ext}',
+    },
+  },
   projects: [
     {
       name: 'dashboard-chromium',

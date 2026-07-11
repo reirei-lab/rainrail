@@ -241,6 +241,33 @@ test('captures dashboard demo screenshots from the scenario manifest', async ({ 
   expect(captures).toHaveLength(dashboardDemoVrtScenarios.length);
 });
 
+test('matches dashboard route visual baselines from the scenario manifest', async ({ page }) => {
+  for (const scenario of dashboardDemoVrtScenarios) {
+    const viewport = scenario.viewport ?? 'desktop';
+    await test.step(`${scenario.id} (${viewport})`, async () => {
+      await page.setViewportSize(viewport === 'mobile'
+        ? { width: 390, height: 844 }
+        : { width: 1440, height: 1000 });
+
+      const url = new URL(scenario.url, dashboardBaseUrl);
+      await page.goto(url.href);
+
+      await expect(page.getByRole('heading', { level: 1, name: /Rainrail (Operations|運用)/i })).toBeVisible();
+      await expect(page.locator('[data-demo-indicator]')).toBeVisible();
+      await expect(page.locator(`[data-dashboard-tab="${scenario.tab}"]`)).toHaveAttribute('aria-pressed', 'true');
+      await expect(page.locator('[data-status-text]')).toContainText(/Live operational state|運用状態/i);
+
+      await expect(page).toHaveScreenshot(`${scenario.id}-${viewport}.png`, {
+        fullPage: true,
+        mask: [
+          page.locator('[data-status-text]'),
+          page.locator('[data-overview-card-id="health"]'),
+        ],
+      });
+    });
+  }
+});
+
 for (const scenario of seededTabScenarios) {
   test(`renders seeded dashboard scenario: ${scenario.id}`, async ({ page }) => {
     const url = new URL(scenario.url, dashboardBaseUrl);
@@ -269,6 +296,145 @@ for (const scenario of seededTabScenarios) {
     }
   });
 }
+
+test('persists Overview custom card visibility and ordering across reloads', async ({ page }) => {
+  await page.goto(`${dashboardBaseUrl}/en/dashboard?demo=1`);
+
+  const board = page.locator('[data-overview-card-board]');
+  const controls = page.locator('[data-overview-card-controls]');
+  await expect(board.locator('[data-overview-card-id="health"]')).toBeVisible();
+  await expect(board.locator('[data-overview-card-id="counts"]')).toBeVisible();
+
+  await overviewCardControl(controls, 'Counts').getByRole('checkbox').uncheck();
+  await overviewCardControl(controls, 'Warnings').getByRole('button', { name: 'Move up' }).click();
+
+  await expect(board.locator('[data-overview-card-id="counts"]')).toHaveCount(0);
+  await expect(board.locator('[data-overview-card-id]').first()).toHaveAttribute('data-overview-card-id', 'health');
+  await expect(board.locator('[data-overview-card-id]').nth(1)).toHaveAttribute('data-overview-card-id', 'warnings');
+
+  await page.reload();
+
+  await expect(page.locator('[data-demo-indicator]')).toBeVisible();
+  await expect(board.locator('[data-overview-card-id="counts"]')).toHaveCount(0);
+  await expect(board.locator('[data-overview-card-id]').first()).toHaveAttribute('data-overview-card-id', 'health');
+  await expect(board.locator('[data-overview-card-id]').nth(1)).toHaveAttribute('data-overview-card-id', 'warnings');
+  await expect.poll(async () => page.evaluate(() => window.localStorage.getItem('rainrail-dashboard-overview-card-layout')))
+    .toContain('"id":"warnings"');
+});
+
+test('sends scoped task operator commands with confirmation and error feedback', async ({ page }) => {
+  const commandRequests: Array<{ pathname: string; body: unknown }> = [];
+
+  await page.route('**/api/v1/agent-tasks/**/actions/resume**', async (route) => {
+    commandRequests.push({ pathname: new URL(route.request().url()).pathname, body: route.request().postDataJSON() });
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        data: {
+          action: 'agent_task_resume',
+          targetType: 'agent-task',
+          targetId: 'agent_task_demo_running',
+          status: 'accepted',
+          dryRun: false,
+          auditId: 'audit-resume-e2e',
+        },
+      }),
+    });
+  });
+
+  // destructive command は fixture API で confirmation-required と confirmed の2段階を固定する。
+  await page.route('**/api/v1/agent-tasks/**/actions/reset**', async (route) => {
+    const body = route.request().postDataJSON();
+    commandRequests.push({ pathname: new URL(route.request().url()).pathname, body });
+    if (body.confirmationToken !== 'confirm-reset-e2e') {
+      await route.fulfill({
+        status: 409,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          error: 'action_confirmation_required',
+          data: { confirmationToken: 'confirm-reset-e2e' },
+        }),
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        data: {
+          action: 'agent_task_reset',
+          targetType: 'agent-task',
+          targetId: 'agent_task_demo_running',
+          status: 'accepted',
+          dryRun: false,
+          auditId: 'audit-reset-e2e',
+        },
+      }),
+    });
+  });
+
+  await page.route('**/api/v1/agent-tasks/**/actions/terminate**', async (route) => {
+    commandRequests.push({ pathname: new URL(route.request().url()).pathname, body: route.request().postDataJSON() });
+    await route.fulfill({
+      status: 403,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: 'operator_scope_rejected' }),
+    });
+  });
+
+  await page.goto(`${dashboardBaseUrl}/en/dashboard/tasks?demo=1&task=agent_task_demo_running`);
+  await expect(page.locator('[data-dashboard-detail]')).toContainText('agent_task_demo_running');
+
+  await page.locator('[data-agent-action="resume"]').click();
+  await expect(page.locator('[data-command-status]')).toContainText('accepted');
+  await expect(page.locator('[data-command-status]')).toContainText('audit-resume-e2e');
+
+  page.once('dialog', async (dialog) => {
+    expect(dialog.message()).toContain('reset');
+    await dialog.accept();
+  });
+  await page.locator('[data-agent-action="reset"]').click();
+  await expect(page.locator('[data-command-status]')).toContainText('audit-reset-e2e');
+
+  await page.locator('[data-agent-action="terminate"]').click();
+  await expect(page.locator('[data-command-status]')).toContainText('operator_scope_rejected');
+
+  expect(commandRequests).toEqual([
+    { pathname: '/api/v1/agent-tasks/agent_task_demo_running/actions/resume', body: {} },
+    { pathname: '/api/v1/agent-tasks/agent_task_demo_running/actions/reset', body: {} },
+    { pathname: '/api/v1/agent-tasks/agent_task_demo_running/actions/reset', body: { confirmationToken: 'confirm-reset-e2e' } },
+    { pathname: '/api/v1/agent-tasks/agent_task_demo_running/actions/terminate', body: {} },
+  ]);
+});
+
+test('sends terminate-all as a collection command and surfaces confirmation cancellation', async ({ page }) => {
+  const terminateAllRequests: unknown[] = [];
+
+  await page.route('**/api/v1/agent-tasks/actions/terminate-all**', async (route) => {
+    terminateAllRequests.push(route.request().postDataJSON());
+    await route.fulfill({
+      status: 409,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        error: 'action_confirmation_required',
+        data: { confirmationToken: 'confirm-terminate-all-e2e' },
+      }),
+    });
+  });
+
+  await page.goto(`${dashboardBaseUrl}/en/dashboard/tasks?demo=1`);
+  await expect(page.locator('[data-dashboard-list] button').first()).toBeVisible();
+
+  page.once('dialog', async (dialog) => {
+    expect(dialog.message()).toContain('terminate all');
+    await dialog.dismiss();
+  });
+  await page.locator('[data-agent-action="terminate-all"]').click();
+
+  await expect(page.locator('[data-command-status]')).toContainText('action_confirmation_required');
+  expect(terminateAllRequests).toEqual([{}]);
+});
 
 test('keeps sidebar tabs clickable before operational data is loaded', async ({ page }) => {
   let apiRequests = 0;
@@ -324,6 +490,10 @@ test('keeps sidebar tabs clickable before operational data is loaded', async ({ 
     });
   }
 });
+
+function overviewCardControl(controls: Locator, name: string): Locator {
+  return controls.locator('.dashboard-overview-card-control').filter({ hasText: name });
+}
 
 async function expectActiveHitTarget(locator: Locator): Promise<void> {
   await expect(locator).toBeVisible();
