@@ -49,6 +49,7 @@ describe('CLI release package builder', () => {
               'package/dist/index.js',
               'package/dist/bin/rainrail.js',
               'package/dist/dashboard/dashboard/index.html',
+              'package/dist/dashboard/dashboard/queue/index.html',
               'package/dist/dashboard/ja/dashboard/index.html',
               'package/dist/dashboard/en/dashboard/index.html',
               'package/dist/dashboard/_astro/dashboard-app.js',

@@ -119,6 +119,7 @@ describe('package scripts used by pull request CI', () => {
       'tsc -p tsconfig.build.json && node ../../scripts/copy-dashboard-assets.mjs && chmod +x dist/bin/rainrail.js',
     );
     expect(copyDashboardAssetsScript).toContain('../apps/www/dist/');
+    expect(copyDashboardAssetsScript).toContain('../apps/www/dist/dashboard/');
     expect(copyDashboardAssetsScript).toContain('../apps/www/dist/ja/dashboard/');
     expect(copyDashboardAssetsScript).toContain('../apps/www/dist/en/dashboard/');
     expect(copyDashboardAssetsScript).toContain('../packages/cli/dist/dashboard/');
