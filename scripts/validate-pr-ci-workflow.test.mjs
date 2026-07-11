@@ -42,7 +42,7 @@ describe('pull request CI workflow', () => {
   });
 
   it('runs dashboard E2E in a separate job with browser setup and failure artifacts', () => {
-    expect(workflow).toMatch(/^ {2}dashboard-e2e:\n {4}name: Dashboard E2E\n {4}needs: validate\n {4}runs-on: ubuntu-latest$/m);
+    expect(workflow).toMatch(/^ {2}dashboard-e2e:\n {4}name: Dashboard E2E\n {4}needs: validate\n {4}runs-on: ubuntu-24\.04$/m);
     expect(workflow).toMatch(/^ {6}- name: Install Playwright browser\n {8}run: pnpm exec playwright install --with-deps chromium$/m);
     expect(workflow).toMatch(/^ {6}- name: Run dashboard E2E\n {8}run: pnpm e2e:dashboard$/m);
     expect(workflow).toMatch(/^ {6}- name: Upload dashboard E2E artifacts\n {8}if: \$\{\{ always\(\) \}\}\n {8}uses: actions\/upload-artifact@v4/m);
