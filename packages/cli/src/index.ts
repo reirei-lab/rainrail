@@ -6367,6 +6367,7 @@ const localCoreRoutePaths = new Set([
 ]);
 const localCoreRoutePrefixes = [
   '/_astro/',
+  '/dashboard/',
   '/ja/dashboard/',
   '/en/dashboard/',
   '/api/events/',
@@ -8946,6 +8947,7 @@ function resolveDashboardAssetRoot(env: Record<string, string | undefined>): str
 function isLocalDashboardAssetRoute(pathname: string): boolean {
   return pathname === '/dashboard' ||
     pathname === '/dashboard/' ||
+    /^\/dashboard\/[^/]+\/?$/u.test(pathname) ||
     /^\/(?:ja|en)\/dashboard(?:\/[^/]+)?\/?$/u.test(pathname) ||
     pathname.startsWith('/_astro/');
 }
@@ -8985,6 +8987,13 @@ function localDashboardAssetBody(assetPath: string, options: RainrailStartOption
 }
 
 function localDashboardAssetPath(assetRoot: string, pathname: string): string | undefined {
+  const dashboard = /^\/dashboard(?:\/([^/]+))?\/?$/u.exec(pathname);
+  if (dashboard !== null) {
+    const view = dashboard[1];
+    if (view !== undefined) {
+      return resolve(assetRoot, 'dashboard', view, 'index.html');
+    }
+  }
   const localeDashboard = /^\/(ja|en)\/dashboard(?:\/([^/]+))?\/?$/u.exec(pathname);
   if (localeDashboard?.[1] !== undefined) {
     const view = localeDashboard[2];
@@ -9022,6 +9031,7 @@ function localDashboardAssetPath(assetRoot: string, pathname: string): string | 
 function isLocalDashboardHtmlRoute(pathname: string): boolean {
   return pathname === '/dashboard' ||
     pathname === '/dashboard/' ||
+    /^\/dashboard\/[^/]+\/?$/u.test(pathname) ||
     /^\/(?:ja|en)\/dashboard(?:\/[^/]+)?\/?$/u.test(pathname);
 }
 

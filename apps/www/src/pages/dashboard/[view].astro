@@ -23,12 +23,19 @@ if (route === undefined) {
 }
 
 const redirect = getDefaultLocaleDashboardRedirect(route.id);
+const redirectHref = redirect.href;
 ---
 
 <!doctype html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <script is:inline define:vars={{ redirectHref }}>
+      const target = new URL(redirectHref, window.location.href);
+      target.search = window.location.search;
+      target.hash = window.location.hash;
+      window.location.replace(target.toString());
+    </script>
     <meta http-equiv="refresh" content={`0;url=${redirect.href}`} />
     <meta name="robots" content="noindex" />
     <link rel="canonical" href={redirect.href} />

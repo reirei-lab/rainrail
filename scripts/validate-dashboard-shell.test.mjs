@@ -120,6 +120,8 @@ describe('dashboard app shell', () => {
     expect(dashboardRouteRedirectPage).toContain('getDashboardRouteBySlug(view)');
     expect(dashboardRouteRedirectPage).toContain('getDefaultLocaleDashboardRedirect(route.id)');
     expect(dashboardRouteRedirectPage).toContain('params: { view: route.slug }');
+    expect(dashboardRouteRedirectPage).toContain('target.search = window.location.search');
+    expect(dashboardRouteRedirectPage).toContain('window.location.replace(target.toString())');
   });
 
   it('adds Sources, Queue, and Settings views for operator context', () => {
