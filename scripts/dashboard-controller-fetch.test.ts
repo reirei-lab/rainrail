@@ -21,6 +21,61 @@ describe('dashboard page controllers', () => {
     ]);
   });
 
+  it('includes a deep-linked event detail row when it is outside the Events page collection', async () => {
+    const client = fakeDashboardClient({
+      events: [{ id: 'evt_recent', type: 'event', status: 'received', summary: 'recent event' }],
+      eventDetails: {
+        evt_older_source: {
+          id: 'evt_older_source',
+          type: 'event',
+          status: 'received',
+          summary: 'older source event',
+        },
+      },
+    });
+
+    const data = await fetchDashboardDataForTab(client, {
+      tab: 'events',
+      eventFilters: {},
+      workflowRunFilters: {},
+      agentTaskFilters: {},
+      queueFilters: {},
+      eventDetailId: 'evt_older_source',
+    });
+
+    expect(client.calls).toEqual([
+      'overview',
+      'dashboardCards',
+      'dashboardLayout',
+      'events::',
+      'eventDetail:evt_older_source',
+    ]);
+    expect(data.events.map((event) => event.id)).toEqual(['evt_older_source', 'evt_recent']);
+  });
+
+  it('does not refetch a deep-linked event that is already in the Events page collection', async () => {
+    const client = fakeDashboardClient({
+      events: [{ id: 'evt_recent', type: 'event', status: 'received', summary: 'recent event' }],
+    });
+
+    const data = await fetchDashboardDataForTab(client, {
+      tab: 'events',
+      eventFilters: {},
+      workflowRunFilters: {},
+      agentTaskFilters: {},
+      queueFilters: {},
+      eventDetailId: 'evt_recent',
+    });
+
+    expect(client.calls).toEqual([
+      'overview',
+      'dashboardCards',
+      'dashboardLayout',
+      'events::',
+    ]);
+    expect(data.events.map((event) => event.id)).toEqual(['evt_recent']);
+  });
+
   it.each<[
     DashboardTab,
     string[],
@@ -45,7 +100,12 @@ describe('dashboard page controllers', () => {
   });
 });
 
-function fakeDashboardClient() {
+type FakeDashboardClientOptions = {
+  events?: Array<{ id: string; type: 'event'; status: string; summary: string }>;
+  eventDetails?: Record<string, { id: string; type: 'event'; status: string; summary: string }>;
+};
+
+function fakeDashboardClient(options: FakeDashboardClientOptions = {}) {
   const calls: string[] = [];
   return {
     calls,
@@ -63,7 +123,18 @@ function fakeDashboardClient() {
     },
     async events(filters: { sourceType?: string; name?: string }) {
       calls.push(`events:${filters.sourceType ?? ''}:${filters.name ?? ''}`);
-      return { data: [], page: { limit: 25, nextCursor: null } };
+      return { data: options.events ?? [], page: { limit: 25, nextCursor: null } };
+    },
+    async eventDetail(id: string) {
+      calls.push(`eventDetail:${id}`);
+      return {
+        data: {
+          id,
+          type: 'event',
+          compact: options.eventDetails?.[id],
+          record: {},
+        },
+      };
     },
     async workflowRuns(filters: { status?: string }) {
       calls.push(`workflowRuns:${filters.status ?? ''}`);

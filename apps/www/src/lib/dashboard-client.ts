@@ -161,10 +161,11 @@ export interface DashboardLayoutUpdateResponse extends DashboardLayout {
   };
 }
 
-export interface DashboardDetail<TRecord = unknown> {
+export interface DashboardDetail<TRecord = unknown, TCompact = unknown> {
   data: {
     id: string;
     type: string;
+    compact?: TCompact;
     record: TRecord;
   };
 }
@@ -251,7 +252,7 @@ export class RainrailDashboardApiClient {
     return this.patchCommand(`/api/v1/dashboard/layout/items/${encodeURIComponent(itemId)}/config`, { config });
   }
 
-  eventDetail(id: string): Promise<DashboardDetail> {
+  eventDetail(id: string): Promise<DashboardDetail<unknown, DashboardEvent>> {
     return this.get(`/api/v1/events/${encodeURIComponent(id)}`);
   }
 

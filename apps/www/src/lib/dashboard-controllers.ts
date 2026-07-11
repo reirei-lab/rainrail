@@ -2,6 +2,7 @@ import {
   type DashboardAgentTask,
   type DashboardCardCatalogEntry,
   type DashboardCollection,
+  type DashboardDetail,
   type DashboardEvent,
   type DashboardLayout,
   type DashboardOverview,
@@ -28,6 +29,7 @@ export interface DashboardData {
 export interface DashboardPageControllerRequest {
   tab: DashboardTab;
   eventFilters: { sourceType?: string; name?: string };
+  eventDetailId?: string;
   workflowRunFilters: { status?: string };
   agentTaskFilters: { status?: string };
   queueFilters: { status?: string };
@@ -36,6 +38,7 @@ export interface DashboardPageControllerRequest {
 export interface DashboardDataClient {
   overview(): Promise<DashboardOverview>;
   events(filters: { sourceType?: string; name?: string }): Promise<DashboardCollection<DashboardEvent>>;
+  eventDetail(id: string): Promise<DashboardDetail<unknown, DashboardEvent>>;
   workflowRuns(filters: { status?: string }): Promise<DashboardCollection<DashboardWorkflowRun>>;
   agentTasks(filters: { status?: string }): Promise<DashboardCollection<DashboardAgentTask>>;
   sources(): Promise<DashboardCollection<DashboardSource>>;
@@ -66,6 +69,12 @@ export async function fetchDashboardDataForTab(
 
   if (request.tab === 'events') {
     data.events = (await client.events(request.eventFilters)).data;
+    if (request.eventDetailId !== undefined && !data.events.some((event) => event.id === request.eventDetailId)) {
+      const detail = await client.eventDetail(request.eventDetailId);
+      if (detail.data.compact !== undefined) {
+        data.events = [detail.data.compact, ...data.events];
+      }
+    }
   } else if (request.tab === 'workflow-runs') {
     data.workflowRuns = (await client.workflowRuns(request.workflowRunFilters)).data;
   } else if (request.tab === 'agent-tasks') {

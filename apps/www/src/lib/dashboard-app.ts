@@ -276,6 +276,7 @@ if (root !== null) {
       const nextData = await fetchDashboardDataForTab(activeClient, {
         tab: selectedTab,
         eventFilters: currentEventFilters(),
+        eventDetailId: initialDashboardState.detailIds.event,
         workflowRunFilters: currentWorkflowRunFilters(),
         agentTaskFilters: currentAgentTaskFilters(),
         queueFilters: currentQueueFilters(),
