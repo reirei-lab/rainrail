@@ -15,6 +15,17 @@ import {
 import { fallbackDashboardAppCopy, type DashboardAppCopy } from './dashboard-content';
 import { fetchDashboardDataForTab, type DashboardData, type DashboardTab } from './dashboard-controllers';
 import {
+  OVERVIEW_CARD_STORAGE_KEY,
+  moveOverviewCard,
+  overviewCardRegistry,
+  overviewWarningCount,
+  parseOverviewCardLayout,
+  serializeOverviewCardLayout,
+  setOverviewCardVisibility,
+  type OverviewCardId,
+  type OverviewCardLayoutItem,
+} from './dashboard-overview-cards';
+import {
   API_BASE_URL_STORAGE_KEY,
   OPERATOR_STORAGE_KEY,
   TOKEN_STORAGE_KEY,
@@ -80,6 +91,9 @@ if (root !== null) {
   const cardPickerList = root.querySelector<HTMLElement>('[data-card-picker-list]');
   const dashboardLayoutGrid = root.querySelector<HTMLElement>('[data-dashboard-layout-grid]');
   const dashboardLayoutStatus = root.querySelector<HTMLElement>('[data-dashboard-layout-status]');
+  const overviewCardPanel = root.querySelector<HTMLElement>('[data-overview-card-panel]');
+  const overviewCardControls = root.querySelector<HTMLElement>('[data-overview-card-controls]');
+  const overviewCardBoard = root.querySelector<HTMLElement>('[data-overview-card-board]');
   const demoIndicator = root.querySelector<HTMLElement>('[data-demo-indicator]');
   const tabButtons = Array.from(root.querySelectorAll<HTMLAnchorElement>('[data-dashboard-tab]'));
   const dashboardCoreCardElements = Array.from(root.querySelectorAll<HTMLElement>('[data-dashboard-core-card]'));
@@ -104,6 +118,7 @@ if (root !== null) {
   let dashboardLayoutSaving = false;
   let layoutMutationSequence = 0;
   let tabChangedDuringLayoutVisibility = false;
+  let overviewCardLayout = parseOverviewCardLayout(localStore.get(OVERVIEW_CARD_STORAGE_KEY), overviewCardRegistry);
 
   const storedToken = sessionStore.get(TOKEN_STORAGE_KEY) ?? '';
   const storedApiBaseUrl = sessionStore.get(API_BASE_URL_STORAGE_KEY) ?? appRoot.dataset.apiBaseUrl ?? '';
@@ -193,6 +208,7 @@ if (root !== null) {
 
   filterApplyButton?.addEventListener('click', () => {
     selectedTab = 'events';
+    renderOverviewCards();
     void refresh();
   });
 
@@ -215,6 +231,7 @@ if (root !== null) {
       if (isDashboardTab(tab)) {
         selectedTab = tab;
         preserveDashboardRouteQuery(button);
+        renderOverviewCards();
         renderCurrentList();
       }
     });
@@ -291,6 +308,7 @@ if (root !== null) {
         refreshAfterCurrent = true;
       }
       renderStats(latestData.overview);
+      renderOverviewCards();
       renderDashboardLayout();
       renderCardPicker();
       renderCardSettingsPicker(options);
@@ -317,6 +335,7 @@ if (root !== null) {
     ensureVisibleDashboardTab();
     updateTabButtons();
     if (list === null || detail === null) return;
+    renderOverviewCards();
 
     if (latestData === undefined) {
       list.replaceChildren();
@@ -435,6 +454,168 @@ if (root !== null) {
     ]);
   }
 
+  function renderOverviewCards(): void {
+    if (overviewCardPanel !== null) {
+      overviewCardPanel.hidden = selectedTab !== 'overview';
+    }
+    renderOverviewCardControls();
+    if (overviewCardBoard === null || selectedTab !== 'overview') return;
+
+    if (latestData === undefined) {
+      overviewCardBoard.replaceChildren();
+      return;
+    }
+
+    const visibleCards = overviewCardLayout.filter((item) => item.visible);
+    if (visibleCards.length === 0) {
+      overviewCardBoard.textContent = copy.overviewCards.empty;
+      return;
+    }
+
+    overviewCardBoard.replaceChildren(...visibleCards.map((item) => overviewCardArticle(item, latestData!.overview)));
+  }
+
+  function renderOverviewCardControls(): void {
+    if (overviewCardControls === null) return;
+
+    overviewCardControls.replaceChildren(...overviewCardLayout.map((item, index) => {
+      const row = document.createElement('div');
+      row.className = 'dashboard-overview-card-control';
+
+      const label = document.createElement('label');
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.checked = item.visible;
+      checkbox.addEventListener('change', () => {
+        saveOverviewCardLayout(setOverviewCardVisibility(overviewCardLayout, item.id, checkbox.checked));
+      });
+      const title = document.createElement('strong');
+      title.textContent = copy.overviewCards.cards[item.id].title;
+      const state = document.createElement('span');
+      state.textContent = item.visible ? copy.overviewCards.visible : copy.overviewCards.hidden;
+      label.append(checkbox, title, state);
+
+      const actions = document.createElement('div');
+      actions.append(
+        overviewCardButton(copy.overviewCards.moveUp, index === 0, () => {
+          saveOverviewCardLayout(moveOverviewCard(overviewCardLayout, item.id, 'up'));
+        }),
+        overviewCardButton(copy.overviewCards.moveDown, index === overviewCardLayout.length - 1, () => {
+          saveOverviewCardLayout(moveOverviewCard(overviewCardLayout, item.id, 'down'));
+        }),
+      );
+      row.append(label, actions);
+      return row;
+    }));
+  }
+
+  function overviewCardButton(label: string, disabled: boolean, action: () => void): HTMLButtonElement {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = label;
+    button.disabled = disabled;
+    button.addEventListener('click', action);
+    return button;
+  }
+
+  function saveOverviewCardLayout(layout: OverviewCardLayoutItem[]): void {
+    overviewCardLayout = layout;
+    localStore.set(OVERVIEW_CARD_STORAGE_KEY, serializeOverviewCardLayout(overviewCardLayout));
+    renderOverviewCards();
+  }
+
+  function overviewCardArticle(item: OverviewCardLayoutItem, overview: DashboardOverview): HTMLElement {
+    const article = document.createElement('article');
+    article.className = 'dashboard-overview-card';
+    article.dataset.overviewCardId = item.id;
+
+    const heading = document.createElement('div');
+    heading.className = 'dashboard-overview-card-heading';
+    const title = document.createElement('div');
+    const label = document.createElement('span');
+    label.textContent = item.id;
+    const name = document.createElement('strong');
+    name.textContent = copy.overviewCards.cards[item.id].title;
+    title.append(label, name);
+    const status = document.createElement('span');
+    status.textContent = copy.overviewCards.visible;
+    heading.append(title, status);
+
+    const body = document.createElement('div');
+    body.className = 'dashboard-overview-card-body';
+    body.append(...overviewCardBody(item.id, overview));
+    article.append(heading, body);
+    return article;
+  }
+
+  function overviewCardBody(id: OverviewCardId, overview: DashboardOverview): HTMLElement[] {
+    if (id === 'health') return overviewHealthCardBody();
+    if (id === 'counts') return overviewCountsCardBody(overview);
+    if (id === 'recentActivity') return overviewRecentActivityCardBody(overview);
+    return overviewWarningsCardBody(overview);
+  }
+
+  function overviewHealthCardBody(): HTMLElement[] {
+    return [
+      overviewMetric(copy.overviewCards.connected, appRoot.dataset.state === 'ready' ? copy.status.ready : copy.overviewCards.connected),
+      overviewMetric(copy.overviewCards.lastRefresh, lastUpdatedAt === 0 ? copy.placeholders.notAvailable : new Date(lastUpdatedAt).toLocaleString()),
+      overviewNote(copy.overviewCards.todoHealth),
+    ];
+  }
+
+  function overviewCountsCardBody(overview: DashboardOverview): HTMLElement[] {
+    const entries = Object.entries(overview.data.counts).sort(([left], [right]) => left.localeCompare(right));
+    if (entries.length === 0) return [overviewNote(copy.placeholders.none)];
+    const grid = document.createElement('div');
+    grid.className = 'dashboard-overview-card-metrics';
+    grid.append(...entries.map(([label, value]) => overviewMetric(label, String(value))));
+    return [grid];
+  }
+
+  function overviewRecentActivityCardBody(overview: DashboardOverview): HTMLElement[] {
+    const rows = overview.data.recentActivity.slice(0, 5);
+    if (rows.length === 0) return [overviewNote(copy.overviewCards.noRecentActivity)];
+    const listElement = document.createElement('ol');
+    listElement.className = 'dashboard-overview-card-list';
+    listElement.append(...rows.map((row) => {
+      const item = document.createElement('li');
+      const title = document.createElement('strong');
+      title.textContent = rowTitle(row);
+      const meta = document.createElement('span');
+      meta.textContent = rowMeta(row, copy);
+      item.append(title, meta);
+      return item;
+    }));
+    return [listElement];
+  }
+
+  function overviewWarningsCardBody(overview: DashboardOverview): HTMLElement[] {
+    const warningCount = overviewWarningCount(overview);
+    if (warningCount === 0) return [overviewNote(copy.overviewCards.noWarnings)];
+    const staleClaims = overview.data.warnings.staleProjectClaims ?? [];
+    return [
+      overviewMetric('staleProjectClaims', String(warningCount)),
+      overviewNote(JSON.stringify(staleClaims.slice(0, 3))),
+    ];
+  }
+
+  function overviewMetric(label: string, value: string): HTMLElement {
+    const item = document.createElement('div');
+    item.className = 'dashboard-overview-card-metric';
+    const labelElement = document.createElement('span');
+    labelElement.textContent = label;
+    const valueElement = document.createElement('strong');
+    valueElement.textContent = value;
+    item.append(labelElement, valueElement);
+    return item;
+  }
+
+  function overviewNote(value: string): HTMLElement {
+    const paragraph = document.createElement('p');
+    paragraph.textContent = value;
+    return paragraph;
+  }
+
   function renderEmptyStats(): void {
     if (stats === null) return;
 
@@ -499,6 +680,7 @@ if (root !== null) {
     clearSelectedDetail();
     if (staleIndicator !== null) staleIndicator.hidden = true;
     renderEmptyStats();
+    renderOverviewCards();
     if (list !== null) list.replaceChildren();
     if (dashboardLayoutGrid !== null) dashboardLayoutGrid.replaceChildren();
     if (cardPickerList !== null) cardPickerList.replaceChildren();

@@ -231,6 +231,24 @@ export type DashboardAppCopy = {
     empty: string;
     noFields: string;
   };
+  overviewCards: {
+    title: string;
+    description: string;
+    controlsLabel: string;
+    boardLabel: string;
+    show: string;
+    moveUp: string;
+    moveDown: string;
+    visible: string;
+    hidden: string;
+    connected: string;
+    lastRefresh: string;
+    empty: string;
+    noRecentActivity: string;
+    noWarnings: string;
+    todoHealth: string;
+    cards: Record<'health' | 'counts' | 'recentActivity' | 'warnings', { title: string; description: string }>;
+  };
   cardLayout: {
     title: string;
     description: string;
@@ -436,6 +454,29 @@ const englishApp: DashboardAppCopy = {
     empty: 'No dashboard cards in the current layout.',
     noFields: 'This card has no configurable fields.',
   },
+  overviewCards: {
+    title: 'Overview cards',
+    description: 'Choose the Overview cards and move them up or down. This layout is saved in this browser.',
+    controlsLabel: 'Overview card visibility and order',
+    boardLabel: 'Custom Overview cards',
+    show: 'Show',
+    moveUp: 'Move up',
+    moveDown: 'Move down',
+    visible: 'visible',
+    hidden: 'hidden',
+    connected: 'Connected',
+    lastRefresh: 'Last refresh',
+    empty: 'No Overview cards are visible.',
+    noRecentActivity: 'No recent activity.',
+    noWarnings: 'No warnings.',
+    todoHealth: 'TODO: expose component health in the overview API.',
+    cards: {
+      health: { title: 'Health', description: 'API response freshness and dashboard connection state.' },
+      counts: { title: 'Counts', description: 'Operational totals from the overview API.' },
+      recentActivity: { title: 'Recent activity', description: 'Latest workflow activity from the overview API.' },
+      warnings: { title: 'Warnings', description: 'Overview warning signals that need operator attention.' },
+    },
+  },
   cardLayout: {
     title: 'Dashboard layout',
     description: 'Pick cards, then drag, resize, remove, and save the operator layout.',
@@ -623,6 +664,29 @@ const japaneseApp: DashboardAppCopy = {
     invalid: '無効なカード設定を修正してから保存してください。',
     empty: '現在のレイアウトに dashboard card がありません。',
     noFields: 'このカードに設定項目はありません。',
+  },
+  overviewCards: {
+    title: '概要カード',
+    description: '概要に表示するカードを選び、上下に並べ替えます。このレイアウトはこのブラウザに保存されます。',
+    controlsLabel: '概要カードの表示と順序',
+    boardLabel: 'カスタム概要カード',
+    show: '表示',
+    moveUp: '上へ',
+    moveDown: '下へ',
+    visible: '表示中',
+    hidden: '非表示',
+    connected: '接続中',
+    lastRefresh: '最終更新',
+    empty: '表示中の概要カードはありません。',
+    noRecentActivity: '最近の活動はありません。',
+    noWarnings: '警告はありません。',
+    todoHealth: 'TODO: overview API でコンポーネント別 health を公開する。',
+    cards: {
+      health: { title: '稼働状況', description: 'API 応答の新しさと dashboard 接続状態。' },
+      counts: { title: '件数', description: 'overview API の運用集計。' },
+      recentActivity: { title: '最近の活動', description: 'overview API の最新 workflow activity。' },
+      warnings: { title: '警告', description: '運用者が確認すべき overview warning。' },
+    },
   },
   cardLayout: {
     title: 'Dashboard レイアウト',

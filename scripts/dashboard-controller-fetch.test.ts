@@ -2,6 +2,25 @@ import { describe, expect, it } from 'vitest';
 import { fetchDashboardDataForTab, type DashboardTab } from '../apps/www/src/lib/dashboard-controllers';
 
 describe('dashboard page controllers', () => {
+  it('fetches overview data plus agent task context for the Overview page', async () => {
+    const client = fakeDashboardClient();
+
+    await fetchDashboardDataForTab(client, {
+      tab: 'overview',
+      eventFilters: {},
+      workflowRunFilters: { status: 'failed' },
+      agentTaskFilters: { status: 'running' },
+      queueFilters: { status: 'blocked' },
+    });
+
+    expect(client.calls).toEqual([
+      'overview',
+      'dashboardCards',
+      'dashboardLayout',
+      'agentTasks:running',
+    ]);
+  });
+
   it('fetches only Events collection data for the Events page', async () => {
     const client = fakeDashboardClient();
 
