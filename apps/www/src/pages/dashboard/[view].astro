@@ -1,11 +1,11 @@
 ---
-import { getDashboardRoutes } from '../../lib/dashboard-content';
+import { getDashboardRoutes, getDashboardRouteSlugs } from '../../lib/dashboard-content';
 import { getDefaultLocaleDashboardRedirect } from '../../lib/redirects';
 
 export function getStaticPaths() {
   return getDashboardRoutes()
     .flatMap((route) => {
-      const routeViews = route.slug === undefined ? [] : [route.slug, ...(route.aliases ?? [])];
+      const routeViews = getDashboardRouteSlugs(route);
       return routeViews.map((view) => ({
         params: { view },
         props: { view },

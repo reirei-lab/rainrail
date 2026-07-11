@@ -11,7 +11,7 @@ export type DashboardRoute = {
 const dashboardRoutes: readonly DashboardRoute[] = [
   { id: 'overview' },
   { id: 'events', slug: 'events' },
-  { id: 'workflow-runs', slug: 'workflow-runs' },
+  { id: 'workflow-runs', slug: 'runs', aliases: ['workflow-runs'] },
   { id: 'agent-tasks', slug: 'tasks', aliases: ['agent-tasks'] },
   { id: 'sources', slug: 'sources' },
   { id: 'queue', slug: 'queue' },
@@ -266,8 +266,11 @@ export type DashboardAppCopy = {
 
 export const getDashboardRoutes = (): readonly DashboardRoute[] => dashboardRoutes;
 
+export const getDashboardRouteSlugs = (route: DashboardRoute): readonly string[] =>
+  route.slug === undefined ? [] : [route.slug, ...(route.aliases ?? [])];
+
 export const getDashboardRouteBySlug = (slug?: string): DashboardRoute | undefined =>
-  dashboardRoutes.find((route) => route.slug === slug || route.aliases?.includes(slug ?? '') === true);
+  dashboardRoutes.find((route) => getDashboardRouteSlugs(route).includes(slug ?? ''));
 
 export const getDashboardHref = (locale: Locale, routeId: DashboardRouteId = 'overview'): string => {
   const route = dashboardRoutes.find((entry) => entry.id === routeId);
@@ -708,7 +711,7 @@ const dashboardContent = {
       tabs: {
         overview: 'Overview',
         events: 'Event Inbox',
-        workflowRuns: 'Workflow Runs',
+        workflowRuns: 'Runs',
         agentTasks: 'Agent Tasks',
         sources: 'Sources',
         queue: 'Queue',
@@ -767,7 +770,7 @@ const dashboardContent = {
       tabs: {
         overview: '概要',
         events: 'イベント受信箱',
-        workflowRuns: 'ワークフロー実行',
+        workflowRuns: '実行履歴',
         agentTasks: 'エージェントタスク',
         sources: '入力元',
         queue: 'キュー',

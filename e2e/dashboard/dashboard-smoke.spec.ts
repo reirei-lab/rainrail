@@ -38,7 +38,7 @@ test('drops legacy tab query when navigating to a routed dashboard view', async 
 
   await page.locator('[data-dashboard-tab="workflow-runs"]').click();
 
-  await expect(page).toHaveURL(/\/en\/dashboard\/workflow-runs\?demo=1$/);
+  await expect(page).toHaveURL(/\/en\/dashboard\/runs\?demo=1$/);
   await expect(page.locator('[data-dashboard-tab="workflow-runs"]')).toHaveAttribute('aria-current', 'page');
   await expect(page.locator('[data-dashboard-tab="workflow-runs"]')).toHaveAttribute('aria-pressed', 'true');
   await expect(page.locator('[data-dashboard-tab="events"]')).toHaveAttribute('aria-pressed', 'false');
@@ -56,14 +56,22 @@ test('keeps legacy Event Inbox filter deep links working without overview filter
 });
 
 test('prefers routed dashboard view over legacy tab query on initial load', async ({ page }) => {
-  await page.goto(`${dashboardBaseUrl}/en/dashboard/workflow-runs?demo=1&tab=events`);
+  await page.goto(`${dashboardBaseUrl}/en/dashboard/runs?demo=1&tab=events`);
 
-  await expect(page).toHaveURL(/\/en\/dashboard\/workflow-runs\?demo=1&tab=events$/);
+  await expect(page).toHaveURL(/\/en\/dashboard\/runs\?demo=1&tab=events$/);
   await expect(page.locator('[data-dashboard-tab="workflow-runs"]')).toHaveAttribute('aria-current', 'page');
   await expect(page.locator('[data-dashboard-tab="workflow-runs"]')).toHaveAttribute('aria-pressed', 'true');
   await expect(page.locator('[data-dashboard-tab="events"]')).toHaveAttribute('aria-pressed', 'false');
   await expect(page.locator('[data-dashboard-list]')).toContainText('Cloudflare tail issue report failed and scheduled retry');
   await expect(page.locator('[data-dashboard-list]')).not.toContainText('github.issue reirei-lab/rainrail#272');
+});
+
+test('keeps the legacy workflow-runs route as a routed Runs alias', async ({ page }) => {
+  await page.goto(`${dashboardBaseUrl}/en/dashboard/workflow-runs?demo=1&status=failed&run=act_demo_workflow_failed_retry`);
+
+  await expect(page.locator('[data-dashboard-tab="workflow-runs"]')).toHaveAttribute('aria-current', 'page');
+  await expect(page.locator('[data-dashboard-list]')).toContainText('Cloudflare tail issue report failed and scheduled retry');
+  await expect(page.locator('[data-dashboard-detail]')).toContainText('evt_demo_cloudflare_tail_001');
 });
 
 type ScenarioExpectation = {
