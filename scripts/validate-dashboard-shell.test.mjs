@@ -13,6 +13,10 @@ const localizedDashboardRoutePage = readFileSync(
   new URL('../apps/www/src/pages/[locale]/dashboard/[view].astro', import.meta.url),
   'utf8',
 );
+const dashboardRouteRedirectPage = readFileSync(
+  new URL('../apps/www/src/pages/dashboard/[view].astro', import.meta.url),
+  'utf8',
+);
 const dashboardLayout = readFileSync(
   new URL('../apps/www/src/layouts/DashboardLayout.astro', import.meta.url),
   'utf8',
@@ -102,6 +106,9 @@ describe('dashboard app shell', () => {
     expect(dashboardContent).toContain("export type DashboardRouteId = 'overview' | 'events' | 'workflow-runs' | 'agent-tasks' | 'sources' | 'queue' | 'settings'");
     expect(dashboardContent).toContain("slug: 'events'");
     expect(dashboardContent).toContain("slug: 'workflow-runs'");
+    expect(dashboardContent).toContain("slug: 'sources'");
+    expect(dashboardContent).toContain("slug: 'queue'");
+    expect(dashboardContent).toContain("slug: 'settings'");
     expect(dashboardContent).toContain("slug: 'tasks'");
     expect(dashboardContent).toContain("aliases: ['agent-tasks']");
     expect(dashboardContent).not.toContain("slug: 'agent-tasks'");
@@ -110,6 +117,17 @@ describe('dashboard app shell', () => {
     expect(localizedDashboardRoutePage).toContain('props: { locale, view }');
     expect(sitemapRoute).toContain("getDashboardHref(locale, route.id)");
     expect(dashboardContent).toContain("return `/${locale}/dashboard/${route.slug}`;");
+  });
+
+  it('redirects non-localized dashboard view URLs to the default locale view pages', () => {
+    expect(dashboardRouteRedirectPage).toContain('getDashboardRoutes()');
+    expect(dashboardRouteRedirectPage).toContain('getDefaultLocaleDashboardRedirect(view)');
+    expect(dashboardRouteRedirectPage).toContain('const routeViews = route.slug === undefined ? [] : [route.slug, ...(route.aliases ?? [])];');
+    expect(dashboardRouteRedirectPage).toContain('params: { view }');
+    expect(dashboardRouteRedirectPage).toContain('props: { view }');
+    expect(dashboardRouteRedirectPage).toContain('appendCurrentLocationQuery');
+    expect(dashboardRouteRedirectPage).toContain('target.search = window.location.search');
+    expect(dashboardRouteRedirectPage).toContain('window.location.replace(appendCurrentLocationQuery(redirectHref))');
   });
 
   it('adds Sources, Queue, and Settings views for operator context', () => {

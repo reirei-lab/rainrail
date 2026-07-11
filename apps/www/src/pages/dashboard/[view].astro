@@ -26,13 +26,6 @@ const redirectHref = redirect.href;
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta http-equiv="refresh" content={`0;url=${redirect.href}`} />
-    <meta name="robots" content="noindex" />
-    <link rel="canonical" href={redirect.href} />
-    <title>{redirect.title}</title>
-  </head>
-  <body>
-    <a href={redirect.href}>{redirect.body}</a>
     <script is:inline define:vars={{ redirectHref }}>
       function appendCurrentLocationQuery(href) {
         const target = new URL(href, window.location.href);
@@ -43,5 +36,12 @@ const redirectHref = redirect.href;
 
       window.location.replace(appendCurrentLocationQuery(redirectHref));
     </script>
+    <meta http-equiv="refresh" content={`0;url=${redirect.href}`} />
+    <meta name="robots" content="noindex" />
+    <link rel="canonical" href={redirect.href} />
+    <title>{redirect.title}</title>
+  </head>
+  <body>
+    <a href={redirect.href}>{redirect.body}</a>
   </body>
 </html>

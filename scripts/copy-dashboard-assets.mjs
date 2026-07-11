@@ -1,11 +1,9 @@
 import { cpSync, existsSync, rmSync } from 'node:fs';
 
 const source = new URL('../apps/www/dist/', import.meta.url);
+const sourceDashboard = new URL('../apps/www/dist/dashboard/', import.meta.url);
 const sourceLocalizedDashboard = new URL('../apps/www/dist/ja/dashboard/', import.meta.url);
 const sourceEnglishDashboard = new URL('../apps/www/dist/en/dashboard/', import.meta.url);
-const sourceDashboard = existsSync(sourceLocalizedDashboard)
-  ? sourceLocalizedDashboard
-  : new URL('../apps/www/dist/dashboard/', import.meta.url);
 const sourceAstroAssets = new URL('../apps/www/dist/_astro/', import.meta.url);
 const target = new URL('../packages/cli/dist/dashboard/', import.meta.url);
 
