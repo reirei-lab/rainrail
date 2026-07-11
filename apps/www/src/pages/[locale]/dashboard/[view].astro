@@ -33,6 +33,7 @@ if (route === undefined) {
 const content = getDashboardContent(locale);
 const apiBaseUrl = import.meta.env.PUBLIC_RAINRAIL_OPERATIONAL_API_URL ?? '';
 const dashboardCopy = JSON.stringify(content.app);
+const showEventInbox = route.id === 'events';
 ---
 
 <DashboardLayout
@@ -101,26 +102,28 @@ const dashboardCopy = JSON.stringify(content.app);
       <div class="dashboard-stat"><span>{content.app.stats.queue}</span><strong>0</strong></div>
     </section>
 
-    <section class="dashboard-filterbar" aria-label={content.shell.filtersLabel}>
-      <label>
-        {content.shell.source}
-        <select data-event-source-filter>
-          <option value="">{content.shell.allSources}</option>
-          <option value="github">{content.shell.sourceOptions.github}</option>
-          <option value="cloudflare">{content.shell.sourceOptions.cloudflare}</option>
-          <option value="manual">{content.shell.sourceOptions.manual}</option>
-          <option value="system">{content.shell.sourceOptions.system}</option>
-        </select>
-      </label>
-      <label>
-        {content.shell.eventName}
-        <input data-event-name-filter type="text" autocomplete="off" placeholder="github.issue" />
-      </label>
-      <button type="button" class="button secondary" data-filter-apply>{content.shell.apply}</button>
-      <span>{content.shell.delivery}</span>
-      <span>{content.shell.publishResult}</span>
-      <span>{content.shell.workflowMatches}</span>
-    </section>
+    {showEventInbox && (
+      <section class="dashboard-filterbar" aria-label={content.shell.filtersLabel}>
+        <label>
+          {content.shell.source}
+          <select data-event-source-filter>
+            <option value="">{content.shell.allSources}</option>
+            <option value="github">{content.shell.sourceOptions.github}</option>
+            <option value="cloudflare">{content.shell.sourceOptions.cloudflare}</option>
+            <option value="manual">{content.shell.sourceOptions.manual}</option>
+            <option value="system">{content.shell.sourceOptions.system}</option>
+          </select>
+        </label>
+        <label>
+          {content.shell.eventName}
+          <input data-event-name-filter type="text" autocomplete="off" placeholder="github.issue" />
+        </label>
+        <button type="button" class="button secondary" data-filter-apply>{content.shell.apply}</button>
+        <span>{content.shell.delivery}</span>
+        <span>{content.shell.publishResult}</span>
+        <span>{content.shell.workflowMatches}</span>
+      </section>
+    )}
 
     <section class="dashboard-two-pane" aria-label={content.shell.recordsLabel}>
       <div class="dashboard-list" data-dashboard-list></div>

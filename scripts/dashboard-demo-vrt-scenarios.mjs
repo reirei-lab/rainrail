@@ -29,7 +29,7 @@ export const dashboardDemoVrtScenarios = Object.freeze([
   {
     id: 'events-handler-retry-detail',
     tab: 'events',
-    url: '/ja/dashboard?demo=1&tab=events&source=github&event=evt_demo_github_issue_272',
+    url: '/ja/dashboard/events?demo=1&source=github&event=evt_demo_github_issue_272',
     captureHints: [
       'GitHub issue event',
       'handler retry count',
@@ -39,7 +39,7 @@ export const dashboardDemoVrtScenarios = Object.freeze([
   {
     id: 'workflow-runs-failed-retry',
     tab: 'workflow-runs',
-    url: '/ja/dashboard?demo=1&tab=workflow-runs&status=failed&run=act_demo_workflow_failed_retry',
+    url: '/ja/dashboard/workflow-runs?demo=1&status=failed&run=act_demo_workflow_failed_retry',
     captureHints: [
       'failed workflow row',
       'retry-oriented summary',
@@ -49,7 +49,7 @@ export const dashboardDemoVrtScenarios = Object.freeze([
   {
     id: 'agent-tasks-running-actions',
     tab: 'agent-tasks',
-    url: '/ja/dashboard?demo=1&tab=agent-tasks&task=agent_task_demo_running',
+    url: '/ja/dashboard/agent-tasks?demo=1&task=agent_task_demo_running',
     captureHints: [
       'running task detail',
       'resume attempt timeline',
@@ -59,7 +59,7 @@ export const dashboardDemoVrtScenarios = Object.freeze([
   {
     id: 'sources-last-deliveries',
     tab: 'sources',
-    url: '/ja/dashboard?demo=1&tab=sources',
+    url: '/ja/dashboard/sources?demo=1',
     captureHints: [
       'GitHub webhook source',
       'Cloudflare tail source',
@@ -70,7 +70,7 @@ export const dashboardDemoVrtScenarios = Object.freeze([
   {
     id: 'queue-blocked-stale-claim',
     tab: 'queue',
-    url: '/ja/dashboard?demo=1&tab=queue&status=blocked',
+    url: '/ja/dashboard/queue?demo=1&status=blocked',
     captureHints: [
       'blocked queue filter',
       'stale project claim warning',
@@ -80,7 +80,7 @@ export const dashboardDemoVrtScenarios = Object.freeze([
   {
     id: 'settings-retry-auth',
     tab: 'settings',
-    url: '/ja/dashboard?demo=1&tab=settings',
+    url: '/ja/dashboard/settings?demo=1',
     captureHints: [
       'retry policy setting',
       'dashboard auth setting',

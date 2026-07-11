@@ -9,6 +9,14 @@ const localizedDashboardPage = readFileSync(
   new URL('../apps/www/src/pages/[locale]/dashboard.astro', import.meta.url),
   'utf8',
 );
+const localizedDashboardRoutePage = readFileSync(
+  new URL('../apps/www/src/pages/[locale]/dashboard/[view].astro', import.meta.url),
+  'utf8',
+);
+const dashboardViewRedirectPage = readFileSync(
+  new URL('../apps/www/src/pages/dashboard/[view].astro', import.meta.url),
+  'utf8',
+);
 const dashboardLayout = readFileSync(
   new URL('../apps/www/src/layouts/DashboardLayout.astro', import.meta.url),
   'utf8',
@@ -185,7 +193,7 @@ describe('dashboard operational views', () => {
       'Publish result',
       'Workflow matches',
     ]) {
-      expect(marker.startsWith('data-') ? localizedDashboardPage : dashboardContent).toContain(marker);
+      expect(marker.startsWith('data-') ? localizedDashboardRoutePage : dashboardContent).toContain(marker);
     }
 
     expect(dashboardClient).toContain('filter[name]');
@@ -194,10 +202,19 @@ describe('dashboard operational views', () => {
     expect(dashboardApp).toContain('latestOutcome');
   });
 
+  it('keeps Event Inbox filters scoped to the Events route', () => {
+    expect(localizedDashboardRoutePage).toContain("const showEventInbox = route.id === 'events';");
+    expect(localizedDashboardRoutePage).toContain('{showEventInbox && (');
+    expect(localizedDashboardPage).not.toContain('data-event-source-filter');
+    expect(localizedDashboardPage).not.toContain('data-event-name-filter');
+    expect(localizedDashboardPage).not.toContain('data-filter-apply');
+    expect(dashboardViewRedirectPage).toContain('getDefaultLocaleDashboardRedirect(view)');
+  });
+
   it('localizes dashboard assistive labels and source filter option labels', () => {
     expect(localizedDashboardPage).toContain('aria-label={content.shell.statsLabel}');
-    expect(localizedDashboardPage).toContain('content.shell.sourceOptions.manual');
-    expect(localizedDashboardPage).toContain('content.shell.sourceOptions.system');
+    expect(localizedDashboardRoutePage).toContain('content.shell.sourceOptions.manual');
+    expect(localizedDashboardRoutePage).toContain('content.shell.sourceOptions.system');
     expect(dashboardContent).toContain('運用集計');
     expect(dashboardContent).toContain('手動');
     expect(dashboardContent).toContain('システム');
