@@ -49,7 +49,7 @@ export const dashboardDemoVrtScenarios = Object.freeze([
   {
     id: 'agent-tasks-running-actions',
     tab: 'agent-tasks',
-    url: '/ja/dashboard/agent-tasks?demo=1&task=agent_task_demo_running',
+    url: '/ja/dashboard/tasks?demo=1&task=agent_task_demo_running',
     captureHints: [
       'running task detail',
       'resume attempt timeline',

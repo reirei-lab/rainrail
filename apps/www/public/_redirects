@@ -14,8 +14,10 @@
 /dashboard/events/ /en/dashboard/events 301
 /dashboard/workflow-runs /en/dashboard/workflow-runs 301
 /dashboard/workflow-runs/ /en/dashboard/workflow-runs 301
-/dashboard/agent-tasks /en/dashboard/agent-tasks 301
-/dashboard/agent-tasks/ /en/dashboard/agent-tasks 301
+/dashboard/tasks /en/dashboard/tasks 301
+/dashboard/tasks/ /en/dashboard/tasks 301
+/dashboard/agent-tasks /en/dashboard/tasks 301
+/dashboard/agent-tasks/ /en/dashboard/tasks 301
 /dashboard/sources /en/dashboard/sources 301
 /dashboard/sources/ /en/dashboard/sources 301
 /dashboard/queue /en/dashboard/queue 301
