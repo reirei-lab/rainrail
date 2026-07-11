@@ -122,6 +122,7 @@ const languagePreferenceKey = 'rainrail.locale';
                 data-dashboard-tab={route.id}
                 data-dashboard-core-card={dashboardCoreCardByRoute[route.id]}
                 aria-current={route.id === activeRoute ? 'page' : undefined}
+                aria-pressed={route.id === activeRoute ? 'true' : 'false'}
               >
                 {dashboardRouteLabels[route.id]}
               </a>

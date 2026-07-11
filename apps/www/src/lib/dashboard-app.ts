@@ -210,12 +210,16 @@ if (root !== null) {
   });
 
   for (const button of tabButtons) {
-    button.addEventListener('click', () => {
+    button.addEventListener('click', (event) => {
       const tab = button.dataset.dashboardTab;
       const cardId = button.dataset.dashboardCoreCard;
-      if (latestData?.layout.source === 'user' && !dashboardCoreCardIsVisible(cardId)) return;
+      if (latestData?.layout.source === 'user' && !dashboardCoreCardIsVisible(cardId)) {
+        event.preventDefault();
+        return;
+      }
       if (isDashboardTab(tab)) {
         selectedTab = tab;
+        preserveDashboardRouteQuery(button);
         renderCurrentList();
       }
     });
@@ -340,10 +344,22 @@ if (root !== null) {
     for (const button of tabButtons) {
       if (button.dataset.dashboardTab === selectedTab) {
         button.setAttribute('aria-current', 'page');
+        button.setAttribute('aria-pressed', 'true');
       } else {
         button.removeAttribute('aria-current');
+        button.setAttribute('aria-pressed', 'false');
       }
     }
+  }
+
+  function preserveDashboardRouteQuery(link: HTMLAnchorElement): void {
+    if (window.location.search === '') return;
+
+    const target = new URL(link.href, window.location.href);
+    if (target.origin !== window.location.origin || target.search !== '') return;
+
+    target.search = window.location.search;
+    link.href = target.href;
   }
 
   function rowButton(row: DashboardRow): HTMLButtonElement {

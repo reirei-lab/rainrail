@@ -82,6 +82,9 @@ describe('dashboard app shell', () => {
     expect(dashboardLayout).toContain('dashboardRoutes.map');
     expect(dashboardLayout).toContain('href={getDashboardHref(locale, route.id)}');
     expect(dashboardLayout).toContain('aria-current={route.id === activeRoute ? \'page\' : undefined}');
+    expect(dashboardLayout).toContain("aria-pressed={route.id === activeRoute ? 'true' : 'false'}");
+    expect(dashboardApp).toContain('preserveDashboardRouteQuery(button)');
+    expect(dashboardApp).toContain('target.search = window.location.search');
     expect(dashboardLayout).not.toContain('<button type="button" data-dashboard-tab="overview"');
     expect(localizedDashboardPage).not.toContain('<aside class="dashboard-sidebar"');
     expect(localizedDashboardRoutePage).not.toContain('<aside class="dashboard-sidebar"');

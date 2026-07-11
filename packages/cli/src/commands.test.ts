@@ -2215,6 +2215,7 @@ describe('Rainrail CLI built-in commands', () => {
       await mkdir(join(dashboardAssetRoot, 'dashboard'), { recursive: true });
       await mkdir(join(dashboardAssetRoot, 'ja', 'dashboard'), { recursive: true });
       await mkdir(join(dashboardAssetRoot, 'en', 'dashboard'), { recursive: true });
+      await mkdir(join(dashboardAssetRoot, 'en', 'dashboard', 'events'), { recursive: true });
       await mkdir(join(dashboardAssetRoot, '_astro'), { recursive: true });
       await writeFile(join(dashboardAssetRoot, 'rainrail.config.json'), 'should-not-leak');
       const port = await getFreePort();
@@ -2258,6 +2259,11 @@ describe('Rainrail CLI built-in commands', () => {
         '<html><head><script type="module" src="/_astro/dashboard-app.js"></script></head>',
         '<body><a href="/ja/dashboard">日本語</a><section data-dashboard-app data-api-base-url="https://ops.example.test" data-auth-required="true"></section></body></html>',
       ].join(''));
+      await writeFile(join(dashboardAssetRoot, 'en', 'dashboard', 'events', 'index.html'), [
+        '<!doctype html>',
+        '<html><head><script type="module" src="/_astro/dashboard-app.js"></script></head>',
+        '<body><a data-dashboard-tab="events" href="/en/dashboard/events" aria-current="page">Event Inbox</a><section data-dashboard-app data-api-base-url="https://ops.example.test" data-auth-required="true"></section></body></html>',
+      ].join(''));
       await writeFile(join(dashboardAssetRoot, '_astro', 'dashboard-app.js'), 'console.log("dashboard");\n');
 
       const result = await runRainrailCliAsync(['start'], {
@@ -2289,6 +2295,13 @@ describe('Rainrail CLI built-in commands', () => {
           expect(localizedHtml, locale).toContain('data-api-base-url=""');
           expect(localizedHtml, locale).toContain('data-auth-required="false"');
         }
+
+        const dashboardEvents = await fetch(`http://127.0.0.1:${port}/en/dashboard/events?demo=1`);
+        expect(dashboardEvents.status).toBe(200);
+        const dashboardEventsHtml = await dashboardEvents.text();
+        expect(dashboardEventsHtml).toContain('data-dashboard-tab="events"');
+        expect(dashboardEventsHtml).toContain('data-api-base-url=""');
+        expect(dashboardEventsHtml).toContain('data-auth-required="false"');
 
         const dashboardAsset = await fetch(`http://127.0.0.1:${port}/_astro/dashboard-app.js`);
         expect(dashboardAsset.status).toBe(200);
@@ -4487,7 +4500,7 @@ describe('Rainrail CLI built-in commands', () => {
       expect(coreEndpoint.exitCode).toBe(1);
       expect(coreEndpoint.stderr).toContain('config endpoint must not use a Rainrail core route');
 
-      for (const endpoint of ['/dashboard', '/ja/dashboard', '/ja/dashboard/', '/en/dashboard', '/en/dashboard/', '/_astro/dashboard-app.js']) {
+      for (const endpoint of ['/dashboard', '/ja/dashboard', '/ja/dashboard/', '/en/dashboard', '/en/dashboard/', '/en/dashboard/events', '/_astro/dashboard-app.js']) {
         await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
           sourceBundles: [{
             type: 'eep-bridge',

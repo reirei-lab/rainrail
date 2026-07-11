@@ -6367,6 +6367,8 @@ const localCoreRoutePaths = new Set([
 ]);
 const localCoreRoutePrefixes = [
   '/_astro/',
+  '/ja/dashboard/',
+  '/en/dashboard/',
   '/api/events/',
   '/api/v1/events/',
   '/api/v1/workflow-runs/',
@@ -8944,7 +8946,7 @@ function resolveDashboardAssetRoot(env: Record<string, string | undefined>): str
 function isLocalDashboardAssetRoute(pathname: string): boolean {
   return pathname === '/dashboard' ||
     pathname === '/dashboard/' ||
-    /^\/(?:ja|en)\/dashboard\/?$/u.test(pathname) ||
+    /^\/(?:ja|en)\/dashboard(?:\/[^/]+)?\/?$/u.test(pathname) ||
     pathname.startsWith('/_astro/');
 }
 
@@ -8983,9 +8985,12 @@ function localDashboardAssetBody(assetPath: string, options: RainrailStartOption
 }
 
 function localDashboardAssetPath(assetRoot: string, pathname: string): string | undefined {
-  const localeDashboard = /^\/(ja|en)\/dashboard\/?$/u.exec(pathname);
+  const localeDashboard = /^\/(ja|en)\/dashboard(?:\/([^/]+))?\/?$/u.exec(pathname);
   if (localeDashboard?.[1] !== undefined) {
-    return resolve(assetRoot, localeDashboard[1], 'dashboard', 'index.html');
+    const view = localeDashboard[2];
+    return view === undefined
+      ? resolve(assetRoot, localeDashboard[1], 'dashboard', 'index.html')
+      : resolve(assetRoot, localeDashboard[1], 'dashboard', view, 'index.html');
   }
   if (pathname === '/dashboard' || pathname === '/dashboard/') {
     const localizedDashboard = resolve(assetRoot, 'en', 'dashboard', 'index.html');
@@ -9017,7 +9022,7 @@ function localDashboardAssetPath(assetRoot: string, pathname: string): string | 
 function isLocalDashboardHtmlRoute(pathname: string): boolean {
   return pathname === '/dashboard' ||
     pathname === '/dashboard/' ||
-    /^\/(?:ja|en)\/dashboard\/?$/u.test(pathname);
+    /^\/(?:ja|en)\/dashboard(?:\/[^/]+)?\/?$/u.test(pathname);
 }
 
 function localDashboardContentType(pathname: string): string {
