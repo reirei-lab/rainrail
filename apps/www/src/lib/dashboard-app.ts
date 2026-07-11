@@ -590,8 +590,8 @@ if (root !== null) {
 
   function currentEventFilters(): { sourceType?: string; name?: string } {
     return {
-      sourceType: eventSourceFilter?.value.trim() ?? '',
-      name: eventNameFilter?.value.trim() ?? '',
+      sourceType: eventSourceFilter?.value.trim() ?? initialDashboardState.eventFilters.sourceType ?? '',
+      name: eventNameFilter?.value.trim() ?? initialDashboardState.eventFilters.name ?? '',
     };
   }
 
