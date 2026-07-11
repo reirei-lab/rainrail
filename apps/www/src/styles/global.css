@@ -613,7 +613,12 @@ h3 {
   gap: 6px;
 }
 
-.dashboard-sidebar button {
+.dashboard-sidebar nav a:not([hidden]) {
+  display: flex;
+}
+
+.dashboard-sidebar nav a {
+  align-items: center;
   min-height: 38px;
   border: 1px solid transparent;
   border-radius: 6px;
@@ -623,9 +628,10 @@ h3 {
   font: inherit;
   font-weight: 650;
   text-align: left;
+  text-decoration: none;
 }
 
-.dashboard-sidebar button[aria-pressed="true"] {
+.dashboard-sidebar nav a[aria-current="page"] {
   border-color: var(--line);
   background: var(--surface);
   color: var(--accent-strong);

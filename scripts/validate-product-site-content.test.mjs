@@ -159,7 +159,8 @@ describe('product site concepts, guides, and examples', () => {
   it('publishes sitemap entries from the localized page model', () => {
     expect(sitemapRoute).toContain('supportedLocales.flatMap');
     expect(sitemapRoute).toContain('pageIds.map');
-    expect(sitemapRoute).toContain('getDashboardHref(locale)');
+    expect(sitemapRoute).toContain('getDashboardRoutes().map');
+    expect(sitemapRoute).toContain('getDashboardHref(locale, route.id)');
     expect(sitemapRoute).toContain('getLocaleHref(locale, pageId)');
     expect(sitemapRoute).toContain('application/xml');
   });
