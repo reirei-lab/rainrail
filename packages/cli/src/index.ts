@@ -1846,9 +1846,9 @@ function checkCodexAppServerSessionSmoke(
   cwd: string,
   environment: RainrailCliEnvironment,
 ): CodexSimpleCheck {
-  const firstAttempt = checkCodexAppServerSessionSmokeWithSandbox(command, readinessOptions, cwd, environment, 'readOnly');
-  if (!firstAttempt.ok && isLegacySandboxNameErrorOutput(firstAttempt.stdout, firstAttempt.stderr)) {
-    return checkCodexAppServerSessionSmokeWithSandbox(command, readinessOptions, cwd, environment, 'read-only');
+  const firstAttempt = checkCodexAppServerSessionSmokeWithSandbox(command, readinessOptions, cwd, environment, 'read-only');
+  if (!firstAttempt.ok && isCamelCaseSandboxNameErrorOutput(firstAttempt.stdout, firstAttempt.stderr)) {
+    return checkCodexAppServerSessionSmokeWithSandbox(command, readinessOptions, cwd, environment, 'readOnly');
   }
   return firstAttempt;
 }
@@ -1858,17 +1858,18 @@ function checkCodexAppServerSessionSmokeWithSandbox(
   readinessOptions: CodexAppServerReadinessOptions,
   cwd: string,
   environment: RainrailCliEnvironment,
-  sandbox: 'readOnly' | 'read-only',
+  sandbox: 'read-only' | 'readOnly',
 ): CodexSimpleCheck {
-  const commandRunner = getCommandRunner(environment);
   const env = createCodexCommandEnvironment(readinessOptions, environment);
-  const result = runCodexCommand(command, ['app-server', '--listen', 'stdio://'], commandRunner, {
-    stdio: 'pipe',
-    cwd,
-    env,
-    input: formatCodexAppServerSessionSmokeInput(cwd, sandbox),
-    timeoutMs: 15_000,
-  });
+  const result = environment.commandRunner === undefined
+    ? runDefaultCodexAppServerSessionSmokeCommand(command, cwd, env, sandbox)
+    : runCodexCommand(command, ['app-server', '--listen', 'stdio://'], environment.commandRunner, {
+        stdio: 'pipe',
+        cwd,
+        env,
+        input: formatCodexAppServerSessionSmokeInput(cwd, sandbox),
+        timeoutMs: 15_000,
+      });
   const stdout = stripTrailingNewline(toOutput(result.stdout));
   const stderr = stripTrailingNewline(toOutput(result.stderr));
   if ((result.status ?? 1) !== 0) {
@@ -1911,12 +1912,146 @@ function checkCodexAppServerSessionSmokeWithSandbox(
   return { ok: true, stdout, stderr };
 }
 
-function isLegacySandboxNameErrorOutput(stdout?: string, stderr?: string): boolean {
-  const output = `${stdout ?? ''}\n${stderr ?? ''}`;
-  return output.includes('unknown variant `readOnly`') || output.includes('invalid sandbox');
+function runDefaultCodexAppServerSessionSmokeCommand(
+  command: string,
+  cwd: string,
+  env: Record<string, string | undefined>,
+  sandbox: 'read-only' | 'readOnly',
+): CommandRunnerResult {
+  return spawnSync(process.execPath, [
+    '--input-type=module',
+    '-e',
+    codexAppServerSessionSmokeScript,
+    command,
+    cwd,
+    sandbox,
+  ], {
+    cwd,
+    encoding: 'utf8',
+    env,
+    stdio: 'pipe',
+    timeout: 20_000,
+  });
 }
 
-function formatCodexAppServerSessionSmokeInput(cwd: string, sandbox: 'readOnly' | 'read-only'): string {
+const codexAppServerSessionSmokeScript = `
+import { spawn } from 'node:child_process';
+
+const [command, cwd, sandbox] = process.argv.slice(1);
+let stdout = '';
+let stderr = '';
+let finished = false;
+let finalStatus = 1;
+let forceKillTimer;
+
+const appServerArgs = ['app-server', '--listen', 'stdio://'];
+const shellCommand = process.platform === 'win32' && /\\\\.(?:bat|cmd)$/i.test(command);
+const child = shellCommand
+  ? spawn('cmd.exe', ['/d', '/s', '/c', formatWindowsCommandLine(command, appServerArgs)], {
+      cwd,
+      env: process.env,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    })
+  : spawn(command, appServerArgs, {
+  cwd,
+  env: process.env,
+  stdio: ['pipe', 'pipe', 'pipe'],
+});
+
+const finish = (status) => {
+  if (finished) return;
+  finished = true;
+  finalStatus = status;
+  clearTimeout(timer);
+  if (child.exitCode === null && child.signalCode === null) {
+    child.kill('SIGTERM');
+    forceKillTimer = setTimeout(() => {
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill('SIGKILL');
+      }
+    }, 2_000);
+    return;
+  }
+  exitWrapper(status);
+};
+
+const exitWrapper = (status) => {
+  clearTimeout(forceKillTimer);
+  process.stdout.write(stdout);
+  process.stderr.write(stderr);
+  process.exit(status);
+};
+
+const send = (frame) => child.stdin.write(JSON.stringify(frame) + '\\n');
+const maybeDone = () => {
+  if (stdout.split(/\\r?\\n/u).some((line) => {
+    try {
+      return JSON.parse(line).id === 2;
+    } catch {
+      return false;
+    }
+  })) {
+    finish(0);
+  }
+};
+
+const timer = setTimeout(() => finish(124), 15_000);
+
+child.stdout.setEncoding('utf8');
+child.stderr.setEncoding('utf8');
+child.stdout.on('data', (chunk) => {
+  stdout += chunk;
+  maybeDone();
+});
+child.stderr.on('data', (chunk) => {
+  stderr += chunk;
+});
+child.on('error', (error) => {
+  stderr += error instanceof Error ? error.message : String(error);
+  finish(1);
+});
+child.on('close', (code) => {
+  if (finished) {
+    exitWrapper(finalStatus);
+    return;
+  }
+  clearTimeout(timer);
+  exitWrapper(code ?? 1);
+});
+
+send({
+  id: 1,
+  method: 'initialize',
+  params: {
+    clientInfo: { name: 'rainrail-cli', title: 'Rainrail CLI', version: '0.0.0' },
+    capabilities: null,
+  },
+});
+send({ method: 'initialized' });
+setTimeout(() => send({
+  id: 2,
+  method: 'thread/start',
+  params: { cwd, ephemeral: true, approvalPolicy: 'never', sandbox },
+}), 50);
+
+function formatWindowsCommandLine(command, args) {
+  return [quoteWindowsCommandArgument(command), ...args.map(quoteWindowsCommandArgument)].join(' ');
+}
+
+function quoteWindowsCommandArgument(argument) {
+  if (!/[\\s"]/u.test(argument)) {
+    return argument;
+  }
+  return '"' + argument.replaceAll('"', '\\\\\\"') + '"';
+}
+`;
+
+function isCamelCaseSandboxNameErrorOutput(stdout?: string, stderr?: string): boolean {
+  const output = `${stdout ?? ''}\n${stderr ?? ''}`;
+  return output.includes('unknown variant `read-only`') || output.includes('invalid sandbox');
+}
+
+function formatCodexAppServerSessionSmokeInput(cwd: string, sandbox: 'read-only' | 'readOnly'): string {
   return [
     {
       id: 1,

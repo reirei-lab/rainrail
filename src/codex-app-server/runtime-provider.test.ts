@@ -92,8 +92,10 @@ describe('createCodexAppServerRuntimeProvider', () => {
       cwd: '/repo',
       approvalPolicy: 'never',
       ephemeral: true,
-      sessionStartSource: 'rainrail',
-      threadSource: 'rainrail',
+    }));
+    expect(client.startThread).toHaveBeenCalledWith(expect.not.objectContaining({
+      sessionStartSource: expect.anything(),
+      threadSource: expect.anything(),
     }));
     expect(client.startTurn).toHaveBeenCalledWith(expect.objectContaining({
       threadId: 'thread-315',

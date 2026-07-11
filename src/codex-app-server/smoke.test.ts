@@ -68,21 +68,21 @@ async function startSmokeThread(
       cwd,
       ephemeral: true,
       approvalPolicy: 'never',
-      sandbox: 'readOnly',
+      sandbox: 'read-only',
     });
   } catch (error) {
-    if (!isLegacySandboxNameError(error)) throw error;
+    if (!isCamelCaseSandboxNameError(error)) throw error;
     return client.startThread({
       cwd,
       ephemeral: true,
       approvalPolicy: 'never',
-      sandbox: 'read-only',
+      sandbox: 'readOnly',
     });
   }
 }
 
-function isLegacySandboxNameError(error: unknown): boolean {
+function isCamelCaseSandboxNameError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
-  return error.message.includes('unknown variant `readOnly`') ||
+  return error.message.includes('unknown variant `read-only`') ||
     error.message.includes('invalid sandbox');
 }
