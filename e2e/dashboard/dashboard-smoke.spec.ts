@@ -45,6 +45,16 @@ test('drops legacy tab query when navigating to a routed dashboard view', async 
   await expect(page.locator('[data-dashboard-list]')).toContainText('Cloudflare tail issue report failed and scheduled retry');
 });
 
+test('keeps legacy Event Inbox filter deep links working without overview filter controls', async ({ page }) => {
+  await page.goto(`${dashboardBaseUrl}/en/dashboard?demo=1&tab=events&source=github&name=github.issue&event=evt_demo_github_issue_272`);
+
+  await expect(page.locator('[data-dashboard-tab="events"]')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('[data-event-source-filter]')).toHaveCount(0);
+  await expect(page.locator('[data-dashboard-list]')).toContainText('github.issue reirei-lab/rainrail#272');
+  await expect(page.locator('[data-dashboard-list]')).not.toContainText('Synthetic timeout while posting a webhook preview');
+  await expect(page.locator('[data-dashboard-detail]')).toContainText('evt_demo_github_issue_272');
+});
+
 test('prefers routed dashboard view over legacy tab query on initial load', async ({ page }) => {
   await page.goto(`${dashboardBaseUrl}/en/dashboard/runs?demo=1&tab=events`);
 

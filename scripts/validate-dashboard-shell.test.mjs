@@ -196,10 +196,10 @@ describe('dashboard app shell', () => {
   });
 
   it('hydrates dashboard demo VRT state from URL parameters', () => {
-    expect(dashboardDemoVrtScenarios).toContain('tab=events&source=github&event=evt_demo_github_issue_272');
+    expect(dashboardDemoVrtScenarios).toContain('/ja/dashboard/events?demo=1&source=github&event=evt_demo_github_issue_272');
     expect(dashboardDemoVrtScenarios).toContain('/ja/dashboard/runs?demo=1&status=failed&run=act_demo_workflow_failed_retry');
     expect(dashboardDemoVrtScenarios).toContain('/ja/dashboard/tasks?demo=1&task=agent_task_demo_running');
-    expect(dashboardDemoVrtScenarios).toContain('tab=queue&status=blocked');
+    expect(dashboardDemoVrtScenarios).toContain('/ja/dashboard/queue?demo=1&status=blocked');
     expect(dashboardApp).toContain('initialDashboardStateFromUrl');
     expect(dashboardApp).toContain('let selectedTab: DashboardTab = initialDashboardState.tab;');
     expect(dashboardApp).toContain('fetchDashboardDataForTab(activeClient');

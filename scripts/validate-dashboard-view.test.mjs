@@ -13,12 +13,20 @@ const localizedDashboardRoutePage = readFileSync(
   new URL('../apps/www/src/pages/[locale]/dashboard/[view].astro', import.meta.url),
   'utf8',
 );
+const dashboardViewRedirectPage = readFileSync(
+  new URL('../apps/www/src/pages/dashboard/[view].astro', import.meta.url),
+  'utf8',
+);
 const dashboardLayout = readFileSync(
   new URL('../apps/www/src/layouts/DashboardLayout.astro', import.meta.url),
   'utf8',
 );
 const dashboardContent = readFileSync(
   new URL('../apps/www/src/lib/dashboard-content.ts', import.meta.url),
+  'utf8',
+);
+const publicRedirects = readFileSync(
+  new URL('../apps/www/public/_redirects', import.meta.url),
   'utf8',
 );
 const dashboardApp = readFileSync(
@@ -198,7 +206,7 @@ describe('dashboard operational views', () => {
       'Publish result',
       'Workflow matches',
     ]) {
-      expect(marker.startsWith('data-') ? localizedDashboardPage : dashboardContent).toContain(marker);
+      expect(marker.startsWith('data-') ? localizedDashboardRoutePage : dashboardContent).toContain(marker);
     }
 
     expect(dashboardClient).toContain('filter[name]');
@@ -207,10 +215,28 @@ describe('dashboard operational views', () => {
     expect(dashboardApp).toContain('latestOutcome');
   });
 
+  it('keeps Event Inbox filters scoped to the Events route', () => {
+    expect(localizedDashboardRoutePage).toContain("const showEventInbox = route.id === 'events';");
+    expect(localizedDashboardRoutePage).toContain('{showEventInbox && (');
+    expect(localizedDashboardPage).not.toContain('data-event-source-filter');
+    expect(localizedDashboardPage).not.toContain('data-event-name-filter');
+    expect(localizedDashboardPage).not.toContain('data-filter-apply');
+    expect(dashboardApp).toContain('eventSourceFilter?.value.trim() ?? initialDashboardState.eventFilters.sourceType ??');
+    expect(dashboardApp).toContain('eventNameFilter?.value.trim() ?? initialDashboardState.eventFilters.name ??');
+    expect(dashboardViewRedirectPage).toContain('getDefaultLocaleDashboardRedirect(view)');
+    expect(dashboardViewRedirectPage).toContain('appendCurrentLocationQuery');
+    expect(publicRedirects).toContain('/dashboard/events /en/dashboard/events 301');
+    expect(publicRedirects).toContain('/dashboard/events/ /en/dashboard/events 301');
+    expect(publicRedirects).toContain('/dashboard/runs /en/dashboard/runs 301');
+    expect(publicRedirects).toContain('/dashboard/runs/ /en/dashboard/runs 301');
+    expect(publicRedirects).toContain('/dashboard/workflow-runs /en/dashboard/runs 301');
+    expect(publicRedirects).toContain('/dashboard/workflow-runs/ /en/dashboard/runs 301');
+  });
+
   it('localizes dashboard assistive labels and source filter option labels', () => {
     expect(localizedDashboardPage).toContain('aria-label={content.shell.statsLabel}');
-    expect(localizedDashboardPage).toContain('content.shell.sourceOptions.manual');
-    expect(localizedDashboardPage).toContain('content.shell.sourceOptions.system');
+    expect(localizedDashboardRoutePage).toContain('content.shell.sourceOptions.manual');
+    expect(localizedDashboardRoutePage).toContain('content.shell.sourceOptions.system');
     expect(dashboardContent).toContain('運用集計');
     expect(dashboardContent).toContain('手動');
     expect(dashboardContent).toContain('システム');
