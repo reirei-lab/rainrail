@@ -1,5 +1,5 @@
 ---
-import { getDashboardRouteBySlug, getDashboardRoutes } from '../../lib/dashboard-content';
+import { getDashboardRoutes } from '../../lib/dashboard-content';
 import { getDefaultLocaleDashboardRedirect } from '../../lib/redirects';
 
 export function getStaticPaths() {
@@ -18,13 +18,7 @@ type Props = {
 };
 
 const { view } = Astro.props as Props;
-const route = getDashboardRouteBySlug(view);
-
-if (route === undefined) {
-  throw new Error(`Unsupported dashboard route: ${view}`);
-}
-
-const redirect = getDefaultLocaleDashboardRedirect(route.id);
+const redirect = getDefaultLocaleDashboardRedirect(view);
 const redirectHref = redirect.href;
 ---
 
@@ -33,10 +27,14 @@ const redirectHref = redirect.href;
   <head>
     <meta charset="UTF-8" />
     <script is:inline define:vars={{ redirectHref }}>
-      const target = new URL(redirectHref, window.location.href);
-      target.search = window.location.search;
-      target.hash = window.location.hash;
-      window.location.replace(target.toString());
+      function appendCurrentLocationQuery(href) {
+        const target = new URL(href, window.location.href);
+        target.search = window.location.search;
+        target.hash = window.location.hash;
+        return target.href;
+      }
+
+      window.location.replace(appendCurrentLocationQuery(redirectHref));
     </script>
     <meta http-equiv="refresh" content={`0;url=${redirect.href}`} />
     <meta name="robots" content="noindex" />

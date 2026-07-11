@@ -1,4 +1,4 @@
-import { getDashboardHref, type DashboardRouteId } from './dashboard-content';
+import { getDashboardHref, getDashboardRouteBySlug } from './dashboard-content';
 import { defaultLocale, getLocaleHref, type PageId } from './i18n';
 
 type RedirectPageId = PageId | 'dashboard';
@@ -20,8 +20,14 @@ export const getDefaultLocaleRedirect = (pageId: RedirectPageId) => {
   };
 };
 
-export const getDefaultLocaleDashboardRedirect = (routeId: DashboardRouteId) => {
-  const href = getDashboardHref(defaultLocale, routeId);
+export const getDefaultLocaleDashboardRedirect = (slug?: string) => {
+  const route = getDashboardRouteBySlug(slug);
+
+  if (route === undefined) {
+    throw new RangeError(`Unsupported dashboard route: ${slug ?? ''}`);
+  }
+
+  const href = getDashboardHref(defaultLocale, route.id);
 
   return {
     href,
