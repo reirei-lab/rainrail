@@ -308,13 +308,13 @@ if (root !== null) {
         refreshAfterCurrent = true;
       }
       renderStats(latestData.overview);
-      renderOverviewCards();
       renderDashboardLayout();
       renderCardPicker();
       renderCardSettingsPicker(options);
       renderCurrentList();
       const hasOperationalData = hasDashboardRecords(latestData);
       setState(hasOperationalData ? 'ready' : 'empty', hasOperationalData ? copy.status.ready : copy.status.empty);
+      renderOverviewCards();
     } catch (error) {
       if (!isCurrentRefresh(activeClient, activeRefreshId)) return;
       const authError = isDashboardAuthError(error);
