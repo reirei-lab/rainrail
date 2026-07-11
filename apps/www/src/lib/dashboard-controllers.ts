@@ -1,7 +1,9 @@
 import {
+  RainrailDashboardApiError,
   type DashboardAgentTask,
   type DashboardCardCatalogEntry,
   type DashboardCollection,
+  type DashboardDetail,
   type DashboardEvent,
   type DashboardLayout,
   type DashboardOverview,
@@ -28,6 +30,7 @@ export interface DashboardData {
 export interface DashboardPageControllerRequest {
   tab: DashboardTab;
   eventFilters: { sourceType?: string; name?: string };
+  eventDetailId?: string;
   workflowRunFilters: { status?: string };
   agentTaskFilters: { status?: string };
   queueFilters: { status?: string };
@@ -36,6 +39,7 @@ export interface DashboardPageControllerRequest {
 export interface DashboardDataClient {
   overview(): Promise<DashboardOverview>;
   events(filters: { sourceType?: string; name?: string }): Promise<DashboardCollection<DashboardEvent>>;
+  eventDetail(id: string): Promise<DashboardDetail<unknown, DashboardEvent>>;
   workflowRuns(filters: { status?: string }): Promise<DashboardCollection<DashboardWorkflowRun>>;
   agentTasks(filters: { status?: string }): Promise<DashboardCollection<DashboardAgentTask>>;
   sources(): Promise<DashboardCollection<DashboardSource>>;
@@ -68,6 +72,17 @@ export async function fetchDashboardDataForTab(
     data.agentTasks = (await client.agentTasks(request.agentTaskFilters)).data;
   } else if (request.tab === 'events') {
     data.events = (await client.events(request.eventFilters)).data;
+    const eventDetailId = request.eventDetailId?.trim();
+    if (eventDetailId !== undefined && eventDetailId !== '' && !data.events.some((event) => event.id === eventDetailId)) {
+      try {
+        const detail = await client.eventDetail(eventDetailId);
+        if (detail.data.compact !== undefined && eventMatchesFilters(detail.data.compact, request.eventFilters)) {
+          data.events = [detail.data.compact, ...data.events];
+        }
+      } catch (error) {
+        if (!isEventDetailNotFound(error)) throw error;
+      }
+    }
   } else if (request.tab === 'workflow-runs') {
     data.workflowRuns = (await client.workflowRuns(request.workflowRunFilters)).data;
   } else if (request.tab === 'agent-tasks') {
@@ -81,4 +96,20 @@ export async function fetchDashboardDataForTab(
   }
 
   return data;
+}
+
+function eventMatchesFilters(event: DashboardEvent, filters: { sourceType?: string; name?: string }): boolean {
+  const sourceType = filters.sourceType?.trim();
+  if (sourceType !== undefined && sourceType !== '' && event.source?.type !== sourceType) return false;
+
+  const name = filters.name?.trim();
+  if (name !== undefined && name !== '' && event.name !== name) return false;
+
+  return true;
+}
+
+function isEventDetailNotFound(error: unknown): boolean {
+  return error instanceof RainrailDashboardApiError
+    && error.status === 404
+    && error.code === 'event_not_found';
 }

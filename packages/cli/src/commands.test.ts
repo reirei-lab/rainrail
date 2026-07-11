@@ -2216,6 +2216,7 @@ describe('Rainrail CLI built-in commands', () => {
       await mkdir(join(dashboardAssetRoot, 'ja', 'dashboard'), { recursive: true });
       await mkdir(join(dashboardAssetRoot, 'en', 'dashboard'), { recursive: true });
       await mkdir(join(dashboardAssetRoot, 'en', 'dashboard', 'events'), { recursive: true });
+      await mkdir(join(dashboardAssetRoot, 'dashboard', 'queue'), { recursive: true });
       await mkdir(join(dashboardAssetRoot, '_astro'), { recursive: true });
       await writeFile(join(dashboardAssetRoot, 'rainrail.config.json'), 'should-not-leak');
       const port = await getFreePort();
@@ -2264,6 +2265,11 @@ describe('Rainrail CLI built-in commands', () => {
         '<html><head><script type="module" src="/_astro/dashboard-app.js"></script></head>',
         '<body><a data-dashboard-tab="events" href="/en/dashboard/events" aria-current="page">Event Inbox</a><section data-dashboard-app data-api-base-url="https://ops.example.test" data-auth-required="true"></section></body></html>',
       ].join(''));
+      await writeFile(join(dashboardAssetRoot, 'dashboard', 'queue', 'index.html'), [
+        '<!doctype html>',
+        '<html><head><script>const target = new URL("/en/dashboard/queue", window.location.href); target.search = window.location.search; window.location.replace(target.toString());</script></head>',
+        '<body><a href="/en/dashboard/queue">Queue</a><section data-dashboard-app data-api-base-url="https://ops.example.test" data-auth-required="true"></section></body></html>',
+      ].join(''));
       await writeFile(join(dashboardAssetRoot, '_astro', 'dashboard-app.js'), 'console.log("dashboard");\n');
 
       const result = await runRainrailCliAsync(['start'], {
@@ -2302,6 +2308,15 @@ describe('Rainrail CLI built-in commands', () => {
         expect(dashboardEventsHtml).toContain('data-dashboard-tab="events"');
         expect(dashboardEventsHtml).toContain('data-api-base-url=""');
         expect(dashboardEventsHtml).toContain('data-auth-required="false"');
+
+        const dashboardQueue = await fetch(`http://127.0.0.1:${port}/dashboard/queue?demo=1&status=blocked`);
+        expect(dashboardQueue.status).toBe(200);
+        expect(dashboardQueue.headers.get('content-type')).toContain('text/html');
+        const dashboardQueueHtml = await dashboardQueue.text();
+        expect(dashboardQueueHtml).toContain('/en/dashboard/queue');
+        expect(dashboardQueueHtml).toContain('target.search = window.location.search');
+        expect(dashboardQueueHtml).toContain('data-api-base-url=""');
+        expect(dashboardQueueHtml).toContain('data-auth-required="false"');
 
         const dashboardAsset = await fetch(`http://127.0.0.1:${port}/_astro/dashboard-app.js`);
         expect(dashboardAsset.status).toBe(200);

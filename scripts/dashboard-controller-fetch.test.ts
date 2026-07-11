@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { RainrailDashboardApiError } from '../apps/www/src/lib/dashboard-client';
 import { fetchDashboardDataForTab, type DashboardTab } from '../apps/www/src/lib/dashboard-controllers';
 
 describe('dashboard page controllers', () => {
@@ -40,6 +41,163 @@ describe('dashboard page controllers', () => {
     ]);
   });
 
+  it('includes a deep-linked event detail row when it is outside the Events page collection', async () => {
+    const client = fakeDashboardClient({
+      events: [{ id: 'evt_recent', type: 'event', status: 'received', summary: 'recent event' }],
+      eventDetails: {
+        evt_older_source: {
+          id: 'evt_older_source',
+          type: 'event',
+          status: 'received',
+          summary: 'older source event',
+        },
+      },
+    });
+
+    const data = await fetchDashboardDataForTab(client, {
+      tab: 'events',
+      eventFilters: {},
+      workflowRunFilters: {},
+      agentTaskFilters: {},
+      queueFilters: {},
+      eventDetailId: 'evt_older_source',
+    });
+
+    expect(client.calls).toEqual([
+      'overview',
+      'dashboardCards',
+      'dashboardLayout',
+      'events::',
+      'eventDetail:evt_older_source',
+    ]);
+    expect(data.events.map((event) => event.id)).toEqual(['evt_older_source', 'evt_recent']);
+  });
+
+  it('does not refetch a deep-linked event that is already in the Events page collection', async () => {
+    const client = fakeDashboardClient({
+      events: [{ id: 'evt_recent', type: 'event', status: 'received', summary: 'recent event' }],
+    });
+
+    const data = await fetchDashboardDataForTab(client, {
+      tab: 'events',
+      eventFilters: {},
+      workflowRunFilters: {},
+      agentTaskFilters: {},
+      queueFilters: {},
+      eventDetailId: 'evt_recent',
+    });
+
+    expect(client.calls).toEqual([
+      'overview',
+      'dashboardCards',
+      'dashboardLayout',
+      'events::',
+    ]);
+    expect(data.events.map((event) => event.id)).toEqual(['evt_recent']);
+  });
+
+  it('treats an empty event detail id as unspecified', async () => {
+    const client = fakeDashboardClient({
+      events: [{ id: 'evt_recent', type: 'event', status: 'received', summary: 'recent event' }],
+    });
+
+    const data = await fetchDashboardDataForTab(client, {
+      tab: 'events',
+      eventFilters: {},
+      workflowRunFilters: {},
+      agentTaskFilters: {},
+      queueFilters: {},
+      eventDetailId: '',
+    });
+
+    expect(client.calls).toEqual([
+      'overview',
+      'dashboardCards',
+      'dashboardLayout',
+      'events::',
+    ]);
+    expect(data.events.map((event) => event.id)).toEqual(['evt_recent']);
+  });
+
+  it('does not mix a deep-linked event detail row into unrelated filtered Events results', async () => {
+    const client = fakeDashboardClient({
+      events: [{ id: 'evt_cloudflare', type: 'event', status: 'received', summary: 'Cloudflare event' }],
+      eventDetails: {
+        evt_github: {
+          id: 'evt_github',
+          type: 'event',
+          status: 'received',
+          summary: 'GitHub event',
+          name: 'issues.opened',
+          source: { type: 'github' },
+        },
+      },
+    });
+
+    const data = await fetchDashboardDataForTab(client, {
+      tab: 'events',
+      eventFilters: { sourceType: 'cloudflare' },
+      workflowRunFilters: {},
+      agentTaskFilters: {},
+      queueFilters: {},
+      eventDetailId: 'evt_github',
+    });
+
+    expect(client.calls).toEqual([
+      'overview',
+      'dashboardCards',
+      'dashboardLayout',
+      'events:cloudflare:',
+      'eventDetail:evt_github',
+    ]);
+    expect(data.events.map((event) => event.id)).toEqual(['evt_cloudflare']);
+  });
+
+  it('keeps the Events collection usable when a deep-linked event no longer exists', async () => {
+    const client = fakeDashboardClient({
+      events: [{ id: 'evt_recent', type: 'event', status: 'received', summary: 'recent event' }],
+      eventDetailErrors: {
+        evt_missing: new RainrailDashboardApiError(404, 'event_not_found'),
+      },
+    });
+
+    const data = await fetchDashboardDataForTab(client, {
+      tab: 'events',
+      eventFilters: {},
+      workflowRunFilters: {},
+      agentTaskFilters: {},
+      queueFilters: {},
+      eventDetailId: 'evt_missing',
+    });
+
+    expect(client.calls).toEqual([
+      'overview',
+      'dashboardCards',
+      'dashboardLayout',
+      'events::',
+      'eventDetail:evt_missing',
+    ]);
+    expect(data.events.map((event) => event.id)).toEqual(['evt_recent']);
+  });
+
+  it('still surfaces non-not-found event detail failures', async () => {
+    const client = fakeDashboardClient({
+      events: [{ id: 'evt_recent', type: 'event', status: 'received', summary: 'recent event' }],
+      eventDetailErrors: {
+        evt_forbidden: new RainrailDashboardApiError(403, 'dashboard_forbidden'),
+      },
+    });
+
+    await expect(fetchDashboardDataForTab(client, {
+      tab: 'events',
+      eventFilters: {},
+      workflowRunFilters: {},
+      agentTaskFilters: {},
+      queueFilters: {},
+      eventDetailId: 'evt_forbidden',
+    })).rejects.toMatchObject({ status: 403, code: 'dashboard_forbidden' });
+  });
+
   it.each<[
     DashboardTab,
     string[],
@@ -64,7 +222,27 @@ describe('dashboard page controllers', () => {
   });
 });
 
-function fakeDashboardClient() {
+type FakeDashboardClientOptions = {
+  events?: Array<{
+    id: string;
+    type: 'event';
+    name?: string;
+    status: string;
+    summary: string;
+    source?: { type?: string };
+  }>;
+  eventDetails?: Record<string, {
+    id: string;
+    type: 'event';
+    name?: string;
+    status: string;
+    summary: string;
+    source?: { type?: string };
+  }>;
+  eventDetailErrors?: Record<string, Error>;
+};
+
+function fakeDashboardClient(options: FakeDashboardClientOptions = {}) {
   const calls: string[] = [];
   return {
     calls,
@@ -82,7 +260,20 @@ function fakeDashboardClient() {
     },
     async events(filters: { sourceType?: string; name?: string }) {
       calls.push(`events:${filters.sourceType ?? ''}:${filters.name ?? ''}`);
-      return { data: [], page: { limit: 25, nextCursor: null } };
+      return { data: options.events ?? [], page: { limit: 25, nextCursor: null } };
+    },
+    async eventDetail(id: string) {
+      calls.push(`eventDetail:${id}`);
+      const error = options.eventDetailErrors?.[id];
+      if (error !== undefined) throw error;
+      return {
+        data: {
+          id,
+          type: 'event',
+          compact: options.eventDetails?.[id],
+          record: {},
+        },
+      };
     },
     async workflowRuns(filters: { status?: string }) {
       calls.push(`workflowRuns:${filters.status ?? ''}`);
