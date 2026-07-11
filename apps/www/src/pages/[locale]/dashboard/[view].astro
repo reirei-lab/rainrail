@@ -10,11 +10,13 @@ import { supportedLocales, type Locale } from '../../../lib/i18n';
 export function getStaticPaths() {
   return supportedLocales.flatMap((locale) =>
     getDashboardRoutes()
-      .filter((route) => route.slug !== undefined)
-      .map((route) => ({
-        params: { locale, view: route.slug },
-        props: { locale, view: route.slug },
-      })),
+      .flatMap((route) => {
+        const routeViews = route.slug === undefined ? [] : [route.slug, ...(route.aliases ?? [])];
+        return routeViews.map((view) => ({
+          params: { locale, view },
+          props: { locale, view },
+        }));
+      }),
   );
 }
 

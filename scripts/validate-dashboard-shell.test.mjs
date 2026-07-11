@@ -105,6 +105,9 @@ describe('dashboard app shell', () => {
     expect(dashboardContent).toContain("slug: 'tasks'");
     expect(dashboardContent).toContain("aliases: ['agent-tasks']");
     expect(dashboardContent).not.toContain("slug: 'agent-tasks'");
+    expect(localizedDashboardRoutePage).toContain('const routeViews = route.slug === undefined ? [] : [route.slug, ...(route.aliases ?? [])];');
+    expect(localizedDashboardRoutePage).toContain('params: { locale, view }');
+    expect(localizedDashboardRoutePage).toContain('props: { locale, view }');
     expect(sitemapRoute).toContain("getDashboardHref(locale, route.id)");
     expect(dashboardContent).toContain("return `/${locale}/dashboard/${route.slug}`;");
   });
