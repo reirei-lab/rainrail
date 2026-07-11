@@ -56,6 +56,14 @@ test('prefers routed dashboard view over legacy tab query on initial load', asyn
   await expect(page.locator('[data-dashboard-list]')).not.toContainText('github.issue reirei-lab/rainrail#272');
 });
 
+test('keeps the legacy workflow-runs route as a routed Runs alias', async ({ page }) => {
+  await page.goto(`${dashboardBaseUrl}/en/dashboard/workflow-runs?demo=1&status=failed&run=act_demo_workflow_failed_retry`);
+
+  await expect(page.locator('[data-dashboard-tab="workflow-runs"]')).toHaveAttribute('aria-current', 'page');
+  await expect(page.locator('[data-dashboard-list]')).toContainText('Cloudflare tail issue report failed and scheduled retry');
+  await expect(page.locator('[data-dashboard-detail]')).toContainText('evt_demo_cloudflare_tail_001');
+});
+
 type ScenarioExpectation = {
   rows: readonly string[];
   excludedRows?: readonly string[];

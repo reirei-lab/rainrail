@@ -3,6 +3,7 @@ import DashboardLayout from '../../../layouts/DashboardLayout.astro';
 import {
   getDashboardContent,
   getDashboardRouteBySlug,
+  getDashboardRouteSlugs,
   getDashboardRoutes,
 } from '../../../lib/dashboard-content';
 import { supportedLocales, type Locale } from '../../../lib/i18n';
@@ -11,10 +12,10 @@ export function getStaticPaths() {
   return supportedLocales.flatMap((locale) =>
     getDashboardRoutes()
       .filter((route) => route.slug !== undefined)
-      .map((route) => ({
-        params: { locale, view: route.slug },
+      .flatMap((route) => getDashboardRouteSlugs(route).map((slug) => ({
+        params: { locale, view: slug },
         props: { locale, view: route.slug },
-      })),
+      }))),
   );
 }
 

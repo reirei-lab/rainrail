@@ -5,12 +5,13 @@ export type DashboardRouteId = 'overview' | 'events' | 'workflow-runs' | 'agent-
 export type DashboardRoute = {
   id: DashboardRouteId;
   slug?: string;
+  aliases?: string[];
 };
 
 const dashboardRoutes: readonly DashboardRoute[] = [
   { id: 'overview' },
   { id: 'events', slug: 'events' },
-  { id: 'workflow-runs', slug: 'runs' },
+  { id: 'workflow-runs', slug: 'runs', aliases: ['workflow-runs'] },
   { id: 'agent-tasks', slug: 'agent-tasks' },
   { id: 'sources', slug: 'sources' },
   { id: 'queue', slug: 'queue' },
@@ -264,8 +265,11 @@ export type DashboardAppCopy = {
 
 export const getDashboardRoutes = (): readonly DashboardRoute[] => dashboardRoutes;
 
+export const getDashboardRouteSlugs = (route: DashboardRoute): readonly string[] =>
+  route.slug === undefined ? [] : [route.slug, ...(route.aliases ?? [])];
+
 export const getDashboardRouteBySlug = (slug?: string): DashboardRoute | undefined =>
-  dashboardRoutes.find((route) => route.slug === slug);
+  dashboardRoutes.find((route) => getDashboardRouteSlugs(route).includes(slug ?? ''));
 
 export const getDashboardHref = (locale: Locale, routeId: DashboardRouteId = 'overview'): string => {
   const route = dashboardRoutes.find((entry) => entry.id === routeId);

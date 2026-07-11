@@ -697,10 +697,12 @@ if (root !== null) {
     if (sourceEventId === undefined || sourceEventId === '') return undefined;
 
     const target = new URL(window.location.href);
-    target.pathname = target.pathname.replace(/\/dashboard(?:\/[^/?#]+)?$/, '/dashboard/events');
+    target.pathname = target.pathname.replace(/\/dashboard(?:\/[^/?#]+)?\/?$/, '/dashboard/events');
     target.searchParams.delete('run');
     target.searchParams.delete('status');
     target.searchParams.delete('tab');
+    target.searchParams.delete('source');
+    target.searchParams.delete('name');
     target.searchParams.set('event', sourceEventId);
     return `${target.pathname}${target.search}${target.hash}`;
   }

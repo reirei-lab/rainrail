@@ -103,7 +103,8 @@ describe('dashboard app shell', () => {
     expect(dashboardContent).toContain("export type DashboardRouteId = 'overview' | 'events' | 'workflow-runs' | 'agent-tasks' | 'sources' | 'queue' | 'settings'");
     expect(dashboardContent).toContain("slug: 'events'");
     expect(dashboardContent).toContain("slug: 'runs'");
-    expect(dashboardContent).not.toContain("slug: 'workflow-runs'");
+    expect(dashboardContent).toContain("aliases: ['workflow-runs']");
+    expect(dashboardContent).toContain('getDashboardRouteSlugs(route)');
     expect(dashboardContent).toContain("slug: 'agent-tasks'");
     expect(sitemapRoute).toContain("getDashboardHref(locale, route.id)");
     expect(dashboardContent).toContain("return `/${locale}/dashboard/${route.slug}`;");

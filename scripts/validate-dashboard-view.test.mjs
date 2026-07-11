@@ -157,8 +157,10 @@ describe('dashboard operational views', () => {
   it('links workflow run details back to the source event context', () => {
     expect(dashboardApp).toContain('workflowRunSourceEventHref');
     expect(dashboardApp).toContain('data-source-event-link');
-    expect(dashboardApp).toContain("target.pathname = target.pathname.replace(/\\/dashboard(?:\\/[^/?#]+)?$/, '/dashboard/events')");
+    expect(dashboardApp).toContain("target.pathname = target.pathname.replace(/\\/dashboard(?:\\/[^/?#]+)?\\/?$/, '/dashboard/events')");
     expect(dashboardApp).toContain("target.searchParams.set('event', sourceEventId)");
+    expect(dashboardApp).toContain("target.searchParams.delete('source')");
+    expect(dashboardApp).toContain("target.searchParams.delete('name')");
   });
 
   it('marks existing standard surfaces as core dashboard cards', () => {
