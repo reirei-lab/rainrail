@@ -77,6 +77,63 @@ describe('dashboard page controllers', () => {
     expect(data.events.map((event) => event.id)).toEqual(['evt_recent']);
   });
 
+  it('treats an empty event detail id as unspecified', async () => {
+    const client = fakeDashboardClient({
+      events: [{ id: 'evt_recent', type: 'event', status: 'received', summary: 'recent event' }],
+    });
+
+    const data = await fetchDashboardDataForTab(client, {
+      tab: 'events',
+      eventFilters: {},
+      workflowRunFilters: {},
+      agentTaskFilters: {},
+      queueFilters: {},
+      eventDetailId: '',
+    });
+
+    expect(client.calls).toEqual([
+      'overview',
+      'dashboardCards',
+      'dashboardLayout',
+      'events::',
+    ]);
+    expect(data.events.map((event) => event.id)).toEqual(['evt_recent']);
+  });
+
+  it('does not mix a deep-linked event detail row into unrelated filtered Events results', async () => {
+    const client = fakeDashboardClient({
+      events: [{ id: 'evt_cloudflare', type: 'event', status: 'received', summary: 'Cloudflare event' }],
+      eventDetails: {
+        evt_github: {
+          id: 'evt_github',
+          type: 'event',
+          status: 'received',
+          summary: 'GitHub event',
+          name: 'issues.opened',
+          source: { type: 'github' },
+        },
+      },
+    });
+
+    const data = await fetchDashboardDataForTab(client, {
+      tab: 'events',
+      eventFilters: { sourceType: 'cloudflare' },
+      workflowRunFilters: {},
+      agentTaskFilters: {},
+      queueFilters: {},
+      eventDetailId: 'evt_github',
+    });
+
+    expect(client.calls).toEqual([
+      'overview',
+      'dashboardCards',
+      'dashboardLayout',
+      'events:cloudflare:',
+      'eventDetail:evt_github',
+    ]);
+    expect(data.events.map((event) => event.id)).toEqual(['evt_cloudflare']);
+  });
+
   it('keeps the Events collection usable when a deep-linked event no longer exists', async () => {
     const client = fakeDashboardClient({
       events: [{ id: 'evt_recent', type: 'event', status: 'received', summary: 'recent event' }],
@@ -147,8 +204,22 @@ describe('dashboard page controllers', () => {
 });
 
 type FakeDashboardClientOptions = {
-  events?: Array<{ id: string; type: 'event'; status: string; summary: string }>;
-  eventDetails?: Record<string, { id: string; type: 'event'; status: string; summary: string }>;
+  events?: Array<{
+    id: string;
+    type: 'event';
+    name?: string;
+    status: string;
+    summary: string;
+    source?: { type?: string };
+  }>;
+  eventDetails?: Record<string, {
+    id: string;
+    type: 'event';
+    name?: string;
+    status: string;
+    summary: string;
+    source?: { type?: string };
+  }>;
   eventDetailErrors?: Record<string, Error>;
 };
 
