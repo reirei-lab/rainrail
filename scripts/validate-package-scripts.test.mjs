@@ -123,6 +123,16 @@ describe('package scripts used by pull request CI', () => {
     expect(copyDashboardAssetsScript).toContain('../apps/www/dist/ja/dashboard/');
     expect(copyDashboardAssetsScript).toContain('../apps/www/dist/en/dashboard/');
     expect(copyDashboardAssetsScript).toContain('../packages/cli/dist/dashboard/');
+    expect(copyDashboardAssetsScript).toContain('expectedDashboardAssetRoutes');
+    expect(copyDashboardAssetsScript).toContain("'en/dashboard/events/index.html'");
+    expect(copyDashboardAssetsScript).toContain("'en/dashboard/runs/index.html'");
+    expect(copyDashboardAssetsScript).toContain("'en/dashboard/tasks/index.html'");
+    expect(copyDashboardAssetsScript).toContain("'en/dashboard/sources/index.html'");
+    expect(copyDashboardAssetsScript).toContain("'en/dashboard/queue/index.html'");
+    expect(copyDashboardAssetsScript).toContain("'en/dashboard/settings/index.html'");
+    expect(copyDashboardAssetsScript).toContain("'ja/dashboard/events/index.html'");
+    expect(copyDashboardAssetsScript).toContain("'dashboard/workflow-runs/index.html'");
+    expect(copyDashboardAssetsScript).toContain("'dashboard/agent-tasks/index.html'");
     expect(cliPackageJson.scripts.test).toBe('vitest run src');
     expect(cliPackageJson.scripts.typecheck).toBe('tsc -p tsconfig.json --noEmit');
   });

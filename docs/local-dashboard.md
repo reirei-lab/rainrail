@@ -46,14 +46,20 @@ host and port, expect:
 ```text
 Health: http://127.0.0.1:8787/healthz
 Dashboard: http://127.0.0.1:8787/dashboard
-Event Stream: http://127.0.0.1:8787/events
+Dashboard routes: /en/dashboard/events, /en/dashboard/runs, /en/dashboard/tasks, /en/dashboard/sources, /en/dashboard/queue, /en/dashboard/settings
 Dashboard API: http://127.0.0.1:8787/api/v1/overview
+Event Stream: http://127.0.0.1:8787/events
 ```
 
 Open `http://127.0.0.1:8787/dashboard` in a browser and paste the configured
 dashboard token into the dashboard auth field. API requests use
 `Authorization: Bearer <token>` behind the same origin, so the local dashboard
 does not need a separate API base URL.
+The printed dashboard route list is the canonical local smoke set for the URL
+split: overview stays at `/en/dashboard`, while Event Inbox, Runs, Agent Tasks,
+Sources, Queue, and Settings are directly reachable at their own URLs. The
+legacy unlocalized `/dashboard/<view>` URLs remain redirect pages that preserve
+the current query string.
 
 ## Seeded SQLite demo mode
 
@@ -74,6 +80,7 @@ operational store. The CLI prints both normal and explicit demo URLs:
 
 ```text
 Dashboard demo: http://127.0.0.1:8787/dashboard?demo=1
+Dashboard demo routes: /en/dashboard/events?demo=1, /en/dashboard/runs?demo=1, /en/dashboard/tasks?demo=1, /en/dashboard/sources?demo=1, /en/dashboard/queue?demo=1, /en/dashboard/settings?demo=1
 Dashboard demo API: http://127.0.0.1:8787/api/v1/overview?demo=1
 ```
 

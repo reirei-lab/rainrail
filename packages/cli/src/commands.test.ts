@@ -1195,6 +1195,9 @@ describe('Rainrail CLI built-in commands', () => {
       expect(result.stdout).toContain(`Config: ${join(projectRoot, 'rainrail.config.json')}`);
       expect(result.stdout).toContain('Health: http://127.0.0.1:8787/healthz');
       expect(result.stdout).toContain('Dashboard: http://127.0.0.1:8787/dashboard');
+      expect(result.stdout).toContain(
+        'Dashboard routes: /en/dashboard/events, /en/dashboard/runs, /en/dashboard/tasks, /en/dashboard/sources, /en/dashboard/queue, /en/dashboard/settings',
+      );
       expect(result.stdout).toContain('Event Stream: http://127.0.0.1:8787/events');
       expect(result.stdout).toContain('Dashboard API: http://127.0.0.1:8787/api/v1/overview');
       expect(result.stdout).toContain('Dashboard Auth: not configured');
@@ -1337,6 +1340,7 @@ describe('Rainrail CLI built-in commands', () => {
       expect(result.exitCode).toBe(0);
       expect(result.stderr).toBe('');
       expect(result.stdout).toContain('Dashboard demo: http://127.0.0.1:8787/dashboard?demo=1');
+      expect(result.stdout).toContain('Dashboard demo routes: /en/dashboard/events?demo=1, /en/dashboard/runs?demo=1, /en/dashboard/tasks?demo=1, /en/dashboard/sources?demo=1, /en/dashboard/queue?demo=1, /en/dashboard/settings?demo=1');
       expect(result.stdout).toContain('Dashboard demo API: http://127.0.0.1:8787/api/v1/overview?demo=1');
       expect(startOptions?.demoMode).toBe(true);
       expect(startOptions?.operationalStoreConfig).toEqual({
@@ -2279,6 +2283,9 @@ describe('Rainrail CLI built-in commands', () => {
       try {
         expect(result.exitCode).toBe(0);
         expect(result.stdout).toContain(`Dashboard: http://127.0.0.1:${port}/dashboard`);
+        expect(result.stdout).toContain(
+          'Dashboard routes: /en/dashboard/events, /en/dashboard/runs, /en/dashboard/tasks, /en/dashboard/sources, /en/dashboard/queue, /en/dashboard/settings',
+        );
 
         const dashboard = await fetch(`http://127.0.0.1:${port}/dashboard`);
         expect(dashboard.status).toBe(200);
