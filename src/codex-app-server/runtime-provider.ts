@@ -276,7 +276,7 @@ function inheritedCodexEnvironment(
   options: Pick<CodexAppServerRuntimeProviderOptions, 'env' | 'inheritEnv'>,
 ): Record<string, string | undefined> {
   if (options.env !== undefined) {
-    return options.env;
+    return options.inheritEnv === true ? { ...process.env, ...options.env } : options.env;
   }
   return options.inheritEnv === false ? {} : process.env;
 }

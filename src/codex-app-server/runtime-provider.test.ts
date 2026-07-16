@@ -171,6 +171,37 @@ describe('createCodexAppServerRuntimeProvider', () => {
     }));
   });
 
+  it('merges parent Codex paths before partial env overrides when inheritance is enabled', async () => {
+    vi.stubEnv('HOME', '/Users/reirei');
+    vi.stubEnv('CODEX_HOME', '');
+    const client = new FakeCodexAppServerProtocolClient();
+    const clientFactory = vi.fn<CodexAppServerRuntimeProviderClientFactory>(() => ({ client, pid: 9315 }));
+    const provider = createCodexAppServerRuntimeProvider({
+      enabled: true,
+      command: 'codex',
+      env: { PATH: '/custom/bin' },
+      inheritEnv: true,
+      logDirectory: temporaryDirectory(),
+      clientFactory,
+    });
+
+    await expect(provider.startRun(runtimeRequest())).resolves.toMatchObject({
+      status: 'succeeded',
+      metadata: {
+        codexHome: '/Users/reirei/.codex',
+      },
+    });
+
+    expect(clientFactory).toHaveBeenCalledWith(expect.objectContaining({
+      env: {
+        CODEX_HOME: '/Users/reirei/.codex',
+        HOME: '/Users/reirei',
+        PATH: '/custom/bin',
+      },
+      inheritEnv: true,
+    }));
+  });
+
   it('does not fall back to parent Codex paths when environment inheritance is disabled', async () => {
     vi.stubEnv('HOME', '/Users/reirei');
     vi.stubEnv('CODEX_HOME', '/Users/reirei/.codex');
