@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.7.0](https://github.com/reirei-lab/rainrail/compare/release/0.6.0...release/0.7.0) (2026-07-11)
+
+
+### Features
+
+* add customizable Overview cards ([#345](https://github.com/reirei-lab/rainrail/issues/345)) ([688b47c](https://github.com/reirei-lab/rainrail/commit/688b47caed88f53f317aa82f5a13071992b60aee))
+* add dashboard view redirect pages ([#344](https://github.com/reirei-lab/rainrail/issues/344)) ([a0dd1d5](https://github.com/reirei-lab/rainrail/commit/a0dd1d51a95fad7d3c0f1e5a2c59081f7a3474d9))
+* add runs dashboard route ([#343](https://github.com/reirei-lab/rainrail/issues/343)) ([bc066a8](https://github.com/reirei-lab/rainrail/commit/bc066a8f19bac8e6308d3d99ecf88916fbf18e1c))
+* consolidate agent task controls on tasks page ([#346](https://github.com/reirei-lab/rainrail/issues/346)) ([134b45a](https://github.com/reirei-lab/rainrail/commit/134b45a32b297b0ff7ff63f08393f8c798d3ce24))
+* isolate Event Inbox dashboard route ([#342](https://github.com/reirei-lab/rainrail/issues/342)) ([26b647d](https://github.com/reirei-lab/rainrail/commit/26b647d0381574c99c25faaeff4e0b55616eaa15))
+* route dashboard views through shared shell ([#340](https://github.com/reirei-lab/rainrail/issues/340)) ([a01704b](https://github.com/reirei-lab/rainrail/commit/a01704bc3ca120b9a1290c632168f82a35aa3d0a))
+
+
+### Bug Fixes
+
+* verify Codex App Server smoke in CI ([#328](https://github.com/reirei-lab/rainrail/issues/328)) ([23da69b](https://github.com/reirei-lab/rainrail/commit/23da69b4ef2321967d0fae1d7d5cb38f9f558aff))
+
 ## [0.6.0](https://github.com/reirei-lab/rainrail/compare/release/0.5.0...release/0.6.0) (2026-07-10)
 
 
