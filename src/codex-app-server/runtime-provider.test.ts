@@ -171,6 +171,31 @@ describe('createCodexAppServerRuntimeProvider', () => {
     }));
   });
 
+  it('does not fall back to parent Codex paths when environment inheritance is disabled', async () => {
+    vi.stubEnv('HOME', '/Users/reirei');
+    vi.stubEnv('CODEX_HOME', '/Users/reirei/.codex');
+    const client = new FakeCodexAppServerProtocolClient();
+    const clientFactory = vi.fn<CodexAppServerRuntimeProviderClientFactory>(() => ({ client, pid: 9315 }));
+    const provider = createCodexAppServerRuntimeProvider({
+      enabled: true,
+      command: 'codex',
+      inheritEnv: false,
+      logDirectory: temporaryDirectory(),
+      clientFactory,
+    });
+
+    const run = await provider.startRun(runtimeRequest());
+    expect(run).toMatchObject({ status: 'succeeded' });
+    expect(run.metadata).not.toHaveProperty('codexHome');
+
+    expect(clientFactory).toHaveBeenCalledWith(expect.objectContaining({
+      inheritEnv: false,
+    }));
+    expect(clientFactory).toHaveBeenCalledWith(expect.not.objectContaining({
+      env: expect.anything(),
+    }));
+  });
+
   it('includes the effective Codex home path in startup auth errors', async () => {
     vi.stubEnv('CODEX_HOME', '');
     const client = new FakeCodexAppServerProtocolClient();

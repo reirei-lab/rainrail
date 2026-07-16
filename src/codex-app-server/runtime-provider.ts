@@ -242,7 +242,7 @@ function createCodexAppServerCommandEnvironment(
   options: Pick<CodexAppServerRuntimeProviderOptions, 'env' | 'inheritEnv' | 'home' | 'codexHome'>,
 ): { env?: Record<string, string | undefined>; inheritEnv?: boolean } {
   const env = options.env === undefined ? undefined : { ...options.env };
-  const baseEnv = env ?? process.env;
+  const baseEnv = inheritedCodexEnvironment(options);
   const home = options.home ?? nonEmptyString(baseEnv.HOME);
   const codexHome = options.codexHome ?? nonEmptyString(baseEnv.CODEX_HOME) ??
     (home === undefined ? undefined : join(home, '.codex'));
@@ -264,12 +264,21 @@ function createCodexAppServerCommandEnvironment(
 }
 
 function effectiveCodexHome(
-  options: Pick<CodexAppServerRuntimeProviderOptions, 'env' | 'home' | 'codexHome'>,
+  options: Pick<CodexAppServerRuntimeProviderOptions, 'env' | 'inheritEnv' | 'home' | 'codexHome'>,
 ): string | undefined {
-  const baseEnv = options.env ?? process.env;
+  const baseEnv = inheritedCodexEnvironment(options);
   const home = options.home ?? nonEmptyString(baseEnv.HOME);
   return options.codexHome ?? nonEmptyString(baseEnv.CODEX_HOME) ??
     (home === undefined ? undefined : join(home, '.codex'));
+}
+
+function inheritedCodexEnvironment(
+  options: Pick<CodexAppServerRuntimeProviderOptions, 'env' | 'inheritEnv'>,
+): Record<string, string | undefined> {
+  if (options.env !== undefined) {
+    return options.env;
+  }
+  return options.inheritEnv === false ? {} : process.env;
 }
 
 function nonEmptyString(value: string | undefined): string | undefined {
