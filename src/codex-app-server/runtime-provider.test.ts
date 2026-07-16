@@ -24,6 +24,7 @@ const temporaryDirectories: string[] = [];
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   temporaryDirectories.splice(0).forEach((directory) => rmSync(directory, { recursive: true, force: true }));
 });
 
@@ -115,6 +116,134 @@ describe('createCodexAppServerRuntimeProvider', () => {
     expect(statMode(logDirectory)).toBe(0o700);
     expect(statMode(String(metadata.metadata?.logPath))).toBe(0o600);
     expect(statMode(String(metadata.metadata?.stderrLogPath))).toBe(0o600);
+  });
+
+  it('passes configured Codex home paths to the app-server child environment', async () => {
+    const client = new FakeCodexAppServerProtocolClient();
+    const clientFactory = vi.fn<CodexAppServerRuntimeProviderClientFactory>(() => ({ client, pid: 9315 }));
+    const provider = createCodexAppServerRuntimeProvider({
+      enabled: true,
+      command: 'codex',
+      home: '/Users/reirei',
+      codexHome: '/Users/reirei/.codex',
+      env: { CODEX_HOME: '/ignored/codex-home', PATH: '/usr/bin' },
+      logDirectory: temporaryDirectory(),
+      clientFactory,
+    });
+
+    await expect(provider.startRun(runtimeRequest())).resolves.toMatchObject({ status: 'succeeded' });
+
+    expect(clientFactory).toHaveBeenCalledWith(expect.objectContaining({
+      command: 'codex',
+      env: {
+        CODEX_HOME: '/Users/reirei/.codex',
+        HOME: '/Users/reirei',
+        PATH: '/usr/bin',
+      },
+    }));
+  });
+
+  it('falls back to the inherited HOME when Codex home is not configured', async () => {
+    vi.stubEnv('HOME', '/Users/reirei');
+    vi.stubEnv('CODEX_HOME', '');
+    const client = new FakeCodexAppServerProtocolClient();
+    const clientFactory = vi.fn<CodexAppServerRuntimeProviderClientFactory>(() => ({ client, pid: 9315 }));
+    const provider = createCodexAppServerRuntimeProvider({
+      enabled: true,
+      command: 'codex',
+      logDirectory: temporaryDirectory(),
+      clientFactory,
+    });
+
+    await expect(provider.startRun(runtimeRequest())).resolves.toMatchObject({
+      status: 'succeeded',
+      metadata: {
+        codexHome: '/Users/reirei/.codex',
+      },
+    });
+
+    expect(clientFactory).toHaveBeenCalledWith(expect.objectContaining({
+      env: {
+        CODEX_HOME: '/Users/reirei/.codex',
+        HOME: '/Users/reirei',
+      },
+      inheritEnv: true,
+    }));
+  });
+
+  it('merges parent Codex paths before partial env overrides when inheritance is enabled', async () => {
+    vi.stubEnv('HOME', '/Users/reirei');
+    vi.stubEnv('CODEX_HOME', '');
+    const client = new FakeCodexAppServerProtocolClient();
+    const clientFactory = vi.fn<CodexAppServerRuntimeProviderClientFactory>(() => ({ client, pid: 9315 }));
+    const provider = createCodexAppServerRuntimeProvider({
+      enabled: true,
+      command: 'codex',
+      env: { PATH: '/custom/bin' },
+      inheritEnv: true,
+      logDirectory: temporaryDirectory(),
+      clientFactory,
+    });
+
+    await expect(provider.startRun(runtimeRequest())).resolves.toMatchObject({
+      status: 'succeeded',
+      metadata: {
+        codexHome: '/Users/reirei/.codex',
+      },
+    });
+
+    expect(clientFactory).toHaveBeenCalledWith(expect.objectContaining({
+      env: {
+        CODEX_HOME: '/Users/reirei/.codex',
+        HOME: '/Users/reirei',
+        PATH: '/custom/bin',
+      },
+      inheritEnv: true,
+    }));
+  });
+
+  it('does not fall back to parent Codex paths when environment inheritance is disabled', async () => {
+    vi.stubEnv('HOME', '/Users/reirei');
+    vi.stubEnv('CODEX_HOME', '/Users/reirei/.codex');
+    const client = new FakeCodexAppServerProtocolClient();
+    const clientFactory = vi.fn<CodexAppServerRuntimeProviderClientFactory>(() => ({ client, pid: 9315 }));
+    const provider = createCodexAppServerRuntimeProvider({
+      enabled: true,
+      command: 'codex',
+      inheritEnv: false,
+      logDirectory: temporaryDirectory(),
+      clientFactory,
+    });
+
+    const run = await provider.startRun(runtimeRequest());
+    expect(run).toMatchObject({ status: 'succeeded' });
+    expect(run.metadata).not.toHaveProperty('codexHome');
+
+    expect(clientFactory).toHaveBeenCalledWith(expect.objectContaining({
+      inheritEnv: false,
+    }));
+    expect(clientFactory).toHaveBeenCalledWith(expect.not.objectContaining({
+      env: expect.anything(),
+    }));
+  });
+
+  it('includes the effective Codex home path in startup auth errors', async () => {
+    vi.stubEnv('CODEX_HOME', '');
+    const client = new FakeCodexAppServerProtocolClient();
+    client.initialize = vi.fn(async () => {
+      throw new Error('401 Unauthorized: Missing bearer or basic authentication in header');
+    });
+    const provider = createCodexAppServerRuntimeProvider({
+      enabled: true,
+      command: 'codex',
+      home: '/Users/reirei',
+      logDirectory: temporaryDirectory(),
+      clientFactory: () => ({ client, pid: 9315 }),
+    });
+
+    await expect(provider.startRun(runtimeRequest())).rejects.toThrow(
+      'CODEX_HOME=/Users/reirei/.codex',
+    );
   });
 
   it.each([

@@ -509,6 +509,9 @@ describe('parseConfig', () => {
           runtime: 'codex-app-server',
           plugin: '@rainrail/codex-app-server-runtime',
           executor: 'codex-app-server',
+          command: 'codex',
+          home: '/Users/reirei',
+          codexHome: '/Users/reirei/.codex',
         },
       },
     });
@@ -521,6 +524,9 @@ describe('parseConfig', () => {
       runtime: 'codex-app-server',
       plugin: '@rainrail/codex-app-server-runtime',
       executor: 'codex-app-server',
+      command: 'codex',
+      home: '/Users/reirei',
+      codexHome: '/Users/reirei/.codex',
     });
   });
 
