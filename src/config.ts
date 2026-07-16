@@ -46,6 +46,9 @@ export interface PluginRuntimeProviderConfig {
   runtime: string;
   plugin: string;
   executor?: string;
+  command?: string;
+  home?: string;
+  codexHome?: string;
 }
 
 export interface TaskProviderConfig {
@@ -503,6 +506,18 @@ function parsePluginRuntimeProvider(value: unknown, path: string): PluginRuntime
   const executor = parseOptionalString(value.executor, `${path}.executor`);
   if (executor !== undefined) {
     provider.executor = executor;
+  }
+  const command = parseOptionalString(value.command, `${path}.command`);
+  if (command !== undefined) {
+    provider.command = command;
+  }
+  const home = parseOptionalString(value.home, `${path}.home`);
+  if (home !== undefined) {
+    provider.home = home;
+  }
+  const codexHome = parseOptionalString(value.codexHome, `${path}.codexHome`);
+  if (codexHome !== undefined) {
+    provider.codexHome = codexHome;
   }
   return provider;
 }

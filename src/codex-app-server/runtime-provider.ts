@@ -24,6 +24,8 @@ export interface CodexAppServerRuntimeProviderOptions {
   cwd?: string | undefined;
   env?: Record<string, string | undefined> | undefined;
   inheritEnv?: boolean | undefined;
+  home?: string | undefined;
+  codexHome?: string | undefined;
   logDirectory: string;
   turnTimeoutMs?: number | undefined;
   requestTimeoutMs?: number | undefined;
@@ -143,6 +145,7 @@ export async function startCodexAppServerRun(
     branchName: task.branchName,
     taskId: task.id,
     appServerCommand: options.command,
+    codexHome: effectiveCodexHome(options),
   };
 
   try {
@@ -156,8 +159,9 @@ export async function startCodexAppServerRun(
       stderrFd,
     };
     if (options.cwd !== undefined) clientFactoryOptions.cwd = options.cwd;
-    if (options.env !== undefined) clientFactoryOptions.env = options.env;
-    if (options.inheritEnv !== undefined) clientFactoryOptions.inheritEnv = options.inheritEnv;
+    const commandEnv = createCodexAppServerCommandEnvironment(options);
+    if (commandEnv.env !== undefined) clientFactoryOptions.env = commandEnv.env;
+    if (commandEnv.inheritEnv !== undefined) clientFactoryOptions.inheritEnv = commandEnv.inheritEnv;
     if (options.spawnProcess !== undefined) clientFactoryOptions.spawnProcess = options.spawnProcess;
     if (options.writeLogChunk !== undefined) clientFactoryOptions.writeLogChunk = options.writeLogChunk;
     runtimeClient = (options.clientFactory ?? createDefaultCodexAppServerRuntimeProviderClient)(clientFactoryOptions);
@@ -208,10 +212,11 @@ export async function startCodexAppServerRun(
       }),
     };
   } catch (error) {
+    const annotatedError = annotateCodexAppServerAuthError(error, effectiveCodexHome(options));
     if (turnId === undefined) {
-      throw error;
+      throw annotatedError;
     }
-    const status = isTimeoutError(error) ? 'timed_out' : isAbortError(error) ? 'canceled' : 'failed';
+    const status = isTimeoutError(annotatedError) ? 'timed_out' : isAbortError(annotatedError) ? 'canceled' : 'failed';
     return {
       id: threadId ?? task.agentSessionId ?? task.id,
       provider: 'codex',
@@ -222,7 +227,7 @@ export async function startCodexAppServerRun(
         threadId,
         turnId,
         timeoutMs: status === 'timed_out' ? turnTimeoutMs : undefined,
-        error: error instanceof Error ? error.message : String(error),
+        error: annotatedError instanceof Error ? annotatedError.message : String(annotatedError),
       }),
     };
   } finally {
@@ -231,6 +236,58 @@ export async function startCodexAppServerRun(
     closeSync(outputFd);
     closeSync(stderrFd);
   }
+}
+
+function createCodexAppServerCommandEnvironment(
+  options: Pick<CodexAppServerRuntimeProviderOptions, 'env' | 'inheritEnv' | 'home' | 'codexHome'>,
+): { env?: Record<string, string | undefined>; inheritEnv?: boolean } {
+  const env = options.env === undefined ? undefined : { ...options.env };
+  const baseEnv = env ?? process.env;
+  const home = options.home ?? nonEmptyString(baseEnv.HOME);
+  const codexHome = options.codexHome ?? nonEmptyString(baseEnv.CODEX_HOME) ??
+    (home === undefined ? undefined : join(home, '.codex'));
+  if (home === undefined && codexHome === undefined) {
+    return {
+      ...(env === undefined ? {} : { env }),
+      ...(options.inheritEnv === undefined ? {} : { inheritEnv: options.inheritEnv }),
+    };
+  }
+
+  const nextEnv = env ?? {};
+  if (home !== undefined) nextEnv.HOME = home;
+  if (codexHome !== undefined) nextEnv.CODEX_HOME = codexHome;
+  const inheritEnv = options.inheritEnv ?? (options.env === undefined ? true : undefined);
+  return {
+    env: nextEnv,
+    ...(inheritEnv === undefined ? {} : { inheritEnv }),
+  };
+}
+
+function effectiveCodexHome(
+  options: Pick<CodexAppServerRuntimeProviderOptions, 'env' | 'home' | 'codexHome'>,
+): string | undefined {
+  const baseEnv = options.env ?? process.env;
+  const home = options.home ?? nonEmptyString(baseEnv.HOME);
+  return options.codexHome ?? nonEmptyString(baseEnv.CODEX_HOME) ??
+    (home === undefined ? undefined : join(home, '.codex'));
+}
+
+function nonEmptyString(value: string | undefined): string | undefined {
+  return value === undefined || value.length === 0 ? undefined : value;
+}
+
+function annotateCodexAppServerAuthError(error: unknown, codexHome: string | undefined): unknown {
+  if (codexHome === undefined || !(error instanceof Error) || error.message.includes('CODEX_HOME=')) {
+    return error;
+  }
+  if (!looksLikeCodexAuthError(error.message)) {
+    return error;
+  }
+  return new Error(`${error.message} (CODEX_HOME=${codexHome})`, { cause: error });
+}
+
+function looksLikeCodexAuthError(message: string): boolean {
+  return /\b(?:401|unauthorized|authentication|auth|login|bearer)\b/iu.test(message);
 }
 
 function codexAppServerThreadParams(options: CodexAppServerRuntimeProviderOptions): CodexAppServerThreadStartParams {
