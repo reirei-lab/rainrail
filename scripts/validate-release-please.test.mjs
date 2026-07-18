@@ -29,7 +29,7 @@ describe('Release Please automation', () => {
 
   it('uses manifest Release Please configuration', () => {
     expect(workflow).toContain("if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.release_tag == '' }}");
-    expect(workflow).toContain('uses: googleapis/release-please-action@v4');
+    expect(workflow).toContain('uses: googleapis/release-please-action@v5');
     expect(workflow).toContain('id: release');
     expect(workflow).toContain('token: ${{ secrets.RELEASE_PLEASE_TOKEN }}');
     expect(workflow).not.toContain('token: ${{ github.token }}');
