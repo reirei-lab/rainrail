@@ -5,7 +5,6 @@ export type Hreflang = Locale | 'x-default';
 
 export const pageIds = [
   'home',
-  'howItWorks',
   'concepts',
   'guides',
   'examples',
@@ -56,7 +55,6 @@ export const defaultLocale = 'en' satisfies Locale;
 
 export const pageSlugs = {
   home: '',
-  howItWorks: 'how-it-works',
   concepts: 'concepts',
   guides: 'guides',
   examples: 'examples',
@@ -71,7 +69,6 @@ const messages = {
       github: 'GitHub',
       languageSwitcherLabel: '言語切替',
       primary: [
-        { label: '仕組み', pageId: 'howItWorks' },
         { label: '概念', pageId: 'concepts' },
         { label: 'ガイド', pageId: 'guides' },
         { label: '例', pageId: 'examples' },
@@ -86,13 +83,6 @@ const messages = {
           title: 'Rainrail',
           description:
             'Rainrail は開発イベントを決定的なエージェントワークフローへルーティングします。',
-        },
-      },
-      howItWorks: {
-        meta: {
-          title: '仕組み',
-          description:
-            'Rainrail がソースイベントを正規化し、プラグインとランタイムへ渡す流れ。',
         },
       },
       concepts: {
@@ -132,7 +122,6 @@ const messages = {
       github: 'GitHub',
       languageSwitcherLabel: 'Language switcher',
       primary: [
-        { label: 'How it works', pageId: 'howItWorks' },
         { label: 'Concepts', pageId: 'concepts' },
         { label: 'Guides', pageId: 'guides' },
         { label: 'Examples', pageId: 'examples' },
@@ -146,13 +135,6 @@ const messages = {
           title: 'Rainrail',
           description:
             'Rainrail routes development events into deterministic agent workflows.',
-        },
-      },
-      howItWorks: {
-        meta: {
-          title: 'How it works',
-          description:
-            'How Rainrail normalizes source events and hands them to plugins and runtimes.',
         },
       },
       concepts: {

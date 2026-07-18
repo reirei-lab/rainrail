@@ -35,7 +35,6 @@ describe('www locale-aware i18n foundation', () => {
   it('defines localized navigation, page metadata, and routes for every public page', () => {
     expect(pageIds).toEqual([
       'home',
-      'howItWorks',
       'concepts',
       'guides',
       'examples',

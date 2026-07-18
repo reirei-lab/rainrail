@@ -171,7 +171,7 @@ describe('package scripts used by pull request CI', () => {
       true,
     );
     expect(
-      existsSync(new URL('../apps/www/src/pages/how-it-works.astro', import.meta.url)),
+      existsSync(new URL('../apps/www/src/pages/concepts.astro', import.meta.url)),
     ).toBe(true);
     expect(existsSync(new URL('../apps/www/src/pages/docs.astro', import.meta.url))).toBe(
       true,

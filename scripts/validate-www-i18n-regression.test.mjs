@@ -10,7 +10,7 @@ import {
 } from './validate-www-i18n-regression.mjs';
 
 const locales = ['ja', 'en'];
-const localizedPaths = ['', 'how-it-works'];
+const localizedPaths = ['', 'concepts'];
 
 /**
  * @param {{ locale: string; path?: string; href?: string }} options
@@ -81,8 +81,8 @@ const writeCompleteDist = async () => {
     writeRoute(root, locale, pageHtml({ locale, href: `/${locale}/` }));
     writeRoute(
       root,
-      `${locale}/how-it-works`,
-      pageHtml({ locale, path: 'how-it-works' }),
+      `${locale}/concepts`,
+      pageHtml({ locale, path: 'concepts' }),
     );
   }
 
@@ -92,14 +92,14 @@ const writeCompleteDist = async () => {
 <urlset>
   <url><loc>https://rainrail.dev/ja/</loc></url>
   <url><loc>https://rainrail.dev/en/</loc></url>
-  <url><loc>https://rainrail.dev/ja/how-it-works</loc></url>
-  <url><loc>https://rainrail.dev/en/how-it-works</loc></url>
+  <url><loc>https://rainrail.dev/ja/concepts</loc></url>
+  <url><loc>https://rainrail.dev/en/concepts</loc></url>
 </urlset>`,
   );
   writeFileSync(
     join(root, '_redirects'),
-    `/how-it-works /en/how-it-works 301
-/how-it-works/ /en/how-it-works 301`,
+    `/concepts /en/concepts 301
+/concepts/ /en/concepts 301`,
   );
 
   return root;
@@ -114,10 +114,10 @@ describe('www i18n regression validator', () => {
 
   it('reports a missing locale page for an existing public page', async () => {
     const distRoot = await writeCompleteDist();
-    writeFileSync(join(distRoot, 'ja/how-it-works/index.html'), '');
+    writeFileSync(join(distRoot, 'ja/concepts/index.html'), '');
 
     expect(validateBuiltWwwI18n({ distRoot, locales, localizedPaths })).toContain(
-      'Missing built HTML for /ja/how-it-works',
+      'Missing built HTML for /ja/concepts',
     );
   });
 
@@ -125,22 +125,22 @@ describe('www i18n regression validator', () => {
     const distRoot = await writeCompleteDist();
     writeRoute(
       distRoot,
-      'en/how-it-works',
+      'en/concepts',
       '<!doctype html><html lang="en"><head></head><body></body></html>',
     );
 
     expect(validateBuiltWwwI18n({ distRoot, locales, localizedPaths })).toEqual(
       expect.arrayContaining([
-        'Missing <title> for /en/how-it-works',
-        'Missing meta description for /en/how-it-works',
-        'Missing canonical link for /en/how-it-works',
-        'Missing og:title for /en/how-it-works',
-        'Missing og:description for /en/how-it-works',
-        'Missing og:url for /en/how-it-works',
-        'Missing og:locale for /en/how-it-works',
-        'Missing hreflang ja for /en/how-it-works',
-        'Missing hreflang en for /en/how-it-works',
-        'Missing hreflang x-default for /en/how-it-works',
+        'Missing <title> for /en/concepts',
+        'Missing meta description for /en/concepts',
+        'Missing canonical link for /en/concepts',
+        'Missing og:title for /en/concepts',
+        'Missing og:description for /en/concepts',
+        'Missing og:url for /en/concepts',
+        'Missing og:locale for /en/concepts',
+        'Missing hreflang ja for /en/concepts',
+        'Missing hreflang en for /en/concepts',
+        'Missing hreflang x-default for /en/concepts',
       ]),
     );
   });
@@ -149,36 +149,36 @@ describe('www i18n regression validator', () => {
     const distRoot = await writeCompleteDist();
     writeRoute(
       distRoot,
-      'en/how-it-works',
+      'en/concepts',
       `<!doctype html>
 <html lang="en">
 <head>
   <title>How it works - Rainrail</title>
   <meta name="description" data-content="description">
-  <link rel="canonical" href="https://rainrail.dev/en/how-it-works">
+  <link rel="canonical" href="https://rainrail.dev/en/concepts">
   <meta property="og:title" data-content="How it works - Rainrail">
   <meta property="og:description" data-content="description">
-  <meta property="og:url" data-content="https://rainrail.dev/en/how-it-works">
+  <meta property="og:url" data-content="https://rainrail.dev/en/concepts">
   <meta property="og:locale" data-content="en_US">
-  <link rel="alternate" hreflang="ja" href="https://rainrail.dev/ja/how-it-works">
-  <link rel="alternate" hreflang="en" href="https://rainrail.dev/en/how-it-works">
-  <link rel="alternate" hreflang="x-default" href="https://rainrail.dev/en/how-it-works">
+  <link rel="alternate" hreflang="ja" href="https://rainrail.dev/ja/concepts">
+  <link rel="alternate" hreflang="en" href="https://rainrail.dev/en/concepts">
+  <link rel="alternate" hreflang="x-default" href="https://rainrail.dev/en/concepts">
 </head>
 <body>
-  <a href="/en/how-it-works">same locale</a>
-  <a href="/ja/how-it-works" data-locale-choice="ja">日本語</a>
-  <a href="/en/how-it-works" data-locale-choice="en">English</a>
+  <a href="/en/concepts">same locale</a>
+  <a href="/ja/concepts" data-locale-choice="ja">日本語</a>
+  <a href="/en/concepts" data-locale-choice="en">English</a>
 </body>
 </html>`,
     );
 
     expect(validateBuiltWwwI18n({ distRoot, locales, localizedPaths })).toEqual(
       expect.arrayContaining([
-        'Missing meta description for /en/how-it-works',
-        'Missing og:title for /en/how-it-works',
-        'Missing og:description for /en/how-it-works',
-        'Missing og:url for /en/how-it-works',
-        'Missing og:locale for /en/how-it-works',
+        'Missing meta description for /en/concepts',
+        'Missing og:title for /en/concepts',
+        'Missing og:description for /en/concepts',
+        'Missing og:url for /en/concepts',
+        'Missing og:locale for /en/concepts',
       ]),
     );
   });
@@ -187,17 +187,17 @@ describe('www i18n regression validator', () => {
     const distRoot = await writeCompleteDist();
     writeRoute(
       distRoot,
-      'ja/how-it-works',
-      pageHtml({ locale: 'ja', path: 'how-it-works' }).replaceAll(
-        'https://rainrail.dev/ja/how-it-works',
-        'https://rainrail.dev/en/how-it-works',
+      'ja/concepts',
+      pageHtml({ locale: 'ja', path: 'concepts' }).replaceAll(
+        'https://rainrail.dev/ja/concepts',
+        'https://rainrail.dev/en/concepts',
       ),
     );
 
     expect(validateBuiltWwwI18n({ distRoot, locales, localizedPaths })).toEqual(
       expect.arrayContaining([
-        'Canonical URL for /ja/how-it-works must be https://rainrail.dev/ja/how-it-works',
-        'og:url for /ja/how-it-works must be https://rainrail.dev/ja/how-it-works',
+        'Canonical URL for /ja/concepts must be https://rainrail.dev/ja/concepts',
+        'og:url for /ja/concepts must be https://rainrail.dev/ja/concepts',
       ]),
     );
   });
@@ -206,15 +206,15 @@ describe('www i18n regression validator', () => {
     const distRoot = await writeCompleteDist();
     writeRoute(
       distRoot,
-      'ja/how-it-works',
-      pageHtml({ locale: 'ja', path: 'how-it-works' }).replace(
+      'ja/concepts',
+      pageHtml({ locale: 'ja', path: 'concepts' }).replace(
         'property="og:locale" content="ja_JP"',
         'property="og:locale" content="en_US"',
       ),
     );
 
     expect(validateBuiltWwwI18n({ distRoot, locales, localizedPaths })).toContain(
-      'og:locale for /ja/how-it-works must be ja_JP',
+      'og:locale for /ja/concepts must be ja_JP',
     );
   });
 
@@ -222,15 +222,15 @@ describe('www i18n regression validator', () => {
     const distRoot = await writeCompleteDist();
     writeRoute(
       distRoot,
-      'ja/how-it-works',
-      pageHtml({ locale: 'ja', path: 'how-it-works' }).replace(
+      'ja/concepts',
+      pageHtml({ locale: 'ja', path: 'concepts' }).replace(
         '<html lang="ja">',
         '<html lang="en">',
       ),
     );
 
     expect(validateBuiltWwwI18n({ distRoot, locales, localizedPaths })).toContain(
-      'html lang for /ja/how-it-works must be ja',
+      'html lang for /ja/concepts must be ja',
     );
   });
 
@@ -238,15 +238,15 @@ describe('www i18n regression validator', () => {
     const distRoot = await writeCompleteDist();
     writeRoute(
       distRoot,
-      'ja/how-it-works',
-      pageHtml({ locale: 'ja', path: 'how-it-works' }).replace(
-        'hreflang="en" href="https://rainrail.dev/en/how-it-works"',
+      'ja/concepts',
+      pageHtml({ locale: 'ja', path: 'concepts' }).replace(
+        'hreflang="en" href="https://rainrail.dev/en/concepts"',
         'hreflang="en" href="https://rainrail.dev/en/docs"',
       ),
     );
 
     expect(validateBuiltWwwI18n({ distRoot, locales, localizedPaths })).toContain(
-      'hreflang en for /ja/how-it-works must be https://rainrail.dev/en/how-it-works',
+      'hreflang en for /ja/concepts must be https://rainrail.dev/en/concepts',
     );
   });
 
@@ -254,15 +254,15 @@ describe('www i18n regression validator', () => {
     const distRoot = await writeCompleteDist();
     writeRoute(
       distRoot,
-      'ja/how-it-works',
-      pageHtml({ locale: 'ja', path: 'how-it-works' }).replace(
-        'href="/en/how-it-works" data-locale-choice="en"',
+      'ja/concepts',
+      pageHtml({ locale: 'ja', path: 'concepts' }).replace(
+        'href="/en/concepts" data-locale-choice="en"',
         'href="/en/" data-locale-choice="en"',
       ),
     );
 
     expect(validateBuiltWwwI18n({ distRoot, locales, localizedPaths })).toContain(
-      'Language switcher en for /ja/how-it-works must link to /en/how-it-works',
+      'Language switcher en for /ja/concepts must link to /en/concepts',
     );
   });
 
@@ -270,15 +270,15 @@ describe('www i18n regression validator', () => {
     const distRoot = await writeCompleteDist();
     writeRoute(
       distRoot,
-      'ja/how-it-works',
-      pageHtml({ locale: 'ja', path: 'how-it-works' }).replace(
-        '<a href="/en/how-it-works" data-locale-choice="en">English</a>',
+      'ja/concepts',
+      pageHtml({ locale: 'ja', path: 'concepts' }).replace(
+        '<a href="/en/concepts" data-locale-choice="en">English</a>',
         '',
       ),
     );
 
     expect(validateBuiltWwwI18n({ distRoot, locales, localizedPaths })).toContain(
-      'Missing language switcher en for /ja/how-it-works',
+      'Missing language switcher en for /ja/concepts',
     );
   });
 
@@ -286,15 +286,15 @@ describe('www i18n regression validator', () => {
     const distRoot = await writeCompleteDist();
     writeRoute(
       distRoot,
-      'ja/how-it-works',
-      pageHtml({ locale: 'ja', path: 'how-it-works' }).replace(
-        '<a href="/en/how-it-works" data-locale-choice="en">English</a>',
-        '<a data-locale-choice="en" data-href="/en/how-it-works">English</a>',
+      'ja/concepts',
+      pageHtml({ locale: 'ja', path: 'concepts' }).replace(
+        '<a href="/en/concepts" data-locale-choice="en">English</a>',
+        '<a data-locale-choice="en" data-href="/en/concepts">English</a>',
       ),
     );
 
     expect(validateBuiltWwwI18n({ distRoot, locales, localizedPaths })).toContain(
-      'Language switcher en for /ja/how-it-works is missing href',
+      'Language switcher en for /ja/concepts is missing href',
     );
   });
 
@@ -302,15 +302,15 @@ describe('www i18n regression validator', () => {
     const distRoot = await writeCompleteDist();
     writeRoute(
       distRoot,
-      'ja/how-it-works',
-      pageHtml({ locale: 'ja', path: 'how-it-works' }).replace(
-        'href="/ja/how-it-works"',
+      'ja/concepts',
+      pageHtml({ locale: 'ja', path: 'concepts' }).replace(
+        'href="/ja/concepts"',
         'href="/docs"',
       ),
     );
 
     expect(validateBuiltWwwI18n({ distRoot, locales, localizedPaths })).toContain(
-      'Locale page /ja/how-it-works links to unlocalized internal URL /docs',
+      'Locale page /ja/concepts links to unlocalized internal URL /docs',
     );
   });
 
@@ -318,15 +318,15 @@ describe('www i18n regression validator', () => {
     const distRoot = await writeCompleteDist();
     writeRoute(
       distRoot,
-      'ja/how-it-works',
-      pageHtml({ locale: 'ja', path: 'how-it-works' }).replace(
-        'href="/ja/how-it-works"',
+      'ja/concepts',
+      pageHtml({ locale: 'ja', path: 'concepts' }).replace(
+        'href="/ja/concepts"',
         'href="docs"',
       ),
     );
 
     expect(validateBuiltWwwI18n({ distRoot, locales, localizedPaths })).not.toContain(
-      'Locale page /ja/how-it-works links to unlocalized internal URL docs',
+      'Locale page /ja/concepts links to unlocalized internal URL docs',
     );
   });
 
@@ -334,15 +334,15 @@ describe('www i18n regression validator', () => {
     const distRoot = await writeCompleteDist();
     writeRoute(
       distRoot,
-      'ja/how-it-works',
-      pageHtml({ locale: 'ja', path: 'how-it-works' }).replace(
-        'href="/ja/how-it-works"',
+      'ja/concepts',
+      pageHtml({ locale: 'ja', path: 'concepts' }).replace(
+        'href="/ja/concepts"',
         'href="/"',
       ),
     );
 
     expect(validateBuiltWwwI18n({ distRoot, locales, localizedPaths })).toContain(
-      'Locale page /ja/how-it-works links to unlocalized internal URL /',
+      'Locale page /ja/concepts links to unlocalized internal URL /',
     );
   });
 
@@ -350,9 +350,9 @@ describe('www i18n regression validator', () => {
     const distRoot = await writeCompleteDist();
     writeRoute(
       distRoot,
-      'ja/how-it-works',
-      pageHtml({ locale: 'ja', path: 'how-it-works' }).replace(
-        'href="/ja/how-it-works"',
+      'ja/concepts',
+      pageHtml({ locale: 'ja', path: 'concepts' }).replace(
+        'href="/ja/concepts"',
         'href="https://preview.example.com/docs"',
       ),
     );
@@ -365,7 +365,7 @@ describe('www i18n regression validator', () => {
         siteOrigin: 'https://preview.example.com',
       }),
     ).toContain(
-      'Locale page /ja/how-it-works links to unlocalized internal URL https://preview.example.com/docs',
+      'Locale page /ja/concepts links to unlocalized internal URL https://preview.example.com/docs',
     );
   });
 
@@ -374,7 +374,7 @@ describe('www i18n regression validator', () => {
     writeFileSync(join(distRoot, 'sitemap.xml'), '<urlset></urlset>');
 
     expect(validateBuiltWwwI18n({ distRoot, locales, localizedPaths })).toContain(
-      'Missing sitemap URL https://rainrail.dev/ja/how-it-works',
+      'Missing sitemap URL https://rainrail.dev/ja/concepts',
     );
   });
 
@@ -386,8 +386,8 @@ describe('www i18n regression validator', () => {
 <urlset>
   <url><loc>https://rainrail.dev/ja/</loc></url>
   <url><loc>https://rainrail.dev/en/</loc></url>
-  <url><loc>https://rainrail.dev/ja/how-it-works</loc></url>
-  <url><loc>https://rainrail.dev/en/how-it-works</loc></url>
+  <url><loc>https://rainrail.dev/ja/concepts</loc></url>
+  <url><loc>https://rainrail.dev/en/concepts</loc></url>
   <url><loc>https://rainrail.dev/docs</loc></url>
 </urlset>`,
     );
@@ -472,7 +472,7 @@ describe('www i18n regression validator', () => {
         distRoot,
         locales,
         localizedPaths,
-        publicPagePaths: ['', 'how-it-works', 'docs'],
+        publicPagePaths: ['', 'concepts', 'docs'],
       }),
     ).toContain('Public page /docs is missing from the localized page collection');
   });
@@ -486,12 +486,12 @@ describe('www i18n regression validator', () => {
         distRoot,
         locales,
         localizedPaths,
-        publicPagePaths: ['how-it-works'],
+        publicPagePaths: ['concepts'],
       }),
     ).toEqual(
       expect.arrayContaining([
-        'Missing legacy redirect /how-it-works -> /en/how-it-works 301',
-        'Missing legacy redirect /how-it-works/ -> /en/how-it-works 301',
+        'Missing legacy redirect /concepts -> /en/concepts 301',
+        'Missing legacy redirect /concepts/ -> /en/concepts 301',
       ]),
     );
   });
@@ -507,8 +507,8 @@ describe('www i18n regression validator', () => {
 <urlset>
   <url><loc>https://rainrail.dev/ja/</loc></url>
   <url><loc>https://rainrail.dev/en/</loc></url>
-  <url><loc>https://rainrail.dev/ja/how-it-works</loc></url>
-  <url><loc>https://rainrail.dev/en/how-it-works</loc></url>
+  <url><loc>https://rainrail.dev/ja/concepts</loc></url>
+  <url><loc>https://rainrail.dev/en/concepts</loc></url>
   <url><loc>https://rainrail.dev/ja/docs</loc></url>
   <url><loc>https://rainrail.dev/en/docs</loc></url>
 </urlset>`,
