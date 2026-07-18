@@ -1,0 +1,182 @@
+---
+import DashboardLayout from '../../../layouts/DashboardLayout.astro';
+import {
+  getDashboardContent,
+  getDashboardRouteBySlug,
+  getDashboardRouteSlugs,
+  getDashboardRoutes,
+} from '../../../lib/dashboard-content';
+import { supportedLocales, type Locale } from '../../../lib/i18n';
+
+export function getStaticPaths() {
+  return supportedLocales.flatMap((locale) =>
+    getDashboardRoutes()
+      .flatMap((route) => {
+        const routeViews = getDashboardRouteSlugs(route);
+        return routeViews.map((view) => ({
+          params: { locale, view },
+          props: { locale, view },
+        }));
+      }),
+  );
+}
+
+type Props = {
+  locale: Locale;
+  view: string;
+};
+
+const { locale, view } = Astro.props as Props;
+const route = getDashboardRouteBySlug(view);
+
+if (route === undefined) {
+  throw new Error(`Unsupported dashboard route: ${view}`);
+}
+
+const content = getDashboardContent(locale);
+const apiBaseUrl = import.meta.env.PUBLIC_RAINRAIL_OPERATIONAL_API_URL ?? '';
+const dashboardCopy = JSON.stringify(content.app);
+const showEventInbox = route.id === 'events';
+---
+
+<DashboardLayout
+  locale={locale}
+  title={content.meta.title}
+  description={content.meta.description}
+  activeRoute={route.id}
+  dashboardCopy={dashboardCopy}
+  apiBaseUrl={apiBaseUrl}
+>
+  <div class="dashboard-workspace">
+    <header class="dashboard-topbar">
+      <div>
+        <p class="eyebrow">{content.shell.eyebrow}</p>
+        <h1>{content.shell.heading}</h1>
+        <span class="dashboard-demo-badge" data-demo-indicator hidden>{content.shell.demoModeBadge}</span>
+      </div>
+      <div class="dashboard-auth">
+        <input data-api-base-url-input type="url" autocomplete="off" placeholder={content.shell.apiBaseUrlPlaceholder} aria-label={content.shell.apiBaseUrlLabel} />
+        <input data-token-input type="password" autocomplete="off" placeholder={content.shell.tokenPlaceholder} aria-label={content.shell.tokenLabel} />
+        <button type="button" class="button secondary" data-token-save>{content.shell.connect}</button>
+        <button type="button" class="button secondary" data-token-clear>{content.shell.clear}</button>
+      </div>
+    </header>
+
+    <div class="dashboard-health">
+      <div>
+        <span>{content.shell.status}</span>
+        <strong data-status-text>{content.shell.states.authMissing}</strong>
+      </div>
+      <button type="button" class="button" data-refresh>{content.shell.refresh}</button>
+      <span class="dashboard-stale" data-stale-indicator hidden>{content.shell.staleData}</span>
+    </div>
+
+    <div class="dashboard-state" data-state="loading">{content.shell.states.loading}</div>
+    <div class="dashboard-state" data-state="empty">{content.shell.states.empty}</div>
+    <div class="dashboard-state" data-state="error">{content.shell.states.unavailable}</div>
+    <div class="dashboard-state" data-state="auth-missing">{content.shell.states.authMissing}</div>
+
+    <section class="dashboard-layout-tools" aria-label={content.app.cardLayout.title}>
+      <div>
+        <h2>{content.app.cardLayout.title}</h2>
+        <p>{content.app.cardLayout.description}</p>
+      </div>
+      <div class="dashboard-card-picker" aria-label={content.app.cardLayout.pickerTitle}>
+        <input data-card-picker-search type="search" autocomplete="off" placeholder={content.app.cardLayout.searchPlaceholder} aria-label={content.app.cardLayout.searchLabel} />
+        <select data-card-picker-category aria-label={content.app.cardLayout.categoryLabel}>
+          <option value="">{content.app.cardLayout.allCategories}</option>
+        </select>
+        <select data-card-picker-provider aria-label={content.app.cardLayout.providerLabel}>
+          <option value="">{content.app.cardLayout.allProviders}</option>
+        </select>
+        <div class="dashboard-card-picker-list" data-card-picker-list></div>
+      </div>
+    </section>
+
+    <section class="dashboard-layout-grid" data-dashboard-layout-grid aria-label={content.app.cardLayout.gridLabel}></section>
+    <div class="dashboard-layout-status" data-dashboard-layout-status aria-live="polite"></div>
+
+    <section class="dashboard-overview-card-panel" data-overview-card-panel aria-label={content.app.overviewCards.title} hidden={route.id !== 'overview'}>
+      <div class="dashboard-overview-card-panel-heading">
+        <div>
+          <h2>{content.app.overviewCards.title}</h2>
+          <p>{content.app.overviewCards.description}</p>
+        </div>
+      </div>
+      <div class="dashboard-overview-card-controls" data-overview-card-controls aria-label={content.app.overviewCards.controlsLabel}></div>
+      <div class="dashboard-overview-card-board" data-overview-card-board aria-label={content.app.overviewCards.boardLabel}></div>
+    </section>
+
+    <section class="dashboard-stats dashboard-overview-grid" data-dashboard-stats data-dashboard-core-card="core.operationalTotals" aria-label={content.shell.statsLabel}>
+      <div class="dashboard-stat"><span>{content.app.stats.events}</span><strong>0</strong></div>
+      <div class="dashboard-stat"><span>{content.app.stats.activeRuns}</span><strong>0</strong></div>
+      <div class="dashboard-stat"><span>{content.app.stats.agentTasks}</span><strong>0</strong></div>
+      <div class="dashboard-stat"><span>{content.app.stats.retryingHandlers}</span><strong>0</strong></div>
+      <div class="dashboard-stat"><span>{content.app.stats.sources}</span><strong>0</strong></div>
+      <div class="dashboard-stat"><span>{content.app.stats.queue}</span><strong>0</strong></div>
+    </section>
+
+    {showEventInbox && (
+      <section class="dashboard-filterbar" aria-label={content.shell.filtersLabel}>
+        <label>
+          {content.shell.source}
+          <select data-event-source-filter>
+            <option value="">{content.shell.allSources}</option>
+            <option value="github">{content.shell.sourceOptions.github}</option>
+            <option value="cloudflare">{content.shell.sourceOptions.cloudflare}</option>
+            <option value="manual">{content.shell.sourceOptions.manual}</option>
+            <option value="system">{content.shell.sourceOptions.system}</option>
+          </select>
+        </label>
+        <label>
+          {content.shell.eventName}
+          <input data-event-name-filter type="text" autocomplete="off" placeholder="github.issue" />
+        </label>
+        <button type="button" class="button secondary" data-filter-apply>{content.shell.apply}</button>
+        <span>{content.shell.delivery}</span>
+        <span>{content.shell.publishResult}</span>
+        <span>{content.shell.workflowMatches}</span>
+      </section>
+    )}
+
+    <section class="dashboard-two-pane" aria-label={content.shell.recordsLabel}>
+      <div class="dashboard-list" data-dashboard-list></div>
+      <article class="dashboard-detail" data-dashboard-detail>
+        <div class="dashboard-detail-heading">
+          <span>{content.app.placeholder.ready}</span>
+          <strong>{content.app.placeholder.waiting}</strong>
+        </div>
+        <h2>{content.app.placeholder.selectStream}</h2>
+        <dl>
+          <div><dt>ID</dt><dd>{content.app.placeholders.notAvailable}</dd></div>
+          <div><dt>{content.app.placeholder.branch}</dt><dd>{content.app.placeholders.notAvailable}</dd></div>
+          <div><dt>{content.app.placeholder.issue}</dt><dd>{content.app.placeholders.notAvailable}</dd></div>
+        </dl>
+      </article>
+    </section>
+
+    {route.id === 'agent-tasks' && (
+      <section class="dashboard-actions" data-dashboard-core-card="core.operatorActions" aria-label={content.shell.tasksActionsLabel}>
+        <button type="button" class="dashboard-action" data-agent-action="resume" data-action-permission="operator" disabled>{content.shell.commandButtons.resume}</button>
+        <button type="button" class="dashboard-action" data-agent-action="reset" data-action-permission="operator" disabled>{content.shell.commandButtons.reset}</button>
+        <button type="button" class="dashboard-action" data-agent-action="terminate" data-action-permission="operator" disabled>{content.shell.commandButtons.terminate}</button>
+        <button type="button" class="dashboard-action danger" data-agent-action="terminate-all" data-action-permission="operator" disabled>{content.shell.commandButtons.terminateAll}</button>
+        <span class="dashboard-command-status" data-command-status aria-live="polite"></span>
+      </section>
+    )}
+
+    <section class="dashboard-card-settings" aria-label={content.app.cardSettings.title}>
+      <label>
+        {content.app.cardSettings.card}
+        <select data-card-settings-select></select>
+      </label>
+      <div class="dashboard-card-settings-form" data-card-settings-form></div>
+      <button type="button" class="dashboard-action" data-card-settings-save data-action-permission="operator" disabled>{content.app.cardSettings.save}</button>
+      <span class="dashboard-command-status" data-card-settings-status aria-live="polite"></span>
+    </section>
+  </div>
+
+  <script>
+    import '../../../lib/dashboard-app';
+  </script>
+</DashboardLayout>

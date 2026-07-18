@@ -103,6 +103,28 @@ unimplemented plugin execution placeholder. That no-op setup route accepts only
 the setup command itself; extra plugin-specific arguments are rejected so typos
 are not reported as successful configuration.
 
+`codex-app-server` is an optional official runtime provider plugin for users who
+want Rainrail to start Codex CLI through the experimental Codex App Server
+stdio protocol. Users who only run OpenClaw, GitHub, Cloudflare, or a different
+runtime do not need it. `rainrail setup codex-app-server --yes` installs the
+project-local plugin, detects the `codex` command, verifies `codex --version`,
+`codex app-server --help`, and `codex login status`, then writes or updates the
+matching `runtimeProviders.codexAppServer` entry in `rainrail.config.json`.
+When a project already has a plugin runtime whose `runtime` is
+`codex-app-server`, setup updates that entry instead of creating a duplicate
+provider key.
+
+The generated provider uses the runtime id `codex-app-server`, plugin package
+`@rainrail/codex-app-server-runtime`, and executor `codex-app-server`. It may
+also record `command`, `home`, and `codexHome` when those values are configured
+or discovered. `home` maps to `HOME` and `codexHome` maps to `CODEX_HOME` for
+doctor/session checks and later runtime execution. Keep those directories on a
+dedicated runner profile when the Codex login state should not share the
+operator's default shell profile. The initial session test is intentionally
+stdio-only: it launches `codex app-server --listen stdio://`, performs a
+non-destructive initialize/thread-start smoke check, and does not validate
+future WebSocket, remote daemon, or process-pool behavior.
+
 If any install or setup step fails, setup stops at that step and returns the
 step exit code. Earlier successful install state is left in place so rerunning
 the same setup command can repair or continue from the first incomplete step.
@@ -149,15 +171,20 @@ used by tests and future embedding code:
 
 - Types: `BuiltInCommandName`, `BuiltInCommand`, `SharedOptions`,
   `ParsedRainrailArguments`, `RainrailCliResult`, `RainrailCliEnvironment`,
-  `CommandRunnerResult`, `CommandRunnerOptions`, `CommandRunner`,
-  `ReleaseFetchResult`, `ReleaseFetcher`, `AsyncReleaseFetcherOptions`,
-  `AsyncReleaseFetcher`, `RainrailCliEntrypointIO`,
+  `RainrailDispatchMode`, `RainrailDispatchManualMessagePayload`,
+  `RainrailDispatchEventEnvelope`, `RainrailDispatchRequest`,
+  `RainrailDispatchRunnerResult`, `RainrailDispatchRunner`,
+  `RainrailAsyncDispatchRunner`, `RainrailStandaloneDispatchFetchResult`,
+  `RainrailStandaloneDispatchFetcher`,
+  `RainrailStandaloneDispatchRunnerOptions`, `CommandRunnerResult`,
+  `CommandRunnerOptions`, `CommandRunner`, `ReleaseFetchResult`, `ReleaseFetcher`,
+  `AsyncReleaseFetcherOptions`, `AsyncReleaseFetcher`, `RainrailCliEntrypointIO`,
   `RainrailCliEntrypointEnvironment`, `RainrailCliFileSystem`,
   `PluginAliasResolver`, `RainrailProject`, `RainrailLockPlugin`, and
   `RainrailLockfile`.
 - Values: `BUILT_IN_COMMANDS`, `getBuiltInCommand`, `parseRainrailArguments`,
-  `formatHelp`, `discoverRainrailProject`, `runRainrailCli`, and
-  `runRainrailCliEntrypoint`.
+  `formatHelp`, `discoverRainrailProject`, `runRainrailCli`,
+  `createStandaloneRainrailDispatchRunner`, and `runRainrailCliEntrypoint`.
 
 `runRainrailCli` stays synchronous for embedded callers. The installed binary
 uses `runRainrailCliEntrypoint`, which starts an asynchronous update notice
@@ -168,6 +195,72 @@ background request on timeout so normal commands are not delayed by slow update
 checks. Built-in help plus official plugin help routes such as `rainrail github
 help`, `rainrail github webhook add help`, and their canonical
 `rainrail plugin ... help` equivalents do not start the update notice check.
+
+`rainrail dispatch` accepts either a simple manual message or a complete
+Rainrail event envelope. Embedded callers can pass
+`RainrailCliEnvironment.dispatchRunner` to receive a `RainrailDispatchRequest`
+from the synchronous `runRainrailCli` path. Asynchronous dispatchers use
+`RainrailCliEnvironment.asyncDispatchRunner` and must run through
+`runRainrailCliEntrypoint`; the synchronous path rejects them before reading
+dispatch input or starting publish side effects. The installed binary passes
+`createStandaloneRainrailDispatchRunner` as an async dispatch runner by default,
+which publishes accepted CLI input to `RAINRAIL_PUBLISH_URL` with
+`RAINRAIL_PUBLISH_TOKEN`. If those variables are not configured, standalone
+dispatch fails instead of reporting a no-op success, and the failure happens
+before reading envelope files or stdin.
+
+Message input can be provided as a positional argument, `--message <text>`, or
+`--stdin`. Message input is rejected before dispatch when it is blank after
+trimming. `--stdin` input is also rejected when it exceeds 65,536 bytes before
+the CLI stores the full input in memory. The CLI converts accepted message
+input into a `rainrail.manual.message` `RainrailDispatchEventEnvelope` with
+`source.type: "manual"` and `source.name: "cli"`, then passes it to the runner
+inside a request with `mode: "message"`. The request keeps the original
+`input` string, the synthesized `event`, and the shared `config`, `profile`,
+and `json` selections parsed before the dispatch command. `--message` values
+that look like options are preserved as message text. The synthesized event
+payload applies the same credential-looking text redaction and 8KB text bound
+as manual/chat source input before writing `payload.message.text`;
+`rawPayload.sha256` still hashes the original CLI input, and
+`rawPayload.contentType` is normalized to `text/plain`. Each synthesized manual
+event includes a per-process sequence and random entropy in `delivery.id` so
+repeated dispatches, including parallel CLI processes in the same millisecond,
+do not collide.
+
+Complete envelope input can be provided as `--json <file>`, `--json --stdin`,
+or `--envelope-json <json>`. File paths are resolved relative to the CLI
+environment cwd. Envelope input is parsed as JSON and validated against the
+core event contract before it is passed to the runner, including safe
+identifiers, repository-shaped identifiers, UTC ISO timestamps, allowed raw
+payload kinds, and allowed event URL references. Optional
+`source.account` and `source.environment` values that are strings are accepted
+without enforcing safe identifier syntax, matching core publish omission
+semantics for unsafe optional metadata. Manual/chat envelopes additionally
+validate the `source.type`/`name` pairing, payload shape, and matching inline
+raw payload reference expected by core publish. Complete envelope JSON is
+forwarded without re-serialization so caller-provided payload fields remain
+byte-for-byte under the runner boundary. Accepted envelope input may omit `id`
+and `schemaVersion`; the CLI inserts those defaults into the raw JSON string
+without synthesizing message metadata or re-serializing payload fields. If a
+dispatch runner is not configured by an embedded caller, JSON file/stdin input
+is not read before the standard missing-runner error is returned.
+`RainrailDispatchRunner` returns the same synchronous `RainrailCliResult` shape
+as other embedded command runners. `RainrailAsyncDispatchRunner` returns a
+promise for that shape when invoked through `runRainrailCliAsync` /
+`runRainrailCliEntrypoint`. The synchronous `runRainrailCli` path rejects async
+dispatch runners before invoking them, so a caller cannot accidentally start
+publish side effects and then receive a synchronous failure result. The
+standalone publish runner uses the raw validated envelope string as its request
+body for complete envelope mode, so payload JSON is not re-parsed or echoed in
+the CLI summary.
+
+The first `rainrail dispatch` CLI surface intentionally avoids per-field
+metadata flags such as `--source-name`, `--delivery-id`, or `--subject-id`.
+Those fields belong to the event envelope contract, and exposing them as many
+independent flags would create a second event-construction surface that can
+drift from core validation. Operators that need explicit source, delivery,
+subject, payload, or raw payload metadata should use complete envelope JSON
+input; message-only mode stays a small manual trigger path.
 
 ## Plugin command resolution
 

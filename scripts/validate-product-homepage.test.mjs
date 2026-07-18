@@ -21,6 +21,10 @@ describe('product homepage', () => {
     expect(siteContent).toContain('external services');
     expect(siteContent).toContain('scripts and agents');
     expect(siteContent).toContain('Inspect the contracts');
+    expect(siteContent).toContain('Developer event routing');
+    expect(siteContent).toContain('agent workflows');
+    expect(siteContent).toContain('Open developer docs');
+    expect(siteContent).toContain('自分のループを組み立てる。');
     expect(localizedRoute).toContain("content.kind === 'home'");
   });
 

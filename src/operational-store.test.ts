@@ -1,12 +1,405 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
 
 import { createEventEnvelope } from './events.js';
-import { RainrailOperationalStore } from './operational-store.js';
+import { createRainrailHttpApp } from './http-app.js';
+import { JsonFileOperationalStore, RainrailOperationalStore, SqliteOperationalStore } from './operational-store.js';
 
 describe('RainrailOperationalStore', () => {
+  it('keeps the module importable on Node versions without a static node:sqlite import', () => {
+    const source = readFileSync(new URL('./operational-store.ts', import.meta.url), 'utf8');
+    expect(source).not.toContain("from 'node:sqlite'");
+  });
+
+  it('migrates an existing JSON-backed RainrailOperationalStore file into SQLite', () => {
+    const { databasePath, cleanup } = temporaryDatabasePath();
+    try {
+      const jsonStore = new JsonFileOperationalStore({ databasePath, eventLimit: 10, now: fixedClock() });
+      const event = jsonStore.recordEvent(fixtureEvent('delivery-json-migration', 'github.issue'));
+      const activity = jsonStore.recordActivityEvent({
+        category: 'plugin',
+        targetType: 'event',
+        targetId: event.id,
+        actionType: 'plugin_executed',
+        outcome: 'success',
+        summary: 'legacy activity',
+      });
+      const command = jsonStore.recordCommandResult({
+        actionType: 'agent_task_resume',
+        targetType: 'agent_task',
+        targetId: 'agent_task_legacy',
+        status: 'accepted',
+        actor: 'operator',
+        requestId: 'request-legacy',
+        dryRun: false,
+      });
+      const task = jsonStore.recordAgentTask({
+        id: 'agent_task_legacy',
+        title: 'legacy task',
+        branchName: 'agent/reirei-lab-rainrail-legacy',
+        status: 'running',
+      });
+      jsonStore.recordEventHandlerRetry({
+        eventId: event.id,
+        handlerName: 'legacy-handler',
+        nextRetryAt: '2026-07-02T01:00:00.000Z',
+        lastError: 'legacy retry',
+      });
+      const retry = jsonStore.getEventHandlerRetry(event.id, 'legacy-handler')!;
+      expect(jsonStore.claimEventHandlerRetry(
+        retry,
+        '2026-07-02T02:00:00.000Z',
+        '2026-07-02T01:00:00.000Z',
+      )).toBe(true);
+      jsonStore.close();
+
+      const migrated = new RainrailOperationalStore({
+        databasePath,
+        eventLimit: 10,
+        now: () => new Date('2026-07-03T01:23:45.000Z'),
+      });
+      expect(migrated.snapshot()).toMatchObject({
+        counts: { events: 1, activityEvents: 1, agentTasks: 1, commandResults: 1, eventHandlerRetries: 1 },
+        events: [{ id: event.id }],
+        activityEvents: [{ id: 'act_000001', summary: 'legacy activity', createdAt: activity.createdAt }],
+        agentTasks: [{ id: task.id, updatedAt: task.updatedAt }],
+        commandResults: [{ id: 'cmd_000001', requestId: 'request-legacy', createdAt: command.createdAt }],
+        eventHandlerRetries: [{
+          eventId: event.id,
+          handlerName: 'legacy-handler',
+          updatedAt: '2026-07-02T01:00:00.000Z',
+          claimedUntilAt: '2026-07-02T02:00:00.000Z',
+        }],
+      });
+      expect(migrated.listDueEventHandlerRetries('2026-07-02T01:30:00.000Z')).toEqual([]);
+      migrated.close();
+
+      const database = new DatabaseSync(databasePath, { readOnly: true });
+      try {
+        expect(database.prepare('select count(*) as count from operational_events').get()).toEqual({ count: 1 });
+      } finally {
+        database.close();
+      }
+      expect(existsSync(`${databasePath}.json-backup`)).toBe(true);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('checks SQLite availability before moving a legacy JSON store aside', () => {
+    const source = readFileSync(new URL('./operational-store.ts', import.meta.url), 'utf8');
+    expect(source.indexOf('const DatabaseSync = loadDatabaseSync()')).toBeLessThan(
+      source.indexOf('moveLegacyJsonStore'),
+    );
+  });
+
+  it('restores the legacy JSON store when migration import fails', () => {
+    const { databasePath, cleanup } = temporaryDatabasePath();
+    const legacyJson = JSON.stringify({
+      events: {
+        event_broken: {
+          id: 'event_broken',
+          name: 'github.issue',
+          source: { type: 'github', name: 'github-webhook', repository: 'reirei-lab/rainrail' },
+          delivery: { id: 'delivery-broken', receivedAt: '2026-07-02T00:00:00.000Z' },
+          subject: { type: 'issue', id: '270' },
+          occurredAt: '2026-07-02T00:00:00.000Z',
+          receivedAt: '2026-07-02T00:00:00.000Z',
+          envelope: {
+            id: 'event_broken',
+            schemaVersion: 'rainrail.event.v1',
+            source: { type: 'github', name: 'github-webhook', repository: 'reirei-lab/rainrail' },
+            name: 'github.issue',
+            delivery: { id: 'delivery-broken', receivedAt: '2026-07-02T00:00:00.000Z' },
+            occurredAt: '2026-07-02T00:00:00.000Z',
+            subject: { type: 'issue', id: '270' },
+            payload: { action: 'opened' },
+          },
+        },
+      },
+      activityEvents: {},
+      agentTasks: {},
+      commandResults: {},
+      eventHandlerRetries: {},
+      sequences: {},
+    });
+    try {
+      writeFileSync(databasePath, legacyJson, { mode: 0o600 });
+
+      expect(() => new RainrailOperationalStore({ databasePath, eventLimit: 10, now: fixedClock() })).toThrow();
+
+      expect(readFileSync(databasePath, 'utf8')).toBe(legacyJson);
+      expect(existsSync(`${databasePath}.json-backup`)).toBe(false);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('restricts SQLite database and sidecar file permissions', () => {
+    const { databasePath, cleanup } = temporaryDatabasePath();
+    try {
+      const store = new RainrailOperationalStore({ databasePath, eventLimit: 10, now: fixedClock() });
+      store.recordEvent(fixtureEvent('delivery-permissions', 'github.issue'));
+      store.recordActivityEvent({
+        category: 'plugin',
+        targetType: 'event',
+        actionType: 'plugin_executed',
+        outcome: 'success',
+        summary: 'permission check',
+      });
+
+      for (const path of [databasePath, `${databasePath}-wal`, `${databasePath}-shm`]) {
+        if (!existsSync(path)) continue;
+        expect(statMode(path)).toBe(0o600);
+      }
+      store.close();
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('configures SQLite connections to wait briefly for write locks during sequence allocation', () => {
+    const source = readFileSync(new URL('./operational-store.ts', import.meta.url), 'utf8');
+    expect(source).toContain('PRAGMA busy_timeout = 5000');
+  });
+
+  it('uses SQLite-backed tables for local file persistence without storing raw provider payloads', () => {
+    const { databasePath, cleanup } = temporaryDatabasePath();
+    try {
+      const store = new SqliteOperationalStore({ databasePath, eventLimit: 10, now: fixedClock() });
+      const event = store.recordEvent(createEventEnvelope({
+        source: { type: 'github', name: 'github-webhook', repository: 'reirei-lab/rainrail' },
+        name: 'github.issue',
+        delivery: { id: 'delivery-raw-secret', receivedAt: '2026-07-02T00:00:00.000Z' },
+        occurredAt: '2026-07-02T00:00:00.000Z',
+        subject: { type: 'issue', id: '270' },
+        payload: { action: 'opened', safe: true },
+        rawPayload: {
+          kind: 'inline-redacted',
+          reference: 'raw-provider-secret-token',
+          contentType: 'application/json',
+        },
+      }));
+      store.recordActivityEvent({
+        sourceEventId: event.id,
+        sourceEventName: event.name,
+        category: 'plugin',
+        targetType: 'event',
+        actionType: 'plugin_executed',
+        outcome: 'success',
+        summary: 'plugin execution completed',
+        metadata: { provider: { installationId: 12345 } },
+      });
+      store.recordAgentTask({
+        id: 'agent_task_rainrail_270',
+        title: 'sqlite operational store',
+        branchName: 'agent/reirei-lab-rainrail-270-operational-store-sqlite-backed',
+        status: 'running',
+        issue: { repository: 'reirei-lab/rainrail', number: 270 },
+        claim: { projectItemId: 'PVTI_270' },
+      });
+      store.recordCommandResult({
+        actionType: 'agent_task_resume',
+        targetType: 'agent_task',
+        targetId: 'agent_task_rainrail_270',
+        status: 'accepted',
+        actor: 'operator',
+        requestId: 'request-270',
+        dryRun: false,
+        metadata: { runtime: { provider: 'local-node' } },
+      });
+      store.recordEventHandlerRetry({
+        eventId: event.id,
+        handlerName: 'review-request',
+        nextRetryAt: '2026-07-02T01:00:00.000Z',
+        lastError: 'GitHub GraphQL request failed with HTTP 503',
+      });
+      store.close();
+
+      const database = new DatabaseSync(databasePath, { readOnly: true });
+      try {
+        expect(database.prepare('select count(*) as count from operational_events').get()).toEqual({ count: 1 });
+        expect(database.prepare('select json_extract(metadata_json, ?) as providerId from activity_events').get('$.provider.installationId'))
+          .toEqual({ providerId: 12345 });
+        expect(JSON.stringify(database.prepare('select * from operational_events').all())).not.toContain('raw-provider-secret-token');
+      } finally {
+        database.close();
+      }
+
+      const reopened = new SqliteOperationalStore({ databasePath, eventLimit: 10, now: fixedClock() });
+      expect(reopened.countEventSourceTypes()).toBe(1);
+      expect(reopened.snapshot()).toMatchObject({
+        counts: {
+          events: 1,
+          activityEvents: 1,
+          agentTasks: 1,
+          commandResults: 1,
+          eventHandlerRetries: 1,
+        },
+        events: [{
+          id: event.id,
+          envelope: {
+            payload: { action: 'opened', safe: true },
+            rawPayload: { kind: 'inline-redacted', reference: 'rainrail://redacted/raw-payload' },
+          },
+        }],
+      });
+      reopened.close();
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('counts distinct event source types without listing event rows', () => {
+    const store = new RainrailOperationalStore({ databasePath: ':memory:', eventLimit: 10, now: fixedClock() });
+    store.recordEvent(fixtureEvent('delivery-github-1', 'github.issue', 'github'));
+    store.recordEvent(fixtureEvent('delivery-github-2', 'github.pull_request', 'github'));
+    store.recordEvent(fixtureEvent('delivery-cloudflare-1', 'cloudflare.tail', 'cloudflare'));
+
+    expect(store.countEventSourceTypes()).toBe(2);
+    store.close();
+  });
+
+  it('preserves safe inline-redacted raw payload references for dashboard tracing', () => {
+    const store = new RainrailOperationalStore({ databasePath: ':memory:', eventLimit: 10, now: fixedClock() });
+    const event = store.recordEvent(createEventEnvelope({
+      source: { type: 'github', name: 'github-webhook', repository: 'reirei-lab/rainrail' },
+      name: 'github.issue',
+      delivery: { id: 'delivery-inline-safe', receivedAt: '2026-07-02T00:00:00.000Z' },
+      occurredAt: '2026-07-02T00:00:00.000Z',
+      subject: { type: 'issue', id: '270' },
+      payload: { action: 'opened' },
+      rawPayload: {
+        kind: 'inline-redacted',
+        reference: 'github://deliveries/delivery-inline-safe',
+        sha256: '0'.repeat(64),
+      },
+    }));
+
+    expect(store.getEvent(event.id)?.envelope.rawPayload).toEqual({
+      kind: 'inline-redacted',
+      reference: 'github://deliveries/delivery-inline-safe',
+      sha256: '0'.repeat(64),
+    });
+    store.close();
+  });
+
+  it('preserves manual and chat inline-redacted raw payload references for dashboard tracing', () => {
+    const store = new RainrailOperationalStore({ databasePath: ':memory:', eventLimit: 10, now: fixedClock() });
+    const manual = store.recordEvent(createEventEnvelope({
+      source: { type: 'manual', name: 'rainrail-dispatch' },
+      name: 'manual.message',
+      delivery: { id: 'manual-delivery-safe', receivedAt: '2026-07-02T00:00:00.000Z' },
+      occurredAt: '2026-07-02T00:00:00.000Z',
+      subject: { type: 'message', id: 'manual-message' },
+      payload: { text: 'manual note' },
+      rawPayload: {
+        kind: 'inline-redacted',
+        reference: 'manual://deliveries/manual-delivery-safe',
+        sha256: '1'.repeat(64),
+      },
+    }));
+    const chat = store.recordEvent(createEventEnvelope({
+      source: { type: 'chat', name: 'chat-ingress' },
+      name: 'chat.message',
+      delivery: { id: 'chat-delivery-safe', receivedAt: '2026-07-02T00:00:00.000Z' },
+      occurredAt: '2026-07-02T00:00:00.000Z',
+      subject: { type: 'message', id: 'chat-message' },
+      payload: { text: 'chat note' },
+      rawPayload: {
+        kind: 'inline-redacted',
+        reference: 'chat://deliveries/chat-delivery-safe',
+        sha256: '2'.repeat(64),
+      },
+    }));
+
+    expect(store.getEvent(manual.id)?.envelope.rawPayload).toEqual({
+      kind: 'inline-redacted',
+      reference: 'manual://deliveries/manual-delivery-safe',
+      sha256: '1'.repeat(64),
+    });
+    expect(store.getEvent(chat.id)?.envelope.rawPayload).toEqual({
+      kind: 'inline-redacted',
+      reference: 'chat://deliveries/chat-delivery-safe',
+      sha256: '2'.repeat(64),
+    });
+    store.close();
+  });
+
+  it('rejects opening an existing SQLite database through the JSON fallback store', () => {
+    const { databasePath, cleanup } = temporaryDatabasePath();
+    try {
+      const sqlite = new RainrailOperationalStore({ databasePath, eventLimit: 10, now: fixedClock() });
+      sqlite.recordEvent(fixtureEvent('delivery-json-fallback-sqlite', 'github.issue'));
+      sqlite.close();
+
+      expect(() => new JsonFileOperationalStore({ databasePath, eventLimit: 10, now: fixedClock() }))
+        .toThrow(/SQLite operational store file/u);
+
+      const database = new DatabaseSync(databasePath, { readOnly: true });
+      try {
+        expect(database.prepare('select count(*) as count from operational_events').get()).toEqual({ count: 1 });
+      } finally {
+        database.close();
+      }
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('serves the dashboard v1 resource surface from a SQLite-backed store', async () => {
+    const { databasePath, cleanup } = temporaryDatabasePath();
+    try {
+      const operationalStore = new SqliteOperationalStore({ databasePath, eventLimit: 10, now: fixedClock() });
+      const event = operationalStore.recordEvent(fixtureEvent('delivery-dashboard-sqlite', 'github.issue'));
+      const workflow = operationalStore.recordActivityEvent({
+        sourceEventId: event.id,
+        sourceEventName: event.name,
+        category: 'workflow',
+        targetType: 'event',
+        targetId: event.id,
+        actionType: 'workflow_dispatched',
+        outcome: 'success',
+        summary: 'workflow dispatched',
+      });
+      operationalStore.recordAgentTask({
+        id: 'agent_task_dashboard_sqlite',
+        title: 'dashboard sqlite task',
+        branchName: 'agent/reirei-lab-rainrail-270-dashboard-sqlite',
+      });
+      operationalStore.recordEventHandlerRetry({
+        eventId: event.id,
+        handlerName: 'dashboard-handler',
+        nextRetryAt: '2026-07-02T01:00:00.000Z',
+        lastError: 'fetch failed',
+      });
+
+      const app = createRainrailHttpApp({
+        room: { fetch: () => Response.json({ ok: true }) },
+        publishToken: 'publish-token',
+        dashboardAuth: { readOnlyToken: 'dashboard-token' },
+        operationalStore,
+      });
+      const headers = { authorization: 'Bearer dashboard-token' };
+
+      await expect((await app.fetch(new Request('https://rainrail.local/api/v1/overview', { headers }))).json())
+        .resolves.toMatchObject({ data: { counts: { events: 1, activityEvents: 1, agentTasks: 1, eventHandlerRetries: 1 } } });
+      await expect((await app.fetch(new Request('https://rainrail.local/api/v1/events', { headers }))).json())
+        .resolves.toMatchObject({ data: [{ id: event.id, handlerRetryCount: 1 }] });
+      await expect((await app.fetch(new Request(`https://rainrail.local/api/v1/workflow-runs/${workflow.id}`, { headers }))).json())
+        .resolves.toMatchObject({ data: { id: workflow.id, record: { summary: 'workflow dispatched' } } });
+      await expect((await app.fetch(new Request('https://rainrail.local/api/v1/agent-tasks/agent_task_dashboard_sqlite', { headers }))).json())
+        .resolves.toMatchObject({ data: { id: 'agent_task_dashboard_sqlite', record: { status: 'running' } } });
+
+      operationalStore.close();
+    } finally {
+      cleanup();
+    }
+  });
+
   it('persists events, activity, tasks, and retry records for dashboard snapshots', () => {
     const { databasePath, cleanup } = temporaryDatabasePath();
     try {
@@ -104,6 +497,41 @@ describe('RainrailOperationalStore', () => {
     }
   });
 
+  it('persists user dashboard layouts as card id references', () => {
+    const { databasePath, cleanup } = temporaryDatabasePath();
+    try {
+      const first = new RainrailOperationalStore({ databasePath, eventLimit: 10, now: fixedClock() });
+      first.saveDashboardLayout([{
+        id: 'queue',
+        cardId: 'plugin:github.queue',
+        x: 4,
+        y: 0,
+        columns: 3,
+        rows: 2,
+        config: { repository: 'reirei-lab/rainrail' },
+      }]);
+      first.close();
+
+      const second = new RainrailOperationalStore({ databasePath, eventLimit: 10, now: fixedClock() });
+      expect(second.getDashboardLayout()).toEqual({
+        id: 'user.dashboardLayout',
+        updatedAt: '2026-07-02T01:23:45.000Z',
+        items: [{
+          id: 'queue',
+          cardId: 'plugin:github.queue',
+          x: 4,
+          y: 0,
+          columns: 3,
+          rows: 2,
+          config: { repository: 'reirei-lab/rainrail' },
+        }],
+      });
+      second.close();
+    } finally {
+      cleanup();
+    }
+  });
+
   it('lists due handler retries in schedule order and clears them after success', () => {
     const store = new RainrailOperationalStore({ databasePath: ':memory:', eventLimit: 10, now: fixedClock() });
     const event = store.recordEvent(fixtureEvent('delivery-1', 'github.issue'));
@@ -167,7 +595,7 @@ describe('RainrailOperationalStore', () => {
     }
   });
 
-  it('generates unique activity ids across store connections', () => {
+  it('generates unique sequence ids across store connections', () => {
     const { databasePath, cleanup } = temporaryDatabasePath();
     try {
       const first = new RainrailOperationalStore({ databasePath, eventLimit: 10, now: fixedClock() });
@@ -190,6 +618,28 @@ describe('RainrailOperationalStore', () => {
 
       expect(firstActivity.id).toBe('act_000001');
       expect(secondActivity.id).toBe('act_000002');
+
+      const firstCommand = first.recordCommandResult({
+        actionType: 'agent_task_resume',
+        targetType: 'agent_task',
+        targetId: 'agent_task_first',
+        status: 'accepted',
+        actor: 'operator',
+        requestId: 'request-first',
+        dryRun: false,
+      });
+      const secondCommand = second.recordCommandResult({
+        actionType: 'agent_task_resume',
+        targetType: 'agent_task',
+        targetId: 'agent_task_second',
+        status: 'accepted',
+        actor: 'operator',
+        requestId: 'request-second',
+        dryRun: false,
+      });
+
+      expect(firstCommand.id).toBe('cmd_000001');
+      expect(secondCommand.id).toBe('cmd_000002');
       first.close();
       second.close();
     } finally {
@@ -285,15 +735,25 @@ describe('RainrailOperationalStore', () => {
   });
 });
 
-function fixtureEvent(deliveryId: string, name: 'github.issue' | 'github.pull_request') {
+function fixtureEvent(
+  deliveryId: string,
+  name: 'github.issue' | 'github.pull_request' | 'cloudflare.tail',
+  sourceType = 'github',
+) {
+  const subjectType = name === 'github.issue'
+    ? 'issue'
+    : name === 'github.pull_request'
+      ? 'pull_request'
+      : 'tail';
+
   return createEventEnvelope({
-    source: { type: 'github', name: 'github-webhook', repository: 'reirei-lab/rainrail' },
+    source: { type: sourceType, name: `${sourceType}-source`, repository: 'reirei-lab/rainrail' },
     name,
     delivery: { id: deliveryId, receivedAt: '2026-07-02T00:00:00.000Z' },
     occurredAt: '2026-07-02T00:00:00.000Z',
-    subject: { type: name === 'github.issue' ? 'issue' : 'pull_request', id: '25' },
+    subject: { type: subjectType, id: '25' },
     payload: { action: 'opened' },
-    rawPayload: { kind: 'external-reference', reference: `github://deliveries/${deliveryId}` },
+    rawPayload: { kind: 'external-reference', reference: `${sourceType}://deliveries/${deliveryId}` },
   });
 }
 
@@ -307,4 +767,8 @@ function temporaryDatabasePath(): { databasePath: string; cleanup: () => void } 
 
 function fixedClock(): () => Date {
   return () => new Date('2026-07-02T01:23:45.000Z');
+}
+
+function statMode(path: string): number {
+  return statSync(path).mode & 0o777;
 }

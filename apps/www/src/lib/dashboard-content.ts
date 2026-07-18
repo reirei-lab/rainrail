@@ -1,5 +1,23 @@
 import { getLocaleHref, type Locale } from './i18n.js';
 
+export type DashboardRouteId = 'overview' | 'events' | 'workflow-runs' | 'agent-tasks' | 'sources' | 'queue' | 'settings';
+
+export type DashboardRoute = {
+  id: DashboardRouteId;
+  slug?: string;
+  aliases?: string[];
+};
+
+const dashboardRoutes: readonly DashboardRoute[] = [
+  { id: 'overview' },
+  { id: 'events', slug: 'events' },
+  { id: 'workflow-runs', slug: 'runs', aliases: ['workflow-runs'] },
+  { id: 'agent-tasks', slug: 'tasks', aliases: ['agent-tasks'] },
+  { id: 'sources', slug: 'sources' },
+  { id: 'queue', slug: 'queue' },
+  { id: 'settings', slug: 'settings' },
+] as const satisfies readonly DashboardRoute[];
+
 export type DashboardContent = {
   meta: {
     title: string;
@@ -11,6 +29,7 @@ export type DashboardContent = {
     brandLabel: string;
     eyebrow: string;
     heading: string;
+    demoModeBadge: string;
     apiBaseUrlPlaceholder: string;
     apiBaseUrlLabel: string;
     tokenPlaceholder: string;
@@ -38,6 +57,7 @@ export type DashboardContent = {
     workflowMatches: string;
     recordsLabel: string;
     actionsLabel: string;
+    tasksActionsLabel: string;
     commandButtons: {
       resume: string;
       reset: string;
@@ -95,6 +115,7 @@ export type DashboardAppCopy = {
     events: string;
     activeRuns: string;
     retryingHandlers: string;
+    commandResults: string;
     providerStatus: string;
     agentTasks: string;
     sources: string;
@@ -203,9 +224,87 @@ export type DashboardAppCopy = {
       allRunningTasks: string;
     };
   };
+  cardSettings: {
+    title: string;
+    card: string;
+    save: string;
+    saved: string;
+    failed: string;
+    invalid: string;
+    empty: string;
+    noFields: string;
+  };
+  overviewCards: {
+    title: string;
+    description: string;
+    controlsLabel: string;
+    boardLabel: string;
+    show: string;
+    moveUp: string;
+    moveDown: string;
+    visible: string;
+    hidden: string;
+    connected: string;
+    lastRefresh: string;
+    empty: string;
+    noRecentActivity: string;
+    noWarnings: string;
+    warningCount: string;
+    todoHealth: string;
+    cards: Record<'health' | 'counts' | 'recentActivity' | 'warnings', { title: string; description: string }>;
+  };
+  cardLayout: {
+    title: string;
+    description: string;
+    pickerTitle: string;
+    searchPlaceholder: string;
+    searchLabel: string;
+    categoryLabel: string;
+    providerLabel: string;
+    allCategories: string;
+    allProviders: string;
+    gridLabel: string;
+    add: string;
+    hide: string;
+    remove: string;
+    settings: string;
+    open: string;
+    resize: string;
+    move: string;
+    unavailable: string;
+    tooWide: string;
+    unknownDashboardCard: string;
+    empty: string;
+    saving: string;
+    saved: string;
+    failed: string;
+    hiddenCardsWarning: string;
+    moveBlocked: string;
+    resizeBlocked: string;
+  };
 };
 
-export const getDashboardHref = (locale: Locale): string => `/${locale}/dashboard`;
+export const getDashboardRoutes = (): readonly DashboardRoute[] => dashboardRoutes;
+
+export const getDashboardRouteSlugs = (route: DashboardRoute): readonly string[] =>
+  route.slug === undefined ? [] : [route.slug, ...(route.aliases ?? [])];
+
+export const getDashboardRouteBySlug = (slug?: string): DashboardRoute | undefined =>
+  dashboardRoutes.find((route) => getDashboardRouteSlugs(route).includes(slug ?? ''));
+
+export const getDashboardHref = (locale: Locale, routeId: DashboardRouteId = 'overview'): string => {
+  const route = dashboardRoutes.find((entry) => entry.id === routeId);
+
+  if (route === undefined) {
+    throw new RangeError(`Unsupported dashboard route: ${routeId}`);
+  }
+
+  if (route.slug === undefined) {
+    return `/${locale}/dashboard`;
+  }
+
+  return `/${locale}/dashboard/${route.slug}`;
+};
 
 const englishApp: DashboardAppCopy = {
   status: {
@@ -244,6 +343,7 @@ const englishApp: DashboardAppCopy = {
     events: 'Events',
     activeRuns: 'Active runs',
     retryingHandlers: 'Retrying handlers',
+    commandResults: 'Command results',
     providerStatus: 'Provider status',
     agentTasks: 'Agent tasks',
     sources: 'Sources',
@@ -352,6 +452,69 @@ const englishApp: DashboardAppCopy = {
       allRunningTasks: 'all running tasks',
     },
   },
+  cardSettings: {
+    title: 'Card settings',
+    card: 'Card',
+    save: 'Save card settings',
+    saved: 'Card settings saved',
+    failed: 'Card settings save failed',
+    invalid: 'Fix invalid card settings before saving.',
+    empty: 'No dashboard cards in the current layout.',
+    noFields: 'This card has no configurable fields.',
+  },
+  overviewCards: {
+    title: 'Overview cards',
+    description: 'Choose the Overview cards and move them up or down. This layout is saved in this browser.',
+    controlsLabel: 'Overview card visibility and order',
+    boardLabel: 'Custom Overview cards',
+    show: 'Show',
+    moveUp: 'Move up',
+    moveDown: 'Move down',
+    visible: 'visible',
+    hidden: 'hidden',
+    connected: 'Connected',
+    lastRefresh: 'Last refresh',
+    empty: 'No Overview cards are visible.',
+    noRecentActivity: 'No recent activity.',
+    noWarnings: 'No warnings.',
+    warningCount: 'Warnings',
+    todoHealth: 'TODO: expose component health in the overview API.',
+    cards: {
+      health: { title: 'Health', description: 'API response freshness and dashboard connection state.' },
+      counts: { title: 'Counts', description: 'Operational totals from the overview API.' },
+      recentActivity: { title: 'Recent activity', description: 'Latest workflow activity from the overview API.' },
+      warnings: { title: 'Warnings', description: 'Overview warning signals that need operator attention.' },
+    },
+  },
+  cardLayout: {
+    title: 'Dashboard layout',
+    description: 'Pick cards, then drag, resize, remove, and save the operator layout.',
+    pickerTitle: 'Card picker',
+    searchPlaceholder: 'Search category / provider / plugin',
+    searchLabel: 'Search dashboard cards by category, provider, or plugin name',
+    categoryLabel: 'Filter cards by category',
+    providerLabel: 'Filter cards by provider',
+    allCategories: 'All categories',
+    allProviders: 'All providers',
+    gridLabel: 'Editable dashboard card layout',
+    add: 'Add card',
+    hide: 'Hide',
+    remove: 'Remove',
+    settings: 'Settings',
+    open: 'Open',
+    resize: 'Resize',
+    move: 'Move',
+    unavailable: 'Unavailable',
+    tooWide: 'This card does not fit the 12-column dashboard grid.',
+    unknownDashboardCard: 'Unknown dashboard card',
+    empty: 'No cards in this layout yet.',
+    saving: 'Saving dashboard layout',
+    saved: 'Dashboard layout saved',
+    failed: 'Dashboard layout save failed',
+    hiddenCardsWarning: 'Hidden cards may be omitted by this save. Re-enable missing plugin cards before editing this saved layout.',
+    moveBlocked: 'Move would place a card outside the grid or overlap another card.',
+    resizeBlocked: 'Resize would overlap another card.',
+  },
 };
 
 export const fallbackDashboardAppCopy: DashboardAppCopy = englishApp;
@@ -393,6 +556,7 @@ const japaneseApp: DashboardAppCopy = {
     events: 'イベント',
     activeRuns: '実行中ワークフロー',
     retryingHandlers: 'リトライ中ハンドラー',
+    commandResults: 'コマンド結果',
     providerStatus: 'プロバイダー状態',
     agentTasks: 'エージェントタスク',
     sources: '入力元',
@@ -501,6 +665,69 @@ const japaneseApp: DashboardAppCopy = {
       allRunningTasks: '一括対象の実行中タスク',
     },
   },
+  cardSettings: {
+    title: 'カード設定',
+    card: 'カード',
+    save: 'カード設定を保存',
+    saved: 'カード設定を保存しました',
+    failed: 'カード設定の保存に失敗しました',
+    invalid: '無効なカード設定を修正してから保存してください。',
+    empty: '現在のレイアウトに dashboard card がありません。',
+    noFields: 'このカードに設定項目はありません。',
+  },
+  overviewCards: {
+    title: '概要カード',
+    description: '概要に表示するカードを選び、上下に並べ替えます。このレイアウトはこのブラウザに保存されます。',
+    controlsLabel: '概要カードの表示と順序',
+    boardLabel: 'カスタム概要カード',
+    show: '表示',
+    moveUp: '上へ',
+    moveDown: '下へ',
+    visible: '表示中',
+    hidden: '非表示',
+    connected: '接続中',
+    lastRefresh: '最終更新',
+    empty: '表示中の概要カードはありません。',
+    noRecentActivity: '最近の活動はありません。',
+    noWarnings: '警告はありません。',
+    warningCount: '警告',
+    todoHealth: 'TODO: overview API でコンポーネント別 health を公開する。',
+    cards: {
+      health: { title: '稼働状況', description: 'API 応答の新しさと dashboard 接続状態。' },
+      counts: { title: '件数', description: 'overview API の運用集計。' },
+      recentActivity: { title: '最近の活動', description: 'overview API の最新 workflow activity。' },
+      warnings: { title: '警告', description: '運用者が確認すべき overview warning。' },
+    },
+  },
+  cardLayout: {
+    title: 'Dashboard レイアウト',
+    description: 'カードを選び、ドラッグ、サイズ変更、削除を保存できます。',
+    pickerTitle: 'カードピッカー',
+    searchPlaceholder: 'category / provider / plugin を検索',
+    searchLabel: 'category、provider、plugin name で dashboard card を検索',
+    categoryLabel: 'カテゴリでカードを絞り込み',
+    providerLabel: 'provider でカードを絞り込み',
+    allCategories: 'すべてのカテゴリ',
+    allProviders: 'すべての provider',
+    gridLabel: '編集可能な dashboard card レイアウト',
+    add: 'カード追加',
+    hide: '非表示',
+    remove: '削除',
+    settings: '設定',
+    open: '表示',
+    resize: 'サイズ変更',
+    move: '移動',
+    unavailable: '利用不可',
+    tooWide: 'このカードは12列の dashboard grid に収まりません。',
+    unknownDashboardCard: '不明な dashboard card',
+    empty: 'このレイアウトにはまだカードがありません。',
+    saving: 'Dashboard レイアウトを保存中',
+    saved: 'Dashboard レイアウトを保存しました',
+    failed: 'Dashboard レイアウトの保存に失敗しました',
+    hiddenCardsWarning: '非表示のカードが保存から除外される可能性があります。非表示の plugin card を再度有効にしてから保存してください。',
+    moveBlocked: '移動するとカードが grid 外へ出るか別のカードと重なります。',
+    resizeBlocked: 'サイズ変更すると別のカードと重なります。',
+  },
 };
 
 const dashboardContent = {
@@ -515,6 +742,7 @@ const dashboardContent = {
       brandLabel: 'Rainrail home',
       eyebrow: 'Operational API client',
       heading: 'Rainrail Operations',
+      demoModeBadge: 'Demo mode',
       apiBaseUrlPlaceholder: 'Operational API URL',
       apiBaseUrlLabel: 'Rainrail Operational API base URL',
       tokenPlaceholder: 'Bearer token',
@@ -542,6 +770,7 @@ const dashboardContent = {
       workflowMatches: 'Workflow matches',
       recordsLabel: 'Operational records',
       actionsLabel: 'Operator actions',
+      tasksActionsLabel: 'Agent task operator actions',
       commandButtons: {
         resume: 'Resume selected',
         reset: 'Reset claim',
@@ -552,7 +781,7 @@ const dashboardContent = {
       tabs: {
         overview: 'Overview',
         events: 'Event Inbox',
-        workflowRuns: 'Workflow Runs',
+        workflowRuns: 'Runs',
         agentTasks: 'Agent Tasks',
         sources: 'Sources',
         queue: 'Queue',
@@ -572,6 +801,7 @@ const dashboardContent = {
       brandLabel: 'Rainrail ホーム',
       eyebrow: '運用 API クライアント',
       heading: 'Rainrail 運用',
+      demoModeBadge: 'デモモード',
       apiBaseUrlPlaceholder: '運用 API URL',
       apiBaseUrlLabel: 'Rainrail 運用 API ベース URL',
       tokenPlaceholder: 'Bearer トークン',
@@ -599,6 +829,7 @@ const dashboardContent = {
       workflowMatches: '一致ワークフロー',
       recordsLabel: '運用レコード',
       actionsLabel: '操作',
+      tasksActionsLabel: 'エージェントタスク操作',
       commandButtons: {
         resume: '選択中を再開',
         reset: 'claim をリセット',
@@ -609,7 +840,7 @@ const dashboardContent = {
       tabs: {
         overview: '概要',
         events: 'イベント受信箱',
-        workflowRuns: 'ワークフロー実行',
+        workflowRuns: '実行履歴',
         agentTasks: 'エージェントタスク',
         sources: '入力元',
         queue: 'キュー',

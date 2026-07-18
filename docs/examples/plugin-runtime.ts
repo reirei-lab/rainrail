@@ -1,7 +1,9 @@
 import {
+  createDashboardCardProviderFromManifest,
   createManualInputEvent,
   createEventEnvelope,
   defineWorkflowPlugin,
+  type DashboardPluginManifest,
   type ManualInputRainrailEvent,
   type RainrailEventEnvelope,
 } from '../../src/index.js';
@@ -71,8 +73,60 @@ export const chatRuntimeStartWorkflow = defineWorkflowPlugin<ManualInputRainrail
   capabilities: ['runtime:start'],
   accepts: (candidate) => candidate.name === 'rainrail.chat.message',
   handle: (candidate, context) => context.actions.startRuntime({
-    runtimeId: 'codex-chat',
+    runtimeId: 'codex-app-server',
     conversationId: candidate.subject.id,
     prompt: candidate.payload.message.text,
   }),
 });
+
+export const codexAppServerRuntimeConfig = {
+  sourceBundles: [{
+    type: 'eep-bridge',
+    name: 'local-chat',
+    sources: [{
+      type: 'manual-chat',
+      name: 'codex-chat',
+      sourceType: 'chat',
+      runtime: 'codex-app-server',
+    }],
+  }],
+  runtimeProviders: {
+    codexAppServer: {
+      type: 'plugin',
+      enabled: true,
+      runtime: 'codex-app-server',
+      plugin: '@rainrail/codex-app-server-runtime',
+      executor: 'codex-app-server',
+      command: '${CODEX_BIN}',
+      home: '${CODEX_HOME_PARENT}',
+      codexHome: '${CODEX_HOME}',
+    },
+  },
+} as const;
+
+export const issueSummaryManifest: DashboardPluginManifest = {
+  name: 'issueSummary',
+  version: '1.0.0',
+  dashboard: {
+    cards: [{
+      name: 'queue',
+      title: 'Issue summary queue',
+      category: 'operations',
+      requiredCapabilities: ['dashboard:read'],
+      size: {
+        default: { columns: 3, rows: 2 },
+        min: { columns: 2, rows: 1 },
+        max: { columns: 6, rows: 4 },
+      },
+      settingsSchema: {
+        type: 'object',
+        properties: {
+          repository: { type: 'string' },
+        },
+        additionalProperties: false,
+      },
+    }],
+  },
+};
+
+export const issueSummaryCards = createDashboardCardProviderFromManifest(issueSummaryManifest);

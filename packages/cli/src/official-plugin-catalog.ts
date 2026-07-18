@@ -90,6 +90,31 @@ export const OFFICIAL_PLUGIN_CATALOG: readonly OfficialPluginMetadata[] = [
       },
     ],
   },
+  {
+    name: 'Codex App Server',
+    alias: 'codex-app-server',
+    aliases: ['codex-app-server', 'cas'],
+    version: '0.1.0',
+    summary: 'Manage Codex App Server runtime provider checks and session dispatch wiring.',
+    helpText: 'Codex App Server official plugin metadata for runtime provider and agent session operations.',
+    commands: [
+      {
+        name: 'setup',
+        summary: 'Prepare Codex App Server runtime provider defaults for local projects.',
+        helpText: 'Usage: rainrail codex-app-server setup [options]',
+      },
+      {
+        name: 'doctor',
+        summary: 'Check Codex App Server command availability and dispatch configuration.',
+        helpText: 'Usage: rainrail codex-app-server doctor [options]',
+      },
+      {
+        name: 'session test',
+        summary: 'Run a non-destructive Codex App Server session connectivity check.',
+        helpText: 'Usage: rainrail codex-app-server session test [options]',
+      },
+    ],
+  },
 ];
 
 export function getOfficialPluginByAlias(alias: string): OfficialPluginMetadata | undefined {

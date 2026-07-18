@@ -40,13 +40,21 @@ jobs:
       - name: Run typecheck
         run: pnpm typecheck
 
-      - name: Run docs drift checks
+      - name: Run docs checks
         run: pnpm docs:check
         env:
           DOCS_DRIFT_CHANGED_FROM: origin/${{ github.base_ref }}
 
       - name: Run tests
         run: pnpm test
+
+      - name: Run Codex App Server smoke test
+        if: >-
+          github.event.pull_request.head.repo.full_name == github.repository &&
+          contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.pull_request.author_association)
+        run: pnpm exec vitest run src/codex-app-server/smoke.test.ts
+        env:
+          RAINRAIL_CODEX_APP_SERVER_SMOKE: '1'
 
       - name: Run build
         env:
@@ -61,6 +69,16 @@ jobs:
         with:
           name: rainrail-pages-dist
           path: apps/www/dist
+          if-no-files-found: error
+
+      - name: Upload Cloudflare Docs Pages preview artifact
+        if: >-
+          github.event.pull_request.head.repo.full_name == github.repository &&
+          !github.event.pull_request.draft
+        uses: actions/upload-artifact@v4
+        with:
+          name: rainrail-docs-dist
+          path: apps/docs/dist
           if-no-files-found: error
 
   cloudflare-deployability:
@@ -91,3 +109,48 @@ jobs:
 
       - name: Run Cloudflare deployability dry run
         run: pnpm cf:deploy:check
+
+  dashboard-e2e:
+    name: Dashboard E2E
+    needs: validate
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          dest: ${{ runner.temp }}/setup-pnpm
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 26
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright browser
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Run dashboard E2E
+        run: pnpm e2e:dashboard
+
+      - name: Upload dashboard E2E artifacts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: dashboard-e2e-artifacts
+          path: |
+            playwright-report/dashboard/
+            test-results/dashboard/
+            test-results/dashboard/screenshots/
+            test-results/dashboard/screenshots/dashboard-demo-screenshot-manifest.json
+          if-no-files-found: ignore
+          retention-days: 7

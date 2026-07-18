@@ -46,14 +46,199 @@ host and port, expect:
 ```text
 Health: http://127.0.0.1:8787/healthz
 Dashboard: http://127.0.0.1:8787/dashboard
-Event Stream: http://127.0.0.1:8787/events
+Dashboard routes: /en/dashboard/events, /en/dashboard/runs, /en/dashboard/tasks, /en/dashboard/sources, /en/dashboard/queue, /en/dashboard/settings
 Dashboard API: http://127.0.0.1:8787/api/v1/overview
+Event Stream: http://127.0.0.1:8787/events
 ```
 
 Open `http://127.0.0.1:8787/dashboard` in a browser and paste the configured
 dashboard token into the dashboard auth field. API requests use
 `Authorization: Bearer <token>` behind the same origin, so the local dashboard
 does not need a separate API base URL.
+The printed dashboard route list is the canonical local smoke set for the URL
+split: overview stays at `/en/dashboard`, while Event Inbox, Runs, Agent Tasks,
+Sources, Queue, and Settings are directly reachable at their own URLs. The
+legacy unlocalized `/dashboard/<view>` URLs remain redirect pages that preserve
+the current query string.
+
+## Seeded SQLite demo mode
+
+Use demo mode when you want to inspect every dashboard tab without GitHub,
+Cloudflare, live runner state, or a real operator token. From the repository
+root, rebuild the deterministic SQLite demo DB and start the local dashboard:
+
+```sh
+pnpm demo:dashboard
+```
+
+The script first builds the product dashboard and CLI package, creates a
+minimal demo config under `.tmp/dashboard-demo/`, runs
+`node scripts/seed-dashboard-demo-db.mjs`, then starts `rainrail start --demo`
+with `RAINRAIL_DASHBOARD_DEMO=1`. The default demo DB path is
+`.tmp/dashboard-demo.sqlite`, and `rainrail start --demo` reads it as a SQLite
+operational store. The CLI prints both normal and explicit demo URLs:
+
+```text
+Dashboard demo: http://127.0.0.1:8787/dashboard?demo=1
+Dashboard demo routes: /en/dashboard/events?demo=1, /en/dashboard/runs?demo=1, /en/dashboard/tasks?demo=1, /en/dashboard/sources?demo=1, /en/dashboard/queue?demo=1, /en/dashboard/settings?demo=1
+Dashboard demo API: http://127.0.0.1:8787/api/v1/overview?demo=1
+```
+
+Open the `?demo=1` dashboard URL. In demo mode, the dashboard API carries
+`demo=1` on same-origin `/api/v1/*` requests, bypasses local dashboard bearer
+auth only when `rainrail start --demo` is bound to localhost, and shows a
+visible `Demo mode` / `デモモード` badge. Requests without `demo=1`, and demo
+servers bound outside localhost, still use the configured dashboard auth rules.
+
+If you are already inside an initialized Rainrail project and want to run the
+two steps manually:
+
+```sh
+node scripts/seed-dashboard-demo-db.mjs --database .tmp/dashboard-demo.sqlite
+RAINRAIL_DASHBOARD_DEMO=1 rainrail start --demo
+```
+
+Demo data is SQLite-backed, not a frontend fixture client. Demo command actions
+return a demo-only accepted response and do not dispatch to GitHub, Cloudflare,
+OpenClaw, or a live local runner.
+
+Run the focused smoke/VRT baseline check before changing dashboard UI that uses
+the demo DB:
+
+```sh
+pnpm demo:dashboard:smoke
+```
+
+The smoke test rebuilds the deterministic SQLite DB, exercises every dashboard
+API resource, and checks the VRT scenario manifest in
+`scripts/dashboard-demo-vrt-scenarios.mjs`. The manifest pins the dashboard tab
+states to capture later with Playwright: overview, retrying events, failed
+workflow runs, running task actions, source delivery status, blocked stale
+claims, settings, default dashboard card layout, and the mobile card layout.
+Custom saved dashboard card layouts and plugin-card failure isolation are
+smoke-only checks today; they are covered by API and sandbox assertions until a
+browser runner can perform pre-capture setup steps.
+
+## Browser E2E smoke
+
+The dashboard browser smoke test uses Playwright against the seeded SQLite demo
+server. Install dependencies and the Chromium browser once on a local machine:
+
+```sh
+pnpm install --frozen-lockfile
+pnpm exec playwright install chromium
+```
+
+Then run the focused dashboard E2E command from the repository root:
+
+```sh
+pnpm e2e:dashboard
+```
+
+The command builds the product dashboard and CLI package, then runs Playwright
+against a disposable server from `startDashboardDemoServerHarness` in
+`scripts/dashboard-demo-server-harness.mjs`. The harness creates a fresh
+temporary directory and SQLite DB for every run, seeds it with
+`scripts/seed-dashboard-demo-db.mjs`, starts the built Rainrail CLI server on a
+random localhost port with the built `apps/www` dashboard assets, and returns
+`baseUrl` for Playwright. It fixes demo-mode environment variables and removes
+operational-store and legacy SSE bearer-token overrides from the spawned server
+environment so each run uses the seeded temporary SQLite DB. Always call
+`cleanup()` from test teardown so the server process, DB files, and temporary
+directory are removed. No real GitHub, Cloudflare, or operator token is needed.
+Failure artifacts are written under `test-results/dashboard/`, and the HTML
+report is written under `playwright-report/dashboard/`.
+The E2E run also captures every entry in
+`scripts/dashboard-demo-vrt-scenarios.mjs` as named screenshots under
+`test-results/dashboard/screenshots/`, with
+`dashboard-demo-screenshot-manifest.json` mapping scenario IDs, viewport
+variants, URLs, and capture hints to each PNG. Pull Request CI uploads those
+files in the `dashboard-e2e-artifacts` artifact.
+
+Keep these captures as inspection artifacts until the paths and rendering are
+stable across the self-hosted and GitHub-hosted runners. Move to strict visual
+snapshot comparison only after the capture manifest has stayed unchanged for
+the dashboard states being protected, screenshots no longer include local
+machine-specific content, and expected UI changes have an explicit review step
+for updating baselines. At that point, add a separate comparison step that
+checks the named screenshots against reviewed baselines while keeping this
+artifact upload for debugging failed comparisons.
+
+```js
+import { startDashboardDemoServerHarness } from './scripts/dashboard-demo-server-harness.mjs';
+
+// Prepare once in the test job:
+// pnpm --filter www build
+// pnpm --filter @rainrail/cli exec tsc -p tsconfig.build.json
+
+const harness = await startDashboardDemoServerHarness();
+try {
+  await page.goto(`${harness.baseUrl}/en/dashboard?demo=1`);
+} finally {
+  await harness.cleanup();
+}
+```
+
+## Dashboard cards
+
+The dashboard card surface is driven by the same-origin card catalog and user
+layout API:
+
+- `GET /api/v1/dashboard/cards` returns Core and plugin card definitions with
+  availability.
+- `GET /api/v1/dashboard/layout` returns the default Core layout until an
+  operator saves a user layout.
+- `PUT /api/v1/dashboard/layout` saves a full user layout and requires an
+  operator or admin dashboard token.
+- `PATCH /api/v1/dashboard/layout/items/:itemId/config` saves settings for one
+  visible card without dropping hidden saved plugin cards. It also requires an
+  operator or admin dashboard token.
+
+The local `rainrail start` CLI catalog currently exposes
+`core.operationalTotals` as its Core card and uses it in the default local
+layout. The shared HTTP app contract also has tests for the broader Core card
+registry used by dashboard API consumers:
+`core.operationalTotals`, `core.eventInbox`, `core.workflowRuns`,
+`core.agentTasks`, `core.sources`, `core.queue`, `core.settings`,
+`core.operatorActions`, plus legacy saved-layout ids `core.overview` and
+`core.recentEvents`. Do not document a Core card as available from
+`rainrail start` until `packages/cli/src/index.ts` includes it in
+`localDashboardCardDefinitions`.
+
+Plugin cards use ids like `plugin:github.queue` and appear in the same card
+picker when the plugin is enabled and its declared read capabilities are
+available. A plugin card can be visible in the catalog as unavailable instead
+of disappearing. The catalog uses unavailable states for disabled plugins,
+missing capabilities, and entry resolution failures so an operator can see why
+a saved layout changed.
+
+The card picker groups cards by category and provider/plugin name. Adding a
+card creates a layout item with the card's default size. Saving the layout
+persists card ids, grid positions, size, and optional per-card `config` only.
+Dashboard card config must stay JSON-serializable and must not contain tokens,
+secrets, passwords, or credential-looking keys. The API rejects sensitive config
+keys before persistence.
+
+The sandbox host contract for plugin-card rendering is described in
+[plugin runtime contract](plugin-runtime-contract.md). The current local
+dashboard renders card catalog/layout metadata; it does not yet load plugin
+bundles into iframes. When an iframe renderer is wired, the sandbox descriptor
+must use `sandbox="allow-scripts"`, no `allow-same-origin`, no referrer, and
+only read-only bridge capabilities such as `dashboard:read` or `*:read`.
+Workflow capabilities such as `runtime:start`, merge, or secret access must not
+be exposed to the iframe bridge. If one plugin card bundle fails to load, the
+dashboard shell, Core cards, and other plugin cards should remain usable.
+
+The focused smoke/VRT baseline for dashboard cards is:
+
+```sh
+pnpm demo:dashboard:smoke
+```
+
+That check verifies the seeded SQLite API data, the default layout, a saved
+custom layout containing a plugin card through the shared HTTP app contract,
+sandbox load failure isolation, and the VRT capture manifest entries for
+directly reachable default and mobile card states.
 
 ## Auth scopes
 
@@ -172,7 +357,10 @@ design should add tests for:
 
 The local dashboard defaults to same origin fetches such as
 `/api/v1/overview`, `/api/v1/events`, `/api/v1/queue`, and
-`/api/v1/settings`. This is the path used by `rainrail start`.
+`/api/v1/settings`. `rainrail start` also serves the same-origin dashboard card
+catalog/layout routes used by the card settings UI:
+`/api/v1/dashboard/cards`, `/api/v1/dashboard/layout`, and
+`PATCH /api/v1/dashboard/layout/items/:itemId/config`.
 
 The Cloudflare Pages product/docs site is separate. When the static dashboard
 page is built for Pages and needs to call an external operational API, set

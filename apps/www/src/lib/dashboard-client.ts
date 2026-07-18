@@ -1,6 +1,7 @@
 export interface DashboardClientOptions {
   token: string;
   baseUrl?: string;
+  demoMode?: boolean;
   pollIntervalMs?: number;
 }
 
@@ -106,10 +107,65 @@ export interface DashboardSetting {
   links?: { self?: string };
 }
 
-export interface DashboardDetail<TRecord = unknown> {
+export interface DashboardCardCatalogEntry {
+  definition: {
+    id: string;
+    title: string;
+    description?: string;
+    entry: { type: 'core'; name: string } | { type: 'plugin'; pluginName: string; cardName: string };
+    category: string;
+    size: {
+      default: { columns: number; rows: number };
+      min?: { columns: number; rows: number };
+      max?: { columns: number; rows: number };
+    };
+    settingsSchema?: {
+      type: 'object';
+      properties?: Record<string, unknown>;
+      required?: string[];
+      additionalProperties?: boolean | Record<string, unknown>;
+    } & Record<string, unknown>;
+  };
+  availability: {
+    status: string;
+    reason?: string;
+    message?: string;
+    missingCapabilities?: string[];
+  };
+}
+
+export interface DashboardLayoutItem {
+  id: string;
+  cardId: string;
+  x: number;
+  y: number;
+  columns: number;
+  rows: number;
+  config?: Record<string, unknown>;
+}
+
+export interface DashboardLayout {
+  data: {
+    id: string;
+    source: 'default' | 'user';
+    updatedAt: string | null;
+    filteredItemCount?: number;
+    items: DashboardLayoutItem[];
+  };
+}
+
+export interface DashboardLayoutUpdateResponse extends DashboardLayout {
+  data: DashboardLayout['data'] & {
+    auditId?: string;
+    auditWarning?: string;
+  };
+}
+
+export interface DashboardDetail<TRecord = unknown, TCompact = unknown> {
   data: {
     id: string;
     type: string;
+    compact?: TCompact;
     record: TRecord;
   };
 }
@@ -134,10 +190,12 @@ export class RainrailDashboardApiClient {
   readonly pollIntervalMs: number;
   private readonly token: string;
   private readonly baseUrl: string;
+  private readonly demoMode: boolean;
 
   constructor(options: DashboardClientOptions) {
     this.token = options.token;
     this.baseUrl = options.baseUrl ?? '';
+    this.demoMode = options.demoMode ?? false;
     this.pollIntervalMs = options.pollIntervalMs ?? 30000;
   }
 
@@ -152,27 +210,49 @@ export class RainrailDashboardApiClient {
     return this.get(`/api/v1/events?${params.toString()}`);
   }
 
-  workflowRuns(): Promise<DashboardCollection<DashboardWorkflowRun>> {
-    return this.get('/api/v1/workflow-runs?limit=25');
+  workflowRuns(filters: { status?: string } = {}): Promise<DashboardCollection<DashboardWorkflowRun>> {
+    const params = new URLSearchParams({ limit: '25' });
+    if (filters.status !== undefined && filters.status !== '') params.set('filter[status]', filters.status);
+    return this.get(`/api/v1/workflow-runs?${params.toString()}`);
   }
 
-  agentTasks(): Promise<DashboardCollection<DashboardAgentTask>> {
-    return this.get('/api/v1/agent-tasks?limit=25');
+  agentTasks(filters: { status?: string } = {}): Promise<DashboardCollection<DashboardAgentTask>> {
+    const params = new URLSearchParams({ limit: '25' });
+    if (filters.status !== undefined && filters.status !== '') params.set('filter[status]', filters.status);
+    return this.get(`/api/v1/agent-tasks?${params.toString()}`);
   }
 
   sources(): Promise<DashboardCollection<DashboardSource>> {
     return this.get('/api/v1/sources?limit=25');
   }
 
-  queue(): Promise<DashboardCollection<DashboardQueueItem>> {
-    return this.get('/api/v1/queue?limit=25');
+  queue(filters: { status?: string } = {}): Promise<DashboardCollection<DashboardQueueItem>> {
+    const params = new URLSearchParams({ limit: '25' });
+    if (filters.status !== undefined && filters.status !== '') params.set('filter[status]', filters.status);
+    return this.get(`/api/v1/queue?${params.toString()}`);
   }
 
   settings(): Promise<DashboardCollection<DashboardSetting>> {
     return this.get('/api/v1/settings?limit=25');
   }
 
-  eventDetail(id: string): Promise<DashboardDetail> {
+  dashboardCards(): Promise<{ data: DashboardCardCatalogEntry[] }> {
+    return this.get('/api/v1/dashboard/cards');
+  }
+
+  dashboardLayout(): Promise<DashboardLayout> {
+    return this.get('/api/v1/dashboard/layout');
+  }
+
+  saveDashboardLayout(items: DashboardLayoutItem[]): Promise<DashboardLayoutUpdateResponse> {
+    return this.putCommand('/api/v1/dashboard/layout', { items });
+  }
+
+  saveDashboardLayoutItemConfig(itemId: string, config: Record<string, unknown>): Promise<DashboardLayoutUpdateResponse> {
+    return this.patchCommand(`/api/v1/dashboard/layout/items/${encodeURIComponent(itemId)}/config`, { config });
+  }
+
+  eventDetail(id: string): Promise<DashboardDetail<unknown, DashboardEvent>> {
     return this.get(`/api/v1/events/${encodeURIComponent(id)}`);
   }
 
@@ -201,7 +281,7 @@ export class RainrailDashboardApiClient {
   }
 
   private async get<T>(path: string): Promise<T> {
-    const response = await fetch(`${this.baseUrl}${path}`, {
+    const response = await fetch(`${this.baseUrl}${this.pathWithDemoMode(path)}`, {
       headers: {
         authorization: `Bearer ${this.token}`,
         accept: 'application/json',
@@ -216,8 +296,20 @@ export class RainrailDashboardApiClient {
   }
 
   private async postCommand(path: string, body: Record<string, unknown>): Promise<DashboardCommandResponse> {
-    const response = await fetch(`${this.baseUrl}${path}`, {
-      method: 'POST',
+    return this.writeCommand('POST', path, body);
+  }
+
+  private async putCommand<T = DashboardCommandResponse>(path: string, body: Record<string, unknown>): Promise<T> {
+    return this.writeCommand('PUT', path, body);
+  }
+
+  private async patchCommand<T = DashboardCommandResponse>(path: string, body: Record<string, unknown>): Promise<T> {
+    return this.writeCommand('PATCH', path, body);
+  }
+
+  private async writeCommand<T = DashboardCommandResponse>(method: 'POST' | 'PUT' | 'PATCH', path: string, body: Record<string, unknown>): Promise<T> {
+    const response = await fetch(`${this.baseUrl}${this.pathWithDemoMode(path)}`, {
+      method,
       headers: {
         authorization: `Bearer ${this.token}`,
         accept: 'application/json',
@@ -232,7 +324,13 @@ export class RainrailDashboardApiClient {
       throw new RainrailDashboardApiError(response.status, errorCodeFromPayload(payload, response.status), payload);
     }
 
-    return payload as DashboardCommandResponse;
+    return payload as T;
+  }
+
+  private pathWithDemoMode(path: string): string {
+    if (!this.demoMode) return path;
+    const separator = path.includes('?') ? '&' : '?';
+    return `${path}${separator}demo=1`;
   }
 }
 

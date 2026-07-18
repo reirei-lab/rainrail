@@ -24,38 +24,16 @@ const dashboardCopy = JSON.stringify(content.app);
   locale={locale}
   title={content.meta.title}
   description={content.meta.description}
+  activeRoute="overview"
+  dashboardCopy={dashboardCopy}
+  apiBaseUrl={apiBaseUrl}
 >
-  <section
-    class="dashboard-shell"
-    data-dashboard-app
-    data-dashboard-copy={dashboardCopy}
-    data-api-base-url={apiBaseUrl}
-    data-auth-required="true"
-    data-state="auth-missing"
-    data-live-strategy="polling"
-  >
-    <aside class="dashboard-sidebar" aria-label={content.shell.navLabel}>
-      <a class="dashboard-brand" href={content.shell.brandHref} aria-label={content.shell.brandLabel}>Rainrail</a>
-      <nav>
-        <button type="button" data-dashboard-tab="overview" aria-pressed="true">{content.shell.tabs.overview}</button>
-        <button type="button" data-dashboard-tab="events" aria-pressed="false">{content.shell.tabs.events}</button>
-        <button type="button" data-dashboard-tab="workflow-runs" aria-pressed="false">{content.shell.tabs.workflowRuns}</button>
-        <button type="button" data-dashboard-tab="agent-tasks" aria-pressed="false">{content.shell.tabs.agentTasks}</button>
-        <button type="button" data-dashboard-tab="sources" aria-pressed="false">{content.shell.tabs.sources}</button>
-        <button type="button" data-dashboard-tab="queue" aria-pressed="false">{content.shell.tabs.queue}</button>
-        <button type="button" data-dashboard-tab="settings" aria-pressed="false">{content.shell.tabs.settings}</button>
-      </nav>
-      <label class="dashboard-permission">
-        <input type="checkbox" data-permission-toggle />
-        {content.shell.operatorControls}
-      </label>
-    </aside>
-
     <div class="dashboard-workspace">
       <header class="dashboard-topbar">
         <div>
           <p class="eyebrow">{content.shell.eyebrow}</p>
           <h1>{content.shell.heading}</h1>
+          <span class="dashboard-demo-badge" data-demo-indicator hidden>{content.shell.demoModeBadge}</span>
         </div>
         <div class="dashboard-auth">
           <input data-api-base-url-input type="url" autocomplete="off" placeholder={content.shell.apiBaseUrlPlaceholder} aria-label={content.shell.apiBaseUrlLabel} />
@@ -79,34 +57,44 @@ const dashboardCopy = JSON.stringify(content.app);
       <div class="dashboard-state" data-state="error">{content.shell.states.unavailable}</div>
       <div class="dashboard-state" data-state="auth-missing">{content.shell.states.authMissing}</div>
 
-      <section class="dashboard-stats dashboard-overview-grid" data-dashboard-stats aria-label={content.shell.statsLabel}>
+      <section class="dashboard-layout-tools" aria-label={content.app.cardLayout.title}>
+        <div>
+          <h2>{content.app.cardLayout.title}</h2>
+          <p>{content.app.cardLayout.description}</p>
+        </div>
+        <div class="dashboard-card-picker" aria-label={content.app.cardLayout.pickerTitle}>
+          <input data-card-picker-search type="search" autocomplete="off" placeholder={content.app.cardLayout.searchPlaceholder} aria-label={content.app.cardLayout.searchLabel} />
+          <select data-card-picker-category aria-label={content.app.cardLayout.categoryLabel}>
+            <option value="">{content.app.cardLayout.allCategories}</option>
+          </select>
+          <select data-card-picker-provider aria-label={content.app.cardLayout.providerLabel}>
+            <option value="">{content.app.cardLayout.allProviders}</option>
+          </select>
+          <div class="dashboard-card-picker-list" data-card-picker-list></div>
+        </div>
+      </section>
+
+      <section class="dashboard-layout-grid" data-dashboard-layout-grid aria-label={content.app.cardLayout.gridLabel}></section>
+      <div class="dashboard-layout-status" data-dashboard-layout-status aria-live="polite"></div>
+
+      <section class="dashboard-overview-card-panel" data-overview-card-panel aria-label={content.app.overviewCards.title}>
+        <div class="dashboard-overview-card-panel-heading">
+          <div>
+            <h2>{content.app.overviewCards.title}</h2>
+            <p>{content.app.overviewCards.description}</p>
+          </div>
+        </div>
+        <div class="dashboard-overview-card-controls" data-overview-card-controls aria-label={content.app.overviewCards.controlsLabel}></div>
+        <div class="dashboard-overview-card-board" data-overview-card-board aria-label={content.app.overviewCards.boardLabel}></div>
+      </section>
+
+      <section class="dashboard-stats dashboard-overview-grid" data-dashboard-stats data-dashboard-core-card="core.operationalTotals" aria-label={content.shell.statsLabel}>
         <div class="dashboard-stat"><span>{content.app.stats.events}</span><strong>0</strong></div>
         <div class="dashboard-stat"><span>{content.app.stats.activeRuns}</span><strong>0</strong></div>
         <div class="dashboard-stat"><span>{content.app.stats.agentTasks}</span><strong>0</strong></div>
         <div class="dashboard-stat"><span>{content.app.stats.retryingHandlers}</span><strong>0</strong></div>
         <div class="dashboard-stat"><span>{content.app.stats.sources}</span><strong>0</strong></div>
         <div class="dashboard-stat"><span>{content.app.stats.queue}</span><strong>0</strong></div>
-      </section>
-
-      <section class="dashboard-filterbar" aria-label={content.shell.filtersLabel}>
-        <label>
-          {content.shell.source}
-          <select data-event-source-filter>
-            <option value="">{content.shell.allSources}</option>
-            <option value="github">{content.shell.sourceOptions.github}</option>
-            <option value="cloudflare">{content.shell.sourceOptions.cloudflare}</option>
-            <option value="manual">{content.shell.sourceOptions.manual}</option>
-            <option value="system">{content.shell.sourceOptions.system}</option>
-          </select>
-        </label>
-        <label>
-          {content.shell.eventName}
-          <input data-event-name-filter type="text" autocomplete="off" placeholder="github.issue" />
-        </label>
-        <button type="button" class="button secondary" data-filter-apply>{content.shell.apply}</button>
-        <span>{content.shell.delivery}</span>
-        <span>{content.shell.publishResult}</span>
-        <span>{content.shell.workflowMatches}</span>
       </section>
 
       <section class="dashboard-two-pane" aria-label={content.shell.recordsLabel}>
@@ -125,15 +113,16 @@ const dashboardCopy = JSON.stringify(content.app);
         </article>
       </section>
 
-      <section class="dashboard-actions" aria-label={content.shell.actionsLabel}>
-        <button type="button" class="dashboard-action" data-agent-action="resume" data-action-permission="operator" disabled>{content.shell.commandButtons.resume}</button>
-        <button type="button" class="dashboard-action" data-agent-action="reset" data-action-permission="operator" disabled>{content.shell.commandButtons.reset}</button>
-        <button type="button" class="dashboard-action" data-agent-action="terminate" data-action-permission="operator" disabled>{content.shell.commandButtons.terminate}</button>
-        <button type="button" class="dashboard-action danger" data-agent-action="terminate-all" data-action-permission="operator" disabled>{content.shell.commandButtons.terminateAll}</button>
-        <span class="dashboard-command-status" data-command-status aria-live="polite"></span>
+      <section class="dashboard-card-settings" aria-label={content.app.cardSettings.title}>
+        <label>
+          {content.app.cardSettings.card}
+          <select data-card-settings-select></select>
+        </label>
+        <div class="dashboard-card-settings-form" data-card-settings-form></div>
+        <button type="button" class="dashboard-action" data-card-settings-save data-action-permission="operator" disabled>{content.app.cardSettings.save}</button>
+        <span class="dashboard-command-status" data-card-settings-status aria-live="polite"></span>
       </section>
     </div>
-  </section>
 
   <script>
     import '../../lib/dashboard-app';

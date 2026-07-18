@@ -392,6 +392,7 @@ describe('Rainrail HTTP app', () => {
     });
     const error = await failingApp.fetch(new Request('https://rainrail.local/healthz'));
     expect(error.status).toBe(500);
+    expect(error.headers.get('Access-Control-Allow-Methods')).toContain('PATCH');
     await expect(error.json()).resolves.toEqual({ error: 'internal_server_error' });
   });
 

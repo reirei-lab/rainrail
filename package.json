@@ -1,30 +1,40 @@
 {
   "name": "rainrail",
-  "version": "0.4.0",
+  "version": "0.7.0",
   "private": true,
   "description": "Agent-ready development event routing and workflow orchestration suite.",
   "type": "module",
   "packageManager": "pnpm@10.12.1",
   "scripts": {
-    "build": "pnpm run build:scripts && pnpm --filter www build && pnpm --filter @rainrail/cli build",
+    "build": "pnpm run build:scripts && pnpm --filter www build && pnpm docs:build && pnpm --filter @rainrail/cli build",
     "build:scripts": "node scripts/check-scripts.mjs",
     "cf:deploy": "node scripts/validate-cloudflare-secrets.mjs && wrangler deploy",
     "cf:deploy:check": "node scripts/check-cloudflare-deployability.mjs",
     "cf:dev": "wrangler dev --local",
     "cf:smoke": "node scripts/smoke-cloudflare-worker.mjs",
-    "docs:check": "node scripts/check-docs-drift.mjs && tsc -p tsconfig.docs.json",
+    "docs:check": "node scripts/check-docs-drift.mjs && node scripts/check-docs-routes.mjs && tsc -p tsconfig.docs.json && pnpm docs:typecheck",
+    "docs:dev": "pnpm --filter @rainrail/docs dev",
+    "docs:build": "pnpm --filter @rainrail/docs build",
+    "docs:typecheck": "pnpm --filter @rainrail/docs typecheck",
+    "docs:deploy:preview": "pnpm docs:build && wrangler pages deploy apps/docs/dist --project-name rainrail-docs --branch \"${RAINRAIL_DOCS_BRANCH:-preview}\"",
+    "docs:deploy:production": "pnpm docs:build && wrangler pages deploy apps/docs/dist --project-name rainrail-docs --branch main",
+    "docs:smoke": "node scripts/smoke-cloudflare-docs.mjs",
+    "demo:dashboard": "node scripts/start-dashboard-demo.mjs",
+    "demo:dashboard:smoke": "vitest run scripts/seed-dashboard-demo-db.test.ts",
+    "e2e:dashboard": "pnpm --filter www build && pnpm --filter @rainrail/cli build && playwright test --config playwright.dashboard.config.ts",
     "pages:build": "pnpm --filter www build",
     "pages:deploy:preview": "pnpm pages:build && wrangler pages deploy apps/www/dist --project-name rainrail-www --branch \"${RAINRAIL_PAGES_BRANCH:-preview}\"",
     "pages:deploy:production": "pnpm pages:build && wrangler pages deploy apps/www/dist --project-name rainrail-www --branch main",
     "pages:smoke": "node scripts/smoke-cloudflare-pages.mjs",
     "release:cli": "node scripts/package-cli-release.mjs",
-    "test": "vitest run scripts src packages",
-    "typecheck": "tsc --noEmit && pnpm --filter @rainrail/cli typecheck"
+    "test": "vitest run scripts src packages apps/www/src/lib",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.e2e.json --noEmit && pnpm --filter @rainrail/cli typecheck"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.1",
     "@types/node": "^26.1.0",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.9",
+    "vitest": "^4.1.10",
     "wrangler": "^4.106.0"
   }
 }

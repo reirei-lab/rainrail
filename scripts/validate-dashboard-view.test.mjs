@@ -9,8 +9,24 @@ const localizedDashboardPage = readFileSync(
   new URL('../apps/www/src/pages/[locale]/dashboard.astro', import.meta.url),
   'utf8',
 );
+const localizedDashboardRoutePage = readFileSync(
+  new URL('../apps/www/src/pages/[locale]/dashboard/[view].astro', import.meta.url),
+  'utf8',
+);
+const dashboardViewRedirectPage = readFileSync(
+  new URL('../apps/www/src/pages/dashboard/[view].astro', import.meta.url),
+  'utf8',
+);
+const dashboardLayout = readFileSync(
+  new URL('../apps/www/src/layouts/DashboardLayout.astro', import.meta.url),
+  'utf8',
+);
 const dashboardContent = readFileSync(
   new URL('../apps/www/src/lib/dashboard-content.ts', import.meta.url),
+  'utf8',
+);
+const publicRedirects = readFileSync(
+  new URL('../apps/www/public/_redirects', import.meta.url),
   'utf8',
 );
 const dashboardApp = readFileSync(
@@ -19,6 +35,14 @@ const dashboardApp = readFileSync(
 );
 const dashboardClient = readFileSync(
   new URL('../apps/www/src/lib/dashboard-client.ts', import.meta.url),
+  'utf8',
+);
+const dashboardControllers = readFileSync(
+  new URL('../apps/www/src/lib/dashboard-controllers.ts', import.meta.url),
+  'utf8',
+);
+const dashboardOverviewCards = readFileSync(
+  new URL('../apps/www/src/lib/dashboard-overview-cards.ts', import.meta.url),
   'utf8',
 );
 const globalStyles = readFileSync(
@@ -40,10 +64,10 @@ describe('dashboard operational views', () => {
   });
 
   it('localizes dashboard shell labels and browser-rendered UI messages', () => {
-    for (const label of ['Overview', 'Event Inbox', 'Workflow Runs', 'Agent Tasks']) {
+    for (const label of ['Overview', 'Event Inbox', 'Runs', 'Agent Tasks']) {
       expect(dashboardContent).toContain(label);
     }
-    for (const label of ['概要', 'イベント受信箱', 'ワークフロー実行', 'エージェントタスク']) {
+    for (const label of ['概要', 'イベント受信箱', '実行履歴', 'エージェントタスク']) {
       expect(dashboardContent).toContain(label);
     }
 
@@ -138,12 +162,43 @@ describe('dashboard operational views', () => {
     expect(dashboardApp).not.toContain("'all running tasks'");
   });
 
-  it('names the Overview, Event Inbox, Workflow Runs, and Agent Tasks work surfaces', () => {
-    for (const label of ['Overview', 'Event Inbox', 'Workflow Runs', 'Agent Tasks']) {
+  it('names the Overview, Event Inbox, Runs, and Agent Tasks work surfaces', () => {
+    for (const label of ['Overview', 'Event Inbox', 'Runs', 'Agent Tasks', '実行履歴']) {
       expect(dashboardContent).toContain(label);
     }
 
-    expect(localizedDashboardPage).toContain('data-dashboard-tab="agent-tasks"');
+    expect(dashboardLayout).toContain('data-dashboard-tab={route.id}');
+  });
+
+  it('links workflow run details back to the source event context', () => {
+    expect(dashboardApp).toContain('workflowRunSourceEventHref');
+    expect(dashboardApp).toContain('data-source-event-link');
+    expect(dashboardApp).toContain("target.pathname = target.pathname.replace(/\\/dashboard(?:\\/[^/?#]+)?\\/?$/, '/dashboard/events')");
+    expect(dashboardApp).toContain("target.searchParams.set('event', sourceEventId)");
+    expect(dashboardApp).toContain("target.searchParams.delete('source')");
+    expect(dashboardApp).toContain("target.searchParams.delete('name')");
+  });
+
+  it('marks existing standard surfaces as core dashboard cards', () => {
+    for (const marker of [
+      'data-dashboard-core-card="core.operationalTotals"',
+    ]) {
+      expect(localizedDashboardPage).toContain(marker);
+    }
+    expect(localizedDashboardRoutePage).toContain('data-dashboard-core-card="core.operatorActions"');
+
+    for (const marker of [
+      'data-dashboard-core-card="core.eventInbox"',
+      'data-dashboard-core-card="core.workflowRuns"',
+      'data-dashboard-core-card="core.agentTasks"',
+      'data-dashboard-core-card="core.sources"',
+      'data-dashboard-core-card="core.queue"',
+      'data-dashboard-core-card="core.settings"',
+    ]) {
+      const cardId = marker.match(/"([^"]+)"/)?.[1];
+      expect(cardId).toBeDefined();
+      expect(dashboardLayout).toContain(cardId);
+    }
   });
 
   it('renders event inbox filters and delivery/result columns', () => {
@@ -155,7 +210,7 @@ describe('dashboard operational views', () => {
       'Publish result',
       'Workflow matches',
     ]) {
-      expect(marker.startsWith('data-') ? localizedDashboardPage : dashboardContent).toContain(marker);
+      expect(marker.startsWith('data-') ? localizedDashboardRoutePage : dashboardContent).toContain(marker);
     }
 
     expect(dashboardClient).toContain('filter[name]');
@@ -164,10 +219,28 @@ describe('dashboard operational views', () => {
     expect(dashboardApp).toContain('latestOutcome');
   });
 
+  it('keeps Event Inbox filters scoped to the Events route', () => {
+    expect(localizedDashboardRoutePage).toContain("const showEventInbox = route.id === 'events';");
+    expect(localizedDashboardRoutePage).toContain('{showEventInbox && (');
+    expect(localizedDashboardPage).not.toContain('data-event-source-filter');
+    expect(localizedDashboardPage).not.toContain('data-event-name-filter');
+    expect(localizedDashboardPage).not.toContain('data-filter-apply');
+    expect(dashboardApp).toContain('eventSourceFilter?.value.trim() ?? initialDashboardState.eventFilters.sourceType ??');
+    expect(dashboardApp).toContain('eventNameFilter?.value.trim() ?? initialDashboardState.eventFilters.name ??');
+    expect(dashboardViewRedirectPage).toContain('getDefaultLocaleDashboardRedirect(view)');
+    expect(dashboardViewRedirectPage).toContain('appendCurrentLocationQuery');
+    expect(publicRedirects).toContain('/dashboard/events /en/dashboard/events 301');
+    expect(publicRedirects).toContain('/dashboard/events/ /en/dashboard/events 301');
+    expect(publicRedirects).toContain('/dashboard/runs /en/dashboard/runs 301');
+    expect(publicRedirects).toContain('/dashboard/runs/ /en/dashboard/runs 301');
+    expect(publicRedirects).toContain('/dashboard/workflow-runs /en/dashboard/runs 301');
+    expect(publicRedirects).toContain('/dashboard/workflow-runs/ /en/dashboard/runs 301');
+  });
+
   it('localizes dashboard assistive labels and source filter option labels', () => {
     expect(localizedDashboardPage).toContain('aria-label={content.shell.statsLabel}');
-    expect(localizedDashboardPage).toContain('content.shell.sourceOptions.manual');
-    expect(localizedDashboardPage).toContain('content.shell.sourceOptions.system');
+    expect(localizedDashboardRoutePage).toContain('content.shell.sourceOptions.manual');
+    expect(localizedDashboardRoutePage).toContain('content.shell.sourceOptions.system');
     expect(dashboardContent).toContain('運用集計');
     expect(dashboardContent).toContain('手動');
     expect(dashboardContent).toContain('システム');
@@ -230,8 +303,11 @@ describe('dashboard operational views', () => {
       'data-agent-action="terminate-all"',
       'data-command-status',
     ]) {
-      expect(localizedDashboardPage).toContain(marker);
+      expect(localizedDashboardRoutePage).toContain(marker);
+      expect(localizedDashboardPage).not.toContain(marker);
     }
+    expect(localizedDashboardRoutePage).toContain("route.id === 'agent-tasks'");
+    expect(localizedDashboardRoutePage).toContain('content.shell.tasksActionsLabel');
 
     for (const method of [
       'resumeAgentTask',
@@ -248,6 +324,217 @@ describe('dashboard operational views', () => {
     expect(dashboardApp).toContain('confirmationToken');
     expect(dashboardApp).toContain('window.confirm');
     expect(dashboardApp).toContain('setCommandStatus');
+  });
+
+  it('wires card settings editing through the dashboard layout API', () => {
+    for (const marker of [
+      'data-card-settings-select',
+      'data-card-settings-form',
+      'data-card-settings-save',
+      'data-card-settings-status',
+    ]) {
+      expect(localizedDashboardPage).toContain(marker);
+    }
+
+    for (const method of [
+      'dashboardCards()',
+      'dashboardLayout()',
+      'saveDashboardLayout',
+      'saveDashboardLayoutItemConfig',
+    ]) {
+      expect(dashboardClient).toContain(method);
+    }
+    expect(dashboardControllers).toContain('dashboardCards()');
+    expect(dashboardControllers).toContain('dashboardLayout()');
+    expect(dashboardApp).toContain('saveDashboardLayout');
+    expect(dashboardApp).toContain('saveDashboardLayoutItemConfig');
+
+    expect(dashboardClient).toContain('DashboardLayoutUpdateResponse');
+    expect(dashboardClient).toContain('/api/v1/dashboard/layout/items/${encodeURIComponent(itemId)}/config');
+    expect(dashboardApp).toContain('renderCardSettingsForm');
+    expect(dashboardApp).toContain('settingsSchema');
+    expect(dashboardApp).toContain('selectedLayoutItem.config');
+    expect(dashboardApp).toContain('mergeCardSettingsConfig');
+    expect(dashboardApp).toContain('updateLatestCardSettingsConfig');
+    expect(dashboardApp).toContain('cardSettingInputType');
+    expect(dashboardApp).toContain('cardSettingValueType');
+    expect(dashboardApp).toContain('cardSettingChanged');
+    expect(dashboardApp).toContain("input.dataset.cardSettingChanged !== 'true'");
+    expect(dashboardApp).toContain('invalidCardSettingsConfig');
+    expect(dashboardApp).toContain('Number.isInteger');
+    expect(dashboardApp).toContain("input.step = '1'");
+    expect(dashboardApp).toContain('setCardSettingsStatus(copy.cardSettings.invalid)');
+    expect(dashboardApp).toContain('delete config[name]');
+    expect(dashboardApp).toContain("currentValue !== null");
+    expect(dashboardApp).toContain('cardSettingsDirty');
+    expect(dashboardApp).toContain('cardSettingsSaving');
+    expect(dashboardApp).toContain('if (cardSettingsDirty && options.quiet) return;');
+    expect(dashboardApp).toContain('if (dashboardLayoutSaving) return;');
+    expect(dashboardApp).toContain("if (latestData?.layout.source === 'user' && !dashboardCoreCardIsVisible(cardId))");
+    expect(dashboardApp).toContain('event.preventDefault();');
+    expect(dashboardApp).toContain('const activeClient = client;');
+    expect(dashboardApp).toContain('await activeClient.saveDashboardLayoutItemConfig(selectedLayoutItem.id, config);');
+    expect(dashboardApp).toContain('action.disabled = dashboardLayoutSaving || cardSettingsSaving || !enabled');
+    expect(dashboardApp).toContain('void refresh({ quiet: true });');
+    expect(dashboardApp).not.toContain('await refresh({ quiet: true });');
+    expect(dashboardContent).toContain('Card settings');
+    expect(dashboardContent).toContain('カード設定');
+  });
+
+  it('renders a card picker and editable dashboard layout grid', () => {
+    for (const marker of [
+      'data-card-picker-search',
+      'data-card-picker-category',
+      'data-card-picker-provider',
+      'data-card-picker-list',
+      'data-dashboard-layout-grid',
+      'data-dashboard-layout-status',
+    ]) {
+      expect(localizedDashboardPage).toContain(marker);
+    }
+
+    for (const marker of [
+      'renderDashboardLayout()',
+      'applyDashboardLayoutVisibility()',
+      'dashboardCoreCardElements',
+      'dashboardCoreCardIsVisible',
+      'dashboardCoreCardLayoutIds',
+      'ensureVisibleDashboardTab',
+      'renderCardPicker()',
+      'saveDashboardLayoutItems',
+      'discardInFlightDashboardRefreshes',
+      'filteredItemCount',
+      'draggable = true',
+      'dragend',
+      'application/x-rainrail-dashboard-layout-item',
+      'hasDashboardLayoutDragPayload',
+      'data-layout-item-id',
+      'data-dashboard-card-id',
+      'data-dashboard-card-menu',
+      'data-dashboard-card-resize',
+      'data-action-permission',
+      'removeDashboardLayoutItem',
+      'moveDashboardLayoutItem',
+      'movedDashboardLayoutItems',
+      'isFirstLayoutItem',
+      'resizeDashboardLayoutItem',
+      'nextDashboardLayoutResizeCandidate',
+      'effectiveMaxColumns',
+      'createDashboardLayoutItem',
+      'dashboardCardGridInitialSize',
+      'dashboardCardCanBeAdded',
+      'unknownDashboardCard',
+      'cardAvailabilityLabel',
+      'copy.cardLayout.open',
+      'dashboardLayoutSaving',
+      'isOperatorModeEnabled()',
+      'currentLayoutCardIds',
+      'hasUnavailableDashboardCards',
+      'layoutFilteredItemCountIsUnknown',
+      'layoutSaveWouldDropHiddenCards',
+      'dashboardLayoutItemInGridBounds',
+      'dashboardLayoutItemsOverlap',
+      'dashboardLayoutItemBounds',
+    ]) {
+      expect(dashboardApp).toContain(marker);
+    }
+
+    expect(dashboardApp.indexOf('syncCardPickerFilters(latestData.cards);')).toBeLessThan(
+      dashboardApp.indexOf("const categoryFilter = cardPickerCategory?.value ?? '';"),
+    );
+
+    expect(dashboardClient).toContain('entry: { type:');
+    expect(dashboardClient).toContain('size: {');
+    expect(dashboardApp).toContain('category / provider / plugin');
+    expect(dashboardApp).toContain('activeClient.saveDashboardLayout(items)');
+    expect(dashboardApp).toContain("article.style.setProperty('--dashboard-card-row-start', String(Math.max(1, item.y + 1)));");
+    expect(dashboardApp).toContain("article.style.setProperty('--dashboard-card-rows', String(Math.max(1, item.rows)));");
+    expect(dashboardApp).not.toContain('clampDashboardCardSize(item.y + 1, 1, 99)');
+    expect(dashboardApp).not.toContain('clampDashboardCardSize(item.rows, 1, 12)');
+    expect(dashboardApp).toContain("element.hidden = latestData !== undefined && latestData.layout.source === 'user' && cardId !== undefined && !dashboardCoreCardIsVisible(cardId);");
+    expect(dashboardApp).toContain('!dashboardCoreCardIsVisible(cardId)');
+    expect(dashboardApp).toContain("new Set(['core.eventInbox', 'core.recentEvents'])");
+    expect(dashboardApp).toContain('if (dashboardLayoutSaving) return;');
+    expect(dashboardApp).toContain('if (cardSettingsSaving) return;');
+    expect(dashboardApp).toContain('discardInFlightDashboardRefreshes(activeClient);');
+    expect(dashboardApp).toContain('if (client !== activeClient) return;');
+    expect(dashboardApp).toContain('renderCardSettingsPicker({ quiet: true });\n      renderCurrentList();');
+    expect(dashboardApp).toContain('renderCardSettingsPicker({ quiet: true });');
+    expect(dashboardApp).not.toContain('setDashboardLayoutStatus(copy.cardLayout.saved);');
+    expect(dashboardApp).not.toContain('return dashboardTabForCard(cardId) === undefined ? copy.cardLayout.settings : copy.cardLayout.move;');
+    expect(dashboardContent).toContain('Card picker');
+    expect(dashboardContent).toContain('カードピッカー');
+    expect(dashboardContent).toContain("open: 'Open'");
+    expect(dashboardContent).toContain("open: '表示'");
+    expect(dashboardContent).toContain('Hidden cards may be omitted');
+    expect(dashboardContent).toContain('非表示のカードが保存から除外される可能性があります。');
+    expect(dashboardContent).not.toContain("hiddenCardsWarning: 'Hidden cards may be omitted by this save。");
+    expect(dashboardContent).toContain('Move would place a card outside the grid');
+    expect(globalStyles).toContain('.dashboard-layout-grid');
+    expect(globalStyles).toContain('grid-template-columns: repeat(12, minmax(0, 1fr))');
+    expect(globalStyles).toContain('grid-auto-rows: 88px');
+    expect(globalStyles).toContain('grid-column: var(--dashboard-card-column-start) / span var(--dashboard-card-columns)');
+    expect(globalStyles).toContain('grid-row: var(--dashboard-card-row-start) / span var(--dashboard-card-rows)');
+    expect(globalStyles).toContain('min-height: calc(var(--dashboard-card-rows) * 88px)');
+    expect(globalStyles).toContain('.dashboard-card-picker-list');
+    expect(globalStyles).toContain('@media (max-width: 900px)');
+    expect(globalStyles).toContain('--dashboard-card-columns: 1');
+  });
+
+  it('renders customizable Overview cards with local ordering controls', () => {
+    for (const marker of [
+      'data-overview-card-panel',
+      'data-overview-card-controls',
+      'data-overview-card-board',
+      'content.app.overviewCards.controlsLabel',
+    ]) {
+      expect(localizedDashboardPage).toContain(marker);
+    }
+    expect(localizedDashboardPage).toContain('activeRoute="overview"');
+    expect(localizedDashboardPage).not.toContain('data-overview-card-panel hidden');
+
+    for (const marker of [
+      "OVERVIEW_CARD_STORAGE_KEY = 'rainrail-dashboard-overview-card-layout'",
+      'overviewCardRegistry',
+      'createDefaultOverviewCardLayout',
+      'parseOverviewCardLayout',
+      'serializeOverviewCardLayout',
+      'setOverviewCardVisibility',
+      'moveOverviewCard',
+      'overviewWarningCount',
+    ]) {
+      expect(dashboardOverviewCards).toContain(marker);
+    }
+
+    for (const marker of [
+      'parseOverviewCardLayout(localStore.get(OVERVIEW_CARD_STORAGE_KEY), overviewCardRegistry)',
+      'serializeOverviewCardLayout(overviewCardLayout)',
+      'setOverviewCardVisibility',
+      'moveOverviewCard',
+      'overviewWarningCount',
+      'overviewWarningSummary',
+      'renderOverviewCards()',
+      'copy.overviewCards.todoHealth',
+    ]) {
+      expect(dashboardApp).toContain(marker);
+    }
+    expect(dashboardApp).toMatch(/setState\('error', message\);\s+renderOverviewCards\(\);/);
+
+    for (const marker of [
+      'Health',
+      'Counts',
+      'Recent activity',
+      'Warnings',
+      'TODO: expose component health in the overview API.',
+      'TODO: overview API でコンポーネント別 health を公開する。',
+    ]) {
+      expect(dashboardContent).toContain(marker);
+    }
+
+    expect(dashboardControllers).toContain("request.tab === 'overview'");
+    expect(globalStyles).toContain('.dashboard-overview-card-panel');
+    expect(globalStyles).toContain('.dashboard-overview-card-controls');
+    expect(globalStyles).toContain('.dashboard-overview-card-board');
   });
 
   it('does not mark the whole dashboard empty just because Event Inbox filters hide rows', () => {

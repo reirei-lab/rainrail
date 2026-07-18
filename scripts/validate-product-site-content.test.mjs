@@ -81,15 +81,23 @@ describe('product site concepts, guides, and examples', () => {
     for (const redirect of [
       '/concepts /en/concepts 301',
       '/concepts/ /en/concepts 301',
+      '/how-it-works /en/concepts 301',
+      '/how-it-works/ /en/concepts 301',
+      '/ja/how-it-works /ja/concepts 301',
+      '/ja/how-it-works/ /ja/concepts 301',
+      '/en/how-it-works /en/concepts 301',
+      '/en/how-it-works/ /en/concepts 301',
       '/guides /en/guides 301',
       '/guides/ /en/guides 301',
       '/examples /en/examples 301',
       '/examples/ /en/examples 301',
-      '/docs /en/docs 301',
-      '/docs/ /en/docs 301',
+      '/docs https://docs.rainrail.dev/ 301',
+      '/docs/ https://docs.rainrail.dev/ 301',
     ]) {
       expect(redirects).toContain(redirect);
     }
+
+    expect(i18n).not.toContain('howItWorks');
 
     for (const route of ['concepts', 'guides', 'examples', 'docs']) {
       const routeSource = page(route);
@@ -129,6 +137,7 @@ describe('product site concepts, guides, and examples', () => {
       throw new Error('Japanese home content must use the home renderer');
     }
 
+    expect(japaneseHome.headline).toBe('自分のループを組み立てる。');
     expect(japaneseHome.primaryActionsLabel).toBe('主要アクション');
     expect(japaneseHome.facts.ariaLabel).toBe('Rainrail の運用モデル');
     expect(japaneseHome.console.decisionsLabel).toBe('ルーティング判断');
@@ -156,7 +165,8 @@ describe('product site concepts, guides, and examples', () => {
   it('publishes sitemap entries from the localized page model', () => {
     expect(sitemapRoute).toContain('supportedLocales.flatMap');
     expect(sitemapRoute).toContain('pageIds.map');
-    expect(sitemapRoute).toContain('getDashboardHref(locale)');
+    expect(sitemapRoute).toContain('getDashboardRoutes().map');
+    expect(sitemapRoute).toContain('getDashboardHref(locale, route.id)');
     expect(sitemapRoute).toContain('getLocaleHref(locale, pageId)');
     expect(sitemapRoute).toContain('application/xml');
   });
@@ -192,6 +202,8 @@ describe('product site concepts, guides, and examples', () => {
   it('exposes Concepts, Guides, and Examples from the primary navigation and docs gateway', () => {
     expect(layout).toContain('site.nav.primary.map');
     expect(layout).toContain('hrefFor(item.pageId)');
+    expect(layout).toContain('item.href ?? hrefFor(item.pageId)');
+    expect(i18n).toContain("href: 'https://docs.rainrail.dev/'");
 
     for (const pageId of ['concepts', 'guides', 'examples']) {
       expect(siteContent).toContain(`pageId: '${pageId}'`);
@@ -201,20 +213,38 @@ describe('product site concepts, guides, and examples', () => {
     expect(dashboardContent).toContain('Rainrail 運用');
   });
 
-  it('publishes the initial Concepts content with links back to implementation contracts', () => {
+  it('points primary product navigation and home CTAs to the self-hosted docs site', () => {
+    const englishHome = getProductPageContent('en', 'home');
+    const japaneseHome = getProductPageContent('ja', 'home');
+
+    if (englishHome.kind !== 'home' || japaneseHome.kind !== 'home') {
+      throw new Error('Localized home content must use the home renderer');
+    }
+
+    expect(i18n).toContain("href: 'https://docs.rainrail.dev/'");
+    expect(englishHome.actions).toContainEqual(
+      expect.objectContaining({ label: 'Open developer docs', href: 'https://docs.rainrail.dev/' }),
+    );
+    expect(japaneseHome.actions).toContainEqual(
+      expect.objectContaining({ label: '技術ドキュメントを開く', href: 'https://docs.rainrail.dev/' }),
+    );
+  });
+
+  it('publishes the initial Concepts content with links to public docs contract pages', () => {
     for (const term of [
       'RainrailEventEnvelope',
       'Source plugin',
       'Source bundle',
       'Workflow plugin',
       'Runtime provider',
+      'Codex App Server',
       'Bridge room',
     ]) {
       expect(siteContent).toContain(term);
     }
 
-    expect(siteContent).toContain('plugin-runtime-contract.md');
-    expect(siteContent).toContain('event-delivery.md');
+    expect(siteContent).toContain('`${publicDocsBase}/reference/plugin-runtime/`');
+    expect(siteContent).toContain('`${publicDocsBase}/concepts/event-delivery/`');
   });
 
   it('publishes the initial Guides content for the first operational workflows', () => {
@@ -227,8 +257,8 @@ describe('product site concepts, guides, and examples', () => {
       expect(siteContent).toContain(guide);
     }
 
-    expect(siteContent).toContain('task-queue-project-issues.md');
-    expect(siteContent).toContain('cloudflare-worker.md');
+    expect(siteContent).toContain('`${publicDocsBase}/operations/task-queue/`');
+    expect(siteContent).toContain('`${publicDocsBase}/operations/cloudflare-worker/`');
   });
 
   it('keeps CLI setup docs minimal and points command details at rainrail help', () => {
@@ -264,11 +294,16 @@ describe('product site concepts, guides, and examples', () => {
       'cat rainrail.config.json',
       'rainrail openclaw help',
       'rainrail openclaw session test help',
+      'rainrail setup codex-app-server --yes',
+      'rainrail plugin codex-app-server doctor',
+      'rainrail plugin codex-app-server session test',
     ]) {
       expect(readme).toContain(command);
     }
 
     expect(readme).toContain('Node.js 20 or newer');
+    expect(readme).toContain('adds a separate `codex-app-server` runtime provider entry');
+    expect(readme).toContain('replace, or proxy the OpenClaw plugin');
     expect(siteContent).not.toContain('less install.sh');
     expect(siteContent).not.toContain('bash install.sh');
     expect(siteContent).not.toContain('Usage: rainrail github');
@@ -288,6 +323,7 @@ describe('product site concepts, guides, and examples', () => {
       'Manual or chat message',
       'Project queue',
       'agent run',
+      'codex-app-server plugin',
       'pull request',
       'review',
       'merge',
@@ -296,12 +332,12 @@ describe('product site concepts, guides, and examples', () => {
     }
   });
 
-  it('links product readers back to repository work surfaces and engineering contracts', () => {
+  it('links product readers to repository work surfaces and public docs contracts', () => {
     for (const target of [
       'https://github.com/reirei-lab/rainrail',
       '/issues',
-      'plugin-runtime-contract.md',
-      'README.md',
+      '`${publicDocsBase}/reference/plugin-runtime/`',
+      '`${publicDocsBase}/`',
     ]) {
       expect(siteContent).toContain(target);
     }

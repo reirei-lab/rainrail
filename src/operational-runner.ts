@@ -1,5 +1,5 @@
 import type { RainrailEventEnvelope } from './events.js';
-import type { RainrailOperationalStore, StoredAgentTask, StoredEventHandlerRetry } from './operational-store.js';
+import type { OperationalStore, StoredAgentTask, StoredEventHandlerRetry } from './operational-store.js';
 import type { ProjectIssue } from './project-issues.js';
 import type { RuntimeRunStatus } from './runtime-provider.js';
 import type { ProjectIssueClaim, TaskQueueProvider } from './task-queue.js';
@@ -27,7 +27,7 @@ const RELEASE_STALE_PROJECT_CLAIM_STATUSES = new Set<RuntimeRunStatus>([
 export type EventHandlerRetryHandler = (event: RainrailEventEnvelope, retry: StoredEventHandlerRetry) => unknown | Promise<unknown>;
 
 export interface ProcessDueEventHandlerRetriesOptions {
-  store: RainrailOperationalStore;
+  store: OperationalStore;
   now: string;
   handlers: Record<string, EventHandlerRetryHandler | undefined>;
   limit?: number;
@@ -40,7 +40,7 @@ export type ProcessDueEventHandlerRetryResult =
   | { eventId: string; handlerName: string; status: 'failed'; error: string };
 
 export interface ReconcileOperationalAgentTasksOptions {
-  store: RainrailOperationalStore;
+  store: OperationalStore;
   readRuntimeStatus(task: StoredAgentTask): Promise<OperationalRuntimeStatus | undefined> | OperationalRuntimeStatus | undefined;
   queue?: Pick<TaskQueueProvider, 'releaseProjectIssue'>;
 }

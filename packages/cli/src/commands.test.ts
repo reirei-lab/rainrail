@@ -1,16 +1,19 @@
 import { writeFileSync as realWriteFileSync } from 'node:fs';
 import { createHmac } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import net from 'node:net';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { once } from 'node:events';
+import { createRequire } from 'node:module';
+import { spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 import {
   BUILT_IN_COMMANDS,
   OFFICIAL_PLUGIN_CATALOG,
   type RainrailCliFileSystem,
   type RainrailStartOptions,
+  createStandaloneRainrailDispatchRunner,
   discoverRainrailProject,
   getBuiltInCommand,
   getOfficialPluginByAlias,
@@ -18,6 +21,9 @@ import {
   runRainrailCli,
   runRainrailCliAsync,
 } from './index.js';
+
+const testRequire = createRequire(import.meta.url);
+const dashboardDemoSeedScript = new URL('../../../scripts/seed-dashboard-demo-db.mjs', import.meta.url);
 
 async function withTempDirectory(test: (directory: string) => Promise<void>): Promise<void> {
   const directory = await mkdtemp(join(tmpdir(), 'rainrail-cli-'));
@@ -35,11 +41,65 @@ async function withTempDirectory(test: (directory: string) => Promise<void>): Pr
   }
 }
 
+function withSqliteDatabase<T>(databasePath: string, callback: (database: {
+  exec(sql: string): void;
+  prepare(sql: string): {
+    run(...values: Array<string | number | null>): void;
+    get(...values: Array<string | number | null>): unknown;
+  };
+}) => T): T {
+  const { DatabaseSync } = testRequire('node:sqlite') as {
+    DatabaseSync: new (path: string) => {
+      exec(sql: string): void;
+      prepare(sql: string): {
+        run(...values: Array<string | number | null>): void;
+        get(...values: Array<string | number | null>): unknown;
+      };
+      close(): void;
+    };
+  };
+  const database = new DatabaseSync(databasePath);
+  try {
+    return callback(database);
+  } finally {
+    database.close();
+  }
+}
+
+async function expectSqliteOperationalFilesProtected(databasePath: string): Promise<void> {
+  for (const path of [databasePath, `${databasePath}-wal`, `${databasePath}-shm`]) {
+    const file = await stat(path);
+    expect(file.mode & 0o777, path).toBe(0o600);
+  }
+}
+
 async function initRainrailProject(parentDirectory: string, projectName: string): Promise<string> {
   const projectRoot = join(parentDirectory, projectName);
   await mkdir(projectRoot, { recursive: true });
   expect(runRainrailCli(['init', '--yes'], { cwd: projectRoot }).exitCode).toBe(0);
   return projectRoot;
+}
+
+function codexAppServerSessionSmokeStdout(): string {
+  return [
+    JSON.stringify({
+      id: 1,
+      result: {
+        userAgent: 'codex-cli/0.139.0',
+        platformFamily: 'unix',
+        platformOs: 'darwin',
+      },
+    }),
+    JSON.stringify({
+      id: 2,
+      result: {
+        thread: {
+          id: 'thread_smoke',
+        },
+      },
+    }),
+    '',
+  ].join('\n');
 }
 
 async function getFreePort(host = '127.0.0.1'): Promise<number> {
@@ -54,6 +114,18 @@ async function getFreePort(host = '127.0.0.1'): Promise<number> {
   server.close();
   await once(server, 'close');
   return port;
+}
+
+async function rawLocalHttpRequest(port: number, lines: readonly string[]): Promise<string> {
+  const socket = net.createConnection({ host: '127.0.0.1', port });
+  socket.write(lines.join('\r\n'));
+  let response = '';
+  socket.setEncoding('utf8');
+  socket.on('data', (chunk) => {
+    response += chunk;
+  });
+  await once(socket, 'end');
+  return response;
 }
 
 async function closeTestServer(result: { server?: { stop: () => void | Promise<void> } }): Promise<void> {
@@ -77,12 +149,23 @@ function githubWebhookHeaders(
   };
 }
 
+function manualDispatchPayload(conversationId: string, text = 'hello'): Record<string, unknown> {
+  return {
+    provider: 'rainrail',
+    channel: 'manual',
+    action: 'message',
+    conversation: { id: conversationId },
+    message: { id: `message-${conversationId}`, text },
+  };
+}
+
 describe('Rainrail CLI built-in commands', () => {
   it('defines the command table without provider or runtime specific handlers', () => {
     expect(BUILT_IN_COMMANDS.map((command) => command.name)).toEqual([
       'init',
       'setup',
       'start',
+      'dispatch',
       'doctor',
       'plugins',
       'plugin',
@@ -163,10 +246,912 @@ describe('Rainrail CLI built-in commands', () => {
       expect(result.stdout).toContain(`  ${command.name}`);
     }
     expect(result.stdout).toContain('Start the local Rainrail harness server in the foreground.');
+    expect(result.stdout).toContain('Dispatch an event into a Rainrail workflow.');
     expect(result.stdout).toContain('Official plugin aliases:');
     expect(result.stdout).toContain('  github');
     expect(result.stdout).toContain('  cloudflare');
     expect(result.stdout).toContain('  openclaw');
+    expect(result.stdout).toContain('  codex-app-server');
+  });
+
+  it('prints dispatch command help', () => {
+    const result = runRainrailCli(['dispatch', 'help']);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe('');
+    expect(result.stdout).toContain('Usage: rainrail dispatch <message> | --stdin | --message <text> | --json <file> | --json --stdin | --envelope-json <json>');
+    expect(result.stdout).toContain('<message>');
+    expect(result.stdout).toContain('--stdin');
+    expect(result.stdout).toContain('--message <text>');
+    expect(result.stdout).toContain('--json <file>');
+    expect(result.stdout).toContain('--json --stdin');
+    expect(result.stdout).toContain('--envelope-json <json>');
+  });
+
+  it('requires exactly one dispatch input mode', () => {
+    expect(runRainrailCli(['dispatch'])).toMatchObject({
+      exitCode: 1,
+      stdout: '',
+      stderr: 'Usage: rainrail dispatch <message> | --stdin | --message <text> | --json <file> | --json --stdin | --envelope-json <json>\n',
+    });
+
+    expect(runRainrailCli(['dispatch', '--message', 'hello', '--envelope-json', '{}'])).toMatchObject({
+      exitCode: 1,
+      stdout: '',
+      stderr: 'Choose only one dispatch input mode.\n',
+    });
+  });
+
+  it('dispatches a positional message as a manual Rainrail event envelope', () => {
+    const dispatched: unknown[] = [];
+
+    const result = runRainrailCli(['dispatch', '明日の13時に歯医者'], {
+      now: () => new Date('2026-07-09T12:34:56.000Z'),
+      dispatchRunner: (request) => {
+        dispatched.push(request);
+        return {
+          exitCode: 0,
+          stdout: 'accepted event\n',
+          stderr: '',
+        };
+      },
+    });
+
+    expect(result).toEqual({
+      exitCode: 0,
+      stdout: 'accepted event\n',
+      stderr: '',
+    });
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0]).toMatchObject(
+      {
+        mode: 'message',
+        input: '明日の13時に歯医者',
+        event: {
+          schemaVersion: 'rainrail.event.v1',
+          source: {
+            type: 'manual',
+            name: 'cli',
+          },
+          name: 'rainrail.manual.message',
+          delivery: {
+            receivedAt: '2026-07-09T12:34:56.000Z',
+          },
+          occurredAt: '2026-07-09T12:34:56.000Z',
+          subject: {
+            type: 'conversation',
+            id: 'cli-manual',
+          },
+          payload: {
+            provider: 'rainrail',
+            channel: 'manual',
+            action: 'message',
+            conversation: {
+              id: 'cli-manual',
+            },
+            message: {
+              text: '明日の13時に歯医者',
+            },
+            actor: {
+              id: 'rainrail-cli',
+              displayName: 'Rainrail CLI',
+              type: 'cli',
+            },
+          },
+          rawPayload: {
+            kind: 'inline-redacted',
+            contentType: 'text/plain',
+          },
+        },
+        options: {
+          config: undefined,
+          profile: undefined,
+          json: false,
+        },
+      },
+    );
+    expect((dispatched[0] as { event: { id: string; delivery: { id: string }; rawPayload: { reference: string; sha256: string } } }).event.id)
+      .toMatch(/^cli:cli-[a-f0-9]{16}-[a-z0-9]+-[a-f0-9]{16}:rainrail\.manual\.message$/u);
+    expect((dispatched[0] as { event: { delivery: { id: string }; rawPayload: { reference: string; sha256: string } } }).event.rawPayload.reference)
+      .toBe(`manual://deliveries/${(dispatched[0] as { event: { delivery: { id: string } } }).event.delivery.id}`);
+    expect((dispatched[0] as { event: { rawPayload: { sha256: string } } }).event.rawPayload.sha256)
+      .toMatch(/^[a-f0-9]{64}$/u);
+  });
+
+  it('dispatches stdin message input as a manual Rainrail event envelope', () => {
+    const dispatched: unknown[] = [];
+
+    const result = runRainrailCli(['dispatch', '--stdin'], {
+      stdin: 'from stdin\n',
+      now: () => new Date('2026-07-09T12:35:56.000Z'),
+      dispatchRunner: (request) => {
+        dispatched.push(request);
+        return {
+          exitCode: 0,
+          stdout: 'accepted message\n',
+          stderr: '',
+        };
+      },
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(dispatched).toMatchObject([
+      {
+        input: 'from stdin\n',
+        event: {
+          payload: {
+            message: {
+              text: 'from stdin',
+            },
+          },
+        },
+      },
+    ]);
+  });
+
+  it('rejects stdin message input that exceeds the dispatch byte limit', () => {
+    const dispatched: unknown[] = [];
+
+    expect(runRainrailCli(['dispatch', '--stdin'], {
+      stdin: 'x'.repeat(65_537),
+      dispatchRunner: (request) => {
+        dispatched.push(request);
+        return {
+          exitCode: 0,
+          stdout: 'accepted message\n',
+          stderr: '',
+        };
+      },
+    })).toMatchObject({
+      exitCode: 1,
+      stdout: '',
+      stderr: 'Message from stdin must not exceed 65536 bytes.\n',
+    });
+    expect(dispatched).toEqual([]);
+  });
+
+  it('does not read stdin until dispatch input modes are valid', () => {
+    const dispatched: unknown[] = [];
+    let stdinReads = 0;
+
+    expect(runRainrailCli(['dispatch', '--stdin', '--message', 'hello'], {
+      stdinReader: () => {
+        stdinReads += 1;
+        return 'from stdin\n';
+      },
+      dispatchRunner: (request) => {
+        dispatched.push(request);
+        return {
+          exitCode: 0,
+          stdout: 'accepted message\n',
+          stderr: '',
+        };
+      },
+    })).toMatchObject({
+      exitCode: 1,
+      stdout: '',
+      stderr: 'Choose only one dispatch input mode.\n',
+    });
+
+    expect(stdinReads).toBe(0);
+    expect(dispatched).toEqual([]);
+  });
+
+  it('rejects positional arguments after explicit dispatch input modes', () => {
+    const dispatched: unknown[] = [];
+    let stdinReads = 0;
+
+    expect(runRainrailCli(['dispatch', '--message', 'hello', 'world'], {
+      dispatchRunner: (request) => {
+        dispatched.push(request);
+        return {
+          exitCode: 0,
+          stdout: 'accepted message\n',
+          stderr: '',
+        };
+      },
+    })).toMatchObject({
+      exitCode: 1,
+      stdout: '',
+      stderr: 'Unexpected rainrail dispatch argument: world.\n',
+    });
+
+    expect(runRainrailCli(['dispatch', '--stdin', 'trailing'], {
+      stdinReader: () => {
+        stdinReads += 1;
+        return 'from stdin\n';
+      },
+      dispatchRunner: (request) => {
+        dispatched.push(request);
+        return {
+          exitCode: 0,
+          stdout: 'accepted message\n',
+          stderr: '',
+        };
+      },
+    })).toMatchObject({
+      exitCode: 1,
+      stdout: '',
+      stderr: 'Unexpected rainrail dispatch argument: trailing.\n',
+    });
+
+    expect(stdinReads).toBe(0);
+    expect(dispatched).toEqual([]);
+  });
+
+  it('redacts and bounds CLI manual message event payload text', () => {
+    const dispatched: unknown[] = [];
+    const longSuffix = 'x'.repeat(9_000);
+
+    const result = runRainrailCli(['dispatch', '--message', `DATABASE_URL=postgres://user:pass@db/prod ${longSuffix}`], {
+      dispatchRunner: (request) => {
+        dispatched.push(request);
+        return {
+          exitCode: 0,
+          stdout: 'accepted message\n',
+          stderr: '',
+        };
+      },
+    });
+
+    expect(result.exitCode).toBe(0);
+    const messageText = (dispatched[0] as { event: { payload: { message: { text: string } } } }).event.payload.message.text;
+    expect(messageText).toContain('DATABASE_URL=[redacted-url]');
+    expect(messageText).not.toContain('postgres://user:pass@db/prod');
+    expect(messageText).toHaveLength(8_000);
+  });
+
+  it('generates unique manual delivery ids for repeated dispatches in the same millisecond', () => {
+    const dispatched: unknown[] = [];
+
+    for (let index = 0; index < 2; index += 1) {
+      const result = runRainrailCli(['dispatch', 'same message'], {
+        now: () => new Date('2026-07-09T12:36:56.000Z'),
+        dispatchRunner: (request) => {
+          dispatched.push(request);
+          return {
+            exitCode: 0,
+            stdout: 'accepted message\n',
+            stderr: '',
+          };
+        },
+      });
+      expect(result.exitCode).toBe(0);
+    }
+
+    const eventIds = dispatched.map((request) => (request as { event: { id: string } }).event.id);
+    const deliveryIds = dispatched.map((request) => (request as { event: { delivery: { id: string } } }).event.delivery.id);
+    expect(new Set(eventIds).size).toBe(2);
+    expect(new Set(deliveryIds).size).toBe(2);
+    expect(deliveryIds).toEqual([
+      expect.stringMatching(/^cli-[a-f0-9]{16}-[a-z0-9]+-[a-f0-9]{16}$/u),
+      expect.stringMatching(/^cli-[a-f0-9]{16}-[a-z0-9]+-[a-f0-9]{16}$/u),
+    ]);
+  });
+
+  it('allows message-only dispatch input that starts with option syntax', () => {
+    const dispatched: unknown[] = [];
+
+    const result = runRainrailCli(['dispatch', '--message', '--review this'], {
+      dispatchRunner: (request) => {
+        dispatched.push(request);
+        return {
+          exitCode: 0,
+          stdout: 'accepted message\n',
+          stderr: '',
+        };
+      },
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(dispatched).toMatchObject([
+      {
+        mode: 'message',
+        input: '--review this',
+        event: {
+          payload: {
+            message: {
+              text: '--review this',
+            },
+          },
+        },
+      },
+    ]);
+  });
+
+  it('protects dispatch input values that match shared option names', () => {
+    const dispatched: unknown[] = [];
+
+    const result = runRainrailCli(['dispatch', '--message', '--json'], {
+      dispatchRunner: (request) => {
+        dispatched.push(request);
+        return {
+          exitCode: 0,
+          stdout: 'accepted message\n',
+          stderr: '',
+        };
+      },
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(dispatched).toMatchObject([
+      {
+        mode: 'message',
+        input: '--json',
+        event: {
+          payload: {
+            message: {
+              text: '--json',
+            },
+          },
+        },
+        options: {
+          config: undefined,
+          profile: undefined,
+          json: false,
+        },
+      },
+    ]);
+  });
+
+  it('preserves the shared JSON output option after a dispatch message input mode', () => {
+    const dispatched: unknown[] = [];
+
+    const result = runRainrailCli(['dispatch', '--message', 'hello', '--json'], {
+      dispatchRunner: (request) => {
+        dispatched.push(request);
+        return {
+          exitCode: 0,
+          stdout: '{"accepted":true}\n',
+          stderr: '',
+        };
+      },
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(dispatched).toMatchObject([
+      {
+        mode: 'message',
+        input: 'hello',
+        options: {
+          config: undefined,
+          profile: undefined,
+          json: true,
+        },
+      },
+    ]);
+  });
+
+  it('rejects empty dispatch messages before dispatching', () => {
+    const dispatched: unknown[] = [];
+
+    expect(runRainrailCli(['dispatch', '   '], {
+      dispatchRunner: (request) => {
+        dispatched.push(request);
+        return {
+          exitCode: 0,
+          stdout: 'accepted message\n',
+          stderr: '',
+        };
+      },
+    })).toMatchObject({
+      exitCode: 1,
+      stdout: '',
+      stderr: 'Message must not be empty.\n',
+    });
+
+    expect(runRainrailCli(['dispatch', '--stdin'], {
+      stdin: '\n\t',
+      dispatchRunner: (request) => {
+        dispatched.push(request);
+        return {
+          exitCode: 0,
+          stdout: 'accepted message\n',
+          stderr: '',
+        };
+      },
+    })).toMatchObject({
+      exitCode: 1,
+      stdout: '',
+      stderr: 'Message must not be empty.\n',
+    });
+    expect(dispatched).toEqual([]);
+  });
+
+  it('routes validated envelope-json dispatch input into the shared dispatch boundary', () => {
+    const dispatched: unknown[] = [];
+    const envelopeJson = `{
+  "id":"manual-source:delivery-inline:rainrail.manual.message",
+  "schemaVersion":"rainrail.event.v1",
+  "source":{"type":"manual","name":"manual-source"},
+  "name":"rainrail.manual.message",
+  "delivery":{"id":"delivery-inline","receivedAt":"2026-07-09T00:00:00.000Z"},
+  "occurredAt":"2026-07-09T00:00:00.000Z",
+  "subject":{"type":"conversation","id":"thread-inline"},
+  "payload":{"provider":"rainrail","channel":"manual","action":"message","conversation":{"id":"thread-inline"},"message":{"id":"message-thread-inline","text":"hello inline"},"numericId":9007199254740993},
+  "rawPayload":{"kind":"inline-redacted","reference":"manual://deliveries/delivery-inline"}
+}`;
+
+    const result = runRainrailCli(['--config', 'rainrail.config.json', 'dispatch', '--envelope-json', envelopeJson], {
+      dispatchRunner: (request) => {
+        dispatched.push(request);
+        return {
+          exitCode: 0,
+          stdout: 'accepted envelope\n',
+          stderr: '',
+        };
+      },
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(dispatched).toEqual([
+      {
+        mode: 'envelope-json',
+        input: envelopeJson,
+        options: {
+          config: 'rainrail.config.json',
+          profile: undefined,
+          json: false,
+        },
+      },
+    ]);
+    expect(JSON.stringify(dispatched)).toContain('9007199254740993');
+  });
+
+  it('dispatches a complete Rainrail event envelope from a JSON file', async () => {
+    await withTempDirectory(async (directory) => {
+      const eventPath = join(directory, 'event.json');
+      const envelope = {
+        id: 'manual-source:delivery-file:rainrail.manual.message',
+        schemaVersion: 'rainrail.event.v1',
+        source: { type: 'manual', name: 'manual-source' },
+        name: 'rainrail.manual.message',
+        delivery: { id: 'delivery-file', receivedAt: '2026-07-09T00:00:00.000Z' },
+        occurredAt: '2026-07-09T00:00:00.000Z',
+        subject: { type: 'conversation', id: 'thread-file' },
+        payload: manualDispatchPayload('thread-file', 'hello file'),
+        rawPayload: { kind: 'inline-redacted', reference: 'manual://deliveries/delivery-file' },
+      };
+      await writeFile(eventPath, JSON.stringify(envelope), 'utf8');
+      const dispatched: unknown[] = [];
+
+      const result = runRainrailCli(['dispatch', '--json', eventPath], {
+        dispatchRunner: (request) => {
+          dispatched.push(request);
+          return {
+            exitCode: 0,
+            stdout: 'accepted file envelope\n',
+            stderr: '',
+          };
+        },
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(dispatched).toEqual([
+        expect.objectContaining({
+          mode: 'envelope-json',
+          input: JSON.stringify(envelope),
+        }),
+      ]);
+    });
+  });
+
+  it('dispatches an accepted Rainrail event envelope input from stdin with defaults', () => {
+    const dispatched: unknown[] = [];
+    const envelopeInput = {
+      source: { type: 'manual', name: 'manual-source' },
+      name: 'rainrail.manual.message',
+      delivery: { id: 'delivery-stdin', receivedAt: '2026-07-09T00:00:00.000Z' },
+      occurredAt: '2026-07-09T00:00:00.000Z',
+      subject: { type: 'conversation', id: 'thread-stdin' },
+      payload: manualDispatchPayload('thread-stdin', 'hello stdin'),
+      rawPayload: { kind: 'inline-redacted', reference: 'manual://deliveries/delivery-stdin' },
+    };
+
+    const result = runRainrailCli(['dispatch', '--json', '--stdin'], {
+      stdinReader: () => JSON.stringify(envelopeInput),
+      dispatchRunner: (request) => {
+        dispatched.push(request);
+        return {
+          exitCode: 0,
+          stdout: 'accepted stdin envelope\n',
+          stderr: '',
+        };
+      },
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(dispatched).toEqual([
+      expect.objectContaining({
+        mode: 'envelope-json',
+        input: `{"id":"manual-source:delivery-stdin:rainrail.manual.message","schemaVersion":"rainrail.event.v1",${JSON.stringify(envelopeInput).slice(1)}`,
+      }),
+    ]);
+  });
+
+  it('returns a clear error for invalid dispatch JSON', async () => {
+    await withTempDirectory(async (directory) => {
+      const eventPath = join(directory, 'event.json');
+      await writeFile(eventPath, '{"source":', 'utf8');
+
+      expect(runRainrailCli(['dispatch', '--json', eventPath], {
+        dispatchRunner: () => ({ exitCode: 0, stdout: 'unexpected\n', stderr: '' }),
+      })).toMatchObject({
+        exitCode: 1,
+        stdout: '',
+        stderr: expect.stringContaining('Invalid JSON for rainrail dispatch envelope:'),
+      });
+    });
+  });
+
+  it('resolves dispatch JSON files relative to the CLI environment cwd', async () => {
+    await withTempDirectory(async (directory) => {
+      const envelope = {
+        id: 'manual-source:delivery-cwd:rainrail.manual.message',
+        schemaVersion: 'rainrail.event.v1',
+        source: { type: 'manual', name: 'manual-source' },
+        name: 'rainrail.manual.message',
+        delivery: { id: 'delivery-cwd', receivedAt: '2026-07-09T00:00:00.000Z' },
+        occurredAt: '2026-07-09T00:00:00.000Z',
+        subject: { type: 'conversation', id: 'thread-cwd' },
+        payload: manualDispatchPayload('thread-cwd', 'hello from cwd'),
+        rawPayload: { kind: 'inline-redacted', reference: 'manual://deliveries/delivery-cwd' },
+      };
+      await writeFile(join(directory, 'event.json'), JSON.stringify(envelope), 'utf8');
+      const dispatched: unknown[] = [];
+
+      const result = runRainrailCli(['dispatch', '--json', 'event.json'], {
+        cwd: directory,
+        dispatchRunner: (request) => {
+          dispatched.push(request);
+          return {
+            exitCode: 0,
+            stdout: 'accepted cwd envelope\n',
+            stderr: '',
+          };
+        },
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(dispatched).toEqual([
+        expect.objectContaining({
+          mode: 'envelope-json',
+          input: JSON.stringify(envelope),
+        }),
+      ]);
+    });
+  });
+
+  it('validates dispatch arguments before reading stdin', () => {
+    let stdinRead = false;
+
+    const result = runRainrailCli(['dispatch', '--json', '--stdin', 'typo'], {
+      stdinReader: () => {
+        stdinRead = true;
+        return '{}';
+      },
+    });
+
+    expect(result).toEqual({
+      exitCode: 1,
+      stdout: '',
+      stderr: 'Unexpected rainrail dispatch argument: typo.\n',
+    });
+    expect(stdinRead).toBe(false);
+  });
+
+  it('returns the missing dispatch runner error before reading stdin', () => {
+    let stdinRead = false;
+
+    const result = runRainrailCli(['dispatch', '--json', '--stdin'], {
+      stdinReader: () => {
+        stdinRead = true;
+        return '{}';
+      },
+    });
+
+    expect(result).toEqual({
+      exitCode: 2,
+      stdout: '',
+      stderr: 'rainrail dispatch requires a dispatch runner, which is not implemented yet.\n',
+    });
+    expect(stdinRead).toBe(false);
+  });
+
+  it('rejects async dispatch runners in the synchronous CLI before side effects', () => {
+    let publishStarted = false;
+    let stdinRead = false;
+
+    const result = runRainrailCli(['dispatch', '--json', '--stdin'], {
+      asyncDispatchRunner: createStandaloneRainrailDispatchRunner({
+        env: {
+          RAINRAIL_PUBLISH_URL: 'https://rainrail.example/publish',
+          RAINRAIL_PUBLISH_TOKEN: 'publish-token',
+        },
+        fetcher: () => {
+          publishStarted = true;
+          return Promise.resolve({ status: 200, body: '{}' });
+        },
+      }),
+      stdinReader: () => {
+        stdinRead = true;
+        return '{}';
+      },
+    });
+
+    expect(result).toEqual({
+      exitCode: 2,
+      stdout: '',
+      stderr: 'rainrail dispatch requires the async CLI runner for asynchronous dispatch runners.\n',
+    });
+    expect(stdinRead).toBe(false);
+    expect(publishStarted).toBe(false);
+  });
+
+  it('returns a clear error for invalid dispatch envelope shapes', async () => {
+    await withTempDirectory(async (directory) => {
+      const eventPath = join(directory, 'event.json');
+      await writeFile(eventPath, JSON.stringify({ source: { type: 'manual' } }), 'utf8');
+
+      expect(runRainrailCli(['dispatch', '--json', eventPath], {
+        dispatchRunner: () => ({ exitCode: 0, stdout: 'unexpected\n', stderr: '' }),
+      })).toEqual({
+        exitCode: 1,
+        stdout: '',
+        stderr: 'Invalid Rainrail event envelope: source.name must be a string.\n',
+      });
+    });
+  });
+
+  it.each([
+    [
+      'source.name',
+      {
+        source: { type: 'manual', name: 'bad\nname' },
+      },
+      'Invalid Rainrail event envelope: source.name must be a safe identifier.\n',
+    ],
+    [
+      'delivery.receivedAt',
+      {
+        delivery: { id: 'delivery-invalid-date', receivedAt: 'not-a-date' },
+      },
+      'Invalid Rainrail event envelope: delivery.receivedAt must be a UTC ISO timestamp.\n',
+    ],
+    [
+      'rawPayload.kind',
+      {
+        rawPayload: { kind: 'inline', reference: 'manual://deliveries/delivery-invalid-kind' },
+      },
+      'Invalid Rainrail event envelope: rawPayload.kind must be a known raw payload kind.\n',
+    ],
+    [
+      'rawPayload.reference',
+      {
+        rawPayload: { kind: 'inline-redacted', reference: 'https://example.com/raw' },
+      },
+      'Invalid Rainrail event envelope: rawPayload.reference must be an allowed Rainrail event URL.\n',
+    ],
+  ])('rejects invalid dispatch envelope contract field %s', async (_field, override, expectedError) => {
+    await withTempDirectory(async (directory) => {
+      const eventPath = join(directory, 'event.json');
+      const envelope = {
+        id: 'manual-source:delivery-contract:rainrail.manual.message',
+        schemaVersion: 'rainrail.event.v1',
+        source: { type: 'manual', name: 'manual-source' },
+        name: 'rainrail.manual.message',
+        delivery: { id: 'delivery-contract', receivedAt: '2026-07-09T00:00:00.000Z' },
+        occurredAt: '2026-07-09T00:00:00.000Z',
+        subject: { type: 'conversation', id: 'thread-contract' },
+        payload: manualDispatchPayload('thread-contract', 'hello contract'),
+        rawPayload: { kind: 'inline-redacted', reference: 'manual://deliveries/delivery-contract' },
+        ...override,
+      };
+      await writeFile(eventPath, JSON.stringify(envelope), 'utf8');
+
+      expect(runRainrailCli(['dispatch', '--json', eventPath], {
+        dispatchRunner: () => ({ exitCode: 0, stdout: 'unexpected\n', stderr: '' }),
+      })).toEqual({
+        exitCode: 1,
+        stdout: '',
+        stderr: expectedError,
+      });
+    });
+  });
+
+  it('preserves caller payload numbers when filling dispatch envelope defaults', () => {
+    const dispatched: unknown[] = [];
+    const envelopeInputJson = `{"source":{"type":"github","name":"github-webhook"},"name":"github.issue","delivery":{"id":"delivery-defaults","receivedAt":"2026-07-09T00:00:00.000Z"},"occurredAt":"2026-07-09T00:00:00.000Z","subject":{"type":"issue","id":"262","url":"https://github.com/reirei-lab/rainrail/issues/262"},"payload":{"provider":"github","resource":{"id":9007199254740993}},"rawPayload":{"kind":"external-reference","reference":"github://deliveries/delivery-defaults"}}`;
+
+    const result = runRainrailCli(['dispatch', '--envelope-json', envelopeInputJson], {
+      dispatchRunner: (request) => {
+        dispatched.push(request);
+        return {
+          exitCode: 0,
+          stdout: 'accepted defaults envelope\n',
+          stderr: '',
+        };
+      },
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(dispatched).toEqual([
+      expect.objectContaining({
+        mode: 'envelope-json',
+        input: `{"id":"github-webhook:delivery-defaults:github.issue","schemaVersion":"rainrail.event.v1",${envelopeInputJson.slice(1)}`,
+      }),
+    ]);
+    expect(JSON.stringify(dispatched)).toContain('9007199254740993');
+  });
+
+  it('accepts repository-shaped event ids and unsafe optional source metadata', () => {
+    const dispatched: unknown[] = [];
+    const envelope = {
+      id: 'reirei-lab/rainrail',
+      schemaVersion: 'rainrail.event.v1',
+      source: {
+        type: 'github',
+        name: 'github-webhook',
+        account: 'renovate[bot]',
+        environment: 'github-actions[bot]',
+      },
+      name: 'github.issue',
+      delivery: { id: 'delivery-repository-id', receivedAt: '2026-07-09T00:00:00.000Z' },
+      occurredAt: '2026-07-09T00:00:00.000Z',
+      subject: { type: 'issue', id: '262', url: 'https://github.com/reirei-lab/rainrail/issues/262' },
+      payload: { provider: 'github', action: 'opened' },
+      rawPayload: { kind: 'external-reference', reference: 'github://deliveries/delivery-repository-id' },
+    };
+
+    const result = runRainrailCli(['dispatch', '--envelope-json', JSON.stringify(envelope)], {
+      dispatchRunner: (request) => {
+        dispatched.push(request);
+        return {
+          exitCode: 0,
+          stdout: 'accepted repository id envelope\n',
+          stderr: '',
+        };
+      },
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(dispatched).toEqual([
+      expect.objectContaining({
+        mode: 'envelope-json',
+        input: JSON.stringify(envelope),
+      }),
+    ]);
+  });
+
+  it('accepts GitHub pull request review URL fragments in dispatch envelope URLs', () => {
+    const dispatched: unknown[] = [];
+    const envelope = {
+      id: 'github-webhook:delivery-review:github.pull_request_review',
+      schemaVersion: 'rainrail.event.v1',
+      source: {
+        type: 'github',
+        name: 'github-webhook',
+        repository: 'reirei-lab/rainrail',
+      },
+      name: 'github.pull_request_review',
+      delivery: { id: 'delivery-review', receivedAt: '2026-07-09T00:00:00.000Z' },
+      occurredAt: '2026-07-09T00:00:00.000Z',
+      subject: {
+        type: 'review',
+        id: '123',
+        url: 'https://github.com/reirei-lab/rainrail/pull/39#pullrequestreview-123',
+      },
+      payload: { provider: 'github', action: 'submitted' },
+      rawPayload: { kind: 'external-reference', reference: 'github://deliveries/delivery-review' },
+    };
+
+    const result = runRainrailCli(['dispatch', '--envelope-json', JSON.stringify(envelope)], {
+      dispatchRunner: (request) => {
+        dispatched.push(request);
+        return {
+          exitCode: 0,
+          stdout: 'accepted review envelope\n',
+          stderr: '',
+        };
+      },
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(dispatched).toEqual([
+      expect.objectContaining({
+        mode: 'envelope-json',
+        input: JSON.stringify(envelope),
+      }),
+    ]);
+  });
+
+  it.each([
+    [
+      'schemaVersion null',
+      {
+        id: 'manual-source:delivery-null-schema:rainrail.manual.message',
+        schemaVersion: null,
+      },
+      'Invalid Rainrail event envelope: schemaVersion must be "rainrail.event.v1".\n',
+    ],
+    [
+      'id null',
+      {
+        id: null,
+        schemaVersion: 'rainrail.event.v1',
+      },
+      'Invalid Rainrail event envelope: id must be a string.\n',
+    ],
+    [
+      'manual source with chat event name',
+      {
+        id: 'manual-source:delivery-manual-chat:rainrail.chat.message',
+        schemaVersion: 'rainrail.event.v1',
+        name: 'rainrail.chat.message',
+      },
+      'Invalid Rainrail event envelope: manual/chat event name must match source.type.\n',
+    ],
+    [
+      'manual payload missing required fields',
+      {
+        id: 'manual-source:delivery-manual-payload:rainrail.manual.message',
+        schemaVersion: 'rainrail.event.v1',
+        payload: { text: 'hello' },
+      },
+      'Invalid Rainrail event envelope: manual/chat payload is missing required fields.\n',
+    ],
+    [
+      'manual raw payload external reference',
+      {
+        id: 'manual-source:delivery-manual-external:rainrail.manual.message',
+        schemaVersion: 'rainrail.event.v1',
+        rawPayload: { kind: 'external-reference', reference: 'manual://deliveries/delivery-manual-external' },
+      },
+      'Invalid Rainrail event envelope: manual/chat raw payload kind must be inline-redacted.\n',
+    ],
+    [
+      'manual raw payload chat reference',
+      {
+        id: 'manual-source:delivery-manual-chat-ref:rainrail.manual.message',
+        schemaVersion: 'rainrail.event.v1',
+        rawPayload: { kind: 'inline-redacted', reference: 'chat://deliveries/delivery-manual-chat-ref' },
+      },
+      'Invalid Rainrail event envelope: manual/chat raw payload reference must match source.type.\n',
+    ],
+    [
+      'delivery reference port',
+      {
+        id: 'manual-source:delivery-manual-port:rainrail.manual.message',
+        schemaVersion: 'rainrail.event.v1',
+        rawPayload: { kind: 'inline-redacted', reference: 'manual://deliveries:123/delivery-manual-port' },
+      },
+      'Invalid Rainrail event envelope: rawPayload.reference must be an allowed Rainrail event URL.\n',
+    ],
+  ])('rejects invalid dispatch envelope contract extension %s', async (_case, override, expectedError) => {
+    await withTempDirectory(async (directory) => {
+      const eventPath = join(directory, 'event.json');
+      const baseEnvelope = {
+        id: 'manual-source:delivery-extension:rainrail.manual.message',
+        schemaVersion: 'rainrail.event.v1',
+        source: { type: 'manual', name: 'manual-source' },
+        name: 'rainrail.manual.message',
+        delivery: { id: 'delivery-extension', receivedAt: '2026-07-09T00:00:00.000Z' },
+        occurredAt: '2026-07-09T00:00:00.000Z',
+        subject: { type: 'conversation', id: 'thread-extension' },
+        payload: manualDispatchPayload('thread-extension', 'hello extension'),
+        rawPayload: { kind: 'inline-redacted', reference: 'manual://deliveries/delivery-extension' },
+      };
+      const envelope = { ...baseEnvelope, ...override };
+      await writeFile(eventPath, JSON.stringify(envelope), 'utf8');
+
+      expect(runRainrailCli(['dispatch', '--json', eventPath], {
+        dispatchRunner: () => ({ exitCode: 0, stdout: 'unexpected\n', stderr: '' }),
+      })).toEqual({
+        exitCode: 1,
+        stdout: '',
+        stderr: expectedError,
+      });
+    });
   });
 
   it('prints the CLI package version from rainrail version', async () => {
@@ -210,6 +1195,9 @@ describe('Rainrail CLI built-in commands', () => {
       expect(result.stdout).toContain(`Config: ${join(projectRoot, 'rainrail.config.json')}`);
       expect(result.stdout).toContain('Health: http://127.0.0.1:8787/healthz');
       expect(result.stdout).toContain('Dashboard: http://127.0.0.1:8787/dashboard');
+      expect(result.stdout).toContain(
+        'Dashboard routes: /en/dashboard/events, /en/dashboard/runs, /en/dashboard/tasks, /en/dashboard/sources, /en/dashboard/queue, /en/dashboard/settings',
+      );
       expect(result.stdout).toContain('Event Stream: http://127.0.0.1:8787/events');
       expect(result.stdout).toContain('Dashboard API: http://127.0.0.1:8787/api/v1/overview');
       expect(result.stdout).toContain('Dashboard Auth: not configured');
@@ -267,6 +1255,170 @@ describe('Rainrail CLI built-in commands', () => {
       expect(startOptions).toMatchObject({
         host: 'localhost',
         port: 9001,
+      });
+    });
+  });
+
+  it('passes rainrail.config.json operationalStore into rainrail start options', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'configured-operational-store');
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        operationalStore: {
+          kind: 'sqlite',
+          databasePath: '${RAINRAIL_OPERATIONAL_DB}',
+          eventLimit: 123,
+        },
+        sourceBundles: [],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+      let startOptions: RainrailStartOptions | undefined;
+
+      const result = runRainrailCli(['start'], {
+        cwd: projectRoot,
+        env: {
+          RAINRAIL_OPERATIONAL_DB: 'var/rainrail-operational.sqlite',
+        },
+        serverStarter: (options) => {
+          startOptions = options;
+          return { stop: () => undefined };
+        },
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+      expect(startOptions?.operationalStoreConfig).toEqual({
+        kind: 'sqlite',
+        databasePath: join(projectRoot, 'var', 'rainrail-operational.sqlite'),
+        eventLimit: 123,
+      });
+    });
+  });
+
+  it('lets rainrail start operational store env override config', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'env-operational-store');
+      let startOptions: RainrailStartOptions | undefined;
+
+      const result = runRainrailCli(['start'], {
+        cwd: projectRoot,
+        env: {
+          RAINRAIL_OPERATIONAL_STORE: 'json',
+          RAINRAIL_OPERATIONAL_DB: 'var/rainrail-operational.json',
+          RAINRAIL_OPERATIONAL_EVENT_LIMIT: '17',
+        },
+        serverStarter: (options) => {
+          startOptions = options;
+          return { stop: () => undefined };
+        },
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+      expect(startOptions?.operationalStoreConfig).toEqual({
+        kind: 'json',
+        databasePath: join(projectRoot, 'var', 'rainrail-operational.json'),
+        eventLimit: 17,
+      });
+    });
+  });
+
+  it('resolves rainrail start --demo to the default seeded SQLite dashboard DB', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'dashboard-demo-options');
+      let startOptions: RainrailStartOptions | undefined;
+
+      const result = runRainrailCli(['start', '--demo'], {
+        cwd: projectRoot,
+        serverStarter: (options) => {
+          startOptions = options;
+          return { stop: () => undefined };
+        },
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+      expect(result.stdout).toContain('Dashboard demo: http://127.0.0.1:8787/dashboard?demo=1');
+      expect(result.stdout).toContain('Dashboard demo routes: /en/dashboard/events?demo=1, /en/dashboard/runs?demo=1, /en/dashboard/tasks?demo=1, /en/dashboard/sources?demo=1, /en/dashboard/queue?demo=1, /en/dashboard/settings?demo=1');
+      expect(result.stdout).toContain('Dashboard demo API: http://127.0.0.1:8787/api/v1/overview?demo=1');
+      expect(startOptions?.demoMode).toBe(true);
+      expect(startOptions?.operationalStoreConfig).toEqual({
+        kind: 'sqlite',
+        databasePath: join(projectRoot, '.tmp', 'dashboard-demo.sqlite'),
+        eventLimit: 250,
+      });
+    });
+  });
+
+  it('does not validate config operationalStore before env override', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'env-operational-store-precedence');
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        operationalStore: {
+          kind: 'sqlite',
+          databasePath: '${RAINRAIL_OPERATIONAL_DB}',
+        },
+        sourceBundles: [],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+      let startOptions: RainrailStartOptions | undefined;
+
+      const result = runRainrailCli(['start'], {
+        cwd: projectRoot,
+        env: {
+          RAINRAIL_OPERATIONAL_STORE: 'memory',
+        },
+        serverStarter: (options) => {
+          startOptions = options;
+          return { stop: () => undefined };
+        },
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+      expect(startOptions?.operationalStoreConfig).toEqual({
+        kind: 'memory',
+        eventLimit: 250,
+      });
+    });
+  });
+
+  it('falls back to config operationalStore when env override is empty', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'empty-env-operational-store');
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        operationalStore: {
+          kind: 'sqlite',
+          databasePath: 'var/rainrail-operational.sqlite',
+          eventLimit: 19,
+        },
+        sourceBundles: [],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+      let startOptions: RainrailStartOptions | undefined;
+
+      const result = runRainrailCli(['start'], {
+        cwd: projectRoot,
+        env: {
+          RAINRAIL_OPERATIONAL_STORE: '',
+        },
+        serverStarter: (options) => {
+          startOptions = options;
+          return { stop: () => undefined };
+        },
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+      expect(startOptions?.operationalStoreConfig).toEqual({
+        kind: 'sqlite',
+        databasePath: join(projectRoot, 'var', 'rainrail-operational.sqlite'),
+        eventLimit: 19,
       });
     });
   });
@@ -1067,6 +2219,8 @@ describe('Rainrail CLI built-in commands', () => {
       await mkdir(join(dashboardAssetRoot, 'dashboard'), { recursive: true });
       await mkdir(join(dashboardAssetRoot, 'ja', 'dashboard'), { recursive: true });
       await mkdir(join(dashboardAssetRoot, 'en', 'dashboard'), { recursive: true });
+      await mkdir(join(dashboardAssetRoot, 'en', 'dashboard', 'events'), { recursive: true });
+      await mkdir(join(dashboardAssetRoot, 'dashboard', 'queue'), { recursive: true });
       await mkdir(join(dashboardAssetRoot, '_astro'), { recursive: true });
       await writeFile(join(dashboardAssetRoot, 'rainrail.config.json'), 'should-not-leak');
       const port = await getFreePort();
@@ -1110,6 +2264,16 @@ describe('Rainrail CLI built-in commands', () => {
         '<html><head><script type="module" src="/_astro/dashboard-app.js"></script></head>',
         '<body><a href="/ja/dashboard">日本語</a><section data-dashboard-app data-api-base-url="https://ops.example.test" data-auth-required="true"></section></body></html>',
       ].join(''));
+      await writeFile(join(dashboardAssetRoot, 'en', 'dashboard', 'events', 'index.html'), [
+        '<!doctype html>',
+        '<html><head><script type="module" src="/_astro/dashboard-app.js"></script></head>',
+        '<body><a data-dashboard-tab="events" href="/en/dashboard/events" aria-current="page">Event Inbox</a><section data-dashboard-app data-api-base-url="https://ops.example.test" data-auth-required="true"></section></body></html>',
+      ].join(''));
+      await writeFile(join(dashboardAssetRoot, 'dashboard', 'queue', 'index.html'), [
+        '<!doctype html>',
+        '<html><head><script>const target = new URL("/en/dashboard/queue", window.location.href); target.search = window.location.search; window.location.replace(target.toString());</script></head>',
+        '<body><a href="/en/dashboard/queue">Queue</a><section data-dashboard-app data-api-base-url="https://ops.example.test" data-auth-required="true"></section></body></html>',
+      ].join(''));
       await writeFile(join(dashboardAssetRoot, '_astro', 'dashboard-app.js'), 'console.log("dashboard");\n');
 
       const result = await runRainrailCliAsync(['start'], {
@@ -1119,6 +2283,9 @@ describe('Rainrail CLI built-in commands', () => {
       try {
         expect(result.exitCode).toBe(0);
         expect(result.stdout).toContain(`Dashboard: http://127.0.0.1:${port}/dashboard`);
+        expect(result.stdout).toContain(
+          'Dashboard routes: /en/dashboard/events, /en/dashboard/runs, /en/dashboard/tasks, /en/dashboard/sources, /en/dashboard/queue, /en/dashboard/settings',
+        );
 
         const dashboard = await fetch(`http://127.0.0.1:${port}/dashboard`);
         expect(dashboard.status).toBe(200);
@@ -1141,6 +2308,22 @@ describe('Rainrail CLI built-in commands', () => {
           expect(localizedHtml, locale).toContain('data-api-base-url=""');
           expect(localizedHtml, locale).toContain('data-auth-required="false"');
         }
+
+        const dashboardEvents = await fetch(`http://127.0.0.1:${port}/en/dashboard/events?demo=1`);
+        expect(dashboardEvents.status).toBe(200);
+        const dashboardEventsHtml = await dashboardEvents.text();
+        expect(dashboardEventsHtml).toContain('data-dashboard-tab="events"');
+        expect(dashboardEventsHtml).toContain('data-api-base-url=""');
+        expect(dashboardEventsHtml).toContain('data-auth-required="false"');
+
+        const dashboardQueue = await fetch(`http://127.0.0.1:${port}/dashboard/queue?demo=1&status=blocked`);
+        expect(dashboardQueue.status).toBe(200);
+        expect(dashboardQueue.headers.get('content-type')).toContain('text/html');
+        const dashboardQueueHtml = await dashboardQueue.text();
+        expect(dashboardQueueHtml).toContain('/en/dashboard/queue');
+        expect(dashboardQueueHtml).toContain('target.search = window.location.search');
+        expect(dashboardQueueHtml).toContain('data-api-base-url=""');
+        expect(dashboardQueueHtml).toContain('data-auth-required="false"');
 
         const dashboardAsset = await fetch(`http://127.0.0.1:${port}/_astro/dashboard-app.js`);
         expect(dashboardAsset.status).toBe(200);
@@ -1196,6 +2379,212 @@ describe('Rainrail CLI built-in commands', () => {
           });
         }
 
+        const cards = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/cards`);
+        expect(cards.status).toBe(200);
+        await expect(cards.json()).resolves.toMatchObject({
+          data: expect.arrayContaining([
+            expect.objectContaining({
+              definition: expect.objectContaining({
+                id: 'core.operationalTotals',
+                settingsSchema: expect.objectContaining({ type: 'object' }),
+              }),
+              availability: { status: 'available' },
+            }),
+            expect.objectContaining({
+              definition: expect.objectContaining({
+                id: 'core.eventInbox',
+                settingsSchema: expect.objectContaining({ type: 'object' }),
+              }),
+              availability: { status: 'available' },
+            }),
+          ]),
+        });
+
+        const layout = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout`);
+        expect(layout.status).toBe(200);
+        await expect(layout.json()).resolves.toMatchObject({
+          data: {
+            id: 'core.defaultLayout',
+            source: 'default',
+            updatedAt: null,
+            items: expect.arrayContaining([
+              expect.objectContaining({ id: 'operational-totals', cardId: 'core.operationalTotals' }),
+              expect.objectContaining({ id: 'event-inbox', cardId: 'core.eventInbox' }),
+            ]),
+          },
+        });
+
+        const layoutSavePreflight = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout`, {
+          method: 'OPTIONS',
+        });
+        expect(layoutSavePreflight.status).toBe(204);
+        expect(layoutSavePreflight.headers.get('access-control-allow-methods')).toBe('GET, PUT, OPTIONS');
+
+        const layoutSave = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout`, {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json', 'x-request-id': 'request-local-layout-save' },
+          body: JSON.stringify({
+            items: [{
+              id: 'operational-totals',
+              cardId: 'core.operationalTotals',
+              x: 0,
+              y: 0,
+              columns: 8,
+              rows: 2,
+              config: { density: 'compact' },
+            }],
+          }),
+        });
+        expect(layoutSave.status).toBe(200);
+        expect(layoutSave.headers.get('x-request-id')).toBe('request-local-layout-save');
+        await expect(layoutSave.json()).resolves.toMatchObject({
+          data: {
+            id: 'user.dashboardLayout',
+            source: 'user',
+            updatedAt: expect.not.stringMatching(/^1970-01-01/u),
+            items: [{ id: 'operational-totals', config: { density: 'compact' } }],
+          },
+        });
+
+        const sharedCatalogSizedLayoutSave = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout`, {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json', 'x-request-id': 'request-local-shared-catalog-layout' },
+          body: JSON.stringify({
+            dryRun: true,
+            items: [
+              { id: 'event-inbox', cardId: 'core.eventInbox', x: 0, y: 0, columns: 8, rows: 8 },
+              { id: 'workflow-runs', cardId: 'core.workflowRuns', x: 0, y: 8, columns: 4, rows: 6 },
+              { id: 'agent-tasks', cardId: 'core.agentTasks', x: 4, y: 8, columns: 4, rows: 6 },
+              { id: 'legacy-overview', cardId: 'core.overview', x: 8, y: 8, columns: 4, rows: 2 },
+              { id: 'legacy-recent-events', cardId: 'core.recentEvents', x: 8, y: 10, columns: 4, rows: 2 },
+            ],
+          }),
+        });
+        expect(sharedCatalogSizedLayoutSave.status).toBe(200);
+        await expect(sharedCatalogSizedLayoutSave.json()).resolves.toMatchObject({
+          data: {
+            action: 'dashboard_layout_update',
+            status: 'preview',
+            dryRun: true,
+            result: { itemCount: 5 },
+          },
+        });
+
+        const dryRunLayoutSave = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout`, {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json', 'x-request-id': 'request-local-layout-preview' },
+          body: JSON.stringify({
+            dryRun: true,
+            items: [{
+              id: 'preview-operational-totals',
+              cardId: 'core.operationalTotals',
+              x: 0,
+              y: 0,
+              columns: 4,
+              rows: 1,
+            }],
+          }),
+        });
+        expect(dryRunLayoutSave.status).toBe(200);
+        expect(dryRunLayoutSave.headers.get('x-request-id')).toBe('request-local-layout-preview');
+        await expect(dryRunLayoutSave.json()).resolves.toMatchObject({
+          data: {
+            action: 'dashboard_layout_update',
+            targetType: 'dashboard_layout',
+            targetId: 'user.dashboardLayout',
+            status: 'preview',
+            dryRun: true,
+            auditId: 'request-local-layout-preview',
+            result: { itemCount: 1 },
+          },
+        });
+        const layoutAfterDryRun = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout`);
+        await expect(layoutAfterDryRun.json()).resolves.toMatchObject({
+          data: {
+            id: 'user.dashboardLayout',
+            items: [{ id: 'operational-totals', config: { density: 'compact' } }],
+          },
+        });
+
+        const invalidLayoutSave = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout`, {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            items: [{
+              id: 'operational-totals',
+              cardId: 'core.unknown',
+              x: 0,
+              y: 0,
+              columns: 8,
+              rows: 2,
+            }],
+          }),
+        });
+        expect(invalidLayoutSave.status).toBe(400);
+        await expect(invalidLayoutSave.json()).resolves.toEqual({ error: 'unknown_dashboard_card', cardId: 'core.unknown' });
+
+        const overlappingLayoutSave = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout`, {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            items: [
+              {
+                id: 'operational-totals',
+                cardId: 'core.operationalTotals',
+                x: 0,
+                y: 0,
+                columns: 8,
+                rows: 2,
+              },
+              {
+                id: 'overlapping-operational-totals',
+                cardId: 'core.operationalTotals',
+                x: 0,
+                y: 0,
+                columns: 8,
+                rows: 2,
+              },
+            ],
+          }),
+        });
+        expect(overlappingLayoutSave.status).toBe(400);
+        await expect(overlappingLayoutSave.json()).resolves.toEqual({
+          error: 'overlapping_dashboard_layout_item',
+          itemId: 'overlapping-operational-totals',
+        });
+
+        const layoutConfigPreflight = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout/items/operational-totals/config`, {
+          method: 'OPTIONS',
+        });
+        expect(layoutConfigPreflight.status).toBe(204);
+        expect(layoutConfigPreflight.headers.get('access-control-allow-methods')).toBe('PATCH, OPTIONS');
+
+        const layoutConfig = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout/items/operational-totals/config`, {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ config: { density: 'compact' } }),
+        });
+        expect(layoutConfig.status).toBe(200);
+        await expect(layoutConfig.json()).resolves.toMatchObject({
+          data: {
+            id: 'user.dashboardLayout',
+            source: 'user',
+            updatedAt: expect.not.stringMatching(/^1970-01-01/u),
+            items: [{ id: 'operational-totals', config: { density: 'compact' } }],
+          },
+        });
+
+        const sensitiveLayoutConfig = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout/items/operational-totals/config`, {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ config: { credential: 'must-not-store' } }),
+        });
+        expect(sensitiveLayoutConfig.status).toBe(400);
+        await expect(sensitiveLayoutConfig.json()).resolves.toEqual({
+          error: 'sensitive_dashboard_card_config',
+          itemId: 'operational-totals',
+        });
+
         const sources = await fetch(`http://127.0.0.1:${port}/api/v1/sources`);
         await expect(sources.json()).resolves.toMatchObject({
           data: [{
@@ -1243,6 +2632,926 @@ describe('Rainrail CLI built-in commands', () => {
       } finally {
         await closeTestServer(result);
       }
+    });
+  });
+
+  it('does not update local dashboard layout memory when JSON persistence fails', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'json-layout-save-failure');
+      const port = await getFreePort();
+      const blockedParent = join(projectRoot, 'var', 'blocked-parent');
+      const databasePath = join(blockedParent, 'rainrail-operational.json');
+      await mkdir(join(projectRoot, 'var'), { recursive: true });
+      await writeFile(blockedParent, 'not a directory');
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        server: {
+          host: '127.0.0.1',
+          port,
+        },
+        operationalStore: {
+          kind: 'json',
+          databasePath,
+          eventLimit: 10,
+        },
+        sourceBundles: [],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+
+      const result = await runRainrailCliAsync(['start'], { cwd: projectRoot });
+      try {
+        expect(result.exitCode).toBe(0);
+        const failed = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout/items/operational-totals/config`, {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ config: { density: 'compact' } }),
+        });
+        expect(failed.status).toBe(500);
+
+        const layout = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout`);
+        await expect(layout.json()).resolves.toMatchObject({
+          data: {
+            id: 'core.defaultLayout',
+            source: 'default',
+            updatedAt: null,
+            items: expect.arrayContaining([
+              expect.objectContaining({ id: 'operational-totals' }),
+              expect.objectContaining({ id: 'event-inbox' }),
+            ]),
+          },
+        });
+        const layoutBody = await (await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout`)).text();
+        expect(layoutBody).not.toContain('compact');
+      } finally {
+        await rm(blockedParent, { force: true });
+        await closeTestServer(result);
+      }
+      const persisted = JSON.parse(await readFile(databasePath, 'utf8')) as { dashboardLayout?: unknown };
+      expect(JSON.stringify(persisted.dashboardLayout ?? '')).not.toContain('compact');
+    });
+  });
+
+  it('persists local dashboard events through configured SQLite operational store', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'sqlite-operational-start');
+      const port = await getFreePort();
+      const restartPort = await getFreePort();
+      const databasePath = join(projectRoot, 'var', 'rainrail-operational.sqlite');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      const startConfig = (serverPort: number): string => `${JSON.stringify({
+        server: {
+          host: '127.0.0.1',
+          port: serverPort,
+        },
+        operationalStore: {
+          kind: 'sqlite',
+          databasePath,
+          eventLimit: 3,
+        },
+        sourceBundles: [
+          {
+            type: 'eep-bridge',
+            name: 'local',
+            sources: [
+              {
+                type: 'github-webhook',
+                name: 'github-local',
+                sourceType: 'github',
+                provider: 'github',
+                webhookSecret: 'secret',
+                endpoint: '/webhooks/github',
+              },
+            ],
+          },
+        ],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`;
+      await writeFile(configPath, startConfig(port));
+
+      const first = await runRainrailCliAsync(['start'], { cwd: projectRoot });
+      try {
+        expect(first.exitCode).toBe(0);
+        for (const delivery of ['delivery-sqlite-start-1', 'delivery-sqlite-start-2', 'delivery-sqlite-start-3']) {
+          const body = JSON.stringify({ action: 'opened' });
+          const accepted = await fetch(`http://127.0.0.1:${port}/webhooks/github`, {
+            method: 'POST',
+            headers: githubWebhookHeaders('secret', body, { delivery, event: 'issues' }),
+            body,
+          });
+          expect(accepted.status).toBe(202);
+        }
+        await expectSqliteOperationalFilesProtected(databasePath);
+
+        const overview = await fetch(`http://127.0.0.1:${port}/api/v1/overview`);
+        await expect(overview.json()).resolves.toMatchObject({ data: { counts: { events: 3 } } });
+
+        const layoutConfig = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout/items/operational-totals/config`, {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ config: { density: 'comfortable' } }),
+        });
+        expect(layoutConfig.status).toBe(200);
+      } finally {
+        await closeTestServer(first);
+      }
+
+      withSqliteDatabase(databasePath, (database) => {
+        database.prepare('UPDATE dashboard_layout SET items_json = ? WHERE id = ?').run(JSON.stringify([{
+          id: 'operational-totals',
+          cardId: 'core.operationalTotals',
+          x: 0,
+          y: 0,
+          columns: 8,
+          rows: 2,
+          config: { density: 'comfortable', apiToken: 'must-not-read' },
+        }]), 'user.dashboardLayout');
+      });
+
+      const limitedConfig = JSON.parse(startConfig(restartPort)) as Record<string, unknown>;
+      if (
+        typeof limitedConfig.operationalStore === 'object'
+        && limitedConfig.operationalStore !== null
+        && !Array.isArray(limitedConfig.operationalStore)
+      ) {
+        Object.assign(limitedConfig.operationalStore, { eventLimit: 1 });
+      }
+      await writeFile(configPath, `${JSON.stringify(limitedConfig, null, 2)}\n`);
+      const second = await runRainrailCliAsync(['start'], { cwd: projectRoot });
+      try {
+        expect(second.exitCode).toBe(0);
+        const overview = await fetch(`http://127.0.0.1:${restartPort}/api/v1/overview`);
+        await expect(overview.json()).resolves.toMatchObject({ data: { counts: { events: 3 } } });
+
+        const events = await fetch(`http://127.0.0.1:${restartPort}/api/v1/events?limit=2`);
+        const eventsPayload = await events.json() as { data: Array<{ id: string; deliveryId: string }>; page: { nextCursor: string | null } };
+        expect(eventsPayload).toMatchObject({
+          data: [
+            { id: 'local-event-000003', deliveryId: 'delivery-sqlite-start-3' },
+            { id: 'local-event-000002', deliveryId: 'delivery-sqlite-start-2' },
+          ],
+          page: { nextCursor: expect.any(String) },
+        });
+
+        const nextEvents = await fetch(`http://127.0.0.1:${restartPort}/api/v1/events?limit=2&cursor=${eventsPayload.page.nextCursor}`);
+        await expect(nextEvents.json()).resolves.toMatchObject({
+          data: [
+            { id: 'local-event-000001', deliveryId: 'delivery-sqlite-start-1' },
+          ],
+          page: { nextCursor: null },
+        });
+
+        const layout = await fetch(`http://127.0.0.1:${restartPort}/api/v1/dashboard/layout`);
+        await expect(layout.json()).resolves.toMatchObject({
+          data: {
+            id: 'user.dashboardLayout',
+            source: 'user',
+            updatedAt: expect.not.stringMatching(/^1970-01-01/u),
+            items: [{ id: 'operational-totals', config: { density: 'comfortable' } }],
+          },
+        });
+        const layoutBody = await (await fetch(`http://127.0.0.1:${restartPort}/api/v1/dashboard/layout`)).text();
+        expect(layoutBody).not.toContain('must-not-read');
+        expect(layoutBody).not.toContain('apiToken');
+      } finally {
+        await closeTestServer(second);
+      }
+    });
+  });
+
+  it('reads shared SQLite operational rows without overwriting existing event metadata', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'sqlite-operational-shared-start');
+      const setupPort = await getFreePort();
+      const port = await getFreePort();
+      const databasePath = join(projectRoot, 'var', 'rainrail-operational.sqlite');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      const startConfig = (serverPort: number): string => `${JSON.stringify({
+        server: {
+          host: '127.0.0.1',
+          port: serverPort,
+        },
+        operationalStore: {
+          kind: 'sqlite',
+          databasePath,
+          eventLimit: 10,
+        },
+        sourceBundles: [
+          {
+            type: 'eep-bridge',
+            name: 'local',
+            sources: [
+              {
+                type: 'github-webhook',
+                name: 'github-local',
+                sourceType: 'github',
+                provider: 'github',
+                webhookSecret: 'secret',
+                endpoint: '/webhooks/github',
+              },
+            ],
+          },
+        ],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`;
+      await writeFile(configPath, startConfig(setupPort));
+
+      const setup = await runRainrailCliAsync(['start'], { cwd: projectRoot });
+      await closeTestServer(setup);
+
+      withSqliteDatabase(databasePath, (database) => {
+        database.prepare(`
+          INSERT INTO operational_events (
+            id, name, source_json, delivery_json, subject_json, occurred_at, received_at,
+            payload_json, raw_payload_reference_json, links_json
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          'github-webhook:delivery-existing:github.issue',
+          'github.issue',
+          JSON.stringify({ type: 'github', name: 'github-webhook', repository: 'reirei-lab/rainrail' }),
+          JSON.stringify({ id: 'delivery-existing', receivedAt: '2026-07-09T00:00:00.000Z' }),
+          JSON.stringify({ type: 'issue', id: '271', url: 'https://github.com/reirei-lab/rainrail/issues/271' }),
+          '2026-07-09T00:00:00.000Z',
+          '2026-07-09T00:00:00.000Z',
+          JSON.stringify({ action: 'opened', preserved: true }),
+          JSON.stringify({ kind: 'external-reference', reference: 'github://deliveries/delivery-existing' }),
+          JSON.stringify({ html: 'https://github.com/reirei-lab/rainrail/issues/271' }),
+        );
+        database.prepare(`
+          INSERT INTO agent_tasks (
+            id, title, branch_name, status, claim_json, started_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          'agent_task_shared_sqlite',
+          'shared sqlite task',
+          'agent/reirei-lab-rainrail-271-dashboard-api-node-sqlite-operational-store',
+          'failed',
+          JSON.stringify({ provider: 'github-project', itemId: 'PVTI_shared' }),
+          '2026-07-09T00:01:00.000Z',
+          '2026-07-09T00:01:00.000Z',
+        );
+        database.prepare(`
+          INSERT INTO activity_events (
+            id, source_event_id, source_event_name, category, target_type, target_id,
+            action_type, outcome, summary, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          'act_shared_sqlite',
+          'github-webhook:delivery-existing:github.issue',
+          'github.issue',
+          'workflow',
+          'event',
+          'github-webhook:delivery-existing:github.issue',
+          'workflow_dispatched',
+          'success',
+          'shared workflow dispatched',
+          '2026-07-09T00:02:00.000Z',
+        );
+      });
+
+      await writeFile(configPath, startConfig(port));
+      const result = await runRainrailCliAsync(['start'], { cwd: projectRoot });
+      try {
+        expect(result.exitCode).toBe(0);
+
+        const overview = await fetch(`http://127.0.0.1:${port}/api/v1/overview`);
+        await expect(overview.json()).resolves.toMatchObject({
+          data: {
+            counts: { events: 1, agentTasks: 1, activityEvents: 1 },
+            warnings: { staleProjectClaims: [{ taskId: 'agent_task_shared_sqlite' }] },
+          },
+        });
+
+        const tasks = await fetch(`http://127.0.0.1:${port}/api/v1/agent-tasks`);
+        const taskPayload = await tasks.json();
+        expect(taskPayload).toMatchObject({
+          data: [{
+            id: 'agent_task_shared_sqlite',
+            title: 'shared sqlite task',
+            warnings: { staleProjectClaim: true },
+          }],
+        });
+        expect(JSON.stringify(taskPayload)).not.toContain('/api/v1/agent-tasks/agent_task_shared_sqlite');
+
+        const taskDetail = await fetch(`http://127.0.0.1:${port}/api/v1/agent-tasks/agent_task_shared_sqlite`);
+        expect(taskDetail.status).toBe(200);
+        await expect(taskDetail.json()).resolves.toMatchObject({
+          data: {
+            id: 'agent_task_shared_sqlite',
+            type: 'agent-task',
+            compact: {
+              id: 'agent_task_shared_sqlite',
+              warnings: { staleProjectClaim: true },
+            },
+            record: {
+              id: 'agent_task_shared_sqlite',
+              status: 'failed',
+            },
+          },
+        });
+
+        const invalidTasks = await fetch(`http://127.0.0.1:${port}/api/v1/agent-tasks?filter[unknown]=x`);
+        expect(invalidTasks.status).toBe(400);
+        await expect(invalidTasks.json()).resolves.toEqual({ error: 'unsupported_filter', filter: 'filter[unknown]' });
+
+        const invalidWorkflowSort = await fetch(`http://127.0.0.1:${port}/api/v1/workflow-runs?sort=newest`);
+        expect(invalidWorkflowSort.status).toBe(400);
+        await expect(invalidWorkflowSort.json()).resolves.toEqual({ error: 'unsupported_sort', sort: 'newest' });
+
+        const workflows = await fetch(`http://127.0.0.1:${port}/api/v1/workflow-runs`);
+        const workflowPayload = await workflows.json();
+        expect(workflowPayload).toMatchObject({
+          data: [{ id: 'act_shared_sqlite', summary: 'shared workflow dispatched' }],
+        });
+        expect(JSON.stringify(workflowPayload)).not.toContain('/api/v1/workflow-runs/act_shared_sqlite');
+
+        const workflowDetail = await fetch(`http://127.0.0.1:${port}/api/v1/workflow-runs/act_shared_sqlite`);
+        expect(workflowDetail.status).toBe(200);
+        await expect(workflowDetail.json()).resolves.toMatchObject({
+          data: {
+            id: 'act_shared_sqlite',
+            type: 'workflow-run',
+            compact: {
+              id: 'act_shared_sqlite',
+              summary: 'shared workflow dispatched',
+            },
+            record: {
+              id: 'act_shared_sqlite',
+              outcome: 'success',
+            },
+          },
+        });
+
+        const missingWorkflowDetail = await fetch(`http://127.0.0.1:${port}/api/v1/workflow-runs/missing`);
+        expect(missingWorkflowDetail.status).toBe(404);
+        await expect(missingWorkflowDetail.json()).resolves.toEqual({ error: 'workflow_run_not_found' });
+
+        const settings = await fetch(`http://127.0.0.1:${port}/api/v1/settings`);
+        const settingsPayload = await settings.json() as { data: Array<{ id: string; value: string }> };
+        expect(settingsPayload.data.find((row) => row.id === 'operational-snapshot-limit')).toMatchObject({
+          value: '10 events',
+        });
+
+        const detail = await fetch(`http://127.0.0.1:${port}/api/v1/events/github-webhook%3Adelivery-existing%3Agithub.issue`);
+        await expect(detail.json()).resolves.toMatchObject({
+          data: {
+            id: 'github-webhook:delivery-existing:github.issue',
+            record: {
+              subject: {
+                id: '271',
+                url: 'https://github.com/reirei-lab/rainrail/issues/271',
+              },
+            },
+          },
+        });
+
+        const body = JSON.stringify({ action: 'opened' });
+        const accepted = await fetch(`http://127.0.0.1:${port}/webhooks/github`, {
+          method: 'POST',
+          headers: githubWebhookHeaders('secret', body, { delivery: 'delivery-new', event: 'issues' }),
+          body,
+        });
+        expect(accepted.status).toBe(202);
+      } finally {
+        await closeTestServer(result);
+      }
+
+      withSqliteDatabase(databasePath, (database) => {
+        const row = database.prepare('SELECT payload_json FROM operational_events WHERE id = ?')
+          .get('github-webhook:delivery-existing:github.issue') as { payload_json: string };
+        expect(JSON.parse(row.payload_json)).toEqual({ action: 'opened', preserved: true });
+      });
+    });
+  });
+
+  it('serves seeded SQLite dashboard demo mode without an operator token or external command dispatch', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'seeded-dashboard-demo-start');
+      const port = await getFreePort();
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        server: { host: '127.0.0.1', port },
+        dashboardAuth: {
+          readOnlyToken: 'read-token',
+          operatorToken: 'operator-token',
+        },
+        sourceBundles: [{
+          type: 'eep-bridge',
+          name: 'demo-eep',
+          sources: [{
+            type: 'github-webhook',
+            name: 'github-webhook',
+            sourceType: 'github',
+            provider: 'github',
+            webhookSecret: 'demo-secret',
+            endpoint: '/webhooks/github',
+          }],
+        }],
+        sources: [{
+          type: 'manual-chat',
+          name: 'manual-chat',
+          sourceType: 'chat',
+          endpoint: '/manual/chat',
+        }],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+      const databasePath = join(projectRoot, '.tmp', 'dashboard-demo.sqlite');
+      const seed = spawnSync(process.execPath, [dashboardDemoSeedScript.pathname, '--database', databasePath], {
+        encoding: 'utf8',
+      });
+      expect(seed.status).toBe(0);
+      withSqliteDatabase(databasePath, (database) => {
+        const row = database.prepare('SELECT * FROM operational_events WHERE id = ?')
+          .get('evt_demo_cloudflare_tail_001') as {
+            name: string;
+            source_json: string;
+            delivery_json: string;
+            subject_json: string;
+            payload_json: string;
+            raw_payload_reference_json: string;
+          };
+        const delivery = JSON.parse(row.delivery_json) as { id: string; receivedAt: string };
+        const rawPayloadReference = JSON.parse(row.raw_payload_reference_json) as { reference: string };
+        database.prepare(`
+          INSERT INTO operational_events (
+            id, name, source_json, delivery_json, subject_json, occurred_at, received_at,
+            payload_json, raw_payload_reference_json, links_json
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          'evt_demo_cloudflare_tail_002',
+          row.name,
+          row.source_json,
+          JSON.stringify({ ...delivery, id: 'cf-tail-demo-002', receivedAt: '2026-07-09T04:53:10.000Z' }),
+          row.subject_json,
+          '2026-07-09T04:53:02.000Z',
+          '2026-07-09T04:53:10.000Z',
+          row.payload_json,
+          JSON.stringify({ ...rawPayloadReference, reference: 'cloudflare://tails/cf-tail-demo-002' }),
+          JSON.stringify({ self: '/api/v1/events/evt_demo_cloudflare_tail_002' }),
+        );
+      });
+
+      const result = await runRainrailCliAsync(['start', '--demo'], { cwd: projectRoot });
+      try {
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toContain(`Dashboard demo: http://127.0.0.1:${port}/dashboard?demo=1`);
+
+        const overview = await fetch(`http://127.0.0.1:${port}/api/v1/overview?demo=1`);
+        expect(overview.status).toBe(200);
+        await expect(overview.json()).resolves.toMatchObject({
+          data: {
+            counts: {
+              events: 4,
+              activityEvents: 4,
+              agentTasks: 3,
+              commandResults: 3,
+              eventHandlerRetries: 2,
+            },
+          },
+        });
+
+        for (const path of [
+          '/api/v1/events',
+          '/api/v1/workflow-runs',
+          '/api/v1/agent-tasks',
+          '/api/v1/sources',
+          '/api/v1/queue',
+          '/api/v1/settings',
+        ]) {
+          const response = await fetch(`http://127.0.0.1:${port}${path}?demo=1`);
+          expect(response.status, path).toBe(200);
+          const body = await response.json() as { data?: unknown[] };
+          expect(body.data?.length, path).toBeGreaterThan(0);
+        }
+
+        const sources = await fetch(`http://127.0.0.1:${port}/api/v1/sources?demo=1`);
+        await expect(sources.json()).resolves.toMatchObject({
+          data: expect.arrayContaining([
+            expect.objectContaining({
+              id: 'cloudflare-tail',
+              sourceType: 'cloudflare',
+              status: 'observed',
+              links: { self: '/api/v1/sources/cloudflare-tail' },
+              lastDelivery: expect.objectContaining({ id: 'evt_demo_cloudflare_tail_002' }),
+            }),
+          ]),
+        });
+
+        const protectedOverview = await fetch(`http://127.0.0.1:${port}/api/v1/overview`);
+        expect(protectedOverview.status).toBe(401);
+
+        const blockedQueue = await fetch(`http://127.0.0.1:${port}/api/v1/queue?demo=1&filter[status]=blocked`);
+        expect(blockedQueue.status).toBe(200);
+        await expect(blockedQueue.json()).resolves.toMatchObject({
+          data: [expect.objectContaining({
+            id: 'agent_task_demo_failed_stale_claim',
+            status: 'blocked',
+          })],
+        });
+
+        const demoCommand = await fetch(`http://127.0.0.1:${port}/api/v1/agent-tasks/agent_task_demo_failed_stale_claim/actions/resume?demo=1`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Request-ID': 'request-demo-resume',
+          },
+          body: JSON.stringify({}),
+        });
+        expect(demoCommand.status).toBe(202);
+        expect(demoCommand.headers.get('x-request-id')).toBe('request-demo-resume');
+        await expect(demoCommand.json()).resolves.toMatchObject({
+          data: {
+            action: 'agent_task_resume',
+            targetType: 'agent_task',
+            targetId: 'agent_task_demo_failed_stale_claim',
+            status: 'accepted',
+            dryRun: false,
+            auditId: 'demo-request-demo-resume',
+            result: { demoOnly: true },
+          },
+        });
+      } finally {
+        await closeTestServer(result);
+      }
+    });
+  });
+
+  it('keeps dashboard demo mode authenticated when local start binds outside localhost', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'seeded-dashboard-demo-external-bind');
+      const port = await getFreePort('0.0.0.0');
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        server: { host: '0.0.0.0', port },
+        dashboardAuth: {
+          readOnlyToken: 'read-token',
+        },
+        sourceBundles: [],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+      const databasePath = join(projectRoot, '.tmp', 'dashboard-demo.sqlite');
+      const seed = spawnSync(process.execPath, [dashboardDemoSeedScript.pathname, '--database', databasePath], {
+        encoding: 'utf8',
+      });
+      expect(seed.status).toBe(0);
+
+      const result = await runRainrailCliAsync(['start', '--demo'], { cwd: projectRoot });
+      try {
+        expect(result.exitCode).toBe(0);
+
+        const unauthenticated = await fetch(`http://127.0.0.1:${port}/api/v1/overview?demo=1`);
+        expect(unauthenticated.status).toBe(401);
+        await expect(unauthenticated.json()).resolves.toEqual({ error: 'missing_bearer_token' });
+
+        const authenticated = await fetch(`http://127.0.0.1:${port}/api/v1/overview?demo=1`, {
+          headers: { Authorization: 'Bearer read-token' },
+        });
+        expect(authenticated.status).toBe(200);
+        await expect(authenticated.json()).resolves.toMatchObject({
+          data: { counts: { events: 3 } },
+        });
+      } finally {
+        await closeTestServer(result);
+      }
+    });
+  });
+
+  it('keeps dashboard demo mode authenticated for non-loopback allowed Host headers', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'seeded-dashboard-demo-allowed-host');
+      const port = await getFreePort();
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        server: {
+          host: '127.0.0.1',
+          port,
+          allowedHosts: ['rainrail-demo.example'],
+        },
+        dashboardAuth: {
+          readOnlyToken: 'read-token',
+        },
+        sourceBundles: [],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+      const databasePath = join(projectRoot, '.tmp', 'dashboard-demo.sqlite');
+      const seed = spawnSync(process.execPath, [dashboardDemoSeedScript.pathname, '--database', databasePath], {
+        encoding: 'utf8',
+      });
+      expect(seed.status).toBe(0);
+
+      const result = await runRainrailCliAsync(['start', '--demo'], { cwd: projectRoot });
+      try {
+        expect(result.exitCode).toBe(0);
+
+        const tunneled = await rawLocalHttpRequest(port, [
+          'GET /api/v1/overview?demo=1 HTTP/1.1',
+          `Host: rainrail-demo.example:${port}`,
+          'Connection: close',
+          '',
+          '',
+        ]);
+        expect(tunneled).toContain('401 Unauthorized');
+        expect(tunneled).toContain('missing_bearer_token');
+
+        const authenticated = await rawLocalHttpRequest(port, [
+          'GET /api/v1/overview?demo=1 HTTP/1.1',
+          `Host: rainrail-demo.example:${port}`,
+          'Authorization: Bearer read-token',
+          'Connection: close',
+          '',
+          '',
+        ]);
+        expect(authenticated).toContain('200 OK');
+        expect(authenticated).toContain('"events":3');
+      } finally {
+        await closeTestServer(result);
+      }
+    });
+  });
+
+  it('migrates older SQLite operational event tables in local start', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'sqlite-operational-start-migration');
+      const port = await getFreePort();
+      const databasePath = join(projectRoot, 'var', 'rainrail-operational.sqlite');
+      await mkdir(join(projectRoot, 'var'), { recursive: true });
+      withSqliteDatabase(databasePath, (database) => {
+        database.exec(`
+          CREATE TABLE operational_events (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            source_json TEXT NOT NULL,
+            delivery_json TEXT NOT NULL,
+            subject_json TEXT NOT NULL,
+            occurred_at TEXT NOT NULL,
+            received_at TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            links_json TEXT
+          );
+        `);
+        database.prepare(`
+          INSERT INTO operational_events (
+            id, name, source_json, delivery_json, subject_json, occurred_at, received_at,
+            payload_json, links_json
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          'github-webhook:delivery-old-schema:github.issue',
+          'github.issue',
+          JSON.stringify({ type: 'github', name: 'github-webhook', repository: 'reirei-lab/rainrail' }),
+          JSON.stringify({ id: 'delivery-old-schema', receivedAt: '2026-07-09T00:00:00.000Z' }),
+          JSON.stringify({ type: 'issue', id: '271' }),
+          '2026-07-09T00:00:00.000Z',
+          '2026-07-09T00:00:00.000Z',
+          JSON.stringify({ action: 'opened' }),
+          null,
+        );
+      });
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        server: {
+          host: '127.0.0.1',
+          port,
+        },
+        operationalStore: {
+          kind: 'sqlite',
+          databasePath,
+          eventLimit: 10,
+        },
+        sourceBundles: [],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+
+      const result = await runRainrailCliAsync(['start'], { cwd: projectRoot });
+      try {
+        expect(result.exitCode).toBe(0);
+        const detail = await fetch(`http://127.0.0.1:${port}/api/v1/events/github-webhook%3Adelivery-old-schema%3Agithub.issue`);
+        await expect(detail.json()).resolves.toMatchObject({
+          data: {
+            id: 'github-webhook:delivery-old-schema:github.issue',
+            record: {
+              envelope: {
+                rawPayload: {
+                  kind: 'inline-redacted',
+                  reference: 'rainrail://redacted/raw-payload',
+                },
+              },
+            },
+          },
+        });
+      } finally {
+        await closeTestServer(result);
+      }
+    });
+  });
+
+  it('reserves local event ids across shared SQLite start processes', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'sqlite-operational-shared-id');
+      const firstPort = await getFreePort();
+      const secondPort = await getFreePort();
+      const databasePath = join(projectRoot, 'var', 'rainrail-operational.sqlite');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      const startConfig = (serverPort: number): string => `${JSON.stringify({
+        server: {
+          host: '127.0.0.1',
+          port: serverPort,
+        },
+        operationalStore: {
+          kind: 'sqlite',
+          databasePath,
+          eventLimit: 10,
+        },
+        sourceBundles: [
+          {
+            type: 'eep-bridge',
+            name: 'local',
+            sources: [
+              {
+                type: 'github-webhook',
+                name: 'github-local',
+                sourceType: 'github',
+                provider: 'github',
+                webhookSecret: 'secret',
+                endpoint: '/webhooks/github',
+              },
+            ],
+          },
+        ],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`;
+      await writeFile(configPath, startConfig(firstPort));
+      const first = await runRainrailCliAsync(['start'], { cwd: projectRoot });
+      await writeFile(configPath, startConfig(secondPort));
+      const second = await runRainrailCliAsync(['start'], { cwd: projectRoot });
+      try {
+        const body = JSON.stringify({ action: 'opened' });
+        const firstAccepted = await fetch(`http://127.0.0.1:${firstPort}/webhooks/github`, {
+          method: 'POST',
+          headers: githubWebhookHeaders('secret', body, { delivery: 'delivery-shared-first', event: 'issues' }),
+          body,
+        });
+        const secondAccepted = await fetch(`http://127.0.0.1:${secondPort}/webhooks/github`, {
+          method: 'POST',
+          headers: githubWebhookHeaders('secret', body, { delivery: 'delivery-shared-second', event: 'issues' }),
+          body,
+        });
+
+        expect(firstAccepted.status).toBe(202);
+        expect(secondAccepted.status).toBe(202);
+        await expect(firstAccepted.json()).resolves.toMatchObject({ data: { id: 'local-event-000001' } });
+        await expect(secondAccepted.json()).resolves.toMatchObject({ data: { id: 'local-event-000002' } });
+      } finally {
+        await closeTestServer(first);
+        await closeTestServer(second);
+      }
+
+      withSqliteDatabase(databasePath, (database) => {
+        expect(database.prepare('SELECT count(*) as count FROM operational_events WHERE id LIKE ?').get('local-event-%'))
+          .toEqual({ count: 2 });
+      });
+    });
+  });
+
+  it('allocates local event ids from all persisted SQLite events', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'sqlite-operational-local-id');
+      const setupPort = await getFreePort();
+      const port = await getFreePort();
+      const databasePath = join(projectRoot, 'var', 'rainrail-operational.sqlite');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      const startConfig = (serverPort: number): string => `${JSON.stringify({
+        server: {
+          host: '127.0.0.1',
+          port: serverPort,
+        },
+        operationalStore: {
+          kind: 'sqlite',
+          databasePath,
+          eventLimit: 1,
+        },
+        sourceBundles: [
+          {
+            type: 'eep-bridge',
+            name: 'local',
+            sources: [
+              {
+                type: 'github-webhook',
+                name: 'github-local',
+                sourceType: 'github',
+                provider: 'github',
+                webhookSecret: 'secret',
+                endpoint: '/webhooks/github',
+              },
+            ],
+          },
+        ],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`;
+      await writeFile(configPath, startConfig(setupPort));
+      const setup = await runRainrailCliAsync(['start'], { cwd: projectRoot });
+      await closeTestServer(setup);
+
+      withSqliteDatabase(databasePath, (database) => {
+        const insertEvent = database.prepare(`
+          INSERT INTO operational_events (
+            id, name, source_json, delivery_json, subject_json, occurred_at, received_at,
+            payload_json, raw_payload_reference_json, links_json
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+        insertEvent.run(
+          'local-event-000009',
+          'github.issue',
+          JSON.stringify({ type: 'github', name: 'github-local' }),
+          JSON.stringify({ id: 'delivery-old-local', receivedAt: '2026-07-09T00:00:00.000Z' }),
+          JSON.stringify({ type: 'issue', id: 'local-event-000009' }),
+          '2026-07-09T00:00:00.000Z',
+          '2026-07-09T00:00:00.000Z',
+          JSON.stringify({ localEvent: { status: 'received', summary: 'old local' } }),
+          JSON.stringify({ kind: 'external-reference', reference: 'local://events/local-event-000009' }),
+          JSON.stringify({ self: '/api/v1/events/local-event-000009' }),
+        );
+        insertEvent.run(
+          'github-webhook:delivery-latest:github.issue',
+          'github.issue',
+          JSON.stringify({ type: 'github', name: 'github-webhook' }),
+          JSON.stringify({ id: 'delivery-latest', receivedAt: '2026-07-09T00:10:00.000Z' }),
+          JSON.stringify({ type: 'issue', id: 'latest' }),
+          '2026-07-09T00:10:00.000Z',
+          '2026-07-09T00:10:00.000Z',
+          JSON.stringify({ action: 'opened' }),
+          JSON.stringify({ kind: 'external-reference', reference: 'github://deliveries/delivery-latest' }),
+          null,
+        );
+      });
+
+      await writeFile(configPath, startConfig(port));
+      const result = await runRainrailCliAsync(['start'], { cwd: projectRoot });
+      try {
+        const body = JSON.stringify({ action: 'opened' });
+        const accepted = await fetch(`http://127.0.0.1:${port}/webhooks/github`, {
+          method: 'POST',
+          headers: githubWebhookHeaders('secret', body, { delivery: 'delivery-new-local-id', event: 'issues' }),
+          body,
+        });
+        expect(accepted.status).toBe(202);
+        await expect(accepted.json()).resolves.toMatchObject({ data: { id: 'local-event-000010' } });
+      } finally {
+        await closeTestServer(result);
+      }
+
+      withSqliteDatabase(databasePath, (database) => {
+        expect(database.prepare('SELECT id FROM operational_events WHERE id = ?').get('local-event-000010'))
+          .toEqual({ id: 'local-event-000010' });
+      });
+    });
+  });
+
+  it('rejects incompatible JSON operational store files in local start', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'json-operational-start');
+      const port = await getFreePort();
+      const databasePath = join(projectRoot, 'var', 'rainrail-operational.json');
+      await mkdir(join(projectRoot, 'var'), { recursive: true });
+      await writeFile(databasePath, `${JSON.stringify({
+        events: {
+          existing: {
+            id: 'existing',
+          },
+        },
+        activityEvents: {},
+      }, null, 2)}\n`);
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        server: {
+          host: '127.0.0.1',
+          port,
+        },
+        operationalStore: {
+          kind: 'json',
+          databasePath,
+          eventLimit: 10,
+        },
+        sourceBundles: [],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+
+      const result = await runRainrailCliAsync(['start'], { cwd: projectRoot });
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('JSON operational store is not compatible with rainrail start local event storage');
+      await expect(readFile(databasePath, 'utf8')).resolves.toContain('"activityEvents"');
     });
   });
 
@@ -2213,7 +4522,7 @@ describe('Rainrail CLI built-in commands', () => {
       expect(coreEndpoint.exitCode).toBe(1);
       expect(coreEndpoint.stderr).toContain('config endpoint must not use a Rainrail core route');
 
-      for (const endpoint of ['/dashboard', '/ja/dashboard', '/ja/dashboard/', '/en/dashboard', '/en/dashboard/', '/_astro/dashboard-app.js']) {
+      for (const endpoint of ['/dashboard', '/ja/dashboard', '/ja/dashboard/', '/en/dashboard', '/en/dashboard/', '/en/dashboard/events', '/_astro/dashboard-app.js']) {
         await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
           sourceBundles: [{
             type: 'eep-bridge',
@@ -2382,7 +4691,7 @@ describe('Rainrail CLI built-in commands', () => {
         serverStarter: () => ({ stop: () => undefined }),
       });
       expect(duplicateName.exitCode).toBe(1);
-      expect(duplicateName.stderr).toContain('config source names must be unique');
+      expect(duplicateName.stderr).toContain('config source name/sourceType pairs must be unique: github-local (github)');
     });
   });
 
@@ -2546,6 +4855,152 @@ describe('Rainrail CLI built-in commands', () => {
             type: 'source',
             lastDelivery: { id: 'local-event-000001' },
           },
+        });
+      } finally {
+        await closeTestServer(result);
+      }
+    });
+  });
+
+  it('keeps duplicate local source names visible with unique source row ids', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'duplicate-source-names');
+      const port = await getFreePort();
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        server: { host: '127.0.0.1', port },
+        sourceBundles: [{
+          type: 'eep-bridge',
+          name: 'local',
+          sources: [
+            {
+              type: 'github-webhook',
+              name: 'shared-local',
+              sourceType: 'github',
+              provider: 'github',
+              webhookSecret: 'secret',
+              endpoint: '/webhooks/github',
+            },
+            {
+              type: 'manual-chat',
+              name: 'shared-local',
+              sourceType: 'manual',
+              endpoint: '/manual',
+            },
+          ],
+        }],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+
+      const result = await runRainrailCliAsync(['start'], { cwd: projectRoot });
+      try {
+        expect(result.exitCode).toBe(0);
+        const body = '{}';
+        expect((await fetch(`http://127.0.0.1:${port}/webhooks/github`, {
+          method: 'POST',
+          headers: githubWebhookHeaders('secret', body),
+          body,
+        })).status).toBe(202);
+        expect((await fetch(`http://127.0.0.1:${port}/manual`, { method: 'POST', body })).status).toBe(202);
+
+        const sources = await fetch(`http://127.0.0.1:${port}/api/v1/sources`);
+        const sourcesBody = await sources.json() as {
+          data: Array<{ id: string; name: string; sourceType: string; links: { self: string }; lastDelivery?: { id: string } }>;
+        };
+        expect(sourcesBody.data).toEqual([
+          expect.objectContaining({
+            id: 'shared-local:0',
+            name: 'shared-local',
+            sourceType: 'github',
+            lastDelivery: expect.objectContaining({ id: 'local-event-000001' }),
+          }),
+          expect.objectContaining({
+            id: 'shared-local:1',
+            name: 'shared-local',
+            sourceType: 'manual',
+            lastDelivery: expect.objectContaining({ id: 'local-event-000002' }),
+          }),
+        ]);
+
+        const githubSources = await fetch(`http://127.0.0.1:${port}/api/v1/sources?filter[source]=github`);
+        await expect(githubSources.json()).resolves.toMatchObject({
+          data: [expect.objectContaining({ id: 'shared-local:0', sourceType: 'github' })],
+          page: { nextCursor: null },
+        });
+
+        const manualDetail = await fetch(`http://127.0.0.1:${port}${sourcesBody.data[1]?.links.self}`);
+        await expect(manualDetail.json()).resolves.toMatchObject({
+          data: {
+            id: 'shared-local:1',
+            sourceType: 'manual',
+            lastDelivery: { id: 'local-event-000002' },
+          },
+        });
+      } finally {
+        await closeTestServer(result);
+      }
+    });
+  });
+
+  it('limits local source last delivery lookups to the restored event snapshot', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'source-last-delivery-limit');
+      const port = await getFreePort();
+      const databasePath = join(projectRoot, '.rainrail', 'operational.sqlite');
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        server: { host: '127.0.0.1', port },
+        operationalStore: {
+          kind: 'sqlite',
+          databasePath,
+          eventLimit: 1,
+        },
+        sourceBundles: [{
+          type: 'eep-bridge',
+          name: 'local',
+          sources: [
+            {
+              type: 'github-webhook',
+              name: 'github-local',
+              sourceType: 'github',
+              provider: 'github',
+              webhookSecret: 'secret',
+              endpoint: '/webhooks/github',
+            },
+            {
+              type: 'manual-chat',
+              name: 'manual-local',
+              sourceType: 'manual',
+              endpoint: '/manual',
+            },
+          ],
+        }],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+
+      const result = await runRainrailCliAsync(['start'], { cwd: projectRoot });
+      try {
+        expect(result.exitCode).toBe(0);
+        const body = '{}';
+        expect((await fetch(`http://127.0.0.1:${port}/webhooks/github`, {
+          method: 'POST',
+          headers: githubWebhookHeaders('secret', body, { delivery: 'delivery-github' }),
+          body,
+        })).status).toBe(202);
+        expect((await fetch(`http://127.0.0.1:${port}/manual`, { method: 'POST', body })).status).toBe(202);
+
+        const sources = await fetch(`http://127.0.0.1:${port}/api/v1/sources`);
+        await expect(sources.json()).resolves.toMatchObject({
+          data: [
+            expect.not.objectContaining({ lastDelivery: expect.any(Object) }),
+            expect.objectContaining({
+              name: 'manual-local',
+              sourceType: 'manual',
+              lastDelivery: expect.objectContaining({ id: 'local-event-000002' }),
+            }),
+          ],
         });
       } finally {
         await closeTestServer(result);
@@ -2753,18 +5208,25 @@ describe('Rainrail CLI built-in commands', () => {
       });
       try {
         expect(result.exitCode).toBe(0);
-        const preflight = await fetch(`http://127.0.0.1:${port}/api/v1/overview`, {
-          method: 'OPTIONS',
-          headers: {
-            Origin: 'http://localhost:3000',
-            'Access-Control-Request-Method': 'GET',
-            'Access-Control-Request-Headers': 'authorization',
-          },
-        });
+        for (const route of [
+          '/api/v1/overview',
+          '/api/v1/workflow-runs/workflow-1',
+          '/api/v1/agent-tasks/task-1',
+        ]) {
+          const preflight = await fetch(`http://127.0.0.1:${port}${route}`, {
+            method: 'OPTIONS',
+            headers: {
+              Origin: 'http://localhost:3000',
+              'Access-Control-Request-Method': 'GET',
+              'Access-Control-Request-Headers': 'authorization',
+            },
+          });
 
-        expect(preflight.status).toBe(204);
-        expect(preflight.headers.get('access-control-allow-origin')).toBe('http://localhost:3000');
-        expect(preflight.headers.get('access-control-allow-headers')?.toLowerCase()).toContain('authorization');
+          expect(preflight.status, route).toBe(204);
+          expect(preflight.headers.get('access-control-allow-origin'), route).toBe('http://localhost:3000');
+          expect(preflight.headers.get('access-control-allow-methods'), route).toBe('GET, OPTIONS');
+          expect(preflight.headers.get('access-control-allow-headers')?.toLowerCase(), route).toContain('authorization');
+        }
       } finally {
         await closeTestServer(result);
       }
@@ -2950,10 +5412,12 @@ describe('Rainrail CLI built-in commands', () => {
       'github',
       'cloudflare',
       'openclaw',
+      'codex-app-server',
     ]);
     expect(getOfficialPluginByAlias('gh')?.alias).toBe('github');
     expect(getOfficialPluginByAlias('cf')?.alias).toBe('cloudflare');
     expect(getOfficialPluginByAlias('oc')?.alias).toBe('openclaw');
+    expect(getOfficialPluginByAlias('cas')?.alias).toBe('codex-app-server');
     expect(getOfficialPluginByAlias('__proto__')).toBeUndefined();
   });
 
@@ -2978,6 +5442,24 @@ describe('Rainrail CLI built-in commands', () => {
     expect(result.stderr).toBe('');
     expect(result.stdout).toContain('Usage: rainrail github webhook add <owner/repo>');
     expect(result.stdout).toContain('Register a GitHub webhook endpoint for a repository.');
+  });
+
+  it('prints Codex App Server help from official plugin metadata', () => {
+    const help = runRainrailCli(['codex-app-server', 'help']);
+    const sessionHelp = runRainrailCli(['cas', 'session', 'test', 'help']);
+
+    expect(help.exitCode).toBe(0);
+    expect(help.stderr).toBe('');
+    expect(help.stdout).toContain('Usage: rainrail codex-app-server <command>');
+    expect(help.stdout).toContain('Codex App Server official plugin');
+    expect(help.stdout).toContain('Aliases: codex-app-server, cas');
+    expect(help.stdout).toContain('  setup');
+    expect(help.stdout).toContain('  doctor');
+    expect(help.stdout).toContain('  session test');
+    expect(sessionHelp.exitCode).toBe(0);
+    expect(sessionHelp.stderr).toBe('');
+    expect(sessionHelp.stdout).toContain('Usage: rainrail codex-app-server session test [options]');
+    expect(sessionHelp.stdout).toContain('Run a non-destructive Codex App Server session connectivity check.');
   });
 
   it('prints canonical plugin command help from canonical plugin routing', () => {
@@ -3023,6 +5505,1167 @@ describe('Rainrail CLI built-in commands', () => {
     expect(result.exitCode).toBe(1);
     expect(result.stdout).toBe('');
     expect(result.stderr).toContain('Unknown rainrail plugin github command: setup typo');
+  });
+
+  it('preserves official plugin commands that accept positional arguments', () => {
+    const result = runRainrailCli(['github', 'webhook', 'add', 'reirei-lab/rainrail']);
+
+    expect(result.exitCode).toBe(2);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('rainrail github webhook add requires plugin execution');
+    expect(result.stderr).not.toContain('Unknown rainrail github command');
+  });
+
+  it('sets up Codex App Server runtime provider config without storing secrets', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'codex-runtime');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      const calls: Array<{ command: string; args: readonly string[] }> = [];
+
+      const result = runRainrailCli(['plugin', 'codex-app-server', 'setup', '--yes'], {
+        cwd: projectRoot,
+        env: {
+          HOME: '/Users/reirei',
+          CODEX_HOME: '/Users/reirei/.codex-work',
+        },
+        commandRunner: (command, args) => {
+          calls.push({ command, args });
+          if (command === 'sh' && args.join(' ') === '-c command -v codex') {
+            return { status: 0, stdout: '/opt/homebrew/bin/codex\n', stderr: '' };
+          }
+          if (command === '/opt/homebrew/bin/codex' && args.join(' ') === '--version') {
+            return { status: 0, stdout: 'codex-cli 0.139.0\n', stderr: '' };
+          }
+          if (command === '/opt/homebrew/bin/codex' && args.join(' ') === 'app-server --help') {
+            return { status: 0, stdout: 'Usage: codex app-server --listen stdio://\n', stderr: '' };
+          }
+          if (command === '/opt/homebrew/bin/codex' && args.join(' ') === 'login status') {
+            return { status: 0, stdout: 'Logged in\n', stderr: '' };
+          }
+          return { status: 1, stdout: '', stderr: 'unexpected command\n' };
+        },
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+      expect(result.stdout).toContain('Codex App Server setup completed.');
+      expect(calls.map((call) => [call.command, call.args])).toEqual([
+        ['sh', ['-c', 'command -v codex']],
+        ['/opt/homebrew/bin/codex', ['--version']],
+        ['/opt/homebrew/bin/codex', ['app-server', '--help']],
+        ['/opt/homebrew/bin/codex', ['login', 'status']],
+      ]);
+      const config = JSON.parse(await readFile(configPath, 'utf8')) as {
+        runtimeProviders?: {
+          codexAppServer?: Record<string, unknown>;
+        };
+      };
+      expect(config.runtimeProviders?.codexAppServer).toEqual({
+        type: 'plugin',
+        enabled: true,
+        runtime: 'codex-app-server',
+        plugin: '@rainrail/codex-app-server-runtime',
+        executor: 'codex-app-server',
+        command: '/opt/homebrew/bin/codex',
+        home: '/Users/reirei',
+        codexHome: '/Users/reirei/.codex-work',
+      });
+      expect(JSON.stringify(config)).not.toMatch(/token|secret|password|credential/iu);
+    });
+  });
+
+  it('returns Codex App Server setup readiness as JSON for automation', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'codex-runtime-json');
+
+      const result = runRainrailCli(['--json', 'plugin', 'codex-app-server', 'setup', '--yes'], {
+        cwd: projectRoot,
+        env: { HOME: '/Users/reirei' },
+        commandRunner: (command, args) => {
+          if (command === 'sh' && args.join(' ') === '-c command -v codex') {
+            return { status: 0, stdout: '/usr/local/bin/codex\n', stderr: '' };
+          }
+          if (command === '/usr/local/bin/codex' && args.join(' ') === '--version') {
+            return { status: 0, stdout: 'codex-cli 0.139.0\n', stderr: '' };
+          }
+          if (command === '/usr/local/bin/codex' && args.join(' ') === 'app-server --help') {
+            return { status: 0, stdout: 'app-server help\n', stderr: '' };
+          }
+          if (command === '/usr/local/bin/codex' && args.join(' ') === 'login status') {
+            return { status: 1, stdout: '', stderr: 'not logged in\n' };
+          }
+          return { status: 1, stdout: '', stderr: 'unexpected command\n' };
+        },
+      });
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toBe('');
+      expect(JSON.parse(result.stdout) as unknown).toMatchObject({
+        command: 'codex-app-server setup',
+        completed: false,
+        checks: {
+          binary: { ok: true, path: '/usr/local/bin/codex' },
+          appServer: { ok: true },
+          login: {
+            ok: false,
+            remediation: 'Run `codex login`, then re-run `rainrail plugin codex-app-server setup --yes`.',
+          },
+        },
+      });
+    });
+  });
+
+  it('preserves unrelated env fragments while writing Codex App Server setup config', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'codex-runtime-fragmented-config');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      await writeFile(configPath, [
+        '{',
+        '  "project": { "name": "codex-runtime-fragmented-config" },',
+        '  "sourceBundles": [],',
+        '  "sources": ${RAINRAIL_SOURCES},',
+        '  "taskProviders": ${TASK_PROVIDERS},',
+        '  "runtimeProviders": {}',
+        '}',
+      ].join('\n'));
+
+      const result = runRainrailCli(['plugin', 'codex-app-server', 'setup', '--yes'], {
+        cwd: projectRoot,
+        env: {
+          HOME: '/Users/reirei',
+          CODEX_HOME: '/Users/reirei/.codex',
+          RAINRAIL_SOURCES: '[]',
+          TASK_PROVIDERS: '{}',
+        },
+        commandRunner: (command, args) => {
+          if (command === 'sh' && args.join(' ') === '-c command -v codex') {
+            return { status: 0, stdout: '/opt/homebrew/bin/codex\n', stderr: '' };
+          }
+          if (command === '/opt/homebrew/bin/codex' && args.join(' ') === '--version') {
+            return { status: 0, stdout: 'codex-cli 0.139.0\n', stderr: '' };
+          }
+          if (command === '/opt/homebrew/bin/codex' && args.join(' ') === 'app-server --help') {
+            return { status: 0, stdout: 'app-server help\n', stderr: '' };
+          }
+          if (command === '/opt/homebrew/bin/codex' && args.join(' ') === 'login status') {
+            return { status: 0, stdout: 'Logged in\n', stderr: '' };
+          }
+          return { status: 1, stdout: '', stderr: 'unexpected command\n' };
+        },
+      });
+      const rawConfig = await readFile(configPath, 'utf8');
+      const parseableConfig = JSON.parse(
+        rawConfig
+          .replace('${RAINRAIL_SOURCES}', '[]')
+          .replace('${TASK_PROVIDERS}', '{}'),
+      ) as { runtimeProviders?: { codexAppServer?: Record<string, unknown> } };
+
+      expect(result.exitCode).toBe(0);
+      expect(rawConfig).toContain('"sources": ${RAINRAIL_SOURCES}');
+      expect(rawConfig).toContain('"taskProviders": ${TASK_PROVIDERS}');
+      expect(parseableConfig.runtimeProviders?.codexAppServer).toMatchObject({
+        type: 'plugin',
+        enabled: true,
+        runtime: 'codex-app-server',
+        plugin: '@rainrail/codex-app-server-runtime',
+      });
+    });
+  });
+
+  it('does not overwrite runtimeProviders that contain env fragments during Codex App Server setup', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'codex-runtime-provider-fragment');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      await writeFile(configPath, [
+        '{',
+        '  "project": { "name": "codex-runtime-provider-fragment" },',
+        '  "runtimeProviders": {',
+        '    "openclaw": ${OPENCLAW_RUNTIME_PROVIDER}',
+        '  }',
+        '}',
+      ].join('\n'));
+
+      const result = runRainrailCli(['--json', 'plugin', 'codex-app-server', 'setup', '--yes'], {
+        cwd: projectRoot,
+        env: {
+          HOME: '/Users/reirei',
+          CODEX_HOME: '/Users/reirei/.codex',
+          OPENCLAW_RUNTIME_PROVIDER: JSON.stringify({
+            type: 'plugin',
+            runtime: 'openclaw',
+            plugin: '@rainrail/openclaw-runtime',
+          }),
+        },
+        commandRunner: (command, args) => {
+          if (command === 'sh' && args.join(' ') === '-c command -v codex') {
+            return { status: 0, stdout: '/opt/homebrew/bin/codex\n', stderr: '' };
+          }
+          if (command === '/opt/homebrew/bin/codex' && args.join(' ') === '--version') {
+            return { status: 0, stdout: 'codex-cli 0.139.0\n', stderr: '' };
+          }
+          if (command === '/opt/homebrew/bin/codex' && args.join(' ') === 'app-server --help') {
+            return { status: 0, stdout: 'app-server help\n', stderr: '' };
+          }
+          if (command === '/opt/homebrew/bin/codex' && args.join(' ') === 'login status') {
+            return { status: 0, stdout: 'Logged in\n', stderr: '' };
+          }
+          return { status: 1, stdout: '', stderr: 'unexpected command\n' };
+        },
+      });
+      const rawConfig = await readFile(configPath, 'utf8');
+
+      expect(result.exitCode).toBe(1);
+      expect(JSON.parse(result.stdout) as unknown).toMatchObject({
+        completed: false,
+        error: 'config.runtimeProviders must be a JSON object without unresolved env fragments before codex-app-server setup can update it',
+      });
+      expect(rawConfig).toContain('"openclaw": ${OPENCLAW_RUNTIME_PROVIDER}');
+      expect(rawConfig).not.toContain('codexAppServer');
+    });
+  });
+
+  it('reuses an existing Codex App Server runtime provider key during setup', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'codex-runtime-existing-key');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      await writeFile(configPath, `${JSON.stringify({
+        project: { name: 'codex-runtime-existing-key' },
+        runtimeProviders: {
+          codexRuntime: {
+            type: 'plugin',
+            enabled: false,
+            runtime: 'codex-app-server',
+            plugin: '@rainrail/codex-app-server-runtime',
+          },
+        },
+      }, null, 2)}\n`);
+
+      const result = runRainrailCli(['plugin', 'codex-app-server', 'setup', '--yes'], {
+        cwd: projectRoot,
+        env: {
+          HOME: '/Users/reirei',
+          CODEX_HOME: '/Users/reirei/.codex',
+        },
+        commandRunner: (command, args) => {
+          if (command === 'sh' && args.join(' ') === '-c command -v codex') {
+            return { status: 0, stdout: '/opt/homebrew/bin/codex\n', stderr: '' };
+          }
+          if (command === '/opt/homebrew/bin/codex' && args.join(' ') === '--version') {
+            return { status: 0, stdout: 'codex-cli 0.139.0\n', stderr: '' };
+          }
+          if (command === '/opt/homebrew/bin/codex' && args.join(' ') === 'app-server --help') {
+            return { status: 0, stdout: 'app-server help\n', stderr: '' };
+          }
+          if (command === '/opt/homebrew/bin/codex' && args.join(' ') === 'login status') {
+            return { status: 0, stdout: 'Logged in\n', stderr: '' };
+          }
+          return { status: 1, stdout: '', stderr: 'unexpected command\n' };
+        },
+      });
+      const config = JSON.parse(await readFile(configPath, 'utf8')) as {
+        runtimeProviders?: {
+          codexRuntime?: Record<string, unknown>;
+          codexAppServer?: Record<string, unknown>;
+        };
+      };
+
+      expect(result.exitCode).toBe(0);
+      expect(config.runtimeProviders?.codexAppServer).toBeUndefined();
+      expect(config.runtimeProviders?.codexRuntime).toMatchObject({
+        enabled: true,
+        runtime: 'codex-app-server',
+        command: '/opt/homebrew/bin/codex',
+        home: '/Users/reirei',
+        codexHome: '/Users/reirei/.codex',
+      });
+    });
+  });
+
+  it('writes parseable Codex App Server setup config when runtimeProviders is missing from an empty object', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'codex-runtime-empty-config');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      await writeFile(configPath, '{}\n');
+
+      const result = runRainrailCli(['plugin', 'codex-app-server', 'setup', '--yes'], {
+        cwd: projectRoot,
+        env: { HOME: '/Users/reirei' },
+        commandRunner: (command, args) => {
+          if (command === 'sh' && args.join(' ') === '-c command -v codex') {
+            return { status: 0, stdout: '/opt/homebrew/bin/codex\n', stderr: '' };
+          }
+          if (command === '/opt/homebrew/bin/codex' && args.join(' ') === '--version') {
+            return { status: 0, stdout: 'codex-cli 0.139.0\n', stderr: '' };
+          }
+          if (command === '/opt/homebrew/bin/codex' && args.join(' ') === 'app-server --help') {
+            return { status: 0, stdout: 'app-server help\n', stderr: '' };
+          }
+          if (command === '/opt/homebrew/bin/codex' && args.join(' ') === 'login status') {
+            return { status: 0, stdout: 'Logged in\n', stderr: '' };
+          }
+          return { status: 1, stdout: '', stderr: 'unexpected command\n' };
+        },
+      });
+      const config = JSON.parse(await readFile(configPath, 'utf8')) as {
+        runtimeProviders?: { codexAppServer?: Record<string, unknown> };
+      };
+
+      expect(result.exitCode).toBe(0);
+      expect(config.runtimeProviders?.codexAppServer?.runtime).toBe('codex-app-server');
+    });
+  });
+
+  it('records Codex App Server HOME and CODEX_HOME candidates without requiring CODEX_HOME', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'codex-runtime-home-candidate');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+
+      const result = runRainrailCli(['plugin', 'codex-app-server', 'setup', '--yes'], {
+        cwd: projectRoot,
+        env: { HOME: '/Users/reirei' },
+        commandRunner: (command, args) => {
+          if (command === 'sh' && args.join(' ') === '-c command -v codex') {
+            return { status: 0, stdout: '/opt/homebrew/bin/codex\n', stderr: '' };
+          }
+          if (command === '/opt/homebrew/bin/codex' && args.join(' ') === '--version') {
+            return { status: 0, stdout: 'codex-cli 0.139.0\n', stderr: '' };
+          }
+          if (command === '/opt/homebrew/bin/codex' && args.join(' ') === 'app-server --help') {
+            return { status: 0, stdout: 'app-server help\n', stderr: '' };
+          }
+          if (command === '/opt/homebrew/bin/codex' && args.join(' ') === 'login status') {
+            return { status: 0, stdout: 'Logged in\n', stderr: '' };
+          }
+          return { status: 1, stdout: '', stderr: 'unexpected command\n' };
+        },
+      });
+
+      expect(result.exitCode).toBe(0);
+      const config = JSON.parse(await readFile(configPath, 'utf8')) as {
+        runtimeProviders?: {
+          codexAppServer?: {
+            home?: string;
+            codexHome?: string;
+          };
+        };
+      };
+      expect(config.runtimeProviders?.codexAppServer?.home).toBe('/Users/reirei');
+      expect(config.runtimeProviders?.codexAppServer?.codexHome).toBe('/Users/reirei/.codex');
+    });
+  });
+
+  it('reports missing Codex binary and unsupported app-server versions with remediation', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'codex-runtime-errors');
+
+      const missingBinary = runRainrailCli(['--json', 'plugin', 'codex-app-server', 'setup', '--yes'], {
+        cwd: projectRoot,
+        env: { PATH: '' },
+        commandRunner: (command, args) => {
+          if (command === 'sh' && args.join(' ') === '-c command -v codex') {
+            return { status: 1, stdout: '', stderr: 'codex not found\n' };
+          }
+          return { status: 1, stdout: '', stderr: 'unexpected command\n' };
+        },
+      });
+      expect(missingBinary.exitCode).toBe(1);
+      expect(JSON.parse(missingBinary.stdout) as unknown).toMatchObject({
+        completed: false,
+        checks: {
+          binary: {
+            ok: false,
+            remediation: 'Install the Codex CLI and make sure `codex` is on PATH.',
+          },
+          appServer: {
+            ok: false,
+            remediation: 'Install the Codex CLI and ensure `codex app-server --help` works.',
+          },
+        },
+      });
+
+      const unsupportedAppServer = runRainrailCli(['--json', 'plugin', 'codex-app-server', 'setup', '--yes'], {
+        cwd: projectRoot,
+        env: { PATH: '' },
+        commandRunner: (command, args) => {
+          if (command === 'sh' && args.join(' ') === '-c command -v codex') {
+            return { status: 0, stdout: '/usr/local/bin/codex\n', stderr: '' };
+          }
+          if (command === '/usr/local/bin/codex' && args.join(' ') === '--version') {
+            return { status: 0, stdout: 'codex-cli 0.120.0\n', stderr: '' };
+          }
+          if (command === '/usr/local/bin/codex' && args.join(' ') === 'app-server --help') {
+            return { status: 2, stdout: '', stderr: 'unrecognized subcommand app-server\n' };
+          }
+          if (command === '/usr/local/bin/codex' && args.join(' ') === 'login status') {
+            return { status: 0, stdout: 'Logged in\n', stderr: '' };
+          }
+          return { status: 1, stdout: '', stderr: 'unexpected command\n' };
+        },
+      });
+      expect(unsupportedAppServer.exitCode).toBe(1);
+      expect(JSON.parse(unsupportedAppServer.stdout) as unknown).toMatchObject({
+        completed: false,
+        checks: {
+          binary: { ok: true, path: '/usr/local/bin/codex', version: 'codex-cli 0.120.0' },
+          appServer: {
+            ok: false,
+            remediation: 'Upgrade Codex CLI to a version that supports `codex app-server`.',
+          },
+        },
+      });
+    });
+  });
+
+  it('detects Codex from PATH without relying on a POSIX shell', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'codex-runtime-path-detection');
+      const binDirectory = join(directory, 'bin');
+      const codexPath = join(binDirectory, 'codex.exe');
+      await mkdir(binDirectory);
+      await writeFile(codexPath, '');
+      await chmod(codexPath, 0o755);
+
+      const result = runRainrailCli(['--json', 'plugin', 'codex-app-server', 'setup', '--yes'], {
+        cwd: projectRoot,
+        env: {
+          HOME: '/Users/reirei',
+          PATH: binDirectory,
+          PATHEXT: '.EXE',
+        },
+        commandRunner: (command, args) => {
+          if (command === codexPath && args.join(' ') === '--version') {
+            return { status: 0, stdout: 'codex-cli 0.139.0\n', stderr: '' };
+          }
+          if (command === codexPath && args.join(' ') === 'app-server --help') {
+            return { status: 0, stdout: 'app-server help\n', stderr: '' };
+          }
+          if (command === codexPath && args.join(' ') === 'login status') {
+            return { status: 0, stdout: 'Logged in\n', stderr: '' };
+          }
+          return { status: 1, stdout: '', stderr: `unexpected command ${command} ${args.join(' ')}\n` };
+        },
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(JSON.parse(result.stdout) as unknown).toMatchObject({
+        checks: {
+          binary: {
+            ok: true,
+            path: codexPath,
+          },
+        },
+      });
+    });
+  });
+
+  it('skips non-executable POSIX Codex PATH candidates', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'codex-runtime-path-executable');
+      const staleBinDirectory = join(directory, 'stale-bin');
+      const validBinDirectory = join(directory, 'valid-bin');
+      const staleCodexPath = join(staleBinDirectory, 'codex');
+      const validCodexPath = join(validBinDirectory, 'codex');
+      await mkdir(staleBinDirectory);
+      await mkdir(validBinDirectory);
+      await writeFile(staleCodexPath, '');
+      await writeFile(validCodexPath, '');
+      await chmod(staleCodexPath, 0o644);
+      await chmod(validCodexPath, 0o755);
+
+      const result = runRainrailCli(['--json', 'plugin', 'codex-app-server', 'setup', '--yes'], {
+        cwd: projectRoot,
+        env: {
+          HOME: '/Users/reirei',
+          PATH: `${staleBinDirectory}:${validBinDirectory}`,
+        },
+        commandRunner: (command, args) => {
+          if (command === validCodexPath && args.join(' ') === '--version') {
+            return { status: 0, stdout: 'codex-cli 0.139.0\n', stderr: '' };
+          }
+          if (command === validCodexPath && args.join(' ') === 'app-server --help') {
+            return { status: 0, stdout: 'app-server help\n', stderr: '' };
+          }
+          if (command === validCodexPath && args.join(' ') === 'login status') {
+            return { status: 0, stdout: 'Logged in\n', stderr: '' };
+          }
+          return { status: command === staleCodexPath ? 126 : 1, stdout: '', stderr: 'unexpected command\n' };
+        },
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(JSON.parse(result.stdout) as unknown).toMatchObject({
+        checks: {
+          binary: {
+            ok: true,
+            path: validCodexPath,
+          },
+        },
+      });
+    });
+  });
+
+  it('runs Windows command shims through cmd.exe', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'codex-runtime-cmd-shim');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      await writeFile(configPath, `${JSON.stringify({
+        project: { name: 'codex-runtime-cmd-shim' },
+        runtimeProviders: {
+          codexAppServer: {
+            type: 'plugin',
+            enabled: true,
+            runtime: 'codex-app-server',
+            plugin: '@rainrail/codex-app-server-runtime',
+            command: 'C:\\Program Files\\Codex\\codex.cmd',
+          },
+        },
+      }, null, 2)}\n`);
+      const commands: Array<{ command: string; args: readonly string[] }> = [];
+
+      const result = runRainrailCli(['--json', 'plugin', 'codex-app-server', 'doctor'], {
+        cwd: projectRoot,
+        commandRunner: (command, args) => {
+          commands.push({ command, args });
+          if (command === 'cmd.exe' && args.at(-1)?.includes(' --version')) {
+            return { status: 0, stdout: 'codex-cli 0.139.0\n', stderr: '' };
+          }
+          if (command === 'cmd.exe' && args.at(-1)?.includes(' app-server --help')) {
+            return { status: 0, stdout: 'app-server help\n', stderr: '' };
+          }
+          if (command === 'cmd.exe' && args.at(-1)?.includes(' login status')) {
+            return { status: 0, stdout: 'Logged in\n', stderr: '' };
+          }
+          return { status: 1, stdout: '', stderr: 'unexpected command\n' };
+        },
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(commands).toEqual([
+        {
+          command: 'cmd.exe',
+          args: ['/d', '/s', '/c', '"C:\\Program Files\\Codex\\codex.cmd" --version'],
+        },
+        {
+          command: 'cmd.exe',
+          args: ['/d', '/s', '/c', '"C:\\Program Files\\Codex\\codex.cmd" app-server --help'],
+        },
+        {
+          command: 'cmd.exe',
+          args: ['/d', '/s', '/c', '"C:\\Program Files\\Codex\\codex.cmd" login status'],
+        },
+      ]);
+    });
+  });
+
+  it('runs Codex App Server doctor and session test checks', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'codex-runtime-doctor');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      await writeFile(configPath, `${JSON.stringify({
+        project: { name: 'codex-runtime-doctor' },
+        runtimeProviders: {
+          codexAppServer: {
+            type: 'plugin',
+            enabled: true,
+            runtime: 'codex-app-server',
+            plugin: '@rainrail/codex-app-server-runtime',
+            executor: 'codex-app-server',
+            command: '/opt/codex/bin/codex',
+            home: '/Users/reirei',
+            codexHome: '/Users/reirei/.codex',
+          },
+        },
+      }, null, 2)}\n`);
+      const calls: Array<{
+        command: string;
+        args: readonly string[];
+        env?: Record<string, string | undefined>;
+      }> = [];
+      const commandRunner = (
+        command: string,
+        args: readonly string[],
+        options: { readonly env?: Record<string, string | undefined> },
+      ) => {
+        calls.push(options.env === undefined ? { command, args } : { command, args, env: options.env });
+        if (command === '/opt/codex/bin/codex' && args.join(' ') === '--version') {
+          return { status: 0, stdout: 'codex-cli 0.139.0\n', stderr: '' };
+        }
+        if (command === '/opt/codex/bin/codex' && args.join(' ') === 'app-server --help') {
+          return { status: 0, stdout: 'app-server --listen stdio://\n', stderr: '' };
+        }
+        if (command === '/opt/codex/bin/codex' && args.join(' ') === 'login status') {
+          return { status: 0, stdout: 'Logged in\n', stderr: '' };
+        }
+        if (command === '/opt/codex/bin/codex' && args.join(' ') === 'app-server --listen stdio://') {
+          return { status: 0, stdout: codexAppServerSessionSmokeStdout(), stderr: '' };
+        }
+        return { status: 1, stdout: '', stderr: 'unexpected command\n' };
+      };
+
+      const doctor = runRainrailCli(['--json', 'plugin', 'codex-app-server', 'doctor'], {
+        cwd: projectRoot,
+        commandRunner,
+      });
+      const session = runRainrailCli(['plugin', 'codex-app-server', 'session', 'test'], {
+        cwd: projectRoot,
+        commandRunner,
+      });
+
+      expect(doctor.exitCode).toBe(0);
+      expect(doctor.stderr).toBe('');
+      expect(JSON.parse(doctor.stdout) as unknown).toMatchObject({
+        command: 'codex-app-server doctor',
+        ok: true,
+        config: {
+          enabled: true,
+          runtime: 'codex-app-server',
+          plugin: '@rainrail/codex-app-server-runtime',
+          executor: 'codex-app-server',
+        },
+        checks: {
+          binary: { ok: true, path: '/opt/codex/bin/codex' },
+          appServer: { ok: true },
+          login: { ok: true },
+        },
+      });
+      expect(session.exitCode).toBe(0);
+      expect(session.stderr).toBe('');
+      expect(session.stdout).toContain('Codex App Server session smoke test passed.');
+      expect(calls.map((call) => call.args.join(' '))).toEqual([
+        '--version',
+        'app-server --help',
+        'login status',
+        '--version',
+        'app-server --help',
+        'login status',
+        'app-server --listen stdio://',
+      ]);
+      expect(calls.every((call) =>
+        call.env?.HOME === '/Users/reirei' && call.env.CODEX_HOME === '/Users/reirei/.codex'
+      )).toBe(true);
+    });
+  });
+
+  it('passes configured Codex home values to the default Codex check runner', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'codex-runtime-default-runner-env');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      const codexScript = join(directory, 'codex-env-check');
+      await writeFile(codexScript, [
+        '#!/bin/sh',
+        'if [ "$1" = "--version" ]; then',
+        '  echo "codex-cli 0.139.0"',
+        '  exit 0',
+        'fi',
+        'if [ "$1" = "app-server" ] && [ "$2" = "--help" ]; then',
+        '  echo "app-server help"',
+        '  exit 0',
+        'fi',
+        'if [ "$1" = "login" ] && [ "$2" = "status" ]; then',
+        '  test "$HOME" = "/Users/configured" && test "$CODEX_HOME" = "/Users/configured/.codex-work"',
+        '  exit $?',
+        'fi',
+        'exit 1',
+      ].join('\n'));
+      await chmod(codexScript, 0o755);
+      await writeFile(configPath, `${JSON.stringify({
+        project: { name: 'codex-runtime-default-runner-env' },
+        runtimeProviders: {
+          codexAppServer: {
+            type: 'plugin',
+            enabled: true,
+            runtime: 'codex-app-server',
+            plugin: '@rainrail/codex-app-server-runtime',
+            command: codexScript,
+            home: '/Users/configured',
+            codexHome: '/Users/configured/.codex-work',
+          },
+        },
+      }, null, 2)}\n`);
+
+      const result = runRainrailCli(['--json', 'plugin', 'codex-app-server', 'doctor'], {
+        cwd: projectRoot,
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(JSON.parse(result.stdout) as unknown).toMatchObject({
+        ok: true,
+        checks: {
+          login: { ok: true },
+        },
+      });
+    });
+  });
+
+  it('expands env references before Codex App Server doctor and session test checks', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'codex-runtime-env-config');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      await writeFile(configPath, [
+        '{',
+        '  "project": { "name": "codex-runtime-env-config" },',
+        '  "runtimeProviders": {',
+        '    "codexAppServer": {',
+        '      "type": "plugin",',
+        '      "enabled": true,',
+        '      "runtime": "codex-app-server",',
+        '      "plugin": "@rainrail/codex-app-server-runtime",',
+        '      "command": "${CODEX_BIN}",',
+        '      "home": "${CODEX_HOME_PARENT}",',
+        '      "codexHome": "${CODEX_HOME}"',
+        '    }',
+        '  }',
+        '}',
+      ].join('\n'));
+      const calls: Array<{ command: string; env?: Record<string, string | undefined> }> = [];
+      const commandRunner = (
+        command: string,
+        args: readonly string[],
+        options: { readonly env?: Record<string, string | undefined> },
+      ) => {
+        calls.push(options.env === undefined ? { command } : { command, env: options.env });
+        if (command === '/opt/codex/bin/codex' && args.join(' ') === '--version') {
+          return { status: 0, stdout: 'codex-cli 0.139.0\n', stderr: '' };
+        }
+        if (command === '/opt/codex/bin/codex' && args.join(' ') === 'app-server --help') {
+          return { status: 0, stdout: 'app-server help\n', stderr: '' };
+        }
+        if (command === '/opt/codex/bin/codex' && args.join(' ') === 'login status') {
+          return { status: 0, stdout: 'Logged in\n', stderr: '' };
+        }
+        if (command === '/opt/codex/bin/codex' && args.join(' ') === 'app-server --listen stdio://') {
+          return { status: 0, stdout: codexAppServerSessionSmokeStdout(), stderr: '' };
+        }
+        return { status: 1, stdout: '', stderr: `unexpected command ${command}\n` };
+      };
+      const env = {
+        CODEX_BIN: '/opt/codex/bin/codex',
+        CODEX_HOME_PARENT: '/Users/reirei',
+        CODEX_HOME: '/Users/reirei/.codex-work',
+      };
+
+      const doctor = runRainrailCli(['--json', 'plugin', 'codex-app-server', 'doctor'], {
+        cwd: projectRoot,
+        env,
+        commandRunner,
+      });
+      const session = runRainrailCli(['--json', 'plugin', 'codex-app-server', 'session', 'test'], {
+        cwd: projectRoot,
+        env,
+        commandRunner,
+      });
+
+      expect(doctor.exitCode).toBe(0);
+      expect(session.exitCode).toBe(0);
+      expect(calls.every((call) => call.command === '/opt/codex/bin/codex')).toBe(true);
+      expect(calls.every((call) =>
+        call.env?.HOME === '/Users/reirei' && call.env.CODEX_HOME === '/Users/reirei/.codex-work'
+      )).toBe(true);
+    });
+  });
+
+  it('accepts minimal valid Codex App Server runtime config in doctor and session test', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'codex-runtime-minimal-config');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      await writeFile(configPath, `${JSON.stringify({
+        project: { name: 'codex-runtime-minimal-config' },
+        runtimeProviders: {
+          codexAppServer: {
+            type: 'plugin',
+            enabled: true,
+            runtime: 'codex-app-server',
+            plugin: '@rainrail/codex-app-server-runtime',
+          },
+        },
+      }, null, 2)}\n`);
+
+      const commandRunner = (command: string, args: readonly string[]) => {
+        if (command === 'sh' && args.join(' ') === '-c command -v codex') {
+          return { status: 0, stdout: '/opt/homebrew/bin/codex\n', stderr: '' };
+        }
+        if (command === '/opt/homebrew/bin/codex' && args.join(' ') === '--version') {
+          return { status: 0, stdout: 'codex-cli 0.139.0\n', stderr: '' };
+        }
+        if (command === '/opt/homebrew/bin/codex' && args.join(' ') === 'app-server --help') {
+          return { status: 0, stdout: 'app-server help\n', stderr: '' };
+        }
+        if (command === '/opt/homebrew/bin/codex' && args.join(' ') === 'login status') {
+          return { status: 0, stdout: 'Logged in\n', stderr: '' };
+        }
+        if (command === '/opt/homebrew/bin/codex' && args.join(' ') === 'app-server --listen stdio://') {
+          return { status: 0, stdout: codexAppServerSessionSmokeStdout(), stderr: '' };
+        }
+        return { status: 1, stdout: '', stderr: 'unexpected command\n' };
+      };
+
+      const doctor = runRainrailCli(['--json', 'plugin', 'codex-app-server', 'doctor'], {
+        cwd: projectRoot,
+        commandRunner,
+      });
+      const session = runRainrailCli(['--json', 'plugin', 'codex-app-server', 'session', 'test'], {
+        cwd: projectRoot,
+        commandRunner,
+      });
+
+      expect(doctor.exitCode).toBe(0);
+      expect(JSON.parse(doctor.stdout) as unknown).toMatchObject({
+        ok: true,
+        config: {
+          ok: true,
+          runtime: 'codex-app-server',
+          plugin: '@rainrail/codex-app-server-runtime',
+        },
+        checks: {
+          binary: { path: '/opt/homebrew/bin/codex' },
+        },
+      });
+      expect(session.exitCode).toBe(0);
+      expect(JSON.parse(session.stdout) as unknown).toMatchObject({ ok: true });
+    });
+  });
+
+  it('fails Codex App Server session test when the stdio session smoke check fails', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'codex-runtime-session-failure');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      await writeFile(configPath, `${JSON.stringify({
+        project: { name: 'codex-runtime-session-failure' },
+        runtimeProviders: {
+          codexAppServer: {
+            type: 'plugin',
+            enabled: true,
+            runtime: 'codex-app-server',
+            plugin: '@rainrail/codex-app-server-runtime',
+            command: '/opt/codex/bin/codex',
+          },
+        },
+      }, null, 2)}\n`);
+
+      const result = runRainrailCli(['--json', 'plugin', 'codex-app-server', 'session', 'test'], {
+        cwd: projectRoot,
+        commandRunner: (command, args) => {
+          if (command === '/opt/codex/bin/codex' && args.join(' ') === '--version') {
+            return { status: 0, stdout: 'codex-cli 0.139.0\n', stderr: '' };
+          }
+          if (command === '/opt/codex/bin/codex' && args.join(' ') === 'app-server --help') {
+            return { status: 0, stdout: 'app-server help\n', stderr: '' };
+          }
+          if (command === '/opt/codex/bin/codex' && args.join(' ') === 'login status') {
+            return { status: 0, stdout: 'Logged in\n', stderr: '' };
+          }
+          if (command === '/opt/codex/bin/codex' && args.join(' ') === 'app-server --listen stdio://') {
+            return {
+              status: 0,
+              stdout: `${JSON.stringify({
+                id: 1,
+                result: {
+                  userAgent: 'codex-cli/0.139.0',
+                  platformFamily: 'unix',
+                  platformOs: 'darwin',
+                },
+              })}\n`,
+              stderr: '',
+            };
+          }
+          return { status: 1, stdout: '', stderr: 'unexpected command\n' };
+        },
+      });
+
+      expect(result.exitCode).toBe(1);
+      expect(JSON.parse(result.stdout) as unknown).toMatchObject({
+        command: 'codex-app-server session test',
+        ok: false,
+        checks: {
+          session: {
+            ok: false,
+          },
+        },
+        error: 'Codex App Server session smoke check did not receive a successful thread/start response.',
+      });
+    });
+  });
+
+  it('retries Codex App Server session test with the legacy camelCase sandbox name', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'codex-runtime-legacy-sandbox');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      await writeFile(configPath, `${JSON.stringify({
+        project: { name: 'codex-runtime-legacy-sandbox' },
+        runtimeProviders: {
+          codexAppServer: {
+            type: 'plugin',
+            enabled: true,
+            runtime: 'codex-app-server',
+            plugin: '@rainrail/codex-app-server-runtime',
+            command: '/opt/codex/bin/codex',
+          },
+        },
+      }, null, 2)}\n`);
+      const sessionInputs: string[] = [];
+
+      const result = runRainrailCli(['--json', 'plugin', 'codex-app-server', 'session', 'test'], {
+        cwd: projectRoot,
+        commandRunner: (command, args, options) => {
+          if (command === '/opt/codex/bin/codex' && args.join(' ') === '--version') {
+            return { status: 0, stdout: 'codex-cli 0.139.0\n', stderr: '' };
+          }
+          if (command === '/opt/codex/bin/codex' && args.join(' ') === 'app-server --help') {
+            return { status: 0, stdout: 'app-server help\n', stderr: '' };
+          }
+          if (command === '/opt/codex/bin/codex' && args.join(' ') === 'login status') {
+            return { status: 0, stdout: 'Logged in\n', stderr: '' };
+          }
+          if (command === '/opt/codex/bin/codex' && args.join(' ') === 'app-server --listen stdio://') {
+            sessionInputs.push(options.input ?? '');
+            if (options.input?.includes('"sandbox":"read-only"')) {
+              return {
+                status: 0,
+                stdout: [
+                  JSON.stringify({
+                    id: 1,
+                    result: {
+                      userAgent: 'codex-cli/0.139.0',
+                      platformFamily: 'unix',
+                      platformOs: 'darwin',
+                    },
+                  }),
+                  JSON.stringify({
+                    id: 2,
+                    error: {
+                      code: -32602,
+                      message: 'unknown variant `read-only`, expected `readOnly`',
+                    },
+                  }),
+                  '',
+                ].join('\n'),
+                stderr: '',
+              };
+            }
+            return { status: 0, stdout: codexAppServerSessionSmokeStdout(), stderr: '' };
+          }
+          return { status: 1, stdout: '', stderr: 'unexpected command\n' };
+        },
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(JSON.parse(result.stdout) as unknown).toMatchObject({ ok: true });
+      expect(sessionInputs).toHaveLength(2);
+      expect(sessionInputs[0]).toContain('"sandbox":"read-only"');
+      expect(sessionInputs[1]).toContain('"sandbox":"readOnly"');
+    });
+  });
+
+  it('returns config errors for duplicate Codex App Server runtime ids', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'codex-runtime-duplicate-id');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      await writeFile(configPath, `${JSON.stringify({
+        project: { name: 'codex-runtime-duplicate-id' },
+        runtimeProviders: {
+          codexAppServer: {
+            type: 'plugin',
+            enabled: true,
+            runtime: 'codex-app-server',
+            plugin: '@rainrail/codex-app-server-runtime',
+          },
+          duplicateCodex: {
+            type: 'plugin',
+            enabled: true,
+            runtime: 'codex-app-server',
+            plugin: '@rainrail/codex-app-server-runtime',
+          },
+        },
+      }, null, 2)}\n`);
+
+      const doctor = runRainrailCli(['--json', 'plugin', 'codex-app-server', 'doctor'], {
+        cwd: projectRoot,
+        commandRunner: () => ({ status: 0, stdout: '', stderr: '' }),
+      });
+      const session = runRainrailCli(['--json', 'plugin', 'codex-app-server', 'session', 'test'], {
+        cwd: projectRoot,
+        commandRunner: () => ({ status: 0, stdout: '', stderr: '' }),
+      });
+
+      expect(doctor.exitCode).toBe(1);
+      expect(JSON.parse(doctor.stdout) as unknown).toMatchObject({
+        ok: false,
+        error: 'config.runtimeProviders contains duplicate runtime "codex-app-server"',
+      });
+      expect(session.exitCode).toBe(1);
+      expect(JSON.parse(session.stdout) as unknown).toMatchObject({
+        ok: false,
+        error: 'config.runtimeProviders contains duplicate runtime "codex-app-server"',
+      });
+    });
+  });
+
+  it('reuses Codex App Server providers whose runtime id is configured through env', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'codex-runtime-env-provider-key');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      await writeFile(configPath, [
+        '{',
+        '  "project": { "name": "codex-runtime-env-provider-key" },',
+        '  "runtimeProviders": {',
+        '    "codexRuntime": {',
+        '      "type": "plugin",',
+        '      "enabled": false,',
+        '      "runtime": "${CODEX_RUNTIME}",',
+        '      "plugin": "@rainrail/codex-app-server-runtime"',
+        '    }',
+        '  }',
+        '}',
+      ].join('\n'));
+
+      const result = runRainrailCli(['plugin', 'codex-app-server', 'setup', '--yes'], {
+        cwd: projectRoot,
+        env: {
+          HOME: '/Users/reirei',
+          CODEX_RUNTIME: 'codex-app-server',
+        },
+        commandRunner: (command, args) => {
+          if (command === 'sh' && args.join(' ') === '-c command -v codex') {
+            return { status: 0, stdout: '/opt/homebrew/bin/codex\n', stderr: '' };
+          }
+          if (command === '/opt/homebrew/bin/codex' && args.join(' ') === '--version') {
+            return { status: 0, stdout: 'codex-cli 0.139.0\n', stderr: '' };
+          }
+          if (command === '/opt/homebrew/bin/codex' && args.join(' ') === 'app-server --help') {
+            return { status: 0, stdout: 'app-server help\n', stderr: '' };
+          }
+          if (command === '/opt/homebrew/bin/codex' && args.join(' ') === 'login status') {
+            return { status: 0, stdout: 'Logged in\n', stderr: '' };
+          }
+          return { status: 1, stdout: '', stderr: 'unexpected command\n' };
+        },
+      });
+      const config = JSON.parse(await readFile(configPath, 'utf8')) as {
+        runtimeProviders?: {
+          codexRuntime?: Record<string, unknown>;
+          codexAppServer?: Record<string, unknown>;
+        };
+      };
+
+      expect(result.exitCode).toBe(0);
+      expect(config.runtimeProviders?.codexAppServer).toBeUndefined();
+      expect(config.runtimeProviders?.codexRuntime).toMatchObject({
+        enabled: true,
+        runtime: 'codex-app-server',
+        command: '/opt/homebrew/bin/codex',
+      });
+    });
+  });
+
+  it('returns config errors for empty configured Codex commands instead of falling back to PATH', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'codex-runtime-empty-command');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      await writeFile(configPath, [
+        '{',
+        '  "project": { "name": "codex-runtime-empty-command" },',
+        '  "runtimeProviders": {',
+        '    "codexAppServer": {',
+        '      "type": "plugin",',
+        '      "enabled": true,',
+        '      "runtime": "codex-app-server",',
+        '      "plugin": "@rainrail/codex-app-server-runtime",',
+        '      "command": "${CODEX_BIN}"',
+        '    }',
+        '  }',
+        '}',
+      ].join('\n'));
+
+      const doctor = runRainrailCli(['--json', 'plugin', 'codex-app-server', 'doctor'], {
+        cwd: projectRoot,
+        env: { PATH: '' },
+        commandRunner: (command, args) => {
+          if (command === 'sh' && args.join(' ') === '-c command -v codex') {
+            return { status: 0, stdout: '/opt/homebrew/bin/codex\n', stderr: '' };
+          }
+          return { status: 0, stdout: 'ok\n', stderr: '' };
+        },
+      });
+      const session = runRainrailCli(['--json', 'plugin', 'codex-app-server', 'session', 'test'], {
+        cwd: projectRoot,
+        env: { PATH: '' },
+        commandRunner: () => ({ status: 0, stdout: 'ok\n', stderr: '' }),
+      });
+
+      expect(doctor.exitCode).toBe(1);
+      expect(JSON.parse(doctor.stdout) as unknown).toMatchObject({
+        ok: false,
+        config: {
+          error: 'config.runtimeProviders.codexAppServer command must be a non-empty string when configured',
+        },
+      });
+      expect(session.exitCode).toBe(1);
+      expect(JSON.parse(session.stdout) as unknown).toMatchObject({
+        ok: false,
+        error: 'config.runtimeProviders.codexAppServer command must be a non-empty string when configured',
+      });
+    });
+  });
+
+  it('returns config errors from Codex App Server doctor and session test', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'codex-runtime-bad-config');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      await writeFile(configPath, `${JSON.stringify({
+        project: { name: 'codex-runtime-bad-config' },
+        runtimeProviders: {
+          codexAppServer: {
+            type: 'plugin',
+            enabled: true,
+            runtime: 'codex-app-server',
+            plugin: '@rainrail/wrong-runtime',
+          },
+        },
+      }, null, 2)}\n`);
+
+      const commandRunner = (command: string, args: readonly string[]) => {
+        if (command === 'sh' && args.join(' ') === '-c command -v codex') {
+          return { status: 0, stdout: '/opt/homebrew/bin/codex\n', stderr: '' };
+        }
+        if (command === '/opt/homebrew/bin/codex' && args.join(' ') === '--version') {
+          return { status: 0, stdout: 'codex-cli 0.139.0\n', stderr: '' };
+        }
+        if (command === '/opt/homebrew/bin/codex' && args.join(' ') === 'app-server --help') {
+          return { status: 0, stdout: 'app-server help\n', stderr: '' };
+        }
+        if (command === '/opt/homebrew/bin/codex' && args.join(' ') === 'login status') {
+          return { status: 0, stdout: 'Logged in\n', stderr: '' };
+        }
+        return { status: 1, stdout: '', stderr: 'unexpected command\n' };
+      };
+
+      const doctor = runRainrailCli(['--json', 'plugin', 'codex-app-server', 'doctor'], {
+        cwd: projectRoot,
+        commandRunner,
+      });
+      const session = runRainrailCli(['--json', 'plugin', 'codex-app-server', 'session', 'test'], {
+        cwd: projectRoot,
+        commandRunner,
+      });
+
+      expect(doctor.exitCode).toBe(1);
+      expect(doctor.stderr).toBe('');
+      expect(JSON.parse(doctor.stdout) as unknown).toMatchObject({
+        command: 'codex-app-server doctor',
+        ok: false,
+        config: {
+          ok: false,
+          error: 'config.runtimeProviders.codexAppServer plugin must be "@rainrail/codex-app-server-runtime"',
+        },
+      });
+      expect(session.exitCode).toBe(1);
+      expect(session.stderr).toBe('');
+      expect(JSON.parse(session.stdout) as unknown).toMatchObject({
+        command: 'codex-app-server session test',
+        ok: false,
+        error: 'config.runtimeProviders.codexAppServer plugin must be "@rainrail/codex-app-server-runtime"',
+      });
+    });
   });
 
   it('keeps built-in commands ahead of plugin aliases and points verbose callers to canonical plugin form', () => {
@@ -3152,6 +6795,7 @@ describe('Rainrail CLI built-in commands', () => {
       expect(result.stdout).toContain('  github');
       expect(result.stdout).toContain('  cloudflare');
       expect(result.stdout).toContain('  openclaw');
+      expect(result.stdout).toContain('  codex-app-server');
       expect(result.stdout).toContain('Run `rainrail setup --yes` to install and set up all official plugins.');
       await expect(readFile(join(projectRoot, 'rainrail.lock'), 'utf8')).resolves.toContain(
         '"plugins": []',
@@ -3171,6 +6815,7 @@ describe('Rainrail CLI built-in commands', () => {
       expect(result.stdout).toContain('  github');
       expect(result.stdout).not.toContain('  cloudflare');
       expect(result.stdout).not.toContain('  openclaw');
+      expect(result.stdout).not.toContain('  codex-app-server');
       expect(result.stdout).toContain('Run `rainrail setup github --yes` to install and set up selected official plugins.');
     });
   });
@@ -3224,6 +6869,8 @@ describe('Rainrail CLI built-in commands', () => {
       expect(result.stdout).toContain('plugin cloudflare setup --yes complete');
       expect(result.stdout).toContain('Added official plugin openclaw@0.1.0');
       expect(result.stdout).toContain('plugin openclaw setup --yes complete');
+      expect(result.stdout).toContain('Added official plugin codex-app-server@0.1.0');
+      expect(result.stdout).toContain('plugin codex-app-server setup --yes complete');
       expect(calls).toEqual([
         {
           command: '/opt/rainrail/bin/rainrail',
@@ -3240,8 +6887,14 @@ describe('Rainrail CLI built-in commands', () => {
           args: ['plugin', 'openclaw', 'setup', '--yes'],
           options: { stdio: 'pipe', cwd: projectRoot },
         },
+        {
+          command: '/opt/rainrail/bin/rainrail',
+          args: ['plugin', 'codex-app-server', 'setup', '--yes'],
+          options: { stdio: 'pipe', cwd: projectRoot },
+        },
       ]);
       const lockfile = await readFile(join(projectRoot, 'rainrail.lock'), 'utf8');
+      expect(lockfile).toContain('"name": "codex-app-server"');
       expect(lockfile).toContain('"name": "cloudflare"');
       expect(lockfile).toContain('"name": "github"');
       expect(lockfile).toContain('"name": "openclaw"');
@@ -3741,7 +7394,7 @@ describe('Rainrail CLI built-in commands', () => {
       const projectRoot = await initRainrailProject(directory, 'my-agent-ops');
       const calls: Array<{ args: readonly string[] }> = [];
 
-      const result = runRainrailCli(['--yes', 'setup', 'gh', 'oc'], {
+      const result = runRainrailCli(['--yes', 'setup', 'gh', 'cas'], {
         cwd: projectRoot,
         currentBinPath: '/opt/rainrail/bin/rainrail',
         commandRunner: (_command, args) => {
@@ -3753,12 +7406,13 @@ describe('Rainrail CLI built-in commands', () => {
       expect(result.exitCode).toBe(0);
       expect(calls.map((call) => call.args)).toEqual([
         ['plugin', 'github', 'setup', '--yes'],
-        ['plugin', 'openclaw', 'setup', '--yes'],
+        ['plugin', 'codex-app-server', 'setup', '--yes'],
       ]);
       const lockfile = await readFile(join(projectRoot, 'rainrail.lock'), 'utf8');
+      expect(lockfile).toContain('"name": "codex-app-server"');
       expect(lockfile).toContain('"name": "github"');
       expect(lockfile).not.toContain('"name": "cloudflare"');
-      expect(lockfile).toContain('"name": "openclaw"');
+      expect(lockfile).not.toContain('"name": "openclaw"');
     });
   });
 
@@ -3843,6 +7497,70 @@ describe('Rainrail CLI built-in commands', () => {
       expect(JSON.parse(result.stdout) as unknown).toMatchObject({
         plugins: ['github'],
         nextAction: `rainrail --config ${configPath} --profile ci setup github --yes`,
+      });
+    });
+  });
+
+  it('includes target options in Codex App Server setup JSON preview nextAction', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'target-codex-project');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+
+      const result = runRainrailCli([
+        '--json',
+        '--config',
+        configPath,
+        '--profile',
+        'ci',
+        'plugin',
+        'codex-app-server',
+        'setup',
+      ], { cwd: directory });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+      expect(JSON.parse(result.stdout) as unknown).toMatchObject({
+        command: 'codex-app-server setup',
+        completed: false,
+        nextAction: `rainrail --config ${configPath} --profile ci plugin codex-app-server setup --yes`,
+      });
+    });
+  });
+
+  it('forwards relative setup config paths as absolute paths to bundled plugin setup', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'target-relative-codex-project');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      const relativeConfig = 'target-relative-codex-project/rainrail.config.json';
+      const calls: Array<{ command: string; args: readonly string[]; cwd?: string }> = [];
+
+      const result = runRainrailCli([
+        '--config',
+        relativeConfig,
+        'setup',
+        'codex-app-server',
+        '--yes',
+      ], {
+        cwd: directory,
+        currentBinPath: '/opt/rainrail/bin/rainrail',
+        commandRunner: (command, args, options) => {
+          calls.push(options.cwd === undefined ? { command, args } : { command, args, cwd: options.cwd });
+          return { status: 0, stdout: 'codex setup ok\n', stderr: '' };
+        },
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(calls).toContainEqual({
+        command: '/opt/rainrail/bin/rainrail',
+        args: [
+          'plugin',
+          'codex-app-server',
+          'setup',
+          '--config',
+          configPath,
+          '--yes',
+        ],
+        cwd: projectRoot,
       });
     });
   });
@@ -4893,9 +8611,9 @@ describe('Rainrail CLI built-in commands', () => {
     await withTempDirectory(async (directory) => {
       const projectRoot = await initRainrailProject(directory, 'my-agent-ops');
 
-      expect(runRainrailCli(['plugins', 'add', 'github'], { cwd: projectRoot })).toEqual({
+      expect(runRainrailCli(['plugins', 'add', 'codex-app-server'], { cwd: projectRoot })).toEqual({
         exitCode: 0,
-        stdout: 'Added official plugin github@0.1.0\n',
+        stdout: 'Added official plugin codex-app-server@0.1.0\n',
         stderr: '',
       });
 
@@ -4905,38 +8623,38 @@ describe('Rainrail CLI built-in commands', () => {
           project: { name: 'my-agent-ops' },
           plugins: [
             {
-              name: 'github',
+              name: 'codex-app-server',
               version: '0.1.0',
-              resolvedSource: 'official:github@0.1.0',
+              resolvedSource: 'official:codex-app-server@0.1.0',
             },
           ],
         }, null, 2)}\n`,
       );
       await expect(
-        readFile(join(projectRoot, '.rainrail', 'plugins', 'github', 'plugin.json'), 'utf8'),
+        readFile(join(projectRoot, '.rainrail', 'plugins', 'codex-app-server', 'plugin.json'), 'utf8'),
       ).resolves.toBe(
         `${JSON.stringify({
-          name: 'github',
+          name: 'codex-app-server',
           version: '0.1.0',
-          resolvedSource: 'official:github@0.1.0',
+          resolvedSource: 'official:codex-app-server@0.1.0',
         }, null, 2)}\n`,
       );
 
       expect(runRainrailCli(['plugins', 'list'], { cwd: join(projectRoot, '.rainrail') })).toEqual({
         exitCode: 0,
-        stdout: 'github@0.1.0 official:github@0.1.0\n',
+        stdout: 'codex-app-server@0.1.0 official:codex-app-server@0.1.0\n',
         stderr: '',
       });
 
-      expect(runRainrailCli(['plugins', 'remove', 'github'], { cwd: projectRoot })).toEqual({
+      expect(runRainrailCli(['plugins', 'remove', 'codex-app-server'], { cwd: projectRoot })).toEqual({
         exitCode: 0,
-        stdout: 'Removed official plugin github\n',
+        stdout: 'Removed official plugin codex-app-server\n',
         stderr: '',
       });
       await expect(readFile(join(projectRoot, 'rainrail.lock'), 'utf8')).resolves.toContain(
         '"plugins": []',
       );
-      await expect(stat(join(projectRoot, '.rainrail', 'plugins', 'github'))).rejects.toThrow();
+      await expect(stat(join(projectRoot, '.rainrail', 'plugins', 'codex-app-server'))).rejects.toThrow();
     });
   });
 
