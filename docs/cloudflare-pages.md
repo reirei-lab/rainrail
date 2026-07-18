@@ -55,7 +55,7 @@ pnpm pages:deploy:preview
 ```
 
 この command は `pnpm --filter www build` の後に
-`wrangler pages deploy apps/www/dist --project-name rainrail-www --branch "${RAINRAIL_PAGES_BRANCH:-preview}"`
+`wrangler pages deploy apps/www/dist --force --project-name rainrail-www --branch "${RAINRAIL_PAGES_BRANCH:-preview}"`
 を実行する。GitHub Actions では `RAINRAIL_PAGES_BRANCH` に pull request の head branch を渡し、
 PR ごとの preview deployment を分ける。手動実行では未指定なら `preview` branch として deploy する。
 
@@ -80,9 +80,9 @@ pnpm pages:deploy:production
 ```
 
 `docs:deploy:production` は `pnpm --filter @rainrail/docs build` の後に
-`wrangler pages deploy apps/docs/dist --project-name rainrail-docs --branch main` を実行する。
+`wrangler pages deploy apps/docs/dist --force --project-name rainrail-docs --branch main` を実行する。
 `pages:deploy:production` は `pnpm --filter www build` の後に
-`wrangler pages deploy apps/www/dist --project-name rainrail-www --branch main` を実行する。
+`wrangler pages deploy apps/www/dist --force --project-name rainrail-www --branch main` を実行する。
 
 ## Docs Deploy
 
@@ -94,7 +94,7 @@ pnpm docs:deploy:preview
 pnpm docs:deploy:production
 ```
 
-`docs:deploy:preview` は `wrangler pages deploy apps/docs/dist --project-name rainrail-docs --branch "${RAINRAIL_DOCS_BRANCH:-preview}"`
+`docs:deploy:preview` は `wrangler pages deploy apps/docs/dist --force --project-name rainrail-docs --branch "${RAINRAIL_DOCS_BRANCH:-preview}"`
 を実行する。`docs:deploy:production` は同じ output directory を `rainrail-docs` project の
 `main` branch として deploy する。
 

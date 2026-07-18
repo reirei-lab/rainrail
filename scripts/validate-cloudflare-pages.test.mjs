@@ -83,7 +83,7 @@ describe('Cloudflare Pages product site deploys', () => {
     expect(workflow).toContain('CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}');
     expect(workflow).toContain('CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}');
     expect(workflow).toContain('if [ -z "${CLOUDFLARE_ACCOUNT_ID}" ] || [ -z "${CLOUDFLARE_API_TOKEN}" ]; then');
-    expect(workflow).toContain('pnpm exec wrangler pages deploy apps/www/dist --project-name rainrail-www --branch "${RAINRAIL_PAGES_BRANCH}"');
+    expect(workflow).toContain('pnpm exec wrangler pages deploy apps/www/dist --force --project-name rainrail-www --branch "${RAINRAIL_PAGES_BRANCH}"');
   });
 
   it('deploys production only from main push or main workflow_dispatch', () => {
@@ -93,12 +93,12 @@ describe('Cloudflare Pages product site deploys', () => {
     expect(workflow).toContain('pnpm pages:build');
     expect(workflow).toContain('pnpm docs:build');
     expect(workflow.indexOf('pnpm docs:build')).toBeLessThan(workflow.indexOf('pnpm pages:build'));
-    expect(workflow).toContain('pnpm exec wrangler pages deploy apps/docs/dist --project-name rainrail-docs --branch main');
-    expect(workflow).toContain('pnpm exec wrangler pages deploy apps/www/dist --project-name rainrail-www --branch main');
+    expect(workflow).toContain('pnpm exec wrangler pages deploy apps/docs/dist --force --project-name rainrail-docs --branch main');
+    expect(workflow).toContain('pnpm exec wrangler pages deploy apps/www/dist --force --project-name rainrail-www --branch main');
     expect(
-      workflow.indexOf('pnpm exec wrangler pages deploy apps/docs/dist --project-name rainrail-docs --branch main'),
+      workflow.indexOf('pnpm exec wrangler pages deploy apps/docs/dist --force --project-name rainrail-docs --branch main'),
     ).toBeLessThan(
-      workflow.indexOf('pnpm exec wrangler pages deploy apps/www/dist --project-name rainrail-www --branch main'),
+      workflow.indexOf('pnpm exec wrangler pages deploy apps/www/dist --force --project-name rainrail-www --branch main'),
     );
   });
 
@@ -152,7 +152,7 @@ describe('Cloudflare Pages docs site deploys', () => {
     expect(docsWorkflow).toContain('id: docs-artifact');
     expect(docsWorkflow).toContain('gh run download "${{ github.event.workflow_run.id }}" --name rainrail-docs-dist --dir apps/docs/dist');
     expect(docsWorkflow).toContain("if: steps.docs-artifact.outputs.found == 'true'");
-    expect(docsWorkflow).toContain('pnpm exec wrangler pages deploy apps/docs/dist --project-name rainrail-docs --branch "${RAINRAIL_DOCS_BRANCH}"');
+    expect(docsWorkflow).toContain('pnpm exec wrangler pages deploy apps/docs/dist --force --project-name rainrail-docs --branch "${RAINRAIL_DOCS_BRANCH}"');
   });
 
   it('deploys docs production only from main push or main workflow_dispatch', () => {
@@ -160,6 +160,6 @@ describe('Cloudflare Pages docs site deploys', () => {
     expect(docsWorkflow).toContain("if: github.ref_name == 'main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')");
     expect(docsWorkflow).toContain('group: cloudflare-docs-pages-production-main');
     expect(docsWorkflow).toContain('pnpm docs:build');
-    expect(docsWorkflow).toContain('pnpm exec wrangler pages deploy apps/docs/dist --project-name rainrail-docs --branch main');
+    expect(docsWorkflow).toContain('pnpm exec wrangler pages deploy apps/docs/dist --force --project-name rainrail-docs --branch main');
   });
 });
