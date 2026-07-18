@@ -63,7 +63,7 @@ describe('Release Please automation', () => {
     expect(workflow).toContain("ref: ${{ steps.release.outputs.sha || format('refs/tags/{0}', github.event.inputs.release_tag) }}");
     expect(workflow).toContain('persist-credentials: false');
     expect(workflow).toContain('uses: pnpm/action-setup@v6');
-    expect(workflow).toContain('uses: actions/setup-node@v6');
+    expect(workflow).toContain('uses: actions/setup-node@v7');
     expect(workflow).toContain('node-version: 26');
     expect(workflow).toContain('pnpm install --frozen-lockfile');
     expect(workflow).toContain('asset_path="$(pnpm --silent release:cli)"');
