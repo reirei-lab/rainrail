@@ -21,7 +21,7 @@ describe('CLI release workflow', () => {
     expect(workflow).toContain('uses: actions/checkout@v7');
     expect(workflow).toContain('persist-credentials: false');
     expect(workflow).toContain('uses: pnpm/action-setup@v6');
-    expect(workflow).toContain('uses: actions/setup-node@v6');
+    expect(workflow).toContain('uses: actions/setup-node@v7');
     expect(workflow).toContain('node-version: 26');
     expect(workflow).toContain('cache: pnpm');
     expect(workflow).toContain('cache-dependency-path: pnpm-lock.yaml');
