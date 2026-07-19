@@ -156,10 +156,10 @@ describe('package scripts used by pull request CI', () => {
   it('defines repeatable Cloudflare Pages commands for product site deploys', () => {
     expect(packageJson.scripts['pages:build']).toBe('pnpm --filter www build');
     expect(packageJson.scripts['pages:deploy:preview']).toBe(
-      'pnpm pages:build && wrangler pages deploy apps/www/dist --project-name rainrail-www --branch "${RAINRAIL_PAGES_BRANCH:-preview}"',
+      'pnpm pages:build && wrangler pages deploy apps/www/dist --force --project-name rainrail-www --branch "${RAINRAIL_PAGES_BRANCH:-preview}"',
     );
     expect(packageJson.scripts['pages:deploy:production']).toBe(
-      'pnpm pages:build && wrangler pages deploy apps/www/dist --project-name rainrail-www --branch main',
+      'pnpm pages:build && wrangler pages deploy apps/www/dist --force --project-name rainrail-www --branch main',
     );
     expect(packageJson.scripts['pages:smoke']).toBe(
       'node scripts/smoke-cloudflare-pages.mjs',

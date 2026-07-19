@@ -81,7 +81,7 @@ jobs:
             exit 0
           fi
 
-          pnpm exec wrangler pages deploy apps/www/dist --project-name rainrail-www --branch "${RAINRAIL_PAGES_BRANCH}"
+          pnpm exec wrangler pages deploy apps/www/dist --force --project-name rainrail-www --branch "${RAINRAIL_PAGES_BRANCH}"
 
   production:
     name: Deploy production
@@ -127,5 +127,5 @@ jobs:
             exit 0
           fi
 
-          pnpm exec wrangler pages deploy apps/docs/dist --project-name rainrail-docs --branch main
-          pnpm exec wrangler pages deploy apps/www/dist --project-name rainrail-www --branch main
+          pnpm exec wrangler pages deploy apps/docs/dist --force --project-name rainrail-docs --branch main
+          pnpm exec wrangler pages deploy apps/www/dist --force --project-name rainrail-www --branch main
