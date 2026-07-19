@@ -1,7 +1,8 @@
 import { spawnSync } from 'node:child_process';
-import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import http, { type IncomingMessage, type OutgoingHttpHeaders, type ServerResponse } from 'node:http';
 import {
+  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -12,8 +13,9 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
+import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
-import { basename, dirname, extname, join, normalize, parse, resolve, sep } from 'node:path';
+import { basename, delimiter, dirname, extname, join, normalize, parse, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   OFFICIAL_PLUGIN_CATALOG,
@@ -25,6 +27,8 @@ import {
   isOfficialPluginHelpRequest,
   type OfficialPluginMetadata,
 } from './official-plugin-catalog.js';
+
+const nodeRequire = createRequire(import.meta.url);
 
 export {
   OFFICIAL_PLUGIN_CATALOG,
@@ -42,6 +46,7 @@ export type BuiltInCommandName =
   | 'init'
   | 'setup'
   | 'start'
+  | 'dispatch'
   | 'doctor'
   | 'plugins'
   | 'plugin'
@@ -78,6 +83,102 @@ export type RainrailCliResult = {
   readonly server?: RainrailStartedServer;
 };
 
+export type RainrailDispatchMode = 'message' | 'envelope-json';
+
+export type RainrailDispatchManualMessagePayload = {
+  readonly provider: 'rainrail';
+  readonly channel: 'manual';
+  readonly action: 'message';
+  readonly conversation: {
+    readonly id: string;
+  };
+  readonly message: {
+    readonly text: string;
+  };
+  readonly actor: {
+    readonly id: string;
+    readonly displayName: string;
+    readonly type: 'cli';
+  };
+};
+
+export type RainrailDispatchEventEnvelope = {
+  readonly id: string;
+  readonly schemaVersion: 'rainrail.event.v1';
+  readonly source: {
+    readonly type: 'manual';
+    readonly name: 'cli';
+  };
+  readonly name: 'rainrail.manual.message';
+  readonly delivery: {
+    readonly id: string;
+    readonly receivedAt: string;
+  };
+  readonly occurredAt: string;
+  readonly subject: {
+    readonly type: 'conversation';
+    readonly id: string;
+  };
+  readonly payload: RainrailDispatchManualMessagePayload;
+  readonly rawPayload: {
+    readonly kind: 'inline-redacted';
+    readonly reference: string;
+    readonly contentType: 'text/plain';
+    readonly sha256: string;
+  };
+};
+
+export type RainrailDispatchRequest =
+  | {
+      readonly mode: 'message';
+      readonly input: string;
+      readonly event: RainrailDispatchEventEnvelope;
+      readonly options: {
+        readonly config?: string | undefined;
+        readonly profile?: string | undefined;
+        readonly json: boolean;
+      };
+    }
+  | {
+      readonly mode: 'envelope-json';
+      readonly input: string;
+      readonly options: {
+        readonly config?: string | undefined;
+        readonly profile?: string | undefined;
+        readonly json: boolean;
+      };
+    };
+
+export type RainrailDispatchRunnerResult = RainrailCliResult;
+
+export type RainrailDispatchRunner = {
+  (request: RainrailDispatchRequest): RainrailDispatchRunnerResult;
+};
+
+export type RainrailAsyncDispatchRunner = {
+  (request: RainrailDispatchRequest): Promise<RainrailCliResult>;
+  readonly preflight?: () => RainrailCliResult | undefined;
+};
+
+export type RainrailStandaloneDispatchFetchResult = {
+  readonly status: number;
+  readonly body: string;
+};
+
+export type RainrailStandaloneDispatchFetcher = (
+  url: string,
+  options: {
+    readonly method: 'POST';
+    readonly headers: Record<string, string>;
+    readonly body: string;
+  },
+) => Promise<RainrailStandaloneDispatchFetchResult>;
+
+export type RainrailStandaloneDispatchRunnerOptions = {
+  readonly env?: Record<string, string | undefined>;
+  readonly fetcher?: RainrailStandaloneDispatchFetcher;
+};
+
 export type CommandRunnerResult = {
   readonly status: number | null;
   readonly stdout?: string | Buffer | null;
@@ -87,6 +188,9 @@ export type CommandRunnerResult = {
 export type CommandRunnerOptions = {
   readonly stdio: 'inherit' | 'pipe';
   readonly cwd?: string;
+  readonly env?: Record<string, string | undefined>;
+  readonly input?: string;
+  readonly timeoutMs?: number;
 };
 
 export type CommandRunner = (
@@ -128,10 +232,12 @@ export type RainrailStartOptions = {
   readonly root: string;
   readonly configPath: string;
   readonly allowedHosts: readonly string[];
+  readonly demoMode?: boolean;
   readonly dashboardToken?: string;
   readonly dashboardAssetRoot?: string;
   readonly dashboardAuth: RainrailDashboardAuth;
   readonly sources: readonly RainrailLocalSource[];
+  readonly operationalStoreConfig?: RainrailStartOperationalStoreConfig;
 };
 
 export type RainrailStartedServer = {
@@ -159,11 +265,21 @@ export type RainrailDashboardAuth = {
   readonly adminToken?: string;
 };
 
+export type RainrailStartOperationalStoreKind = 'sqlite' | 'json' | 'memory';
+
+export type RainrailStartOperationalStoreConfig = {
+  readonly kind: RainrailStartOperationalStoreKind;
+  readonly databasePath?: string;
+  readonly eventLimit: number;
+};
+
 export type RainrailCliEnvironment = {
   readonly cacheDirectory?: string;
   readonly cwd?: string;
   readonly commandRunner?: CommandRunner;
   readonly currentVersion?: string;
+  readonly dispatchRunner?: RainrailDispatchRunner;
+  readonly asyncDispatchRunner?: RainrailAsyncDispatchRunner;
   readonly currentBinPath?: string;
   readonly env?: Record<string, string | undefined>;
   readonly fileSystem?: Partial<RainrailCliFileSystem>;
@@ -268,6 +384,12 @@ export const BUILT_IN_COMMANDS: readonly BuiltInCommand[] = [
     implemented: true,
   },
   {
+    name: 'dispatch',
+    kind: 'built-in',
+    summary: 'Dispatch an event into a Rainrail workflow.',
+    implemented: true,
+  },
+  {
     name: 'doctor',
     kind: 'built-in',
     summary: 'Check local Rainrail configuration and environment health.',
@@ -334,6 +456,16 @@ export function parseRainrailArguments(argv: readonly string[]): ParsedRainrailA
     if (arg === '--') {
       commandArgs.push(...argv.slice(index + 1));
       break;
+    }
+
+    if (commandName === 'dispatch' && isDispatchInputModeOption(arg, commandArgs)) {
+      commandArgs.push(arg);
+      const value = argv[index + 1];
+      if (value !== undefined) {
+        commandArgs.push(value);
+        index += 1;
+      }
+      continue;
     }
 
     if (arg === '--json') {
@@ -408,6 +540,35 @@ export function parseRainrailArguments(argv: readonly string[]): ParsedRainrailA
     options: parsedOptions,
     errors,
   };
+}
+
+function isDispatchInputModeOption(arg: string, commandArgs: readonly string[]): boolean {
+  if (arg === '--message' || arg === '--envelope-json') {
+    return true;
+  }
+  if (arg !== '--json') {
+    return false;
+  }
+  return !hasDispatchInputMode(commandArgs);
+}
+
+function hasDispatchInputMode(commandArgs: readonly string[]): boolean {
+  return commandArgs.some((arg, index) => {
+    if (
+      arg === '--message'
+      || arg === '--envelope-json'
+      || arg === '--stdin'
+      || arg.startsWith('--message=')
+      || arg.startsWith('--json=')
+      || arg.startsWith('--envelope-json=')
+    ) {
+      return true;
+    }
+    if (arg === '--json') {
+      return true;
+    }
+    return index === 0 && !arg.startsWith('--');
+  });
 }
 
 export function formatHelp(): string {
@@ -874,6 +1035,10 @@ function shouldStartUpdateNoticeCheck(
     return false;
   }
 
+  if (parsed.commandName === 'dispatch' && isDispatchHelpRequestForNotice(parsed.commandArgs)) {
+    return false;
+  }
+
   const pluginAliasResolver = environment.pluginAliasResolver ?? defaultPluginAliasResolver;
   if (parsed.commandName === 'plugin') {
     const pluginName = parsed.commandArgs[0];
@@ -884,6 +1049,10 @@ function shouldStartUpdateNoticeCheck(
 
   const plugin = pluginAliasResolver(parsed.commandName);
   return plugin === undefined || !isPluginHelpRequestForNotice(plugin, parsed.commandArgs);
+}
+
+function isDispatchHelpRequestForNotice(args: readonly string[]): boolean {
+  return args.length === 1 && (args[0] === 'help' || args[0] === '--help');
 }
 
 function isPluginHelpRequestForNotice(
@@ -1220,10 +1389,16 @@ function defaultPluginAliasResolver(alias: string): OfficialPluginMetadata | und
   return getOfficialPluginByAlias(alias);
 }
 
+const codexAppServerRuntimeProviderKey = 'codexAppServer';
+const codexAppServerRuntimeId = 'codex-app-server';
+const codexAppServerRuntimePlugin = '@rainrail/codex-app-server-runtime';
+
 function runPluginCommand(
   plugin: OfficialPluginMetadata,
   args: readonly string[],
   invocation: readonly string[],
+  options: SharedOptions,
+  environment: RainrailCliEnvironment,
 ): RainrailCliResult {
   if (isOfficialPluginHelpRequest(args)) {
     return {
@@ -1242,6 +1417,7 @@ function runPluginCommand(
     };
   }
 
+  const commandLength = pluginCommand.name.split(' ').length;
   if (isOfficialPluginCommandHelpRequest(pluginCommand, args)) {
     return {
       exitCode: 0,
@@ -1250,16 +1426,31 @@ function runPluginCommand(
     };
   }
 
-  if (pluginCommand.name === 'setup' && isOfficialBundledPlugin(plugin)) {
-    const commandLength = pluginCommand.name.split(' ').length;
+  if (plugin.alias === codexAppServerRuntimeId && pluginCommand.name === 'setup') {
     if (args.length !== commandLength) {
-      return {
-        exitCode: 1,
-        stdout: '',
-        stderr: `Unknown rainrail ${invocation.join(' ')} command: ${args.join(' ')}\n\n${formatOfficialPluginHelp(plugin, invocation)}`,
-      };
+      return unknownPluginCommandResult(plugin, args, invocation);
     }
+    return runCodexAppServerSetupCommand(options, environment);
+  }
 
+  if (plugin.alias === codexAppServerRuntimeId && pluginCommand.name === 'doctor') {
+    if (args.length !== commandLength) {
+      return unknownPluginCommandResult(plugin, args, invocation);
+    }
+    return runCodexAppServerDoctorCommand(options, environment);
+  }
+
+  if (plugin.alias === codexAppServerRuntimeId && pluginCommand.name === 'session test') {
+    if (args.length !== commandLength) {
+      return unknownPluginCommandResult(plugin, args, invocation);
+    }
+    return runCodexAppServerSessionTestCommand(options, environment);
+  }
+
+  if (pluginCommand.name === 'setup' && isOfficialBundledPlugin(plugin)) {
+    if (args.length !== commandLength) {
+      return unknownPluginCommandResult(plugin, args, invocation);
+    }
     return {
       exitCode: 0,
       stdout:
@@ -1271,8 +1462,1009 @@ function runPluginCommand(
   return {
     exitCode: 2,
     stdout: '',
-    stderr: `rainrail ${[...invocation, pluginCommand.name].join(' ')} requires plugin execution, which is not implemented yet.\n`,
+      stderr: `rainrail ${[...invocation, pluginCommand.name].join(' ')} requires plugin execution, which is not implemented yet.\n`,
   };
+}
+
+function unknownPluginCommandResult(
+  plugin: OfficialPluginMetadata,
+  args: readonly string[],
+  invocation: readonly string[],
+): RainrailCliResult {
+  return {
+    exitCode: 1,
+    stdout: '',
+    stderr: `Unknown rainrail ${invocation.join(' ')} command: ${args.join(' ')}\n\n${formatOfficialPluginHelp(plugin, invocation)}`,
+  };
+}
+
+type CodexAppServerRawProviderConfig = {
+  readonly type?: unknown;
+  readonly enabled?: unknown;
+  readonly runtime?: unknown;
+  readonly plugin?: unknown;
+  readonly executor?: unknown;
+  readonly command?: unknown;
+  readonly home?: unknown;
+  readonly codexHome?: unknown;
+};
+
+type CodexAppServerConfigCheck = {
+  ok: boolean;
+  enabled: boolean;
+  runtime?: string;
+  plugin?: string;
+  executor?: string;
+  command?: string;
+  home?: string;
+  codexHome?: string;
+  error?: string;
+};
+
+type CodexCommandCheck = {
+  readonly ok: boolean;
+  readonly path?: string;
+  readonly version?: string;
+  readonly stderr?: string;
+  readonly remediation?: string;
+};
+
+type CodexSimpleCheck = {
+  readonly ok: boolean;
+  readonly stdout?: string;
+  readonly stderr?: string;
+  readonly remediation?: string;
+};
+
+type CodexAppServerReadiness = {
+  readonly binary: CodexCommandCheck;
+  readonly appServer: CodexSimpleCheck;
+  readonly login: CodexSimpleCheck;
+};
+
+type CodexAppServerSessionChecks = CodexAppServerReadiness & {
+  readonly session: CodexSimpleCheck;
+};
+
+type CodexAppServerReadinessOptions = {
+  readonly command?: string;
+  readonly home?: string;
+  readonly codexHome?: string;
+};
+
+function runCodexAppServerSetupCommand(
+  options: SharedOptions,
+  environment: RainrailCliEnvironment,
+): RainrailCliResult {
+  if (!options.yes) {
+    const nextAction = formatCodexAppServerSetupNextAction(options);
+    if (options.json) {
+      return {
+        exitCode: 0,
+        stdout: formatJson({ command: 'codex-app-server setup', completed: false, nextAction }),
+        stderr: '',
+      };
+    }
+    return {
+      exitCode: 0,
+      stdout: `Run \`${nextAction}\` to detect Codex App Server and update rainrail.config.json.\n`,
+      stderr: '',
+    };
+  }
+
+  const project = resolveProjectForCodexAppServerCommand(options, environment);
+  if ('error' in project) {
+    return formatCodexAppServerSetupResult(false, undefined, options, project.error);
+  }
+
+  const readiness = checkCodexAppServerReadiness({}, environment);
+  if (!codexAppServerReadinessOk(readiness)) {
+    return formatCodexAppServerSetupResult(false, readiness, options);
+  }
+
+  try {
+    writeCodexAppServerRuntimeConfig(project.project.configPath, readiness.binary.path ?? 'codex', environment);
+  } catch (error) {
+    return formatCodexAppServerSetupResult(
+      false,
+      readiness,
+      options,
+      error instanceof Error ? error.message : String(error),
+    );
+  }
+
+  return formatCodexAppServerSetupResult(true, readiness, options);
+}
+
+function runCodexAppServerDoctorCommand(
+  options: SharedOptions,
+  environment: RainrailCliEnvironment,
+): RainrailCliResult {
+  const project = resolveProjectForCodexAppServerCommand(options, environment);
+  if ('error' in project) {
+    return formatCodexAppServerDoctorResult(options, false, undefined, undefined, project.error);
+  }
+
+  const config = readCodexAppServerRuntimeConfig(project.project.configPath, environment);
+  if ('error' in config) {
+    return formatCodexAppServerDoctorResult(options, false, undefined, undefined, config.error);
+  }
+
+  const readiness = checkCodexAppServerReadiness(config.config, environment);
+  const ok = config.config.ok && codexAppServerReadinessOk(readiness);
+  return formatCodexAppServerDoctorResult(options, ok, config.config, readiness);
+}
+
+function runCodexAppServerSessionTestCommand(
+  options: SharedOptions,
+  environment: RainrailCliEnvironment,
+): RainrailCliResult {
+  const project = resolveProjectForCodexAppServerCommand(options, environment);
+  if ('error' in project) {
+    return formatCodexAppServerSessionResult(options, false, undefined, project.error);
+  }
+
+  const config = readCodexAppServerRuntimeConfig(project.project.configPath, environment);
+  if ('error' in config) {
+    return formatCodexAppServerSessionResult(options, false, undefined, config.error);
+  }
+
+  const readiness = checkCodexAppServerReadiness(config.config, environment);
+  if (!config.config.ok || !codexAppServerReadinessOk(readiness)) {
+    return formatCodexAppServerSessionResult(
+      options,
+      false,
+      readiness,
+      config.config.ok ? undefined : config.config.error,
+    );
+  }
+  const session = checkCodexAppServerSessionSmoke(
+    readiness.binary.path ?? config.config.command ?? 'codex',
+    config.config,
+    project.project.root,
+    environment,
+  );
+  return formatCodexAppServerSessionResult(
+    options,
+    session.ok,
+    { ...readiness, session },
+    session.ok ? undefined : session.remediation,
+  );
+}
+
+function resolveProjectForCodexAppServerCommand(
+  options: SharedOptions,
+  environment: RainrailCliEnvironment,
+): { readonly project: RainrailProject } | { readonly error: string } {
+  const cwd = environment.cwd === undefined ? process.cwd() : environment.cwd;
+  const fileSystem = getRainrailCliFileSystem(environment);
+  try {
+    const project = resolveRainrailProject(cwd, options, fileSystem);
+    if (project === undefined) {
+      return {
+        error:
+          'rainrail plugin codex-app-server requires a Rainrail project. Run it inside a directory with rainrail.config.json.',
+      };
+    }
+    return { project };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+function checkCodexAppServerReadiness(
+  readinessOptions: CodexAppServerReadinessOptions,
+  environment: RainrailCliEnvironment,
+): CodexAppServerReadiness {
+  const commandRunner = getCommandRunner(environment);
+  const fileSystem = getRainrailCliFileSystem(environment);
+  const commandEnv = createCodexCommandEnvironment(readinessOptions, environment);
+  const binary = readinessOptions.command === undefined
+    ? detectCodexBinary(commandRunner, commandEnv, fileSystem)
+    : checkConfiguredCodexBinary(readinessOptions.command, commandRunner, commandEnv);
+  const command = binary.path;
+  if (!binary.ok || command === undefined) {
+    return {
+      binary,
+      appServer: {
+        ok: false,
+        remediation: 'Install the Codex CLI and ensure `codex app-server --help` works.',
+      },
+      login: {
+        ok: false,
+        remediation: 'Run `codex login`, then re-run this Rainrail command.',
+      },
+    };
+  }
+
+  const appServer = runCodexCheck(command, ['app-server', '--help'], commandRunner, commandEnv);
+  const login = runCodexCheck(command, ['login', 'status'], commandRunner, commandEnv);
+  return {
+    binary,
+    appServer: appServer.ok
+      ? appServer
+      : {
+          ...appServer,
+          remediation: 'Upgrade Codex CLI to a version that supports `codex app-server`.',
+        },
+    login: login.ok
+      ? login
+      : {
+          ...login,
+          remediation: 'Run `codex login`, then re-run `rainrail plugin codex-app-server setup --yes`.',
+        },
+  };
+}
+
+function detectCodexBinary(
+  commandRunner: CommandRunner,
+  env: Record<string, string | undefined>,
+  fileSystem: RainrailCliFileSystem,
+): CodexCommandCheck {
+  const path = findCommandOnPath('codex', env, fileSystem) ?? detectCodexBinaryWithShell(commandRunner, env);
+  if (path === undefined) {
+    return {
+      ok: false,
+      remediation: 'Install the Codex CLI and make sure `codex` is on PATH.',
+    };
+  }
+  return checkConfiguredCodexBinary(path, commandRunner, env);
+}
+
+function detectCodexBinaryWithShell(
+  commandRunner: CommandRunner,
+  env: Record<string, string | undefined>,
+): string | undefined {
+  const detected = process.platform === 'win32'
+    ? commandRunner('where.exe', ['codex'], { stdio: 'pipe', env })
+    : commandRunner('sh', ['-c', 'command -v codex'], { stdio: 'pipe', env });
+  return (detected.status ?? 1) === 0 ? firstNonEmptyLine(toOutput(detected.stdout)) : undefined;
+}
+
+function findCommandOnPath(
+  command: string,
+  env: Record<string, string | undefined>,
+  fileSystem: RainrailCliFileSystem,
+): string | undefined {
+  const pathValue = firstNonEmptyString(env.PATH) ?? firstNonEmptyString(env.Path);
+  if (pathValue === undefined) {
+    return undefined;
+  }
+  const pathSeparator = process.platform === 'win32' ? ';' : delimiter;
+  const candidateNames = commandCandidateNames(command, env);
+  for (const directory of pathValue.split(pathSeparator)) {
+    if (directory.length === 0) continue;
+    for (const candidateName of candidateNames) {
+      const candidate = join(directory, candidateName);
+      try {
+        if (isExecutableCommandPath(candidate, fileSystem)) {
+          return candidate;
+        }
+      } catch {
+        // Keep searching PATH.
+      }
+    }
+  }
+  return undefined;
+}
+
+function isExecutableCommandPath(path: string, fileSystem: RainrailCliFileSystem): boolean {
+  const stat = fileSystem.statSync(path);
+  if (!stat.isFile()) {
+    return false;
+  }
+  if (process.platform === 'win32' || /\.(?:bat|cmd|com|exe)$/iu.test(path)) {
+    return true;
+  }
+  return (stat.mode & 0o111) !== 0;
+}
+
+function commandCandidateNames(command: string, env: Record<string, string | undefined>): readonly string[] {
+  const names = new Set<string>([command]);
+  const pathExt = firstNonEmptyString(env.PATHEXT);
+  const extensions = process.platform === 'win32' || pathExt !== undefined
+    ? (pathExt ?? '.COM;.EXE;.BAT;.CMD')
+      .split(';')
+      .map((extension) => extension.trim())
+      .filter((extension) => extension.length > 0)
+    : [];
+  for (const extension of extensions) {
+    names.add(`${command}${extension.toLowerCase()}`);
+    names.add(`${command}${extension.toUpperCase()}`);
+  }
+  if (process.platform !== 'win32') {
+    names.add(`${command}.exe`);
+  }
+  return [...names];
+}
+
+function checkConfiguredCodexBinary(
+  command: string,
+  commandRunner: CommandRunner,
+  env: Record<string, string | undefined>,
+): CodexCommandCheck {
+  const version = runCodexCommand(command, ['--version'], commandRunner, { stdio: 'pipe', env });
+  if ((version.status ?? 1) !== 0) {
+    return {
+      ok: false,
+      path: command,
+      stderr: toOutput(version.stderr),
+      remediation: `Check that ${command} is executable and points to the Codex CLI.`,
+    };
+  }
+  return {
+    ok: true,
+    path: command,
+    version: stripTrailingNewline(toOutput(version.stdout)),
+  };
+}
+
+function runCodexCheck(
+  command: string,
+  args: readonly string[],
+  commandRunner: CommandRunner,
+  env: Record<string, string | undefined>,
+): CodexSimpleCheck {
+  const result = runCodexCommand(command, args, commandRunner, { stdio: 'pipe', env });
+  return {
+    ok: (result.status ?? 1) === 0,
+    stdout: stripTrailingNewline(toOutput(result.stdout)),
+    stderr: stripTrailingNewline(toOutput(result.stderr)),
+  };
+}
+
+function runCodexCommand(
+  command: string,
+  args: readonly string[],
+  commandRunner: CommandRunner,
+  options: CommandRunnerOptions,
+): CommandRunnerResult {
+  if (isWindowsCommandShim(command)) {
+    return commandRunner('cmd.exe', ['/d', '/s', '/c', formatWindowsCommandLine(command, args)], options);
+  }
+  return commandRunner(command, args, options);
+}
+
+function isWindowsCommandShim(command: string): boolean {
+  return /\.(?:bat|cmd)$/iu.test(command);
+}
+
+function formatWindowsCommandLine(command: string, args: readonly string[]): string {
+  return [quoteWindowsCommandArgument(command), ...args.map(quoteWindowsCommandArgument)].join(' ');
+}
+
+function quoteWindowsCommandArgument(argument: string): string {
+  if (/^[A-Za-z0-9_./:@%+=,-]+$/u.test(argument)) {
+    return argument;
+  }
+  return `"${argument.replaceAll('"', '\\"')}"`;
+}
+
+function checkCodexAppServerSessionSmoke(
+  command: string,
+  readinessOptions: CodexAppServerReadinessOptions,
+  cwd: string,
+  environment: RainrailCliEnvironment,
+): CodexSimpleCheck {
+  const firstAttempt = checkCodexAppServerSessionSmokeWithSandbox(command, readinessOptions, cwd, environment, 'read-only');
+  if (!firstAttempt.ok && isCamelCaseSandboxNameErrorOutput(firstAttempt.stdout, firstAttempt.stderr)) {
+    return checkCodexAppServerSessionSmokeWithSandbox(command, readinessOptions, cwd, environment, 'readOnly');
+  }
+  return firstAttempt;
+}
+
+function checkCodexAppServerSessionSmokeWithSandbox(
+  command: string,
+  readinessOptions: CodexAppServerReadinessOptions,
+  cwd: string,
+  environment: RainrailCliEnvironment,
+  sandbox: 'read-only' | 'readOnly',
+): CodexSimpleCheck {
+  const env = createCodexCommandEnvironment(readinessOptions, environment);
+  const result = environment.commandRunner === undefined
+    ? runDefaultCodexAppServerSessionSmokeCommand(command, cwd, env, sandbox)
+    : runCodexCommand(command, ['app-server', '--listen', 'stdio://'], environment.commandRunner, {
+        stdio: 'pipe',
+        cwd,
+        env,
+        input: formatCodexAppServerSessionSmokeInput(cwd, sandbox),
+        timeoutMs: 15_000,
+      });
+  const stdout = stripTrailingNewline(toOutput(result.stdout));
+  const stderr = stripTrailingNewline(toOutput(result.stderr));
+  if ((result.status ?? 1) !== 0) {
+    return {
+      ok: false,
+      stdout,
+      stderr,
+      remediation: stderr.length > 0
+        ? stderr
+        : 'Codex App Server session smoke check failed before completing initialize and thread/start.',
+    };
+  }
+  const frames = parseCodexAppServerJsonLines(stdout);
+  if (frames === undefined) {
+    return {
+      ok: false,
+      stdout,
+      stderr,
+      remediation: 'Codex App Server session smoke check returned invalid JSON-RPC output.',
+    };
+  }
+  const initialize = findCodexAppServerResponseFrame(frames, 1);
+  if (!codexAppServerResponseOk(initialize)) {
+    return {
+      ok: false,
+      stdout,
+      stderr,
+      remediation: 'Codex App Server session smoke check did not receive a successful initialize response.',
+    };
+  }
+  const thread = findCodexAppServerResponseFrame(frames, 2);
+  if (!codexAppServerThreadStartResponseOk(thread)) {
+    return {
+      ok: false,
+      stdout,
+      stderr,
+      remediation: 'Codex App Server session smoke check did not receive a successful thread/start response.',
+    };
+  }
+  return { ok: true, stdout, stderr };
+}
+
+function runDefaultCodexAppServerSessionSmokeCommand(
+  command: string,
+  cwd: string,
+  env: Record<string, string | undefined>,
+  sandbox: 'read-only' | 'readOnly',
+): CommandRunnerResult {
+  return spawnSync(process.execPath, [
+    '--input-type=module',
+    '-e',
+    codexAppServerSessionSmokeScript,
+    command,
+    cwd,
+    sandbox,
+  ], {
+    cwd,
+    encoding: 'utf8',
+    env,
+    stdio: 'pipe',
+    timeout: 20_000,
+  });
+}
+
+const codexAppServerSessionSmokeScript = `
+import { spawn } from 'node:child_process';
+
+const [command, cwd, sandbox] = process.argv.slice(1);
+let stdout = '';
+let stderr = '';
+let finished = false;
+let finalStatus = 1;
+let forceKillTimer;
+
+const appServerArgs = ['app-server', '--listen', 'stdio://'];
+const shellCommand = process.platform === 'win32' && /\\\\.(?:bat|cmd)$/i.test(command);
+const child = shellCommand
+  ? spawn('cmd.exe', ['/d', '/s', '/c', formatWindowsCommandLine(command, appServerArgs)], {
+      cwd,
+      env: process.env,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    })
+  : spawn(command, appServerArgs, {
+  cwd,
+  env: process.env,
+  stdio: ['pipe', 'pipe', 'pipe'],
+});
+
+const finish = (status) => {
+  if (finished) return;
+  finished = true;
+  finalStatus = status;
+  clearTimeout(timer);
+  if (child.exitCode === null && child.signalCode === null) {
+    child.kill('SIGTERM');
+    forceKillTimer = setTimeout(() => {
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill('SIGKILL');
+      }
+    }, 2_000);
+    return;
+  }
+  exitWrapper(status);
+};
+
+const exitWrapper = (status) => {
+  clearTimeout(forceKillTimer);
+  process.stdout.write(stdout);
+  process.stderr.write(stderr);
+  process.exit(status);
+};
+
+const send = (frame) => child.stdin.write(JSON.stringify(frame) + '\\n');
+const maybeDone = () => {
+  if (stdout.split(/\\r?\\n/u).some((line) => {
+    try {
+      return JSON.parse(line).id === 2;
+    } catch {
+      return false;
+    }
+  })) {
+    finish(0);
+  }
+};
+
+const timer = setTimeout(() => finish(124), 15_000);
+
+child.stdout.setEncoding('utf8');
+child.stderr.setEncoding('utf8');
+child.stdout.on('data', (chunk) => {
+  stdout += chunk;
+  maybeDone();
+});
+child.stderr.on('data', (chunk) => {
+  stderr += chunk;
+});
+child.on('error', (error) => {
+  stderr += error instanceof Error ? error.message : String(error);
+  finish(1);
+});
+child.on('close', (code) => {
+  if (finished) {
+    exitWrapper(finalStatus);
+    return;
+  }
+  clearTimeout(timer);
+  exitWrapper(code ?? 1);
+});
+
+send({
+  id: 1,
+  method: 'initialize',
+  params: {
+    clientInfo: { name: 'rainrail-cli', title: 'Rainrail CLI', version: '0.0.0' },
+    capabilities: null,
+  },
+});
+send({ method: 'initialized' });
+setTimeout(() => send({
+  id: 2,
+  method: 'thread/start',
+  params: { cwd, ephemeral: true, approvalPolicy: 'never', sandbox },
+}), 50);
+
+function formatWindowsCommandLine(command, args) {
+  return [quoteWindowsCommandArgument(command), ...args.map(quoteWindowsCommandArgument)].join(' ');
+}
+
+function quoteWindowsCommandArgument(argument) {
+  if (!/[\\s"]/u.test(argument)) {
+    return argument;
+  }
+  return '"' + argument.replaceAll('"', '\\\\\\"') + '"';
+}
+`;
+
+function isCamelCaseSandboxNameErrorOutput(stdout?: string, stderr?: string): boolean {
+  const output = `${stdout ?? ''}\n${stderr ?? ''}`;
+  return output.includes('unknown variant `read-only`') || output.includes('invalid sandbox');
+}
+
+function formatCodexAppServerSessionSmokeInput(cwd: string, sandbox: 'read-only' | 'readOnly'): string {
+  return [
+    {
+      id: 1,
+      method: 'initialize',
+      params: {
+        clientInfo: {
+          name: 'rainrail-cli',
+          title: 'Rainrail CLI',
+          version: '0.0.0',
+        },
+        capabilities: null,
+      },
+    },
+    { method: 'initialized' },
+    {
+      id: 2,
+      method: 'thread/start',
+      params: {
+        cwd,
+        ephemeral: true,
+        approvalPolicy: 'never',
+        sandbox,
+      },
+    },
+  ].map((frame) => JSON.stringify(frame)).join('\n') + '\n';
+}
+
+function parseCodexAppServerJsonLines(stdout: string): readonly Record<string, unknown>[] | undefined {
+  const frames: Record<string, unknown>[] = [];
+  for (const line of stdout.split(/\r?\n/u)) {
+    const trimmed = line.trim();
+    if (trimmed.length === 0) continue;
+    try {
+      const value = JSON.parse(trimmed) as unknown;
+      if (!isJsonRecord(value)) {
+        return undefined;
+      }
+      frames.push(value);
+    } catch {
+      return undefined;
+    }
+  }
+  return frames;
+}
+
+function findCodexAppServerResponseFrame(
+  frames: readonly Record<string, unknown>[],
+  id: number,
+): Record<string, unknown> | undefined {
+  return frames.find((frame) => frame.id === id);
+}
+
+function codexAppServerResponseOk(frame: Record<string, unknown> | undefined): boolean {
+  return frame !== undefined && frame.error === undefined && frame.result !== undefined;
+}
+
+function codexAppServerThreadStartResponseOk(frame: Record<string, unknown> | undefined): boolean {
+  if (frame === undefined || !codexAppServerResponseOk(frame) || !isJsonRecord(frame.result)) {
+    return false;
+  }
+  const result = frame.result;
+  return isJsonRecord(result.thread) && firstNonEmptyString(result.thread.id) !== undefined;
+}
+
+function createCodexCommandEnvironment(
+  readinessOptions: CodexAppServerReadinessOptions,
+  environment: RainrailCliEnvironment,
+): Record<string, string | undefined> {
+  const env = { ...(environment.env ?? process.env) };
+  if (readinessOptions.home !== undefined) {
+    env.HOME = readinessOptions.home;
+  }
+  if (readinessOptions.codexHome !== undefined) {
+    env.CODEX_HOME = readinessOptions.codexHome;
+  }
+  return env;
+}
+
+function codexAppServerReadinessOk(readiness: CodexAppServerReadiness): boolean {
+  return readiness.binary.ok && readiness.appServer.ok && readiness.login.ok;
+}
+
+function writeCodexAppServerRuntimeConfig(
+  configPath: string,
+  command: string,
+  environment: RainrailCliEnvironment,
+): void {
+  const fileSystem = getRainrailCliFileSystem(environment);
+  const raw = fileSystem.readFileSync(configPath, 'utf8');
+  const rawRuntimeProviders = readRawRuntimeProvidersObject(raw);
+  if (rawRuntimeProviders === undefined && hasRuntimeProvidersProperty(raw)) {
+    throw new Error(
+      'config.runtimeProviders must be a JSON object without unresolved env fragments before codex-app-server setup can update it',
+    );
+  }
+  const env = environment.env ?? process.env;
+  const runtimeProviders = rawRuntimeProviders ?? {};
+  const expandedRuntimeProviders = readExpandedRuntimeProvidersObject(raw, env) ?? runtimeProviders;
+  const providerKeys = findCodexAppServerRuntimeProviderKeys(expandedRuntimeProviders);
+  if (providerKeys.length > 1) {
+    throw new Error('config.runtimeProviders contains duplicate runtime "codex-app-server"');
+  }
+  const providerKey = providerKeys[0] ?? codexAppServerRuntimeProviderKey;
+  const previous = isJsonRecord(runtimeProviders[providerKey])
+    ? runtimeProviders[providerKey]
+    : {};
+  const nextProvider: Record<string, unknown> = {
+    ...previous,
+    type: 'plugin',
+    enabled: true,
+    runtime: codexAppServerRuntimeId,
+    plugin: codexAppServerRuntimePlugin,
+    executor: codexAppServerRuntimeId,
+    command,
+  };
+  const home = firstNonEmptyString(env.HOME) ?? homedir();
+  if (home.length > 0) {
+    nextProvider.home = home;
+  }
+  const codexHome = firstNonEmptyString(env.CODEX_HOME) ?? (home.length > 0 ? join(home, '.codex') : undefined);
+  if (codexHome !== undefined) {
+    nextProvider.codexHome = codexHome;
+  }
+  runtimeProviders[providerKey] = nextProvider;
+  fileSystem.writeFileSync(configPath, formatConfigWithRuntimeProviders(raw, runtimeProviders), { flag: 'w' });
+}
+
+function readCodexAppServerRuntimeConfig(
+  configPath: string,
+  environment: RainrailCliEnvironment,
+): { readonly config: CodexAppServerConfigCheck } | { readonly error: string } {
+  const fileSystem = getRainrailCliFileSystem(environment);
+  try {
+    const rawConfig = fileSystem.readFileSync(configPath, 'utf8');
+    const runtimeProviders = readExpandedRuntimeProvidersObject(rawConfig, environment.env ?? process.env);
+    if (runtimeProviders === undefined) {
+      return { error: 'config.runtimeProviders.codexAppServer is not configured' };
+    }
+    const providerKeys = findCodexAppServerRuntimeProviderKeys(runtimeProviders);
+    if (providerKeys.length > 1) {
+      return { error: 'config.runtimeProviders contains duplicate runtime "codex-app-server"' };
+    }
+    const providerKey = providerKeys[0] ?? codexAppServerRuntimeProviderKey;
+    const rawProvider = runtimeProviders[providerKey];
+    if (!isJsonRecord(rawProvider)) {
+      return { error: 'config.runtimeProviders.codexAppServer is not configured' };
+    }
+    return { config: normalizeCodexAppServerRuntimeConfig(rawProvider) };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+function readExpandedRuntimeProvidersObject(
+  raw: string,
+  env: Record<string, string | undefined>,
+): Record<string, unknown> | undefined {
+  try {
+    const value = JSON.parse(expandConfigEnv(raw, env)) as unknown;
+    return isJsonRecord(value) && isJsonRecord(value.runtimeProviders) ? value.runtimeProviders : undefined;
+  } catch {
+    const objectStart = findRuntimeProvidersObjectStart(raw);
+    if (objectStart === undefined) {
+      return undefined;
+    }
+    const objectEnd = findJsonObjectEnd(raw, objectStart);
+    if (objectEnd === undefined) {
+      return undefined;
+    }
+    try {
+      const value = JSON.parse(expandConfigEnv(raw.slice(objectStart, objectEnd + 1), env)) as unknown;
+      return isJsonRecord(value) ? value : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+}
+
+function findCodexAppServerRuntimeProviderKeys(runtimeProviders: Record<string, unknown>): readonly string[] {
+  return Object.entries(runtimeProviders).filter(([, provider]) =>
+    isJsonRecord(provider) && provider.runtime === codexAppServerRuntimeId
+  ).map(([key]) => key);
+}
+
+function readRawRuntimeProvidersObject(raw: string): Record<string, unknown> | undefined {
+  try {
+    const value = JSON.parse(raw) as unknown;
+    return isJsonRecord(value) && isJsonRecord(value.runtimeProviders) ? value.runtimeProviders : undefined;
+  } catch {
+    const objectStart = findRuntimeProvidersObjectStart(raw);
+    if (objectStart === undefined) {
+      return undefined;
+    }
+    const objectEnd = findJsonObjectEnd(raw, objectStart);
+    if (objectEnd === undefined) {
+      return undefined;
+    }
+    try {
+      const value = JSON.parse(raw.slice(objectStart, objectEnd + 1)) as unknown;
+      return isJsonRecord(value) ? value : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+}
+
+function formatConfigWithRuntimeProviders(
+  raw: string,
+  runtimeProviders: Record<string, unknown>,
+): string {
+  try {
+    const rawValue = JSON.parse(raw) as unknown;
+    if (isJsonRecord(rawValue)) {
+      return formatJson({
+        ...rawValue,
+        runtimeProviders,
+      });
+    }
+  } catch {
+    const runtimeProvidersObjectStart = findRuntimeProvidersObjectStart(raw);
+    if (runtimeProvidersObjectStart !== undefined) {
+      const runtimeProvidersObjectEnd = findJsonObjectEnd(raw, runtimeProvidersObjectStart);
+      if (runtimeProvidersObjectEnd !== undefined) {
+        return replaceJsonObjectValue(raw, runtimeProvidersObjectStart, runtimeProvidersObjectEnd, runtimeProviders);
+      }
+      throw new Error('config.runtimeProviders must be an object in rainrail.config.json');
+    }
+    if (hasRuntimeProvidersProperty(raw)) {
+      throw new Error('config.runtimeProviders must be an object in rainrail.config.json');
+    }
+  }
+
+  return insertTopLevelRuntimeProviders(raw, runtimeProviders);
+}
+
+function normalizeCodexAppServerRuntimeConfig(
+  rawProvider: CodexAppServerRawProviderConfig,
+): CodexAppServerConfigCheck {
+  const config: CodexAppServerConfigCheck = {
+    ok: true,
+    enabled: rawProvider.enabled === true,
+  };
+  if (typeof rawProvider.runtime === 'string') config.runtime = rawProvider.runtime;
+  if (typeof rawProvider.plugin === 'string') config.plugin = rawProvider.plugin;
+  if (typeof rawProvider.executor === 'string') config.executor = rawProvider.executor;
+  if ('command' in rawProvider) {
+    const command = firstNonEmptyString(rawProvider.command);
+    if (command !== undefined) config.command = command;
+  }
+  if (typeof rawProvider.home === 'string') config.home = rawProvider.home;
+  if (typeof rawProvider.codexHome === 'string') config.codexHome = rawProvider.codexHome;
+  const problems: string[] = [];
+  if (rawProvider.type !== 'plugin') problems.push('type must be "plugin"');
+  if (config.enabled !== true) problems.push('enabled must be true');
+  if (config.runtime !== codexAppServerRuntimeId) problems.push('runtime must be "codex-app-server"');
+  if (config.plugin !== codexAppServerRuntimePlugin) {
+    problems.push('plugin must be "@rainrail/codex-app-server-runtime"');
+  }
+  if (config.executor !== undefined && config.executor !== codexAppServerRuntimeId) {
+    problems.push('executor must be "codex-app-server"');
+  }
+  if ('command' in rawProvider && config.command === undefined) {
+    problems.push('command must be a non-empty string when configured');
+  }
+  if (problems.length === 0) {
+    return config;
+  }
+  return {
+    ...config,
+    ok: false,
+    error: `config.runtimeProviders.codexAppServer ${problems.join(', ')}`,
+  };
+}
+
+function formatCodexAppServerSetupResult(
+  completed: boolean,
+  readiness: CodexAppServerReadiness | undefined,
+  options: SharedOptions,
+  error?: string,
+): RainrailCliResult {
+  if (options.json) {
+    return {
+      exitCode: completed ? 0 : 1,
+      stdout: formatJson({
+        command: 'codex-app-server setup',
+        completed,
+        ...(readiness === undefined ? {} : { checks: readiness }),
+        ...(error === undefined ? {} : { error }),
+      }),
+      stderr: '',
+    };
+  }
+  if (completed) {
+    return {
+      exitCode: 0,
+      stdout: 'Codex App Server setup completed. Updated runtimeProviders.codexAppServer in rainrail.config.json.\n',
+      stderr: '',
+    };
+  }
+  return {
+    exitCode: 1,
+    stdout: '',
+    stderr: `${error ?? formatCodexAppServerReadinessFailure(readiness)}\n`,
+  };
+}
+
+function formatCodexAppServerDoctorResult(
+  options: SharedOptions,
+  ok: boolean,
+  config: CodexAppServerConfigCheck | undefined,
+  readiness: CodexAppServerReadiness | undefined,
+  error?: string,
+): RainrailCliResult {
+  if (options.json) {
+    return {
+      exitCode: ok ? 0 : 1,
+      stdout: formatJson({
+        command: 'codex-app-server doctor',
+        ok,
+        ...(config === undefined ? {} : { config }),
+        ...(readiness === undefined ? {} : { checks: readiness }),
+        ...(error === undefined ? {} : { error }),
+      }),
+      stderr: '',
+    };
+  }
+  if (ok) {
+    return {
+      exitCode: 0,
+      stdout: 'Codex App Server doctor passed.\n',
+      stderr: '',
+    };
+  }
+  return {
+    exitCode: 1,
+    stdout: '',
+    stderr: `${error ?? config?.error ?? formatCodexAppServerReadinessFailure(readiness)}\n`,
+  };
+}
+
+function formatCodexAppServerSessionResult(
+  options: SharedOptions,
+  ok: boolean,
+  readiness: CodexAppServerReadiness | CodexAppServerSessionChecks | undefined,
+  error?: string,
+): RainrailCliResult {
+  if (options.json) {
+    return {
+      exitCode: ok ? 0 : 1,
+      stdout: formatJson({
+        command: 'codex-app-server session test',
+        ok,
+        ...(readiness === undefined ? {} : { checks: readiness }),
+        ...(error === undefined ? {} : { error }),
+      }),
+      stderr: '',
+    };
+  }
+  if (ok) {
+    return {
+      exitCode: 0,
+      stdout: 'Codex App Server session smoke test passed.\n',
+      stderr: '',
+    };
+  }
+  return {
+    exitCode: 1,
+    stdout: '',
+    stderr: `${error ?? formatCodexAppServerReadinessFailure(readiness)}\n`,
+  };
+}
+
+function formatCodexAppServerReadinessFailure(
+  readiness: CodexAppServerReadiness | undefined,
+): string {
+  if (readiness === undefined) {
+    return 'Codex App Server readiness check failed.';
+  }
+  if (!readiness.binary.ok) {
+    return readiness.binary.remediation ?? 'Codex binary check failed.';
+  }
+  if (!readiness.appServer.ok) {
+    return readiness.appServer.remediation ?? 'Codex App Server readiness check failed.';
+  }
+  if (!readiness.login.ok) {
+    return readiness.login.remediation ?? 'Codex login check failed.';
+  }
+  return 'Codex App Server readiness check failed.';
+}
+
+function firstNonEmptyLine(value: string): string | undefined {
+  return value.split(/\r?\n/u).map((line) => line.trim()).find((line) => line.length > 0);
+}
+
+function firstNonEmptyString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
+}
+
+function getCommandRunner(environment: RainrailCliEnvironment): CommandRunner {
+  return environment.commandRunner ??
+    ((commandName, args, commandOptions) =>
+      spawnSync(commandName, args, {
+        cwd: commandOptions.cwd,
+        encoding: 'utf8',
+        env: commandOptions.env,
+        input: commandOptions.input,
+        stdio: commandOptions.stdio,
+        timeout: commandOptions.timeoutMs,
+      }));
+}
+
+function isJsonRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function isOfficialBundledPlugin(plugin: OfficialPluginMetadata): boolean {
@@ -1316,7 +2508,7 @@ export function runRainrailCli(
   if (command === undefined) {
     const officialPlugin = pluginAliasResolver(parsed.commandName);
     if (officialPlugin !== undefined) {
-      return runPluginCommand(officialPlugin, parsed.commandArgs, [officialPlugin.alias]);
+      return runPluginCommand(officialPlugin, parsed.commandArgs, [officialPlugin.alias], parsed.options, environment);
     }
 
     return {
@@ -1345,7 +2537,7 @@ export function runRainrailCli(
       };
     }
 
-    return runPluginCommand(plugin, parsed.commandArgs.slice(1), ['plugin', pluginName]);
+    return runPluginCommand(plugin, parsed.commandArgs.slice(1), ['plugin', pluginName], parsed.options, environment);
   }
 
   const pluginCollisionHint = getPluginCollisionHint(
@@ -1408,6 +2600,10 @@ export function runRainrailCli(
     return runStartCommand(parsed.commandArgs, parsed.options, environment);
   }
 
+  if (command.name === 'dispatch') {
+    return runDispatchCommand(parsed.commandArgs, parsed.options, environment);
+  }
+
   if (command.name === 'plugins') {
     return runPluginsCommand(parsed.commandArgs, parsed.options, environment);
   }
@@ -1436,7 +2632,11 @@ export async function runRainrailCliAsync(
   }
 
   const command = getBuiltInCommand(parsed.commandName);
-  if (command?.name !== 'start') {
+  if (command?.name !== 'start' && command?.name !== 'dispatch') {
+    return runRainrailCli(argv, environment);
+  }
+
+  if (command === undefined) {
     return runRainrailCli(argv, environment);
   }
 
@@ -1454,12 +2654,17 @@ export async function runRainrailCliAsync(
     };
   }
 
+  if (command.name === 'dispatch') {
+    return runDispatchCommandAsync(parsed.commandArgs, parsed.options, environment);
+  }
+
   return runStartCommandAsync(parsed.commandArgs, parsed.options, environment);
 }
 
 type StartArguments = {
   readonly host?: string;
   readonly port?: number;
+  readonly demoMode: boolean;
   readonly errors: readonly string[];
 };
 
@@ -1470,12 +2675,15 @@ type StartConfig = {
     readonly allowedHosts?: readonly string[];
   };
   readonly dashboardAuth: RainrailDashboardAuth;
+  readonly operationalStore?: RainrailStartOperationalStoreConfig;
   readonly sources: readonly RainrailLocalSource[];
 };
 
 const localDefaultMaxRequestBodyBytes = 25 * 1024 * 1024;
 const localGitHubWebhookSourceNameMaxLength = 53;
 const localEventHistoryLimit = 50;
+const localDefaultOperationalStoreEventLimit = 250;
+const localDefaultDemoOperationalStorePath = '.tmp/dashboard-demo.sqlite';
 const localEmptyCollectionRows: readonly { readonly id: string }[] = [];
 
 function runStartCommand(
@@ -1640,10 +2848,16 @@ function parseStartArguments(args: readonly string[]): StartArguments {
   const errors: string[] = [];
   let host: string | undefined;
   let port: number | undefined;
+  let demoMode = false;
 
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === undefined) continue;
+
+    if (arg === '--demo') {
+      demoMode = true;
+      continue;
+    }
 
     if (arg === '--host' || arg === '--port') {
       const value = args[index + 1];
@@ -1681,7 +2895,7 @@ function parseStartArguments(args: readonly string[]): StartArguments {
     errors.push(`Unknown rainrail start option: ${arg}.`);
   }
 
-  const result: { host?: string; port?: number; errors: readonly string[] } = { errors };
+  const result: { host?: string; port?: number; demoMode: boolean; errors: readonly string[] } = { demoMode, errors };
   if (host !== undefined) result.host = host;
   if (port !== undefined) result.port = port;
   return result;
@@ -1705,8 +2919,16 @@ function readStartConfig(
 
   const server = parseStartConfigServer(value.server);
   const dashboardAuth = parseStartDashboardAuth(value.dashboardAuth);
+  const operationalStore = env.RAINRAIL_OPERATIONAL_STORE === undefined || env.RAINRAIL_OPERATIONAL_STORE.length === 0
+    ? parseStartOperationalStoreConfig(value.operationalStore)
+    : undefined;
   const sources = parseStartConfigSources(value, markerValue, env);
-  return server === undefined ? { dashboardAuth, sources } : { server, dashboardAuth, sources };
+  return {
+    ...(server === undefined ? {} : { server }),
+    dashboardAuth,
+    ...(operationalStore === undefined ? {} : { operationalStore }),
+    sources,
+  };
 }
 
 function parseStartDashboardAuth(value: unknown): RainrailDashboardAuth {
@@ -1744,6 +2966,27 @@ function assertUniqueLocalDashboardAuthTokens(auth: RainrailDashboardAuth): void
     }
     seen.set(token, key);
   }
+}
+
+function parseStartOperationalStoreConfig(value: unknown): RainrailStartOperationalStoreConfig | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!isRecord(value)) {
+    throw new Error('config.operationalStore must be an object');
+  }
+
+  const kind = parseStartOperationalStoreKind(value.kind, 'config.operationalStore.kind');
+  const databasePath = parseOptionalStartConfigString(value.databasePath, 'config.operationalStore.databasePath');
+  const eventLimit = parseOptionalStartPositiveInteger(value.eventLimit, 'config.operationalStore.eventLimit')
+    ?? localDefaultOperationalStoreEventLimit;
+  assertStartOperationalStorePath(kind, databasePath, 'config.operationalStore.databasePath');
+
+  return {
+    kind,
+    ...(databasePath === undefined ? {} : { databasePath }),
+    eventLimit,
+  };
 }
 
 function parseStartConfigServer(value: unknown): StartConfig['server'] {
@@ -2084,17 +3327,18 @@ function parseLocalSourceMaxBodyBytes(value: unknown): number {
 
 function dedupeLocalSources(sources: readonly RainrailLocalSource[]): RainrailLocalSource[] {
   const endpoints = new Set<string>();
-  const names = new Set<string>();
+  const sourceKeys = new Set<string>();
   const deduped: RainrailLocalSource[] = [];
   for (const source of sources) {
     if (endpoints.has(source.endpoint)) {
       throw new Error(`config endpoints must be unique: ${source.endpoint}`);
     }
-    if (names.has(source.name)) {
-      throw new Error(`config source names must be unique: ${source.name}`);
+    const sourceKey = `${source.name}\u0000${source.sourceType}`;
+    if (sourceKeys.has(sourceKey)) {
+      throw new Error(`config source name/sourceType pairs must be unique: ${source.name} (${source.sourceType})`);
     }
     endpoints.add(source.endpoint);
-    names.add(source.name);
+    sourceKeys.add(sourceKey);
     deduped.push(source);
   }
   return deduped;
@@ -2144,6 +3388,22 @@ function resolveStartOptions(
     return { error: 'dashboardAuth.readOnlyToken, dashboardAuth.operatorToken, dashboardAuth.adminToken, or SSE_BEARER_TOKEN is required when rainrail start binds outside localhost' };
   }
   const dashboardAssetRoot = resolveDashboardAssetRoot(env);
+  const envOperationalStore = parseStartOperationalStoreEnv(env);
+  if (envOperationalStore.error !== undefined) {
+    return { error: envOperationalStore.error };
+  }
+  const demoMode = args.demoMode || env.RAINRAIL_DASHBOARD_DEMO === '1';
+  const configuredOperationalStore = envOperationalStore.config ?? config.operationalStore;
+  const operationalStoreConfig = normalizeStartOperationalStoreConfigPath(
+    configuredOperationalStore ?? (demoMode
+      ? {
+        kind: 'sqlite',
+        databasePath: localDefaultDemoOperationalStorePath,
+        eventLimit: localDefaultOperationalStoreEventLimit,
+      }
+      : undefined),
+    project.root,
+  );
 
   return {
     options: {
@@ -2155,7 +3415,9 @@ function resolveStartOptions(
       ...(dashboardAssetRoot === undefined ? {} : { dashboardAssetRoot }),
       sources: config.sources,
       dashboardAuth,
+      ...(demoMode ? { demoMode } : {}),
       ...(dashboardToken === undefined ? {} : { dashboardToken }),
+      ...(operationalStoreConfig === undefined ? {} : { operationalStoreConfig }),
     },
   };
 }
@@ -2194,6 +3456,94 @@ function parseStartPort(value: unknown, label: string): number | { readonly mess
   return port;
 }
 
+function parseStartOperationalStoreEnv(
+  env: Record<string, string | undefined>,
+): { readonly config?: RainrailStartOperationalStoreConfig; readonly error?: undefined } | { readonly error: string } {
+  const envKind = env.RAINRAIL_OPERATIONAL_STORE;
+  if (envKind === undefined || envKind.length === 0) {
+    return {};
+  }
+  let kind: RainrailStartOperationalStoreKind;
+  try {
+    kind = parseStartOperationalStoreKind(envKind, 'RAINRAIL_OPERATIONAL_STORE');
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) };
+  }
+
+  const databasePath = env.RAINRAIL_OPERATIONAL_DB === undefined || env.RAINRAIL_OPERATIONAL_DB.length === 0
+    ? undefined
+    : env.RAINRAIL_OPERATIONAL_DB;
+  const eventLimit = env.RAINRAIL_OPERATIONAL_EVENT_LIMIT === undefined || env.RAINRAIL_OPERATIONAL_EVENT_LIMIT.length === 0
+    ? localDefaultOperationalStoreEventLimit
+    : Number(env.RAINRAIL_OPERATIONAL_EVENT_LIMIT);
+  if (!Number.isInteger(eventLimit) || eventLimit < 1) {
+    return { error: 'RAINRAIL_OPERATIONAL_EVENT_LIMIT must be a positive integer' };
+  }
+  try {
+    assertStartOperationalStorePath(kind, databasePath, 'RAINRAIL_OPERATIONAL_DB');
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) };
+  }
+
+  return {
+    config: {
+      kind,
+      ...(databasePath === undefined ? {} : { databasePath }),
+      eventLimit,
+    },
+  };
+}
+
+function parseStartOperationalStoreKind(value: unknown, label: string): RainrailStartOperationalStoreKind {
+  if (value !== 'sqlite' && value !== 'json' && value !== 'memory') {
+    throw new Error(`${label} must be one of: sqlite, json, memory`);
+  }
+  return value;
+}
+
+function parseOptionalStartConfigString(value: unknown, label: string): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  return parseLocalNonEmptyString(value, label);
+}
+
+function parseOptionalStartPositiveInteger(value: unknown, label: string): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) {
+    throw new Error(`${label} must be a positive integer`);
+  }
+  return value;
+}
+
+function assertStartOperationalStorePath(
+  kind: RainrailStartOperationalStoreKind,
+  databasePath: string | undefined,
+  label: string,
+): void {
+  if ((kind === 'sqlite' || kind === 'json') && databasePath === undefined) {
+    throw new Error(`${label} must be a non-empty string for sqlite/json stores`);
+  }
+  if (kind === 'memory' && databasePath !== undefined) {
+    throw new Error(`${label} must be omitted for memory stores`);
+  }
+}
+
+function normalizeStartOperationalStoreConfigPath(
+  config: RainrailStartOperationalStoreConfig | undefined,
+  root: string,
+): RainrailStartOperationalStoreConfig | undefined {
+  if (config?.databasePath === undefined) {
+    return config;
+  }
+  return {
+    ...config,
+    databasePath: resolve(root, config.databasePath),
+  };
+}
+
 function parseStartConfigPort(value: unknown, label: string): number | { readonly message: string } {
   if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > 65535) {
     return { message: `${label} must be an integer from 1 to 65535` };
@@ -2207,6 +3557,15 @@ function formatStartOutput(options: RainrailStartOptions): string {
     `  ${source.name} (${source.sourceType}): ${baseUrl}${source.endpoint}`
   );
   const dashboardAuthRows = formatDashboardAuthRows(options.dashboardAuth, options.configPath);
+  const dashboardRoutes = [
+    '/en/dashboard/events',
+    '/en/dashboard/runs',
+    '/en/dashboard/tasks',
+    '/en/dashboard/sources',
+    '/en/dashboard/queue',
+    '/en/dashboard/settings',
+  ];
+  const dashboardDemoRoutes = dashboardRoutes.map((route) => `${route}?demo=1`);
   return [
     'Rainrail local harness server starting',
     `Workspace: ${options.root}`,
@@ -2215,7 +3574,11 @@ function formatStartOutput(options: RainrailStartOptions): string {
     `Port: ${options.port}`,
     `Health: ${baseUrl}/healthz`,
     `Dashboard: ${baseUrl}/dashboard`,
+    `Dashboard routes: ${dashboardRoutes.join(', ')}`,
+    ...(options.demoMode ? [`Dashboard demo: ${baseUrl}/dashboard?demo=1`] : []),
+    ...(options.demoMode ? [`Dashboard demo routes: ${dashboardDemoRoutes.join(', ')}`] : []),
     `Dashboard API: ${baseUrl}/api/v1/overview`,
+    ...(options.demoMode ? [`Dashboard demo API: ${baseUrl}/api/v1/overview?demo=1`] : []),
     ...dashboardAuthRows,
     `Event Stream: ${baseUrl}/events`,
     ...(localIntakeRows.length === 0 ? [] : [
@@ -2289,6 +3652,1148 @@ function getRainrailCliPackageVersion(): string {
   }
 
   return packageJson.version;
+}
+
+type ParsedDispatchArguments = {
+  readonly request?: RainrailDispatchRequest | undefined;
+  readonly errors: readonly string[];
+  readonly help: boolean;
+};
+
+type DispatchEnvelopeInputSource =
+  | { readonly kind: 'inline'; readonly input: string }
+  | { readonly kind: 'file'; readonly path: string }
+  | { readonly kind: 'stdin' };
+
+const dispatchUsage = 'Usage: rainrail dispatch <message> | --stdin | --message <text> | --json <file> | --json --stdin | --envelope-json <json>';
+const dispatchCliConversationId = 'cli-manual';
+const dispatchCliSourceName = 'cli';
+const maxDispatchManualMessageTextLength = 8_000;
+const maxDispatchStdinMessageBytes = 65_536;
+let dispatchDeliverySequence = 0;
+
+function runDispatchCommand(
+  args: readonly string[],
+  options: SharedOptions,
+  environment: RainrailCliEnvironment,
+): RainrailCliResult {
+  if (args.length === 1 && (args[0] === 'help' || args[0] === '--help')) {
+    return {
+      exitCode: 0,
+      stdout: formatDispatchHelp(),
+      stderr: '',
+    };
+  }
+
+  if (environment.asyncDispatchRunner !== undefined) {
+    return {
+      exitCode: 2,
+      stdout: '',
+      stderr: 'rainrail dispatch requires the async CLI runner for asynchronous dispatch runners.\n',
+    };
+  }
+
+  const parsed = parseDispatchArguments(args, options, environment);
+  if (parsed.help) {
+    return {
+      exitCode: 0,
+      stdout: formatDispatchHelp(),
+      stderr: '',
+    };
+  }
+
+  if (parsed.errors.length > 0 || parsed.request === undefined) {
+    return {
+      exitCode: 1,
+      stdout: '',
+      stderr: `${parsed.errors.length > 0 ? parsed.errors.join('\n') : dispatchUsage}\n`,
+    };
+  }
+
+  return runDispatchRequest(parsed.request, environment.dispatchRunner);
+}
+
+async function runDispatchCommandAsync(
+  args: readonly string[],
+  options: SharedOptions,
+  environment: RainrailCliEnvironment,
+): Promise<RainrailCliResult> {
+  if (args.length === 1 && (args[0] === 'help' || args[0] === '--help')) {
+    return {
+      exitCode: 0,
+      stdout: formatDispatchHelp(),
+      stderr: '',
+    };
+  }
+
+  const preflightError = environment.asyncDispatchRunner?.preflight?.();
+  if (preflightError !== undefined) {
+    return preflightError;
+  }
+
+  const parsed = parseDispatchArguments(args, options, environment);
+  if (parsed.help) {
+    return {
+      exitCode: 0,
+      stdout: formatDispatchHelp(),
+      stderr: '',
+    };
+  }
+
+  if (parsed.errors.length > 0 || parsed.request === undefined) {
+    return {
+      exitCode: 1,
+      stdout: '',
+      stderr: `${parsed.errors.length > 0 ? parsed.errors.join('\n') : dispatchUsage}\n`,
+    };
+  }
+
+  return runDispatchRequestAsync(
+    parsed.request,
+    environment.asyncDispatchRunner ?? environment.dispatchRunner,
+  );
+}
+
+function runDispatchRequest(
+  request: RainrailDispatchRequest,
+  dispatchRunner: RainrailDispatchRunner | undefined,
+): RainrailCliResult {
+  if (dispatchRunner === undefined) {
+    return {
+      exitCode: 2,
+      stdout: '',
+      stderr: 'rainrail dispatch requires a dispatch runner, which is not implemented yet.\n',
+    };
+  }
+
+  const result = dispatchRunner(request);
+  return result;
+}
+
+async function runDispatchRequestAsync(
+  request: RainrailDispatchRequest,
+  dispatchRunner: RainrailDispatchRunner | RainrailAsyncDispatchRunner | undefined,
+): Promise<RainrailCliResult> {
+  if (dispatchRunner === undefined) {
+    return {
+      exitCode: 2,
+      stdout: '',
+      stderr: 'rainrail dispatch requires a dispatch runner, which is not implemented yet.\n',
+    };
+  }
+
+  return dispatchRunner(request);
+}
+
+export function createStandaloneRainrailDispatchRunner(
+  options: RainrailStandaloneDispatchRunnerOptions = {},
+): RainrailAsyncDispatchRunner {
+  const preflight = (): RainrailCliResult | undefined => {
+    const env = options.env ?? process.env;
+    const publishUrl = env.RAINRAIL_PUBLISH_URL;
+    const publishToken = env.RAINRAIL_PUBLISH_TOKEN;
+    if (publishUrl === undefined || publishUrl.trim().length === 0 ||
+      publishToken === undefined || publishToken.trim().length === 0) {
+      return {
+        exitCode: 2,
+        stdout: '',
+        stderr: 'rainrail dispatch requires RAINRAIL_PUBLISH_URL and RAINRAIL_PUBLISH_TOKEN for standalone event delivery.\n',
+      };
+    }
+    return undefined;
+  };
+
+  return Object.assign(async (request: RainrailDispatchRequest) => {
+    const env = options.env ?? process.env;
+    const configError = preflight();
+    if (configError !== undefined) {
+      return configError;
+    }
+    const publishUrl = env.RAINRAIL_PUBLISH_URL as string;
+    const publishToken = env.RAINRAIL_PUBLISH_TOKEN as string;
+
+    const body = request.mode === 'message' ? JSON.stringify(request.event) : request.input;
+    const fetcher = options.fetcher ?? defaultStandaloneDispatchFetcher;
+    let response: RainrailStandaloneDispatchFetchResult;
+    try {
+      response = await fetcher(publishUrl, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${publishToken}`,
+          'Content-Type': 'application/json',
+        },
+        body,
+      });
+    } catch (error) {
+      return {
+        exitCode: 1,
+        stdout: '',
+        stderr: `rainrail dispatch publish failed: ${error instanceof Error ? error.message : String(error)}\n`,
+      };
+    }
+    if (response.status < 200 || response.status >= 300) {
+      return {
+        exitCode: 1,
+        stdout: '',
+        stderr: `rainrail dispatch publish failed with status ${response.status}.\n`,
+      };
+    }
+
+    const summary = summarizeStandaloneDispatchResponse(response);
+    if (request.options.json) {
+      return {
+        exitCode: 0,
+        stdout: `${JSON.stringify({
+          published: true,
+          status: response.status,
+          ...(summary.eventId === undefined ? {} : { eventId: summary.eventId }),
+          ...(summary.eventName === undefined ? {} : { eventName: summary.eventName }),
+        })}\n`,
+        stderr: '',
+      };
+    }
+
+    const eventDescription = summary.eventName === undefined || summary.eventId === undefined
+      ? 'event'
+      : `${summary.eventName} event ${summary.eventId}`;
+    return {
+      exitCode: 0,
+      stdout: `Published ${eventDescription}.\n`,
+      stderr: '',
+    };
+  }, { preflight });
+}
+
+async function defaultStandaloneDispatchFetcher(
+  url: string,
+  options: Parameters<RainrailStandaloneDispatchFetcher>[1],
+): Promise<RainrailStandaloneDispatchFetchResult> {
+  const response = await fetch(url, {
+    method: options.method,
+    headers: options.headers,
+    body: options.body,
+  });
+  return {
+    status: response.status,
+    body: await response.text(),
+  };
+}
+
+function summarizeStandaloneDispatchResponse(
+  response: RainrailStandaloneDispatchFetchResult,
+): { readonly eventId?: string; readonly eventName?: string } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(response.body) as unknown;
+  } catch {
+    return {};
+  }
+  if (!isRecord(parsed)) {
+    return {};
+  }
+  const eventId = typeof parsed.id === 'string' ? parsed.id : undefined;
+  const eventName = typeof parsed.name === 'string' ? parsed.name : undefined;
+  return {
+    ...(eventId === undefined ? {} : { eventId }),
+    ...(eventName === undefined ? {} : { eventName }),
+  };
+}
+
+function parseDispatchArguments(
+  args: readonly string[],
+  options: SharedOptions,
+  environment: RainrailCliEnvironment,
+): ParsedDispatchArguments {
+  if (args.length === 1 && (args[0] === 'help' || args[0] === '--help')) {
+    return { errors: [], help: true };
+  }
+
+  const errors: string[] = [];
+  let mode: RainrailDispatchMode | undefined;
+  let input: string | undefined;
+  let shouldReadStdin = false;
+  let envelopeSource: DispatchEnvelopeInputSource | undefined;
+  const positionalParts: string[] = [];
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === undefined) {
+      continue;
+    }
+
+    const parsedInlineMode = parseInlineDispatchMode(arg);
+    if (parsedInlineMode !== undefined) {
+      if (mode !== undefined) {
+        errors.push('Choose only one dispatch input mode.');
+        continue;
+      }
+      mode = parsedInlineMode.mode;
+      if (parsedInlineMode.mode === 'envelope-json') {
+        envelopeSource = { kind: 'inline', input: parsedInlineMode.input };
+      } else {
+        input = parsedInlineMode.input;
+      }
+      continue;
+    }
+
+    if (arg.startsWith('--json=')) {
+      const value = arg.slice('--json='.length);
+      if (value.length === 0) {
+        errors.push('Missing value for --json.');
+        continue;
+      }
+      if (mode !== undefined || positionalParts.length > 0) {
+        errors.push('Choose only one dispatch input mode.');
+        continue;
+      }
+      mode = 'envelope-json';
+      envelopeSource = { kind: 'file', path: value };
+      continue;
+    }
+
+    if (arg === '--json') {
+      const value = args[index + 1];
+      if (value === undefined) {
+        errors.push('Missing value for --json.');
+        continue;
+      }
+      if (mode !== undefined || positionalParts.length > 0) {
+        errors.push('Choose only one dispatch input mode.');
+        index += 1;
+        continue;
+      }
+      mode = 'envelope-json';
+      envelopeSource = value === '--stdin'
+        ? { kind: 'stdin' }
+        : { kind: 'file', path: value };
+      index += 1;
+      continue;
+    }
+
+    if (arg === '--stdin') {
+      if (mode !== undefined || positionalParts.length > 0) {
+        errors.push('Choose only one dispatch input mode.');
+        continue;
+      }
+      mode = 'message';
+      shouldReadStdin = true;
+      continue;
+    }
+
+    if (arg === '--message' || arg === '--envelope-json') {
+      const value = args[index + 1];
+      if (value === undefined) {
+        errors.push(`Missing value for ${arg}.`);
+        continue;
+      }
+      if (mode !== undefined || positionalParts.length > 0) {
+        errors.push('Choose only one dispatch input mode.');
+        index += 1;
+        continue;
+      }
+      mode = arg === '--message' ? 'message' : 'envelope-json';
+      if (mode === 'envelope-json') {
+        envelopeSource = { kind: 'inline', input: value };
+      } else {
+        input = value;
+      }
+      index += 1;
+      continue;
+    }
+
+    if (arg.startsWith('--')) {
+      errors.push(`Unknown rainrail dispatch option: ${arg}.`);
+      continue;
+    }
+
+    if (mode !== undefined && (mode !== 'message' || input !== undefined || shouldReadStdin)) {
+      errors.push(`Unexpected rainrail dispatch argument: ${arg}.`);
+      continue;
+    }
+    mode = 'message';
+    positionalParts.push(arg);
+  }
+
+  if (errors.length === 0 && mode === 'envelope-json' && envelopeSource !== undefined) {
+    if (environment.dispatchRunner === undefined && environment.asyncDispatchRunner === undefined) {
+      input = '';
+    } else {
+      const envelopeInput = readDispatchEnvelopeInput(envelopeSource, environment);
+      if (envelopeInput.error !== undefined) {
+        return { errors: [envelopeInput.error], help: false };
+      }
+      const validated = parseAndValidateDispatchEnvelope(envelopeInput.input);
+      if (validated.error !== undefined) {
+        return { errors: [validated.error], help: false };
+      }
+      input = validated.input;
+    }
+  } else if (errors.length === 0 && shouldReadStdin) {
+    const stdinInput = readDispatchStdin(environment);
+    if ('error' in stdinInput) {
+      return { errors: [stdinInput.error], help: false };
+    }
+    input = stdinInput.input;
+  } else if (input === undefined && positionalParts.length > 0) {
+    input = positionalParts.join(' ');
+  }
+
+  if (errors.length === 0 && mode === 'message' && input !== undefined && input.trim().length === 0) {
+    return { errors: ['Message must not be empty.'], help: false };
+  }
+
+  if (errors.length === 0 && (mode === undefined || input === undefined)) {
+    return { errors: [dispatchUsage], help: false };
+  }
+
+  const request = createDispatchRequest(mode, input, options, environment);
+
+  return {
+    errors,
+    help: false,
+    request,
+  };
+}
+
+function parseInlineDispatchMode(
+  arg: string,
+): { readonly mode: RainrailDispatchMode; readonly input: string } | undefined {
+  if (arg.startsWith('--message=')) {
+    return { mode: 'message', input: arg.slice('--message='.length) };
+  }
+
+  if (arg.startsWith('--envelope-json=')) {
+    return { mode: 'envelope-json', input: arg.slice('--envelope-json='.length) };
+  }
+
+  return undefined;
+}
+
+function formatDispatchHelp(): string {
+  return [
+    dispatchUsage,
+    '',
+    'Input modes:',
+    '  <message>               Dispatch a message-only input as a manual Rainrail event.',
+    '  --stdin                 Read the message from standard input.',
+    '  --message <text>        Dispatch a message-only input payload.',
+    '  --json <file>           Dispatch a complete Rainrail event envelope JSON file.',
+    '  --json --stdin          Dispatch a complete Rainrail event envelope from stdin.',
+    '  --envelope-json <json>  Dispatch a complete Rainrail event envelope JSON string.',
+    '',
+  ].join('\n');
+}
+
+function readDispatchEnvelopeInput(
+  source: DispatchEnvelopeInputSource,
+  environment: RainrailCliEnvironment,
+): { readonly input: string; readonly error?: undefined } | { readonly error: string } {
+  if (source.kind === 'inline') {
+    return { input: source.input };
+  }
+  if (source.kind === 'stdin') {
+    return readDispatchJsonStdin(environment);
+  }
+  return readDispatchJsonFile(source.path, environment);
+}
+
+function readDispatchJsonFile(
+  path: string,
+  environment: RainrailCliEnvironment,
+): { readonly input: string; readonly error?: undefined } | { readonly error: string } {
+  const fileSystem = {
+    ...defaultRainrailCliFileSystem,
+    ...environment.fileSystem,
+  };
+  const resolvedPath = resolve(environment.cwd ?? process.cwd(), path);
+  try {
+    return { input: fileSystem.readFileSync(resolvedPath, 'utf8') };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { error: `Unable to read rainrail dispatch JSON file: ${message}` };
+  }
+}
+
+function readDispatchJsonStdin(
+  environment: RainrailCliEnvironment,
+): { readonly input: string; readonly error?: undefined } | { readonly error: string } {
+  try {
+    if (environment.stdinReader !== undefined) {
+      return { input: environment.stdinReader() };
+    }
+    return { input: environment.stdin ?? readFileSync(0, 'utf8') };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { error: `Unable to read rainrail dispatch JSON from stdin: ${message}` };
+  }
+}
+
+function createDispatchRequest(
+  mode: RainrailDispatchMode | undefined,
+  input: string | undefined,
+  options: SharedOptions,
+  environment: RainrailCliEnvironment,
+): RainrailDispatchRequest | undefined {
+  if (mode === undefined || input === undefined) {
+    return undefined;
+  }
+
+  const requestOptions = {
+    config: options.config,
+    profile: options.profile,
+    json: options.json,
+  };
+
+  if (mode === 'envelope-json') {
+    return {
+      mode,
+      input,
+      options: requestOptions,
+    };
+  }
+
+  return {
+    mode,
+    input,
+    event: createDispatchManualMessageEvent(input, environment.now?.() ?? new Date()),
+    options: requestOptions,
+  };
+}
+
+function createDispatchManualMessageEvent(
+  message: string,
+  receivedAt: Date,
+): RainrailDispatchEventEnvelope {
+  const occurredAt = receivedAt.toISOString();
+  const redactedMessage = redactDispatchManualMessageText(message);
+  const messageSha256 = sha256Hex(message);
+  dispatchDeliverySequence += 1;
+  const sequence = dispatchDeliverySequence.toString(36);
+  const entropy = randomBytes(8).toString('hex');
+  const deliveryId = `cli-${sha256Hex(`${occurredAt}\n${message}`).slice(0, 16)}-${sequence}-${entropy}`;
+
+  return {
+    id: `${dispatchCliSourceName}:${deliveryId}:rainrail.manual.message`,
+    schemaVersion: 'rainrail.event.v1',
+    source: {
+      type: 'manual',
+      name: dispatchCliSourceName,
+    },
+    name: 'rainrail.manual.message',
+    delivery: {
+      id: deliveryId,
+      receivedAt: occurredAt,
+    },
+    occurredAt,
+    subject: {
+      type: 'conversation',
+      id: dispatchCliConversationId,
+    },
+    payload: {
+      provider: 'rainrail',
+      channel: 'manual',
+      action: 'message',
+      conversation: {
+        id: dispatchCliConversationId,
+      },
+      message: {
+        text: redactedMessage,
+      },
+      actor: {
+        id: 'rainrail-cli',
+        displayName: 'Rainrail CLI',
+        type: 'cli',
+      },
+    },
+    rawPayload: {
+      kind: 'inline-redacted',
+      reference: `manual://deliveries/${deliveryId}`,
+      contentType: 'text/plain',
+      sha256: messageSha256,
+    },
+  };
+}
+
+function parseAndValidateDispatchEnvelope(input: string): { readonly input: string; readonly error?: undefined } | { readonly error: string } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(input);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { error: `Invalid JSON for rainrail dispatch envelope: ${message}` };
+  }
+
+  const validation = validateDispatchEnvelopeInput(parsed);
+  if (validation.error !== undefined) {
+    return { error: `Invalid Rainrail event envelope: ${validation.error}` };
+  }
+
+  return {
+    input: validation.complete ? input : addDispatchEnvelopeDefaults(input, validation),
+  };
+}
+
+type DispatchEnvelopeObject = Record<string, unknown>;
+type DispatchEnvelopeValidation = {
+  readonly envelope: DispatchEnvelopeObject & {
+    readonly id: string;
+    readonly schemaVersion: 'rainrail.event.v1';
+  };
+  readonly complete: boolean;
+  readonly hasId: boolean;
+  readonly hasSchemaVersion: boolean;
+  readonly error?: undefined;
+};
+const dispatchSafeIdentifierPattern = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/u;
+const dispatchSafeRepositoryNamePattern = /^[A-Za-z0-9_.-]{1,64}\/[A-Za-z0-9_.-]{1,64}$/u;
+const dispatchSafeRefSubjectIdPattern = /^(?:(?:branch|tag):|refs\/(?:heads|tags)\/)[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$/u;
+const dispatchSafeDeliveryReferenceIdPattern = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/u;
+const dispatchSafeGithubUrlSegmentPattern = /^[A-Za-z0-9_.-]{1,64}$/u;
+const dispatchSafeGithubNumericIdPattern = /^\d{1,20}$/u;
+const dispatchUtcIsoTimestampPattern = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,3}))?Z$/u;
+const dispatchAllowedRawPayloadKinds = new Set(['external-reference', 'inline-redacted']);
+
+function validateDispatchEnvelopeInput(
+  value: unknown,
+): DispatchEnvelopeValidation | { readonly error: string } {
+  if (!isRecord(value)) {
+    return { error: 'envelope must be a JSON object.' };
+  }
+
+  const source = readRequiredObject(value, 'source');
+  if (source.error !== undefined) return source;
+  const sourceType = readRequiredString(source.value, 'source.type');
+  if (sourceType.error !== undefined) return sourceType;
+  if (!isDispatchSafeIdentifier(sourceType.value)) {
+    return { error: 'source.type must be a safe identifier.' };
+  }
+  const sourceName = readRequiredString(source.value, 'source.name');
+  if (sourceName.error !== undefined) return sourceName;
+  if (!isDispatchSafeIdentifier(sourceName.value)) {
+    return { error: 'source.name must be a safe identifier.' };
+  }
+  const sourceRepository = validateOptionalDispatchRepository(source.value, 'source.repository');
+  if (sourceRepository.error !== undefined) return sourceRepository;
+  const sourceAccount = validateOptionalDispatchIdentifier(source.value, 'source.account');
+  if (sourceAccount.error !== undefined) return sourceAccount;
+  const sourceEnvironment = validateOptionalDispatchIdentifier(source.value, 'source.environment');
+  if (sourceEnvironment.error !== undefined) return sourceEnvironment;
+
+  const name = readRequiredString(value, 'name');
+  if (name.error !== undefined) return name;
+  if (!isDispatchSafeIdentifier(name.value)) {
+    return { error: 'name must be a safe identifier.' };
+  }
+  const manualSourceMatch = validateManualInputEventSourceMatches(sourceType.value, name.value);
+  if (manualSourceMatch.error !== undefined) return manualSourceMatch;
+
+  const delivery = readRequiredObject(value, 'delivery');
+  if (delivery.error !== undefined) return delivery;
+  const deliveryId = readRequiredString(delivery.value, 'delivery.id');
+  if (deliveryId.error !== undefined) return deliveryId;
+  if (!isDispatchSafeIdentifier(deliveryId.value)) {
+    return { error: 'delivery.id must be a safe identifier.' };
+  }
+  const deliveryReceivedAt = readRequiredString(delivery.value, 'delivery.receivedAt');
+  if (deliveryReceivedAt.error !== undefined) return deliveryReceivedAt;
+  if (!isDispatchUtcIsoTimestamp(deliveryReceivedAt.value)) {
+    return { error: 'delivery.receivedAt must be a UTC ISO timestamp.' };
+  }
+
+  const occurredAt = readRequiredString(value, 'occurredAt');
+  if (occurredAt.error !== undefined) return occurredAt;
+  if (!isDispatchUtcIsoTimestamp(occurredAt.value)) {
+    return { error: 'occurredAt must be a UTC ISO timestamp.' };
+  }
+
+  const subject = readRequiredObject(value, 'subject');
+  if (subject.error !== undefined) return subject;
+  const subjectType = readRequiredString(subject.value, 'subject.type');
+  if (subjectType.error !== undefined) return subjectType;
+  if (!isDispatchSafeIdentifier(subjectType.value)) {
+    return { error: 'subject.type must be a safe identifier.' };
+  }
+  const subjectId = readRequiredString(subject.value, 'subject.id');
+  if (subjectId.error !== undefined) return subjectId;
+  if (!isDispatchSafeSubjectIdentifier(subjectId.value)) {
+    return { error: 'subject.id must be a safe identifier.' };
+  }
+  const subjectUrl = validateOptionalDispatchUrl(subject.value, 'subject.url');
+  if (subjectUrl.error !== undefined) return subjectUrl;
+
+  if (!Object.hasOwn(value, 'payload')) {
+    return { error: 'payload is required.' };
+  }
+  const manualPayload = validateManualInputPayload(
+    value.payload,
+    {
+      sourceType: sourceType.value,
+      name: name.value,
+      subjectType: subjectType.value,
+      subjectId: subjectId.value,
+    },
+  );
+  if (manualPayload.error !== undefined) return manualPayload;
+
+  const rawPayload = readRequiredObject(value, 'rawPayload');
+  if (rawPayload.error !== undefined) return rawPayload;
+  const rawPayloadKind = readRequiredString(rawPayload.value, 'rawPayload.kind');
+  if (rawPayloadKind.error !== undefined) return rawPayloadKind;
+  if (!dispatchAllowedRawPayloadKinds.has(rawPayloadKind.value)) {
+    return { error: 'rawPayload.kind must be a known raw payload kind.' };
+  }
+  const rawPayloadReference = readRequiredString(rawPayload.value, 'rawPayload.reference');
+  if (rawPayloadReference.error !== undefined) return rawPayloadReference;
+  if (!isAllowedDispatchEventUrl(rawPayloadReference.value)) {
+    return { error: 'rawPayload.reference must be an allowed Rainrail event URL.' };
+  }
+  const manualRawPayload = validateManualInputRawPayloadMatches(
+    sourceType.value,
+    name.value,
+    rawPayloadKind.value,
+    rawPayloadReference.value,
+  );
+  if (manualRawPayload.error !== undefined) return manualRawPayload;
+  const rawPayloadContentType = validateOptionalDispatchContentType(rawPayload.value, 'rawPayload.contentType');
+  if (rawPayloadContentType.error !== undefined) return rawPayloadContentType;
+  const rawPayloadSha256 = validateOptionalDispatchSha256(rawPayload.value, 'rawPayload.sha256');
+  if (rawPayloadSha256.error !== undefined) return rawPayloadSha256;
+
+  const hasSchemaVersion = Object.hasOwn(value, 'schemaVersion');
+  const schemaVersion = hasSchemaVersion ? value.schemaVersion : 'rainrail.event.v1';
+  if (schemaVersion !== 'rainrail.event.v1') {
+    return { error: 'schemaVersion must be "rainrail.event.v1".' };
+  }
+
+  const hasId = Object.hasOwn(value, 'id');
+  const id = hasId ? value.id : `${sourceName.value}:${deliveryId.value}:${name.value}`;
+  if (typeof id !== 'string') {
+    return { error: 'id must be a string.' };
+  }
+  if (!isDispatchSafeIdentifier(id)) {
+    return { error: 'id must be a safe identifier.' };
+  }
+
+  return {
+    envelope: {
+      ...value,
+      id,
+      schemaVersion,
+    },
+    complete: hasId && hasSchemaVersion,
+    hasId,
+    hasSchemaVersion,
+  };
+}
+
+function addDispatchEnvelopeDefaults(
+  input: string,
+  validation: DispatchEnvelopeValidation,
+): string {
+  const properties: string[] = [];
+  if (!validation.hasId) {
+    properties.push(`"id":${JSON.stringify(validation.envelope.id)}`);
+  }
+  if (!validation.hasSchemaVersion) {
+    properties.push('"schemaVersion":"rainrail.event.v1"');
+  }
+  if (properties.length === 0) {
+    return input;
+  }
+
+  const objectStartIndex = input.search(/\S/u);
+  if (objectStartIndex < 0 || input[objectStartIndex] !== '{') {
+    return JSON.stringify(validation.envelope);
+  }
+
+  const afterOpenBrace = input.slice(objectStartIndex + 1);
+  const hasExistingProperties = !afterOpenBrace.trimStart().startsWith('}');
+  return [
+    input.slice(0, objectStartIndex + 1),
+    properties.join(','),
+    hasExistingProperties ? ',' : '',
+    input.slice(objectStartIndex + 1),
+  ].join('');
+}
+
+function validateOptionalDispatchIdentifier(
+  value: DispatchEnvelopeObject,
+  path: string,
+): { readonly error?: undefined } | { readonly error: string } {
+  const fieldName = path.split('.').at(-1);
+  const field = fieldName === undefined ? undefined : value[fieldName];
+  if (field === undefined) return {};
+  if (typeof field !== 'string') {
+    return { error: `${path} must be a string.` };
+  }
+  return {};
+}
+
+function validateOptionalDispatchRepository(
+  value: DispatchEnvelopeObject,
+  path: string,
+): { readonly error?: undefined } | { readonly error: string } {
+  const fieldName = path.split('.').at(-1);
+  const field = fieldName === undefined ? undefined : value[fieldName];
+  if (field === undefined) return {};
+  if (typeof field !== 'string') {
+    return { error: `${path} must be a string.` };
+  }
+  if (!dispatchSafeRepositoryNamePattern.test(field)) {
+    return { error: `${path} must be an owner/repo identifier.` };
+  }
+  return {};
+}
+
+function validateOptionalDispatchUrl(
+  value: DispatchEnvelopeObject,
+  path: string,
+): { readonly error?: undefined } | { readonly error: string } {
+  const fieldName = path.split('.').at(-1);
+  const field = fieldName === undefined ? undefined : value[fieldName];
+  if (field === undefined) return {};
+  if (typeof field !== 'string') {
+    return { error: `${path} must be a string.` };
+  }
+  if (!isAllowedDispatchEventUrl(field)) {
+    return { error: `${path} must be an allowed Rainrail event URL.` };
+  }
+  return {};
+}
+
+function validateOptionalDispatchContentType(
+  value: DispatchEnvelopeObject,
+  path: string,
+): { readonly error?: undefined } | { readonly error: string } {
+  const fieldName = path.split('.').at(-1);
+  const field = fieldName === undefined ? undefined : value[fieldName];
+  if (field === undefined) return {};
+  if (typeof field !== 'string') {
+    return { error: `${path} must be a string.` };
+  }
+  const contentType = field.split(';', 1)[0]?.trim().toLowerCase();
+  if (contentType === undefined || !/^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/u.test(contentType)) {
+    return { error: `${path} must be a MIME type.` };
+  }
+  return {};
+}
+
+function validateOptionalDispatchSha256(
+  value: DispatchEnvelopeObject,
+  path: string,
+): { readonly error?: undefined } | { readonly error: string } {
+  const fieldName = path.split('.').at(-1);
+  const field = fieldName === undefined ? undefined : value[fieldName];
+  if (field === undefined) return {};
+  if (typeof field !== 'string') {
+    return { error: `${path} must be a string.` };
+  }
+  if (!/^[a-f0-9]{64}$/iu.test(field)) {
+    return { error: `${path} must be a SHA-256 hex digest.` };
+  }
+  return {};
+}
+
+function validateManualInputEventSourceMatches(
+  sourceType: string,
+  name: string,
+): { readonly error?: undefined } | { readonly error: string } {
+  if (
+    (name === 'rainrail.manual.message' && sourceType !== 'manual')
+    || (name === 'rainrail.chat.message' && sourceType !== 'chat')
+  ) {
+    return { error: 'manual/chat event name must match source.type.' };
+  }
+  if (
+    (sourceType === 'manual' && name !== 'rainrail.manual.message')
+    || (sourceType === 'chat' && name !== 'rainrail.chat.message')
+  ) {
+    return { error: 'manual/chat source.type must use the matching event name.' };
+  }
+  return {};
+}
+
+function validateManualInputPayload(
+  payload: unknown,
+  context: {
+    readonly sourceType: string;
+    readonly name: string;
+    readonly subjectType: string;
+    readonly subjectId: string;
+  },
+): { readonly error?: undefined } | { readonly error: string } {
+  if (!isManualInputDispatchEnvelope(context)) return {};
+  if (!isRecord(payload)) {
+    return { error: 'manual/chat payload must be an object.' };
+  }
+  if (payload.provider !== 'rainrail' || payload.channel !== context.sourceType || payload.action !== 'message') {
+    return { error: 'manual/chat payload is missing required fields.' };
+  }
+  if (!isRecord(payload.conversation) || typeof payload.conversation.id !== 'string' || payload.conversation.id.length === 0) {
+    return { error: 'manual/chat payload is missing required fields.' };
+  }
+  if (context.subjectType !== 'conversation' || payload.conversation.id !== context.subjectId) {
+    return { error: 'manual/chat subject must match payload conversation.' };
+  }
+  if (!isRecord(payload.message) || typeof payload.message.text !== 'string' || payload.message.text.trim().length === 0) {
+    return { error: 'payload.message.text is required.' };
+  }
+  return {};
+}
+
+function validateManualInputRawPayloadMatches(
+  sourceType: string,
+  name: string,
+  kind: string,
+  reference: string,
+): { readonly error?: undefined } | { readonly error: string } {
+  if (!isManualInputDispatchEnvelope({ sourceType, name })) return {};
+  if (kind !== 'inline-redacted') {
+    return { error: 'manual/chat raw payload kind must be inline-redacted.' };
+  }
+  if (new URL(reference).protocol !== `${sourceType}:`) {
+    return { error: 'manual/chat raw payload reference must match source.type.' };
+  }
+  return {};
+}
+
+function isManualInputDispatchEnvelope(context: { readonly sourceType: string; readonly name: string }): boolean {
+  return (context.sourceType === 'manual' && context.name === 'rainrail.manual.message')
+    || (context.sourceType === 'chat' && context.name === 'rainrail.chat.message');
+}
+
+function isDispatchSafeIdentifier(value: string): boolean {
+  return dispatchSafeIdentifierPattern.test(value) || dispatchSafeRepositoryNamePattern.test(value);
+}
+
+function isDispatchSafeSubjectIdentifier(value: string): boolean {
+  return isDispatchSafeIdentifier(value) || dispatchSafeRefSubjectIdPattern.test(value);
+}
+
+function isDispatchUtcIsoTimestamp(value: string): boolean {
+  const match = dispatchUtcIsoTimestampPattern.exec(value);
+  if (match === null) return false;
+  const parsed = Date.parse(value);
+  if (Number.isNaN(parsed)) return false;
+  const [, seconds, milliseconds] = match;
+  const canonical = `${seconds}.${(milliseconds ?? '').padEnd(3, '0')}Z`;
+  return new Date(parsed).toISOString() === canonical;
+}
+
+function isAllowedDispatchEventUrl(value: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  if (url.username !== '' || url.password !== '' || url.search !== '') {
+    return false;
+  }
+  if (url.protocol === 'github:' || url.protocol === 'cloudflare:' || url.protocol === 'manual:' || url.protocol === 'chat:') {
+    return url.hostname === 'deliveries'
+      && url.port.length === 0
+      && url.hash.length === 0
+      && dispatchSafeDeliveryReferenceIdPattern.test(url.pathname.slice(1))
+      && !url.pathname.slice(1).includes('/');
+  }
+  if (url.protocol !== 'https:' || url.hostname !== 'github.com') return false;
+  const segments = url.pathname.split('/').filter(Boolean);
+  if (segments.length < 2 || !segments.every((segment) => dispatchSafeGithubUrlSegmentPattern.test(segment))) {
+    return false;
+  }
+  if (segments.length === 2) return true;
+  if (segments.length === 4 && (segments[2] === 'issues' || segments[2] === 'pull' || segments[2] === 'runs')) {
+    return dispatchSafeGithubNumericIdPattern.test(segments[3] ?? '');
+  }
+  if (segments.length === 5 && segments[2] === 'actions' && segments[3] === 'runs') {
+    return dispatchSafeGithubNumericIdPattern.test(segments[4] ?? '');
+  }
+  return false;
+}
+
+function readRequiredObject(
+  value: DispatchEnvelopeObject,
+  path: string,
+): { readonly value: DispatchEnvelopeObject; readonly error?: undefined } | { readonly error: string } {
+  const field = value[path];
+  if (!isRecord(field)) {
+    return { error: `${path} must be an object.` };
+  }
+  return { value: field };
+}
+
+function readRequiredString(
+  value: DispatchEnvelopeObject,
+  path: string,
+): { readonly value: string; readonly error?: undefined } | { readonly error: string } {
+  const fieldName = path.split('.').at(-1);
+  const field = fieldName === undefined ? undefined : value[fieldName];
+  if (typeof field !== 'string') {
+    return { error: `${path} must be a string.` };
+  }
+  return { value: field };
+}
+
+function readDispatchStdin(environment: RainrailCliEnvironment):
+  | { readonly input: string }
+  | { readonly error: string } {
+  if (environment.stdin !== undefined) {
+    return dispatchStdinInputResult(environment.stdin);
+  }
+
+  if (environment.stdinReader !== undefined) {
+    return dispatchStdinInputResult(environment.stdinReader());
+  }
+
+  if (process.stdin.isTTY) {
+    return { input: '' };
+  }
+
+  return readStdinAllSync();
+}
+
+function dispatchStdinInputResult(input: string):
+  | { readonly input: string }
+  | { readonly error: string } {
+  return Buffer.byteLength(input, 'utf8') > maxDispatchStdinMessageBytes
+    ? { error: formatDispatchStdinTooLargeError() }
+    : { input };
+}
+
+function readStdinAllSync():
+  | { readonly input: string }
+  | { readonly error: string } {
+  const chunks: Buffer[] = [];
+  const buffer = Buffer.alloc(4096);
+  let bytesTotal = 0;
+
+  while (true) {
+    const bytesRead = readSync(0, buffer, 0, buffer.length, null);
+    if (bytesRead === 0) {
+      break;
+    }
+    bytesTotal += bytesRead;
+    if (bytesTotal > maxDispatchStdinMessageBytes) {
+      return { error: formatDispatchStdinTooLargeError() };
+    }
+    chunks.push(Buffer.from(buffer.subarray(0, bytesRead)));
+  }
+
+  return { input: Buffer.concat(chunks).toString('utf8') };
+}
+
+function formatDispatchStdinTooLargeError(): string {
+  return `Message from stdin must not exceed ${maxDispatchStdinMessageBytes} bytes.`;
+}
+
+function sha256Hex(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+function redactDispatchManualMessageText(value: string): string {
+  return redactDispatchManualSecretStructuredValues(value)
+    .replace(/\b[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s"'<>`/@]*@[^\s"'<>`,;)]+/giu, () => '[redacted-url]')
+    .replace(/\b[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s"'<>`,;)]+/giu, (url) => sanitizeDispatchManualTextUrl(url))
+    .replace(/(^|\r?\n)([ \t]*)(authorization|proxy-authorization|cookie|set-cookie)\s*:\s*[^\r\n]*/giu, '$1$2$3: [redacted]')
+    .replace(/(^|[.?&{\s"'<>`,;\[(])(["']?)([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification|session)[A-Za-z0-9_.-]*)\2\s*=\s*(["'])(?:\\.|(?!\4)[^\\])*\4/giu, '$1$2$3$2=[redacted]')
+    .replace(/(^|[.?&{\s"'<>`,;\[(])(["']?)([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification|session)[A-Za-z0-9_.-]*)\2\s*=\s*([^&\s"'<>`,;)]+)/giu, '$1$2$3$2=[redacted]')
+    .replace(/(["'])([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification|session)[A-Za-z0-9_.-]*)\1(\s*:\s*)(["'])(?:\\.|(?!\4)[^\\])*\4/giu, '$1$2$1$3$4[redacted]$4')
+    .replace(/(^|[{\s"'<>`,;\[(])(["']?)([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification|session)[A-Za-z0-9_.-]*)\2(\s*:\s*)(["'])(?:\\.|(?!\5)[^\\])*\5/giu, '$1$2$3$2$4$5[redacted]$5')
+    .replace(/(^|[{\s"'<>`,;\[(])(["']?)([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification|session)[A-Za-z0-9_.-]*)\2(\s*:\s*)(?!["']|\[redacted\])([^,\s\r\n}\]]+)/giu, '$1$2$3$2$4[redacted]')
+    .replace(/\b(Bearer)\s+[A-Za-z0-9._~+/=-]+/giu, '$1 [redacted]')
+    .replace(/\b(?:github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9_]{20,})\b/gu, '[redacted-token]')
+    .trim()
+    .slice(0, maxDispatchManualMessageTextLength);
+}
+
+function redactDispatchManualSecretStructuredValues(value: string): string {
+  const keyPattern = /(^|[{\s"'<>`,;\[(])(["']?)([A-Za-z0-9_.-]*(?:authorization|cookie|token|secret|password|key|code|reset|verification|session)[A-Za-z0-9_.-]*)\2(\s*[:=]\s*)([\[{])/giu;
+  let redacted = '';
+  let cursor = 0;
+  for (const match of value.matchAll(keyPattern)) {
+    const matchText = match[0];
+    const matchIndex = match.index;
+    if (matchIndex < cursor) continue;
+    const valueStart = matchIndex + matchText.length - 1;
+    const valueEnd = findDispatchManualBalancedStructuredValueEnd(value, valueStart);
+    redacted += value.slice(cursor, matchIndex);
+    redacted += `${match[1] ?? ''}${match[2] ?? ''}${match[3] ?? ''}${match[2] ?? ''}${match[4] ?? ''}[redacted]`;
+    if (valueEnd === undefined) {
+      const newlineIndex = value.indexOf('\n', valueStart);
+      cursor = newlineIndex === -1 ? value.length : newlineIndex;
+    } else {
+      cursor = valueEnd + 1;
+    }
+  }
+  return redacted + value.slice(cursor);
+}
+
+function findDispatchManualBalancedStructuredValueEnd(value: string, valueStart: number): number | undefined {
+  const stack: string[] = [];
+  let quote: string | undefined;
+  let escaped = false;
+  for (let index = valueStart; index < value.length; index += 1) {
+    const char = value[index];
+    if (quote !== undefined) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === '\\') {
+        escaped = true;
+      } else if (char === quote) {
+        quote = undefined;
+      }
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+    } else if (char === '[') {
+      stack.push(']');
+    } else if (char === '{') {
+      stack.push('}');
+    } else if (char === ']') {
+      if (stack.at(-1) !== ']') return undefined;
+      stack.pop();
+      if (stack.length === 0) return index;
+    } else if (char === '}') {
+      if (stack.at(-1) !== '}') return undefined;
+      stack.pop();
+      if (stack.length === 0) return index;
+    }
+  }
+  return undefined;
+}
+
+function sanitizeDispatchManualTextUrl(value: string): string {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'https:') return '[redacted-url]';
+    url.username = '';
+    url.password = '';
+    url.pathname = sanitizeDispatchManualUrlPathname(url.pathname);
+    url.search = '';
+    url.hash = '';
+    return url.toString().slice(0, maxDispatchManualMessageTextLength);
+  } catch {
+    return '[redacted-url]';
+  }
+}
+
+function sanitizeDispatchManualUrlPathname(pathname: string): string {
+  const segments = pathname.split('/');
+  return segments.map((segment, index) => {
+    if (segment.length === 0) return segment;
+    const previous = segments[index - 1]?.toLowerCase() ?? '';
+    if (/^(token|secret|password|code|reset|magic-link|invite|session|auth|verify|verification)$/iu.test(previous)) {
+      return '[redacted]';
+    }
+    if (/^(token|secret|password|code|reset)$/iu.test(segment)) {
+      return '[redacted]';
+    }
+    return /^[A-Za-z0-9_-]{16,}$/u.test(segment) && /[A-Za-z]/u.test(segment) && /\d/u.test(segment)
+      ? '[redacted]'
+      : segment;
+  }).join('/') || '/';
 }
 
 function runInitCommand(
@@ -2603,7 +5108,10 @@ function runSetupCommand(
       ? runPluginCommand(plugin, ['setup'], [
           'plugin',
           plugin.alias,
-        ])
+        ], setupOptions, {
+          ...environment,
+          cwd: project.root,
+        })
       : toCliResult(environment.commandRunner(invocation.command, setupArgs, {
           stdio: 'pipe',
           cwd: project.root,
@@ -2828,6 +5336,27 @@ function insertTopLevelDashboardAuth(raw: string, dashboardAuth: Record<string, 
   return `${raw.slice(0, objectStart + 1)}${newline}  ${property},${newline}${rest}`;
 }
 
+function insertTopLevelRuntimeProviders(raw: string, runtimeProviders: Record<string, unknown>): string {
+  const objectStart = raw.indexOf('{');
+  if (objectStart < 0) {
+    throw new Error('config must be an object');
+  }
+  const objectEnd = raw.lastIndexOf('}');
+  if (objectEnd < objectStart) {
+    throw new Error('config must be an object');
+  }
+  const afterStart = raw.slice(objectStart + 1);
+  const newline = afterStart.startsWith('\r\n') ? '\r\n' : afterStart.startsWith('\n') ? '\n' : '';
+  const body = raw.slice(objectStart + 1, objectEnd);
+  const hasExistingProperties = body.trim().length > 0;
+  const property = `"runtimeProviders": ${JSON.stringify(runtimeProviders, null, 2).replaceAll('\n', `${newline}  `)}`;
+  if (!hasExistingProperties) {
+    return `${raw.slice(0, objectStart + 1)}${newline}  ${property}${newline}${raw.slice(objectEnd)}`;
+  }
+  const rest = newline.length === 0 ? afterStart : afterStart.slice(newline.length);
+  return `${raw.slice(0, objectStart + 1)}${newline}  ${property},${newline}${rest}`;
+}
+
 function replaceJsonObjectValue(
   raw: string,
   objectStart: number,
@@ -2856,8 +5385,20 @@ function findDashboardAuthObjectStart(raw: string): number | undefined {
   return raw[valueStart] === '{' ? valueStart : undefined;
 }
 
+function findRuntimeProvidersObjectStart(raw: string): number | undefined {
+  const valueStart = findTopLevelPropertyValueStart(raw, 'runtimeProviders');
+  if (valueStart === undefined) {
+    return undefined;
+  }
+  return raw[valueStart] === '{' ? valueStart : undefined;
+}
+
 function hasDashboardAuthProperty(raw: string): boolean {
   return findTopLevelPropertyValueStart(raw, 'dashboardAuth') !== undefined;
+}
+
+function hasRuntimeProvidersProperty(raw: string): boolean {
+  return findTopLevelPropertyValueStart(raw, 'runtimeProviders') !== undefined;
 }
 
 function findTopLevelPropertyValueStart(raw: string, propertyName: string): number | undefined {
@@ -3138,6 +5679,17 @@ function formatSetupNextAction(
     ...formatForwardedTargetOptions(options),
     'setup',
     ...(includePluginArguments ? plugins.map((plugin) => plugin.alias) : []),
+    '--yes',
+  ].map(shellQuoteArgument).join(' ');
+}
+
+function formatCodexAppServerSetupNextAction(options: Pick<SharedOptions, 'config' | 'profile'>): string {
+  return [
+    'rainrail',
+    ...formatForwardedTargetOptions(options),
+    'plugin',
+    'codex-app-server',
+    'setup',
     '--yes',
   ].map(shellQuoteArgument).join(' ');
 }
@@ -3798,7 +6350,7 @@ function formatRainrailLock(projectName: string): string {
 }
 
 const localCorsHeaders = {
-  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, OPTIONS',
   'Access-Control-Allow-Headers': 'Authorization, Content-Type, Last-Event-ID, X-GitHub-Delivery, X-GitHub-Event, X-Hub-Signature-256, X-Rainrail-Client, X-Rainrail-Publish-Token, X-Request-ID',
   'Access-Control-Expose-Headers': 'X-Request-ID',
   'Access-Control-Max-Age': '86400',
@@ -3821,9 +6373,14 @@ const localCoreRoutePaths = new Set([
   '/api/v1/sources',
   '/api/v1/queue',
   '/api/v1/settings',
+  '/api/v1/dashboard/cards',
+  '/api/v1/dashboard/layout',
 ]);
 const localCoreRoutePrefixes = [
   '/_astro/',
+  '/dashboard/',
+  '/ja/dashboard/',
+  '/en/dashboard/',
   '/api/events/',
   '/api/v1/events/',
   '/api/v1/workflow-runs/',
@@ -3831,7 +6388,204 @@ const localCoreRoutePrefixes = [
   '/api/v1/sources/',
   '/api/v1/queue/',
   '/api/v1/settings/',
+  '/api/v1/dashboard/layout/items/',
 ] as const;
+
+type LocalDashboardLayoutItem = {
+  readonly id: string;
+  readonly cardId: string;
+  readonly x: number;
+  readonly y: number;
+  readonly columns: number;
+  readonly rows: number;
+  readonly config?: Record<string, unknown>;
+};
+
+type LocalDashboardLayoutSnapshot = {
+  readonly items: readonly LocalDashboardLayoutItem[];
+  readonly updatedAt: string;
+};
+
+type LocalDashboardCardDefinition = {
+  readonly id: string;
+  readonly title: string;
+  readonly description: string;
+  readonly entry: { readonly type: 'core'; readonly name: string };
+  readonly category: string;
+  readonly requiredCapabilities: readonly ['dashboard:read'];
+  readonly size: {
+    readonly default: { readonly columns: number; readonly rows: number };
+    readonly min: { readonly columns: number; readonly rows: number };
+    readonly max: { readonly columns: number; readonly rows: number };
+  };
+  readonly settingsSchema: {
+    readonly type: 'object';
+    readonly properties: Record<string, unknown>;
+    readonly additionalProperties: false;
+  };
+};
+
+const localDashboardSettingsSchema = {
+  type: 'object',
+  properties: {
+    density: { type: 'string' },
+  },
+  additionalProperties: false,
+} as const;
+
+const localDashboardCardDefinitions: readonly LocalDashboardCardDefinition[] = [
+  {
+    id: 'core.operationalTotals',
+    title: 'Operational totals',
+    description: 'Current event, workflow, agent task, retry, source, and queue totals.',
+    entry: { type: 'core', name: 'operationalTotals' },
+    category: 'operations',
+    requiredCapabilities: ['dashboard:read'],
+    size: {
+      default: { columns: 8, rows: 2 },
+      min: { columns: 4, rows: 1 },
+      max: { columns: 12, rows: 3 },
+    },
+    settingsSchema: localDashboardSettingsSchema,
+  },
+  {
+    id: 'core.eventInbox',
+    title: 'Event Inbox',
+    description: 'Filtered event deliveries with publish results and workflow matches.',
+    entry: { type: 'core', name: 'eventInbox' },
+    category: 'events',
+    requiredCapabilities: ['dashboard:read'],
+    size: {
+      default: { columns: 8, rows: 4 },
+      min: { columns: 4, rows: 2 },
+      max: { columns: 12, rows: 8 },
+    },
+    settingsSchema: localDashboardSettingsSchema,
+  },
+  {
+    id: 'core.workflowRuns',
+    title: 'Workflow Runs',
+    description: 'Workflow run rows and detail records.',
+    entry: { type: 'core', name: 'workflowRuns' },
+    category: 'workflows',
+    requiredCapabilities: ['dashboard:read'],
+    size: {
+      default: { columns: 4, rows: 3 },
+      min: { columns: 3, rows: 2 },
+      max: { columns: 8, rows: 6 },
+    },
+    settingsSchema: localDashboardSettingsSchema,
+  },
+  {
+    id: 'core.agentTasks',
+    title: 'Agent Tasks',
+    description: 'Agent task status, timelines, logs, and Codex activity.',
+    entry: { type: 'core', name: 'agentTasks' },
+    category: 'agents',
+    requiredCapabilities: ['dashboard:read'],
+    size: {
+      default: { columns: 4, rows: 3 },
+      min: { columns: 3, rows: 2 },
+      max: { columns: 8, rows: 6 },
+    },
+    settingsSchema: localDashboardSettingsSchema,
+  },
+  {
+    id: 'core.sources',
+    title: 'Sources',
+    description: 'Configured source bundles, health, and source metadata.',
+    entry: { type: 'core', name: 'sources' },
+    category: 'sources',
+    requiredCapabilities: ['dashboard:read'],
+    size: {
+      default: { columns: 4, rows: 2 },
+      min: { columns: 2, rows: 1 },
+      max: { columns: 8, rows: 4 },
+    },
+    settingsSchema: localDashboardSettingsSchema,
+  },
+  {
+    id: 'core.queue',
+    title: 'Queue',
+    description: 'Task queue rows, upcoming work, and blocked signals.',
+    entry: { type: 'core', name: 'queue' },
+    category: 'queue',
+    requiredCapabilities: ['dashboard:read'],
+    size: {
+      default: { columns: 4, rows: 2 },
+      min: { columns: 2, rows: 1 },
+      max: { columns: 8, rows: 4 },
+    },
+    settingsSchema: localDashboardSettingsSchema,
+  },
+  {
+    id: 'core.settings',
+    title: 'Settings',
+    description: 'Read-only operational settings and local dashboard configuration.',
+    entry: { type: 'core', name: 'settings' },
+    category: 'settings',
+    requiredCapabilities: ['dashboard:read'],
+    size: {
+      default: { columns: 4, rows: 2 },
+      min: { columns: 2, rows: 1 },
+      max: { columns: 8, rows: 4 },
+    },
+    settingsSchema: localDashboardSettingsSchema,
+  },
+  {
+    id: 'core.operatorActions',
+    title: 'Operator Actions',
+    description: 'Scoped resume, reset, terminate, and queue operation controls.',
+    entry: { type: 'core', name: 'operatorActions' },
+    category: 'operators',
+    requiredCapabilities: ['dashboard:read'],
+    size: {
+      default: { columns: 4, rows: 2 },
+      min: { columns: 2, rows: 1 },
+      max: { columns: 8, rows: 4 },
+    },
+    settingsSchema: localDashboardSettingsSchema,
+  },
+  {
+    id: 'core.overview',
+    title: 'Overview',
+    description: 'Legacy dashboard overview card id kept for saved layout compatibility.',
+    entry: { type: 'core', name: 'overview' },
+    category: 'operations',
+    requiredCapabilities: ['dashboard:read'],
+    size: {
+      default: { columns: 4, rows: 2 },
+      min: { columns: 2, rows: 1 },
+      max: { columns: 8, rows: 4 },
+    },
+    settingsSchema: localDashboardSettingsSchema,
+  },
+  {
+    id: 'core.recentEvents',
+    title: 'Recent events',
+    description: 'Legacy dashboard recent-events card id kept for saved layout compatibility.',
+    entry: { type: 'core', name: 'recentEvents' },
+    category: 'events',
+    requiredCapabilities: ['dashboard:read'],
+    size: {
+      default: { columns: 4, rows: 2 },
+      min: { columns: 2, rows: 1 },
+      max: { columns: 8, rows: 4 },
+    },
+    settingsSchema: localDashboardSettingsSchema,
+  },
+];
+
+const localDefaultDashboardLayout: readonly LocalDashboardLayoutItem[] = [
+  { id: 'operational-totals', cardId: 'core.operationalTotals', x: 0, y: 0, columns: 8, rows: 2 },
+  { id: 'event-inbox', cardId: 'core.eventInbox', x: 0, y: 2, columns: 8, rows: 4 },
+  { id: 'workflow-runs', cardId: 'core.workflowRuns', x: 0, y: 6, columns: 4, rows: 3 },
+  { id: 'agent-tasks', cardId: 'core.agentTasks', x: 4, y: 6, columns: 4, rows: 3 },
+  { id: 'sources', cardId: 'core.sources', x: 0, y: 9, columns: 4, rows: 2 },
+  { id: 'queue', cardId: 'core.queue', x: 4, y: 9, columns: 4, rows: 2 },
+  { id: 'settings', cardId: 'core.settings', x: 0, y: 11, columns: 4, rows: 2 },
+  { id: 'operator-actions', cardId: 'core.operatorActions', x: 4, y: 11, columns: 4, rows: 2 },
+];
 
 type LocalRainrailEvent = {
   readonly id: string;
@@ -3858,10 +6612,137 @@ type LocalRainrailEvent = {
   };
 };
 
+type LocalOperationalEvent = {
+  readonly id: string;
+  readonly name: string;
+  readonly source: {
+    readonly type: string;
+    readonly name: string;
+    readonly repository?: string;
+  };
+  readonly delivery: {
+    readonly id: string;
+    readonly receivedAt: string;
+  };
+  readonly subject: {
+    readonly type: string;
+    readonly id: string;
+    readonly url?: string;
+  };
+  readonly occurredAt: string;
+  readonly receivedAt: string;
+  readonly envelope: {
+    readonly id: string;
+    readonly schemaVersion: 'rainrail.event.v1';
+    readonly source: LocalOperationalEvent['source'];
+    readonly name: string;
+    readonly delivery: LocalOperationalEvent['delivery'];
+    readonly occurredAt: string;
+    readonly subject: LocalOperationalEvent['subject'];
+    readonly payload?: unknown;
+    readonly rawPayload: {
+      readonly kind: string;
+      readonly reference: string;
+      readonly contentType?: string;
+      readonly sha256?: string;
+    };
+    readonly links?: Record<string, string>;
+  };
+};
+
+type LocalOperationalActivityEvent = {
+  readonly id: string;
+  readonly sourceEventId?: string;
+  readonly sourceEventName?: string;
+  readonly category: string;
+  readonly targetType: string;
+  readonly targetId?: string;
+  readonly targetUrl?: string;
+  readonly actionType: string;
+  readonly outcome: string;
+  readonly summary: string;
+  readonly metadata?: Record<string, unknown>;
+  readonly createdAt: string;
+};
+
+type LocalOperationalAgentTask = {
+  readonly id: string;
+  readonly title: string;
+  readonly agentSessionId?: string;
+  readonly branchName: string;
+  readonly status: string;
+  readonly issue?: unknown;
+  readonly claim?: unknown;
+  readonly logPath?: string;
+  readonly stderrLogPath?: string;
+  readonly pid?: number;
+  readonly resumeAttempts?: unknown;
+  readonly projectClaim?: unknown;
+  readonly result?: string;
+  readonly startedAt: string;
+  readonly completedAt?: string;
+  readonly updatedAt: string;
+  readonly runtime: {
+    readonly status: string;
+    readonly pid?: number;
+    readonly startedAt: string;
+    readonly completedAt?: string;
+  };
+};
+
+type LocalOperationalEventHandlerRetry = {
+  readonly eventId: string;
+  readonly handlerName: string;
+  readonly attempts: number;
+  readonly nextRetryAt: string;
+  readonly lastError: string;
+  readonly updatedAt: string;
+  readonly claimedUntilAt?: string;
+};
+
+type LocalStaleProjectClaimWarning = {
+  readonly taskId: string;
+  readonly title: string;
+  readonly status: string;
+  readonly agentSessionId?: string;
+  readonly branchName: string;
+  readonly issue?: unknown;
+  readonly claim?: unknown;
+  readonly releaseError?: string;
+};
+
 type LocalRainrailServerState = {
   nextEventId: number;
   events: LocalRainrailEvent[];
   sseClients: Set<ServerResponse>;
+  eventStore?: LocalRainrailEventStore;
+  dashboardLayout: LocalDashboardLayoutItem[];
+  dashboardLayoutUpdatedAt?: string;
+};
+
+type LocalRainrailEventStore = {
+  readonly eventLimit: number;
+  readonly listEvents: () => LocalRainrailEvent[];
+  readonly listOperationalEvents?: () => LocalOperationalEvent[];
+  readonly getOperationalEvent?: (id: string) => LocalOperationalEvent | undefined;
+  readonly listActivityEvents?: () => LocalOperationalActivityEvent[];
+  readonly listAgentTasks?: () => LocalOperationalAgentTask[];
+  readonly listEventHandlerRetries?: () => LocalOperationalEventHandlerRetry[];
+  readonly recordOperationalEvent?: (event: LocalOperationalEvent['envelope']) => LocalOperationalEvent;
+  readonly reserveLocalEventId?: () => string;
+  readonly nextEventId?: () => number;
+  readonly staleProjectClaimWarnings?: () => readonly LocalStaleProjectClaimWarning[];
+  readonly getDashboardLayout?: () => LocalDashboardLayoutSnapshot | undefined;
+  readonly saveDashboardLayout?: (items: readonly LocalDashboardLayoutItem[]) => LocalDashboardLayoutSnapshot;
+  readonly counts?: () => {
+    readonly events: number;
+    readonly activityEvents: number;
+    readonly agentTasks: number;
+    readonly commandResults: number;
+    readonly eventHandlerRetries: number;
+  };
+  readonly replaceEvents: (events: readonly LocalRainrailEvent[]) => void;
+  readonly close: () => void;
 };
 
 type LocalDashboardScope = 'read-only' | 'operator' | 'admin';
@@ -3874,10 +6755,16 @@ type LocalDashboardCommand = {
 };
 
 async function startLocalRainrailServer(options: RainrailStartOptions): Promise<RainrailStartedServer> {
+  const eventStore = createLocalRainrailEventStore(options.operationalStoreConfig);
+  const restoredEvents = eventStore?.listEvents() ?? [];
+  const restoredDashboardLayout = eventStore?.getDashboardLayout?.();
   const state: LocalRainrailServerState = {
-    nextEventId: 1,
-    events: [],
+    nextEventId: eventStore?.nextEventId?.() ?? nextLocalEventId(restoredEvents),
+    events: [...restoredEvents],
     sseClients: new Set(),
+    dashboardLayout: localCloneDashboardLayout(restoredDashboardLayout?.items ?? localDefaultDashboardLayout),
+    ...(restoredDashboardLayout === undefined ? {} : { dashboardLayoutUpdatedAt: restoredDashboardLayout.updatedAt }),
+    ...(eventStore === undefined ? {} : { eventStore }),
   };
   const server = http.createServer((request, response) => {
     handleLocalRainrailRequest(request, response, options, state).catch(() => {
@@ -3892,6 +6779,7 @@ async function startLocalRainrailServer(options: RainrailStartOptions): Promise<
   await new Promise<void>((resolveListen, rejectListen) => {
     const onError = (error: Error): void => {
       server.off('listening', onListening);
+      eventStore?.close();
       rejectListen(error);
     };
     const onListening = (): void => {
@@ -3905,6 +6793,7 @@ async function startLocalRainrailServer(options: RainrailStartOptions): Promise<
 
   const stop = async (): Promise<void> => {
     await closeHttpServer(server);
+    eventStore?.close();
   };
   const onSigint = (): void => {
     stop().finally(() => {
@@ -3932,6 +6821,710 @@ async function closeHttpServer(server: http.Server): Promise<void> {
       resolveClose();
     });
   });
+}
+
+function createLocalRainrailEventStore(
+  config: RainrailStartOperationalStoreConfig | undefined,
+): LocalRainrailEventStore | undefined {
+  if (config === undefined) {
+    return undefined;
+  }
+  switch (config.kind) {
+    case 'memory':
+      if (config.databasePath !== undefined) {
+        throw new Error('operationalStoreConfig.databasePath must be omitted for memory stores');
+      }
+      return createMemoryLocalRainrailEventStore(config.eventLimit);
+    case 'json':
+      return createJsonLocalRainrailEventStore(expectStartStoreDatabasePath(config, 'json'), config.eventLimit);
+    case 'sqlite':
+      return createSqliteLocalRainrailEventStore(expectStartStoreDatabasePath(config, 'sqlite'), config.eventLimit);
+  }
+}
+
+function createMemoryLocalRainrailEventStore(eventLimit: number): LocalRainrailEventStore {
+  let events: LocalRainrailEvent[] = [];
+  let dashboardLayout: LocalDashboardLayoutItem[] | undefined;
+  let dashboardLayoutUpdatedAt: string | undefined;
+  return {
+    eventLimit,
+    listEvents: () => [...events],
+    getDashboardLayout: () => dashboardLayout === undefined || dashboardLayoutUpdatedAt === undefined
+      ? undefined
+      : { items: localCloneDashboardLayout(dashboardLayout), updatedAt: dashboardLayoutUpdatedAt },
+    saveDashboardLayout(items) {
+      dashboardLayoutUpdatedAt = new Date().toISOString();
+      dashboardLayout = localCloneDashboardLayout(items);
+      return { items: localCloneDashboardLayout(dashboardLayout), updatedAt: dashboardLayoutUpdatedAt };
+    },
+    replaceEvents(nextEvents) {
+      events = [...nextEvents].slice(-eventLimit);
+    },
+    close() {
+      events = [];
+      dashboardLayout = undefined;
+      dashboardLayoutUpdatedAt = undefined;
+    },
+  };
+}
+
+function createJsonLocalRainrailEventStore(databasePath: string, eventLimit: number): LocalRainrailEventStore {
+  const initialData = readLocalRainrailEventStoreJson(databasePath);
+  let events = initialData.events.slice(-eventLimit);
+  let dashboardLayout = initialData.dashboardLayout?.items;
+  let dashboardLayoutUpdatedAt = initialData.dashboardLayout?.updatedAt;
+  const writeStore = (
+    nextEvents = events,
+    nextDashboardLayout = dashboardLayout,
+    nextDashboardLayoutUpdatedAt = dashboardLayoutUpdatedAt,
+  ): void => {
+    mkdirSync(dirname(databasePath), { recursive: true });
+    writeFileSync(databasePath, `${JSON.stringify({
+      events: nextEvents,
+      ...(nextDashboardLayout === undefined || nextDashboardLayoutUpdatedAt === undefined
+        ? {}
+        : { dashboardLayout: nextDashboardLayout, dashboardLayoutUpdatedAt: nextDashboardLayoutUpdatedAt }),
+    }, null, 2)}\n`, { mode: 0o600 });
+  };
+  return {
+    eventLimit,
+    listEvents: () => [...events],
+    getDashboardLayout: () => dashboardLayout === undefined || dashboardLayoutUpdatedAt === undefined
+      ? undefined
+      : { items: localCloneDashboardLayout(dashboardLayout), updatedAt: dashboardLayoutUpdatedAt },
+    saveDashboardLayout(items) {
+      const nextDashboardLayoutUpdatedAt = new Date().toISOString();
+      const nextDashboardLayout = localCloneDashboardLayout(items);
+      writeStore(events, nextDashboardLayout, nextDashboardLayoutUpdatedAt);
+      dashboardLayoutUpdatedAt = nextDashboardLayoutUpdatedAt;
+      dashboardLayout = nextDashboardLayout;
+      return { items: localCloneDashboardLayout(dashboardLayout), updatedAt: dashboardLayoutUpdatedAt };
+    },
+    replaceEvents(nextEvents) {
+      events = [...nextEvents].slice(-eventLimit);
+      writeStore();
+    },
+    close() {
+      writeStore();
+    },
+  };
+}
+
+function readLocalRainrailEventStoreJson(databasePath: string): {
+  readonly events: readonly LocalRainrailEvent[];
+  readonly dashboardLayout?: LocalDashboardLayoutSnapshot;
+} {
+  if (!existsSync(databasePath)) {
+    return { events: [] };
+  }
+  const parsed = JSON.parse(readFileSync(databasePath, 'utf8')) as unknown;
+  if (!isRecord(parsed) || !Array.isArray(parsed.events)) {
+    throw new Error(
+      'JSON operational store is not compatible with rainrail start local event storage. '
+        + 'Use kind "sqlite", kind "memory", or choose a separate JSON databasePath.',
+    );
+  }
+  const dashboardLayoutUpdatedAt = typeof parsed.dashboardLayoutUpdatedAt === 'string'
+    ? parsed.dashboardLayoutUpdatedAt
+    : undefined;
+  return {
+    events: parsed.events.filter(isLocalRainrailEvent),
+    ...(Array.isArray(parsed.dashboardLayout) && dashboardLayoutUpdatedAt !== undefined
+      ? { dashboardLayout: { items: parseLocalDashboardLayoutItems(parsed.dashboardLayout), updatedAt: dashboardLayoutUpdatedAt } }
+      : {}),
+  };
+}
+
+function createSqliteLocalRainrailEventStore(databasePath: string, eventLimit: number): LocalRainrailEventStore {
+  mkdirSync(dirname(databasePath), { recursive: true });
+  const { DatabaseSync } = nodeRequire('node:sqlite') as {
+    DatabaseSync: new (path: string) => {
+      exec(sql: string): void;
+      prepare(sql: string): {
+        run(...values: Array<string | number | null>): void;
+        get(...values: Array<string | number | null>): unknown;
+        all(...values: Array<string | number | null>): unknown[];
+      };
+      close(): void;
+    };
+  };
+  const database = new DatabaseSync(databasePath);
+  protectSqliteDatabaseFiles(databasePath);
+  database.exec('PRAGMA busy_timeout = 5000');
+  database.exec('PRAGMA journal_mode = WAL');
+  protectSqliteDatabaseFiles(databasePath);
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS operational_events (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      source_json TEXT NOT NULL,
+      delivery_json TEXT NOT NULL,
+      subject_json TEXT NOT NULL,
+      occurred_at TEXT NOT NULL,
+      received_at TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      raw_payload_reference_json TEXT NOT NULL,
+      links_json TEXT
+    );
+    CREATE INDEX IF NOT EXISTS operational_events_received_at_idx
+      ON operational_events (received_at DESC, id DESC);
+    CREATE TABLE IF NOT EXISTS activity_events (
+      id TEXT PRIMARY KEY,
+      source_event_id TEXT,
+      source_event_name TEXT,
+      category TEXT NOT NULL,
+      target_type TEXT NOT NULL,
+      target_id TEXT,
+      target_url TEXT,
+      action_type TEXT NOT NULL,
+      outcome TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      metadata_json TEXT,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS activity_events_created_at_idx
+      ON activity_events (created_at DESC, id DESC);
+    CREATE TABLE IF NOT EXISTS command_results (
+      id TEXT PRIMARY KEY,
+      action_type TEXT NOT NULL,
+      target_type TEXT NOT NULL,
+      target_id TEXT NOT NULL,
+      status TEXT NOT NULL,
+      actor TEXT NOT NULL,
+      client TEXT,
+      request_id TEXT NOT NULL,
+      dry_run INTEGER NOT NULL,
+      result_json TEXT,
+      error TEXT,
+      metadata_json TEXT,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS command_results_created_at_idx
+      ON command_results (created_at DESC, id DESC);
+    CREATE TABLE IF NOT EXISTS agent_tasks (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      agent_session_id TEXT,
+      branch_name TEXT NOT NULL,
+      status TEXT NOT NULL,
+      issue_json TEXT,
+      claim_json TEXT,
+      log_path TEXT,
+      stderr_log_path TEXT,
+      pid INTEGER,
+      resume_attempts_json TEXT,
+      project_claim_json TEXT,
+      result TEXT,
+      started_at TEXT NOT NULL,
+      completed_at TEXT,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS agent_tasks_updated_at_idx
+      ON agent_tasks (updated_at DESC, id DESC);
+    CREATE INDEX IF NOT EXISTS agent_tasks_branch_name_idx
+      ON agent_tasks (branch_name);
+    CREATE TABLE IF NOT EXISTS event_handler_retries (
+      event_id TEXT NOT NULL,
+      handler_name TEXT NOT NULL,
+      attempts INTEGER NOT NULL,
+      next_retry_at TEXT NOT NULL,
+      last_error TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      claimed_until_at TEXT,
+      PRIMARY KEY (event_id, handler_name)
+    );
+    CREATE INDEX IF NOT EXISTS event_handler_retries_schedule_idx
+      ON event_handler_retries (next_retry_at ASC, handler_name ASC);
+    CREATE TABLE IF NOT EXISTS operational_sequences (
+      name TEXT PRIMARY KEY,
+      value INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS dashboard_layout (
+      id TEXT PRIMARY KEY,
+      items_json TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+  `);
+  sqliteAddColumnIfMissing(
+    database,
+    'operational_events',
+    'raw_payload_reference_json',
+    `TEXT NOT NULL DEFAULT '${JSON.stringify({
+      kind: 'inline-redacted',
+      reference: 'rainrail://redacted/raw-payload',
+    }).replaceAll("'", "''")}'`,
+  );
+  protectSqliteDatabaseFiles(databasePath);
+  const selectEvents = database.prepare(
+    `SELECT * FROM (
+      SELECT * FROM operational_events ORDER BY received_at DESC, id DESC LIMIT ?
+    ) ORDER BY received_at ASC, id ASC`,
+  );
+  const selectOperationalEventsNewest = database.prepare('SELECT * FROM operational_events ORDER BY received_at DESC, id DESC');
+  const selectEvent = database.prepare('SELECT * FROM operational_events WHERE id = ?');
+  const selectLocalEventIds = database.prepare('SELECT id FROM operational_events WHERE id LIKE ?');
+  const selectActivities = database.prepare('SELECT * FROM activity_events ORDER BY created_at DESC, id DESC LIMIT ?');
+  const selectAgentTasks = database.prepare('SELECT * FROM agent_tasks ORDER BY updated_at DESC, id DESC');
+  const selectRetries = database.prepare('SELECT * FROM event_handler_retries ORDER BY next_retry_at ASC, handler_name ASC');
+  const selectDashboardLayout = database.prepare('SELECT * FROM dashboard_layout WHERE id = ?');
+  const upsertDashboardLayout = database.prepare(`
+    INSERT INTO dashboard_layout (id, items_json, updated_at)
+    VALUES (?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      items_json = excluded.items_json,
+      updated_at = excluded.updated_at
+  `);
+  const insertEvent = database.prepare(
+    `INSERT INTO operational_events (
+      id, name, source_json, delivery_json, subject_json, occurred_at, received_at,
+      payload_json, raw_payload_reference_json, links_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO NOTHING`,
+  );
+  sqliteSeedSequenceValue(
+    database,
+    'local_event',
+    nextLocalEventId(
+      selectLocalEventIds.all('local-event-%')
+        .map((row) => ({ id: requiredStringRowValue(row, 'id') })),
+    ) - 1,
+  );
+  protectSqliteDatabaseFiles(databasePath);
+
+  return {
+    eventLimit,
+    listEvents() {
+      return selectEvents.all(eventLimit)
+        .map(localRainrailEventFromOperationalRow)
+        .filter((event): event is LocalRainrailEvent => event !== undefined);
+    },
+    listOperationalEvents() {
+      return selectOperationalEventsNewest.all().map(localOperationalEventFromRow);
+    },
+    getOperationalEvent(id) {
+      const row = selectEvent.get(id);
+      return row === undefined ? undefined : localOperationalEventFromRow(row);
+    },
+    listActivityEvents() {
+      return selectActivities.all(eventLimit).map(localOperationalActivityEventFromRow);
+    },
+    listAgentTasks() {
+      return selectAgentTasks.all().map(localOperationalAgentTaskFromRow);
+    },
+    listEventHandlerRetries() {
+      return selectRetries.all().map(localOperationalEventHandlerRetryFromRow);
+    },
+    recordOperationalEvent(event) {
+      insertEvent.run(
+        event.id,
+        event.name,
+        JSON.stringify(event.source),
+        JSON.stringify(event.delivery),
+        JSON.stringify(event.subject),
+        event.occurredAt,
+        event.delivery.receivedAt,
+        JSON.stringify(event.payload ?? null),
+        JSON.stringify(event.rawPayload),
+        JSON.stringify(event.links ?? null),
+      );
+      protectSqliteDatabaseFiles(databasePath);
+      return localOperationalEventFromRow(selectEvent.get(event.id));
+    },
+    reserveLocalEventId() {
+      const id = `local-event-${String(sqliteNextSequenceValue(database, 'local_event')).padStart(6, '0')}`;
+      protectSqliteDatabaseFiles(databasePath);
+      return id;
+    },
+    nextEventId() {
+      return nextLocalEventId(
+        selectLocalEventIds.all('local-event-%')
+          .map((row) => ({ id: requiredStringRowValue(row, 'id') })),
+      );
+    },
+    staleProjectClaimWarnings() {
+      return localStaleProjectClaimWarnings(selectAgentTasks.all().map(localOperationalAgentTaskFromRow));
+    },
+    getDashboardLayout() {
+      const row = selectDashboardLayout.get('user.dashboardLayout');
+      return row === undefined ? undefined : localDashboardLayoutItemsFromRow(row);
+    },
+    saveDashboardLayout(items) {
+      const updatedAt = new Date().toISOString();
+      upsertDashboardLayout.run('user.dashboardLayout', JSON.stringify(items), updatedAt);
+      protectSqliteDatabaseFiles(databasePath);
+      return { items: localCloneDashboardLayout(items), updatedAt };
+    },
+    counts() {
+      return {
+        events: sqliteCount(database, 'operational_events'),
+        activityEvents: sqliteCount(database, 'activity_events'),
+        agentTasks: sqliteCount(database, 'agent_tasks'),
+        commandResults: sqliteCount(database, 'command_results'),
+        eventHandlerRetries: sqliteCount(database, 'event_handler_retries'),
+      };
+    },
+    replaceEvents(nextEvents) {
+      database.exec('BEGIN IMMEDIATE');
+      try {
+        for (const event of [...nextEvents].slice(-eventLimit)) {
+          if (selectEvent.get(event.id) !== undefined) {
+            continue;
+          }
+          insertEvent.run(
+            event.id,
+            event.name,
+            JSON.stringify(event.source),
+            JSON.stringify({ id: event.deliveryId, receivedAt: event.receivedAt }),
+            JSON.stringify(event.subject),
+            event.occurredAt,
+            event.receivedAt,
+            JSON.stringify({
+              localEvent: {
+                status: event.status,
+                summary: event.summary,
+                workflowRunCount: event.workflowRunCount,
+                handlerRetryCount: event.handlerRetryCount,
+              },
+            }),
+            JSON.stringify({ kind: 'external-reference', reference: event.rawPayloadReference }),
+            JSON.stringify(event.links),
+          );
+        }
+        database.exec('COMMIT');
+      } catch (error) {
+        database.exec('ROLLBACK');
+        throw error;
+      }
+    },
+    close() {
+      database.close();
+    },
+  };
+}
+
+function expectStartStoreDatabasePath(config: RainrailStartOperationalStoreConfig, kind: 'sqlite' | 'json'): string {
+  if (config.databasePath === undefined || config.databasePath.length === 0) {
+    throw new Error(`operationalStoreConfig.databasePath is required for ${kind} stores`);
+  }
+  return config.databasePath;
+}
+
+function localRainrailEventFromOperationalRow(row: unknown): LocalRainrailEvent | undefined {
+  if (!isRecord(row)) {
+    return undefined;
+  }
+  const id = stringRowValue(row, 'id');
+  const name = stringRowValue(row, 'name');
+  const source = jsonRowValue<{ type?: unknown; name?: unknown }>(row, 'source_json');
+  const delivery = jsonRowValue<{ id?: unknown; receivedAt?: unknown }>(row, 'delivery_json');
+  const subject = jsonRowValue<{ type?: unknown; id?: unknown }>(row, 'subject_json');
+  const payload = jsonRowValue<{ localEvent?: unknown }>(row, 'payload_json');
+  const rawPayload = jsonRowValue<{ reference?: unknown }>(row, 'raw_payload_reference_json');
+  const links = jsonRowValue<{ self?: unknown }>(row, 'links_json');
+  const occurredAt = stringRowValue(row, 'occurred_at');
+  const receivedAt = stringRowValue(row, 'received_at');
+  if (
+    id === undefined
+    || name === undefined
+    || occurredAt === undefined
+    || receivedAt === undefined
+    || typeof source?.type !== 'string'
+    || typeof source.name !== 'string'
+    || typeof delivery?.id !== 'string'
+    || typeof subject?.type !== 'string'
+    || typeof subject.id !== 'string'
+  ) {
+    return undefined;
+  }
+  const localEvent = isRecord(payload?.localEvent) ? payload.localEvent : {};
+  return {
+    id,
+    type: 'event',
+    name,
+    status: typeof localEvent.status === 'string' ? localEvent.status : 'received',
+    summary: typeof localEvent.summary === 'string' ? localEvent.summary : `${source.name} event received`,
+    deliveryId: delivery.id,
+    rawPayloadReference: typeof rawPayload?.reference === 'string'
+      ? rawPayload.reference
+      : `local://events/${id}`,
+    workflowRunCount: typeof localEvent.workflowRunCount === 'number' ? localEvent.workflowRunCount : 0,
+    handlerRetryCount: typeof localEvent.handlerRetryCount === 'number' ? localEvent.handlerRetryCount : 0,
+    subject: {
+      type: subject.type,
+      id: subject.id,
+    },
+    occurredAt,
+    receivedAt,
+    source: {
+      type: source.type,
+      name: source.name,
+    },
+    links: {
+      self: typeof links?.self === 'string' ? links.self : `/api/v1/events/${encodeURIComponent(id)}`,
+    },
+  };
+}
+
+function localOperationalEventFromRow(row: unknown): LocalOperationalEvent {
+  const source = requiredJsonRowValue<LocalOperationalEvent['source']>(row, 'source_json');
+  const delivery = requiredJsonRowValue<LocalOperationalEvent['delivery']>(row, 'delivery_json');
+  const subject = requiredJsonRowValue<LocalOperationalEvent['subject']>(row, 'subject_json');
+  const payload = requiredJsonRowValue<unknown>(row, 'payload_json');
+  const rawPayload = requiredJsonRowValue<LocalOperationalEvent['envelope']['rawPayload']>(row, 'raw_payload_reference_json');
+  const links = nullableJsonRowValue<Record<string, string>>(row, 'links_json');
+  const id = requiredStringRowValue(row, 'id');
+  const name = requiredStringRowValue(row, 'name');
+  const occurredAt = requiredStringRowValue(row, 'occurred_at');
+  const receivedAt = requiredStringRowValue(row, 'received_at');
+  const envelope = {
+    id,
+    schemaVersion: 'rainrail.event.v1' as const,
+    source,
+    name,
+    delivery,
+    occurredAt,
+    subject,
+    payload,
+    rawPayload,
+    ...(links === undefined ? {} : { links }),
+  };
+  return {
+    id,
+    name,
+    source,
+    delivery,
+    subject,
+    occurredAt,
+    receivedAt,
+    envelope,
+  };
+}
+
+function localOperationalActivityEventFromRow(row: unknown): LocalOperationalActivityEvent {
+  const sourceEventId = nullableStringRowValue(row, 'source_event_id');
+  const sourceEventName = nullableStringRowValue(row, 'source_event_name');
+  const targetId = nullableStringRowValue(row, 'target_id');
+  const targetUrl = nullableStringRowValue(row, 'target_url');
+  const metadata = nullableJsonRowValue<Record<string, unknown>>(row, 'metadata_json');
+  return {
+    id: requiredStringRowValue(row, 'id'),
+    ...(sourceEventId === undefined ? {} : { sourceEventId }),
+    ...(sourceEventName === undefined ? {} : { sourceEventName }),
+    category: requiredStringRowValue(row, 'category'),
+    targetType: requiredStringRowValue(row, 'target_type'),
+    ...(targetId === undefined ? {} : { targetId }),
+    ...(targetUrl === undefined ? {} : { targetUrl }),
+    actionType: requiredStringRowValue(row, 'action_type'),
+    outcome: requiredStringRowValue(row, 'outcome'),
+    summary: requiredStringRowValue(row, 'summary'),
+    ...(metadata === undefined ? {} : { metadata }),
+    createdAt: requiredStringRowValue(row, 'created_at'),
+  };
+}
+
+function localOperationalAgentTaskFromRow(row: unknown): LocalOperationalAgentTask {
+  const agentSessionId = nullableStringRowValue(row, 'agent_session_id');
+  const issue = nullableJsonRowValue<unknown>(row, 'issue_json');
+  const claim = nullableJsonRowValue<unknown>(row, 'claim_json');
+  const logPath = nullableStringRowValue(row, 'log_path');
+  const stderrLogPath = nullableStringRowValue(row, 'stderr_log_path');
+  const pid = nullableNumberRowValue(row, 'pid');
+  const resumeAttempts = nullableJsonRowValue<unknown>(row, 'resume_attempts_json');
+  const projectClaim = nullableJsonRowValue<unknown>(row, 'project_claim_json');
+  const result = nullableStringRowValue(row, 'result');
+  const completedAt = nullableStringRowValue(row, 'completed_at');
+  const status = requiredStringRowValue(row, 'status');
+  const startedAt = requiredStringRowValue(row, 'started_at');
+  return {
+    id: requiredStringRowValue(row, 'id'),
+    title: requiredStringRowValue(row, 'title'),
+    ...(agentSessionId === undefined ? {} : { agentSessionId }),
+    branchName: requiredStringRowValue(row, 'branch_name'),
+    status,
+    ...(issue === undefined ? {} : { issue }),
+    ...(claim === undefined ? {} : { claim }),
+    ...(logPath === undefined ? {} : { logPath }),
+    ...(stderrLogPath === undefined ? {} : { stderrLogPath }),
+    ...(pid === undefined ? {} : { pid }),
+    ...(resumeAttempts === undefined ? {} : { resumeAttempts }),
+    ...(projectClaim === undefined ? {} : { projectClaim }),
+    ...(result === undefined ? {} : { result }),
+    startedAt,
+    ...(completedAt === undefined ? {} : { completedAt }),
+    updatedAt: requiredStringRowValue(row, 'updated_at'),
+    runtime: {
+      status,
+      ...(pid === undefined ? {} : { pid }),
+      startedAt,
+      ...(completedAt === undefined ? {} : { completedAt }),
+    },
+  };
+}
+
+function localOperationalEventHandlerRetryFromRow(row: unknown): LocalOperationalEventHandlerRetry {
+  const claimedUntilAt = nullableStringRowValue(row, 'claimed_until_at');
+  return {
+    eventId: requiredStringRowValue(row, 'event_id'),
+    handlerName: requiredStringRowValue(row, 'handler_name'),
+    attempts: requiredNumberRowValue(row, 'attempts'),
+    nextRetryAt: requiredStringRowValue(row, 'next_retry_at'),
+    lastError: requiredStringRowValue(row, 'last_error'),
+    updatedAt: requiredStringRowValue(row, 'updated_at'),
+    ...(claimedUntilAt === undefined ? {} : { claimedUntilAt }),
+  };
+}
+
+function sqliteCount(
+  database: { prepare(sql: string): { get(...values: Array<string | number | null>): unknown } },
+  tableName: string,
+): number {
+  return requiredNumberRowValue(database.prepare(`SELECT count(*) as count FROM ${tableName}`).get(), 'count');
+}
+
+function protectSqliteDatabaseFiles(databasePath: string): void {
+  for (const path of [databasePath, `${databasePath}-wal`, `${databasePath}-shm`]) {
+    if (existsSync(path)) {
+      chmodSync(path, 0o600);
+    }
+  }
+}
+
+function sqliteAddColumnIfMissing(
+  database: { exec(sql: string): void; prepare(sql: string): { all(): unknown[] } },
+  tableName: string,
+  columnName: string,
+  definition: string,
+): void {
+  const rows = database.prepare(`PRAGMA table_info(${tableName})`).all();
+  if (rows.some((row) => rowValue(row, 'name') === columnName)) return;
+  database.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
+}
+
+function sqliteSeedSequenceValue(
+  database: {
+    exec(sql: string): void;
+    prepare(sql: string): {
+      run(...values: Array<string | number | null>): void;
+    };
+  },
+  name: string,
+  value: number,
+): void {
+  database.prepare(`
+    INSERT INTO operational_sequences (name, value) VALUES (?, ?)
+    ON CONFLICT(name) DO UPDATE SET value = max(value, excluded.value)
+  `).run(name, value);
+}
+
+function sqliteNextSequenceValue(
+  database: {
+    exec(sql: string): void;
+    prepare(sql: string): {
+      get(...values: Array<string | number | null>): unknown;
+      run(...values: Array<string | number | null>): void;
+    };
+  },
+  name: string,
+): number {
+  database.exec('BEGIN IMMEDIATE');
+  try {
+    const row = database.prepare('SELECT value FROM operational_sequences WHERE name = ?').get(name);
+    const value = (row === undefined ? 0 : requiredNumberRowValue(row, 'value')) + 1;
+    database.prepare(`
+      INSERT INTO operational_sequences (name, value) VALUES (?, ?)
+      ON CONFLICT(name) DO UPDATE SET value = excluded.value
+    `).run(name, value);
+    database.exec('COMMIT');
+    return value;
+  } catch (error) {
+    database.exec('ROLLBACK');
+    throw error;
+  }
+}
+
+function stringRowValue(row: unknown, key: string): string | undefined {
+  const value = rowValue(row, key);
+  return typeof value === 'string' ? value : undefined;
+}
+
+function requiredStringRowValue(row: unknown, key: string): string {
+  const value = rowValue(row, key);
+  if (typeof value !== 'string') {
+    throw new Error(`SQLite row ${key} must be a string`);
+  }
+  return value;
+}
+
+function nullableStringRowValue(row: unknown, key: string): string | undefined {
+  const value = rowValue(row, key);
+  if (value === null) return undefined;
+  if (typeof value !== 'string') {
+    throw new Error(`SQLite row ${key} must be a string or null`);
+  }
+  return value;
+}
+
+function requiredNumberRowValue(row: unknown, key: string): number {
+  const value = rowValue(row, key);
+  if (typeof value !== 'number') {
+    throw new Error(`SQLite row ${key} must be a number`);
+  }
+  return value;
+}
+
+function nullableNumberRowValue(row: unknown, key: string): number | undefined {
+  const value = rowValue(row, key);
+  if (value === null) return undefined;
+  if (typeof value !== 'number') {
+    throw new Error(`SQLite row ${key} must be a number or null`);
+  }
+  return value;
+}
+
+function rowValue(row: unknown, key: string): unknown {
+  if (!isRecord(row) || !(key in row)) {
+    throw new Error(`SQLite row is missing ${key}`);
+  }
+  return row[key];
+}
+
+function jsonRowValue<T>(row: unknown, key: string): T | undefined {
+  const value = rowValue(row, key);
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return undefined;
+  }
+}
+
+function requiredJsonRowValue<T>(row: unknown, key: string): T {
+  const value = rowValue(row, key);
+  if (typeof value !== 'string') {
+    throw new Error(`SQLite row ${key} must be JSON text`);
+  }
+  return JSON.parse(value) as T;
+}
+
+function nullableJsonRowValue<T>(row: unknown, key: string): T | undefined {
+  const value = rowValue(row, key);
+  if (value === null) return undefined;
+  if (typeof value !== 'string') {
+    throw new Error(`SQLite row ${key} must be JSON text or null`);
+  }
+  return JSON.parse(value) as T;
+}
+
+function nextLocalEventId(events: readonly { readonly id: string }[]): number {
+  return events.reduce((nextId, event) => {
+    const match = /^local-event-(\d+)$/u.exec(event.id);
+    if (match === null) {
+      return nextId;
+    }
+    return Math.max(nextId, Number(match[1]) + 1);
+  }, 1);
 }
 
 async function handleLocalRainrailRequest(
@@ -3986,7 +7579,7 @@ async function handleLocalRainrailRequest(
     }
   }
 
-  const authError = getLocalServerAuthError(request, url.pathname, options);
+  const authError = getLocalServerAuthError(request, url, options);
   if (authError !== undefined) {
     writeJsonResponse(response, authError.status, authError.body, request);
     return;
@@ -4018,6 +7611,31 @@ async function handleLocalRainrailRequest(
   }
 
   if (request.method === 'GET' && url.pathname === '/api/v1/overview') {
+    if (state.eventStore?.counts !== undefined) {
+      const activityEvents = state.eventStore.listActivityEvents?.() ?? [];
+      const staleProjectClaims = state.eventStore.staleProjectClaimWarnings?.() ?? [];
+      writeJsonResponse(response, 200, {
+        data: {
+          runtime: 'node',
+          workspace: options.root,
+          counts: state.eventStore.counts(),
+          warnings: { staleProjectClaims },
+          recentActivity: activityEvents
+            .filter(isLocalWorkflowRunActivity)
+            .slice(0, 5)
+            .map(localActivityToWorkflowRunRow),
+          links: {
+            events: '/api/v1/events',
+            workflowRuns: '/api/v1/workflow-runs',
+            agentTasks: '/api/v1/agent-tasks',
+            sources: '/api/v1/sources',
+            queue: '/api/v1/queue',
+            settings: '/api/v1/settings',
+          },
+        },
+      }, request);
+      return;
+    }
     writeJsonResponse(response, 200, {
       data: {
         runtime: 'node',
@@ -4044,6 +7662,22 @@ async function handleLocalRainrailRequest(
       writeJsonResponse(response, 400, queryError, request);
       return;
     }
+    if (state.eventStore?.listOperationalEvents !== undefined) {
+      const activityEvents = state.eventStore.listActivityEvents?.() ?? [];
+      const handlerRetries = state.eventStore.listEventHandlerRetries?.() ?? [];
+      writeLocalCollectionResponse(
+        response,
+        filterLocalOperationalEvents(state.eventStore.listOperationalEvents(), url)
+          .map((event) => localOperationalEventToCompactRow(event, {
+            activityEvents: activityEvents.filter((activity) => activity.sourceEventId === event.id),
+            handlerRetries: handlerRetries.filter((retry) => retry.eventId === event.id),
+          })),
+        url,
+        request,
+        (row) => typeof row.receivedAt === 'string' ? row.receivedAt : row.id,
+      );
+      return;
+    }
     writeLocalCollectionResponse(
       response,
       filterLocalEvents([...state.events].reverse(), url),
@@ -4057,6 +7691,15 @@ async function handleLocalRainrailRequest(
   const eventDetailMatch = /^\/api\/v1\/events\/([^/]+)$/u.exec(url.pathname);
   if (request.method === 'GET' && eventDetailMatch !== null) {
     const eventId = safeDecodeURIComponent(eventDetailMatch[1] ?? '');
+    const operationalEvent = eventId === undefined ? undefined : state.eventStore?.getOperationalEvent?.(eventId);
+    if (operationalEvent !== undefined) {
+      const activityEvents = state.eventStore?.listActivityEvents?.().filter((activity) => activity.sourceEventId === operationalEvent.id) ?? [];
+      const handlerRetries = state.eventStore?.listEventHandlerRetries?.().filter((retry) => retry.eventId === operationalEvent.id) ?? [];
+      writeJsonResponse(response, 200, {
+        data: localOperationalEventDetail(operationalEvent, { activityEvents, handlerRetries }),
+      }, request);
+      return;
+    }
     const event = eventId === undefined ? undefined : state.events.find((item) => item.id === eventId);
     if (event === undefined) {
       writeJsonResponse(response, 404, { error: 'event_not_found' }, request);
@@ -4069,16 +7712,90 @@ async function handleLocalRainrailRequest(
   }
 
   if (request.method === 'GET' && url.pathname === '/api/v1/workflow-runs') {
+    const queryError = validateLocalCollectionQuery(url, ['filter[status]']);
+    if (queryError !== undefined) {
+      writeJsonResponse(response, 400, queryError, request);
+      return;
+    }
+    if (state.eventStore?.listActivityEvents !== undefined) {
+      writeLocalCollectionResponse(
+        response,
+        state.eventStore.listActivityEvents()
+          .filter(isLocalWorkflowRunActivity)
+          .filter((activity) => matchesOptionalLocalFilter(activity.outcome, url.searchParams.get('filter[status]')))
+          .map(localActivityToWorkflowRunRow),
+        url,
+        request,
+        (row) => typeof row.createdAt === 'string' ? row.createdAt : row.id,
+      );
+      return;
+    }
     if (!writeValidatedLocalCollectionResponse(response, localEmptyCollectionRows, url, request, (row) => row.id, ['filter[status]'])) {
       return;
     }
     return;
   }
 
+  const workflowRunDetailMatch = /^\/api\/v1\/workflow-runs\/([^/]+)$/u.exec(url.pathname);
+  if (request.method === 'GET' && workflowRunDetailMatch !== null) {
+    const workflowRunId = safeDecodeURIComponent(workflowRunDetailMatch[1] ?? '');
+    if (workflowRunId === undefined) {
+      writeJsonResponse(response, 400, { error: 'invalid_workflow_run_id' }, request);
+      return;
+    }
+    const activity = state.eventStore?.listActivityEvents?.()
+      .find((item) => item.id === workflowRunId && isLocalWorkflowRunActivity(item));
+    if (activity === undefined) {
+      writeJsonResponse(response, 404, { error: 'workflow_run_not_found' }, request);
+      return;
+    }
+    writeJsonResponse(response, 200, {
+      data: localWorkflowRunDetail(activity),
+    }, request);
+    return;
+  }
+
   if (request.method === 'GET' && url.pathname === '/api/v1/agent-tasks') {
+    const queryError = validateLocalCollectionQuery(url, ['filter[status]']);
+    if (queryError !== undefined) {
+      writeJsonResponse(response, 400, queryError, request);
+      return;
+    }
+    if (state.eventStore?.listAgentTasks !== undefined) {
+      const staleTaskIds = new Set((state.eventStore.staleProjectClaimWarnings?.() ?? []).map((warning) => warning.taskId));
+      writeLocalCollectionResponse(
+        response,
+        state.eventStore.listAgentTasks()
+          .filter((task) => matchesOptionalLocalFilter(task.status, url.searchParams.get('filter[status]')))
+          .map((task) => localAgentTaskToCompactRow(task, staleTaskIds)),
+        url,
+        request,
+        (row) => typeof row.updatedAt === 'string' ? row.updatedAt : row.id,
+      );
+      return;
+    }
     if (!writeValidatedLocalCollectionResponse(response, localEmptyCollectionRows, url, request, (row) => row.id, ['filter[status]'])) {
       return;
     }
+    return;
+  }
+
+  const agentTaskDetailMatch = /^\/api\/v1\/agent-tasks\/([^/]+)$/u.exec(url.pathname);
+  if (request.method === 'GET' && agentTaskDetailMatch !== null) {
+    const taskId = safeDecodeURIComponent(agentTaskDetailMatch[1] ?? '');
+    if (taskId === undefined) {
+      writeJsonResponse(response, 400, { error: 'invalid_agent_task_id' }, request);
+      return;
+    }
+    const task = state.eventStore?.listAgentTasks?.().find((item) => item.id === taskId);
+    if (task === undefined) {
+      writeJsonResponse(response, 404, { error: 'agent_task_not_found' }, request);
+      return;
+    }
+    const staleTaskIds = new Set((state.eventStore?.staleProjectClaimWarnings?.() ?? []).map((warning) => warning.taskId));
+    writeJsonResponse(response, 200, {
+      data: localAgentTaskDetail(task, staleTaskIds),
+    }, request);
     return;
   }
 
@@ -4090,7 +7807,7 @@ async function handleLocalRainrailRequest(
     }
     writeLocalCollectionResponse(
       response,
-      filterLocalSources(localSourceRows(options.sources, state), url),
+      filterLocalSources(localSourceRows(options.sources, state, { includeHistorySources: options.demoMode === true }), url),
       url,
       request,
       (row) => typeof row.name === 'string' ? row.name : row.id,
@@ -4103,7 +7820,7 @@ async function handleLocalRainrailRequest(
     const sourceId = safeDecodeURIComponent(sourceDetailMatch[1] ?? '');
     const row = sourceId === undefined
       ? undefined
-      : localSourceRows(options.sources, state).find((source) => source.id === sourceId);
+      : localSourceRows(options.sources, state, { includeHistorySources: options.demoMode === true }).find((source) => source.id === sourceId);
     if (row === undefined) {
       writeJsonResponse(response, 404, { error: 'source_not_found' }, request);
       return;
@@ -4115,6 +7832,12 @@ async function handleLocalRainrailRequest(
   }
 
   if (request.method === 'GET' && url.pathname === '/api/v1/queue') {
+    if (options.demoMode && state.eventStore?.listAgentTasks !== undefined) {
+      writeValidatedLocalCollectionResponse(response, filterLocalDemoQueueRows(localDemoQueueRows(state.eventStore.listAgentTasks()), url), url, request, (row) => row.id, ['filter[status]'], {
+        summary: localDemoQueueSummary(state.eventStore.listAgentTasks()),
+      });
+      return;
+    }
     if (!writeValidatedLocalCollectionResponse(response, localEmptyCollectionRows, url, request, (row) => row.id, ['filter[status]'], {
       summary: {
         upcomingIssues: 0,
@@ -4131,7 +7854,7 @@ async function handleLocalRainrailRequest(
   if (request.method === 'GET' && url.pathname === '/api/v1/settings') {
     writeLocalCollectionResponse(
       response,
-      localSettingsRows(options),
+      localSettingsRows(options, state),
       url,
       request,
       (row) => row.id,
@@ -4139,19 +7862,140 @@ async function handleLocalRainrailRequest(
     return;
   }
 
+  if (request.method === 'GET' && url.pathname === '/api/v1/dashboard/cards') {
+    writeJsonResponse(response, 200, { data: localDashboardCards() }, request);
+    return;
+  }
+
+  if (request.method === 'GET' && url.pathname === '/api/v1/dashboard/layout') {
+    writeJsonResponse(response, 200, { data: localDashboardLayout(state) }, request);
+    return;
+  }
+  if (request.method === 'PUT' && url.pathname === '/api/v1/dashboard/layout') {
+    await handleLocalDashboardLayoutUpdateRequest(request, response, state);
+    return;
+  }
+
+  const localDashboardLayoutConfigMatch = /^\/api\/v1\/dashboard\/layout\/items\/([^/]+)\/config$/u.exec(url.pathname);
+  if (request.method === 'PATCH' && localDashboardLayoutConfigMatch !== null) {
+    const itemId = safeDecodeURIComponent(localDashboardLayoutConfigMatch[1] ?? '');
+    if (itemId === undefined) {
+      writeJsonResponse(response, 400, { error: 'invalid_dashboard_layout_item_id' }, request);
+      return;
+    }
+    await handleLocalDashboardLayoutItemConfigRequest(request, response, state, itemId);
+    return;
+  }
+
   const localCommand = localDashboardCommandForPath(url.pathname);
   if (request.method === 'POST' && localCommand !== undefined) {
-    await handleLocalDashboardCommandRequest(request, response, localCommand);
+    await handleLocalDashboardCommandRequest(request, response, localCommand, options.demoMode === true && url.searchParams.get('demo') === '1');
     return;
   }
 
   writeJsonResponse(response, 404, { error: 'not_found' }, request);
 }
 
+async function handleLocalDashboardLayoutItemConfigRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  state: LocalRainrailServerState,
+  itemId: string,
+): Promise<void> {
+  const requestId = localRequestId(request);
+  const body = await readLocalJsonObjectBody(request);
+  if (!body.ok) {
+    writeJsonResponse(response, body.status, { error: body.error }, request, {
+      'X-Request-ID': requestId,
+    });
+    return;
+  }
+
+  const config = body.value.config;
+  if (!isRecord(config) || !isJsonSerializableLocalValue(config)) {
+    writeJsonResponse(response, 400, { error: 'invalid_dashboard_card_config', itemId }, request, {
+      'X-Request-ID': requestId,
+    });
+    return;
+  }
+  if (hasSensitiveLocalDashboardConfigKey(config)) {
+    writeJsonResponse(response, 400, { error: 'sensitive_dashboard_card_config', itemId }, request, {
+      'X-Request-ID': requestId,
+    });
+    return;
+  }
+
+  const itemIndex = state.dashboardLayout.findIndex((item) => item.id === itemId);
+  if (itemIndex < 0) {
+    writeJsonResponse(response, 404, { error: 'unknown_dashboard_layout_item', itemId }, request, {
+      'X-Request-ID': requestId,
+    });
+    return;
+  }
+
+  const nextDashboardLayout = state.dashboardLayout.map((item, index) => index === itemIndex
+    ? { ...item, config: localCloneRecord(config) }
+    : item);
+  const saved = state.eventStore?.saveDashboardLayout?.(nextDashboardLayout);
+  state.dashboardLayout = localCloneDashboardLayout(saved?.items ?? nextDashboardLayout);
+  state.dashboardLayoutUpdatedAt = saved?.updatedAt ?? new Date().toISOString();
+  writeJsonResponse(response, 200, { data: localDashboardLayout(state) }, request, {
+    'X-Request-ID': requestId,
+  });
+}
+
+async function handleLocalDashboardLayoutUpdateRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  state: LocalRainrailServerState,
+): Promise<void> {
+  const requestId = localRequestId(request);
+  const body = await readLocalJsonObjectBody(request);
+  if (!body.ok) {
+    writeJsonResponse(response, body.status, { error: body.error }, request, {
+      'X-Request-ID': requestId,
+    });
+    return;
+  }
+
+  const parsed = parseLocalDashboardLayoutUpdateItems(body.value.items);
+  if (!parsed.ok) {
+    writeJsonResponse(response, parsed.status, parsed.body, request, {
+      'X-Request-ID': requestId,
+    });
+    return;
+  }
+
+  if (body.value.dryRun === true) {
+    writeJsonResponse(response, 200, {
+      data: {
+        action: 'dashboard_layout_update',
+        targetType: 'dashboard_layout',
+        targetId: 'user.dashboardLayout',
+        status: 'preview',
+        dryRun: true,
+        auditId: requestId,
+        result: { itemCount: parsed.items.length },
+      },
+    }, request, {
+      'X-Request-ID': requestId,
+    });
+    return;
+  }
+
+  const saved = state.eventStore?.saveDashboardLayout?.(parsed.items);
+  state.dashboardLayout = localCloneDashboardLayout(saved?.items ?? parsed.items);
+  state.dashboardLayoutUpdatedAt = saved?.updatedAt ?? new Date().toISOString();
+  writeJsonResponse(response, 200, { data: localDashboardLayout(state) }, request, {
+    'X-Request-ID': requestId,
+  });
+}
+
 async function handleLocalDashboardCommandRequest(
   request: IncomingMessage,
   response: ServerResponse,
   command: LocalDashboardCommand,
+  demoMode: boolean,
 ): Promise<void> {
   const requestId = localRequestId(request);
   const body = await readLocalJsonObjectBody(request);
@@ -4181,6 +8025,24 @@ async function handleLocalDashboardCommandRequest(
     writeJsonResponse(response, 409, {
       error: 'action_confirmation_required',
       data: preview,
+    }, request, {
+      'X-Request-ID': requestId,
+    });
+    return;
+  }
+
+  if (demoMode) {
+    writeJsonResponse(response, 202, {
+      data: {
+        ...preview,
+        status: 'accepted',
+        dryRun: false,
+        auditId: `demo-${requestId}`,
+        result: {
+          demoOnly: true,
+          message: 'Demo mode accepted the command without dispatching to an external runtime.',
+        },
+      },
     }, request, {
       'X-Request-ID': requestId,
     });
@@ -4322,8 +8184,10 @@ async function handleLocalIntakeRequest(
     writeJsonResponse(response, 400, { error: payload.error }, request);
     return;
   }
-  const id = `local-event-${String(state.nextEventId).padStart(6, '0')}`;
-  state.nextEventId += 1;
+  const id = state.eventStore?.reserveLocalEventId?.() ?? `local-event-${String(state.nextEventId).padStart(6, '0')}`;
+  if (state.eventStore?.reserveLocalEventId === undefined) {
+    state.nextEventId += 1;
+  }
   const eventName = payload.eventName ?? `${intakeSource.sourceType}.event`;
   const deliveryId = payload.deliveryId ?? id;
   const occurredAt = new Date().toISOString();
@@ -4352,8 +8216,15 @@ async function handleLocalIntakeRequest(
     },
   };
   state.events.push(event);
-  if (state.events.length > localEventHistoryLimit) {
-    state.events.splice(0, state.events.length - localEventHistoryLimit);
+  const eventLimit = state.eventStore?.eventLimit ?? localEventHistoryLimit;
+  if (state.events.length > eventLimit) {
+    state.events.splice(0, state.events.length - eventLimit);
+  }
+  if (state.eventStore?.recordOperationalEvent !== undefined) {
+    state.eventStore.recordOperationalEvent(localOperationalEnvelopeFromLocalEvent(event));
+    state.events = state.eventStore.listEvents();
+  } else {
+    state.eventStore?.replaceEvents(state.events);
   }
   broadcastLocalEvent(state, event);
   writeJsonResponse(response, 202, { data: event }, request);
@@ -4403,14 +8274,290 @@ function localEventDetail(event: LocalRainrailEvent): {
   };
 }
 
+function localOperationalEnvelopeFromLocalEvent(event: LocalRainrailEvent): LocalOperationalEvent['envelope'] {
+  return {
+    id: event.id,
+    schemaVersion: 'rainrail.event.v1',
+    source: event.source,
+    name: event.name,
+    delivery: { id: event.deliveryId, receivedAt: event.receivedAt },
+    occurredAt: event.occurredAt,
+    subject: event.subject,
+    payload: {
+      localEvent: {
+        status: event.status,
+        summary: event.summary,
+        workflowRunCount: event.workflowRunCount,
+        handlerRetryCount: event.handlerRetryCount,
+      },
+    },
+    rawPayload: { kind: 'external-reference', reference: event.rawPayloadReference },
+    links: event.links,
+  };
+}
+
+function filterLocalOperationalEvents(events: readonly LocalOperationalEvent[], url: URL): readonly LocalOperationalEvent[] {
+  const sourceFilter = url.searchParams.get('filter[source]');
+  const nameFilter = url.searchParams.get('filter[name]');
+  return events
+    .filter((event) => matchesOptionalLocalFilter(event.source.type, sourceFilter))
+    .filter((event) => matchesOptionalLocalFilter(event.name, nameFilter));
+}
+
+function localOperationalEventToCompactRow(
+  event: LocalOperationalEvent,
+  context: {
+    readonly activityEvents?: readonly LocalOperationalActivityEvent[];
+    readonly handlerRetries?: readonly LocalOperationalEventHandlerRetry[];
+  } = {},
+) {
+  const activityEvents = context.activityEvents ?? [];
+  const handlerRetries = context.handlerRetries ?? [];
+  const latestActivity = activityEvents[0];
+  return {
+    id: event.id,
+    type: 'event',
+    name: event.name,
+    status: 'received',
+    summary: localOperationalEventSummary(event),
+    deliveryId: event.delivery.id,
+    rawPayloadReference: event.envelope.rawPayload.reference,
+    workflowRunCount: activityEvents.length,
+    handlerRetryCount: handlerRetries.length,
+    ...(latestActivity === undefined ? {} : { latestOutcome: latestActivity.outcome }),
+    source: {
+      type: event.source.type,
+      name: event.source.name,
+      ...(event.source.repository === undefined ? {} : { repository: event.source.repository }),
+    },
+    subject: event.subject,
+    occurredAt: event.occurredAt,
+    receivedAt: event.receivedAt,
+    links: { self: `/api/v1/events/${encodeURIComponent(event.id)}` },
+  };
+}
+
+function localOperationalEventDetail(
+  event: LocalOperationalEvent,
+  context: {
+    readonly activityEvents?: readonly LocalOperationalActivityEvent[];
+    readonly handlerRetries?: readonly LocalOperationalEventHandlerRetry[];
+  } = {},
+) {
+  const activityEvents = context.activityEvents ?? [];
+  const handlerRetries = context.handlerRetries ?? [];
+  return {
+    id: event.id,
+    type: 'event',
+    compact: localOperationalEventToCompactRow(event, { activityEvents, handlerRetries }),
+    record: {
+      name: event.name,
+      humanSummary: localOperationalEventSummary(event),
+      source: event.source,
+      delivery: event.delivery,
+      subject: event.subject,
+      occurredAt: event.occurredAt,
+      receivedAt: event.receivedAt,
+      envelope: localSanitizedOperationalEnvelope(event),
+      activityEvents,
+      handlerRetries,
+    },
+  };
+}
+
+function localOperationalEventSummary(event: LocalOperationalEvent): string {
+  const repository = event.source.repository;
+  if (repository !== undefined) {
+    return `${event.name} ${repository}#${event.subject.id}`;
+  }
+  return `${event.name} ${event.subject.type}#${event.subject.id}`;
+}
+
+function localSanitizedOperationalEnvelope(event: LocalOperationalEvent) {
+  return {
+    id: event.envelope.id,
+    schemaVersion: event.envelope.schemaVersion,
+    source: event.envelope.source,
+    name: event.envelope.name,
+    delivery: event.envelope.delivery,
+    occurredAt: event.envelope.occurredAt,
+    subject: event.envelope.subject,
+    rawPayload: event.envelope.rawPayload,
+    ...(event.envelope.links === undefined ? {} : { links: event.envelope.links }),
+  };
+}
+
+function localActivityToWorkflowRunRow(activity: LocalOperationalActivityEvent) {
+  return {
+    id: activity.id,
+    type: 'workflow-run',
+    status: activity.outcome,
+    summary: activity.summary,
+    category: activity.category,
+    actionType: activity.actionType,
+    targetType: activity.targetType,
+    ...(activity.targetId === undefined ? {} : { targetId: activity.targetId }),
+    ...(activity.targetUrl === undefined ? {} : { targetUrl: activity.targetUrl }),
+    ...(activity.sourceEventId === undefined ? {} : { sourceEventId: activity.sourceEventId }),
+    ...(activity.sourceEventName === undefined ? {} : { sourceEventName: activity.sourceEventName }),
+    createdAt: activity.createdAt,
+  };
+}
+
+function localWorkflowRunDetail(activity: LocalOperationalActivityEvent) {
+  return {
+    id: activity.id,
+    type: 'workflow-run',
+    compact: localActivityToWorkflowRunRow(activity),
+    record: activity,
+  };
+}
+
+function isLocalWorkflowRunActivity(activity: LocalOperationalActivityEvent): boolean {
+  return activity.category !== 'command';
+}
+
+function localAgentTaskToCompactRow(task: LocalOperationalAgentTask, staleTaskIds: ReadonlySet<string> = new Set()) {
+  return {
+    id: task.id,
+    type: 'agent-task',
+    status: task.status,
+    title: task.title,
+    branchName: task.branchName,
+    ...(task.agentSessionId === undefined ? {} : { agentSessionId: task.agentSessionId }),
+    ...(task.issue === undefined ? {} : { issue: task.issue }),
+    startedAt: task.startedAt,
+    updatedAt: task.updatedAt,
+    ...(task.completedAt === undefined ? {} : { completedAt: task.completedAt }),
+    warnings: { staleProjectClaim: staleTaskIds.has(task.id) },
+  };
+}
+
+function localAgentTaskDetail(task: LocalOperationalAgentTask, staleTaskIds: ReadonlySet<string> = new Set()) {
+  return {
+    id: task.id,
+    type: 'agent-task',
+    compact: localAgentTaskToCompactRow(task, staleTaskIds),
+    record: task,
+  };
+}
+
+function localDemoQueueRows(tasks: readonly LocalOperationalAgentTask[]) {
+  const taskRows = tasks
+    .filter((task) => task.status === 'running' || localStaleProjectClaimStatuses.has(task.status))
+    .map((task) => {
+      const blocked = localStaleProjectClaimStatuses.has(task.status);
+      return {
+        id: task.id,
+        type: 'queue-item',
+        status: blocked ? 'blocked' : 'in-progress',
+        title: task.title,
+        branchName: task.branchName,
+        projectStatus: blocked ? 'Blocked' : 'In Progress',
+        ...(blocked ? { blockedReason: 'stale demo project claim' } : {}),
+        ...(isLocalIssueReference(task.issue) ? { issue: task.issue } : {}),
+        ...(isRecord(task.claim) ? { claimLock: task.claim } : {}),
+        links: { self: `/api/v1/agent-tasks/${encodeURIComponent(task.id)}` },
+      };
+    });
+
+  return [
+    {
+      id: 'demo-upcoming-issue-300',
+      type: 'queue-item',
+      status: 'upcoming',
+      title: 'Upcoming dashboard polish task',
+      projectStatus: 'Todo',
+      issue: {
+        repository: 'reirei-lab/rainrail',
+        number: 300,
+      },
+    },
+    ...taskRows,
+  ];
+}
+
+function localDemoQueueSummary(tasks: readonly LocalOperationalAgentTask[]) {
+  const blockedCount = tasks.filter((task) => localStaleProjectClaimStatuses.has(task.status)).length;
+  const inProgressCount = tasks.filter((task) => task.status === 'running').length;
+  return {
+    upcomingIssues: 1,
+    blockedReasons: blockedCount === 0 ? [] : ['stale demo project claim'],
+    inProgressCount,
+    blockedCount,
+    claimedCount: blockedCount + inProgressCount,
+    staleClaimCount: blockedCount,
+  };
+}
+
+function filterLocalDemoQueueRows<TRow extends { readonly status?: string }>(
+  rows: readonly TRow[],
+  url: URL,
+): readonly TRow[] {
+  const statusFilter = url.searchParams.get('filter[status]');
+  return rows.filter((row) => matchesOptionalLocalFilter(row.status, statusFilter));
+}
+
+function isLocalIssueReference(value: unknown): value is { readonly repository?: string; readonly number?: number } {
+  return isRecord(value)
+    && (typeof value.repository === 'string' || value.repository === undefined)
+    && (typeof value.number === 'number' || value.number === undefined);
+}
+
+const localStaleProjectClaimStatuses = new Set(['failed', 'canceled', 'stopped', 'timed_out', 'compaction_failed']);
+
+function localStaleProjectClaimWarnings(tasks: readonly LocalOperationalAgentTask[]): readonly LocalStaleProjectClaimWarning[] {
+  return tasks
+    .filter((task) =>
+      localStaleProjectClaimStatuses.has(task.status)
+      && task.claim !== undefined
+      && (!isRecord(task.projectClaim) || task.projectClaim.status !== 'released')
+    )
+    .map((task) => ({
+      taskId: task.id,
+      title: task.title,
+      status: task.status,
+      ...(task.agentSessionId === undefined ? {} : { agentSessionId: task.agentSessionId }),
+      branchName: task.branchName,
+      ...(task.issue === undefined ? {} : { issue: task.issue }),
+      ...(task.claim === undefined ? {} : { claim: task.claim }),
+      ...(isRecord(task.projectClaim) && typeof task.projectClaim.error === 'string'
+        ? { releaseError: task.projectClaim.error }
+        : {}),
+    }));
+}
+
+function isLocalRainrailEvent(value: unknown): value is LocalRainrailEvent {
+  return isRecord(value)
+    && typeof value.id === 'string'
+    && value.type === 'event'
+    && typeof value.name === 'string'
+    && typeof value.status === 'string'
+    && typeof value.summary === 'string'
+    && typeof value.deliveryId === 'string'
+    && typeof value.rawPayloadReference === 'string'
+    && typeof value.workflowRunCount === 'number'
+    && typeof value.handlerRetryCount === 'number'
+    && typeof value.occurredAt === 'string'
+    && typeof value.receivedAt === 'string'
+    && isRecord(value.subject)
+    && typeof value.subject.type === 'string'
+    && typeof value.subject.id === 'string'
+    && isRecord(value.source)
+    && typeof value.source.type === 'string'
+    && typeof value.source.name === 'string'
+    && isRecord(value.links)
+    && typeof value.links.self === 'string';
+}
+
 type LocalSourceRow = {
   readonly id: string;
   readonly type: 'source';
-  readonly status: 'configured';
+  readonly status: string;
   readonly sourceType: string;
   readonly name: string;
-  readonly endpoint: string;
-  readonly transport: 'http';
+  readonly endpoint?: string;
+  readonly transport: string;
   readonly auth: { readonly status: string };
   readonly links: { readonly self: string };
   readonly lastDelivery?: {
@@ -4425,13 +8572,19 @@ type LocalSourceRow = {
 function localSourceRows(
   sources: readonly RainrailLocalSource[],
   state: LocalRainrailServerState,
+  options: { readonly includeHistorySources?: boolean } = {},
 ): readonly LocalSourceRow[] {
-  return sources.map((source) => {
+  const rows: LocalSourceRow[] = [];
+  const duplicateSourceNames = duplicateLocalSourceNames(sources.map((source) => source.name));
+  const reservedSourceRowIds = new Set(sources.map((source) => source.name));
+  const assignedSourceRowIds = new Set<string>();
+  for (const [index, source] of sources.entries()) {
     const latestEvent = [...state.events]
       .reverse()
       .find((event) => event.source.name === source.name && event.source.type === source.sourceType);
+    const id = localSourceRowId(source.name, index, duplicateSourceNames, reservedSourceRowIds, assignedSourceRowIds);
     const row = {
-      id: source.name,
+      id,
       type: 'source',
       status: 'configured',
       sourceType: source.sourceType,
@@ -4439,11 +8592,10 @@ function localSourceRows(
       endpoint: source.endpoint,
       transport: source.transport,
       auth: { status: source.authConfigured ? 'configured' : 'not configured' },
-      links: { self: `/api/v1/sources/${encodeURIComponent(source.name)}` },
+      links: { self: `/api/v1/sources/${encodeURIComponent(id)}` },
     } satisfies Omit<LocalSourceRow, 'lastDelivery'>;
-    return latestEvent === undefined
-      ? row
-      : {
+    if (latestEvent !== undefined) {
+      rows.push({
         ...row,
         lastDelivery: {
           id: latestEvent.id,
@@ -4452,8 +8604,77 @@ function localSourceRows(
           receivedAt: latestEvent.receivedAt,
           links: latestEvent.links,
         },
-      };
-  });
+      });
+      continue;
+    }
+    rows.push(row);
+  }
+
+  if (options.includeHistorySources !== true) return rows;
+
+  const observedEvents = [...state.events].reverse();
+  const observedSources: LocalRainrailEvent[] = [];
+  const observedSourceKeys = new Set<string>();
+  for (const event of observedEvents) {
+    if (rows.some((row) => row.name === event.source.name && row.sourceType === event.source.type)) continue;
+    const sourceKey = `${event.source.name}\u0000${event.source.type}`;
+    if (observedSourceKeys.has(sourceKey)) continue;
+    observedSourceKeys.add(sourceKey);
+    observedSources.push(event);
+  }
+  const observedSourceNames = duplicateLocalSourceNames([...sources.map((source) => source.name), ...observedSources.map((event) => event.source.name)]);
+  for (const [index, event] of observedSources.entries()) {
+    const id = localSourceRowId(event.source.name, sources.length + index, observedSourceNames, reservedSourceRowIds, assignedSourceRowIds);
+    rows.push({
+      id,
+      type: 'source',
+      status: 'observed',
+      sourceType: event.source.type,
+      name: event.source.name,
+      transport: 'event-store',
+      auth: { status: 'not configured' },
+      links: { self: `/api/v1/sources/${encodeURIComponent(id)}` },
+      lastDelivery: {
+        id: event.id,
+        status: event.status,
+        occurredAt: event.occurredAt,
+        receivedAt: event.receivedAt,
+        links: event.links,
+      },
+    });
+  }
+
+  return rows;
+}
+
+function duplicateLocalSourceNames(values: readonly string[]): Set<string> {
+  const seen = new Set<string>();
+  const duplicates = new Set<string>();
+  for (const value of values) {
+    if (seen.has(value)) {
+      duplicates.add(value);
+    } else {
+      seen.add(value);
+    }
+  }
+  return duplicates;
+}
+
+function localSourceRowId(
+  name: string,
+  index: number,
+  duplicateSourceNames: Set<string>,
+  reservedSourceRowIds: Set<string>,
+  assignedSourceRowIds: Set<string>,
+): string {
+  let candidate = duplicateSourceNames.has(name) ? `${name}:${index}` : name;
+  let suffix = 1;
+  while (assignedSourceRowIds.has(candidate) || (candidate !== name && reservedSourceRowIds.has(candidate))) {
+    candidate = `${name}:${index}:${suffix}`;
+    suffix += 1;
+  }
+  assignedSourceRowIds.add(candidate);
+  return candidate;
 }
 
 function filterLocalSources(sources: readonly LocalSourceRow[], url: URL): readonly LocalSourceRow[] {
@@ -4474,15 +8695,227 @@ type LocalSettingRow = {
   readonly value: string;
 };
 
-function localSettingsRows(options: RainrailStartOptions): readonly LocalSettingRow[] {
+function localSettingsRows(options: RainrailStartOptions, state: LocalRainrailServerState): readonly LocalSettingRow[] {
+  const operationalSnapshotLimit = options.operationalStoreConfig?.eventLimit ?? localEventHistoryLimit;
+  const retryCount = state.eventStore?.listEventHandlerRetries?.().length ?? 0;
   return [
     { id: 'max-concurrency', type: 'setting', status: 'read-only', label: 'Max concurrency', value: '1 task' },
     { id: 'auto-start', type: 'setting', status: 'read-only', label: 'Auto-start', value: 'not configured' },
-    { id: 'retry-policy', type: 'setting', status: 'read-only', label: 'Retry policy', value: '0 retries pending' },
-    { id: 'operational-snapshot-limit', type: 'setting', status: 'read-only', label: 'Operational snapshot limit', value: `${localEventHistoryLimit} events` },
+    { id: 'retry-policy', type: 'setting', status: 'read-only', label: 'Retry policy', value: retryCount === 1 ? '1 retry pending' : `${retryCount} retries pending` },
+    { id: 'operational-snapshot-limit', type: 'setting', status: 'read-only', label: 'Operational snapshot limit', value: `${operationalSnapshotLimit} events` },
     { id: 'dashboard-auth', type: 'setting', status: 'read-only', label: 'Dashboard auth', value: hasAnyDashboardAuthToken(options.dashboardAuth) ? 'bearer token configured' : 'not configured' },
     { id: 'runtime', type: 'setting', status: 'read-only', label: 'Runtime', value: 'node' },
   ];
+}
+
+function localDashboardCards(): readonly unknown[] {
+  return localDashboardCardDefinitions.map((definition) => ({
+    definition,
+    availability: { status: 'available' },
+  }));
+}
+
+type LocalDashboardLayoutParseResult =
+  | { readonly ok: true; readonly items: readonly LocalDashboardLayoutItem[] }
+  | { readonly ok: false; readonly status: number; readonly body: Record<string, unknown> };
+
+function parseLocalDashboardLayoutUpdateItems(value: unknown): LocalDashboardLayoutParseResult {
+  if (!Array.isArray(value)) {
+    return { ok: false, status: 400, body: { error: 'invalid_dashboard_layout_items' } };
+  }
+
+  const cardDefinitions = new Map(localDashboardCardDefinitions.map((definition) => [definition.id, definition]));
+  const itemIds = new Set<string>();
+  const items: LocalDashboardLayoutItem[] = [];
+  for (const valueItem of value) {
+    if (!isRecord(valueItem)) {
+      return { ok: false, status: 400, body: { error: 'invalid_dashboard_layout_item' } };
+    }
+    const id = valueItem.id;
+    const cardId = valueItem.cardId;
+    if (typeof id !== 'string' || id.length === 0 || typeof cardId !== 'string' || cardId.length === 0) {
+      return { ok: false, status: 400, body: { error: 'invalid_dashboard_layout_item' } };
+    }
+    if (itemIds.has(id)) {
+      return { ok: false, status: 400, body: { error: 'duplicate_dashboard_layout_item', itemId: id } };
+    }
+    itemIds.add(id);
+
+    const definition = cardDefinitions.get(cardId);
+    if (definition === undefined) {
+      return { ok: false, status: 400, body: { error: 'unknown_dashboard_card', cardId } };
+    }
+
+    const x = localDashboardGridInteger(valueItem.x);
+    const y = localDashboardGridInteger(valueItem.y);
+    const columns = localDashboardGridInteger(valueItem.columns);
+    const rows = localDashboardGridInteger(valueItem.rows);
+    if (x === undefined || y === undefined || columns === undefined || rows === undefined) {
+      return { ok: false, status: 400, body: { error: 'invalid_dashboard_layout_item' } };
+    }
+    const { min, max } = definition.size;
+    if (
+      columns < min.columns ||
+      rows < min.rows ||
+      columns > max.columns ||
+      rows > max.rows ||
+      x + columns > 12
+    ) {
+      return { ok: false, status: 400, body: { error: 'invalid_dashboard_layout_item' } };
+    }
+
+    const config = valueItem.config;
+    if (config !== undefined) {
+      if (!isRecord(config) || !isJsonSerializableLocalValue(config)) {
+        return { ok: false, status: 400, body: { error: 'invalid_dashboard_card_config', itemId: id } };
+      }
+      if (hasSensitiveLocalDashboardConfigKey(config)) {
+        return { ok: false, status: 400, body: { error: 'sensitive_dashboard_card_config', itemId: id } };
+      }
+    }
+
+    const item = {
+      id,
+      cardId,
+      x,
+      y,
+      columns,
+      rows,
+      ...(config === undefined ? {} : { config: localCloneRecord(config) }),
+    };
+    if (items.some((existing) => localDashboardLayoutItemsOverlap(existing, item))) {
+      return { ok: false, status: 400, body: { error: 'overlapping_dashboard_layout_item', itemId: id } };
+    }
+
+    items.push(item);
+  }
+
+  return { ok: true, items };
+}
+
+function localDashboardLayoutItemsOverlap(
+  left: LocalDashboardLayoutItem,
+  right: LocalDashboardLayoutItem,
+): boolean {
+  return left.x < right.x + right.columns
+    && left.x + left.columns > right.x
+    && left.y < right.y + right.rows
+    && left.y + left.rows > right.y;
+}
+
+function localDashboardGridInteger(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : undefined;
+}
+
+function localDashboardLayout(state: LocalRainrailServerState): {
+  readonly id: 'core.defaultLayout' | 'user.dashboardLayout';
+  readonly source: 'default' | 'user';
+  readonly updatedAt: string | null;
+  readonly filteredItemCount: 0;
+  readonly items: readonly LocalDashboardLayoutItem[];
+} {
+  const updatedAt = state.dashboardLayoutUpdatedAt;
+  return {
+    id: updatedAt === undefined ? 'core.defaultLayout' : 'user.dashboardLayout',
+    source: updatedAt === undefined ? 'default' : 'user',
+    updatedAt: updatedAt ?? null,
+    filteredItemCount: 0,
+    items: localCloneDashboardLayout(state.dashboardLayout),
+  };
+}
+
+function localCloneDashboardLayout(items: readonly LocalDashboardLayoutItem[]): LocalDashboardLayoutItem[] {
+  return items.map((item) => ({
+    ...item,
+    ...(item.config === undefined ? {} : { config: localCloneRecord(item.config) }),
+  }));
+}
+
+function localCloneRecord(value: Record<string, unknown>): Record<string, unknown> {
+  return JSON.parse(JSON.stringify(value)) as Record<string, unknown>;
+}
+
+function parseLocalDashboardLayoutItems(value: unknown): LocalDashboardLayoutItem[] {
+  if (!Array.isArray(value)) return [];
+  const items: LocalDashboardLayoutItem[] = [];
+  for (const rawItem of value) {
+    if (!isRecord(rawItem)) continue;
+    if (
+      typeof rawItem.id !== 'string'
+      || typeof rawItem.cardId !== 'string'
+      || typeof rawItem.x !== 'number'
+      || typeof rawItem.y !== 'number'
+      || typeof rawItem.columns !== 'number'
+      || typeof rawItem.rows !== 'number'
+    ) {
+      continue;
+    }
+    const config = sanitizeLocalDashboardConfig(rawItem.config);
+    items.push({
+      id: rawItem.id,
+      cardId: rawItem.cardId,
+      x: rawItem.x,
+      y: rawItem.y,
+      columns: rawItem.columns,
+      rows: rawItem.rows,
+      ...(config === undefined ? {} : { config }),
+    });
+  }
+  return items;
+}
+
+function localDashboardLayoutItemsFromRow(row: unknown): LocalDashboardLayoutSnapshot {
+  return {
+    items: parseLocalDashboardLayoutItems(JSON.parse(requiredStringRowValue(row, 'items_json')) as unknown),
+    updatedAt: requiredStringRowValue(row, 'updated_at'),
+  };
+}
+
+function isJsonSerializableLocalValue(value: unknown): boolean {
+  try {
+    JSON.stringify(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function sanitizeLocalDashboardConfig(value: unknown): Record<string, unknown> | undefined {
+  if (!isRecord(value) || !isJsonSerializableLocalValue(value)) return undefined;
+  const sanitized = omitSensitiveLocalDashboardConfigKeys(value);
+  return Object.keys(sanitized).length === 0 ? undefined : sanitized;
+}
+
+function omitSensitiveLocalDashboardConfigKeys(value: Record<string, unknown>): Record<string, unknown> {
+  const sanitized: Record<string, unknown> = {};
+  for (const [key, nested] of Object.entries(value)) {
+    if (isSensitiveLocalDashboardConfigKey(key)) continue;
+    if (isRecord(nested)) {
+      const nestedSanitized = omitSensitiveLocalDashboardConfigKeys(nested);
+      if (Object.keys(nestedSanitized).length > 0) sanitized[key] = nestedSanitized;
+      continue;
+    }
+    if (Array.isArray(nested)) {
+      sanitized[key] = nested.map((item) => isRecord(item) ? omitSensitiveLocalDashboardConfigKeys(item) : item);
+      continue;
+    }
+    sanitized[key] = nested;
+  }
+  return sanitized;
+}
+
+function hasSensitiveLocalDashboardConfigKey(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some(hasSensitiveLocalDashboardConfigKey);
+  if (!isRecord(value)) return false;
+  return Object.entries(value).some(([key, nested]) => isSensitiveLocalDashboardConfigKey(key) || hasSensitiveLocalDashboardConfigKey(nested));
+}
+
+function isSensitiveLocalDashboardConfigKey(key: string): boolean {
+  return /(?:authorization|cookie|token|secret|password|key|credential|code|reset|verification|session|confirmation)/iu.test(key);
+}
+
+function isLocalDashboardLayoutItemConfigPath(pathname: string): boolean {
+  return /^\/api\/v1\/dashboard\/layout\/items\/[^/]+\/config$/u.test(pathname);
 }
 
 function matchesOptionalLocalFilter(value: string | undefined, filter: string | null): boolean {
@@ -4525,7 +8958,8 @@ function resolveDashboardAssetRoot(env: Record<string, string | undefined>): str
 function isLocalDashboardAssetRoute(pathname: string): boolean {
   return pathname === '/dashboard' ||
     pathname === '/dashboard/' ||
-    /^\/(?:ja|en)\/dashboard\/?$/u.test(pathname) ||
+    /^\/dashboard\/[^/]+\/?$/u.test(pathname) ||
+    /^\/(?:ja|en)\/dashboard(?:\/[^/]+)?\/?$/u.test(pathname) ||
     pathname.startsWith('/_astro/');
 }
 
@@ -4564,9 +8998,19 @@ function localDashboardAssetBody(assetPath: string, options: RainrailStartOption
 }
 
 function localDashboardAssetPath(assetRoot: string, pathname: string): string | undefined {
-  const localeDashboard = /^\/(ja|en)\/dashboard\/?$/u.exec(pathname);
+  const dashboard = /^\/dashboard(?:\/([^/]+))?\/?$/u.exec(pathname);
+  if (dashboard !== null) {
+    const view = dashboard[1];
+    if (view !== undefined) {
+      return resolve(assetRoot, 'dashboard', view, 'index.html');
+    }
+  }
+  const localeDashboard = /^\/(ja|en)\/dashboard(?:\/([^/]+))?\/?$/u.exec(pathname);
   if (localeDashboard?.[1] !== undefined) {
-    return resolve(assetRoot, localeDashboard[1], 'dashboard', 'index.html');
+    const view = localeDashboard[2];
+    return view === undefined
+      ? resolve(assetRoot, localeDashboard[1], 'dashboard', 'index.html')
+      : resolve(assetRoot, localeDashboard[1], 'dashboard', view, 'index.html');
   }
   if (pathname === '/dashboard' || pathname === '/dashboard/') {
     const localizedDashboard = resolve(assetRoot, 'en', 'dashboard', 'index.html');
@@ -4598,7 +9042,8 @@ function localDashboardAssetPath(assetRoot: string, pathname: string): string | 
 function isLocalDashboardHtmlRoute(pathname: string): boolean {
   return pathname === '/dashboard' ||
     pathname === '/dashboard/' ||
-    /^\/(?:ja|en)\/dashboard\/?$/u.test(pathname);
+    /^\/dashboard\/[^/]+\/?$/u.test(pathname) ||
+    /^\/(?:ja|en)\/dashboard(?:\/[^/]+)?\/?$/u.test(pathname);
 }
 
 function localDashboardContentType(pathname: string): string {
@@ -4678,9 +9123,19 @@ function requiresLocalServerAuth(pathname: string, options: RainrailStartOptions
 
 function getLocalServerAuthError(
   request: IncomingMessage,
-  pathname: string,
+  url: URL,
   options: RainrailStartOptions,
 ): { readonly status: number; readonly body: { readonly error: string; readonly requiredScope?: LocalDashboardScope } } | undefined {
+  const pathname = url.pathname;
+  if (
+    options.demoMode === true
+    && isLocalBindHost(options.host)
+    && isLocalRequestHost(request)
+    && url.searchParams.get('demo') === '1'
+    && isLocalDashboardDemoPath(pathname)
+  ) {
+    return undefined;
+  }
   if (!requiresLocalServerAuth(pathname, options)) {
     return undefined;
   }
@@ -4697,14 +9152,27 @@ function getLocalServerAuthError(
   if (principal === undefined) {
     return { status: 403, body: { error: 'invalid_bearer_token' } };
   }
-  const requiredScope = requiredLocalDashboardScopeForPath(pathname);
+  const requiredScope = requiredLocalDashboardScopeForPath(pathname, request.method);
   if (!localDashboardScopeIncludes(principal.scope, requiredScope)) {
     return { status: 403, body: { error: 'insufficient_scope', requiredScope } };
   }
   return undefined;
 }
 
-function requiredLocalDashboardScopeForPath(pathname: string): LocalDashboardScope {
+function isLocalDashboardDemoPath(pathname: string): boolean {
+  return pathname === '/events' || pathname.startsWith('/api/v1/') || pathname === '/api/state';
+}
+
+function isLocalRequestHost(request: IncomingMessage): boolean {
+  const host = Array.isArray(request.headers.host) ? request.headers.host[0] : request.headers.host;
+  if (host === undefined) return false;
+  const hostName = hostHeaderName(host);
+  return hostName === 'localhost' || hostName === '127.0.0.1' || hostName === '::1';
+}
+
+function requiredLocalDashboardScopeForPath(pathname: string, method = 'GET'): LocalDashboardScope {
+  if (isLocalDashboardLayoutItemConfigPath(pathname)) return 'operator';
+  if (pathname === '/api/v1/dashboard/layout' && method.toUpperCase() === 'PUT') return 'operator';
   return localDashboardCommandForPath(pathname) === undefined ? 'read-only' : 'operator';
 }
 
@@ -5019,13 +9487,18 @@ function preflightMethodsForLocalPath(pathname: string, options: RainrailStartOp
   if (pathname === '/api/v1/overview') return ['GET', 'OPTIONS'];
   if (pathname === '/api/v1/events') return ['GET', 'OPTIONS'];
   if (/^\/api\/v1\/events\/[^/]+$/u.test(pathname)) return ['GET', 'OPTIONS'];
+  if (/^\/api\/v1\/workflow-runs\/[^/]+$/u.test(pathname)) return ['GET', 'OPTIONS'];
+  if (/^\/api\/v1\/agent-tasks\/[^/]+$/u.test(pathname)) return ['GET', 'OPTIONS'];
+  if (isLocalDashboardLayoutItemConfigPath(pathname)) return ['PATCH', 'OPTIONS'];
+  if (pathname === '/api/v1/dashboard/layout') return ['GET', 'PUT', 'OPTIONS'];
   if (localDashboardCommandForPath(pathname) !== undefined) return ['POST', 'OPTIONS'];
   if (
     pathname === '/api/v1/workflow-runs' ||
     pathname === '/api/v1/agent-tasks' ||
     pathname === '/api/v1/sources' ||
     pathname === '/api/v1/queue' ||
-    pathname === '/api/v1/settings'
+    pathname === '/api/v1/settings' ||
+    pathname === '/api/v1/dashboard/cards'
   ) {
     return ['GET', 'OPTIONS'];
   }

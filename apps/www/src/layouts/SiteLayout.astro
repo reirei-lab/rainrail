@@ -42,6 +42,8 @@ const hrefFor = (targetPageId: PageId) =>
   usesLocalizedRoutes
     ? getLocaleHref(locale, targetPageId)
     : getLegacyHref(targetPageId);
+const navHrefFor = (item: (typeof site.nav.primary)[number]) =>
+  item.href ?? hrefFor(item.pageId);
 const localeLabel = (targetLocale: Locale) =>
   targetLocale === 'ja' ? '日本語' : 'English';
 const languagePreferenceKey = 'rainrail.locale';
@@ -101,7 +103,7 @@ const languagePreferenceKey = 'rainrail.locale';
           <div class="nav-links">
             {
               site.nav.primary.map((item) => (
-                <a href={hrefFor(item.pageId)}>{item.label}</a>
+                <a href={navHrefFor(item)}>{item.label}</a>
               ))
             }
             <a href="https://github.com/reirei-lab/rainrail">{site.nav.github}</a>

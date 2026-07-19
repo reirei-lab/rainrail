@@ -24,7 +24,7 @@ jobs:
       - name: Run Release Please
         if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.release_tag == '' }}
         id: release
-        uses: googleapis/release-please-action@v4
+        uses: googleapis/release-please-action@v5
         with:
           token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
           config-file: release-please-config.json
@@ -43,7 +43,7 @@ jobs:
 
       - name: Set up Node.js
         if: ${{ steps.release.outputs.release_created || (github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag != '') }}
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: 26
           cache: pnpm

@@ -1,4 +1,4 @@
-import { getDashboardHref } from '../lib/dashboard-content.js';
+import { getDashboardHref, getDashboardRoutes } from '../lib/dashboard-content.js';
 import {
   defaultLocale,
   getLocaleHref,
@@ -31,11 +31,14 @@ export function GET({ site }: { site?: URL }) {
         getLocaleHref(alternateLocale, pageId),
     })),
   );
-  const localizedDashboards = supportedLocales.map((locale) => ({
-    locale,
-    href: getDashboardHref(locale),
-    alternateHref: getDashboardHref,
-  }));
+  const localizedDashboards = supportedLocales.flatMap((locale) =>
+    getDashboardRoutes().map((route) => ({
+      locale,
+      href: getDashboardHref(locale, route.id),
+      alternateHref: (alternateLocale: Locale) =>
+        getDashboardHref(alternateLocale, route.id),
+    })),
+  );
   const entries = [...localizedPages, ...localizedDashboards].map((entry) => {
       const loc = new URL(entry.href, baseUrl).toString();
       const alternates = hreflangs

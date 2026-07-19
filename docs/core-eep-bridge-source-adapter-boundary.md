@@ -125,6 +125,9 @@ Worker EEP Bridge の起動表示や運用状態と混同しない。
   delivery id、workflow/audit summary、sanitized envelope、operator-visible metadata だけを返し、
   provider raw payload body、webhook secret、bearer token、normalized `payload` 本体を
   transport response に漏らさない。
+  Dashboard layout metadata such as `filteredItemCount` is also a provider-neutral
+  transport/core-adapter projection. It lets the dashboard avoid overwriting hidden
+  saved cards without moving plugin availability semantics or provider payloads into Core.
 - Command action audit attribution is a transport/core-adapter responsibility.
   scoped dashboard token から stable actor id を決め、`X-Rainrail-Client` がない command caller は
   deterministic な `unknown` client として扱い、`X-Request-ID` または生成 request id と同じ値を

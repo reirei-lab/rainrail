@@ -27,7 +27,16 @@ describe('local dashboard start documentation', () => {
       'rainrail setup --dashboard-auth-only --yes',
       'rainrail setup --dashboard-auth-only --rotate --yes',
       'rainrail start',
+      'pnpm demo:dashboard',
+      'rainrail start --demo',
+      'Dashboard demo: http://127.0.0.1:8787/dashboard?demo=1',
+      'Dashboard demo API: http://127.0.0.1:8787/api/v1/overview?demo=1',
+      'Demo mode',
+      'デモモード',
+      'minimal demo config',
+      'bound outside localhost',
       'Dashboard: http://127.0.0.1:8787/dashboard',
+      'Dashboard routes: /en/dashboard/events, /en/dashboard/runs, /en/dashboard/tasks, /en/dashboard/sources, /en/dashboard/queue, /en/dashboard/settings',
       'Dashboard API: http://127.0.0.1:8787/api/v1/overview',
       'dashboardAuth.readOnlyToken',
       'dashboardAuth.operatorToken',
@@ -61,6 +70,12 @@ describe('local dashboard start documentation', () => {
       'scoped SSE token',
       'multi-user actor management',
       'handler-backed local runtime execution for operator/admin mutations',
+      'demo-only accepted response',
+      'startDashboardDemoServerHarness',
+      'baseUrl',
+      'built `apps/www` dashboard assets',
+      'legacy SSE bearer-token overrides',
+      'server process, DB files, and temporary',
       'https://github.com/reirei-lab/rainrail/issues/228',
       'https://github.com/reirei-lab/rainrail/issues/230',
       'https://github.com/reirei-lab/rainrail/issues/231',
@@ -117,6 +132,9 @@ describe('local dashboard start documentation', () => {
     expect(localDashboardDocs).toContain('local operational dashboard');
     expect(localDashboardDocs).toContain('Cloudflare Pages product/docs site');
     expect(localDashboardDocs).toContain('same origin');
+    expect(localDashboardDocs).toContain('/api/v1/dashboard/cards');
+    expect(localDashboardDocs).toContain('/api/v1/dashboard/layout');
+    expect(localDashboardDocs).toContain('PATCH /api/v1/dashboard/layout/items/:itemId/config');
     expect(localDashboardDocs).toContain('PUBLIC_RAINRAIL_OPERATIONAL_API_URL');
     expect(localDashboardDocs).toContain('docs/cloudflare-pages.md');
 
@@ -126,7 +144,11 @@ describe('local dashboard start documentation', () => {
 
   it('maps the guide to the implementation tests that protect the documented flow', () => {
     expect(cliCommandsTest).toContain('Dashboard: http://127.0.0.1:8787/dashboard');
+    expect(cliCommandsTest).toContain('Dashboard routes: /en/dashboard/events');
     expect(cliCommandsTest).toContain('Dashboard API: http://127.0.0.1:8787/api/v1/overview');
+    expect(cliCommandsTest).toContain('Dashboard demo: http://127.0.0.1:8787/dashboard?demo=1');
+    expect(cliCommandsTest).toContain('Dashboard demo routes: /en/dashboard/events?demo=1');
+    expect(cliCommandsTest).toContain('serves seeded SQLite dashboard demo mode without an operator token');
     expect(cliCommandsTest).toContain('missing_bearer_token');
     expect(cliCommandsTest).toContain('invalid_bearer_token');
     expect(dashboardShellTest).toContain('defaults the dashboard API client to same-origin');
@@ -141,7 +163,10 @@ describe('local dashboard start documentation', () => {
             'apps/www/src/pages/[locale]/dashboard.astro',
             'apps/www/src/lib/dashboard-client.ts',
             'apps/www/src/lib/dashboard-app.ts',
+            'apps/www/src/lib/dashboard-controllers.ts',
+            'apps/www/src/lib/dashboard-session.ts',
             'apps/www/src/lib/dashboard-content.ts',
+            'scripts/dashboard-demo-server-harness.mjs',
           ]),
           docs: expect.arrayContaining([
             'docs/local-dashboard.md',
@@ -151,6 +176,8 @@ describe('local dashboard start documentation', () => {
           tests: expect.arrayContaining([
             'scripts/validate-local-dashboard-start.test.mjs',
             'scripts/validate-dashboard-shell.test.mjs',
+            'e2e/dashboard/dashboard-smoke.spec.ts',
+            'scripts/dashboard-demo-server-harness.test.mjs',
             'packages/cli/src/commands.test.ts',
             'src/dashboard-api.test.ts',
           ]),

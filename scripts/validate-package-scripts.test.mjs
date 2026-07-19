@@ -7,6 +7,9 @@ const packageJson = JSON.parse(
 const tsconfig = JSON.parse(
   readFileSync(new URL('../tsconfig.json', import.meta.url), 'utf8'),
 );
+const e2eTsconfig = JSON.parse(
+  readFileSync(new URL('../tsconfig.e2e.json', import.meta.url), 'utf8'),
+);
 const workspace = readFileSync(
   new URL('../pnpm-workspace.yaml', import.meta.url),
   'utf8',
@@ -27,6 +30,22 @@ const copyDashboardAssetsScript = readFileSync(
   new URL('./copy-dashboard-assets.mjs', import.meta.url),
   'utf8',
 );
+const startDashboardDemoScript = readFileSync(
+  new URL('./start-dashboard-demo.mjs', import.meta.url),
+  'utf8',
+);
+const dashboardE2eConfig = readFileSync(
+  new URL('../playwright.dashboard.config.ts', import.meta.url),
+  'utf8',
+);
+const dashboardSmokeSpec = readFileSync(
+  new URL('../e2e/dashboard/dashboard-smoke.spec.ts', import.meta.url),
+  'utf8',
+);
+const prCiWorkflow = readFileSync(
+  new URL('../.github/workflows/pr-ci.yml', import.meta.url),
+  'utf8',
+);
 
 describe('package scripts used by pull request CI', () => {
   it('builds repository scripts, the product site, docs site, and CLI package from the root command', () => {
@@ -42,8 +61,12 @@ describe('package scripts used by pull request CI', () => {
 
   it('typechecks JavaScript automation scripts through tsconfig', () => {
     expect(packageJson.scripts.typecheck).toBe(
-      'tsc --noEmit && pnpm --filter @rainrail/cli typecheck',
+      'tsc --noEmit && tsc -p tsconfig.e2e.json --noEmit && pnpm --filter @rainrail/cli typecheck',
     );
+    expect(packageJson.scripts['docs:check']).toContain(
+      'node scripts/check-docs-routes.mjs',
+    );
+    expect(packageJson.scripts['docs:check']).toContain('pnpm docs:typecheck');
     expect(tsconfig.compilerOptions.allowJs).toBe(true);
     expect(tsconfig.compilerOptions.checkJs).toBe(true);
     expect(tsconfig.include).toContain('scripts/**/*.mjs');
@@ -55,19 +78,61 @@ describe('package scripts used by pull request CI', () => {
   });
 
   it('defines the Rainrail CLI workspace package and binary entrypoint', () => {
-    expect(packageJson.scripts.test).toBe('vitest run scripts src packages');
+    expect(packageJson.scripts.test).toBe('vitest run scripts src packages apps/www/src/lib');
     expect(packageJson.scripts['release:cli']).toBe(
       'node scripts/package-cli-release.mjs',
     );
+    expect(packageJson.scripts['demo:dashboard']).toBe(
+      'node scripts/start-dashboard-demo.mjs',
+    );
+    expect(packageJson.scripts['demo:dashboard:smoke']).toBe(
+      'vitest run scripts/seed-dashboard-demo-db.test.ts',
+    );
+    expect(packageJson.scripts['e2e:dashboard']).toBe(
+      'pnpm --filter www build && pnpm --filter @rainrail/cli build && playwright test --config playwright.dashboard.config.ts',
+    );
+    expect(e2eTsconfig.extends).toBe('./tsconfig.json');
+    expect(e2eTsconfig.compilerOptions.lib).toEqual(['ESNext', 'DOM', 'DOM.Iterable']);
+    expect(e2eTsconfig.include).toContain('e2e/**/*.ts');
+    expect(e2eTsconfig.include).toContain('playwright.dashboard.config.ts');
+    expect(packageJson.devDependencies['@playwright/test']).toMatch(/^\^/);
+    expect(dashboardE2eConfig).toContain("testDir: './e2e/dashboard'");
+    expect(dashboardE2eConfig).not.toContain('webServer');
+    expect(dashboardE2eConfig).toContain("trace: 'on-first-retry'");
+    expect(dashboardE2eConfig).toContain("screenshot: 'only-on-failure'");
+    expect(dashboardE2eConfig).toContain("video: 'retain-on-failure'");
+    expect(dashboardSmokeSpec).toContain('dashboard-demo-screenshot-manifest.json');
+    expect(dashboardSmokeSpec).toContain('dashboardDemoVrtScenarios');
+    expect(prCiWorkflow).toContain('test-results/dashboard/screenshots/');
+    expect(prCiWorkflow).toContain('dashboard-demo-screenshot-manifest.json');
+    expect(startDashboardDemoScript).toContain("'.tmp', 'dashboard-demo'");
+    expect(startDashboardDemoScript).toContain("runRequiredPnpm(['--filter', 'www', 'build'])");
+    expect(startDashboardDemoScript).toContain("runRequiredPnpm(['--filter', '@rainrail/cli', 'build'])");
+    expect(startDashboardDemoScript).toContain("'packages', 'cli', 'dist', 'bin', 'rainrail.js'");
+    expect(startDashboardDemoScript).toContain('process.execPath');
+    expect(startDashboardDemoScript).toContain('rainrail.config.json');
+    expect(startDashboardDemoScript).toContain("'--config'");
+    expect(startDashboardDemoScript).toContain("'--demo'");
     expect(cliPackageJson.name).toBe('@rainrail/cli');
     expect(cliPackageJson.bin.rainrail).toBe('./dist/bin/rainrail.js');
     expect(cliPackageJson.scripts.build).toBe(
       'tsc -p tsconfig.build.json && node ../../scripts/copy-dashboard-assets.mjs && chmod +x dist/bin/rainrail.js',
     );
     expect(copyDashboardAssetsScript).toContain('../apps/www/dist/');
+    expect(copyDashboardAssetsScript).toContain('../apps/www/dist/dashboard/');
     expect(copyDashboardAssetsScript).toContain('../apps/www/dist/ja/dashboard/');
     expect(copyDashboardAssetsScript).toContain('../apps/www/dist/en/dashboard/');
     expect(copyDashboardAssetsScript).toContain('../packages/cli/dist/dashboard/');
+    expect(copyDashboardAssetsScript).toContain('expectedDashboardAssetRoutes');
+    expect(copyDashboardAssetsScript).toContain("'en/dashboard/events/index.html'");
+    expect(copyDashboardAssetsScript).toContain("'en/dashboard/runs/index.html'");
+    expect(copyDashboardAssetsScript).toContain("'en/dashboard/tasks/index.html'");
+    expect(copyDashboardAssetsScript).toContain("'en/dashboard/sources/index.html'");
+    expect(copyDashboardAssetsScript).toContain("'en/dashboard/queue/index.html'");
+    expect(copyDashboardAssetsScript).toContain("'en/dashboard/settings/index.html'");
+    expect(copyDashboardAssetsScript).toContain("'ja/dashboard/events/index.html'");
+    expect(copyDashboardAssetsScript).toContain("'dashboard/workflow-runs/index.html'");
+    expect(copyDashboardAssetsScript).toContain("'dashboard/agent-tasks/index.html'");
     expect(cliPackageJson.scripts.test).toBe('vitest run src');
     expect(cliPackageJson.scripts.typecheck).toBe('tsc -p tsconfig.json --noEmit');
   });
@@ -91,10 +156,10 @@ describe('package scripts used by pull request CI', () => {
   it('defines repeatable Cloudflare Pages commands for product site deploys', () => {
     expect(packageJson.scripts['pages:build']).toBe('pnpm --filter www build');
     expect(packageJson.scripts['pages:deploy:preview']).toBe(
-      'pnpm pages:build && wrangler pages deploy apps/www/dist --project-name rainrail-www --branch "${RAINRAIL_PAGES_BRANCH:-preview}"',
+      'pnpm pages:build && wrangler pages deploy apps/www/dist --force --project-name rainrail-www --branch "${RAINRAIL_PAGES_BRANCH:-preview}"',
     );
     expect(packageJson.scripts['pages:deploy:production']).toBe(
-      'pnpm pages:build && wrangler pages deploy apps/www/dist --project-name rainrail-www --branch main',
+      'pnpm pages:build && wrangler pages deploy apps/www/dist --force --project-name rainrail-www --branch main',
     );
     expect(packageJson.scripts['pages:smoke']).toBe(
       'node scripts/smoke-cloudflare-pages.mjs',
@@ -106,7 +171,7 @@ describe('package scripts used by pull request CI', () => {
       true,
     );
     expect(
-      existsSync(new URL('../apps/www/src/pages/how-it-works.astro', import.meta.url)),
+      existsSync(new URL('../apps/www/src/pages/concepts.astro', import.meta.url)),
     ).toBe(true);
     expect(existsSync(new URL('../apps/www/src/pages/docs.astro', import.meta.url))).toBe(
       true,

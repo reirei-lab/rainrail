@@ -4,6 +4,9 @@ Operational API v1 は Web dashboard と将来の mobile app が同じ contract 
 provider-neutral API surface とする。既存の `GET /api/state` は store snapshot をそのまま
 返す transitional API であり、v1 は UI が `RainrailOperationalStore` の内部形に直接
 依存しないように compact row、detail record、action scope を明示する。
+local Node runtime の既定 store は SQLite-backed `RainrailOperationalStore` だが、v1 response は
+`OperationalStore` contract から作る projection であり、SQLite table layout や JSON column の形を
+public API として公開しない。
 
 ## Goals
 
@@ -29,6 +32,9 @@ v1 resource は operational workflow を観察・操作する単位に合わせ�
 | Sources | `GET /api/v1/sources` | configured source、health、last delivery、auth status summary。 | `read-only` |
 | Queue | `GET /api/v1/queue` | assignable Project issues、claimed item、stale claim warning。 | `read-only` |
 | Settings | `GET /api/v1/settings` | operator-visible runtime/source settings metadata。secret value は返さない。 | `read-only` |
+| Dashboard card catalog | `GET /api/v1/dashboard/cards` | Core/plugin dashboard card definition と availability を返す。 | `read-only` |
+| Dashboard layout | `GET /api/v1/dashboard/layout` | 保存済み user layout、未保存時は `core.defaultLayout` を返す。 | `read-only` |
+| Save dashboard card config | `PATCH /api/v1/dashboard/layout/items/:itemId/config` | 対象 layout item の `config` だけを更新する。 | `operator` |
 
 Action endpoints は resource ごとの `actions` subresource として追加する。初期 command API は
 handler 注入で実操作に接続し、HTTP layer は endpoint、scope check、confirmation、audit/result
@@ -42,6 +48,7 @@ recording を保証する。
 | Terminate all tasks | `POST /api/v1/agent-tasks/actions/terminate-all` | `operator` | 必須。 |
 | Assign next queue item | `POST /api/v1/queue/actions/assign-next` | `operator` | 不要。 |
 | Update settings | `POST /api/v1/settings/actions/update` | `admin` | 必須。 |
+| Save dashboard layout | `PUT /api/v1/dashboard/layout` | `operator` | 不要。 |
 
 Destructive action で confirmation が不足している場合は
 `409 { "error": "action_confirmation_required", "data": { "confirmationToken": "..." } }` を返す。
@@ -84,6 +91,8 @@ event detail record の `envelope` は dashboard-safe な sanitized projection �
 `payload` 本体は含めない。raw provider payload は `rawPayload.reference` だけを表示用に返し、
 secret-like metadata、operator token、log の全文は v1 detail でも返さない。必要な場合は別の
 scoped download API を設計する。
+SQLite-backed store でも保存するのは安全化済み raw payload reference だけであり、inline raw payload
+や provider secret を復元できる値は persistence layer に残さない。
 
 ```json
 {
@@ -111,6 +120,47 @@ scoped download API を設計する。
 The same split applies to workflow runs, agent tasks, queue items, and settings:
 compact row fields stay stable for list rendering; detail record fields may grow behind resource-specific
 versioned tests.
+
+## Dashboard cards and layout
+
+`GET /api/v1/dashboard/cards` は `DashboardCardRegistry` の catalog projection を返す。
+各 row は `definition` と `availability` を持ち、unavailable な plugin card や capability 不足の
+card も catalog からは落とさない。HTTP app に registry が注入されない場合は `core` provider の
+既定 card catalog を使う。既定 catalog は現行 dashboard の標準 surface に対応し、
+`core.operationalTotals`、`core.eventInbox`、`core.workflowRuns`、`core.agentTasks`、
+`core.sources`、`core.queue`、`core.settings`、`core.operatorActions` を登録する。
+5cefb07 以前の保存済み layout 互換のため、legacy id の `core.overview` と
+`core.recentEvents` も catalog に残す。これらは新規 default layout には使わないが、
+保存済み layout の再保存や catalog 照合で `unknown_dashboard_card` にならないようにする。
+
+`GET /api/v1/dashboard/layout` は保存済み layout があれば
+`{ id: "user.dashboardLayout", source: "user", updatedAt, filteredItemCount, items }` を返す。保存済み layout がない
+初回状態では `{ id: "core.defaultLayout", source: "default", updatedAt: null, filteredItemCount, items }` を返す。
+layout item は `id`、`cardId`、`x`、`y`、`columns`、`rows`、任意の JSON object `config` を持つ。
+永続化されるのは card definition の copy ではなく `cardId` 参照なので、card definition が変わっても
+layout は catalog の現在値と照合して復元する。
+`filteredItemCount` は保存済み/default layout のうち現在の catalog / capability では返却されなかった
+item 数を表す。Dashboard UI は `source: "user"` かつ `filteredItemCount > 0` の layout では
+見えている `items` だけを authoritative とする全体 `PUT` を避け、非表示 card と config を落とさない。
+Dashboard UI の card settings は catalog の `definition.settingsSchema` から描画し、保存値は
+該当 layout item の `config` に保存する。plugin card からは token や store へ直接触れず、
+dashboard shell が検証した layout config と sandbox bridge capability だけを渡す。
+Dashboard UI の card picker と editable layout grid は catalog の `definition.entry`、
+`definition.category`、`definition.size` を client contract として使う。`entry.type` と
+plugin 名は provider / plugin filter に、`size.default` / `size.min` / `size.max` は
+card 追加時の初期 size と resize guard に使う。
+
+`PUT /api/v1/dashboard/layout` は `{ "items": [...] }` を受け取り、operator scope を要求する。
+保存前に item id 重複、不明 card id、unavailable card、範囲外 size、非 JSON object config を
+`400` として拒否し、secret / token / credential 系 key を含まない検証済み item だけを
+operational store に保存する。
+
+`PATCH /api/v1/dashboard/layout/items/:itemId/config` は `{ "config": {...} }` を受け取り、
+対象 item の `config` だけを差し替える。保存済み layout に現在の catalog では unavailable な
+plugin card が含まれていて `GET /api/v1/dashboard/layout` の返却から filter されている場合も、
+この endpoint は store 内の既存 layout 全体を読み、対象 item 以外は再保存時に保持する。
+対象 item 自体は現在の catalog / size / config validation を通すため、不明 item、unavailable item、
+非 JSON object config、secret / token / credential 系 key は拒否する。
 
 ## Pagination, filtering, and sorting
 

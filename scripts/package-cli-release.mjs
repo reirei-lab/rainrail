@@ -41,6 +41,7 @@ function validateCliReleaseAsset(spawn, assetPath) {
   const entrySet = new Set(entries);
   const requiredEntries = [
     'package/dist/dashboard/dashboard/index.html',
+    'package/dist/dashboard/dashboard/queue/index.html',
     'package/dist/dashboard/ja/dashboard/index.html',
     'package/dist/dashboard/en/dashboard/index.html',
   ];

@@ -70,18 +70,19 @@ type LocaleContent = Record<PageId, ProductPageContent>;
 
 const repo = 'https://github.com/reirei-lab/rainrail';
 const docsBase = `${repo}/blob/main/docs`;
+const publicDocsBase = 'https://docs.rainrail.dev';
 
 const english = {
   home: {
     kind: 'home',
     eyebrow: 'Developer event routing for agent operations',
-    headline: 'Rainrail routes development events into agent workflows.',
+    headline: 'Build your own loop.',
     lede:
-      'Turn issues, pull requests, project queues, webhook deliveries, and operational signals into deterministic agent tasks with stable contracts between every source, plugin, and runtime.',
+      'Turn events from external services into loops run by your own code. Rainrail receives, shapes, and connects inputs to your scripts and agents.',
     primaryActionsLabel: 'Primary actions',
     actions: [
-      { label: 'Start with the workflow', pageId: 'howItWorks' },
       { label: 'Inspect the contracts', pageId: 'docs', variant: 'secondary' },
+      { label: 'Open developer docs', href: `${publicDocsBase}/`, variant: 'secondary' },
       { label: 'Open GitHub repo', href: repo, variant: 'secondary' },
     ],
     facts: {
@@ -228,55 +229,15 @@ const english = {
       heading:
         'Use Rainrail when event-driven automation needs contracts, not another one-off webhook handler.',
       actions: [
-        { label: 'Follow the event path', pageId: 'howItWorks' },
-        { label: 'Engineering docs', href: `${docsBase}/README.md`, variant: 'secondary' },
+        { label: 'Engineering docs', href: `${publicDocsBase}/`, variant: 'secondary' },
         {
           label: 'Runtime contract',
-          href: `${docsBase}/plugin-runtime-contract.md`,
+          href: `${publicDocsBase}/reference/plugin-runtime/`,
           variant: 'secondary',
         },
         { label: 'Issues', href: `${repo}/issues`, variant: 'secondary' },
       ],
     },
-  },
-  howItWorks: {
-    kind: 'secondary',
-    eyebrow: 'Architecture overview',
-    headline: 'One route from provider events to agent execution.',
-    lede:
-      'Rainrail separates event ingestion from workflow selection so each adapter can stay small, testable, and accountable.',
-    panel: {
-      ariaLabel: 'Plugin runtime stages',
-      flow: [
-        {
-          title: 'Source plugin',
-          body: 'Accepts provider input and normalizes it.',
-        },
-        {
-          title: 'RainrailEventEnvelope',
-          body: 'Captures event kind, source, identity, and safe metadata.',
-        },
-        {
-          title: 'Workflow plugin',
-          body: 'Maps neutral events to task-specific agent instructions.',
-        },
-        {
-          title: 'Runtime provider',
-          body: 'Starts or resumes the agent workflow with deterministic inputs.',
-        },
-      ],
-    },
-    sections: [
-      {
-        heading: 'Implementation contracts stay in engineering docs',
-        body:
-          'The product site summarizes the architecture. Payload shapes, plugin API signatures, retry behavior, and runtime semantics remain in the repository documentation so implementation decisions have a single source of truth.',
-        actions: [
-          { label: 'Plugin runtime contract', href: `${docsBase}/plugin-runtime-contract.md` },
-          { label: 'End-to-end example', pageId: 'examples', variant: 'secondary' },
-        ],
-      },
-    ],
   },
   concepts: {
     kind: 'secondary',
@@ -324,7 +285,7 @@ const english = {
           {
             title: 'Runtime provider',
             body:
-              'The adapter for starting or resuming agent runs in OpenClaw, devteam, Codex, or another execution backend without exposing runtime secrets to workflows.',
+              'The adapter for starting or resuming agent runs in OpenClaw, devteam, Codex App Server, or another execution backend without exposing runtime secrets to workflows.',
           },
           {
             title: 'Task and queue providers',
@@ -343,8 +304,8 @@ const english = {
         body:
           'This page is a product-facing map. The exact payload fields, plugin API signatures, capability gates, and Bridge room replay behavior stay in the engineering docs.',
         actions: [
-          { label: 'Plugin runtime contract', href: `${docsBase}/plugin-runtime-contract.md` },
-          { label: 'Event delivery', href: `${docsBase}/event-delivery.md`, variant: 'secondary' },
+          { label: 'Plugin runtime contract', href: `${publicDocsBase}/reference/plugin-runtime/` },
+          { label: 'Event delivery', href: `${publicDocsBase}/concepts/event-delivery/`, variant: 'secondary' },
         ],
       },
     ],
@@ -368,28 +329,28 @@ const english = {
             title: 'GitHub issue automation',
             body:
               'Start from a GitHub issue event, normalize it, select work from the Project queue, claim it with a short-lived lock, and dispatch an agent run with branch and session metadata.',
-            href: `${docsBase}/task-queue-project-issues.md`,
+            href: `${publicDocsBase}/operations/task-queue/`,
             linkText: 'Project issue selection',
           },
           {
             title: 'Manual and chat intake',
             body:
               'Publish operator-entered manual prompts or web chat messages as first-party source events that use Core intake and replay without going through the legacy EEP Bridge bundle.',
-            href: `${docsBase}/plugin-runtime-contract.md`,
+            href: `${publicDocsBase}/reference/plugin-runtime/`,
             linkText: 'Manual source contract',
           },
           {
             title: 'PR review loop',
             body:
               'Use pull request and review events as neutral workflow inputs, then route review follow-up into the same task and runtime provider boundaries used for issue automation.',
-            href: `${docsBase}/plugin-runtime-contract.md`,
+            href: `${publicDocsBase}/reference/plugin-runtime/`,
             linkText: 'Workflow plugin contract',
           },
           {
             title: 'Cloudflare event reporting',
             body:
               'Deploy the Worker bridge, register required secrets, publish Cloudflare tail or error events, and smoke test health without committing operational credentials.',
-            href: `${docsBase}/cloudflare-worker.md`,
+            href: `${publicDocsBase}/operations/cloudflare-worker/`,
             linkText: 'Cloudflare Worker operations',
           },
         ],
@@ -434,7 +395,7 @@ const english = {
           {
             title: '3. Agent run',
             body:
-              'A workflow plugin requests an agent run through the runtime provider, passing deterministic issue, branch, and session inputs.',
+              'A workflow plugin requests an agent run through the runtime provider, such as OpenClaw or the optional codex-app-server plugin, passing deterministic issue, branch, and session inputs.',
           },
           {
             title: '4. Pull request',
@@ -458,10 +419,10 @@ const english = {
         body:
           'The example intentionally stays implementation-neutral. The exact event envelope, Project queue claim semantics, and runtime capability gates are documented in the engineering specs.',
         actions: [
-          { label: 'Plugin runtime contract', href: `${docsBase}/plugin-runtime-contract.md` },
+          { label: 'Plugin runtime contract', href: `${publicDocsBase}/reference/plugin-runtime/` },
           {
             label: 'Project issue selection',
-            href: `${docsBase}/task-queue-project-issues.md`,
+            href: `${publicDocsBase}/operations/task-queue/`,
             variant: 'secondary',
           },
         ],
@@ -473,7 +434,7 @@ const english = {
     eyebrow: 'Documentation gateway',
     headline: 'Start with the overview, then jump into the contracts.',
     lede:
-      'Rainrail keeps product narrative in this site and durable engineering decisions in repository docs.',
+      'Rainrail keeps product narrative in this site and durable engineering decisions in the self-hosted developer docs.',
     sections: [
       {
         heading: 'Start here',
@@ -498,35 +459,36 @@ const english = {
           },
           {
             title: 'Plugin runtime contract',
-            href: `${docsBase}/plugin-runtime-contract.md`,
+            href: `${publicDocsBase}/reference/plugin-runtime/`,
             body: 'Source plugin, workflow plugin, and runtime provider boundaries.',
           },
           {
             title: 'Engineering docs index',
-            href: `${docsBase}/README.md`,
+            href: `${publicDocsBase}/`,
             body:
-              'GitHub landing page for contracts, operations, deployment notes, examples, and coverage references.',
+              'Public developer docs for contracts, operations, deployment notes, and examples.',
           },
           {
             title: 'GitHub webhook normalization',
-            href: `${docsBase}/github-webhook-normalization.md`,
+            href: `${publicDocsBase}/reference/github-webhook-normalization/`,
             body: 'How GitHub webhook payloads become neutral Rainrail events.',
           },
           {
             title: 'Cloudflare Worker operations',
-            href: `${docsBase}/cloudflare-worker.md`,
+            href: `${publicDocsBase}/operations/cloudflare-worker/`,
             body: 'Deploy, required secrets, local development, and production smoke testing.',
           },
           {
             title: 'Cloudflare Pages operations',
-            href: `${docsBase}/cloudflare-pages.md`,
+            href: `${publicDocsBase}/operations/cloudflare-pages/`,
             body:
               'Preview deploys, production deploys, required secrets, and product site smoke testing.',
           },
           {
-            title: 'Product site information architecture',
+            title: 'GitHub-only engineering notes',
             href: `${docsBase}/product-site-information-architecture.md`,
-            body: 'The boundary between public product content and engineering docs.',
+            body:
+              'Internal source specs such as product-site IA stay in GitHub and are not part of public docs navigation.',
           },
           {
             title: 'GitHub repository',
@@ -562,13 +524,13 @@ const japanese = {
   home: {
     kind: 'home',
     eyebrow: 'エージェント運用のための開発イベントルーティング',
-    headline: 'Rainrail は開発イベントをエージェントワークフローへ届けます。',
+    headline: '自分のループを組み立てる。',
     lede:
-      'issue、pull request、Project queue、webhook delivery、運用シグナルを、source・plugin・runtime の安定した契約で決定的な agent task に変換します。',
+      '外部サービスのイベントを、あなたのコードで動くループへ。Rainrail は入力を受け取り、整え、スクリプトやエージェントにつなぎます。',
     primaryActionsLabel: '主要アクション',
     actions: [
-      { label: 'ワークフローを見る', pageId: 'howItWorks' },
       { label: '契約を確認する', pageId: 'docs', variant: 'secondary' },
+      { label: '技術ドキュメントを開く', href: `${publicDocsBase}/`, variant: 'secondary' },
       { label: 'GitHub repo を開く', href: repo, variant: 'secondary' },
     ],
     facts: {
@@ -715,55 +677,15 @@ const japanese = {
       heading:
         'イベント駆動の自動化に必要なのが、もうひとつの一回限りの webhook handler ではなく契約なら、Rainrail を使います。',
       actions: [
-        { label: 'イベント経路を追う', pageId: 'howItWorks' },
-        { label: '技術ドキュメント', href: `${docsBase}/README.md`, variant: 'secondary' },
+        { label: '技術ドキュメント', href: `${publicDocsBase}/`, variant: 'secondary' },
         {
           label: 'ランタイム契約',
-          href: `${docsBase}/plugin-runtime-contract.md`,
+          href: `${publicDocsBase}/reference/plugin-runtime/`,
           variant: 'secondary',
         },
         { label: 'Issue を見る', href: `${repo}/issues`, variant: 'secondary' },
       ],
     },
-  },
-  howItWorks: {
-    kind: 'secondary',
-    eyebrow: 'アーキテクチャ概要',
-    headline: 'Provider event から agent execution までを一本の route にする。',
-    lede:
-      'Rainrail は event ingestion と workflow selection を分け、各 adapter を小さく、testable に、責任範囲の見える形に保ちます。',
-    panel: {
-      ariaLabel: 'プラグイン実行ステージ',
-      flow: [
-        {
-          title: 'Source plugin',
-          body: 'provider input を受け取り、Rainrail の event envelope へ正規化します。',
-        },
-        {
-          title: 'RainrailEventEnvelope',
-          body: 'event kind、source、identity、安全に扱える metadata を保持します。',
-        },
-        {
-          title: 'Workflow plugin',
-          body: 'neutral event を task-specific な agent instruction に対応づけます。',
-        },
-        {
-          title: 'Runtime provider',
-          body: '決定的な input と一緒に agent workflow を開始または再開します。',
-        },
-      ],
-    },
-    sections: [
-      {
-        heading: '実装契約は engineering docs に残す',
-        body:
-          'Product site は architecture を要約します。payload shape、plugin API signature、retry behavior、runtime semantics は repository docs に置き、実装判断の source of truth をひとつに保ちます。',
-        actions: [
-          { label: 'プラグイン実行契約', href: `${docsBase}/plugin-runtime-contract.md` },
-          { label: 'End-to-end の例', pageId: 'examples', variant: 'secondary' },
-        ],
-      },
-    ],
   },
   concepts: {
     kind: 'secondary',
@@ -811,7 +733,7 @@ const japanese = {
           {
             title: 'Runtime provider',
             body:
-              'OpenClaw、devteam、Codex などの execution backend で agent run を開始または再開する adapter です。runtime secret は workflow に露出させません。',
+              'OpenClaw、devteam、Codex App Server などの execution backend で agent run を開始または再開する adapter です。runtime secret は workflow に露出させません。',
           },
           {
             title: 'Task and queue providers',
@@ -830,8 +752,8 @@ const japanese = {
         body:
           'このページは product-facing な地図です。正確な payload field、plugin API signature、capability gate、Bridge room replay behavior は engineering docs に残します。',
         actions: [
-          { label: 'プラグイン実行契約', href: `${docsBase}/plugin-runtime-contract.md` },
-          { label: 'イベント配送', href: `${docsBase}/event-delivery.md`, variant: 'secondary' },
+          { label: 'プラグイン実行契約', href: `${publicDocsBase}/reference/plugin-runtime/` },
+          { label: 'イベント配送', href: `${publicDocsBase}/concepts/event-delivery/`, variant: 'secondary' },
         ],
       },
     ],
@@ -855,28 +777,28 @@ const japanese = {
             title: 'GitHub issue 自動化',
             body:
               'GitHub issue event から始め、正規化し、Project queue から work を選び、短い lock を取り、branch と session metadata つきで agent run を dispatch します。',
-            href: `${docsBase}/task-queue-project-issues.md`,
+            href: `${publicDocsBase}/operations/task-queue/`,
             linkText: 'Project issue 選択',
           },
           {
             title: 'Manual / chat intake',
             body:
               'operator が入力した manual prompt や web chat message を first-party source event として publish し、legacy EEP Bridge bundle を通さず Core intake と replay を使います。',
-            href: `${docsBase}/plugin-runtime-contract.md`,
+            href: `${publicDocsBase}/reference/plugin-runtime/`,
             linkText: 'Manual source 契約',
           },
           {
             title: 'PR review loop',
             body:
               'pull request と review event を neutral workflow input として受け取り、review follow-up を issue automation と同じ task / runtime provider boundary に流します。',
-            href: `${docsBase}/plugin-runtime-contract.md`,
+            href: `${publicDocsBase}/reference/plugin-runtime/`,
             linkText: 'Workflow plugin 契約',
           },
           {
             title: 'Cloudflare event reporting',
             body:
               'Worker bridge を deploy し、必要な secret を登録し、Cloudflare tail や error event を publish し、operational credential を commit せず health を smoke test します。',
-            href: `${docsBase}/cloudflare-worker.md`,
+            href: `${publicDocsBase}/operations/cloudflare-worker/`,
             linkText: 'Cloudflare Worker 運用',
           },
         ],
@@ -921,7 +843,7 @@ const japanese = {
           {
             title: '3. Agent run',
             body:
-              'workflow plugin が runtime provider に agent run を依頼し、deterministic な issue、branch、session input を渡します。',
+              'workflow plugin が OpenClaw や任意の codex-app-server plugin などの runtime provider に agent run を依頼し、deterministic な issue、branch、session input を渡します。',
           },
           {
             title: '4. Pull request',
@@ -945,10 +867,10 @@ const japanese = {
         body:
           'Example は意図的に implementation-neutral にしています。正確な event envelope、Project queue claim semantics、runtime capability gate は engineering specs に記録します。',
         actions: [
-          { label: 'プラグイン実行契約', href: `${docsBase}/plugin-runtime-contract.md` },
+          { label: 'プラグイン実行契約', href: `${publicDocsBase}/reference/plugin-runtime/` },
           {
             label: 'Project issue 選択',
-            href: `${docsBase}/task-queue-project-issues.md`,
+            href: `${publicDocsBase}/operations/task-queue/`,
             variant: 'secondary',
           },
         ],
@@ -960,7 +882,7 @@ const japanese = {
     eyebrow: 'ドキュメント入口',
     headline: '概要から始めて、contract へ進む。',
     lede:
-      'Rainrail は product narrative をこの site に、長く残す engineering decision を repository docs に分けて置きます。',
+      'Rainrail は product narrative をこの site に、長く残す engineering decision を self-hosted developer docs に分けて置きます。',
     sections: [
       {
         heading: 'ここから始める',
@@ -985,34 +907,35 @@ const japanese = {
           },
           {
             title: 'プラグイン実行契約',
-            href: `${docsBase}/plugin-runtime-contract.md`,
+            href: `${publicDocsBase}/reference/plugin-runtime/`,
             body: 'Source plugin、workflow plugin、runtime provider の境界。',
           },
           {
             title: '技術ドキュメント一覧',
-            href: `${docsBase}/README.md`,
+            href: `${publicDocsBase}/`,
             body:
-              'contract、operation、deployment note、example、coverage reference への GitHub 上の入口です。',
+              'contract、operation、deployment note、example への public developer docs 入口です。',
           },
           {
             title: 'GitHub webhook 正規化',
-            href: `${docsBase}/github-webhook-normalization.md`,
+            href: `${publicDocsBase}/reference/github-webhook-normalization/`,
             body: 'GitHub webhook payload が neutral Rainrail event になる流れ。',
           },
           {
             title: 'Cloudflare Worker 運用',
-            href: `${docsBase}/cloudflare-worker.md`,
+            href: `${publicDocsBase}/operations/cloudflare-worker/`,
             body: 'deploy、required secrets、local development、production smoke testing。',
           },
           {
             title: 'Cloudflare Pages 運用',
-            href: `${docsBase}/cloudflare-pages.md`,
+            href: `${publicDocsBase}/operations/cloudflare-pages/`,
             body: 'preview deploy、production deploy、required secrets、product site smoke testing。',
           },
           {
-            title: 'プロダクトサイト情報設計',
+            title: 'GitHub-only engineering notes',
             href: `${docsBase}/product-site-information-architecture.md`,
-            body: 'public product content と engineering docs の境界。',
+            body:
+              'product-site IA などの内部 source spec は GitHub に残し、public docs navigation には含めません。',
           },
           {
             title: 'GitHub repository',

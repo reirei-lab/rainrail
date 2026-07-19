@@ -82,6 +82,11 @@ describe('parseConfig', () => {
         host: '127.0.0.1',
         port: 8787,
       },
+      operationalStore: {
+        kind: 'sqlite',
+        databasePath: 'var/rainrail-operational.sqlite',
+        eventLimit: 100,
+      },
       dashboardAuth: {
         readOnlyToken: 'read-token',
         operatorToken: 'operator-token',
@@ -148,6 +153,11 @@ describe('parseConfig', () => {
       port: 8787,
       allowedHosts: [],
     });
+    expect(config.operationalStore).toEqual({
+      kind: 'sqlite',
+      databasePath: 'var/rainrail-operational.sqlite',
+      eventLimit: 100,
+    });
     expect(config.dashboardAuth).toEqual({
       readOnlyToken: 'read-token',
       operatorToken: 'operator-token',
@@ -163,6 +173,7 @@ describe('parseConfig', () => {
         allowedHosts: [],
       },
       dashboardAuth: {},
+      operationalStore: undefined,
       sourceBundles: [],
       sources: [],
       taskProviders: {
@@ -355,6 +366,57 @@ describe('parseConfig', () => {
     expectConfigError({ runtimeProviders }, message);
   });
 
+  it('parses local operational store config with environment-expanded database path', () => {
+    const config = parseConfigJson(JSON.stringify({
+      operationalStore: {
+        kind: 'sqlite',
+        databasePath: '${RAINRAIL_OPERATIONAL_DB}',
+      },
+    }), {
+      RAINRAIL_OPERATIONAL_DB: 'var/rainrail-operational.sqlite',
+    });
+
+    expect(config.operationalStore).toEqual({
+      kind: 'sqlite',
+      databasePath: 'var/rainrail-operational.sqlite',
+      eventLimit: 250,
+    });
+  });
+
+  it.each([
+    ['string', 'config.operationalStore must be an object'],
+    [
+      { kind: 'postgres', databasePath: 'var/state.db' },
+      'config.operationalStore.kind must be one of: sqlite, json, memory',
+    ],
+    [
+      { kind: 'sqlite' },
+      'config.operationalStore.databasePath must be a non-empty string for sqlite/json stores',
+    ],
+    [
+      { kind: 'json' },
+      'config.operationalStore.databasePath must be a non-empty string for sqlite/json stores',
+    ],
+    [
+      { kind: 'memory', databasePath: ':memory:' },
+      'config.operationalStore.databasePath must be omitted for memory stores',
+    ],
+    [
+      { kind: 'sqlite', databasePath: '', eventLimit: 10 },
+      'config.operationalStore.databasePath must be a non-empty string',
+    ],
+    [
+      { kind: 'sqlite', databasePath: 'var/state.sqlite', eventLimit: 0 },
+      'config.operationalStore.eventLimit must be a positive integer',
+    ],
+    [
+      { kind: 'sqlite', databasePath: 'var/state.sqlite', eventLimit: 1.5 },
+      'config.operationalStore.eventLimit must be a positive integer',
+    ],
+  ])('rejects invalid operationalStore config %#', (operationalStore, message) => {
+    expectConfigError({ operationalStore }, message);
+  });
+
   it.each([
     ['enabled', 'yes', 'config.runtimeProviders.openclaw.enabled must be a boolean'],
     ['command', '', 'config.runtimeProviders.openclaw.command must be a non-empty string'],
@@ -422,6 +484,106 @@ describe('parseConfig', () => {
       timeoutSeconds: 600,
       logDirectory: 'var/agent-task-logs',
     });
+  });
+
+  it('parses plugin runtime providers and lets source bundles reference their runtime id', () => {
+    const config = parseConfig({
+      sourceBundles: [
+        {
+          type: 'eep-bridge',
+          name: 'plugin-ingress',
+          sources: [
+            {
+              type: 'manual-chat',
+              name: 'codex-chat',
+              sourceType: 'chat',
+              runtime: 'codex-app-server',
+            },
+          ],
+        },
+      ],
+      runtimeProviders: {
+        codexAppServer: {
+          type: 'plugin',
+          enabled: true,
+          runtime: 'codex-app-server',
+          plugin: '@rainrail/codex-app-server-runtime',
+          executor: 'codex-app-server',
+          command: 'codex',
+          home: '/Users/reirei',
+          codexHome: '/Users/reirei/.codex',
+        },
+      },
+    });
+
+    expect(config.sourceBundles[0]?.sources[0]?.runtime).toBe('codex-app-server');
+    expect(config.runtimeProviders.openclaw.enabled).toBe(false);
+    expect(config.runtimeProviders.codexAppServer).toEqual({
+      type: 'plugin',
+      enabled: true,
+      runtime: 'codex-app-server',
+      plugin: '@rainrail/codex-app-server-runtime',
+      executor: 'codex-app-server',
+      command: 'codex',
+      home: '/Users/reirei',
+      codexHome: '/Users/reirei/.codex',
+    });
+  });
+
+  it('rejects plugin runtime provider configs without a plugin runtime id', () => {
+    expectConfigError({
+      runtimeProviders: {
+        codexAppServer: {
+          type: 'plugin',
+          plugin: '@rainrail/codex-app-server-runtime',
+        },
+      },
+    }, 'config.runtimeProviders.codexAppServer.runtime must be a non-empty string');
+  });
+
+  it('rejects source bundle runtime ids that are not configured', () => {
+    expectConfigError({
+      sourceBundles: [
+        {
+          type: 'eep-bridge',
+          name: 'plugin-ingress',
+          sources: [
+            {
+              type: 'manual-chat',
+              name: 'codex-chat',
+              sourceType: 'chat',
+              runtime: 'missing-runtime',
+            },
+          ],
+        },
+      ],
+      runtimeProviders: {
+        codexAppServer: {
+          type: 'plugin',
+          enabled: true,
+          runtime: 'codex-app-server',
+          plugin: '@rainrail/codex-app-server-runtime',
+        },
+      },
+    }, 'config.sourceBundles[0].sources[0].runtime must reference a configured runtime provider');
+  });
+
+  it('rejects duplicate plugin runtime ids', () => {
+    expectConfigError({
+      runtimeProviders: {
+        codexAppServer: {
+          type: 'plugin',
+          runtime: 'codex-app-server',
+          plugin: '@rainrail/codex-app-server-runtime',
+        },
+        codexMirror: {
+          type: 'plugin',
+          runtime: 'codex-app-server',
+          plugin: '@rainrail/codex-mirror-runtime',
+        },
+      },
+    }, 'config.runtimeProviders.codexMirror.runtime must not duplicate runtime provider id ' +
+      '"codex-app-server" from config.runtimeProviders.codexAppServer');
   });
 
   it.each([0, 0.5])('allows finite non-negative timeoutSeconds boundary value %s', (timeoutSeconds) => {

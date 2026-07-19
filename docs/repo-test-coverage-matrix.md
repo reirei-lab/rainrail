@@ -95,6 +95,12 @@ Rainrail test column where it expands Bridge room and intake behavior.
 | `reirei-harness/test/runner.test.ts` | Auto-assign next issue, classify retryable errors, retry event handlers, and reconnect streams with backoff. | `src/operational-runner.ts`, `src/agent-assignment.ts`, `src/event-delivery/event-bus.ts` | `src/operational-runner.test.ts`, `src/agent-assignment.test.ts`, `src/event-bus.test.ts` | Covered by split. Stream reconnect timing is an adapter/runtime concern; Rainrail currently verifies event bus stream behavior and operational retry scheduling. |
 | `reirei-harness/test/store.test.ts` | Persist events, activity, tasks, resume attempts, settings, retry rows, and ids across store instances. | `src/operational-store.ts` | `src/operational-store.test.ts` | Ported. |
 
+## Rainrail-native contract coverage
+
+| Contract | Viewpoint | Rainrail package/module | Rainrail test coverage | Status and notes |
+| --- | --- | --- | --- | --- |
+| Codex App Server runtime provider | Start one app-server process, create one thread, start one task turn, preserve pid/log/thread/turn metadata, map completion and timeout statuses, and report resume unsupported in the initial version. | `src/codex-app-server/runtime-provider.ts`, `src/codex-app-server/stdio-transport.ts`, `src/codex-app-server/protocol-client.ts` | `src/codex-app-server/runtime-provider.test.ts`, `src/codex-app-server/protocol-client.test.ts`, `src/codex-app-server/stdio-transport.test.ts` | Added as a Rainrail-native runtime contract; no original harness test existed for Codex App Server. |
+
 ## Current gaps and alternate checks
 
 - `reirei-harness/test/codexCleanAutoMerge.test.ts`: Not ported as a separate

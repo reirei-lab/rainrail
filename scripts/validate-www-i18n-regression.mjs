@@ -10,7 +10,12 @@ const defaultOgLocales = {
   en: 'en_US',
 };
 const i18nSourcePath = join(repoRoot, 'apps/www/src/lib/i18n.ts');
+const dashboardContentSourcePath = join(repoRoot, 'apps/www/src/lib/dashboard-content.ts');
 const pagesRoot = join(repoRoot, 'apps/www/src/pages');
+/** @type {Record<string, string>} */
+const legacyRedirectTargets = {
+  docs: 'https://docs.rainrail.dev/',
+};
 
 /**
  * @param {string} locale
@@ -382,7 +387,7 @@ const requireLegacyRedirects = ({ redirects, publicPagePaths, defaultLocale, err
 
     const source = `/${publicPath}`;
     const sourceWithSlash = `${source}/`;
-    const target = routePath(defaultLocale, publicPath);
+    const target = legacyRedirectTargets[publicPath] ?? routePath(defaultLocale, publicPath);
 
     if (!hasRedirectRule(redirects, source, target)) {
       errors.push(`Missing legacy redirect ${source} -> ${target} 301`);
@@ -426,9 +431,16 @@ export const parseWwwI18nSource = (source) => {
       .flatMap((match) => (match[1] && match[2] ? [[match[1], match[2]]] : [])),
   );
 
+  const dashboardContentSource = readFileSync(dashboardContentSourcePath, 'utf8');
+  const dashboardRoutesMatch = dashboardContentSource.match(/const dashboardRoutes:[\s\S]*?=\s*\[([\s\S]*?)\];/m);
+  const dashboardRoutesSource = dashboardRoutesMatch?.[1] ?? '';
+  const dashboardRouteSlugs = [...dashboardRoutesSource.matchAll(/slug:\s*["']([^"']+)["']/g)]
+    .flatMap((match) => (match[1] ? [match[1]] : []));
+  const dashboardPaths = ['dashboard', ...dashboardRouteSlugs.map((slug) => `dashboard/${slug}`)];
+
   return {
     locales,
-    localizedPaths: [...localizedPaths, 'dashboard'],
+    localizedPaths: [...localizedPaths, ...dashboardPaths],
     defaultLocale: defaultLocaleMatch?.[1] ?? locales[0] ?? '',
     ogLocales,
   };

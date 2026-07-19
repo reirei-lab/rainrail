@@ -7,9 +7,16 @@ const routes = [
     expectedText: 'Start with the overview, then jump into the contracts.',
   },
   {
-    path: '/en/how-it-works',
-    expectedText: 'One route from provider events to agent execution.',
+    path: '/en/concepts',
+    expectedText: 'The vocabulary for routing provider events into agent workflows.',
   },
+  { path: '/en/dashboard', expectedText: 'Rainrail Operations' },
+  { path: '/en/dashboard/events', expectedText: 'Event Inbox' },
+  { path: '/en/dashboard/runs', expectedText: 'Runs' },
+  { path: '/en/dashboard/tasks', expectedText: 'Agent Tasks' },
+  { path: '/en/dashboard/sources', expectedText: 'Sources' },
+  { path: '/en/dashboard/queue', expectedText: 'Queue' },
+  { path: '/en/dashboard/settings', expectedText: 'Settings' },
 ];
 
 for (const route of routes) {

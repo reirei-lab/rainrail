@@ -1,3 +1,13 @@
+import {
+  createDashboardCardRegistry,
+  defineDashboardCard,
+  defineDashboardCardProvider,
+  type DashboardCardCatalogEntry,
+  type DashboardCardDefinition,
+  type DashboardCardListOptions,
+  type DashboardCardRegistry,
+  type DashboardLayoutItem,
+} from './dashboard-card-registry.js';
 import type { RainrailEventEnvelope } from './events.js';
 import {
   DEFAULT_MAX_REQUEST_BODY_BYTES,
@@ -14,7 +24,7 @@ import {
   type RainrailIntakeRegistry,
 } from './intake-adapter.js';
 import type {
-  RainrailOperationalStore,
+  OperationalStore,
   StoredActivityEvent,
   StoredAgentTask,
   StoredCommandResult,
@@ -26,6 +36,171 @@ import { getInProgressProjectIssues, getNextProjectIssueToStart, type ProjectIss
 import type { TaskQueueProvider } from './task-queue.js';
 
 const DEFAULT_MAX_CONCURRENT_AGENT_TASKS = 1;
+const USER_DASHBOARD_LAYOUT_ID = 'user.dashboardLayout';
+const DEFAULT_DASHBOARD_LAYOUT_ID = 'core.defaultLayout';
+
+const defaultCoreSettingsSchema = {
+  type: 'object',
+  additionalProperties: false,
+} as const;
+
+const CORE_DASHBOARD_CARD_PROVIDER = defineDashboardCardProvider({
+  name: 'core',
+  kind: 'dashboard-card-provider',
+  cards: [
+    defineDashboardCard({
+      id: 'core.operationalTotals',
+      title: 'Operational totals',
+      description: 'Current event, workflow, agent task, retry, source, and queue totals.',
+      entry: { type: 'core', name: 'operationalTotals' },
+      category: 'operations',
+      requiredCapabilities: ['dashboard:read'],
+      size: {
+        default: { columns: 8, rows: 2 },
+        min: { columns: 4, rows: 1 },
+        max: { columns: 12, rows: 3 },
+      },
+      settingsSchema: defaultCoreSettingsSchema,
+    }),
+    defineDashboardCard({
+      id: 'core.eventInbox',
+      title: 'Event Inbox',
+      description: 'Filtered event deliveries with publish results and workflow matches.',
+      entry: { type: 'core', name: 'eventInbox' },
+      category: 'events',
+      requiredCapabilities: ['dashboard:read'],
+      size: {
+        default: { columns: 8, rows: 4 },
+        min: { columns: 4, rows: 2 },
+        max: { columns: 12, rows: 8 },
+      },
+      settingsSchema: defaultCoreSettingsSchema,
+    }),
+    defineDashboardCard({
+      id: 'core.workflowRuns',
+      title: 'Workflow Runs',
+      description: 'Workflow run rows and detail records.',
+      entry: { type: 'core', name: 'workflowRuns' },
+      category: 'workflows',
+      requiredCapabilities: ['dashboard:read'],
+      size: {
+        default: { columns: 4, rows: 3 },
+        min: { columns: 3, rows: 2 },
+        max: { columns: 8, rows: 6 },
+      },
+      settingsSchema: defaultCoreSettingsSchema,
+    }),
+    defineDashboardCard({
+      id: 'core.agentTasks',
+      title: 'Agent Tasks',
+      description: 'Agent task status, timelines, logs, and Codex activity.',
+      entry: { type: 'core', name: 'agentTasks' },
+      category: 'agents',
+      requiredCapabilities: ['dashboard:read'],
+      size: {
+        default: { columns: 4, rows: 3 },
+        min: { columns: 3, rows: 2 },
+        max: { columns: 8, rows: 6 },
+      },
+      settingsSchema: defaultCoreSettingsSchema,
+    }),
+    defineDashboardCard({
+      id: 'core.sources',
+      title: 'Sources',
+      description: 'Configured source bundles, health, and source metadata.',
+      entry: { type: 'core', name: 'sources' },
+      category: 'sources',
+      requiredCapabilities: ['dashboard:read'],
+      size: {
+        default: { columns: 4, rows: 2 },
+        min: { columns: 2, rows: 1 },
+        max: { columns: 8, rows: 4 },
+      },
+      settingsSchema: defaultCoreSettingsSchema,
+    }),
+    defineDashboardCard({
+      id: 'core.queue',
+      title: 'Queue',
+      description: 'Task queue rows, upcoming work, and blocked signals.',
+      entry: { type: 'core', name: 'queue' },
+      category: 'queue',
+      requiredCapabilities: ['dashboard:read'],
+      size: {
+        default: { columns: 4, rows: 2 },
+        min: { columns: 2, rows: 1 },
+        max: { columns: 8, rows: 4 },
+      },
+      settingsSchema: defaultCoreSettingsSchema,
+    }),
+    defineDashboardCard({
+      id: 'core.settings',
+      title: 'Settings',
+      description: 'Read-only operational settings and local dashboard configuration.',
+      entry: { type: 'core', name: 'settings' },
+      category: 'settings',
+      requiredCapabilities: ['dashboard:read'],
+      size: {
+        default: { columns: 4, rows: 2 },
+        min: { columns: 2, rows: 1 },
+        max: { columns: 8, rows: 4 },
+      },
+      settingsSchema: defaultCoreSettingsSchema,
+    }),
+    defineDashboardCard({
+      id: 'core.operatorActions',
+      title: 'Operator Actions',
+      description: 'Scoped resume, reset, terminate, and queue operation controls.',
+      entry: { type: 'core', name: 'operatorActions' },
+      category: 'operators',
+      requiredCapabilities: ['dashboard:read'],
+      size: {
+        default: { columns: 4, rows: 2 },
+        min: { columns: 2, rows: 1 },
+        max: { columns: 8, rows: 4 },
+      },
+      settingsSchema: defaultCoreSettingsSchema,
+    }),
+    defineDashboardCard({
+      id: 'core.overview',
+      title: 'Overview',
+      description: 'Legacy dashboard overview card id kept for saved layout compatibility.',
+      entry: { type: 'core', name: 'overview' },
+      category: 'operations',
+      requiredCapabilities: ['dashboard:read'],
+      size: {
+        default: { columns: 4, rows: 2 },
+        min: { columns: 2, rows: 1 },
+        max: { columns: 8, rows: 4 },
+      },
+      settingsSchema: defaultCoreSettingsSchema,
+    }),
+    defineDashboardCard({
+      id: 'core.recentEvents',
+      title: 'Recent events',
+      description: 'Legacy dashboard recent-events card id kept for saved layout compatibility.',
+      entry: { type: 'core', name: 'recentEvents' },
+      category: 'events',
+      requiredCapabilities: ['dashboard:read'],
+      size: {
+        default: { columns: 4, rows: 2 },
+        min: { columns: 2, rows: 1 },
+        max: { columns: 8, rows: 4 },
+      },
+      settingsSchema: defaultCoreSettingsSchema,
+    }),
+  ],
+});
+
+const DEFAULT_DASHBOARD_LAYOUT: readonly DashboardLayoutItem[] = [
+  { id: 'operational-totals', cardId: 'core.operationalTotals', x: 0, y: 0, columns: 8, rows: 2 },
+  { id: 'event-inbox', cardId: 'core.eventInbox', x: 0, y: 2, columns: 8, rows: 4 },
+  { id: 'workflow-runs', cardId: 'core.workflowRuns', x: 0, y: 6, columns: 4, rows: 3 },
+  { id: 'agent-tasks', cardId: 'core.agentTasks', x: 4, y: 6, columns: 4, rows: 3 },
+  { id: 'sources', cardId: 'core.sources', x: 0, y: 9, columns: 4, rows: 2 },
+  { id: 'queue', cardId: 'core.queue', x: 4, y: 9, columns: 4, rows: 2 },
+  { id: 'settings', cardId: 'core.settings', x: 0, y: 11, columns: 4, rows: 2 },
+  { id: 'operator-actions', cardId: 'core.operatorActions', x: 4, y: 11, columns: 4, rows: 2 },
+];
 
 export type RainrailDashboardScope = 'read-only' | 'operator' | 'admin';
 
@@ -51,10 +226,11 @@ export type RainrailCommandActionType =
   | 'agent_task_reset'
   | 'agent_task_terminate'
   | 'agent_task_terminate_all'
+  | 'dashboard_layout_update'
   | 'queue_assign_next'
   | 'settings_update';
 
-export type RainrailCommandTargetType = 'agent_task' | 'agent_tasks' | 'queue' | 'settings';
+export type RainrailCommandTargetType = 'agent_task' | 'agent_tasks' | 'dashboard_layout' | 'queue' | 'settings';
 
 export type RainrailCommandHandler = (command: RainrailCommandRequest) => unknown | Promise<unknown>;
 
@@ -68,8 +244,11 @@ export interface RainrailHttpAppOptions {
   eventsBearerToken?: string;
   runtime?: string;
   intakeAdapters?: readonly RainrailIntakeAdapter[];
-  operationalStore?: RainrailOperationalStore;
+  operationalStore?: OperationalStore;
   taskQueue?: Pick<TaskQueueProvider, 'listProjectIssues' | 'selection'>;
+  dashboardCardRegistry?: DashboardCardRegistry;
+  dashboardCardCatalog?: DashboardCardListOptions;
+  dashboardDefaultLayout?: readonly DashboardLayoutItem[];
   dashboardCommandMaxBodyBytes?: number;
   dashboardAuth?: RainrailDashboardAuthOptions;
   commandHandler?: RainrailCommandHandler;
@@ -118,7 +297,7 @@ export function rainrailHttpRequestBodyLimit(
   method: string,
   options: RainrailHttpAppOptions,
 ): number | undefined {
-  if (isDashboardCommandRoute(pathname, method)) return options.dashboardCommandMaxBodyBytes;
+  if (isDashboardBodyRoute(pathname, method)) return options.dashboardCommandMaxBodyBytes;
   return createRainrailIntakeRegistry(options.intakeAdapters).routeBodyLimit(pathname, method);
 }
 
@@ -270,6 +449,42 @@ async function routeRainrailHttpRequest(
     return dashboardV1SettingsResponse(url, options);
   }
 
+  if (url.pathname === '/api/v1/dashboard/cards') {
+    if (request.method !== 'GET') return methodNotAllowedResponse(['GET', 'OPTIONS']);
+
+    const auth = verifyDashboardScopedRequest(request, options, 'read-only');
+    if (!auth.ok) return auth.response;
+
+    return dashboardV1CardsResponse(options);
+  }
+
+  const v1DashboardLayoutItemConfigMatch = /^\/api\/v1\/dashboard\/layout\/items\/([^/]+)\/config$/.exec(url.pathname);
+  if (v1DashboardLayoutItemConfigMatch !== null) {
+    if (request.method !== 'PATCH') return methodNotAllowedResponse(['PATCH', 'OPTIONS']);
+
+    const itemId = safeDecodeURIComponent(v1DashboardLayoutItemConfigMatch[1]!);
+    if (itemId === undefined) {
+      return jsonResponse({ error: 'invalid_dashboard_layout_item_id' }, { status: 400 });
+    }
+
+    return handleDashboardLayoutItemConfigUpdateRequest(request, itemId, options);
+  }
+
+  if (url.pathname === '/api/v1/dashboard/layout') {
+    if (request.method === 'GET') {
+      const auth = verifyDashboardScopedRequest(request, options, 'read-only');
+      if (!auth.ok) return auth.response;
+
+      return dashboardV1LayoutResponse(options);
+    }
+
+    if (request.method === 'PUT') {
+      return handleDashboardLayoutUpdateRequest(request, options);
+    }
+
+    return methodNotAllowedResponse(['GET', 'PUT', 'OPTIONS']);
+  }
+
   const v1AgentTaskDetailMatch = /^\/api\/v1\/agent-tasks\/([^/]+)$/.exec(url.pathname);
   if (v1AgentTaskDetailMatch !== null) {
     if (request.method !== 'GET') return methodNotAllowedResponse(['GET', 'OPTIONS']);
@@ -418,6 +633,11 @@ function isDashboardCommandRoute(pathname: string, method: string): boolean {
       || pathname === '/api/v1/settings/actions/update');
 }
 
+function isDashboardBodyRoute(pathname: string, method: string): boolean {
+  return isDashboardCommandRoute(pathname, method)
+    || (method.toUpperCase() === 'PUT' && pathname === '/api/v1/dashboard/layout');
+}
+
 function isStatusCodeError(error: unknown): error is { statusCode: number } {
   return typeof error === 'object'
     && error !== null
@@ -455,16 +675,23 @@ function dashboardEventDetailResponse(eventId: string, options: RainrailHttpAppO
   return jsonResponse(event);
 }
 
-function dashboardV1OverviewResponse(options: RainrailHttpAppOptions): Response {
+async function dashboardV1OverviewResponse(options: RainrailHttpAppOptions): Promise<Response> {
   const store = options.operationalStore;
   if (store === undefined) {
     return jsonResponse({ error: 'operational_store_not_configured' }, { status: 503 });
   }
 
   const snapshot = store.snapshot({ hideSkippedActivityEvents: true });
+  const sourceCount = options.intakeAdapters?.length ?? 0;
+  const queueRows = dashboardV1LocalQueueRows(options, snapshot);
   return jsonResponse({
     data: {
-      counts: snapshot.counts,
+      counts: {
+        ...snapshot.counts,
+        providers: store.countEventSourceTypes(),
+        sources: sourceCount,
+        queue: queueRows.length,
+      },
       warnings: snapshot.warnings,
       recentActivity: store.listActivityEvents({ hideSkippedActivityEvents: true })
         .filter(isWorkflowRunActivity)
@@ -642,17 +869,7 @@ function dashboardV1SourcesResponse(url: URL, options: RainrailHttpAppOptions): 
     return jsonResponse({ error: 'unsupported_sort', sort }, { status: 400 });
   }
 
-  const latestBySource = latestEventBySourceName(store.listEvents());
-  const adapters = options.intakeAdapters ?? [];
-  const duplicateSourceNames = duplicateValues(adapters.map((adapter) => adapter.name));
-  const reservedSourceRowIds = new Set(adapters.map((adapter) => adapter.name));
-  const assignedSourceRowIds = new Set<string>();
-  const rows = adapters
-    .map((adapter, index) => intakeAdapterToSourceRow(
-      adapter,
-      latestBySource.get(adapter.name),
-      sourceRowId(adapter.name, index, duplicateSourceNames, reservedSourceRowIds, assignedSourceRowIds),
-    ))
+  const rows = dashboardV1SourceRows(options, store)
     .filter((row) => matchesOptionalFilter(row.sourceType, url.searchParams.get('filter[source]')));
   const page = pageRows(rows, collection.limit, collection.cursor, (row) => row.name);
   if (!page.ok) return page.response;
@@ -677,11 +894,7 @@ async function dashboardV1QueueResponse(url: URL, options: RainrailHttpAppOption
   }
 
   const snapshot = store.snapshot();
-  const tasks = store.listAgentTasks();
-  const staleWarningsByTaskId = new Map(snapshot.warnings.staleProjectClaims.map((warning) => [warning.taskId, warning]));
-  const taskRows = tasks.map((task) => agentTaskToQueueRow(task, staleWarningsByTaskId.get(task.id)));
-  const projectIssueRows = await projectIssueQueueRows(options.taskQueue, tasks, staleWarningsByTaskId);
-  const allRows = sortQueueRows([...taskRows, ...projectIssueRows]);
+  const allRows = await dashboardV1QueueRows(options, snapshot);
   const rows = allRows
     .filter((row) => matchesOptionalFilter(row.status, url.searchParams.get('filter[status]')));
   const page = pageRows(rows, collection.limit, collection.cursor, queueCursorValue);
@@ -724,6 +937,421 @@ function dashboardV1SettingsResponse(url: URL, options: RainrailHttpAppOptions):
     updatePolicy: { requiredScope: 'admin', audit: 'required' },
     page: { limit: collection.limit, nextCursor: page.nextCursor },
   });
+}
+
+function dashboardV1CardsResponse(options: RainrailHttpAppOptions): Response {
+  return jsonResponse({
+    data: dashboardCardCatalog(options),
+  });
+}
+
+function dashboardV1LayoutResponse(options: RainrailHttpAppOptions): Response {
+  const store = options.operationalStore;
+  if (store === undefined) {
+    return jsonResponse({ error: 'operational_store_not_configured' }, { status: 503 });
+  }
+
+  const stored = store.getDashboardLayout();
+  if (stored !== undefined) {
+    const catalog = dashboardCardCatalog(options);
+    return jsonResponse({
+      data: dashboardLayoutResponseData(stored.id, 'user', stored.updatedAt, stored.items, catalog),
+    });
+  }
+
+  const catalog = dashboardCardCatalog(options);
+  const items = dashboardDefaultLayout(options);
+  return jsonResponse({
+    data: dashboardLayoutResponseData(DEFAULT_DASHBOARD_LAYOUT_ID, 'default', null, items, catalog),
+  });
+}
+
+async function handleDashboardLayoutUpdateRequest(
+  request: Request,
+  options: RainrailHttpAppOptions,
+): Promise<Response> {
+  const auth = verifyDashboardScopedRequest(request, options, 'operator');
+  if (!auth.ok) return auth.response;
+
+  const store = options.operationalStore;
+  if (store === undefined) {
+    return jsonResponse({ error: 'operational_store_not_configured' }, { status: 503 });
+  }
+
+  const requestId = sanitizeAuditHeaderValue(request.headers.get('x-request-id')) ?? generatedRequestId();
+  const client = sanitizeAuditHeaderValue(request.headers.get('x-rainrail-client')) ?? auth.principal.client ?? 'unknown';
+  const body = await readJsonObjectBody(request, options.dashboardCommandMaxBodyBytes ?? DEFAULT_MAX_REQUEST_BODY_BYTES);
+  if (!body.ok) return commandResponse({ error: body.error }, requestId, body.status);
+
+  const parsed = parseDashboardLayoutItems(body.value.items, dashboardCardCatalog(options));
+  if (!parsed.ok) return withRequestIdHeader(parsed.response, requestId);
+
+  const dryRun = body.value.dryRun === true;
+  if (dryRun) {
+    let previewAudit: StoredCommandResult;
+    try {
+      previewAudit = store.recordCommandResult({
+        actionType: 'dashboard_layout_update',
+        targetType: 'dashboard_layout',
+        targetId: USER_DASHBOARD_LAYOUT_ID,
+        status: 'preview',
+        actor: auth.principal.actor,
+        ...(client === undefined ? {} : { client }),
+        requestId,
+        dryRun: true,
+        result: { itemCount: parsed.items.length },
+      });
+      store.recordActivityEvent({
+        category: 'command',
+        targetType: 'dashboard_layout',
+        targetId: USER_DASHBOARD_LAYOUT_ID,
+        actionType: 'dashboard_layout_update',
+        outcome: 'skipped',
+        summary: `Previewed dashboard_layout_update for dashboard layout ${USER_DASHBOARD_LAYOUT_ID}`,
+        metadata: auditMetadata(auth.principal.actor, client, requestId, true),
+      });
+    } catch {
+      return commandResponse({ error: 'operational_store_unavailable' }, requestId, 503);
+    }
+
+    return commandResponse({
+      data: {
+        action: 'dashboard_layout_update',
+        targetType: 'dashboard_layout',
+        targetId: USER_DASHBOARD_LAYOUT_ID,
+        status: 'preview',
+        dryRun: true,
+        auditId: previewAudit.id,
+        result: { itemCount: parsed.items.length },
+      },
+    }, requestId, 200);
+  }
+
+  let dispatchAuditId: string;
+  try {
+    const dispatchAudit = store.recordCommandResult({
+      actionType: 'dashboard_layout_update',
+      targetType: 'dashboard_layout',
+      targetId: USER_DASHBOARD_LAYOUT_ID,
+      status: 'dispatching',
+      actor: auth.principal.actor,
+      ...(client === undefined ? {} : { client }),
+      requestId,
+      dryRun: false,
+    });
+    dispatchAuditId = dispatchAudit.id;
+  } catch {
+    return commandResponse({ error: 'operational_store_unavailable' }, requestId, 503);
+  }
+
+  let saved;
+  let auditId = dispatchAuditId;
+  let auditWarning: string | undefined;
+  try {
+    saved = store.saveDashboardLayout(parsed.items);
+  } catch {
+    return commandResponse({ error: 'operational_store_unavailable' }, requestId, 503);
+  }
+
+  try {
+    const audit = store.recordCommandResult({
+      actionType: 'dashboard_layout_update',
+      targetType: 'dashboard_layout',
+      targetId: USER_DASHBOARD_LAYOUT_ID,
+      status: 'accepted',
+      actor: auth.principal.actor,
+      ...(client === undefined ? {} : { client }),
+      requestId,
+      dryRun: false,
+      result: { itemCount: saved.items.length },
+    });
+    auditId = audit.id;
+    store.recordActivityEvent({
+      category: 'command',
+      targetType: 'dashboard_layout',
+      targetId: USER_DASHBOARD_LAYOUT_ID,
+      actionType: 'dashboard_layout_update',
+      outcome: 'success',
+      summary: `Accepted dashboard_layout_update for dashboard layout ${USER_DASHBOARD_LAYOUT_ID}`,
+      metadata: auditMetadata(auth.principal.actor, client, requestId, false),
+    });
+  } catch {
+    auditWarning = 'post_dispatch_audit_failed';
+  }
+
+  return commandResponse({
+    data: {
+      ...dashboardLayoutResponseData(USER_DASHBOARD_LAYOUT_ID, 'user', saved.updatedAt, saved.items, dashboardCardCatalog(options)),
+      auditId,
+      ...(auditWarning === undefined ? {} : { auditWarning }),
+    },
+  }, requestId, 200);
+}
+
+async function handleDashboardLayoutItemConfigUpdateRequest(
+  request: Request,
+  itemId: string,
+  options: RainrailHttpAppOptions,
+): Promise<Response> {
+  const auth = verifyDashboardScopedRequest(request, options, 'operator');
+  if (!auth.ok) return auth.response;
+
+  const store = options.operationalStore;
+  if (store === undefined) {
+    return jsonResponse({ error: 'operational_store_not_configured' }, { status: 503 });
+  }
+
+  const requestId = sanitizeAuditHeaderValue(request.headers.get('x-request-id')) ?? generatedRequestId();
+  const client = sanitizeAuditHeaderValue(request.headers.get('x-rainrail-client')) ?? auth.principal.client ?? 'unknown';
+  const body = await readJsonObjectBody(request, options.dashboardCommandMaxBodyBytes ?? DEFAULT_MAX_REQUEST_BODY_BYTES);
+  if (!body.ok) return commandResponse({ error: body.error }, requestId, body.status);
+
+  const config = body.value.config;
+  if (!isPlainRecord(config) || !isJsonSerializableValue(config)) {
+    return withRequestIdHeader(jsonResponse({ error: 'invalid_dashboard_card_config', itemId }, { status: 400 }), requestId);
+  }
+  if (hasSensitiveConfigKey(config)) {
+    return withRequestIdHeader(jsonResponse({ error: 'sensitive_dashboard_card_config', itemId }, { status: 400 }), requestId);
+  }
+
+  const catalog = dashboardCardCatalog(options);
+  const existingLayout = store.getDashboardLayout();
+  const currentItems = jsonClone(existingLayout?.items ?? filterDashboardLayoutItems(dashboardDefaultLayout(options), catalog));
+  const itemIndex = currentItems.findIndex((item) => item.id === itemId);
+  if (itemIndex < 0) {
+    return withRequestIdHeader(jsonResponse({ error: 'unknown_dashboard_layout_item', itemId }, { status: 404 }), requestId);
+  }
+
+  const currentItem = currentItems[itemIndex]!;
+  const parsed = parseDashboardLayoutItems([{ ...currentItem, config }], catalog);
+  if (!parsed.ok) return withRequestIdHeader(parsed.response, requestId);
+  currentItems[itemIndex] = parsed.items[0]!;
+
+  let dispatchAuditId: string;
+  try {
+    const dispatchAudit = store.recordCommandResult({
+      actionType: 'dashboard_layout_update',
+      targetType: 'dashboard_layout',
+      targetId: USER_DASHBOARD_LAYOUT_ID,
+      status: 'dispatching',
+      actor: auth.principal.actor,
+      ...(client === undefined ? {} : { client }),
+      requestId,
+      dryRun: false,
+    });
+    dispatchAuditId = dispatchAudit.id;
+  } catch {
+    return commandResponse({ error: 'operational_store_unavailable' }, requestId, 503);
+  }
+
+  let saved;
+  let auditId = dispatchAuditId;
+  let auditWarning: string | undefined;
+  try {
+    saved = store.saveDashboardLayout(currentItems);
+  } catch {
+    return commandResponse({ error: 'operational_store_unavailable' }, requestId, 503);
+  }
+
+  try {
+    const audit = store.recordCommandResult({
+      actionType: 'dashboard_layout_update',
+      targetType: 'dashboard_layout',
+      targetId: USER_DASHBOARD_LAYOUT_ID,
+      status: 'accepted',
+      actor: auth.principal.actor,
+      ...(client === undefined ? {} : { client }),
+      requestId,
+      dryRun: false,
+      result: { itemCount: saved.items.length, itemId },
+    });
+    auditId = audit.id;
+    store.recordActivityEvent({
+      category: 'command',
+      targetType: 'dashboard_layout',
+      targetId: USER_DASHBOARD_LAYOUT_ID,
+      actionType: 'dashboard_layout_update',
+      outcome: 'success',
+      summary: `Accepted dashboard_layout_update for dashboard layout item ${itemId}`,
+      metadata: auditMetadata(auth.principal.actor, client, requestId, false),
+    });
+  } catch {
+    auditWarning = 'post_dispatch_audit_failed';
+  }
+
+  return commandResponse({
+    data: {
+      ...dashboardLayoutResponseData(USER_DASHBOARD_LAYOUT_ID, 'user', saved.updatedAt, saved.items, catalog),
+      auditId,
+      ...(auditWarning === undefined ? {} : { auditWarning }),
+    },
+  }, requestId, 200);
+}
+
+function dashboardCardCatalog(options: RainrailHttpAppOptions): DashboardCardCatalogEntry[] {
+  return dashboardCardRegistry(options).list(options.dashboardCardCatalog ?? {
+    availableCapabilities: ['dashboard:read'],
+  });
+}
+
+function dashboardCardRegistry(options: RainrailHttpAppOptions): DashboardCardRegistry {
+  const registry = createDashboardCardRegistry();
+  const registered = new Set<string>();
+  for (const card of CORE_DASHBOARD_CARD_PROVIDER.cards) {
+    registry.register(card);
+    registered.add(card.id);
+  }
+
+  if (options.dashboardCardRegistry !== undefined) {
+    for (const entry of options.dashboardCardRegistry.list()) {
+      if (registered.has(entry.definition.id)) continue;
+      registry.register(entry.definition);
+      registered.add(entry.definition.id);
+    }
+  }
+
+  return registry;
+}
+
+function dashboardDefaultLayout(options: RainrailHttpAppOptions): DashboardLayoutItem[] {
+  return jsonClone([...(options.dashboardDefaultLayout ?? DEFAULT_DASHBOARD_LAYOUT)]);
+}
+
+function dashboardLayoutResponseData(
+  id: string,
+  source: 'default' | 'user',
+  updatedAt: string | null,
+  items: readonly DashboardLayoutItem[],
+  catalog: DashboardCardCatalogEntry[],
+): {
+  id: string;
+  source: 'default' | 'user';
+  updatedAt: string | null;
+  filteredItemCount: number;
+  items: DashboardLayoutItem[];
+} {
+  const filteredItems = filterDashboardLayoutItems(items, catalog);
+  return {
+    id,
+    source,
+    updatedAt,
+    filteredItemCount: items.length - filteredItems.length,
+    items: filteredItems,
+  };
+}
+
+function parseDashboardLayoutItems(
+  value: unknown,
+  catalog: DashboardCardCatalogEntry[],
+): { ok: true; items: DashboardLayoutItem[] } | { ok: false; response: Response } {
+  if (!Array.isArray(value)) {
+    return { ok: false, response: jsonResponse({ error: 'invalid_dashboard_layout_items' }, { status: 400 }) };
+  }
+
+  const definitionsById = new Map(catalog.map((entry) => [entry.definition.id, entry]));
+  const seenItemIds = new Set<string>();
+  const items: DashboardLayoutItem[] = [];
+
+  for (const rawItem of value) {
+    const item = recordValue(rawItem);
+    if (item === undefined) {
+      return { ok: false, response: jsonResponse({ error: 'invalid_dashboard_layout_item' }, { status: 400 }) };
+    }
+
+    const id = strictStringField(item, 'id');
+    const cardId = strictStringField(item, 'cardId');
+    const x = integerField(item, 'x');
+    const y = integerField(item, 'y');
+    const columns = integerField(item, 'columns');
+    const rows = integerField(item, 'rows');
+    if (id === undefined || id.length === 0 || cardId === undefined || cardId.length === 0
+      || x === undefined || y === undefined || columns === undefined || rows === undefined
+      || x < 0 || y < 0 || columns < 1 || rows < 1) {
+      return { ok: false, response: jsonResponse({ error: 'invalid_dashboard_layout_item' }, { status: 400 }) };
+    }
+
+    if (seenItemIds.has(id)) {
+      return { ok: false, response: jsonResponse({ error: 'duplicate_dashboard_layout_item', itemId: id }, { status: 400 }) };
+    }
+    seenItemIds.add(id);
+
+    const catalogEntry = definitionsById.get(cardId);
+    if (catalogEntry === undefined) {
+      return { ok: false, response: jsonResponse({ error: 'unknown_dashboard_card', cardId }, { status: 400 }) };
+    }
+    if (catalogEntry.availability.status !== 'available') {
+      return { ok: false, response: jsonResponse({ error: 'unavailable_dashboard_card', cardId }, { status: 400 }) };
+    }
+    if (!dashboardCardSizeIsAllowed(catalogEntry.definition, { columns, rows })) {
+      return {
+        ok: false,
+        response: jsonResponse({ error: 'dashboard_card_size_out_of_range', itemId: id, cardId }, { status: 400 }),
+      };
+    }
+    if (x + columns > 12) {
+      return { ok: false, response: jsonResponse({ error: 'invalid_dashboard_layout_item', itemId: id }, { status: 400 }) };
+    }
+
+    const config = item.config;
+    if (config !== undefined && (!isPlainRecord(config) || !isJsonSerializableValue(config))) {
+      return { ok: false, response: jsonResponse({ error: 'invalid_dashboard_card_config', itemId: id, cardId }, { status: 400 }) };
+    }
+    if (config !== undefined && hasSensitiveConfigKey(config)) {
+      return { ok: false, response: jsonResponse({ error: 'sensitive_dashboard_card_config', itemId: id, cardId }, { status: 400 }) };
+    }
+
+    const parsedItem = {
+      id,
+      cardId,
+      x,
+      y,
+      columns,
+      rows,
+      ...(config === undefined ? {} : { config: jsonClone(config as Record<string, unknown>) }),
+    };
+    if (items.some((item) => dashboardLayoutItemsOverlap(item, parsedItem))) {
+      return { ok: false, response: jsonResponse({ error: 'overlapping_dashboard_layout_item', itemId: id }, { status: 400 }) };
+    }
+    items.push(parsedItem);
+  }
+
+  return { ok: true, items };
+}
+
+function dashboardLayoutItemsOverlap(left: DashboardLayoutItem, right: DashboardLayoutItem): boolean {
+  return left.x < right.x + right.columns
+    && left.x + left.columns > right.x
+    && left.y < right.y + right.rows
+    && left.y + left.rows > right.y;
+}
+
+function filterDashboardLayoutItems(
+  items: readonly DashboardLayoutItem[],
+  catalog: DashboardCardCatalogEntry[],
+): DashboardLayoutItem[] {
+  const seenItemIds = new Set<string>();
+  const filtered: DashboardLayoutItem[] = [];
+  for (const item of items) {
+    const parsed = parseDashboardLayoutItems([item], catalog);
+    if (!parsed.ok) continue;
+    const [parsedItem] = parsed.items;
+    if (parsedItem === undefined || seenItemIds.has(parsedItem.id)) continue;
+    if (filtered.some((existing) => dashboardLayoutItemsOverlap(existing, parsedItem))) continue;
+    seenItemIds.add(parsedItem.id);
+    filtered.push(parsedItem);
+  }
+  return filtered;
+}
+
+function dashboardCardSizeIsAllowed(
+  definition: DashboardCardDefinition,
+  size: { columns: number; rows: number },
+): boolean {
+  const min = definition.size.min ?? { columns: 1, rows: 1 };
+  const max = definition.size.max;
+  return size.columns >= min.columns
+    && size.rows >= min.rows
+    && (max === undefined || (size.columns <= max.columns && size.rows <= max.rows));
 }
 
 type CollectionRequest =
@@ -942,6 +1570,19 @@ function latestEventBySourceName(events: StoredOperationalEvent[]): Map<string, 
   return latest;
 }
 
+function dashboardV1SourceRows(options: RainrailHttpAppOptions, store: OperationalStore) {
+  const latestBySource = latestEventBySourceName(store.listEvents());
+  const adapters = options.intakeAdapters ?? [];
+  const duplicateSourceNames = duplicateValues(adapters.map((adapter) => adapter.name));
+  const reservedSourceRowIds = new Set(adapters.map((adapter) => adapter.name));
+  const assignedSourceRowIds = new Set<string>();
+  return adapters.map((adapter, index) => intakeAdapterToSourceRow(
+    adapter,
+    latestBySource.get(adapter.name),
+    sourceRowId(adapter.name, index, duplicateSourceNames, reservedSourceRowIds, assignedSourceRowIds),
+  ));
+}
+
 function intakeAdapterToSourceRow(adapter: RainrailIntakeAdapter, latestEvent: StoredOperationalEvent | undefined, id = adapter.name) {
   const route = adapter.routes?.[0];
   const sourceType = adapter.source?.type ?? latestEvent?.source.type ?? 'system';
@@ -1014,6 +1655,24 @@ function agentTaskToQueueRow(task: StoredAgentTask, staleWarning: StoredStalePro
       ...(task.projectClaim === undefined ? {} : { releaseStatus: task.projectClaim.status }),
     }),
   };
+}
+
+async function dashboardV1QueueRows(options: RainrailHttpAppOptions, snapshot: ReturnType<OperationalStore['snapshot']>) {
+  const taskRows = dashboardV1LocalQueueRows(options, snapshot);
+  const store = options.operationalStore;
+  if (store === undefined) return taskRows;
+  const tasks = store.listAgentTasks();
+  const staleWarningsByTaskId = new Map(snapshot.warnings.staleProjectClaims.map((warning) => [warning.taskId, warning]));
+  const projectIssueRows = await projectIssueQueueRows(options.taskQueue, tasks, staleWarningsByTaskId);
+  return sortQueueRows([...taskRows, ...projectIssueRows]);
+}
+
+function dashboardV1LocalQueueRows(options: RainrailHttpAppOptions, snapshot: ReturnType<OperationalStore['snapshot']>) {
+  const store = options.operationalStore;
+  if (store === undefined) return [];
+  const tasks = store.listAgentTasks();
+  const staleWarningsByTaskId = new Map(snapshot.warnings.staleProjectClaims.map((warning) => [warning.taskId, warning]));
+  return sortQueueRows(tasks.map((task) => agentTaskToQueueRow(task, staleWarningsByTaskId.get(task.id))));
 }
 
 async function projectIssueQueueRows(
@@ -1223,6 +1882,11 @@ function stringField(record: Record<string, unknown> | undefined, field: string)
   return value === null || value === undefined ? undefined : String(value);
 }
 
+function strictStringField(record: Record<string, unknown> | undefined, field: string): string | undefined {
+  const value = record?.[field];
+  return typeof value === 'string' ? value : undefined;
+}
+
 function hasConfiguredDashboardToken(options: RainrailHttpAppOptions): boolean {
   return dashboardTokens(options).some((configured) => configured !== undefined && configured.length > 0);
 }
@@ -1230,6 +1894,37 @@ function hasConfiguredDashboardToken(options: RainrailHttpAppOptions): boolean {
 function numberField(record: Record<string, unknown> | undefined, field: string): number | undefined {
   const value = record?.[field];
   return typeof value === 'number' ? value : undefined;
+}
+
+function integerField(record: Record<string, unknown> | undefined, field: string): number | undefined {
+  const value = numberField(record, field);
+  return value === undefined || !Number.isInteger(value) ? undefined : value;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value) as unknown;
+  return prototype === Object.prototype || prototype === null;
+}
+
+function isJsonSerializableValue(value: unknown): boolean {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return true;
+  if (typeof value === 'number') return Number.isFinite(value);
+  if (Array.isArray(value)) return value.every(isJsonSerializableValue);
+  if (isPlainRecord(value)) {
+    return Object.values(value).every(isJsonSerializableValue);
+  }
+  return false;
+}
+
+function hasSensitiveConfigKey(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some(hasSensitiveConfigKey);
+  if (!isPlainRecord(value)) return false;
+  return Object.entries(value).some(([key, nested]) => isSensitiveCommandResultKey(key) || hasSensitiveConfigKey(nested));
+}
+
+function jsonClone<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
 }
 
 async function handleDashboardCommandRequest(
@@ -1704,7 +2399,7 @@ function redactSensitiveText(value: string): string {
 }
 
 function isSensitiveCommandResultKey(key: string): boolean {
-  return /(?:authorization|cookie|token|secret|password|key|code|reset|verification|session|confirmation)/iu.test(key);
+  return /(?:authorization|cookie|token|secret|password|key|credential|code|reset|verification|session|confirmation)/iu.test(key);
 }
 
 function auditMetadata(actor: string, client: string | undefined, requestId: string, dryRun: boolean): Record<string, unknown> {
@@ -1720,6 +2415,16 @@ function commandResponse(body: unknown, requestId: string, status: number): Resp
   return jsonResponse(body, {
     status,
     headers: { 'X-Request-ID': requestId },
+  });
+}
+
+function withRequestIdHeader(response: Response, requestId: string): Response {
+  const headers = new Headers(response.headers);
+  headers.set('X-Request-ID', requestId);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
   });
 }
 

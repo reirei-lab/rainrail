@@ -1,5 +1,64 @@
 # Changelog
 
+## [0.7.0](https://github.com/reirei-lab/rainrail/compare/release/0.6.0...release/0.7.0) (2026-07-11)
+
+
+### Features
+
+* add customizable Overview cards ([#345](https://github.com/reirei-lab/rainrail/issues/345)) ([688b47c](https://github.com/reirei-lab/rainrail/commit/688b47caed88f53f317aa82f5a13071992b60aee))
+* add dashboard view redirect pages ([#344](https://github.com/reirei-lab/rainrail/issues/344)) ([a0dd1d5](https://github.com/reirei-lab/rainrail/commit/a0dd1d51a95fad7d3c0f1e5a2c59081f7a3474d9))
+* add runs dashboard route ([#343](https://github.com/reirei-lab/rainrail/issues/343)) ([bc066a8](https://github.com/reirei-lab/rainrail/commit/bc066a8f19bac8e6308d3d99ecf88916fbf18e1c))
+* consolidate agent task controls on tasks page ([#346](https://github.com/reirei-lab/rainrail/issues/346)) ([134b45a](https://github.com/reirei-lab/rainrail/commit/134b45a32b297b0ff7ff63f08393f8c798d3ce24))
+* isolate Event Inbox dashboard route ([#342](https://github.com/reirei-lab/rainrail/issues/342)) ([26b647d](https://github.com/reirei-lab/rainrail/commit/26b647d0381574c99c25faaeff4e0b55616eaa15))
+* route dashboard views through shared shell ([#340](https://github.com/reirei-lab/rainrail/issues/340)) ([a01704b](https://github.com/reirei-lab/rainrail/commit/a01704bc3ca120b9a1290c632168f82a35aa3d0a))
+
+
+### Bug Fixes
+
+* verify Codex App Server smoke in CI ([#328](https://github.com/reirei-lab/rainrail/issues/328)) ([23da69b](https://github.com/reirei-lab/rainrail/commit/23da69b4ef2321967d0fae1d7d5cb38f9f558aff))
+
+## [0.6.0](https://github.com/reirei-lab/rainrail/compare/release/0.5.0...release/0.6.0) (2026-07-10)
+
+
+### Features
+
+* add Codex App Server runtime provider ([#325](https://github.com/reirei-lab/rainrail/issues/325)) ([f1e7285](https://github.com/reirei-lab/rainrail/commit/f1e7285f851924ad1e635b7fbb78714693017820))
+* add Codex App Server setup checks ([#326](https://github.com/reirei-lab/rainrail/issues/326)) ([8f1eca6](https://github.com/reirei-lab/rainrail/commit/8f1eca61b95c6b784fc6295d660c17866d81644b))
+* **cli:** add Codex App Server official plugin ([#322](https://github.com/reirei-lab/rainrail/issues/322)) ([fb4143e](https://github.com/reirei-lab/rainrail/commit/fb4143e5eb0c77a737afe58410112a520821e1c9))
+* Codex App Server client transport boundary ([#321](https://github.com/reirei-lab/rainrail/issues/321)) ([54850fa](https://github.com/reirei-lab/rainrail/commit/54850faf53a894978439700014707f8598665fc4))
+* support plugin runtime provider config ([#320](https://github.com/reirei-lab/rainrail/issues/320)) ([0d46862](https://github.com/reirei-lab/rainrail/commit/0d46862df26b8bb268c69220b6ef156b3c42a22f))
+
+
+### Bug Fixes
+
+* keep dashboard sidebar tabs responsive ([#300](https://github.com/reirei-lab/rainrail/issues/300)) ([dc24240](https://github.com/reirei-lab/rainrail/commit/dc24240471857eec136ec043b2cfc2ec9812e7f8))
+
+## [0.5.0](https://github.com/reirei-lab/rainrail/compare/release/0.4.1...release/0.5.0) (2026-07-10)
+
+
+### Features
+
+* add dashboard card layout API ([#291](https://github.com/reirei-lab/rainrail/issues/291)) ([26ebaf6](https://github.com/reirei-lab/rainrail/commit/26ebaf6a42ca29d602cc1416c090a656709f1d4d))
+* add dashboard card registry contract ([#290](https://github.com/reirei-lab/rainrail/issues/290)) ([a2ab5c3](https://github.com/reirei-lab/rainrail/commit/a2ab5c38a37627152c7eb6905502c0c569c1bdec))
+* add dashboard card settings bridge ([#297](https://github.com/reirei-lab/rainrail/issues/297)) ([fd40962](https://github.com/reirei-lab/rainrail/commit/fd4096278571a2fe05ff9efb6d0ad0728b3b0bc8))
+* add dashboard demo sqlite seed ([#289](https://github.com/reirei-lab/rainrail/issues/289)) ([9ac2789](https://github.com/reirei-lab/rainrail/commit/9ac278996eddf61be92e5ebf9bc2772a18163603))
+* add dashboard plugin card manifest sandbox ([#295](https://github.com/reirei-lab/rainrail/issues/295)) ([cf16978](https://github.com/reirei-lab/rainrail/commit/cf169782109e842c61bfba1e0122dfbbf9d30b15))
+* add dispatch CLI skeleton ([#264](https://github.com/reirei-lab/rainrail/issues/264)) ([d1b4e70](https://github.com/reirei-lab/rainrail/commit/d1b4e700f69102b857e23ea6a4a261db8ccb0646))
+* add editable dashboard card layout ([#298](https://github.com/reirei-lab/rainrail/issues/298)) ([bf31727](https://github.com/reirei-lab/rainrail/commit/bf31727cd94b6e70b38ca080dd8d081fb95aed99))
+* add seeded dashboard demo mode ([#294](https://github.com/reirei-lab/rainrail/issues/294)) ([19b88ed](https://github.com/reirei-lab/rainrail/commit/19b88edc1bc407449ebf77350ce2cf29be992dca))
+* add SQLite operational store ([#276](https://github.com/reirei-lab/rainrail/issues/276)) ([5813e02](https://github.com/reirei-lab/rainrail/commit/5813e02b970e907b1639e344c7cb98879a3583f8))
+* dispatch CLI messages as Rainrail events ([#266](https://github.com/reirei-lab/rainrail/issues/266)) ([4556206](https://github.com/reirei-lab/rainrail/commit/4556206a9907493e96914200726f740e1e135b05))
+* dispatch JSON event envelopes from CLI ([#267](https://github.com/reirei-lab/rainrail/issues/267)) ([fabd79e](https://github.com/reirei-lab/rainrail/commit/fabd79e4868cd356317c2db8ae78bca957bb14e5))
+* wire local sqlite operational store config ([#288](https://github.com/reirei-lab/rainrail/issues/288)) ([8523df4](https://github.com/reirei-lab/rainrail/commit/8523df4cd02c40a1ef4d0661b41feb6f3bbd6ca0))
+* wire standalone rainrail dispatch ([#279](https://github.com/reirei-lab/rainrail/issues/279)) ([dc96d67](https://github.com/reirei-lab/rainrail/commit/dc96d673392fb7804cc5835e1b9d77628d72aa3a))
+
+## [0.4.1](https://github.com/reirei-lab/rainrail/compare/release/0.4.0...release/0.4.1) (2026-07-08)
+
+
+### Bug Fixes
+
+* route product docs links to docs site ([#255](https://github.com/reirei-lab/rainrail/issues/255)) ([925fea2](https://github.com/reirei-lab/rainrail/commit/925fea2bc0962d8d87ae89caa63c3ee6bbb46937))
+
 ## [0.4.0](https://github.com/reirei-lab/rainrail/compare/release/0.3.0...release/0.4.0) (2026-07-08)
 
 

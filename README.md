@@ -36,6 +36,17 @@ Run a minimal first-use smoke test in a disposable directory:
     rainrail openclaw help
     rainrail openclaw session test help
 
+If you want Rainrail to dispatch work through Codex CLI App Server instead of
+OpenClaw, add the optional Codex runtime plugin inside the initialized project:
+
+    rainrail setup codex-app-server --yes
+    rainrail plugin codex-app-server doctor
+    rainrail plugin codex-app-server session test
+
+The Codex App Server plugin is not required for users who do not run Codex. It
+adds a separate `codex-app-server` runtime provider entry and does not install,
+replace, or proxy the OpenClaw plugin.
+
 `rainrail start` starts the local harness server for the dashboard API, event
 stream, and any configured local intake endpoints. It does not start or manage
 the Cloudflare Worker EEP Bridge; Worker deployment and always-on ingress live
@@ -53,6 +64,42 @@ Check the installed CLI version and whether a newer GitHub Release is available:
 Update discovery is advisory and cached locally; see
 [docs/cli-update-and-version.md](docs/cli-update-and-version.md) for the exact
 output, cache, and automatic notice behavior.
+
+## Dispatching events from the CLI
+
+`rainrail dispatch` accepts one input mode at a time and sends the validated
+event to a Rainrail publish endpoint when `RAINRAIL_PUBLISH_URL` and
+`RAINRAIL_PUBLISH_TOKEN` are configured. Embedded callers can still pass
+`RainrailCliEnvironment.dispatchRunner` to replace the standalone publish
+runner.
+
+For ad hoc manual messages, pass the text positionally, through `--message`, or
+through `--stdin`:
+
+    rainrail dispatch "please inspect issue #263"
+    rainrail dispatch --message "please inspect issue #263"
+    printf '%s\n' "please inspect issue #263" | rainrail dispatch --stdin
+
+The CLI turns message-only input into a `rainrail.manual.message` event from
+the manual `cli` source before handing it to event delivery. Blank messages are
+rejected before dispatch.
+
+For replaying or testing a complete event contract, provide the whole
+`rainrail.event.v1` envelope as JSON:
+
+    rainrail dispatch --json ./event.json
+    cat ./event.json | rainrail dispatch --json --stdin
+    rainrail dispatch --envelope-json '{"source":{"type":"manual","name":"manual-source"},"name":"rainrail.manual.message","delivery":{"id":"delivery-demo","receivedAt":"2026-07-09T00:00:00.000Z"},"occurredAt":"2026-07-09T00:00:00.000Z","subject":{"type":"conversation","id":"thread-demo"},"payload":{"provider":"rainrail","channel":"manual","action":"message","conversation":{"id":"thread-demo"},"message":{"id":"message-demo","text":"hello from JSON"}},"rawPayload":{"kind":"inline-redacted","reference":"manual://deliveries/delivery-demo"}}'
+
+Envelope JSON is validated before event delivery and forwarded to the publish
+endpoint without re-serializing the caller-provided envelope string. The first
+CLI surface intentionally does not expose per-field metadata flags; use
+complete JSON envelope input when you need source, delivery, subject, payload,
+or raw payload metadata to be explicit. Add the shared `--json` option before
+`dispatch` when you need a machine-readable delivery summary; the summary is
+limited to publish status and event identity, and does not echo payload or raw
+provider data. Run `rainrail dispatch help` for the current usage and error
+behavior.
 
 ## Repository structure
 
@@ -101,8 +148,10 @@ caches pnpm dependencies from `pnpm-lock.yaml`, and runs these checks as
 separate steps so failures identify the command that failed:
 
 - `pnpm typecheck`
+- `pnpm docs:check`
 - `pnpm test`
 - `pnpm build`
+- `pnpm e2e:dashboard` in a separate Dashboard E2E job
 
 ## Cloudflare Worker
 

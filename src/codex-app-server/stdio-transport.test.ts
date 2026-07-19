@@ -1,0 +1,378 @@
+import { EventEmitter } from 'node:events';
+import { PassThrough, Writable } from 'node:stream';
+
+import { describe, expect, it, vi } from 'vitest';
+
+import { createStdioCodexAppServerTransport, type SpawnCodexAppServerProcess } from './stdio-transport.js';
+import type { CodexAppServerFrame } from './client.js';
+
+class RecordingWritable extends Writable {
+  readonly writes: string[] = [];
+
+  override _write(chunk: Buffer, _encoding: BufferEncoding, callback: (error?: Error | null) => void): void {
+    this.writes.push(chunk.toString('utf8'));
+    callback();
+  }
+}
+
+function createChildProcessFixture() {
+  const stdout = new PassThrough();
+  const stderr = new PassThrough();
+  const stdin = new RecordingWritable();
+  const child = new EventEmitter() as EventEmitter & {
+    stdin: RecordingWritable;
+    stdout: PassThrough;
+    stderr: PassThrough;
+    kill: (signal?: NodeJS.Signals | number) => boolean;
+  };
+  child.stdin = stdin;
+  child.stdout = stdout;
+  child.stderr = stderr;
+  child.kill = vi.fn(() => true);
+  const spawnProcess = vi.fn<SpawnCodexAppServerProcess>(() => child);
+  return { child, spawnProcess, stdin, stdout, stderr };
+}
+
+describe('stdio Codex App Server transport', () => {
+  it('spawns the configured command and writes JSON-line framed messages', async () => {
+    const { spawnProcess, stdin } = createChildProcessFixture();
+    const transport = createStdioCodexAppServerTransport({
+      command: 'codex-app-server',
+      args: ['--stdio'],
+      cwd: '/repo',
+      env: { NODE_ENV: 'test' },
+      spawnProcess,
+    });
+    const frame: CodexAppServerFrame = {
+      id: 1,
+      method: 'session.start',
+      params: { repository: 'reirei-lab/rainrail' },
+    };
+
+    await transport.connect();
+    await transport.send(frame);
+
+    expect(spawnProcess).toHaveBeenCalledWith('codex-app-server', ['--stdio'], {
+      cwd: '/repo',
+      env: expect.objectContaining({ NODE_ENV: 'test' }),
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    expect(stdin.writes).toEqual([`${JSON.stringify(frame)}\n`]);
+  });
+
+  it('passes an explicit env without leaking the parent process environment', async () => {
+    const { spawnProcess } = createChildProcessFixture();
+    const transport = createStdioCodexAppServerTransport({
+      command: 'codex-app-server',
+      env: { CODEX_APP_SERVER_TOKEN: 'test-token', PATH: '/custom/bin' },
+      spawnProcess,
+    });
+
+    await transport.connect();
+
+    const options = spawnProcess.mock.calls[0]?.[2];
+    expect(options?.env).toEqual({
+      PATH: '/custom/bin',
+      CODEX_APP_SERVER_TOKEN: 'test-token',
+    });
+  });
+
+  it('passes an empty env when inheritance is explicitly disabled without overrides', async () => {
+    const { spawnProcess } = createChildProcessFixture();
+    const transport = createStdioCodexAppServerTransport({
+      command: 'codex-app-server',
+      inheritEnv: false,
+      spawnProcess,
+    });
+
+    await transport.connect();
+
+    const options = spawnProcess.mock.calls[0]?.[2];
+    expect(options?.env).toEqual({});
+  });
+
+  it('merges env overrides with the parent process environment when inheritance is explicit', async () => {
+    const { spawnProcess } = createChildProcessFixture();
+    const transport = createStdioCodexAppServerTransport({
+      command: 'codex-app-server',
+      env: { CODEX_APP_SERVER_TOKEN: 'test-token' },
+      inheritEnv: true,
+      spawnProcess,
+    });
+
+    await transport.connect();
+
+    const options = spawnProcess.mock.calls[0]?.[2];
+    expect(options?.env).toMatchObject({
+      CODEX_APP_SERVER_TOKEN: 'test-token',
+      PATH: process.env.PATH,
+    });
+  });
+
+  it('parses newline-delimited stdout frames independently of chunk boundaries', async () => {
+    const { spawnProcess, stdout } = createChildProcessFixture();
+    const transport = createStdioCodexAppServerTransport({ command: 'codex-app-server', spawnProcess });
+    const frames: CodexAppServerFrame[] = [];
+
+    transport.onFrame((frame) => frames.push(frame));
+    await transport.connect();
+
+    stdout.write('{"method":"session.');
+    stdout.write('output","params":{"text":"one"}}\n{"id":1,"result":');
+    stdout.write('{"ok":true}}\n');
+
+    expect(frames).toEqual([
+      {
+        method: 'session.output',
+        params: { text: 'one' },
+      },
+      {
+        id: 1,
+        result: { ok: true },
+      },
+    ]);
+  });
+
+  it('drains stderr so verbose child logs cannot block protocol responses', async () => {
+    const { spawnProcess, stderr } = createChildProcessFixture();
+    const transport = createStdioCodexAppServerTransport({ command: 'codex-app-server', spawnProcess });
+
+    await transport.connect();
+    stderr.write('warning: noisy app server log\n');
+
+    expect(stderr.readableLength).toBe(0);
+  });
+
+  it('decodes stdout with streaming UTF-8 state across chunk boundaries', async () => {
+    const { spawnProcess, stdout } = createChildProcessFixture();
+    const transport = createStdioCodexAppServerTransport({ command: 'codex-app-server', spawnProcess });
+    const frames: CodexAppServerFrame[] = [];
+    const line = Buffer.from('{"method":"session.output","params":{"text":"こんにちは"}}\n');
+    const splitInsideMultibyteCharacter = line.indexOf(Buffer.from('ん')) + 1;
+
+    transport.onFrame((frame) => frames.push(frame));
+    await transport.connect();
+    stdout.write(line.subarray(0, splitInsideMultibyteCharacter));
+    stdout.write(line.subarray(splitInsideMultibyteCharacter));
+
+    expect(frames).toEqual([
+      {
+        method: 'session.output',
+        params: { text: 'こんにちは' },
+      },
+    ]);
+  });
+
+  it('emits parse errors without closing the transport or dropping later valid frames', async () => {
+    const { spawnProcess, stdout } = createChildProcessFixture();
+    const transport = createStdioCodexAppServerTransport({ command: 'codex-app-server', spawnProcess });
+    const errors: string[] = [];
+    const frames: CodexAppServerFrame[] = [];
+
+    transport.onError((error) => errors.push(error.message));
+    transport.onFrame((frame) => frames.push(frame));
+    await transport.connect();
+
+    stdout.write('{not json}\n');
+    stdout.write('{"method":"session.output"}\n');
+
+    expect(errors).toEqual(['Failed to parse Codex App Server stdio frame']);
+    expect(frames).toEqual([{ method: 'session.output' }]);
+  });
+
+  it('emits close when the child process exits', async () => {
+    const { child, spawnProcess } = createChildProcessFixture();
+    const transport = createStdioCodexAppServerTransport({ command: 'codex-app-server', spawnProcess });
+    const close = vi.fn();
+
+    transport.onClose(close);
+    await transport.connect();
+    child.emit('close', 0, null);
+
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it('keeps stdout readable after exit until the child close event drains stdio', async () => {
+    const { child, spawnProcess, stdout } = createChildProcessFixture();
+    const transport = createStdioCodexAppServerTransport({ command: 'codex-app-server', spawnProcess });
+    const close = vi.fn();
+    const frames: CodexAppServerFrame[] = [];
+
+    transport.onClose(close);
+    transport.onFrame((frame) => frames.push(frame));
+    await transport.connect();
+    child.emit('exit', 0, null);
+    stdout.write('{"method":"session.complete"}\n');
+
+    expect(close).not.toHaveBeenCalled();
+    expect(frames).toEqual([{ method: 'session.complete' }]);
+
+    child.emit('close', 0, null);
+
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it('waits for child close before resolving transport close', async () => {
+    const { child, spawnProcess } = createChildProcessFixture();
+    const transport = createStdioCodexAppServerTransport({ command: 'codex-app-server', spawnProcess });
+    const close = vi.fn();
+    let closeResolved = false;
+
+    transport.onClose(close);
+    await transport.connect();
+    const closePromise = transport.close().then(() => {
+      closeResolved = true;
+    });
+    await Promise.resolve();
+
+    expect(child.kill).toHaveBeenCalledOnce();
+    expect(close).not.toHaveBeenCalled();
+    expect(closeResolved).toBe(false);
+
+    child.emit('close', 0, null);
+    await closePromise;
+
+    expect(close).toHaveBeenCalledOnce();
+    expect(closeResolved).toBe(true);
+  });
+
+  it('does not close a reconnected child when the previous child exits late', async () => {
+    const first = createChildProcessFixture();
+    const second = createChildProcessFixture();
+    const spawnProcess = vi.fn<SpawnCodexAppServerProcess>()
+      .mockReturnValueOnce(first.child)
+      .mockReturnValueOnce(second.child);
+    const transport = createStdioCodexAppServerTransport({ command: 'codex-app-server', spawnProcess });
+    const close = vi.fn();
+
+    transport.onClose(close);
+    await transport.connect();
+    const closePromise = transport.close();
+    first.child.emit('close', 0, null);
+    await closePromise;
+    await transport.connect();
+    close.mockClear();
+
+    first.child.emit('exit', 0, null);
+    await transport.send({ method: 'session.ping' });
+
+    expect(close).not.toHaveBeenCalled();
+    expect(second.stdin.writes).toEqual(['{"method":"session.ping"}\n']);
+  });
+
+  it('ignores stdout flushed by a previous child after reconnecting', async () => {
+    const first = createChildProcessFixture();
+    const second = createChildProcessFixture();
+    const spawnProcess = vi.fn<SpawnCodexAppServerProcess>()
+      .mockReturnValueOnce(first.child)
+      .mockReturnValueOnce(second.child);
+    const transport = createStdioCodexAppServerTransport({ command: 'codex-app-server', spawnProcess });
+    const errors: string[] = [];
+    const frames: CodexAppServerFrame[] = [];
+
+    transport.onError((error) => errors.push(error.message));
+    transport.onFrame((frame) => frames.push(frame));
+    await transport.connect();
+    const closePromise = transport.close();
+    first.child.emit('close', 0, null);
+    await closePromise;
+    await transport.connect();
+
+    first.stdout.write('{"method":"stale.output"}\n');
+    first.stdout.write('{"method":"partial"');
+    second.stdout.write('{"method":"session.output"}\n');
+
+    expect(errors).toEqual([]);
+    expect(frames).toEqual([{ method: 'session.output' }]);
+  });
+
+  it('ignores errors emitted by a previous child after reconnecting', async () => {
+    const first = createChildProcessFixture();
+    const second = createChildProcessFixture();
+    const spawnProcess = vi.fn<SpawnCodexAppServerProcess>()
+      .mockReturnValueOnce(first.child)
+      .mockReturnValueOnce(second.child);
+    const transport = createStdioCodexAppServerTransport({ command: 'codex-app-server', spawnProcess });
+    const errors: string[] = [];
+
+    transport.onError((error) => errors.push(error.message));
+    await transport.connect();
+    const closePromise = transport.close();
+    first.child.emit('close', 0, null);
+    await closePromise;
+    await transport.connect();
+
+    first.child.emit('error', new Error('stale child error'));
+
+    expect(errors).toEqual([]);
+  });
+
+  it('resets partial stdout framing state before reconnecting', async () => {
+    const first = createChildProcessFixture();
+    const second = createChildProcessFixture();
+    const spawnProcess = vi.fn<SpawnCodexAppServerProcess>()
+      .mockReturnValueOnce(first.child)
+      .mockReturnValueOnce(second.child);
+    const transport = createStdioCodexAppServerTransport({ command: 'codex-app-server', spawnProcess });
+    const errors: string[] = [];
+    const frames: CodexAppServerFrame[] = [];
+
+    transport.onError((error) => errors.push(error.message));
+    transport.onFrame((frame) => frames.push(frame));
+    await transport.connect();
+    first.stdout.write('{"method":"partial"');
+    const closePromise = transport.close();
+    first.child.emit('close', 0, null);
+    await closePromise;
+    await transport.connect();
+    second.stdout.write('{"method":"session.output"}\n');
+
+    expect(errors).toEqual([]);
+    expect(frames).toEqual([{ method: 'session.output' }]);
+  });
+
+  it('rejects connect when the child emits an initial spawn error', async () => {
+    const { child } = createChildProcessFixture();
+    const spawnProcess = vi.fn<SpawnCodexAppServerProcess>(() => {
+      process.nextTick(() => child.emit('error', new Error('spawn ENOENT')));
+      return child;
+    });
+    const transport = createStdioCodexAppServerTransport({ command: 'missing-codex-app-server', spawnProcess });
+
+    await expect(transport.connect()).rejects.toThrow('spawn ENOENT');
+    await expect(transport.send({ method: 'session.ping' })).rejects.toThrow(
+      'Codex App Server stdio transport is not connected',
+    );
+  });
+
+  it('shares the same initial spawn failure with concurrent connect callers', async () => {
+    const { child } = createChildProcessFixture();
+    const spawnProcess = vi.fn<SpawnCodexAppServerProcess>(() => {
+      process.nextTick(() => child.emit('error', new Error('spawn ENOENT')));
+      return child;
+    });
+    const transport = createStdioCodexAppServerTransport({ command: 'missing-codex-app-server', spawnProcess });
+
+    const firstConnect = transport.connect();
+    const secondConnect = transport.connect();
+    const results = await Promise.allSettled([firstConnect, secondConnect]);
+
+    expect(spawnProcess).toHaveBeenCalledOnce();
+    expect(results).toHaveLength(2);
+    expect(results[0]?.status).toBe('rejected');
+    expect(results[1]?.status).toBe('rejected');
+    if (results[0]?.status === 'rejected') expect(results[0].reason).toEqual(expect.any(Error));
+    if (results[1]?.status === 'rejected') expect(results[1].reason).toEqual(expect.any(Error));
+  });
+
+  it('rejects connect when the child exits before the initial spawn check completes', async () => {
+    const { child } = createChildProcessFixture();
+    const spawnProcess = vi.fn<SpawnCodexAppServerProcess>(() => {
+      process.nextTick(() => child.emit('exit', 127, null));
+      return child;
+    });
+    const transport = createStdioCodexAppServerTransport({ command: 'codex-app-server', spawnProcess });
+
+    await expect(transport.connect()).rejects.toThrow('exited before stdio transport connected');
+  });
+});

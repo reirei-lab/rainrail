@@ -1,13 +1,21 @@
 ---
 title: Reference
-description: Placeholder reference section for Rainrail contracts and commands.
+description: Stable Rainrail contracts, schemas, and source-spec entry points.
 ---
 
-This section will collect precise contracts and command surfaces.
+Reference pages name the public surface first, then link back to the repository
+source spec for exact implementation decisions and tests.
 
-## Planned topics
+## Contracts
 
-- Event payload schemas.
-- Public TypeScript exports.
-- CLI commands and environment variables.
-- Cloudflare Worker and Pages deployment commands.
+- [Plugin runtime](/reference/plugin-runtime/) covers source plugins, workflow
+  plugins, runtime providers, and event envelopes.
+- [GitHub webhook normalization](/reference/github-webhook-normalization/) maps
+  GitHub deliveries into Rainrail events.
+- [Operational API v1](/reference/operational-api-v1/) describes dashboard and
+  mobile API resources.
+- [Contracts manifest](/reference/contracts-manifest/) explains drift checks
+  between implementation, docs, and tests.
+
+GitHub-only engineering notes are intentionally not listed here unless they
+describe a public contract.

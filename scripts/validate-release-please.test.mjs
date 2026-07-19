@@ -29,7 +29,7 @@ describe('Release Please automation', () => {
 
   it('uses manifest Release Please configuration', () => {
     expect(workflow).toContain("if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.release_tag == '' }}");
-    expect(workflow).toContain('uses: googleapis/release-please-action@v4');
+    expect(workflow).toContain('uses: googleapis/release-please-action@v5');
     expect(workflow).toContain('id: release');
     expect(workflow).toContain('token: ${{ secrets.RELEASE_PLEASE_TOKEN }}');
     expect(workflow).not.toContain('token: ${{ github.token }}');
@@ -63,7 +63,7 @@ describe('Release Please automation', () => {
     expect(workflow).toContain("ref: ${{ steps.release.outputs.sha || format('refs/tags/{0}', github.event.inputs.release_tag) }}");
     expect(workflow).toContain('persist-credentials: false');
     expect(workflow).toContain('uses: pnpm/action-setup@v6');
-    expect(workflow).toContain('uses: actions/setup-node@v6');
+    expect(workflow).toContain('uses: actions/setup-node@v7');
     expect(workflow).toContain('node-version: 26');
     expect(workflow).toContain('pnpm install --frozen-lockfile');
     expect(workflow).toContain('asset_path="$(pnpm --silent release:cli)"');

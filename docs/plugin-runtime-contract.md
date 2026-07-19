@@ -14,6 +14,159 @@ EEP Bridge bundle is one source bundle: 現行実装では GitHub webhook と Cl
 同じ publish-to-core 経路へ束ねる。manual/chat source は EEP Bridge 由来ではないが、
 同じ `RainrailEventEnvelope`、`RainrailIntakeAdapter`、Workflow plugin contract を使う。
 
+PR lifecycle / routing / GitHub helper の部分的な公開 export inventory は
+`WorkflowPlugin` `PluginRuntimeContext`
+`RuntimeDispatcher` `createRuntimeDispatcher` `defineWorkflowPlugin`
+`createPluginLoader` `createRouteWorkflow` `createRouteLocalHandler`
+`routeRainrailEvent` `PullRequestCheck` `PullRequestReview`
+`PullRequestReviewTarget` `PullRequestReviewComment` `PullRequestMergeMethod`
+`GitHubPullRequestProvider` `AgentTaskIssue` `AgentTaskClaim` `AgentTask`
+`AgentTaskHandoffClient` `ReviewRequestWorkflowOptions`
+`TodoHandoffWorkflowOptions` `ChangeRequestWorkflowOptions`
+`CodexReviewWorkflowOptions` `CheckFailureWorkflowOptions`
+`ConflictCheckWorkflowOptions` `AutoMergeWorkflowOptions` `WorkflowResult`
+`createReviewRequestWorkflow` `createChangeRequestWorkflow`
+`createCodexReviewWorkflow` `createCheckFailureWorkflow`
+`createConflictCheckWorkflow` `createAutoMergeWorkflow`
+`handleReviewRequestEvent` `handleChangeRequestEvent` `handleCodexReviewEvent`
+`handleCheckFailureEvent` `handleConflictCheckEvent` `handleAutoMergeEvent`
+`allChecksPassed` `createTaskProviderPullRequestCommentHandoff`
+`GitHubAuthToken` `createGitHubTaskProvider` `createGitHubPullRequestProvider`
+`recordGitHubRateLimit` とする。Plugin runtime contract 全体の公開 export 範囲は、
+この節だけではなく `docs/contracts.manifest.json` の `plugin-runtime.publicExports` を正とする。
+
+## Codex App Server client transport boundary
+
+Codex App Server protocol client は protocol parsing と transport implementation を分ける。
+`CodexAppServerTransport` は `connect()`、`close()`、`send(frame)`、
+`onFrame()`、`onError()`、`onClose()` だけを持つ小さい境界で、client は
+`CodexAppServerFrame` の request/response/notification をこの境界越しに扱う。wire
+format は `codex app-server generate-ts` の `ClientRequest` / `ServerNotification` と
+実 stdio probe に合わせ、request は `id` と `method`、response は `id` と
+`result` または `error`、notification は `method` と任意の `params` を持つ JSON line とする。
+`createCodexAppServerClient` は `CodexAppServerClientOptions` の injected transport だけに
+依存し、`CodexAppServerClient` として `request()`、`notify()`、
+`onRequest()`、`onNotification()` を公開する。request id は client が割り当て、
+`CodexAppServerResponseError` を含む response は `CodexAppServerProtocolError` として
+該当 request だけを reject する。JSON-RPC error code は string と number の両方を受ける。
+server-initiated request は登録済み `onRequest()` handler が result response を返せるようにし、
+handler がない場合だけ JSON-RPC `-32601` response を返して server を待機させない。handler 例外は
+JSON-RPC `-32603` response に変換する。transport close は pending request をまとめて reject し、
+notification は request/response matching から独立して handler へ渡す。
+
+protocol frame 型は `CodexAppServerFrameId`、`CodexAppServerRequestFrame`、
+`CodexAppServerResponseFrame`、`CodexAppServerNotificationFrame`、
+`CodexAppServerFrame` とする。初期 transport は
+`createStdioCodexAppServerTransport` で、`StdioCodexAppServerTransportOptions` の
+`command`、`args`、`cwd`、`env` から child process を起動し、stdin/stdout の
+JSON line framing だけを担当する。`env` を指定した場合はその値を child process の
+完全な環境として扱い、親 process の環境を混ぜる場合だけ `inheritEnv: true` を明示する。
+`env` を省略しても `inheritEnv: false` が明示された場合は空の environment を spawn に渡し、
+Node の既定環境継承で secret が子 process へ漏れないようにする。
+test や別 supervisor は `SpawnCodexAppServerProcess` と
+`StdioCodexAppServerChildProcess` を差し替えられる。stdout の parse error は
+transport error として通知し、後続の valid frame は処理を続ける。stdio transport の
+`close()` は child process に終了シグナルを送り、stdio drain 後の child `close` event を
+待ってから transport close を通知する。child `exit` event だけでは stdout/stderr drain が
+完了したとは扱わない。
+
+runtime provider から直接 protocol method 名や event shape を扱わないよう、
+`createCodexAppServerProtocolClient` は `CodexAppServerProtocolClientOptions` から
+`CodexAppServerProtocolClient` を作り、`initialize`、`thread/start`、`turn/start` の
+最小 wrapper と server-initiated request handler、`turn/completed` 待機、
+`item/agentMessage/delta` 購読を公開する。
+wrapper の型は `CodexAppServerClientInfo`、`CodexAppServerInitializeParams`、
+`CodexAppServerInitializeResponse`、`CodexAppServerThreadStartParams`、
+`CodexAppServerThreadSummary`、`CodexAppServerThreadStartResponse`、
+`CodexAppServerTextInput`、`CodexAppServerTurnInput`、
+`CodexAppServerTurnStartParams`、`CodexAppServerTurnSummary`、
+`CodexAppServerTurnStartResponse`、`CodexAppServerTurnWaitTarget`、
+`CodexAppServerTurnCompletedEvent`、`CodexAppServerAssistantDeltaEvent` などの固定された
+最小型とし、生成 protocol 全体は vendoring しない。`initialize` 成功後は client から
+`initialized` notification を送って handshake を完了する。`initialize` response の `codexHome` は
+公式 App Server の必須 field ではないため optional として扱う。`initialize` params の
+`clientInfo.title` と `capabilities` も wire schema の必須 field ではないため optional とする。
+`turn/completed` は公式 payload の
+`{ turn }` を受けられるよう `threadId` を必須にせず、完了通知が `startTurn()` resolve 前に
+届いても後続の `waitForTurnCompleted()` が拾えるよう turn id で直近完了を cache する。
+completion cache は race 回避用の短期 cache として上限を持ち、daemon/provider が長時間
+使い回されても turn summary を無期限には保持しない。request timeout は低レベル request を
+abort して pending state を掃除する。transport parse error などの非致命的な `onError` は
+監視用通知として扱い、turn completion 待機は timeout と transport close のみで reject する。
+server-initiated request は protocol wrapper の `onRequest()` からも扱えるようにし、
+承認や MCP elicitation を含む turn を caller が継続できるようにする。`undefined` handler result は
+JSON-RPC response の `result` field が落ちないよう `null` に正規化する。`onAssistantDelta` と
+`onTurnCompleted` handler の例外は observer failure として隔離し、
+受信済み stream event や completion の waiter 解決を妨げない。実 Codex CLI との非破壊 smoke は
+`RAINRAIL_CODEX_APP_SERVER_SMOKE=1` のときだけ `src/codex-app-server/smoke.test.ts` で
+ephemeral thread / `readOnly` sandbox として実行し、古い app-server が camelCase sandbox shorthand を
+拒否した場合だけ legacy `read-only` に再試行する。
+
+LAN remote 用の境界は `WebSocketCodexAppServerTransportConfig` で先に固定する。
+現時点では `type: "websocket"`、`endpoint`、任意の `headers`、`tokenEnv`、
+`reconnect` policy を config/type として持つだけで、pairing、token rotation、
+remote daemon supervisor、pool scheduling は後続 issue の責務とする。
+
+Codex App Server runtime provider は `CodexAppServerRuntimeProviderOptions` から
+`createCodexAppServerRuntimeProvider()` を作り、低レベル helper として
+`startCodexAppServerRun()` も公開する。初期版では `1 task = 1 app-server process = 1 thread`
+として stdio transport だけを扱う。experimental な Codex App Server API に依存するため、
+Codex CLI を使わないユーザーはこの runtime provider plugin を install / setup しなくてよい。
+WebSocket / LAN remote transport と long-lived process pool は interface だけを先に固定し、
+運用で使う接続方式と pool scheduling は後続 issue の責務とする。`startRun()` は capability gate の背後で
+`codex app-server --listen stdio://` 相当を起動し、`initialize`、`thread/start`、
+`turn/start`、`turn/completed` を順に実行する。stdout/stderr は protocol transport とは
+別に private log file へ mirror し、run metadata には log path、stderr log path、pid、
+thread id、turn id、branch、task id を残す。default thread は自動 runtime として
+承認 request で止まらないよう `approvalPolicy: "never"` を使い、caller が
+`thread.approvalPolicy` で明示した場合だけ上書きできる。`never` 以外へ上書きする場合は
+`CodexAppServerRuntimeProviderRequestHandler` を `requestHandler` として渡し、server-initiated
+request を client が処理できるようにする。この request handler は `turn/start` response 後も
+`turn/completed` まで保持し、turn 実行中の承認/tool request も処理できるようにする。
+`thread` option に含まれる `undefined` field は default params を消さないよう merge 前に
+除外し、`approvalPolicy: null` も既定の `never` を消さないよう除外する。turn completion status は
+failed/error を `failed`、interrupted/cancelled/canceled を `canceled`、
+timeout/timedOut を `timed_out` に対応させる。`turn.error` が非 null の completion は
+status が欠落または未知でも `failed` とする。Codex turn summary の final text や payload text から
+`Outcome: needs_human` / `Outcome: split_recommended` が取れた場合は runtime status に反映し、
+`Outcome: implemented` / `Outcome: updated_issue` は成功完了として扱う。その他の完了だけを
+`succeeded` として扱う。
+
+実プロセス起動時は `command`、`args`、`cwd`、`env`、`inheritEnv` を runtime provider
+config から渡す。`HOME` と `CODEX_HOME` は Codex auth / settings / session state を
+決めるため、プロジェクトや supervisor が既定 HOME と別の Codex profile を使う場合は
+runtime provider config に明示する。Rainrail は secret 値を log や audit metadata に
+保存しないが、Codex CLI 側の HOME / CODEX_HOME 配下には認証状態が存在し得るため、
+shared runner では専用 directory を使う。`codex-app-server` plugin の setup / doctor /
+session test は `codex --version`、`codex app-server --help`、`codex login status`、
+stdio smoke を確認するための CLI surface であり、OpenClaw runtime provider の代替として
+同じ `runtimeProviders` registry に追加される。OpenClaw plugin は OpenClaw session
+起動用、Codex App Server plugin は Codex CLI app-server 起動用で、片方がもう片方を
+install したり proxy したりしない。
+
+stuck turn は provider-level timeout で `timed_out` とし、実行中の caller
+`AbortSignal` は即座に `canceled` として扱い、どちらも app-server process を
+`close()` 経由で cleanup する。`close()` は `closeTimeoutMs` で上限を設け、stuck process
+cleanup が runtime result 返却を無期限にブロックしないようにする。close timeout 後は
+stdout/stderr log mirror を無効化し、対応 transport が提供する場合は強制 kill fallback を呼ぶ。
+turn が受理される前の
+connect/initialize/thread/start/turn/start 失敗または startup 中の abort は assignment が
+claim を release できるよう reject する。runtime log path は symlink component に加えて
+未正規化の `..` parent directory segment も拒否し、private log 書き込みが想定外の親 path へ
+逸れないようにする。既存 log path は open 前に `lstat` し、regular file 以外なら拒否して
+FIFO などの特殊ファイルで startup が block しないようにする。
+`CodexAppServerRuntimeProviderClientFactory`、
+`CodexAppServerRuntimeProviderClientFactoryOptions`、`CodexAppServerRuntimeProviderClient`
+は test や別 supervisor が protocol client、pid、spawn/log wiring を差し替えるための
+injection point とする。`CodexAppServerRuntimeProviderLogWriter` は stdio mirror 書き込みを
+test などで差し替えるための injection point で、default の log write failure は stream
+listener から投げず runtime failure として観測する。`resumeRun()` は disabled provider では
+`startRun()` と同じく reject する。初期版の enabled provider では resume 未対応として
+`needs_human` と `resumeSupported: false` metadata を返す。
+`createAgentAssignmentRuntimeFromProvider()` は runtime provider が `failed`、`canceled`、
+`stopped`、`timed_out`、`compaction_failed` の terminal start failure を返した場合に throw し、
+Project claim finalize ではなく assignment 側の release/retry 経路に戻す。
+
 ## Event envelope
 
 `RainrailEventEnvelope` は `schemaVersion: "rainrail.event.v1"` を持つ。
@@ -273,6 +426,179 @@ secret や provider 固有 token は runtime provider の実装が保持し、
 contract には含めない。
 公開 contract は `RuntimeProvider` として提供する。
 
+## Dashboard card contribution
+
+Dashboard card は Core built-in card と plugin contribution を同じ catalog で扱う。
+公開 API は `DashboardCardDefinition`、`DashboardCardProvider`、
+`DashboardCardRegistry`、`createDashboardCardRegistry`、`defineDashboardCard`、
+`defineDashboardCardProvider`、`DashboardCardCatalogEntry`、
+`DashboardCardAvailability`、`DashboardCardEntry`、`DashboardCardSize`、
+`DashboardCardSizeConstraints`、`DashboardCardSettingsSchema`、
+`DashboardCardListOptions`、`DashboardLayoutItem`、
+`DashboardCardRegistryError`、`DashboardCardRegistryErrorCode`、
+`DashboardPluginManifest`、`DashboardPluginManifestDashboard`、
+`DashboardPluginManifestCard`、`createDashboardCardProviderFromManifest`、
+`DashboardCardSandboxHostOptions`、`DashboardCardSandboxFrameOptions`、
+`DashboardCardSandboxBridgeHandler`、`DashboardCardBridgeAction`、
+`DashboardCardBridgeRequest`、`DashboardCardSandboxBridge`、
+`DashboardCardSandboxFrame`、`DashboardCardSandboxLoadResult`、
+`DashboardCardSandboxHost`、`createDashboardCardSandboxHost` を入口にする。
+
+`DashboardCardDefinition.id` は catalog 全体で一意にする。Core card は
+`core.eventInbox` のように `core.` prefix を使い、plugin card は
+`plugin:<pluginName>.<cardName>` のように plugin 名を含める。registry は id 衝突を
+登録時に拒否するため、dashboard layout の `DashboardLayoutItem.cardId` は
+Core/plugin の区別を意識せず同じ id 空間を参照できる。
+`description` は任意だが、指定する場合は文字列だけを許可する。
+Core card の id は `core.${entry.name}`、plugin card の id は
+`plugin:${entry.pluginName}.${entry.cardName}` と完全一致させる。registry はこの
+namespace 不一致を登録時に拒否し、catalog consumer が id から Core/plugin と owner を
+安定して判定できるようにする。
+
+`DashboardCardDefinition.entry` は `{ type: "core", name }` または
+`{ type: "plugin", pluginName, cardName }` のどちらかに分ける。Core entry は
+Rainrail 本体が解決し、plugin entry は enabled plugin catalog で plugin が有効な場合だけ
+利用可能とする。無効な plugin、capability 不足、entry 解決失敗は card を catalog から
+消す理由にはしない。`DashboardCardCatalogEntry.availability` を
+`available` / `unavailable` で返し、`invalid_plugin`、`missing_capability`、
+`entry_resolution_failed` の reason と operator 向け message を保持する。
+entry 解決を実行する caller は、解決できなかった card id と理由を
+`DashboardCardListOptions.entryResolutionFailures` に渡して catalog 上へ反映する。
+entry 解決失敗と capability 不足が同時にある場合も、availability には
+`missingCapabilities` を残す。
+plugin card の availability 評価では `DashboardCardListOptions.enabledPlugins` が未指定なら
+plugin 有効性は未確認として扱い、`invalid_plugin` で unavailable にする。
+`DashboardCardListOptions.availableCapabilities` が未指定の場合も全許可とは扱わず、
+card が宣言した `requiredCapabilities` をすべて missing として返す。
+Rainrail 本体の標準 dashboard は `core` provider として
+`core.operationalTotals`、`core.eventInbox`、`core.workflowRuns`、`core.agentTasks`、
+`core.sources`、`core.queue`、`core.settings`、`core.operatorActions` を登録する。
+保存済み layout の永続 `cardId` 互換のため、legacy id の `core.overview` と
+`core.recentEvents` も catalog には残す。
+これらは既存の fixed dashboard surface と同じ情報境界を保ち、card dashboard 移行中も
+auth、token 入力、polling、stale data 表示、operator action の workflow を維持する。
+`registerProvider()` で plugin contribution を受ける場合、plugin entry の `pluginName` は
+`DashboardCardProvider.name` と一致しなければならない。別 provider の namespace を
+先取りする card は登録時に拒否する。Core entry は Rainrail 本体の内部登録経路だけが扱い、
+`registerProvider()` では `core` provider 名を予約名として拒否し、plugin provider 経由の
+non-plugin entry も拒否する。provider 登録は all-or-nothing とし、
+複数 card のうち 1 件でも invalid definition、duplicate id、namespace mismatch があれば、
+その provider 由来の card は 1 件も catalog に追加しない。
+provider object は `kind: "dashboard-card-provider"` と `cards` 配列を必須とし、
+別 kind や非配列 cards は登録時に拒否する。provider の各 card も通常の definition として
+先に検証し、非 object card から TypeError を漏らさない。plugin id の曖昧な分割を避けるため、
+plugin entry の `pluginName` と `cardName` は `.` と `:` を含めない。
+
+`requiredCapabilities` は dashboard 表示や provider 読み取りに必要な read-only
+capability を宣言する。registry の `list()` は caller が渡した
+`availableCapabilities` と `enabledPlugins` で availability を評価し、不足 capability は
+`missingCapabilities` として返す。危険操作の capability gate は Workflow plugin の
+`context.actions` に残し、Dashboard card は action 実行経路を持たない。
+`requiredCapabilities` は任意だが、指定する場合は非空文字列の配列だけを許可する。
+JS/JSON 経由の plugin が別 shape を渡した場合は登録時に `DashboardCardRegistryError` で
+拒否し、catalog 生成中に TypeError を漏らさない。
+
+`category` は dashboard 側の grouping 用の安定文字列とする。`size` は plain object、
+`size.default` は必須で、
+`size.min` / `size.max` は任意の制約として扱う。columns/rows は正の整数だけを許可し、
+min/default/max の大小関係が壊れた definition は登録時に
+`DashboardCardRegistryError` として拒否する。`settingsSchema` は JSON object schema
+compatible な operator settings metadata で、secret value や provider credential は
+含めない。Card-specific rendering payload は別 API で解決し、registry contract は
+definition と layout metadata だけを持つ。
+card definition と `settingsSchema` を指定する場合の schema は plain object として受ける。
+`settingsSchema` は `type: "object"`、JSON-serializable な値だけを許可する。
+`additionalProperties` は boolean または JSON schema plain object だけを指定できる。
+`Map`、function、`undefined`、`BigInt`、循環 object など、JSON として安定保存できない
+値は登録時に拒否する。
+Dashboard UI は card catalog の `settingsSchema` から per-card settings form を最小描画し、
+保存値は user dashboard layout item の `config` にだけ保存する。`config` は operational API の
+layout validation を通り、secret / token / credential 系 key は保存前に拒否するため、
+plugin card は provider credential や dashboard bearer token を settings に持ち込まない。
+registry は登録時に検証済み definition を clone/freeze し、plugin 側が元 object を後から
+mutate しても Map key、entry namespace、capability、size、entry resolution failure の照合が
+変わらないようにする。
+
+Plugin package manifest は `DashboardPluginManifest.dashboard.cards[]` で dashboard card
+contribution を宣言できる。`createDashboardCardProviderFromManifest()` は manifest の
+`name` を provider 名として使い、各 card の `name` から
+`plugin:<pluginName>.<cardName>` id と `{ type: "plugin", pluginName, cardName }`
+entry を生成する。manifest の `dashboard.cards` は配列だけを許可し、card object は通常の
+`DashboardCardDefinition` と同じ validation を受ける。これにより sample plugin は
+manifest だけで card catalog に contribution を登録でき、namespace 不一致や delimiter を含む
+card name は registry 登録前に `DashboardCardRegistryError` として扱われる。
+
+最小の plugin dashboard card contribution は次の形にする。
+
+```ts
+import {
+  createDashboardCardProviderFromManifest,
+  type DashboardPluginManifest,
+} from 'rainrail';
+
+const manifest: DashboardPluginManifest = {
+  name: 'github',
+  version: '1.0.0',
+  dashboard: {
+    cards: [{
+      name: 'queue',
+      title: 'GitHub queue',
+      description: 'Open issue and pull request queue.',
+      category: 'operations',
+      requiredCapabilities: ['dashboard:read', 'github:read'],
+      size: {
+        default: { columns: 3, rows: 2 },
+        min: { columns: 2, rows: 1 },
+        max: { columns: 6, rows: 4 },
+      },
+      settingsSchema: {
+        type: 'object',
+        properties: {
+          repository: { type: 'string' },
+        },
+        additionalProperties: false,
+      },
+    }],
+  },
+};
+
+export const githubDashboardCards = createDashboardCardProviderFromManifest(manifest);
+```
+
+この例の card id は `plugin:github.queue` になる。Dashboard layout は
+`DashboardLayoutItem.cardId` でこの id を参照し、operator が保存する card-specific
+settings は layout item の `config` にだけ入る。Plugin manifest や settings schema に
+provider credential、dashboard bearer token、secret 値は入れない。
+実際に typecheck される sample は `docs/examples/plugin-runtime.ts` の
+`issueSummaryManifest` と `issueSummaryCards` に置く。
+
+Plugin card の描画境界は `createDashboardCardSandboxHost()` が作る
+`DashboardCardSandboxFrame` を正とする。host は plugin card だけを iframe sandbox 対象にし、
+`sandbox: "allow-scripts"`、`referrerPolicy: "no-referrer"`、lazy loading の descriptor を返す。
+`allow-same-origin`、form、popup、top-navigation などの権限は付けない。sandbox URL は
+plugin 名と card 名の path だけで解決し、`cardId` と任意の layout item id を query に渡す。
+`DashboardCardSandboxBridge` は card definition の `requiredCapabilities` と host 側
+`allowedCapabilities` の交差だけを公開する。bridge handler がない capability や許可されていない
+capability request は card 単位で失敗し、危険操作は Workflow plugin の action gate に残す。
+Structured bridge call は `DashboardCardBridgeRequest` として `cardId`、`pluginName`、
+`cardName`、任意の `layoutItemId`、`capability`、`action`、JSON object `params` を渡す。
+host は handler dispatch 前に card id / plugin name / card name / layout item id / capability /
+action を検証し、別 card へのなりすましや capability の横取りを拒否する。
+旧 `bridge.request(capability, payload)` 形式は untrusted iframe 境界では handler dispatch 前に
+拒否し、structured request validation の迂回経路として残さない。
+`DashboardCardBridgeAction` は `refresh`、`openDetail`、`runAction`、`showToast` に限定する。
+`refresh` と `openDetail` は dashboard read capability の範囲で dashboard shell が代行し、
+`runAction` は operator API と同じ scope / confirmation / audit を通る handler だけが実装する。
+現行の iframe bridge は read-only capability だけを公開するため、operator capability の対応が
+追加されるまでは `runAction` を handler dispatch 前に拒否する。
+`showToast` は card-local feedback であり、token、store、raw payload への直接 access は提供しない。
+iframe bridge に公開できる capability は `dashboard:read` または `*:read` 形式の read-only
+capability だけとし、`runtime:start`、`secret:access`、`merge` などの workflow 用 capability は
+host 側の `allowedCapabilities` に含まれていても公開しない。
+`DashboardCardSandboxHost.load()` は load failure / timeout を throw せず
+`DashboardCardSandboxLoadResult` の `{ status: "error" }` として返すため、1 つの plugin card が
+落ちても dashboard shell と他カードの描画を継続できる。
+
 ## Workflow plugin
 
 Workflow plugin は `accepts(event)` で対象イベントを絞り込み、
@@ -289,6 +615,11 @@ mock task provider と mock runtime provider を `createRuntimeDispatcher` に�
 workflow test は外部 API なしで書ける。互換性のため dispatcher runtime context は
 provider/runtime 未指定でも構成できるが、その場合 handler に渡る provider/runtime は
 呼び出し時に明示的な unavailable error を返す。
+
+Workflow plugin と routing helper の公開 export inventory は
+`WorkflowPlugin`、`PluginRuntimeContext`、`RuntimeDispatcher`、
+`createRuntimeDispatcher`、`defineWorkflowPlugin`、`createPluginLoader`、
+`createRouteWorkflow`、`createRouteLocalHandler`、`routeRainrailEvent` とする。
 
 Workflow plugin は任意で `capabilities` と `timeoutMs` を宣言できる。
 `capabilities` は危険操作を呼ぶための宣言であり、宣言されていない plugin は
@@ -340,6 +671,9 @@ GitHub provider 実装の HTTP adapter behavior は `github-provider.test.ts`、
 `github-project.test.ts` で検証する。
 check rollup 判定は `allChecksPassed` に集約し、`success` に加えて
 `neutral` / `skipped` の完了も成功扱いにする。
+GitHub provider helper の公開 export inventory は `GitHubAuthToken`、
+`createGitHubTaskProvider`、`createGitHubPullRequestProvider`、
+`recordGitHubRateLimit` とする。
 
 ## Plugin loader と local handler
 
@@ -464,10 +798,51 @@ dispatcher の結果返却も止めない。audit sink が未設定の場合、d
 
 Rainrail の config は provider 境界ごとに分ける。`sources` は GitHub webhook
 などの event input、`taskProviders.github` は GitHub API 用の auth、
-`runtimeProviders.openclaw` は agent runtime 起動設定を持つ。`sourceBundles` は
-EEP Bridge bundle、GitHub webhook、Cloudflare tail、manual/chat source などの
-組み立てを明示する。bundle source は `provider` と `runtime` に既知 provider 名を
-参照として持ち、Core app / Worker は config からどの intake adapter を登録するか追える。
+`runtimeProviders` は agent runtime 起動設定または plugin runtime 定義を持つ。
+既存互換のため `runtimeProviders.openclaw` は省略時も default 設定として作られ、
+bundle source は引き続き `runtime: "openclaw"` で参照できる。
+`sourceBundles` は EEP Bridge bundle、GitHub webhook、Cloudflare tail、
+manual/chat source などの組み立てを明示する。bundle source は `provider` と
+`runtime` に既知 provider 名または plugin runtime id を参照として持ち、
+Core app / Worker は config からどの intake adapter を登録するか追える。
+
+plugin runtime provider は `runtimeProviders.<canonicalKey>` に `type: "plugin"`、
+`runtime`、`plugin`、任意の `executor` を持つ。`canonicalKey` は config 内の
+管理名で、source bundle から参照する値は `runtime` の文字列である。たとえば
+Codex App Server runtime を追加する場合は `runtimeProviders.codexAppServer.runtime`
+を `codex-app-server` にし、bundle source は `runtime: "codex-app-server"` を
+指定する。`sourceBundles[].sources[].runtime` が `openclaw` でも登録済み plugin
+runtime id でもない場合、config parse は明確な error で拒否する。同じ runtime id を
+複数 provider が宣言することも拒否する。
+
+```json
+{
+  "sourceBundles": [
+    {
+      "type": "eep-bridge",
+      "name": "plugin-ingress",
+      "sources": [
+        {
+          "type": "manual-chat",
+          "name": "codex-chat",
+          "sourceType": "chat",
+          "runtime": "codex-app-server"
+        }
+      ]
+    }
+  ],
+  "runtimeProviders": {
+    "codexAppServer": {
+      "type": "plugin",
+      "enabled": true,
+      "runtime": "codex-app-server",
+      "plugin": "@rainrail/codex-app-server-runtime",
+      "executor": "codex-app-server"
+    }
+  }
+}
+```
+
 環境変数は `${NAME}` 形式で JSON parse 前に展開し、値は JSON string content として
 エスケープする。secret 値そのものではなく、運用では環境変数や secret 名を
 config に渡す。Worker の `RAINRAIL_CONFIG_JSON` では `webhookSecret` に secret 名を
