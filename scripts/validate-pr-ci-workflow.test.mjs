@@ -45,7 +45,7 @@ describe('pull request CI workflow', () => {
     expect(workflow).toMatch(/^ {2}dashboard-e2e:\n {4}name: Dashboard E2E\n {4}needs: validate\n {4}runs-on: ubuntu-24\.04$/m);
     expect(workflow).toMatch(/^ {6}- name: Install Playwright browser\n {8}run: pnpm exec playwright install --with-deps chromium$/m);
     expect(workflow).toMatch(/^ {6}- name: Run dashboard E2E\n {8}run: pnpm e2e:dashboard$/m);
-    expect(workflow).toMatch(/^ {6}- name: Upload dashboard E2E artifacts\n {8}if: \$\{\{ always\(\) \}\}\n {8}uses: actions\/upload-artifact@v4/m);
+    expect(workflow).toMatch(/^ {6}- name: Upload dashboard E2E artifacts\n {8}if: \$\{\{ always\(\) \}\}\n {8}uses: actions\/upload-artifact@v7/m);
     expect(workflow).toContain('name: dashboard-e2e-artifacts');
     expect(workflow).toContain('playwright-report/dashboard/');
     expect(workflow).toContain('test-results/dashboard/');
@@ -55,7 +55,7 @@ describe('pull request CI workflow', () => {
   });
 
   it('uploads the product site build artifact for trusted preview deploys without secrets', () => {
-    expect(workflow).toContain('uses: actions/upload-artifact@v4');
+    expect(workflow).toContain('uses: actions/upload-artifact@v7');
     expect(workflow).toContain('name: rainrail-pages-dist');
     expect(workflow).toContain('path: apps/www/dist');
     expect(workflow).toContain('github.event.pull_request.head.repo.full_name == github.repository');

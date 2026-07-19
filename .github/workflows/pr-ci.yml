@@ -65,7 +65,7 @@ jobs:
         if: >-
           github.event.pull_request.head.repo.full_name == github.repository &&
           !github.event.pull_request.draft
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: rainrail-pages-dist
           path: apps/www/dist
@@ -75,7 +75,7 @@ jobs:
         if: >-
           github.event.pull_request.head.repo.full_name == github.repository &&
           !github.event.pull_request.draft
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: rainrail-docs-dist
           path: apps/docs/dist
@@ -144,7 +144,7 @@ jobs:
 
       - name: Upload dashboard E2E artifacts
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dashboard-e2e-artifacts
           path: |
