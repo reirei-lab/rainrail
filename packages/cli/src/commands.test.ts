@@ -1909,6 +1909,32 @@ describe('Rainrail CLI built-in commands', () => {
     });
   });
 
+  it('does not write generated dashboard auth when start environment validation fails', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'invalid-env-dashboard-auth');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      const originalConfig = await readFile(configPath, 'utf8');
+      let started = false;
+
+      const result = runRainrailCli(['start'], {
+        cwd: projectRoot,
+        env: {
+          RAINRAIL_PORT: 'bad',
+        },
+        serverStarter: () => {
+          started = true;
+          return { stop: () => undefined };
+        },
+      });
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toBe('RAINRAIL_PORT must be an integer from 1 to 65535\n');
+      expect(result.stdout).toBe('');
+      expect(started).toBe(false);
+      await expect(readFile(configPath, 'utf8')).resolves.toBe(originalConfig);
+    });
+  });
+
   it('passes configured dashboardAuth into rainrail start options', async () => {
     await withTempDirectory(async (directory) => {
       const projectRoot = await initRainrailProject(directory, 'configured-dashboard-auth');

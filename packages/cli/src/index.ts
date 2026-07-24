@@ -2826,6 +2826,22 @@ function resolveStartCommandOptions(
     };
   }
 
+  const startOptionError = validateStartOptionInputs(
+    project,
+    config,
+    environment.env ?? process.env,
+    parsedStart,
+  );
+  if (startOptionError !== undefined) {
+    return {
+      result: {
+        exitCode: 1,
+        stdout: '',
+        stderr: `${startOptionError}\n`,
+      },
+    };
+  }
+
   let generatedDashboardAuthScopes: readonly DashboardAuthScope[];
   try {
     if (hasReadOnlyAndOperatorDashboardAuth(config.dashboardAuth)) {
@@ -3367,6 +3383,55 @@ function dedupeLocalSources(sources: readonly RainrailLocalSource[]): RainrailLo
     deduped.push(source);
   }
   return deduped;
+}
+
+function validateStartOptionInputs(
+  project: RainrailProject,
+  config: StartConfig,
+  env: Record<string, string | undefined>,
+  args: StartArguments,
+): string | undefined {
+  const envHost = env.RAINRAIL_HOST === undefined
+    ? undefined
+    : parseStartHost(env.RAINRAIL_HOST, 'RAINRAIL_HOST');
+  if (envHost !== undefined && typeof envHost !== 'string') {
+    return envHost.message;
+  }
+
+  const envPort = env.RAINRAIL_PORT === undefined
+    ? undefined
+    : parseStartPort(env.RAINRAIL_PORT, 'RAINRAIL_PORT');
+  if (envPort !== undefined && typeof envPort !== 'number') {
+    return envPort.message;
+  }
+
+  try {
+    if (env.RAINRAIL_ALLOWED_HOSTS !== undefined && env.RAINRAIL_ALLOWED_HOSTS.length > 0) {
+      parseStartAllowedHosts(
+        env.RAINRAIL_ALLOWED_HOSTS.split(',').map((host) => host.trim()).filter((host) => host.length > 0),
+        'RAINRAIL_ALLOWED_HOSTS',
+      );
+    }
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+
+  const envOperationalStore = parseStartOperationalStoreEnv(env);
+  if (envOperationalStore.error !== undefined) {
+    return envOperationalStore.error;
+  }
+  const demoMode = args.demoMode || env.RAINRAIL_DASHBOARD_DEMO === '1';
+  normalizeStartOperationalStoreConfigPath(
+    envOperationalStore.config ?? config.operationalStore ?? (demoMode
+      ? {
+        kind: 'sqlite',
+        databasePath: localDefaultDemoOperationalStorePath,
+        eventLimit: localDefaultOperationalStoreEventLimit,
+      }
+      : undefined),
+    project.root,
+  );
+  return undefined;
 }
 
 function resolveStartOptions(
