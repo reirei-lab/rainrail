@@ -521,6 +521,38 @@ test('keeps dashboard connection controls inside the narrow viewport', async ({ 
   }
 });
 
+test('keeps dashboard connection controls stacked on mobile', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(`${dashboardBaseUrl}/en/dashboard?demo=1`);
+
+  await expect(page.getByRole('heading', { level: 1, name: /Rainrail Operations/i })).toBeVisible();
+
+  const [
+    apiBaseUrlBox,
+    tokenBox,
+    connectBox,
+    clearBox,
+  ] = await page.locator([
+    '[data-api-base-url-input]',
+    '[data-token-input]',
+    '[data-token-save]',
+    '[data-token-clear]',
+  ].join(',')).evaluateAll((elements) => elements.map((element) => {
+    const rect = element.getBoundingClientRect();
+    return {
+      top: rect.top,
+      bottom: rect.bottom,
+      left: rect.left,
+      right: rect.right,
+    };
+  }));
+
+  expect(apiBaseUrlBox.right).toBeLessThanOrEqual(390);
+  expect(tokenBox.top).toBeGreaterThanOrEqual(apiBaseUrlBox.bottom);
+  expect(connectBox.top).toBeGreaterThanOrEqual(tokenBox.bottom);
+  expect(clearBox.top).toBeGreaterThanOrEqual(connectBox.bottom);
+});
+
 function overviewCardControl(controls: Locator, name: string): Locator {
   return controls.locator('.dashboard-overview-card-control').filter({ hasText: name });
 }

@@ -1539,6 +1539,17 @@ h3 {
     grid-template-columns: 1fr;
   }
 
+  .dashboard-auth {
+    align-items: stretch;
+    justify-content: flex-start;
+  }
+
+  .dashboard-auth input,
+  .dashboard-auth .button {
+    flex-basis: 100%;
+    width: 100%;
+  }
+
   .routing-console {
     padding: 14px;
   }
