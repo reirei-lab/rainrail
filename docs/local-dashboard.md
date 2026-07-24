@@ -13,21 +13,31 @@ machine.
 
 ## Quick start
 
-Create or enter a Rainrail project directory, initialize the config, generate
-local dashboard tokens, then start the foreground server:
+Create or enter a Rainrail project directory, initialize the config, then start
+the foreground server:
 
 ```sh
 mkdir -p ~/rainrail-sandbox/my-agent-ops
 cd ~/rainrail-sandbox/my-agent-ops
 rainrail init
-rainrail setup --dashboard-auth-only --yes
 rainrail start
 ```
 
-`rainrail setup --dashboard-auth-only --yes` writes local-only
-`dashboardAuth.readOnlyToken` and `dashboardAuth.operatorToken` values into
-`rainrail.config.json` when they are missing. Existing values are preserved.
-Keep these values private. To rotate concrete local values in place, run:
+On startup, `rainrail start` writes local dashboard auth tokens to
+`rainrail.config.json` when they are missing. This automatically writes missing
+local dashboard auth tokens for new local projects:
+`dashboardAuth.readOnlyToken` and `dashboardAuth.operatorToken`. Existing
+concrete values are preserved, and `${ENV_VAR}` references are not overwritten.
+`dashboardAuth.adminToken` is not created automatically. Keep these values
+private. When startup creates tokens, the CLI logs only the affected scopes,
+not token values:
+
+```text
+Dashboard Auth: generated scopes: read-only, operator
+Dashboard Auth: configured scopes: read-only, operator
+```
+
+To rotate concrete local values in place, run:
 
 ```sh
 rainrail setup --dashboard-auth-only --rotate --yes
@@ -48,6 +58,7 @@ Health: http://127.0.0.1:8787/healthz
 Dashboard: http://127.0.0.1:8787/dashboard
 Dashboard routes: /en/dashboard/events, /en/dashboard/runs, /en/dashboard/tasks, /en/dashboard/sources, /en/dashboard/queue, /en/dashboard/settings
 Dashboard API: http://127.0.0.1:8787/api/v1/overview
+Dashboard Auth: configured scopes: read-only, operator
 Event Stream: http://127.0.0.1:8787/events
 ```
 
@@ -265,9 +276,12 @@ environment-provided `SSE_BEARER_TOKEN`; unset or rotate that environment value
 too when you want to revoke it. New projects should prefer `dashboardAuth`
 because it can distinguish read-only, operator, and admin behavior.
 
-When `rainrail start` binds outside localhost, one of
-`dashboardAuth.readOnlyToken`, `dashboardAuth.operatorToken`,
-`dashboardAuth.adminToken`, or `SSE_BEARER_TOKEN` is required before startup.
+`rainrail start` auto-generates local dashboard bearer tokens when
+`dashboardAuth.readOnlyToken` or `dashboardAuth.operatorToken` is missing,
+including when binding outside localhost. If the whole `dashboardAuth` value is
+provided as an environment fragment such as `"dashboardAuth": ${DASHBOARD_AUTH}`
+and the expanded value already contains read-only and operator tokens, startup
+uses that expanded configuration without rewriting the file.
 
 ## Auth failure guidance
 
@@ -277,9 +291,9 @@ If the dashboard stays in an auth error state, check the API response:
   Paste a dashboard token into the local dashboard or send
   `Authorization: Bearer <token>` when calling the API directly.
 - HTTP `403` with `invalid_bearer_token` means a token was sent but it does not
-  match the configured local dashboard auth tokens. Re-run
-  `rainrail setup --dashboard-auth-only --yes` or copy the current token from
-  `rainrail.config.json`.
+  match the configured local dashboard auth tokens. Copy the current token from
+  `rainrail.config.json`, or restart `rainrail start` if a missing local token
+  should be generated.
 - HTTP `403` with `insufficient_scope` means a read-only token tried to call an
   operator/admin route. Use `dashboardAuth.operatorToken` or `adminToken` for
   agent-task commands.
@@ -322,14 +336,14 @@ configured.
 
 Local MVP decision: keep the bearer-token field as the operator UX.
 This resolves [#231](https://github.com/reirei-lab/rainrail/issues/231) for the
-local dashboard MVP. When no dashboard auth token is configured and
-`rainrail start` is bound to localhost, the supported local no-auth mode
-remains available. For the recommended operator setup, and for any non-local
-bind where auth is required, configured `dashboardAuth` bearer tokens give the
-current dashboard an explicit copy/paste credential, stable API behavior, and
-no browser cookie dependency. This also matches the shared operational API
-contract, where `Authorization: Bearer <token>` carries the read-only,
-operator, or admin scope used by both dashboard reads and command routes.
+local dashboard MVP. `rainrail start` now auto-generates local dashboard bearer
+tokens when `dashboardAuth.readOnlyToken` or `dashboardAuth.operatorToken` is
+missing. There is no localhost no-auth dashboard API mode for normal startup.
+Configured `dashboardAuth` bearer tokens give the current dashboard an explicit
+copy/paste credential, stable API behavior, and no browser cookie dependency.
+This also matches the shared operational API contract, where
+`Authorization: Bearer <token>` carries the read-only, operator, or admin scope
+used by both dashboard reads and command routes.
 
 Do not add cookie/session login to `rainrail start` until Rainrail has a hosted
 or multi-user dashboard mode. A session login would add CSRF protection,

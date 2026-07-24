@@ -1987,6 +1987,75 @@ describe('Rainrail CLI built-in commands', () => {
     });
   });
 
+  it('adds dashboard auth to an otherwise empty config before rainrail start without leaving a trailing comma', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'start-empty-config-dashboard-auth');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      await writeFile(configPath, '{\n}\n');
+      let startOptions: RainrailStartOptions | undefined;
+
+      const result = runRainrailCli(['start'], {
+        cwd: projectRoot,
+        serverStarter: (options) => {
+          startOptions = options;
+          return { stop: () => undefined };
+        },
+      });
+      const rawConfig = await readFile(configPath, 'utf8');
+      const config = JSON.parse(rawConfig) as {
+        dashboardAuth?: { readOnlyToken?: string; operatorToken?: string; adminToken?: string };
+      };
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+      expect(result.stdout).toContain('Dashboard Auth: generated scopes: read-only, operator');
+      expect(config.dashboardAuth).toEqual(startOptions?.dashboardAuth);
+      expect(config.dashboardAuth?.readOnlyToken).toMatch(/^rr_local_read-only_[A-Za-z0-9_-]+$/u);
+      expect(config.dashboardAuth?.operatorToken).toMatch(/^rr_local_operator_[A-Za-z0-9_-]+$/u);
+      expect(config.dashboardAuth?.adminToken).toBeUndefined();
+      expect(rawConfig).not.toContain(',\n}');
+    });
+  });
+
+  it('starts without rewriting a whole dashboardAuth environment fragment that already has local tokens', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'start-dashboard-auth-object-fragment');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      const originalConfig = [
+        '{',
+        '  "dashboardAuth": ${DASHBOARD_AUTH},',
+        '  "sourceBundles": [],',
+        '  "sources": [],',
+        '  "taskProviders": {},',
+        '  "runtimeProviders": {}',
+        '}',
+      ].join('\n');
+      await writeFile(configPath, originalConfig);
+      let startOptions: RainrailStartOptions | undefined;
+
+      const result = runRainrailCli(['start'], {
+        cwd: projectRoot,
+        env: {
+          DASHBOARD_AUTH: '{"readOnlyToken":"fragment-read-token","operatorToken":"fragment-operator-token"}',
+        },
+        serverStarter: (options) => {
+          startOptions = options;
+          return { stop: () => undefined };
+        },
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+      expect(result.stdout).not.toContain('Dashboard Auth: generated scopes');
+      expect(result.stdout).toContain('Dashboard Auth: configured scopes: read-only, operator');
+      expect(startOptions?.dashboardAuth).toEqual({
+        readOnlyToken: 'fragment-read-token',
+        operatorToken: 'fragment-operator-token',
+      });
+      await expect(readFile(configPath, 'utf8')).resolves.toBe(originalConfig);
+    });
+  });
+
   it('keeps SSE_BEARER_TOKEN valid when dashboardAuth.readOnlyToken is configured', async () => {
     await withTempDirectory(async (directory) => {
       const projectRoot = await initRainrailProject(directory, 'dashboard-auth-compat');

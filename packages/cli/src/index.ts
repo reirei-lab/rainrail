@@ -2828,10 +2828,14 @@ function resolveStartCommandOptions(
 
   let generatedDashboardAuthScopes: readonly DashboardAuthScope[];
   try {
-    const dashboardAuthResult = ensureLocalDashboardAuth(project.configPath, fileSystem, environment.env ?? process.env);
-    generatedDashboardAuthScopes = dashboardAuthResult.created.map(dashboardAuthKeyToScope);
-    if (dashboardAuthResult.created.length > 0) {
-      config = readStartConfig(project.configPath, fileSystem, environment.env ?? process.env);
+    if (hasReadOnlyAndOperatorDashboardAuth(config.dashboardAuth)) {
+      generatedDashboardAuthScopes = [];
+    } else {
+      const dashboardAuthResult = ensureLocalDashboardAuth(project.configPath, fileSystem, environment.env ?? process.env);
+      generatedDashboardAuthScopes = dashboardAuthResult.created.map(dashboardAuthKeyToScope);
+      if (dashboardAuthResult.created.length > 0) {
+        config = readStartConfig(project.configPath, fileSystem, environment.env ?? process.env);
+      }
     }
   } catch (error) {
     return {
@@ -3454,6 +3458,11 @@ function mergeDashboardAuth(configAuth: RainrailDashboardAuth, eventsBearerToken
 
 function hasAnyDashboardAuthToken(auth: RainrailDashboardAuth): boolean {
   return [auth.readOnlyToken, auth.operatorToken, auth.adminToken].some((token) => token !== undefined && token.length > 0);
+}
+
+function hasReadOnlyAndOperatorDashboardAuth(auth: RainrailDashboardAuth): boolean {
+  return auth.readOnlyToken !== undefined && auth.readOnlyToken.length > 0 &&
+    auth.operatorToken !== undefined && auth.operatorToken.length > 0;
 }
 
 function isLocalBindHost(host: string): boolean {
@@ -5365,10 +5374,19 @@ function insertTopLevelDashboardAuth(raw: string, dashboardAuth: Record<string, 
   if (objectStart < 0) {
     throw new Error('config must be an object');
   }
+  const objectEnd = raw.lastIndexOf('}');
+  if (objectEnd < objectStart) {
+    throw new Error('config must be an object');
+  }
   const afterStart = raw.slice(objectStart + 1);
   const newline = afterStart.startsWith('\r\n') ? '\r\n' : afterStart.startsWith('\n') ? '\n' : '';
+  const body = raw.slice(objectStart + 1, objectEnd);
+  const hasExistingProperties = body.trim().length > 0;
   const rest = newline.length === 0 ? afterStart : afterStart.slice(newline.length);
   const property = `"dashboardAuth": ${JSON.stringify(dashboardAuth, null, 2).replaceAll('\n', `${newline}  `)}`;
+  if (!hasExistingProperties) {
+    return `${raw.slice(0, objectStart + 1)}${newline}  ${property}${newline}${raw.slice(objectEnd)}`;
+  }
   return `${raw.slice(0, objectStart + 1)}${newline}  ${property},${newline}${rest}`;
 }
 
