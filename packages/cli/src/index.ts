@@ -236,6 +236,7 @@ export type RainrailStartOptions = {
   readonly dashboardToken?: string;
   readonly dashboardAssetRoot?: string;
   readonly dashboardAuth: RainrailDashboardAuth;
+  readonly generatedDashboardAuthScopes?: readonly DashboardAuthScope[];
   readonly sources: readonly RainrailLocalSource[];
   readonly operationalStoreConfig?: RainrailStartOperationalStoreConfig;
 };
@@ -264,6 +265,8 @@ export type RainrailDashboardAuth = {
   readonly operatorToken?: string;
   readonly adminToken?: string;
 };
+
+export type DashboardAuthScope = 'read-only' | 'operator' | 'admin';
 
 export type RainrailStartOperationalStoreKind = 'sqlite' | 'json' | 'memory';
 
@@ -2823,11 +2826,49 @@ function resolveStartCommandOptions(
     };
   }
 
+  const startOptionError = validateStartOptionInputs(
+    project,
+    config,
+    environment.env ?? process.env,
+    parsedStart,
+  );
+  if (startOptionError !== undefined) {
+    return {
+      result: {
+        exitCode: 1,
+        stdout: '',
+        stderr: `${startOptionError}\n`,
+      },
+    };
+  }
+
+  let generatedDashboardAuthScopes: readonly DashboardAuthScope[];
+  try {
+    if (hasReadOnlyAndOperatorDashboardAuth(config.dashboardAuth)) {
+      generatedDashboardAuthScopes = [];
+    } else {
+      const dashboardAuthResult = ensureLocalDashboardAuth(project.configPath, fileSystem, environment.env ?? process.env);
+      generatedDashboardAuthScopes = dashboardAuthResult.created.map(dashboardAuthKeyToScope);
+      if (dashboardAuthResult.created.length > 0) {
+        config = readStartConfig(project.configPath, fileSystem, environment.env ?? process.env);
+      }
+    }
+  } catch (error) {
+    return {
+      result: {
+        exitCode: 1,
+        stdout: '',
+        stderr: `${error instanceof Error ? error.message : String(error)}\n`,
+      },
+    };
+  }
+
   const resolved = resolveStartOptions(
     project,
     config,
     environment.env ?? process.env,
     parsedStart,
+    generatedDashboardAuthScopes,
   );
   if (resolved.error !== undefined) {
     return {
@@ -3344,11 +3385,61 @@ function dedupeLocalSources(sources: readonly RainrailLocalSource[]): RainrailLo
   return deduped;
 }
 
+function validateStartOptionInputs(
+  project: RainrailProject,
+  config: StartConfig,
+  env: Record<string, string | undefined>,
+  args: StartArguments,
+): string | undefined {
+  const envHost = env.RAINRAIL_HOST === undefined
+    ? undefined
+    : parseStartHost(env.RAINRAIL_HOST, 'RAINRAIL_HOST');
+  if (envHost !== undefined && typeof envHost !== 'string') {
+    return envHost.message;
+  }
+
+  const envPort = env.RAINRAIL_PORT === undefined
+    ? undefined
+    : parseStartPort(env.RAINRAIL_PORT, 'RAINRAIL_PORT');
+  if (envPort !== undefined && typeof envPort !== 'number') {
+    return envPort.message;
+  }
+
+  try {
+    if (env.RAINRAIL_ALLOWED_HOSTS !== undefined && env.RAINRAIL_ALLOWED_HOSTS.length > 0) {
+      parseStartAllowedHosts(
+        env.RAINRAIL_ALLOWED_HOSTS.split(',').map((host) => host.trim()).filter((host) => host.length > 0),
+        'RAINRAIL_ALLOWED_HOSTS',
+      );
+    }
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+
+  const envOperationalStore = parseStartOperationalStoreEnv(env);
+  if (envOperationalStore.error !== undefined) {
+    return envOperationalStore.error;
+  }
+  const demoMode = args.demoMode || env.RAINRAIL_DASHBOARD_DEMO === '1';
+  normalizeStartOperationalStoreConfigPath(
+    envOperationalStore.config ?? config.operationalStore ?? (demoMode
+      ? {
+        kind: 'sqlite',
+        databasePath: localDefaultDemoOperationalStorePath,
+        eventLimit: localDefaultOperationalStoreEventLimit,
+      }
+      : undefined),
+    project.root,
+  );
+  return undefined;
+}
+
 function resolveStartOptions(
   project: RainrailProject,
   config: StartConfig,
   env: Record<string, string | undefined>,
   args: StartArguments,
+  generatedDashboardAuthScopes: readonly DashboardAuthScope[] = [],
 ): { readonly options: RainrailStartOptions; readonly error?: undefined } | {
   readonly options?: undefined;
   readonly error: string;
@@ -3415,6 +3506,7 @@ function resolveStartOptions(
       ...(dashboardAssetRoot === undefined ? {} : { dashboardAssetRoot }),
       sources: config.sources,
       dashboardAuth,
+      ...(generatedDashboardAuthScopes.length === 0 ? {} : { generatedDashboardAuthScopes }),
       ...(demoMode ? { demoMode } : {}),
       ...(dashboardToken === undefined ? {} : { dashboardToken }),
       ...(operationalStoreConfig === undefined ? {} : { operationalStoreConfig }),
@@ -3431,6 +3523,11 @@ function mergeDashboardAuth(configAuth: RainrailDashboardAuth, eventsBearerToken
 
 function hasAnyDashboardAuthToken(auth: RainrailDashboardAuth): boolean {
   return [auth.readOnlyToken, auth.operatorToken, auth.adminToken].some((token) => token !== undefined && token.length > 0);
+}
+
+function hasReadOnlyAndOperatorDashboardAuth(auth: RainrailDashboardAuth): boolean {
+  return auth.readOnlyToken !== undefined && auth.readOnlyToken.length > 0 &&
+    auth.operatorToken !== undefined && auth.operatorToken.length > 0;
 }
 
 function isLocalBindHost(host: string): boolean {
@@ -3556,7 +3653,11 @@ function formatStartOutput(options: RainrailStartOptions): string {
   const localIntakeRows = options.sources.map((source) =>
     `  ${source.name} (${source.sourceType}): ${baseUrl}${source.endpoint}`
   );
-  const dashboardAuthRows = formatDashboardAuthRows(options.dashboardAuth, options.configPath);
+  const dashboardAuthRows = formatDashboardAuthRows(
+    options.dashboardAuth,
+    options.configPath,
+    options.generatedDashboardAuthScopes ?? [],
+  );
   const dashboardRoutes = [
     '/en/dashboard/events',
     '/en/dashboard/runs',
@@ -3590,7 +3691,11 @@ function formatStartOutput(options: RainrailStartOptions): string {
   ].join('\n');
 }
 
-function formatDashboardAuthRows(auth: RainrailDashboardAuth, configPath: string): readonly string[] {
+function formatDashboardAuthRows(
+  auth: RainrailDashboardAuth,
+  configPath: string,
+  generatedScopes: readonly DashboardAuthScope[] = [],
+): readonly string[] {
   const scopes = [
     auth.readOnlyToken === undefined ? undefined : 'read-only',
     auth.operatorToken === undefined ? undefined : 'operator',
@@ -3598,7 +3703,12 @@ function formatDashboardAuthRows(auth: RainrailDashboardAuth, configPath: string
   ].filter((scope) => scope !== undefined);
 
   if (scopes.length > 0) {
-    return [`Dashboard Auth: configured scopes: ${scopes.join(', ')}`];
+    return [
+      ...(generatedScopes === undefined || generatedScopes.length === 0
+        ? []
+        : [`Dashboard Auth: generated scopes: ${generatedScopes.join(', ')}`]),
+      `Dashboard Auth: configured scopes: ${scopes.join(', ')}`,
+    ];
   }
 
   return [
@@ -5329,10 +5439,19 @@ function insertTopLevelDashboardAuth(raw: string, dashboardAuth: Record<string, 
   if (objectStart < 0) {
     throw new Error('config must be an object');
   }
+  const objectEnd = raw.lastIndexOf('}');
+  if (objectEnd < objectStart) {
+    throw new Error('config must be an object');
+  }
   const afterStart = raw.slice(objectStart + 1);
   const newline = afterStart.startsWith('\r\n') ? '\r\n' : afterStart.startsWith('\n') ? '\n' : '';
+  const body = raw.slice(objectStart + 1, objectEnd);
+  const hasExistingProperties = body.trim().length > 0;
   const rest = newline.length === 0 ? afterStart : afterStart.slice(newline.length);
   const property = `"dashboardAuth": ${JSON.stringify(dashboardAuth, null, 2).replaceAll('\n', `${newline}  `)}`;
+  if (!hasExistingProperties) {
+    return `${raw.slice(0, objectStart + 1)}${newline}  ${property}${newline}${raw.slice(objectEnd)}`;
+  }
   return `${raw.slice(0, objectStart + 1)}${newline}  ${property},${newline}${rest}`;
 }
 
@@ -5827,6 +5946,12 @@ function formatDashboardAuthSetupOutput(result: LocalDashboardAuthSetupResult): 
     ? ''
     : `Generated ${formatDashboardAuthKeyList(result.created)} in ${basename(result.configPath)}.\n`;
   return `${rotatedOutput}${createdOutput}`;
+}
+
+function dashboardAuthKeyToScope(key: keyof RainrailDashboardAuth): DashboardAuthScope {
+  if (key === 'readOnlyToken') return 'read-only';
+  if (key === 'operatorToken') return 'operator';
+  return 'admin';
 }
 
 function formatDashboardAuthKeyList(keys: readonly (keyof RainrailDashboardAuth)[]): string {

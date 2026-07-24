@@ -27,7 +27,9 @@ describe('dashboard demo server harness', () => {
       expect(harness.baseUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
       expect(existsSync(harness.databasePath)).toBe(true);
 
-      const overviewResponse = await fetch(`${harness.baseUrl}/api/v1/overview`);
+      const overviewResponse = await fetch(`${harness.baseUrl}/api/v1/overview`, {
+        headers: harness.dashboardAuthHeaders.readOnly,
+      });
       expect(overviewResponse.status).toBe(200);
       await expect(overviewResponse.json()).resolves.toMatchObject({
         data: {
@@ -46,7 +48,9 @@ describe('dashboard demo server harness', () => {
       expect(dashboardResponse.status).toBe(200);
       await expect(dashboardResponse.text()).resolves.toContain('data-dashboard-app');
 
-      const sourcesResponse = await fetch(`${harness.baseUrl}/api/v1/sources`);
+      const sourcesResponse = await fetch(`${harness.baseUrl}/api/v1/sources`, {
+        headers: harness.dashboardAuthHeaders.readOnly,
+      });
       expect(sourcesResponse.status).toBe(200);
       await expect(sourcesResponse.json()).resolves.toMatchObject({
         data: expect.arrayContaining([

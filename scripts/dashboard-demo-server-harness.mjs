@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -104,6 +104,7 @@ export async function startDashboardDemoServerHarness(options = {}) {
     databasePath,
     configPath,
     dashboardAssetRoot,
+    dashboardAuthHeaders: readDashboardAuthHeaders(configPath),
     process: child,
     cleanup,
   };
@@ -147,6 +148,22 @@ function dashboardDemoServerEnv(sourceEnv, dashboardAssetRoot) {
     delete env[key];
   }
   return env;
+}
+
+/**
+ * @param {string} configPath
+ */
+function readDashboardAuthHeaders(configPath) {
+  const config = JSON.parse(readFileSync(configPath, 'utf8'));
+  const readOnlyToken = config.dashboardAuth?.readOnlyToken;
+  const operatorToken = config.dashboardAuth?.operatorToken;
+  if (typeof readOnlyToken !== 'string' || typeof operatorToken !== 'string') {
+    throw new Error(`Rainrail dashboard auth was not generated in ${configPath}`);
+  }
+  return {
+    readOnly: { Authorization: `Bearer ${readOnlyToken}` },
+    operator: { Authorization: `Bearer ${operatorToken}` },
+  };
 }
 
 /**
