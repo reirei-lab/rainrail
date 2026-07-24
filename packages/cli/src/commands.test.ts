@@ -128,6 +128,20 @@ async function rawLocalHttpRequest(port: number, lines: readonly string[]): Prom
   return response;
 }
 
+async function readDashboardAuthHeaders(
+  projectRoot: string,
+  scope: 'readOnlyToken' | 'operatorToken' = 'readOnlyToken',
+): Promise<Record<string, string>> {
+  const config = JSON.parse(await readFile(join(projectRoot, 'rainrail.config.json'), 'utf8')) as {
+    dashboardAuth?: { readOnlyToken?: string; operatorToken?: string };
+  };
+  const token = config.dashboardAuth?.[scope];
+  if (token === undefined) {
+    throw new Error(`missing generated dashboardAuth.${scope}`);
+  }
+  return { Authorization: `Bearer ${token}` };
+}
+
 async function closeTestServer(result: { server?: { stop: () => void | Promise<void> } }): Promise<void> {
   await result.server?.stop();
 }
@@ -1170,6 +1184,7 @@ describe('Rainrail CLI built-in commands', () => {
   it('starts a foreground local server with built-in defaults from a Rainrail workspace', async () => {
     await withTempDirectory(async (directory) => {
       const projectRoot = await initRainrailProject(directory, 'local-server');
+      const configPath = join(projectRoot, 'rainrail.config.json');
       const starts: RainrailStartOptions[] = [];
 
       const result = runRainrailCli(['start'], {
@@ -1200,10 +1215,16 @@ describe('Rainrail CLI built-in commands', () => {
       );
       expect(result.stdout).toContain('Event Stream: http://127.0.0.1:8787/events');
       expect(result.stdout).toContain('Dashboard API: http://127.0.0.1:8787/api/v1/overview');
-      expect(result.stdout).toContain('Dashboard Auth: not configured');
-      expect(result.stdout).toContain('Run `rainrail --config');
-      expect(result.stdout).toContain('setup --dashboard-auth-only --yes` to generate local dashboardAuth tokens.');
-      expect(result.stdout).toContain(`Or set dashboardAuth.readOnlyToken, dashboardAuth.operatorToken, or dashboardAuth.adminToken in ${join(projectRoot, 'rainrail.config.json')}.`);
+      expect(result.stdout).toContain('Dashboard Auth: generated scopes: read-only, operator');
+      expect(result.stdout).toContain('Dashboard Auth: configured scopes: read-only, operator');
+      expect(result.stdout).not.toContain('rr_local_');
+      expect(starts[0]?.dashboardAuth.readOnlyToken).toMatch(/^rr_local_read-only_[A-Za-z0-9_-]+$/u);
+      expect(starts[0]?.dashboardAuth.operatorToken).toMatch(/^rr_local_operator_[A-Za-z0-9_-]+$/u);
+      const config = JSON.parse(await readFile(configPath, 'utf8')) as {
+        dashboardAuth?: { readOnlyToken?: string; operatorToken?: string; adminToken?: string };
+      };
+      expect(config.dashboardAuth).toEqual(starts[0]?.dashboardAuth);
+      expect(config.dashboardAuth?.adminToken).toBeUndefined();
       expect(result.stdout).not.toContain('EEP Bridge');
     });
   });
@@ -1423,7 +1444,7 @@ describe('Rainrail CLI built-in commands', () => {
     });
   });
 
-  it('prints custom config setup guidance when dashboard auth is not configured', async () => {
+  it('generates dashboard auth in the selected custom config before rainrail start', async () => {
     await withTempDirectory(async (directory) => {
       const projectRoot = await initRainrailProject(directory, 'custom-start-auth-guide');
       const customConfigPath = join(projectRoot, 'custom.rainrail.json');
@@ -1445,9 +1466,15 @@ describe('Rainrail CLI built-in commands', () => {
 
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain(`Config: ${customConfigPath}`);
-      expect(result.stdout).toContain(`Run \`rainrail --config ${customConfigPath} setup --dashboard-auth-only --yes\` to generate local dashboardAuth tokens.`);
-      expect(result.stdout).toContain(`Or set dashboardAuth.readOnlyToken, dashboardAuth.operatorToken, or dashboardAuth.adminToken in ${customConfigPath}.`);
+      expect(result.stdout).toContain('Dashboard Auth: generated scopes: read-only, operator');
+      expect(result.stdout).toContain('Dashboard Auth: configured scopes: read-only, operator');
       expect(result.stdout).not.toContain('rainrail.config.json');
+      const config = JSON.parse(await readFile(customConfigPath, 'utf8')) as {
+        dashboardAuth?: { readOnlyToken?: string; operatorToken?: string; adminToken?: string };
+      };
+      expect(config.dashboardAuth?.readOnlyToken).toMatch(/^rr_local_read-only_[A-Za-z0-9_-]+$/u);
+      expect(config.dashboardAuth?.operatorToken).toMatch(/^rr_local_operator_[A-Za-z0-9_-]+$/u);
+      expect(config.dashboardAuth?.adminToken).toBeUndefined();
     });
   });
 
@@ -1595,8 +1622,10 @@ describe('Rainrail CLI built-in commands', () => {
   it('rejects string server ports from start config files', async () => {
     await withTempDirectory(async (directory) => {
       const projectRoot = await initRainrailProject(directory, 'string-config-port');
-      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      await writeFile(configPath, `${JSON.stringify({
         server: { host: '127.0.0.1', port: '8787' },
+        dashboardAuth: {},
         sourceBundles: [],
         sources: [],
         taskProviders: {},
@@ -1610,6 +1639,7 @@ describe('Rainrail CLI built-in commands', () => {
 
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain('config.server.port must be an integer from 1 to 65535');
+      await expect(readFile(configPath, 'utf8')).resolves.toContain('"dashboardAuth": {}');
     });
   });
 
@@ -1870,14 +1900,19 @@ describe('Rainrail CLI built-in commands', () => {
       expect(startOptions).toMatchObject({
         host: '0.0.0.0',
         port: 9999,
-        dashboardAuth: { readOnlyToken: 'events-token' },
+        dashboardAuth: {
+          readOnlyToken: expect.stringMatching(/^rr_local_read-only_[A-Za-z0-9_-]+$/u),
+          operatorToken: expect.stringMatching(/^rr_local_operator_[A-Za-z0-9_-]+$/u),
+        },
       });
+      expect(startOptions?.dashboardToken).toBe('events-token');
     });
   });
 
   it('passes configured dashboardAuth into rainrail start options', async () => {
     await withTempDirectory(async (directory) => {
       const projectRoot = await initRainrailProject(directory, 'configured-dashboard-auth');
+      const configPath = join(projectRoot, 'rainrail.config.json');
       await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
         dashboardAuth: {
           readOnlyToken: 'read-token',
@@ -1909,6 +1944,46 @@ describe('Rainrail CLI built-in commands', () => {
         operatorToken: 'operator-token',
         adminToken: 'admin-token',
       });
+      await expect(readFile(configPath, 'utf8')).resolves.toContain('"operatorToken": "operator-token"');
+    });
+  });
+
+  it('preserves dashboard auth env references while generating missing tokens before rainrail start', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'start-dashboard-auth-env-reference');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      await writeFile(configPath, `${JSON.stringify({
+        dashboardAuth: {
+          readOnlyToken: '${DASHBOARD_READ_TOKEN}',
+        },
+        sourceBundles: [],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+      let startOptions: RainrailStartOptions | undefined;
+
+      const result = runRainrailCli(['start'], {
+        cwd: projectRoot,
+        env: { DASHBOARD_READ_TOKEN: 'expanded-read-token' },
+        serverStarter: (options) => {
+          startOptions = options;
+          return { stop: () => undefined };
+        },
+      });
+      const rawConfig = await readFile(configPath, 'utf8');
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+      expect(result.stdout).toContain('Dashboard Auth: generated scopes: operator');
+      expect(result.stdout).toContain('Dashboard Auth: configured scopes: read-only, operator');
+      expect(result.stdout).not.toContain('expanded-read-token');
+      expect(rawConfig).toContain('"readOnlyToken": "${DASHBOARD_READ_TOKEN}"');
+      expect(rawConfig).not.toContain('expanded-read-token');
+      expect(rawConfig).toMatch(/"operatorToken": "rr_local_operator_[A-Za-z0-9_-]+"/u);
+      expect(startOptions?.dashboardAuth.readOnlyToken).toBe('expanded-read-token');
+      expect(startOptions?.dashboardAuth.operatorToken).toMatch(/^rr_local_operator_[A-Za-z0-9_-]+$/u);
+      expect(startOptions?.dashboardAuth.adminToken).toBeUndefined();
     });
   });
 
@@ -2295,7 +2370,7 @@ describe('Rainrail CLI built-in commands', () => {
         expect(dashboardHtml).toContain('data-dashboard-app');
         expect(dashboardHtml).toContain('data-api-base-url=""');
         expect(dashboardHtml).not.toContain('https://ops.example.test');
-        expect(dashboardHtml).toContain('data-auth-required="false"');
+        expect(dashboardHtml).toContain('data-auth-required="true"');
         expect(dashboardHtml).toContain('src="/_astro/dashboard-app.js"');
         expect(dashboardHtml).toContain('href="/ja/dashboard"');
         expect(dashboardHtml).toContain('日本語');
@@ -2306,7 +2381,7 @@ describe('Rainrail CLI built-in commands', () => {
           const localizedHtml = await localizedDashboard.text();
           expect(localizedHtml, locale).toContain('data-dashboard-app');
           expect(localizedHtml, locale).toContain('data-api-base-url=""');
-          expect(localizedHtml, locale).toContain('data-auth-required="false"');
+          expect(localizedHtml, locale).toContain('data-auth-required="true"');
         }
 
         const dashboardEvents = await fetch(`http://127.0.0.1:${port}/en/dashboard/events?demo=1`);
@@ -2314,7 +2389,7 @@ describe('Rainrail CLI built-in commands', () => {
         const dashboardEventsHtml = await dashboardEvents.text();
         expect(dashboardEventsHtml).toContain('data-dashboard-tab="events"');
         expect(dashboardEventsHtml).toContain('data-api-base-url=""');
-        expect(dashboardEventsHtml).toContain('data-auth-required="false"');
+        expect(dashboardEventsHtml).toContain('data-auth-required="true"');
 
         const dashboardQueue = await fetch(`http://127.0.0.1:${port}/dashboard/queue?demo=1&status=blocked`);
         expect(dashboardQueue.status).toBe(200);
@@ -2323,7 +2398,7 @@ describe('Rainrail CLI built-in commands', () => {
         expect(dashboardQueueHtml).toContain('/en/dashboard/queue');
         expect(dashboardQueueHtml).toContain('target.search = window.location.search');
         expect(dashboardQueueHtml).toContain('data-api-base-url=""');
-        expect(dashboardQueueHtml).toContain('data-auth-required="false"');
+        expect(dashboardQueueHtml).toContain('data-auth-required="true"');
 
         const dashboardAsset = await fetch(`http://127.0.0.1:${port}/_astro/dashboard-app.js`);
         expect(dashboardAsset.status).toBe(200);
@@ -2346,7 +2421,9 @@ describe('Rainrail CLI built-in commands', () => {
         });
         expect(accepted.status).toBe(202);
 
-        const overview = await fetch(`http://127.0.0.1:${port}/api/v1/overview`);
+        const readAuth = await readDashboardAuthHeaders(projectRoot);
+        const operatorAuth = await readDashboardAuthHeaders(projectRoot, 'operatorToken');
+        const overview = await fetch(`http://127.0.0.1:${port}/api/v1/overview`, { headers: readAuth });
         await expect(overview.json()).resolves.toMatchObject({
           data: {
             counts: { events: 1 },
@@ -2371,7 +2448,7 @@ describe('Rainrail CLI built-in commands', () => {
           '/api/v1/queue',
           '/api/v1/settings',
         ]) {
-          const response = await fetch(`http://127.0.0.1:${port}${route}`);
+          const response = await fetch(`http://127.0.0.1:${port}${route}`, { headers: readAuth });
           expect(response.status, route).toBe(200);
           await expect(response.json(), route).resolves.toMatchObject({
             data: expect.any(Array),
@@ -2379,7 +2456,7 @@ describe('Rainrail CLI built-in commands', () => {
           });
         }
 
-        const cards = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/cards`);
+        const cards = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/cards`, { headers: readAuth });
         expect(cards.status).toBe(200);
         await expect(cards.json()).resolves.toMatchObject({
           data: expect.arrayContaining([
@@ -2400,7 +2477,7 @@ describe('Rainrail CLI built-in commands', () => {
           ]),
         });
 
-        const layout = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout`);
+        const layout = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout`, { headers: readAuth });
         expect(layout.status).toBe(200);
         await expect(layout.json()).resolves.toMatchObject({
           data: {
@@ -2422,7 +2499,7 @@ describe('Rainrail CLI built-in commands', () => {
 
         const layoutSave = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout`, {
           method: 'PUT',
-          headers: { 'content-type': 'application/json', 'x-request-id': 'request-local-layout-save' },
+          headers: { ...operatorAuth, 'content-type': 'application/json', 'x-request-id': 'request-local-layout-save' },
           body: JSON.stringify({
             items: [{
               id: 'operational-totals',
@@ -2448,7 +2525,7 @@ describe('Rainrail CLI built-in commands', () => {
 
         const sharedCatalogSizedLayoutSave = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout`, {
           method: 'PUT',
-          headers: { 'content-type': 'application/json', 'x-request-id': 'request-local-shared-catalog-layout' },
+          headers: { ...operatorAuth, 'content-type': 'application/json', 'x-request-id': 'request-local-shared-catalog-layout' },
           body: JSON.stringify({
             dryRun: true,
             items: [
@@ -2472,7 +2549,7 @@ describe('Rainrail CLI built-in commands', () => {
 
         const dryRunLayoutSave = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout`, {
           method: 'PUT',
-          headers: { 'content-type': 'application/json', 'x-request-id': 'request-local-layout-preview' },
+          headers: { ...operatorAuth, 'content-type': 'application/json', 'x-request-id': 'request-local-layout-preview' },
           body: JSON.stringify({
             dryRun: true,
             items: [{
@@ -2498,7 +2575,7 @@ describe('Rainrail CLI built-in commands', () => {
             result: { itemCount: 1 },
           },
         });
-        const layoutAfterDryRun = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout`);
+        const layoutAfterDryRun = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout`, { headers: readAuth });
         await expect(layoutAfterDryRun.json()).resolves.toMatchObject({
           data: {
             id: 'user.dashboardLayout',
@@ -2508,7 +2585,7 @@ describe('Rainrail CLI built-in commands', () => {
 
         const invalidLayoutSave = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout`, {
           method: 'PUT',
-          headers: { 'content-type': 'application/json' },
+          headers: { ...operatorAuth, 'content-type': 'application/json' },
           body: JSON.stringify({
             items: [{
               id: 'operational-totals',
@@ -2525,7 +2602,7 @@ describe('Rainrail CLI built-in commands', () => {
 
         const overlappingLayoutSave = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout`, {
           method: 'PUT',
-          headers: { 'content-type': 'application/json' },
+          headers: { ...operatorAuth, 'content-type': 'application/json' },
           body: JSON.stringify({
             items: [
               {
@@ -2561,7 +2638,7 @@ describe('Rainrail CLI built-in commands', () => {
 
         const layoutConfig = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout/items/operational-totals/config`, {
           method: 'PATCH',
-          headers: { 'content-type': 'application/json' },
+          headers: { ...operatorAuth, 'content-type': 'application/json' },
           body: JSON.stringify({ config: { density: 'compact' } }),
         });
         expect(layoutConfig.status).toBe(200);
@@ -2576,7 +2653,7 @@ describe('Rainrail CLI built-in commands', () => {
 
         const sensitiveLayoutConfig = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout/items/operational-totals/config`, {
           method: 'PATCH',
-          headers: { 'content-type': 'application/json' },
+          headers: { ...operatorAuth, 'content-type': 'application/json' },
           body: JSON.stringify({ config: { credential: 'must-not-store' } }),
         });
         expect(sensitiveLayoutConfig.status).toBe(400);
@@ -2585,7 +2662,7 @@ describe('Rainrail CLI built-in commands', () => {
           itemId: 'operational-totals',
         });
 
-        const sources = await fetch(`http://127.0.0.1:${port}/api/v1/sources`);
+        const sources = await fetch(`http://127.0.0.1:${port}/api/v1/sources`, { headers: readAuth });
         await expect(sources.json()).resolves.toMatchObject({
           data: [{
             id: 'github-local',
@@ -2598,7 +2675,7 @@ describe('Rainrail CLI built-in commands', () => {
           }],
         });
 
-        const events = await fetch(`http://127.0.0.1:${port}/api/v1/events`);
+        const events = await fetch(`http://127.0.0.1:${port}/api/v1/events`, { headers: readAuth });
         await expect(events.json()).resolves.toMatchObject({
           data: [{
             id: 'local-event-000001',
@@ -2615,12 +2692,12 @@ describe('Rainrail CLI built-in commands', () => {
             receivedAt: expect.any(String),
           }],
         });
-        const filtered = await fetch(`http://127.0.0.1:${port}/api/v1/events?filter[name]=github.issue`);
+        const filtered = await fetch(`http://127.0.0.1:${port}/api/v1/events?filter[name]=github.issue`, { headers: readAuth });
         await expect(filtered.json()).resolves.toMatchObject({
           data: [{ id: 'local-event-000001', name: 'github.issue' }],
         });
 
-        const apiRoutePrecedence = await fetch(`http://127.0.0.1:${port}/api/v1/events/local-event-000001`);
+        const apiRoutePrecedence = await fetch(`http://127.0.0.1:${port}/api/v1/events/local-event-000001`, { headers: readAuth });
         expect(apiRoutePrecedence.status).toBe(200);
         expect(apiRoutePrecedence.headers.get('content-type')).toContain('application/json');
         await expect(apiRoutePrecedence.json()).resolves.toMatchObject({
@@ -2662,14 +2739,16 @@ describe('Rainrail CLI built-in commands', () => {
       const result = await runRainrailCliAsync(['start'], { cwd: projectRoot });
       try {
         expect(result.exitCode).toBe(0);
+        const operatorAuth = await readDashboardAuthHeaders(projectRoot, 'operatorToken');
+        const readAuth = await readDashboardAuthHeaders(projectRoot);
         const failed = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout/items/operational-totals/config`, {
           method: 'PATCH',
-          headers: { 'content-type': 'application/json' },
+          headers: { ...operatorAuth, 'content-type': 'application/json' },
           body: JSON.stringify({ config: { density: 'compact' } }),
         });
         expect(failed.status).toBe(500);
 
-        const layout = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout`);
+        const layout = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout`, { headers: readAuth });
         await expect(layout.json()).resolves.toMatchObject({
           data: {
             id: 'core.defaultLayout',
@@ -2681,7 +2760,7 @@ describe('Rainrail CLI built-in commands', () => {
             ]),
           },
         });
-        const layoutBody = await (await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout`)).text();
+        const layoutBody = await (await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout`, { headers: readAuth })).text();
         expect(layoutBody).not.toContain('compact');
       } finally {
         await rm(blockedParent, { force: true });
@@ -2734,6 +2813,8 @@ describe('Rainrail CLI built-in commands', () => {
       const first = await runRainrailCliAsync(['start'], { cwd: projectRoot });
       try {
         expect(first.exitCode).toBe(0);
+        const operatorAuth = await readDashboardAuthHeaders(projectRoot, 'operatorToken');
+        const readAuth = await readDashboardAuthHeaders(projectRoot);
         for (const delivery of ['delivery-sqlite-start-1', 'delivery-sqlite-start-2', 'delivery-sqlite-start-3']) {
           const body = JSON.stringify({ action: 'opened' });
           const accepted = await fetch(`http://127.0.0.1:${port}/webhooks/github`, {
@@ -2745,12 +2826,12 @@ describe('Rainrail CLI built-in commands', () => {
         }
         await expectSqliteOperationalFilesProtected(databasePath);
 
-        const overview = await fetch(`http://127.0.0.1:${port}/api/v1/overview`);
+        const overview = await fetch(`http://127.0.0.1:${port}/api/v1/overview`, { headers: readAuth });
         await expect(overview.json()).resolves.toMatchObject({ data: { counts: { events: 3 } } });
 
         const layoutConfig = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/layout/items/operational-totals/config`, {
           method: 'PATCH',
-          headers: { 'content-type': 'application/json' },
+          headers: { ...operatorAuth, 'content-type': 'application/json' },
           body: JSON.stringify({ config: { density: 'comfortable' } }),
         });
         expect(layoutConfig.status).toBe(200);
@@ -2782,10 +2863,11 @@ describe('Rainrail CLI built-in commands', () => {
       const second = await runRainrailCliAsync(['start'], { cwd: projectRoot });
       try {
         expect(second.exitCode).toBe(0);
-        const overview = await fetch(`http://127.0.0.1:${restartPort}/api/v1/overview`);
+        const readAuth = await readDashboardAuthHeaders(projectRoot);
+        const overview = await fetch(`http://127.0.0.1:${restartPort}/api/v1/overview`, { headers: readAuth });
         await expect(overview.json()).resolves.toMatchObject({ data: { counts: { events: 3 } } });
 
-        const events = await fetch(`http://127.0.0.1:${restartPort}/api/v1/events?limit=2`);
+        const events = await fetch(`http://127.0.0.1:${restartPort}/api/v1/events?limit=2`, { headers: readAuth });
         const eventsPayload = await events.json() as { data: Array<{ id: string; deliveryId: string }>; page: { nextCursor: string | null } };
         expect(eventsPayload).toMatchObject({
           data: [
@@ -2795,7 +2877,7 @@ describe('Rainrail CLI built-in commands', () => {
           page: { nextCursor: expect.any(String) },
         });
 
-        const nextEvents = await fetch(`http://127.0.0.1:${restartPort}/api/v1/events?limit=2&cursor=${eventsPayload.page.nextCursor}`);
+        const nextEvents = await fetch(`http://127.0.0.1:${restartPort}/api/v1/events?limit=2&cursor=${eventsPayload.page.nextCursor}`, { headers: readAuth });
         await expect(nextEvents.json()).resolves.toMatchObject({
           data: [
             { id: 'local-event-000001', deliveryId: 'delivery-sqlite-start-1' },
@@ -2803,7 +2885,7 @@ describe('Rainrail CLI built-in commands', () => {
           page: { nextCursor: null },
         });
 
-        const layout = await fetch(`http://127.0.0.1:${restartPort}/api/v1/dashboard/layout`);
+        const layout = await fetch(`http://127.0.0.1:${restartPort}/api/v1/dashboard/layout`, { headers: readAuth });
         await expect(layout.json()).resolves.toMatchObject({
           data: {
             id: 'user.dashboardLayout',
@@ -2812,7 +2894,7 @@ describe('Rainrail CLI built-in commands', () => {
             items: [{ id: 'operational-totals', config: { density: 'comfortable' } }],
           },
         });
-        const layoutBody = await (await fetch(`http://127.0.0.1:${restartPort}/api/v1/dashboard/layout`)).text();
+        const layoutBody = await (await fetch(`http://127.0.0.1:${restartPort}/api/v1/dashboard/layout`, { headers: readAuth })).text();
         expect(layoutBody).not.toContain('must-not-read');
         expect(layoutBody).not.toContain('apiToken');
       } finally {
@@ -2917,8 +2999,9 @@ describe('Rainrail CLI built-in commands', () => {
       const result = await runRainrailCliAsync(['start'], { cwd: projectRoot });
       try {
         expect(result.exitCode).toBe(0);
+        const readAuth = await readDashboardAuthHeaders(projectRoot);
 
-        const overview = await fetch(`http://127.0.0.1:${port}/api/v1/overview`);
+        const overview = await fetch(`http://127.0.0.1:${port}/api/v1/overview`, { headers: readAuth });
         await expect(overview.json()).resolves.toMatchObject({
           data: {
             counts: { events: 1, agentTasks: 1, activityEvents: 1 },
@@ -2926,7 +3009,7 @@ describe('Rainrail CLI built-in commands', () => {
           },
         });
 
-        const tasks = await fetch(`http://127.0.0.1:${port}/api/v1/agent-tasks`);
+        const tasks = await fetch(`http://127.0.0.1:${port}/api/v1/agent-tasks`, { headers: readAuth });
         const taskPayload = await tasks.json();
         expect(taskPayload).toMatchObject({
           data: [{
@@ -2937,7 +3020,7 @@ describe('Rainrail CLI built-in commands', () => {
         });
         expect(JSON.stringify(taskPayload)).not.toContain('/api/v1/agent-tasks/agent_task_shared_sqlite');
 
-        const taskDetail = await fetch(`http://127.0.0.1:${port}/api/v1/agent-tasks/agent_task_shared_sqlite`);
+        const taskDetail = await fetch(`http://127.0.0.1:${port}/api/v1/agent-tasks/agent_task_shared_sqlite`, { headers: readAuth });
         expect(taskDetail.status).toBe(200);
         await expect(taskDetail.json()).resolves.toMatchObject({
           data: {
@@ -2954,22 +3037,22 @@ describe('Rainrail CLI built-in commands', () => {
           },
         });
 
-        const invalidTasks = await fetch(`http://127.0.0.1:${port}/api/v1/agent-tasks?filter[unknown]=x`);
+        const invalidTasks = await fetch(`http://127.0.0.1:${port}/api/v1/agent-tasks?filter[unknown]=x`, { headers: readAuth });
         expect(invalidTasks.status).toBe(400);
         await expect(invalidTasks.json()).resolves.toEqual({ error: 'unsupported_filter', filter: 'filter[unknown]' });
 
-        const invalidWorkflowSort = await fetch(`http://127.0.0.1:${port}/api/v1/workflow-runs?sort=newest`);
+        const invalidWorkflowSort = await fetch(`http://127.0.0.1:${port}/api/v1/workflow-runs?sort=newest`, { headers: readAuth });
         expect(invalidWorkflowSort.status).toBe(400);
         await expect(invalidWorkflowSort.json()).resolves.toEqual({ error: 'unsupported_sort', sort: 'newest' });
 
-        const workflows = await fetch(`http://127.0.0.1:${port}/api/v1/workflow-runs`);
+        const workflows = await fetch(`http://127.0.0.1:${port}/api/v1/workflow-runs`, { headers: readAuth });
         const workflowPayload = await workflows.json();
         expect(workflowPayload).toMatchObject({
           data: [{ id: 'act_shared_sqlite', summary: 'shared workflow dispatched' }],
         });
         expect(JSON.stringify(workflowPayload)).not.toContain('/api/v1/workflow-runs/act_shared_sqlite');
 
-        const workflowDetail = await fetch(`http://127.0.0.1:${port}/api/v1/workflow-runs/act_shared_sqlite`);
+        const workflowDetail = await fetch(`http://127.0.0.1:${port}/api/v1/workflow-runs/act_shared_sqlite`, { headers: readAuth });
         expect(workflowDetail.status).toBe(200);
         await expect(workflowDetail.json()).resolves.toMatchObject({
           data: {
@@ -2986,17 +3069,17 @@ describe('Rainrail CLI built-in commands', () => {
           },
         });
 
-        const missingWorkflowDetail = await fetch(`http://127.0.0.1:${port}/api/v1/workflow-runs/missing`);
+        const missingWorkflowDetail = await fetch(`http://127.0.0.1:${port}/api/v1/workflow-runs/missing`, { headers: readAuth });
         expect(missingWorkflowDetail.status).toBe(404);
         await expect(missingWorkflowDetail.json()).resolves.toEqual({ error: 'workflow_run_not_found' });
 
-        const settings = await fetch(`http://127.0.0.1:${port}/api/v1/settings`);
+        const settings = await fetch(`http://127.0.0.1:${port}/api/v1/settings`, { headers: readAuth });
         const settingsPayload = await settings.json() as { data: Array<{ id: string; value: string }> };
         expect(settingsPayload.data.find((row) => row.id === 'operational-snapshot-limit')).toMatchObject({
           value: '10 events',
         });
 
-        const detail = await fetch(`http://127.0.0.1:${port}/api/v1/events/github-webhook%3Adelivery-existing%3Agithub.issue`);
+        const detail = await fetch(`http://127.0.0.1:${port}/api/v1/events/github-webhook%3Adelivery-existing%3Agithub.issue`, { headers: readAuth });
         await expect(detail.json()).resolves.toMatchObject({
           data: {
             id: 'github-webhook:delivery-existing:github.issue',
@@ -3331,7 +3414,8 @@ describe('Rainrail CLI built-in commands', () => {
       const result = await runRainrailCliAsync(['start'], { cwd: projectRoot });
       try {
         expect(result.exitCode).toBe(0);
-        const detail = await fetch(`http://127.0.0.1:${port}/api/v1/events/github-webhook%3Adelivery-old-schema%3Agithub.issue`);
+        const readAuth = await readDashboardAuthHeaders(projectRoot);
+        const detail = await fetch(`http://127.0.0.1:${port}/api/v1/events/github-webhook%3Adelivery-old-schema%3Agithub.issue`, { headers: readAuth });
         await expect(detail.json()).resolves.toMatchObject({
           data: {
             id: 'github-webhook:delivery-old-schema:github.issue',
@@ -3675,7 +3759,9 @@ describe('Rainrail CLI built-in commands', () => {
       const result = await runRainrailCliAsync(['start'], { cwd: projectRoot });
       const controller = new AbortController();
       try {
+        const readAuth = await readDashboardAuthHeaders(projectRoot);
         const eventsResponse = await fetch(`http://127.0.0.1:${port}/events`, {
+          headers: readAuth,
           signal: controller.signal,
         });
         expect(eventsResponse.status).toBe(200);
@@ -3735,7 +3821,8 @@ describe('Rainrail CLI built-in commands', () => {
           expect(posted.status).toBe(202);
         }
 
-        const firstPage = await fetch(`http://127.0.0.1:${port}/api/v1/events?limit=2`);
+        const readAuth = await readDashboardAuthHeaders(projectRoot);
+        const firstPage = await fetch(`http://127.0.0.1:${port}/api/v1/events?limit=2`, { headers: readAuth });
         const firstPageBody = await firstPage.json() as { data: Array<{ id: string; links: { self: string } }>; page: { nextCursor: string | null } };
         expect(firstPageBody.data).toHaveLength(2);
         expect(firstPageBody.data.map((event) => event.id)).toEqual([
@@ -3744,7 +3831,7 @@ describe('Rainrail CLI built-in commands', () => {
         ]);
         expect(firstPageBody.page.nextCursor).toEqual(expect.any(String));
 
-        const detail = await fetch(`http://127.0.0.1:${port}${firstPageBody.data[0]!.links.self}`);
+        const detail = await fetch(`http://127.0.0.1:${port}${firstPageBody.data[0]!.links.self}`, { headers: readAuth });
         expect(detail.status).toBe(200);
         await expect(detail.json()).resolves.toMatchObject({
           data: {
@@ -3761,7 +3848,7 @@ describe('Rainrail CLI built-in commands', () => {
           },
         });
 
-        const secondPage = await fetch(`http://127.0.0.1:${port}/api/v1/events?limit=2&cursor=${firstPageBody.page.nextCursor}`);
+        const secondPage = await fetch(`http://127.0.0.1:${port}/api/v1/events?limit=2&cursor=${firstPageBody.page.nextCursor}`, { headers: readAuth });
         const secondPageBody = await secondPage.json() as { data: Array<{ id: string }>; page: { nextCursor: string | null } };
         expect(secondPageBody.data).toHaveLength(1);
         expect(secondPageBody.data.map((event) => event.id)).toEqual(['local-event-000001']);
@@ -3808,7 +3895,8 @@ describe('Rainrail CLI built-in commands', () => {
           expect(posted.status).toBe(202);
         }
 
-        const events = await fetch(`http://127.0.0.1:${port}/api/v1/events`);
+        const readAuth = await readDashboardAuthHeaders(projectRoot);
+        const events = await fetch(`http://127.0.0.1:${port}/api/v1/events`, { headers: readAuth });
         const body = await events.json() as { data: Array<{ id: string }>; page: { nextCursor: string | null } };
         expect(body.data).toHaveLength(50);
         expect(body.data[0]?.id).toBe('local-event-000055');
@@ -3854,6 +3942,7 @@ describe('Rainrail CLI built-in commands', () => {
 
       const result = await runRainrailCliAsync(['start'], { cwd: projectRoot });
       try {
+        const readAuth = await readDashboardAuthHeaders(projectRoot);
         expect((await fetch(`http://127.0.0.1:${port}/webhooks/github`, {
           method: 'POST',
           headers: githubWebhookHeaders('secret', '{}'),
@@ -3861,13 +3950,13 @@ describe('Rainrail CLI built-in commands', () => {
         })).status).toBe(202);
         expect((await fetch(`http://127.0.0.1:${port}/manual`, { method: 'POST', body: '{}' })).status).toBe(202);
 
-        const manualEvents = await fetch(`http://127.0.0.1:${port}/api/v1/events?filter[source]=manual`);
+        const manualEvents = await fetch(`http://127.0.0.1:${port}/api/v1/events?filter[source]=manual`, { headers: readAuth });
         await expect(manualEvents.json()).resolves.toMatchObject({
           data: [{ source: { type: 'manual', name: 'manual-local' }, name: 'manual.event' }],
           page: { nextCursor: null },
         });
 
-        const githubEvents = await fetch(`http://127.0.0.1:${port}/api/v1/events?filter[name]=github.issue`);
+        const githubEvents = await fetch(`http://127.0.0.1:${port}/api/v1/events?filter[name]=github.issue`, { headers: readAuth });
         await expect(githubEvents.json()).resolves.toMatchObject({
           data: [{ source: { type: 'github', name: 'github-local' }, name: 'github.issue' }],
           page: { nextCursor: null },
@@ -3885,7 +3974,8 @@ describe('Rainrail CLI built-in commands', () => {
       const result = await runRainrailCliAsync(['start', '--port', String(port)], { cwd: projectRoot });
       try {
         expect(result.exitCode).toBe(0);
-        const response = await fetch(`http://127.0.0.1:${port}/api/v1/events?cursor=not-a-cursor`);
+        const readAuth = await readDashboardAuthHeaders(projectRoot);
+        const response = await fetch(`http://127.0.0.1:${port}/api/v1/events?cursor=not-a-cursor`, { headers: readAuth });
         expect(response.status).toBe(400);
         await expect(response.json()).resolves.toEqual({ error: 'invalid_cursor' });
       } finally {
@@ -3901,8 +3991,9 @@ describe('Rainrail CLI built-in commands', () => {
       const result = await runRainrailCliAsync(['start', '--port', String(port)], { cwd: projectRoot });
       try {
         expect(result.exitCode).toBe(0);
+        const readAuth = await readDashboardAuthHeaders(projectRoot);
         for (const limit of ['0', '1000']) {
-          const response = await fetch(`http://127.0.0.1:${port}/api/v1/events?limit=${limit}`);
+          const response = await fetch(`http://127.0.0.1:${port}/api/v1/events?limit=${limit}`, { headers: readAuth });
           expect(response.status).toBe(400);
           await expect(response.json()).resolves.toEqual({ error: 'invalid_limit' });
         }
@@ -4404,7 +4495,8 @@ describe('Rainrail CLI built-in commands', () => {
       const result = await runRainrailCliAsync(['start'], { cwd: projectRoot });
       try {
         expect(result.exitCode).toBe(0);
-        const sources = await fetch(`http://127.0.0.1:${port}/api/v1/sources`);
+        const readAuth = await readDashboardAuthHeaders(projectRoot);
+        const sources = await fetch(`http://127.0.0.1:${port}/api/v1/sources`, { headers: readAuth });
         await expect(sources.json()).resolves.toMatchObject({
           data: [{
             name: 'github-webhook',
@@ -4436,7 +4528,8 @@ describe('Rainrail CLI built-in commands', () => {
       });
       try {
         expect(result.exitCode).toBe(0);
-        const overview = await fetch(`http://127.0.0.1:${port}/api/v1/overview`);
+        const readAuth = await readDashboardAuthHeaders(projectRoot);
+        const overview = await fetch(`http://127.0.0.1:${port}/api/v1/overview`, { headers: readAuth });
         expect(overview.status).toBe(200);
       } finally {
         await closeTestServer(result);
@@ -4785,18 +4878,19 @@ describe('Rainrail CLI built-in commands', () => {
       const result = await runRainrailCliAsync(['start'], { cwd: projectRoot });
       try {
         expect(result.exitCode).toBe(0);
-        const filtered = await fetch(`http://127.0.0.1:${port}/api/v1/sources?filter[source]=github`);
+        const readAuth = await readDashboardAuthHeaders(projectRoot);
+        const filtered = await fetch(`http://127.0.0.1:${port}/api/v1/sources?filter[source]=github`, { headers: readAuth });
         await expect(filtered.json()).resolves.toMatchObject({
           data: [{ name: 'github-local', sourceType: 'github' }],
           page: { limit: 50, nextCursor: null },
         });
 
-        const firstPage = await fetch(`http://127.0.0.1:${port}/api/v1/sources?limit=1`);
+        const firstPage = await fetch(`http://127.0.0.1:${port}/api/v1/sources?limit=1`, { headers: readAuth });
         const firstPageBody = await firstPage.json() as { data: Array<{ name: string }>; page: { nextCursor: string | null } };
         expect(firstPageBody.data).toHaveLength(1);
         expect(firstPageBody.page.nextCursor).toEqual(expect.any(String));
 
-        const secondPage = await fetch(`http://127.0.0.1:${port}/api/v1/sources?limit=1&cursor=${firstPageBody.page.nextCursor}`);
+        const secondPage = await fetch(`http://127.0.0.1:${port}/api/v1/sources?limit=1&cursor=${firstPageBody.page.nextCursor}`, { headers: readAuth });
         const secondPageBody = await secondPage.json() as { data: Array<{ name: string }>; page: { nextCursor: string | null } };
         expect(secondPageBody.data).toHaveLength(1);
         expect(secondPageBody.page.nextCursor).toBeNull();
@@ -4832,6 +4926,7 @@ describe('Rainrail CLI built-in commands', () => {
       const result = await runRainrailCliAsync(['start'], { cwd: projectRoot });
       try {
         expect(result.exitCode).toBe(0);
+        const readAuth = await readDashboardAuthHeaders(projectRoot);
         const body = '{}';
         const intake = await fetch(`http://127.0.0.1:${port}/webhooks/github`, {
           method: 'POST',
@@ -4840,14 +4935,14 @@ describe('Rainrail CLI built-in commands', () => {
         });
         expect(intake.status).toBe(202);
 
-        const sources = await fetch(`http://127.0.0.1:${port}/api/v1/sources`);
+        const sources = await fetch(`http://127.0.0.1:${port}/api/v1/sources`, { headers: readAuth });
         const sourcesBody = await sources.json() as { data: Array<{ links: { self: string }; lastDelivery?: unknown }> };
         expect(sourcesBody.data[0]?.lastDelivery).toMatchObject({
           id: 'local-event-000001',
           status: 'received',
         });
 
-        const detail = await fetch(`http://127.0.0.1:${port}${sourcesBody.data[0]?.links.self}`);
+        const detail = await fetch(`http://127.0.0.1:${port}${sourcesBody.data[0]?.links.self}`, { headers: readAuth });
         expect(detail.status).toBe(200);
         await expect(detail.json()).resolves.toMatchObject({
           data: {
@@ -4896,6 +4991,7 @@ describe('Rainrail CLI built-in commands', () => {
       const result = await runRainrailCliAsync(['start'], { cwd: projectRoot });
       try {
         expect(result.exitCode).toBe(0);
+        const readAuth = await readDashboardAuthHeaders(projectRoot);
         const body = '{}';
         expect((await fetch(`http://127.0.0.1:${port}/webhooks/github`, {
           method: 'POST',
@@ -4904,7 +5000,7 @@ describe('Rainrail CLI built-in commands', () => {
         })).status).toBe(202);
         expect((await fetch(`http://127.0.0.1:${port}/manual`, { method: 'POST', body })).status).toBe(202);
 
-        const sources = await fetch(`http://127.0.0.1:${port}/api/v1/sources`);
+        const sources = await fetch(`http://127.0.0.1:${port}/api/v1/sources`, { headers: readAuth });
         const sourcesBody = await sources.json() as {
           data: Array<{ id: string; name: string; sourceType: string; links: { self: string }; lastDelivery?: { id: string } }>;
         };
@@ -4923,13 +5019,13 @@ describe('Rainrail CLI built-in commands', () => {
           }),
         ]);
 
-        const githubSources = await fetch(`http://127.0.0.1:${port}/api/v1/sources?filter[source]=github`);
+        const githubSources = await fetch(`http://127.0.0.1:${port}/api/v1/sources?filter[source]=github`, { headers: readAuth });
         await expect(githubSources.json()).resolves.toMatchObject({
           data: [expect.objectContaining({ id: 'shared-local:0', sourceType: 'github' })],
           page: { nextCursor: null },
         });
 
-        const manualDetail = await fetch(`http://127.0.0.1:${port}${sourcesBody.data[1]?.links.self}`);
+        const manualDetail = await fetch(`http://127.0.0.1:${port}${sourcesBody.data[1]?.links.self}`, { headers: readAuth });
         await expect(manualDetail.json()).resolves.toMatchObject({
           data: {
             id: 'shared-local:1',
@@ -4983,6 +5079,7 @@ describe('Rainrail CLI built-in commands', () => {
       const result = await runRainrailCliAsync(['start'], { cwd: projectRoot });
       try {
         expect(result.exitCode).toBe(0);
+        const readAuth = await readDashboardAuthHeaders(projectRoot);
         const body = '{}';
         expect((await fetch(`http://127.0.0.1:${port}/webhooks/github`, {
           method: 'POST',
@@ -4991,7 +5088,7 @@ describe('Rainrail CLI built-in commands', () => {
         })).status).toBe(202);
         expect((await fetch(`http://127.0.0.1:${port}/manual`, { method: 'POST', body })).status).toBe(202);
 
-        const sources = await fetch(`http://127.0.0.1:${port}/api/v1/sources`);
+        const sources = await fetch(`http://127.0.0.1:${port}/api/v1/sources`, { headers: readAuth });
         await expect(sources.json()).resolves.toMatchObject({
           data: [
             expect.not.objectContaining({ lastDelivery: expect.any(Object) }),
@@ -5015,11 +5112,12 @@ describe('Rainrail CLI built-in commands', () => {
       const result = await runRainrailCliAsync(['start', '--port', String(port)], { cwd: projectRoot });
       try {
         expect(result.exitCode).toBe(0);
-        const badFilter = await fetch(`http://127.0.0.1:${port}/api/v1/events?filter[status]=failed`);
+        const readAuth = await readDashboardAuthHeaders(projectRoot);
+        const badFilter = await fetch(`http://127.0.0.1:${port}/api/v1/events?filter[status]=failed`, { headers: readAuth });
         expect(badFilter.status).toBe(400);
         await expect(badFilter.json()).resolves.toEqual({ error: 'unsupported_filter', filter: 'filter[status]' });
 
-        const badSort = await fetch(`http://127.0.0.1:${port}/api/v1/events?sort=oldest`);
+        const badSort = await fetch(`http://127.0.0.1:${port}/api/v1/events?sort=oldest`, { headers: readAuth });
         expect(badSort.status).toBe(400);
         await expect(badSort.json()).resolves.toEqual({ error: 'unsupported_sort', sort: 'oldest' });
       } finally {
@@ -5035,22 +5133,23 @@ describe('Rainrail CLI built-in commands', () => {
       const result = await runRainrailCliAsync(['start', '--port', String(port)], { cwd: projectRoot });
       try {
         expect(result.exitCode).toBe(0);
+        const readAuth = await readDashboardAuthHeaders(projectRoot);
 
-        const workflowRuns = await fetch(`http://127.0.0.1:${port}/api/v1/workflow-runs?limit=25`);
+        const workflowRuns = await fetch(`http://127.0.0.1:${port}/api/v1/workflow-runs?limit=25`, { headers: readAuth });
         await expect(workflowRuns.json()).resolves.toMatchObject({
           data: [],
           page: { limit: 25, nextCursor: null },
         });
 
-        const badAgentTaskCursor = await fetch(`http://127.0.0.1:${port}/api/v1/agent-tasks?cursor=not-a-cursor`);
+        const badAgentTaskCursor = await fetch(`http://127.0.0.1:${port}/api/v1/agent-tasks?cursor=not-a-cursor`, { headers: readAuth });
         expect(badAgentTaskCursor.status).toBe(400);
         await expect(badAgentTaskCursor.json()).resolves.toEqual({ error: 'invalid_cursor' });
 
-        const badQueueFilter = await fetch(`http://127.0.0.1:${port}/api/v1/queue?filter[unknown]=upcoming`);
+        const badQueueFilter = await fetch(`http://127.0.0.1:${port}/api/v1/queue?filter[unknown]=upcoming`, { headers: readAuth });
         expect(badQueueFilter.status).toBe(400);
         await expect(badQueueFilter.json()).resolves.toEqual({ error: 'unsupported_filter', filter: 'filter[unknown]' });
 
-        const badWorkflowSort = await fetch(`http://127.0.0.1:${port}/api/v1/workflow-runs?sort=newest`);
+        const badWorkflowSort = await fetch(`http://127.0.0.1:${port}/api/v1/workflow-runs?sort=newest`, { headers: readAuth });
         expect(badWorkflowSort.status).toBe(400);
         await expect(badWorkflowSort.json()).resolves.toEqual({ error: 'unsupported_sort', sort: 'newest' });
       } finally {
@@ -5066,7 +5165,8 @@ describe('Rainrail CLI built-in commands', () => {
       const result = await runRainrailCliAsync(['start', '--port', String(port)], { cwd: projectRoot });
       try {
         expect(result.exitCode).toBe(0);
-        const firstPage = await fetch(`http://127.0.0.1:${port}/api/v1/settings?limit=1`);
+        const readAuth = await readDashboardAuthHeaders(projectRoot);
+        const firstPage = await fetch(`http://127.0.0.1:${port}/api/v1/settings?limit=1`, { headers: readAuth });
         const firstPageBody = await firstPage.json() as { data: Array<{ id: string }>; page: { limit: number; nextCursor: string | null } };
         expect(firstPage.status).toBe(200);
         expect(firstPageBody.data).toEqual([
@@ -5074,13 +5174,13 @@ describe('Rainrail CLI built-in commands', () => {
         ]);
         expect(firstPageBody.page).toMatchObject({ limit: 1, nextCursor: expect.any(String) });
 
-        const secondPage = await fetch(`http://127.0.0.1:${port}/api/v1/settings?limit=1&cursor=${firstPageBody.page.nextCursor}`);
+        const secondPage = await fetch(`http://127.0.0.1:${port}/api/v1/settings?limit=1&cursor=${firstPageBody.page.nextCursor}`, { headers: readAuth });
         await expect(secondPage.json()).resolves.toMatchObject({
           data: [{ id: 'auto-start' }],
           page: { limit: 1, nextCursor: expect.any(String) },
         });
 
-        const fullCollection = await fetch(`http://127.0.0.1:${port}/api/v1/settings`);
+        const fullCollection = await fetch(`http://127.0.0.1:${port}/api/v1/settings`, { headers: readAuth });
         const fullBody = await fullCollection.json() as { data: Array<{ id: string }> };
         expect(fullBody.data.map((row) => row.id)).toEqual([
           'max-concurrency',
@@ -5091,7 +5191,7 @@ describe('Rainrail CLI built-in commands', () => {
           'runtime',
         ]);
 
-        const badCursor = await fetch(`http://127.0.0.1:${port}/api/v1/settings?cursor=not-a-cursor`);
+        const badCursor = await fetch(`http://127.0.0.1:${port}/api/v1/settings?cursor=not-a-cursor`, { headers: readAuth });
         expect(badCursor.status).toBe(400);
         await expect(badCursor.json()).resolves.toEqual({ error: 'invalid_cursor' });
       } finally {
@@ -5181,12 +5281,13 @@ describe('Rainrail CLI built-in commands', () => {
       const result = await runRainrailCliAsync(['start'], { cwd: projectRoot });
       try {
         expect(result.exitCode).toBe(0);
-        const firstPage = await fetch(`http://127.0.0.1:${port}/api/v1/sources?limit=1`);
+        const readAuth = await readDashboardAuthHeaders(projectRoot);
+        const firstPage = await fetch(`http://127.0.0.1:${port}/api/v1/sources?limit=1`, { headers: readAuth });
         expect(firstPage.status).toBe(200);
         const firstPageBody = await firstPage.json() as { page: { nextCursor: string | null } };
         expect(firstPageBody.page.nextCursor).toEqual(expect.any(String));
 
-        const secondPage = await fetch(`http://127.0.0.1:${port}/api/v1/sources?limit=1&cursor=${firstPageBody.page.nextCursor}`);
+        const secondPage = await fetch(`http://127.0.0.1:${port}/api/v1/sources?limit=1&cursor=${firstPageBody.page.nextCursor}`, { headers: readAuth });
         expect(secondPage.status).toBe(200);
         await expect(secondPage.json()).resolves.toMatchObject({
           data: [{ name: 'manual-local' }],
@@ -5240,8 +5341,9 @@ describe('Rainrail CLI built-in commands', () => {
       const result = await runRainrailCliAsync(['start', '--port', String(port)], { cwd: projectRoot });
       try {
         expect(result.exitCode).toBe(0);
+        const readAuth = await readDashboardAuthHeaders(projectRoot);
         const response = await fetch(`http://127.0.0.1:${port}/api/v1/events`, {
-          headers: { Origin: 'https://attacker.example' },
+          headers: { ...readAuth, Origin: 'https://attacker.example' },
         });
         expect(response.status).toBe(200);
         expect(response.headers.get('access-control-allow-origin')).toBeNull();
@@ -5259,8 +5361,9 @@ describe('Rainrail CLI built-in commands', () => {
       const controller = new AbortController();
       try {
         expect(result.exitCode).toBe(0);
+        const readAuth = await readDashboardAuthHeaders(projectRoot);
         const events = await fetch(`http://127.0.0.1:${port}/events`, {
-          headers: { Origin: 'http://localhost:3000' },
+          headers: { ...readAuth, Origin: 'http://localhost:3000' },
           signal: controller.signal,
         });
         expect(events.status).toBe(200);
@@ -5392,7 +5495,7 @@ describe('Rainrail CLI built-in commands', () => {
     });
   });
 
-  it('requires an SSE bearer token before binding to public interfaces', async () => {
+  it('generates dashboard auth before binding to public interfaces', async () => {
     await withTempDirectory(async (directory) => {
       const projectRoot = await initRainrailProject(directory, 'public-bind');
       const port = await getFreePort();
@@ -5400,10 +5503,16 @@ describe('Rainrail CLI built-in commands', () => {
       const result = await runRainrailCliAsync(['start', '--host', '0.0.0.0', '--port', String(port)], {
         cwd: projectRoot,
       });
-
-      expect(result.exitCode).toBe(1);
-      expect(result.stdout).toBe('');
-      expect(result.stderr).toContain('dashboardAuth.readOnlyToken, dashboardAuth.operatorToken, dashboardAuth.adminToken, or SSE_BEARER_TOKEN is required when rainrail start binds outside localhost');
+      try {
+        expect(result.exitCode).toBe(0);
+        expect(result.stderr).toBe('');
+        expect(result.stdout).toContain('Dashboard Auth: generated scopes: read-only, operator');
+        const readAuth = await readDashboardAuthHeaders(projectRoot);
+        const overview = await fetch(`http://127.0.0.1:${port}/api/v1/overview`, { headers: readAuth });
+        expect(overview.status).toBe(200);
+      } finally {
+        await closeTestServer(result);
+      }
     });
   });
 

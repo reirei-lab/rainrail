@@ -236,6 +236,7 @@ export type RainrailStartOptions = {
   readonly dashboardToken?: string;
   readonly dashboardAssetRoot?: string;
   readonly dashboardAuth: RainrailDashboardAuth;
+  readonly generatedDashboardAuthScopes?: readonly DashboardAuthScope[];
   readonly sources: readonly RainrailLocalSource[];
   readonly operationalStoreConfig?: RainrailStartOperationalStoreConfig;
 };
@@ -264,6 +265,8 @@ export type RainrailDashboardAuth = {
   readonly operatorToken?: string;
   readonly adminToken?: string;
 };
+
+export type DashboardAuthScope = 'read-only' | 'operator' | 'admin';
 
 export type RainrailStartOperationalStoreKind = 'sqlite' | 'json' | 'memory';
 
@@ -2823,11 +2826,29 @@ function resolveStartCommandOptions(
     };
   }
 
+  let generatedDashboardAuthScopes: readonly DashboardAuthScope[];
+  try {
+    const dashboardAuthResult = ensureLocalDashboardAuth(project.configPath, fileSystem, environment.env ?? process.env);
+    generatedDashboardAuthScopes = dashboardAuthResult.created.map(dashboardAuthKeyToScope);
+    if (dashboardAuthResult.created.length > 0) {
+      config = readStartConfig(project.configPath, fileSystem, environment.env ?? process.env);
+    }
+  } catch (error) {
+    return {
+      result: {
+        exitCode: 1,
+        stdout: '',
+        stderr: `${error instanceof Error ? error.message : String(error)}\n`,
+      },
+    };
+  }
+
   const resolved = resolveStartOptions(
     project,
     config,
     environment.env ?? process.env,
     parsedStart,
+    generatedDashboardAuthScopes,
   );
   if (resolved.error !== undefined) {
     return {
@@ -3349,6 +3370,7 @@ function resolveStartOptions(
   config: StartConfig,
   env: Record<string, string | undefined>,
   args: StartArguments,
+  generatedDashboardAuthScopes: readonly DashboardAuthScope[] = [],
 ): { readonly options: RainrailStartOptions; readonly error?: undefined } | {
   readonly options?: undefined;
   readonly error: string;
@@ -3415,6 +3437,7 @@ function resolveStartOptions(
       ...(dashboardAssetRoot === undefined ? {} : { dashboardAssetRoot }),
       sources: config.sources,
       dashboardAuth,
+      ...(generatedDashboardAuthScopes.length === 0 ? {} : { generatedDashboardAuthScopes }),
       ...(demoMode ? { demoMode } : {}),
       ...(dashboardToken === undefined ? {} : { dashboardToken }),
       ...(operationalStoreConfig === undefined ? {} : { operationalStoreConfig }),
@@ -3556,7 +3579,11 @@ function formatStartOutput(options: RainrailStartOptions): string {
   const localIntakeRows = options.sources.map((source) =>
     `  ${source.name} (${source.sourceType}): ${baseUrl}${source.endpoint}`
   );
-  const dashboardAuthRows = formatDashboardAuthRows(options.dashboardAuth, options.configPath);
+  const dashboardAuthRows = formatDashboardAuthRows(
+    options.dashboardAuth,
+    options.configPath,
+    options.generatedDashboardAuthScopes ?? [],
+  );
   const dashboardRoutes = [
     '/en/dashboard/events',
     '/en/dashboard/runs',
@@ -3590,7 +3617,11 @@ function formatStartOutput(options: RainrailStartOptions): string {
   ].join('\n');
 }
 
-function formatDashboardAuthRows(auth: RainrailDashboardAuth, configPath: string): readonly string[] {
+function formatDashboardAuthRows(
+  auth: RainrailDashboardAuth,
+  configPath: string,
+  generatedScopes: readonly DashboardAuthScope[] = [],
+): readonly string[] {
   const scopes = [
     auth.readOnlyToken === undefined ? undefined : 'read-only',
     auth.operatorToken === undefined ? undefined : 'operator',
@@ -3598,7 +3629,12 @@ function formatDashboardAuthRows(auth: RainrailDashboardAuth, configPath: string
   ].filter((scope) => scope !== undefined);
 
   if (scopes.length > 0) {
-    return [`Dashboard Auth: configured scopes: ${scopes.join(', ')}`];
+    return [
+      ...(generatedScopes === undefined || generatedScopes.length === 0
+        ? []
+        : [`Dashboard Auth: generated scopes: ${generatedScopes.join(', ')}`]),
+      `Dashboard Auth: configured scopes: ${scopes.join(', ')}`,
+    ];
   }
 
   return [
@@ -5827,6 +5863,12 @@ function formatDashboardAuthSetupOutput(result: LocalDashboardAuthSetupResult): 
     ? ''
     : `Generated ${formatDashboardAuthKeyList(result.created)} in ${basename(result.configPath)}.\n`;
   return `${rotatedOutput}${createdOutput}`;
+}
+
+function dashboardAuthKeyToScope(key: keyof RainrailDashboardAuth): DashboardAuthScope {
+  if (key === 'readOnlyToken') return 'read-only';
+  if (key === 'operatorToken') return 'operator';
+  return 'admin';
 }
 
 function formatDashboardAuthKeyList(keys: readonly (keyof RainrailDashboardAuth)[]): string {
