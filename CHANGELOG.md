@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.1](https://github.com/reirei-lab/rainrail/compare/release/0.7.0...release/0.7.1) (2026-07-24)
+
+
+### Bug Fixes
+
+* propagate Codex App Server home config ([#351](https://github.com/reirei-lab/rainrail/issues/351)) ([4ddb1a0](https://github.com/reirei-lab/rainrail/commit/4ddb1a0afabc7641c73a4fdf3c71ecf0ad06d0fd))
+
 ## [0.7.0](https://github.com/reirei-lab/rainrail/compare/release/0.6.0...release/0.7.0) (2026-07-11)
 
 
