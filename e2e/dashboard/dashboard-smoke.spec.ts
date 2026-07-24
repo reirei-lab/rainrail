@@ -527,12 +527,7 @@ test('keeps dashboard connection controls stacked on mobile', async ({ page }) =
 
   await expect(page.getByRole('heading', { level: 1, name: /Rainrail Operations/i })).toBeVisible();
 
-  const [
-    apiBaseUrlBox,
-    tokenBox,
-    connectBox,
-    clearBox,
-  ] = await page.locator([
+  const connectionControlBoxes = await page.locator([
     '[data-api-base-url-input]',
     '[data-token-input]',
     '[data-token-save]',
@@ -546,6 +541,11 @@ test('keeps dashboard connection controls stacked on mobile', async ({ page }) =
       right: rect.right,
     };
   }));
+  expect(connectionControlBoxes).toHaveLength(4);
+  const apiBaseUrlBox = connectionControlBoxes[0]!;
+  const tokenBox = connectionControlBoxes[1]!;
+  const connectBox = connectionControlBoxes[2]!;
+  const clearBox = connectionControlBoxes[3]!;
 
   expect(apiBaseUrlBox.right).toBeLessThanOrEqual(390);
   expect(tokenBox.top).toBeGreaterThanOrEqual(apiBaseUrlBox.bottom);
