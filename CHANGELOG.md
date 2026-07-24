@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.8.0](https://github.com/reirei-lab/rainrail/compare/release/0.7.1...release/0.8.0) (2026-07-24)
+
+
+### Features
+
+* generate dashboard auth on rainrail start ([#364](https://github.com/reirei-lab/rainrail/issues/364)) ([aa65557](https://github.com/reirei-lab/rainrail/commit/aa655573ed34bfa4eeb1469a692653b94ea246b0))
+
+
+### Bug Fixes
+
+* keep dashboard connection controls in narrow viewports ([#362](https://github.com/reirei-lab/rainrail/issues/362)) ([1c9006d](https://github.com/reirei-lab/rainrail/commit/1c9006d13da8fdc13ffc1cecaeb8497d28ca143f))
+
 ## [0.7.1](https://github.com/reirei-lab/rainrail/compare/release/0.7.0...release/0.7.1) (2026-07-24)
 
 
