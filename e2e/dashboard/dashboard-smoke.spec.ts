@@ -491,6 +491,36 @@ test('keeps sidebar tabs clickable before operational data is loaded', async ({ 
   }
 });
 
+test('keeps dashboard connection controls inside the narrow viewport', async ({ page }) => {
+  await page.setViewportSize({ width: 1000, height: 844 });
+  await page.goto(`${dashboardBaseUrl}/en/dashboard?demo=1`);
+
+  await expect(page.getByRole('heading', { level: 1, name: /Rainrail Operations/i })).toBeVisible();
+  await expect(page.locator('[data-token-save]')).toBeVisible();
+  await expect(page.locator('[data-token-clear]')).toBeVisible();
+
+  const connectionControlBoxes = await page.locator([
+    '[data-api-base-url-input]',
+    '[data-token-input]',
+    '[data-token-save]',
+    '[data-token-clear]',
+  ].join(',')).evaluateAll((elements) => elements.map((element) => {
+    const rect = element.getBoundingClientRect();
+    return {
+      left: rect.left,
+      right: rect.right,
+      width: rect.width,
+    };
+  }));
+
+  expect(connectionControlBoxes).toHaveLength(4);
+  for (const box of connectionControlBoxes) {
+    expect(box.left).toBeGreaterThanOrEqual(0);
+    expect(box.right).toBeLessThanOrEqual(1000);
+    expect(box.width).toBeGreaterThanOrEqual(44);
+  }
+});
+
 function overviewCardControl(controls: Locator, name: string): Locator {
   return controls.locator('.dashboard-overview-card-control').filter({ hasText: name });
 }
