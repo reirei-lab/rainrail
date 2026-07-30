@@ -756,12 +756,45 @@ h3 {
   display: block;
 }
 
+.dashboard-layout-disclosure {
+  border-bottom: 1px solid var(--line);
+}
+
+.dashboard-layout-disclosure summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 48px;
+  padding: 12px 0;
+  color: var(--accent-strong);
+  cursor: pointer;
+  list-style: none;
+}
+
+.dashboard-layout-disclosure summary::-webkit-details-marker {
+  display: none;
+}
+
+.dashboard-layout-disclosure summary span {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 7px 10px;
+  background: var(--surface);
+  font-size: 0.82rem;
+  font-weight: 760;
+}
+
+.dashboard-layout-disclosure summary strong {
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
 .dashboard-layout-tools {
   display: grid;
   grid-template-columns: minmax(0, 0.36fr) minmax(0, 0.64fr);
   gap: 14px;
   align-items: start;
-  border-bottom: 1px solid var(--line);
   padding: 16px 0;
 }
 
