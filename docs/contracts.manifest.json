@@ -489,6 +489,7 @@
         "scripts/validate-operational-api-v1.test.mjs",
         "scripts/validate-dashboard-shell.test.mjs",
         "packages/cli/src/commands.test.ts",
+        "e2e/dashboard/dashboard-smoke.spec.ts",
         "src/dashboard-api.test.ts",
         "src/sse.test.ts",
         "src/events-auth.test.ts"

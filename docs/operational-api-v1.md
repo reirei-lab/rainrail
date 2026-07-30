@@ -155,6 +155,8 @@ operational store 未設定時は `store.status: "missing"`、top-level `status:
 
 Local demo mode は seed data と同じく deterministic な status response を返し、demo の初期
 `lastAttemptAt` / `lastSuccessAt` は固定時刻、`lastDurationMs` は `0` とする。
+Dashboard shell はこの endpoint を `GET /api/v1/overview` とは別に polling し、overview が
+slow/loading/error の間も API Status Tile の診断情報を更新する。
 
 `GET /api/v1/dashboard/cards` は `DashboardCardRegistry` の catalog projection を返す。
 各 row は `definition` と `availability` を持ち、unavailable な plugin card や capability 不足の
