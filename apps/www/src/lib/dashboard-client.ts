@@ -29,6 +29,32 @@ export interface DashboardOverview {
   };
 }
 
+export type DashboardApiStatus = 'ok' | 'degraded' | 'error';
+
+export interface DashboardStatusErrorSummary {
+  code: string;
+  summary: string;
+}
+
+export interface DashboardStatus {
+  data: {
+    status: DashboardApiStatus;
+    runtime: string;
+    store: { status: 'configured' | 'missing' | 'unavailable' };
+    overview: {
+      status: 'unknown' | 'loading' | 'slow' | 'ok' | 'error';
+      lastAttemptAt: string | null;
+      lastSuccessAt: string | null;
+      lastDurationMs: number | null;
+      lastHttpStatus: number | null;
+      lastError: DashboardStatusErrorSummary | null;
+      links?: { self?: string };
+    };
+    auth?: { scope?: string };
+    links?: { overview?: string };
+  };
+}
+
 export interface DashboardEvent {
   id: string;
   type: 'event';
@@ -201,6 +227,10 @@ export class RainrailDashboardApiClient {
 
   overview(): Promise<DashboardOverview> {
     return this.get('/api/v1/overview');
+  }
+
+  status(): Promise<DashboardStatus> {
+    return this.get('/api/v1/dashboard/status');
   }
 
   events(filters: { sourceType?: string; name?: string } = {}): Promise<DashboardCollection<DashboardEvent>> {

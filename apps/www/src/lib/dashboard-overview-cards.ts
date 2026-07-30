@@ -1,8 +1,8 @@
-import type { DashboardOverview } from './dashboard-client';
+import type { DashboardApiStatus, DashboardOverview, DashboardStatus } from './dashboard-client';
 
 export const OVERVIEW_CARD_STORAGE_KEY = 'rainrail-dashboard-overview-card-layout';
 
-export type OverviewCardId = 'health' | 'counts' | 'recentActivity' | 'warnings';
+export type OverviewCardId = 'apiStatus' | 'health' | 'counts' | 'recentActivity' | 'warnings';
 
 export interface OverviewCardDefinition {
   id: OverviewCardId;
@@ -46,7 +46,39 @@ export interface OverviewWarningSummary {
   detail: string;
 }
 
+export interface OverviewApiStatusLabels {
+  connected: string;
+  degraded: string;
+  error: string;
+  authMissing: string;
+  authRejected: string;
+  unavailable: string;
+  overview: string;
+  duration: string;
+  lastSuccess: string;
+  authScope: string;
+  store: string;
+}
+
+export interface OverviewApiStatusSummary {
+  status: string;
+  tone: DashboardApiStatus | 'auth-missing' | 'auth-rejected' | 'unavailable';
+  metrics: {
+    overview: string;
+    duration: string;
+    lastSuccess: string;
+    authScope: string;
+    store: string;
+  };
+  note: string;
+}
+
 export const overviewCardRegistry: readonly OverviewCardDefinition[] = [
+  {
+    id: 'apiStatus',
+    title: 'API status',
+    description: 'Independent operational API, auth, and overview health signals.',
+  },
   {
     id: 'health',
     title: 'Health',
@@ -171,6 +203,73 @@ export function overviewWarningSummary(
     value: String(count),
     detail: `${labels.warningCount} ${count}`,
   };
+}
+
+export function overviewApiStatusSummary(
+  status: DashboardStatus | undefined,
+  labels: OverviewApiStatusLabels,
+  options: {
+    nowMs?: number;
+    dashboardState?: string;
+    currentStatusMessage?: string;
+  } = {},
+): OverviewApiStatusSummary {
+  if (status === undefined) {
+    const dashboardState = options.dashboardState;
+    const isAuthMissing = dashboardState === 'auth-missing';
+    const isAuthRejected = dashboardState === 'error' && options.currentStatusMessage === labels.authRejected;
+    return {
+      status: isAuthMissing ? labels.authMissing : isAuthRejected ? labels.authRejected : labels.unavailable,
+      tone: isAuthMissing ? 'auth-missing' : isAuthRejected ? 'auth-rejected' : 'unavailable',
+      metrics: {
+        overview: labels.unavailable,
+        duration: 'n/a',
+        lastSuccess: 'n/a',
+        authScope: isAuthMissing ? labels.authMissing : 'n/a',
+        store: 'n/a',
+      },
+      note: isAuthMissing ? labels.authMissing : options.currentStatusMessage ?? labels.unavailable,
+    };
+  }
+
+  const data = status.data;
+  const lastError = data.overview.lastError;
+  return {
+    status: apiStatusLabel(data.status, labels),
+    tone: data.status,
+    metrics: {
+      overview: data.overview.status,
+      duration: formatDuration(data.overview.lastDurationMs),
+      lastSuccess: formatRelativeTime(data.overview.lastSuccessAt, options.nowMs ?? Date.now()),
+      authScope: data.auth?.scope ?? 'read-only',
+      store: data.store.status,
+    },
+    note: lastError === null ? `${labels.overview}: ${data.overview.status}` : `${lastError.code}: ${lastError.summary}`,
+  };
+}
+
+function apiStatusLabel(status: DashboardApiStatus, labels: OverviewApiStatusLabels): string {
+  if (status === 'ok') return labels.connected;
+  if (status === 'degraded') return labels.degraded;
+  return labels.error;
+}
+
+function formatDuration(value: number | null): string {
+  if (value === null) return 'n/a';
+  return `${Math.max(0, Math.round(value))} ms`;
+}
+
+function formatRelativeTime(value: string | null, nowMs: number): string {
+  if (value === null) return 'n/a';
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return 'n/a';
+  const diffMs = Math.max(0, nowMs - timestamp);
+  const minutes = Math.floor(diffMs / 60000);
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
 }
 
 function isOverviewCardId(value: unknown, registryIds: Set<OverviewCardId>): value is OverviewCardId {

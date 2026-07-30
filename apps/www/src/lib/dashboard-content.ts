@@ -251,7 +251,18 @@ export type DashboardAppCopy = {
     noWarnings: string;
     warningCount: string;
     todoHealth: string;
-    cards: Record<'health' | 'counts' | 'recentActivity' | 'warnings', { title: string; description: string }>;
+    apiStatus: {
+      connected: string;
+      degraded: string;
+      error: string;
+      status: string;
+      overview: string;
+      duration: string;
+      lastSuccess: string;
+      authScope: string;
+      store: string;
+    };
+    cards: Record<'apiStatus' | 'health' | 'counts' | 'recentActivity' | 'warnings', { title: string; description: string }>;
   };
   cardLayout: {
     title: string;
@@ -479,7 +490,19 @@ const englishApp: DashboardAppCopy = {
     noWarnings: 'No warnings.',
     warningCount: 'Warnings',
     todoHealth: 'TODO: expose component health in the overview API.',
+    apiStatus: {
+      connected: 'Connected',
+      degraded: 'Degraded',
+      error: 'Error',
+      status: 'Status',
+      overview: 'Overview',
+      duration: 'Duration',
+      lastSuccess: 'Last success',
+      authScope: 'Auth scope',
+      store: 'Store',
+    },
     cards: {
+      apiStatus: { title: 'API status', description: 'Independent operational API, auth, and overview health signals.' },
       health: { title: 'Health', description: 'API response freshness and dashboard connection state.' },
       counts: { title: 'Counts', description: 'Operational totals from the overview API.' },
       recentActivity: { title: 'Recent activity', description: 'Latest workflow activity from the overview API.' },
@@ -692,7 +715,19 @@ const japaneseApp: DashboardAppCopy = {
     noWarnings: '警告はありません。',
     warningCount: '警告',
     todoHealth: 'TODO: overview API でコンポーネント別 health を公開する。',
+    apiStatus: {
+      connected: '接続中',
+      degraded: '縮退',
+      error: 'エラー',
+      status: '状態',
+      overview: '概要',
+      duration: '所要時間',
+      lastSuccess: '最終成功',
+      authScope: '認証スコープ',
+      store: 'ストア',
+    },
     cards: {
+      apiStatus: { title: 'API 状態', description: '運用 API、認証、overview health を独立して確認する診断情報。' },
       health: { title: '稼働状況', description: 'API 応答の新しさと dashboard 接続状態。' },
       counts: { title: '件数', description: 'overview API の運用集計。' },
       recentActivity: { title: '最近の活動', description: 'overview API の最新 workflow activity。' },

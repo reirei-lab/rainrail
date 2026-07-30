@@ -261,6 +261,7 @@ test('matches dashboard route visual baselines from the scenario manifest', asyn
         maxDiffPixelRatio: 0.04,
         mask: [
           page.locator('[data-status-text]'),
+          page.locator('[data-overview-card-id="apiStatus"]'),
           page.locator('[data-overview-card-id="health"]'),
         ],
       });
@@ -302,6 +303,7 @@ test('persists Overview custom card visibility and ordering across reloads', asy
 
   const board = page.locator('[data-overview-card-board]');
   const controls = page.locator('[data-overview-card-controls]');
+  await expect(board.locator('[data-overview-card-id="apiStatus"]')).toBeVisible();
   await expect(board.locator('[data-overview-card-id="health"]')).toBeVisible();
   await expect(board.locator('[data-overview-card-id="counts"]')).toBeVisible();
 
@@ -309,17 +311,77 @@ test('persists Overview custom card visibility and ordering across reloads', asy
   await overviewCardControl(controls, 'Warnings').getByRole('button', { name: 'Move up' }).click();
 
   await expect(board.locator('[data-overview-card-id="counts"]')).toHaveCount(0);
-  await expect(board.locator('[data-overview-card-id]').first()).toHaveAttribute('data-overview-card-id', 'health');
-  await expect(board.locator('[data-overview-card-id]').nth(1)).toHaveAttribute('data-overview-card-id', 'warnings');
+  await expect(board.locator('[data-overview-card-id]').first()).toHaveAttribute('data-overview-card-id', 'apiStatus');
+  await expect(board.locator('[data-overview-card-id]').nth(1)).toHaveAttribute('data-overview-card-id', 'health');
+  await expect(board.locator('[data-overview-card-id]').nth(2)).toHaveAttribute('data-overview-card-id', 'warnings');
 
   await page.reload();
 
   await expect(page.locator('[data-demo-indicator]')).toBeVisible();
   await expect(board.locator('[data-overview-card-id="counts"]')).toHaveCount(0);
-  await expect(board.locator('[data-overview-card-id]').first()).toHaveAttribute('data-overview-card-id', 'health');
-  await expect(board.locator('[data-overview-card-id]').nth(1)).toHaveAttribute('data-overview-card-id', 'warnings');
+  await expect(board.locator('[data-overview-card-id]').first()).toHaveAttribute('data-overview-card-id', 'apiStatus');
+  await expect(board.locator('[data-overview-card-id]').nth(1)).toHaveAttribute('data-overview-card-id', 'health');
+  await expect(board.locator('[data-overview-card-id]').nth(2)).toHaveAttribute('data-overview-card-id', 'warnings');
   await expect.poll(async () => page.evaluate(() => window.localStorage.getItem('rainrail-dashboard-overview-card-layout')))
     .toContain('"id":"warnings"');
+});
+
+test('updates the API Status Tile while overview is slow and unavailable', async ({ page }) => {
+  const lastSuccessAt = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+  let overviewRequests = 0;
+  let statusRequests = 0;
+
+  await page.route('**/api/v1/dashboard/status**', async (route) => {
+    statusRequests += 1;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        data: {
+          status: 'degraded',
+          runtime: 'node',
+          store: { status: 'configured' },
+          overview: {
+            status: 'error',
+            lastAttemptAt: new Date().toISOString(),
+            lastSuccessAt,
+            lastDurationMs: 1200,
+            lastHttpStatus: 503,
+            lastError: {
+              code: 'operational_store_unavailable',
+              summary: 'Operational store unavailable',
+            },
+            links: { self: '/api/v1/overview' },
+          },
+          auth: { scope: 'read-only' },
+          links: { overview: '/api/v1/overview' },
+        },
+      }),
+    });
+  });
+  await page.route('**/api/v1/overview**', async (route) => {
+    overviewRequests += 1;
+    await new Promise((resolve) => setTimeout(resolve, 750));
+    await route.fulfill({
+      status: 503,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: 'operational_store_unavailable' }),
+    });
+  });
+
+  await page.goto(`${dashboardBaseUrl}/en/dashboard?demo=1`);
+
+  const apiStatusTile = page.locator('[data-overview-card-id="apiStatus"]');
+  await expect(apiStatusTile).toBeVisible();
+  await expect(apiStatusTile).toContainText('Degraded');
+  await expect(apiStatusTile).toContainText('error');
+  await expect(apiStatusTile).toContainText('1200 ms');
+  await expect(apiStatusTile).toContainText('5m ago');
+  await expect(apiStatusTile).toContainText('read-only');
+  await expect(apiStatusTile).toContainText('operational_store_unavailable');
+  await expect(page.locator('[data-status-text]')).toContainText(/Operational API unavailable/i);
+  expect(statusRequests).toBeGreaterThan(0);
+  expect(overviewRequests).toBeGreaterThan(0);
 });
 
 test('sends scoped task operator commands with confirmation and error feedback', async ({ page }) => {

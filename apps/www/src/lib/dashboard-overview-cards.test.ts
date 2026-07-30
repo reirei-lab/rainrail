@@ -3,6 +3,7 @@ import {
   OVERVIEW_CARD_STORAGE_KEY,
   createDefaultOverviewCardLayout,
   moveOverviewCard,
+  overviewApiStatusSummary,
   overviewCountLabel,
   overviewCardRegistry,
   overviewHealthStatusLabel,
@@ -16,6 +17,7 @@ describe('dashboard overview cards', () => {
   it('defines a stable built-in registry for overview-api cards', () => {
     expect(OVERVIEW_CARD_STORAGE_KEY).toBe('rainrail-dashboard-overview-card-layout');
     expect(overviewCardRegistry.map((card) => card.id)).toEqual([
+      'apiStatus',
       'health',
       'counts',
       'recentActivity',
@@ -25,6 +27,7 @@ describe('dashboard overview cards', () => {
 
   it('creates a visible default layout in registry order', () => {
     expect(createDefaultOverviewCardLayout(overviewCardRegistry)).toEqual([
+      { id: 'apiStatus', visible: true },
       { id: 'health', visible: true },
       { id: 'counts', visible: true },
       { id: 'recentActivity', visible: true },
@@ -43,6 +46,7 @@ describe('dashboard overview cards', () => {
     expect(parseOverviewCardLayout(saved, overviewCardRegistry)).toEqual([
       { id: 'warnings', visible: false },
       { id: 'counts', visible: true },
+      { id: 'apiStatus', visible: true },
       { id: 'health', visible: true },
       { id: 'recentActivity', visible: true },
     ]);
@@ -57,6 +61,7 @@ describe('dashboard overview cards', () => {
     const layout = createDefaultOverviewCardLayout(overviewCardRegistry);
 
     expect(setOverviewCardVisibility(layout, 'counts', false)).toEqual([
+      { id: 'apiStatus', visible: true },
       { id: 'health', visible: true },
       { id: 'counts', visible: false },
       { id: 'recentActivity', visible: true },
@@ -68,18 +73,20 @@ describe('dashboard overview cards', () => {
     const layout = createDefaultOverviewCardLayout(overviewCardRegistry);
 
     expect(moveOverviewCard(layout, 'recentActivity', 'up').map((item) => item.id)).toEqual([
+      'apiStatus',
       'health',
       'recentActivity',
       'counts',
       'warnings',
     ]);
     expect(moveOverviewCard(layout, 'recentActivity', 'down').map((item) => item.id)).toEqual([
+      'apiStatus',
       'health',
       'counts',
       'warnings',
       'recentActivity',
     ]);
-    expect(moveOverviewCard(layout, 'health', 'up')).toEqual(layout);
+    expect(moveOverviewCard(layout, 'apiStatus', 'up')).toEqual(layout);
     expect(moveOverviewCard(layout, 'warnings', 'down')).toEqual(layout);
   });
 
@@ -153,5 +160,73 @@ describe('dashboard overview cards', () => {
     });
     expect(summary.detail).not.toContain('staleProjectClaims');
     expect(summary.detail).not.toContain('{');
+  });
+
+  it('summarizes the independent API status contract for the overview tile', () => {
+    const labels = {
+      connected: 'Connected',
+      degraded: 'Degraded',
+      error: 'Error',
+      authMissing: 'Bearer token required',
+      authRejected: 'Token rejected by operational API',
+      unavailable: 'Operational API unavailable',
+      overview: 'Overview',
+      duration: 'Duration',
+      lastSuccess: 'Last success',
+      authScope: 'Auth scope',
+      store: 'Store',
+    };
+
+    expect(overviewApiStatusSummary({
+      data: {
+        status: 'degraded',
+        runtime: 'node',
+        store: { status: 'configured' },
+        overview: {
+          status: 'error',
+          lastAttemptAt: '2026-07-09T05:00:10.000Z',
+          lastSuccessAt: '2026-07-09T05:00:00.000Z',
+          lastDurationMs: 42.4,
+          lastHttpStatus: 500,
+          lastError: { code: 'operational_store_unavailable', summary: 'Operational store unavailable' },
+          links: { self: '/api/v1/overview' },
+        },
+        auth: { scope: 'read-only' },
+        links: { overview: '/api/v1/overview' },
+      },
+    }, labels, { nowMs: Date.parse('2026-07-09T05:05:00.000Z') })).toEqual({
+      status: 'Degraded',
+      tone: 'degraded',
+      metrics: {
+        overview: 'error',
+        duration: '42 ms',
+        lastSuccess: '5m ago',
+        authScope: 'read-only',
+        store: 'configured',
+      },
+      note: 'operational_store_unavailable: Operational store unavailable',
+    });
+  });
+
+  it('keeps auth missing and unavailable status readable before status loads', () => {
+    const labels = {
+      connected: 'Connected',
+      degraded: 'Degraded',
+      error: 'Error',
+      authMissing: 'Bearer token required',
+      authRejected: 'Token rejected by operational API',
+      unavailable: 'Operational API unavailable',
+      overview: 'Overview',
+      duration: 'Duration',
+      lastSuccess: 'Last success',
+      authScope: 'Auth scope',
+      store: 'Store',
+    };
+
+    expect(overviewApiStatusSummary(undefined, labels, { dashboardState: 'auth-missing' }).status).toBe('Bearer token required');
+    expect(overviewApiStatusSummary(undefined, labels, {
+      dashboardState: 'error',
+      currentStatusMessage: 'Token rejected by operational API',
+    }).tone).toBe('auth-rejected');
   });
 });
