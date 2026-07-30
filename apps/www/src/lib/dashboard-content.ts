@@ -264,6 +264,7 @@ export type DashboardAppCopy = {
     allCategories: string;
     allProviders: string;
     gridLabel: string;
+    customize: string;
     add: string;
     hide: string;
     remove: string;
@@ -497,6 +498,7 @@ const englishApp: DashboardAppCopy = {
     allCategories: 'All categories',
     allProviders: 'All providers',
     gridLabel: 'Editable dashboard card layout',
+    customize: 'Customize',
     add: 'Add card',
     hide: 'Hide',
     remove: 'Remove',
@@ -710,6 +712,7 @@ const japaneseApp: DashboardAppCopy = {
     allCategories: 'すべてのカテゴリ',
     allProviders: 'すべての provider',
     gridLabel: '編集可能な dashboard card レイアウト',
+    customize: 'カスタマイズ',
     add: 'カード追加',
     hide: '非表示',
     remove: '削除',

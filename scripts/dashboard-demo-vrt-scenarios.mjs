@@ -92,9 +92,9 @@ export const dashboardDemoVrtScenarios = Object.freeze([
     tab: 'overview',
     url: '/ja/dashboard?demo=1&tab=overview',
     captureHints: [
-      'default core card layout',
-      'card picker with core cards',
-      'layout save controls idle state',
+      'collapsed dashboard layout customize control',
+      'overview cards before layout editor',
+      'operational summary before layout editor',
     ],
   },
   {
@@ -103,7 +103,7 @@ export const dashboardDemoVrtScenarios = Object.freeze([
     url: '/ja/dashboard?demo=1&tab=overview',
     viewport: 'mobile',
     captureHints: [
-      'mobile single-column layout tools',
+      'expanded mobile single-column layout tools',
       'card picker does not overlap controls',
       'dashboard cards remain readable on narrow screens',
     ],
