@@ -58,6 +58,10 @@ const dashboardDemoVrtScenarios = readFileSync(
   new URL('./dashboard-demo-vrt-scenarios.mjs', import.meta.url),
   'utf8',
 );
+const dashboardSmokeSpec = readFileSync(
+  new URL('../e2e/dashboard/dashboard-smoke.spec.ts', import.meta.url),
+  'utf8',
+);
 /** @type {{ contracts: Array<{ id: string, sources: string[], tests: string[] }> }} */
 const contractsManifest = JSON.parse(
   readFileSync(new URL('../docs/contracts.manifest.json', import.meta.url), 'utf8'),
@@ -226,6 +230,16 @@ describe('dashboard app shell', () => {
     expect(dashboardControllers).toContain('data.queue = (await client.queue(request.queueFilters)).data');
     expect(dashboardApp).toContain('preferredDetailRowId()');
     expect(dashboardClient).toContain("params.set('filter[status]', filters.status)");
+  });
+
+  it('keeps API Status Tile covered by deterministic dashboard VRT', () => {
+    expect(dashboardDemoVrtScenarios).toContain("id: 'overview-api-status-tile-default'");
+    expect(dashboardDemoVrtScenarios).toContain('deterministic API Status Tile default response');
+    expect(dashboardSmokeSpec).toContain("await page.clock.setFixedTime(new Date('2026-07-09T05:00:30.000Z'))");
+    expect(dashboardSmokeSpec).toContain('routeDashboardStatusForApiStatusVrt');
+    expect(dashboardSmokeSpec).toContain("lastDurationMs: 0");
+    expect(dashboardSmokeSpec).toContain("scenario.id !== 'overview-api-status-tile-default'");
+    expect(dashboardSmokeSpec).toContain("page.locator('[data-overview-card-id=\"apiStatus\"]')");
   });
 
   it('keeps dashboard demo smoke and VRT files attached to the local dashboard contract', () => {

@@ -99,6 +99,16 @@ export const dashboardDemoVrtScenarios = Object.freeze([
     ],
   },
   {
+    id: 'overview-api-status-tile-default',
+    tab: 'overview',
+    url: '/ja/dashboard?demo=1&tab=overview',
+    captureHints: [
+      'deterministic API Status Tile default response',
+      'seeded dashboard status API connected state',
+      'localized status, overview, duration, last success, auth scope, and store labels',
+    ],
+  },
+  {
     id: 'dashboard-cards-mobile-layout',
     tab: 'overview',
     url: '/ja/dashboard?demo=1&tab=overview',
