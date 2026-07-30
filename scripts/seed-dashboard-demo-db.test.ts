@@ -232,6 +232,7 @@ describe('dashboard demo SQLite seed script', () => {
           expect.objectContaining({ id: 'queue-blocked-stale-claim', tab: 'queue' }),
           expect.objectContaining({ id: 'settings-retry-auth', tab: 'settings' }),
           expect.objectContaining({ id: 'dashboard-cards-default-layout', tab: 'overview' }),
+          expect.objectContaining({ id: 'overview-api-status-tile-default', tab: 'overview' }),
           expect.objectContaining({ id: 'dashboard-cards-mobile-layout', tab: 'overview', viewport: 'mobile' }),
         ]);
         for (const scenario of dashboardDemoVrtScenarios) {
@@ -254,6 +255,21 @@ describe('dashboard demo SQLite seed script', () => {
             ],
           },
         });
+        const apiStatus = await getJson(app, '/api/v1/dashboard/status', headers);
+        expect(apiStatus.data).toMatchObject({
+          status: 'ok',
+          runtime: 'node',
+          store: { status: 'configured' },
+          auth: { scope: 'read-only' },
+          overview: {
+            status: 'ok',
+            lastHttpStatus: 200,
+            lastError: null,
+          },
+          links: { overview: '/api/v1/overview' },
+        });
+        expect(apiStatus.data.overview.lastSuccessAt).toEqual(apiStatus.data.overview.lastAttemptAt);
+        expect(apiStatus.data.overview.lastDurationMs).toBeGreaterThanOrEqual(0);
 
         const retryEvents = await getJson(app, '/api/v1/events?filter[source]=github', headers);
         expect(retryEvents.data).toEqual(expect.arrayContaining([

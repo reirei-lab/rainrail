@@ -289,6 +289,7 @@ test('matches dashboard route visual baselines from the scenario manifest', asyn
   for (const scenario of dashboardDemoVrtScenarios) {
     const viewport = scenario.viewport ?? 'desktop';
     await test.step(`${scenario.id} (${viewport})`, async () => {
+      await page.clock.setFixedTime(new Date('2026-07-09T05:00:30.000Z'));
       await page.setViewportSize(viewport === 'mobile'
         ? { width: 390, height: 844 }
         : { width: 1440, height: 1000 });
@@ -305,12 +306,23 @@ test('matches dashboard route visual baselines from the scenario manifest', asyn
         await page.locator('[data-dashboard-layout-toggle]').click();
         await expect(page.locator('[data-dashboard-layout-grid]')).toBeVisible();
       }
+      if (scenario.id === 'overview-api-status-tile-default') {
+        const apiStatusTile = page.locator('[data-overview-card-id="apiStatus"]');
+        await expect(apiStatusTile).toContainText('接続中');
+        await expect(apiStatusTile).toContainText('正常');
+        await expect(apiStatusTile).toContainText('0 ms');
+        await expect(apiStatusTile).toContainText('たった今');
+        await expect(apiStatusTile).toContainText('不明');
+        await expect(apiStatusTile).toContainText('設定済み');
+      }
 
       await expect(page).toHaveScreenshot(`${scenario.id}-${viewport}.png`, {
         maxDiffPixelRatio: 0.04,
         mask: [
           page.locator('[data-status-text]'),
-          page.locator('[data-overview-card-id="apiStatus"]'),
+          ...(scenario.id !== 'overview-api-status-tile-default'
+            ? [page.locator('[data-overview-card-id="apiStatus"]')]
+            : []),
           page.locator('[data-overview-card-id="health"]'),
         ],
       });
