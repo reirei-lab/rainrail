@@ -274,6 +274,7 @@ export type DashboardAppCopy = {
         missing: string;
         unavailable: string;
       };
+      authScopes: Record<string, string>;
       errorSummaries: Record<string, string>;
       justNow: string;
       minutesAgo: string;
@@ -532,6 +533,11 @@ const englishApp: DashboardAppCopy = {
         missing: 'Missing',
         unavailable: 'Unavailable',
       },
+      authScopes: {
+        'read-only': 'Read-only',
+        operator: 'Operator',
+        admin: 'Admin',
+      },
       errorSummaries: {
         operational_store_not_configured: 'Operational store is not configured.',
         operational_store_unavailable: 'Operational store unavailable',
@@ -779,6 +785,11 @@ const japaneseApp: DashboardAppCopy = {
         configured: '設定済み',
         missing: '未設定',
         unavailable: '利用不可',
+      },
+      authScopes: {
+        'read-only': '読み取り専用',
+        operator: '操作者',
+        admin: '管理者',
       },
       errorSummaries: {
         operational_store_not_configured: '運用ストアが設定されていません。',

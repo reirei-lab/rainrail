@@ -189,6 +189,11 @@ describe('dashboard overview cards', () => {
         missing: 'Missing',
         unavailable: 'Unavailable',
       },
+      authScopes: {
+        'read-only': 'Read-only',
+        operator: 'Operator',
+        admin: 'Admin',
+      },
       errorSummaries: {
         operational_store_unavailable: 'Operational store unavailable',
       },
@@ -222,7 +227,7 @@ describe('dashboard overview cards', () => {
         overview: 'Error',
         duration: '42 ms',
         lastSuccess: '5m ago',
-        authScope: 'read-only',
+        authScope: 'Read-only',
         store: 'Configured',
       },
       note: 'operational_store_unavailable: Operational store unavailable',
@@ -255,6 +260,11 @@ describe('dashboard overview cards', () => {
         configured: 'Configured',
         missing: 'Missing',
         unavailable: 'Unavailable',
+      },
+      authScopes: {
+        'read-only': 'Read-only',
+        operator: 'Operator',
+        admin: 'Admin',
       },
       justNow: 'just now',
       minutesAgo: '{value}m ago',
@@ -311,6 +321,11 @@ describe('dashboard overview cards', () => {
         missing: '未設定',
         unavailable: '利用不可',
       },
+      authScopes: {
+        'read-only': '読み取り専用',
+        operator: '操作者',
+        admin: '管理者',
+      },
       errorSummaries: {
         operational_store_not_configured: '運用ストアが設定されていません。',
       },
@@ -361,9 +376,13 @@ describe('dashboard overview cards', () => {
           lastError: { code: 'operational_store_not_configured', summary: 'Operational store is not configured.' },
           links: { self: '/api/v1/overview' },
         },
+        auth: { scope: 'operator' },
         links: { overview: '/api/v1/overview' },
       },
     }, labels, { nowMs: Date.parse('2026-07-09T05:05:00.000Z') })).toMatchObject({
+      metrics: {
+        authScope: '操作者',
+      },
       note: 'operational_store_not_configured: 運用ストアが設定されていません。',
     });
   });

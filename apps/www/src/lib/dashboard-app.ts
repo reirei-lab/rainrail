@@ -156,6 +156,7 @@ if (root !== null) {
     renderOverviewCards();
   } else {
     client = createDashboardClient(storedToken, storedApiBaseUrl);
+    setState('loading', copy.status.loading);
     void refreshStatus();
     void refresh();
     startPolling(client);
@@ -181,6 +182,7 @@ if (root !== null) {
       } else {
         client = createDashboardClient('', apiBaseUrl);
         resetDashboardData();
+        setState('loading', copy.status.loading);
         void refreshStatus();
         void refresh();
         startPolling(client);
@@ -197,6 +199,7 @@ if (root !== null) {
     if (apiBaseUrlInput !== null) apiBaseUrlInput.value = apiBaseUrl;
     client = createDashboardClient(token, apiBaseUrl);
     resetDashboardData();
+    setState('loading', copy.status.loading);
     void refreshStatus();
     void refresh();
     startPolling(client);
@@ -215,6 +218,7 @@ if (root !== null) {
     } else {
       client = createDashboardClient('', apiBaseUrl);
       resetDashboardData();
+      setState('loading', copy.status.loading);
       void refreshStatus();
       void refresh();
       startPolling(client);
@@ -347,11 +351,12 @@ if (root !== null) {
       setState('error', message);
       renderOverviewCards();
     } finally {
+      const refreshIsCurrent = isCurrentRefresh(activeClient, activeRefreshId);
       clearRefreshInFlight(activeClient, activeRefreshId);
-      if (client === activeClient) {
+      if (refreshIsCurrent && client === activeClient) {
         void refreshStatus({ force: true, quiet: true });
       }
-      if (refreshAfterCurrent && client === activeClient) {
+      if (refreshIsCurrent && refreshAfterCurrent && client === activeClient) {
         void refresh({ quiet: true });
       }
     }
@@ -635,6 +640,7 @@ if (root !== null) {
       store: statusCopy.store,
       overviewStatuses: statusCopy.overviewStatuses,
       storeStatuses: statusCopy.storeStatuses,
+      authScopes: statusCopy.authScopes,
       errorSummaries: statusCopy.errorSummaries,
       justNow: statusCopy.justNow,
       minutesAgo: statusCopy.minutesAgo,

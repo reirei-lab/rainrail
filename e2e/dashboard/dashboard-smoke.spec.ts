@@ -436,7 +436,7 @@ test('updates the API Status Tile while overview is slow and unavailable', async
   await expect(apiStatusTile).toContainText('Error');
   await expect(apiStatusTile).toContainText('1200 ms');
   await expect(apiStatusTile).toContainText('5m ago');
-  await expect(apiStatusTile).toContainText('read-only');
+  await expect(apiStatusTile).toContainText('Read-only');
   await expect(apiStatusTile).toContainText('Configured');
   await expect(apiStatusTile).toContainText('operational_store_unavailable');
   await expect(page.locator('[data-status-text]')).toContainText(/Operational API unavailable/i);
@@ -481,6 +481,52 @@ test('keeps the API Status Tile loading while status refresh is pending after ov
   await expect(apiStatusTile).toContainText('Loading', { timeout: 1000 });
   await expect(apiStatusTile).not.toContainText('Operational API unavailable');
   expect(statusRequests).toBeGreaterThan(0);
+});
+
+test('shows the API Status Tile loading while a saved-token dashboard connects', async ({ page }) => {
+  let releaseStatus: (() => void) | undefined;
+  await page.addInitScript(() => {
+    window.sessionStorage.setItem('rainrail-dashboard-token', 'operator-token');
+  });
+  await page.route('**/api/v1/dashboard/status**', async (route) => {
+    await new Promise<void>((resolve) => {
+      releaseStatus = resolve;
+    });
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        data: {
+          status: 'ok',
+          runtime: 'node',
+          store: { status: 'configured' },
+          overview: {
+            status: 'ok',
+            lastAttemptAt: new Date().toISOString(),
+            lastSuccessAt: new Date().toISOString(),
+            lastDurationMs: 15,
+            lastHttpStatus: 200,
+            lastError: null,
+            links: { self: '/api/v1/overview' },
+          },
+          auth: { scope: 'operator' },
+          links: { overview: '/api/v1/overview' },
+        },
+      }),
+    });
+  });
+  await page.route('**/api/v1/overview**', async (route) => {
+    await new Promise<void>(() => {});
+  });
+
+  await page.goto(`${dashboardBaseUrl}/en/dashboard`);
+
+  const apiStatusTile = page.locator('[data-overview-card-id="apiStatus"]');
+  await expect(apiStatusTile).toContainText('Loading');
+  await expect(apiStatusTile).not.toContainText('Bearer token required');
+
+  releaseStatus?.();
+  await expect(apiStatusTile).toContainText('Connected');
 });
 
 test('redraws the API Status Tile when retrying after a status refresh failure', async ({ page }) => {
@@ -543,6 +589,74 @@ test('redraws the API Status Tile when retrying after a status refresh failure',
   await expect(apiStatusTile).toContainText('Connected');
 });
 
+test('does not refresh API Status Tile diagnostics from a discarded overview refresh', async ({ page }) => {
+  await page.goto(`${dashboardBaseUrl}/en/dashboard?demo=1`);
+  await expect(page.locator('[data-status-text]')).toContainText(/Live operational state/i);
+
+  let statusRequests = 0;
+  let overviewRequests = 0;
+  let releaseOldOverview: (() => void) | undefined;
+  let resolveOldOverviewStarted: (() => void) | undefined;
+  const oldOverviewStarted = new Promise<void>((resolve) => {
+    resolveOldOverviewStarted = resolve;
+  });
+
+  await page.route('**/api/v1/dashboard/status**', async (route) => {
+    statusRequests += 1;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        data: {
+          status: 'ok',
+          runtime: 'node',
+          store: { status: 'configured' },
+          overview: {
+            status: 'ok',
+            lastAttemptAt: new Date().toISOString(),
+            lastSuccessAt: new Date().toISOString(),
+            lastDurationMs: 15,
+            lastHttpStatus: 200,
+            lastError: null,
+            links: { self: '/api/v1/overview' },
+          },
+          auth: { scope: 'read-only' },
+          links: { overview: '/api/v1/overview' },
+        },
+      }),
+    });
+  });
+  await page.route('**/api/v1/overview**', async (route) => {
+    overviewRequests += 1;
+    if (overviewRequests === 1) {
+      resolveOldOverviewStarted?.();
+      await new Promise<void>((resolve) => {
+        releaseOldOverview = resolve;
+      });
+      await route.fulfill({
+        status: 503,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'operational_store_unavailable' }),
+      });
+      return;
+    }
+
+    await route.continue();
+  });
+
+  await page.locator('[data-refresh]').click();
+  await oldOverviewStarted;
+  await page.locator('[data-refresh]').click();
+  await expect(page.locator('[data-status-text]')).toContainText(/Live operational state/i);
+  await expect.poll(() => statusRequests).toBeGreaterThan(0);
+
+  const statusRequestsBeforeDiscardedRefreshSettles = statusRequests;
+  releaseOldOverview?.();
+  await page.waitForTimeout(300);
+
+  expect(statusRequests).toBe(statusRequestsBeforeDiscardedRefreshSettles);
+});
+
 test('redraws the API Status Tile after clearing an auth-required dashboard token', async ({ page }) => {
   await page.route('**/api/v1/dashboard/status**', async (route) => {
     await route.fulfill({
@@ -574,7 +688,7 @@ test('redraws the API Status Tile after clearing an auth-required dashboard toke
   await page.locator('[data-token-save]').click();
 
   const apiStatusTile = page.locator('[data-overview-card-id="apiStatus"]');
-  await expect(apiStatusTile).toContainText('operator');
+  await expect(apiStatusTile).toContainText('Operator');
 
   await page.locator('[data-token-clear]').click();
 

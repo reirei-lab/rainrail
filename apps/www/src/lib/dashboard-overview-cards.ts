@@ -72,6 +72,7 @@ export interface OverviewApiStatusLabels {
     missing: string;
     unavailable: string;
   };
+  authScopes: Record<string, string>;
   errorSummaries?: Record<string, string>;
   justNow: string;
   minutesAgo: string;
@@ -262,13 +263,18 @@ export function overviewApiStatusSummary(
       overview: labels.overviewStatuses[data.overview.status],
       duration: formatDuration(data.overview.lastDurationMs, labels),
       lastSuccess: formatRelativeTime(data.overview.lastSuccessAt, options.nowMs ?? Date.now(), labels),
-      authScope: data.auth?.scope ?? labels.unknownAuthScope,
+      authScope: formatAuthScope(data.auth?.scope, labels),
       store: labels.storeStatuses[data.store.status],
     },
     note: lastError === null
       ? `${labels.overview}: ${labels.overviewStatuses[data.overview.status]}`
       : `${lastError.code}: ${labels.errorSummaries?.[lastError.code] ?? lastError.summary}`,
   };
+}
+
+function formatAuthScope(value: string | undefined, labels: OverviewApiStatusLabels): string {
+  if (value === undefined) return labels.unknownAuthScope;
+  return labels.authScopes[value] ?? value;
 }
 
 function apiStatusLabel(status: DashboardApiStatus, labels: OverviewApiStatusLabels): string {
