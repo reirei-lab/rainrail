@@ -7708,6 +7708,25 @@ function recordLocalDashboardOverviewSuccess(
   };
 }
 
+function recordLocalDashboardOverviewFailure(
+  state: LocalRainrailServerState,
+  startedAtMs: number,
+  options: Pick<RainrailStartOptions, 'demoMode'>,
+): void {
+  const timestamp = options.demoMode === true ? '2026-07-09T05:00:00.000Z' : new Date(startedAtMs).toISOString();
+  state.dashboardStatus.overview = {
+    status: 'error',
+    lastAttemptAt: timestamp,
+    lastSuccessAt: state.dashboardStatus.overview.lastSuccessAt,
+    lastDurationMs: options.demoMode === true ? 0 : Math.max(0, Date.now() - startedAtMs),
+    lastHttpStatus: 500,
+    lastError: {
+      code: 'internal_server_error',
+      summary: localDashboardStatusErrorSummary('internal_server_error'),
+    },
+  };
+}
+
 function localDashboardStatusResponse(state: LocalRainrailServerState): {
   data: {
     status: 'ok' | 'degraded' | 'error';
@@ -7718,7 +7737,9 @@ function localDashboardStatusResponse(state: LocalRainrailServerState): {
   };
 } {
   const storeStatus = state.eventStore === undefined ? 'missing' : 'configured';
-  const overview = state.dashboardStatus.overview;
+  const overview = storeStatus === 'missing'
+    ? localMissingStoreOverviewStatus()
+    : state.dashboardStatus.overview;
   return {
     data: {
       status: localDashboardStatusFromParts(storeStatus, overview.status),
@@ -7741,6 +7762,31 @@ function localDashboardStatusFromParts(
   if (overviewStatus === 'ok') return 'ok';
   if (overviewStatus === 'error') return 'error';
   return 'degraded';
+}
+
+function localMissingStoreOverviewStatus(): LocalDashboardStatusState['overview'] {
+  return {
+    status: 'error',
+    lastAttemptAt: null,
+    lastSuccessAt: null,
+    lastDurationMs: null,
+    lastHttpStatus: null,
+    lastError: {
+      code: 'operational_store_not_configured',
+      summary: localDashboardStatusErrorSummary('operational_store_not_configured'),
+    },
+  };
+}
+
+function localDashboardStatusErrorSummary(code: string): string {
+  switch (code) {
+    case 'operational_store_not_configured':
+      return 'Operational store is not configured.';
+    case 'internal_server_error':
+      return 'Overview request failed with an internal server error.';
+    default:
+      return 'Overview request failed.';
+  }
 }
 
 async function handleLocalRainrailRequest(
@@ -7829,29 +7875,35 @@ async function handleLocalRainrailRequest(
   if (request.method === 'GET' && url.pathname === '/api/v1/overview') {
     const overviewStartedAt = Date.now();
     if (state.eventStore?.counts !== undefined) {
-      const activityEvents = state.eventStore.listActivityEvents?.() ?? [];
-      const staleProjectClaims = state.eventStore.staleProjectClaimWarnings?.() ?? [];
-      recordLocalDashboardOverviewSuccess(state, overviewStartedAt, options);
-      writeJsonResponse(response, 200, {
-        data: {
-          runtime: 'node',
-          workspace: options.root,
-          counts: state.eventStore.counts(),
-          warnings: { staleProjectClaims },
-          recentActivity: activityEvents
-            .filter(isLocalWorkflowRunActivity)
-            .slice(0, 5)
-            .map(localActivityToWorkflowRunRow),
-          links: {
-            events: '/api/v1/events',
-            workflowRuns: '/api/v1/workflow-runs',
-            agentTasks: '/api/v1/agent-tasks',
-            sources: '/api/v1/sources',
-            queue: '/api/v1/queue',
-            settings: '/api/v1/settings',
+      try {
+        const activityEvents = state.eventStore.listActivityEvents?.() ?? [];
+        const staleProjectClaims = state.eventStore.staleProjectClaimWarnings?.() ?? [];
+        const body = {
+          data: {
+            runtime: 'node',
+            workspace: options.root,
+            counts: state.eventStore.counts(),
+            warnings: { staleProjectClaims },
+            recentActivity: activityEvents
+              .filter(isLocalWorkflowRunActivity)
+              .slice(0, 5)
+              .map(localActivityToWorkflowRunRow),
+            links: {
+              events: '/api/v1/events',
+              workflowRuns: '/api/v1/workflow-runs',
+              agentTasks: '/api/v1/agent-tasks',
+              sources: '/api/v1/sources',
+              queue: '/api/v1/queue',
+              settings: '/api/v1/settings',
+            },
           },
-        },
-      }, request);
+        };
+        recordLocalDashboardOverviewSuccess(state, overviewStartedAt, options);
+        writeJsonResponse(response, 200, body, request);
+      } catch (error) {
+        recordLocalDashboardOverviewFailure(state, overviewStartedAt, options);
+        throw error;
+      }
       return;
     }
     recordLocalDashboardOverviewSuccess(state, overviewStartedAt, options);

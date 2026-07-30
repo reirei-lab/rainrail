@@ -98,6 +98,7 @@ describe('operational API v1 design note', () => {
           id: 'operational-api-v1',
           docs: expect.arrayContaining(['docs/operational-api-v1.md']),
           tests: expect.arrayContaining([
+            'packages/cli/src/commands.test.ts',
             'scripts/validate-operational-api-v1.test.mjs',
             'src/dashboard-api.test.ts',
           ]),

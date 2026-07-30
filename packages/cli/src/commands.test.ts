@@ -2518,6 +2518,27 @@ describe('Rainrail CLI built-in commands', () => {
 
         const readAuth = await readDashboardAuthHeaders(projectRoot);
         const operatorAuth = await readDashboardAuthHeaders(projectRoot, 'operatorToken');
+        const initialStatus = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/status`, { headers: readAuth });
+        expect(initialStatus.status).toBe(200);
+        await expect(initialStatus.json()).resolves.toMatchObject({
+          data: {
+            status: 'degraded',
+            runtime: 'node',
+            store: { status: 'missing' },
+            overview: {
+              status: 'error',
+              lastAttemptAt: null,
+              lastSuccessAt: null,
+              lastDurationMs: null,
+              lastHttpStatus: null,
+              lastError: {
+                code: 'operational_store_not_configured',
+                summary: 'Operational store is not configured.',
+              },
+              links: { self: '/api/v1/overview' },
+            },
+          },
+        });
         const overview = await fetch(`http://127.0.0.1:${port}/api/v1/overview`, { headers: readAuth });
         await expect(overview.json()).resolves.toMatchObject({
           data: {
@@ -2543,12 +2564,11 @@ describe('Rainrail CLI built-in commands', () => {
             runtime: 'node',
             store: { status: 'missing' },
             overview: {
-              status: 'ok',
-              lastAttemptAt: expect.any(String),
-              lastSuccessAt: expect.any(String),
-              lastDurationMs: expect.any(Number),
-              lastHttpStatus: 200,
-              lastError: null,
+              status: 'error',
+              lastError: {
+                code: 'operational_store_not_configured',
+                summary: 'Operational store is not configured.',
+              },
               links: { self: '/api/v1/overview' },
             },
             links: { overview: '/api/v1/overview' },
@@ -3223,6 +3243,65 @@ describe('Rainrail CLI built-in commands', () => {
           .get('github-webhook:delivery-existing:github.issue') as { payload_json: string };
         expect(JSON.parse(row.payload_json)).toEqual({ action: 'opened', preserved: true });
       });
+    });
+  });
+
+  it('records local dashboard overview failures before returning status', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'sqlite-overview-status-failure');
+      const port = await getFreePort();
+      const databasePath = join(projectRoot, 'var', 'rainrail-operational.sqlite');
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        project: { name: 'sqlite-overview-status-failure' },
+        server: { host: '127.0.0.1', port },
+        dashboardAuth: {},
+        operationalStore: {
+          kind: 'sqlite',
+          databasePath,
+          eventLimit: 3,
+        },
+        sourceBundles: [],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+
+      const result = await runRainrailCliAsync(['start'], { cwd: projectRoot });
+      try {
+        expect(result.exitCode).toBe(0);
+        const readAuth = await readDashboardAuthHeaders(projectRoot);
+        withSqliteDatabase(databasePath, (database) => {
+          database.exec('DROP TABLE operational_events');
+        });
+
+        const overview = await fetch(`http://127.0.0.1:${port}/api/v1/overview`, { headers: readAuth });
+        expect(overview.status).toBe(500);
+        await expect(overview.json()).resolves.toEqual({ error: 'internal_server_error' });
+
+        const status = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/status`, { headers: readAuth });
+        expect(status.status).toBe(200);
+        await expect(status.json()).resolves.toMatchObject({
+          data: {
+            status: 'error',
+            runtime: 'node',
+            store: { status: 'configured' },
+            overview: {
+              status: 'error',
+              lastAttemptAt: expect.any(String),
+              lastSuccessAt: null,
+              lastDurationMs: expect.any(Number),
+              lastHttpStatus: 500,
+              lastError: {
+                code: 'internal_server_error',
+                summary: 'Overview request failed with an internal server error.',
+              },
+              links: { self: '/api/v1/overview' },
+            },
+          },
+        });
+      } finally {
+        await closeTestServer(result);
+      }
     });
   });
 
