@@ -197,6 +197,8 @@ layout API:
 
 - `GET /api/v1/dashboard/cards` returns Core and plugin card definitions with
   availability.
+- `GET /api/v1/dashboard/status` returns lightweight API health and the last
+  observed overview duration/success/error summary without rerunning overview.
 - `GET /api/v1/dashboard/layout` returns the default Core layout until an
   operator saves a user layout.
 - `PUT /api/v1/dashboard/layout` saves a full user layout and requires an
@@ -373,7 +375,8 @@ The local dashboard defaults to same origin fetches such as
 `/api/v1/overview`, `/api/v1/events`, `/api/v1/queue`, and
 `/api/v1/settings`. `rainrail start` also serves the same-origin dashboard card
 catalog/layout routes used by the card settings UI:
-`/api/v1/dashboard/cards`, `/api/v1/dashboard/layout`, and
+`/api/v1/dashboard/status`, `/api/v1/dashboard/cards`,
+`/api/v1/dashboard/layout`, and
 `PATCH /api/v1/dashboard/layout/items/:itemId/config`.
 
 The Cloudflare Pages product/docs site is separate. When the static dashboard

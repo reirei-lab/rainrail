@@ -6498,6 +6498,7 @@ const localCoreRoutePaths = new Set([
   '/api/v1/sources',
   '/api/v1/queue',
   '/api/v1/settings',
+  '/api/v1/dashboard/status',
   '/api/v1/dashboard/cards',
   '/api/v1/dashboard/layout',
 ]);
@@ -6841,8 +6842,20 @@ type LocalRainrailServerState = {
   events: LocalRainrailEvent[];
   sseClients: Set<ServerResponse>;
   eventStore?: LocalRainrailEventStore;
+  dashboardStatus: LocalDashboardStatusState;
   dashboardLayout: LocalDashboardLayoutItem[];
   dashboardLayoutUpdatedAt?: string;
+};
+
+type LocalDashboardStatusState = {
+  overview: {
+    status: 'ok' | 'unknown' | 'error';
+    lastAttemptAt: string | null;
+    lastSuccessAt: string | null;
+    lastDurationMs: number | null;
+    lastHttpStatus: number | null;
+    lastError: { code: string; summary: string } | null;
+  };
 };
 
 type LocalRainrailEventStore = {
@@ -6879,6 +6892,32 @@ type LocalDashboardCommand = {
   readonly confirmationRequired: boolean;
 };
 
+function createLocalDashboardStatusState(options: Pick<RainrailStartOptions, 'demoMode'>): LocalDashboardStatusState {
+  if (options.demoMode === true) {
+    return {
+      overview: {
+        status: 'ok',
+        lastAttemptAt: '2026-07-09T05:00:00.000Z',
+        lastSuccessAt: '2026-07-09T05:00:00.000Z',
+        lastDurationMs: 0,
+        lastHttpStatus: 200,
+        lastError: null,
+      },
+    };
+  }
+
+  return {
+    overview: {
+      status: 'unknown',
+      lastAttemptAt: null,
+      lastSuccessAt: null,
+      lastDurationMs: null,
+      lastHttpStatus: null,
+      lastError: null,
+    },
+  };
+}
+
 async function startLocalRainrailServer(options: RainrailStartOptions): Promise<RainrailStartedServer> {
   const eventStore = createLocalRainrailEventStore(options.operationalStoreConfig);
   const restoredEvents = eventStore?.listEvents() ?? [];
@@ -6887,6 +6926,7 @@ async function startLocalRainrailServer(options: RainrailStartOptions): Promise<
     nextEventId: eventStore?.nextEventId?.() ?? nextLocalEventId(restoredEvents),
     events: [...restoredEvents],
     sseClients: new Set(),
+    dashboardStatus: createLocalDashboardStatusState(options),
     dashboardLayout: localCloneDashboardLayout(restoredDashboardLayout?.items ?? localDefaultDashboardLayout),
     ...(restoredDashboardLayout === undefined ? {} : { dashboardLayoutUpdatedAt: restoredDashboardLayout.updatedAt }),
     ...(eventStore === undefined ? {} : { eventStore }),
@@ -7652,6 +7692,57 @@ function nextLocalEventId(events: readonly { readonly id: string }[]): number {
   }, 1);
 }
 
+function recordLocalDashboardOverviewSuccess(
+  state: LocalRainrailServerState,
+  startedAtMs: number,
+  options: Pick<RainrailStartOptions, 'demoMode'>,
+): void {
+  const timestamp = options.demoMode === true ? '2026-07-09T05:00:00.000Z' : new Date(startedAtMs).toISOString();
+  state.dashboardStatus.overview = {
+    status: 'ok',
+    lastAttemptAt: timestamp,
+    lastSuccessAt: timestamp,
+    lastDurationMs: options.demoMode === true ? 0 : Math.max(0, Date.now() - startedAtMs),
+    lastHttpStatus: 200,
+    lastError: null,
+  };
+}
+
+function localDashboardStatusResponse(state: LocalRainrailServerState): {
+  data: {
+    status: 'ok' | 'degraded' | 'error';
+    runtime: string;
+    store: { status: 'configured' | 'missing' };
+    overview: LocalDashboardStatusState['overview'] & { links: { self: '/api/v1/overview' } };
+    links: { overview: '/api/v1/overview' };
+  };
+} {
+  const storeStatus = state.eventStore === undefined ? 'missing' : 'configured';
+  const overview = state.dashboardStatus.overview;
+  return {
+    data: {
+      status: localDashboardStatusFromParts(storeStatus, overview.status),
+      runtime: 'node',
+      store: { status: storeStatus },
+      overview: {
+        ...overview,
+        links: { self: '/api/v1/overview' },
+      },
+      links: { overview: '/api/v1/overview' },
+    },
+  };
+}
+
+function localDashboardStatusFromParts(
+  storeStatus: 'configured' | 'missing',
+  overviewStatus: LocalDashboardStatusState['overview']['status'],
+): 'ok' | 'degraded' | 'error' {
+  if (storeStatus === 'missing') return 'degraded';
+  if (overviewStatus === 'ok') return 'ok';
+  if (overviewStatus === 'error') return 'error';
+  return 'degraded';
+}
+
 async function handleLocalRainrailRequest(
   request: IncomingMessage,
   response: ServerResponse,
@@ -7736,9 +7827,11 @@ async function handleLocalRainrailRequest(
   }
 
   if (request.method === 'GET' && url.pathname === '/api/v1/overview') {
+    const overviewStartedAt = Date.now();
     if (state.eventStore?.counts !== undefined) {
       const activityEvents = state.eventStore.listActivityEvents?.() ?? [];
       const staleProjectClaims = state.eventStore.staleProjectClaimWarnings?.() ?? [];
+      recordLocalDashboardOverviewSuccess(state, overviewStartedAt, options);
       writeJsonResponse(response, 200, {
         data: {
           runtime: 'node',
@@ -7761,6 +7854,7 @@ async function handleLocalRainrailRequest(
       }, request);
       return;
     }
+    recordLocalDashboardOverviewSuccess(state, overviewStartedAt, options);
     writeJsonResponse(response, 200, {
       data: {
         runtime: 'node',
@@ -7778,6 +7872,11 @@ async function handleLocalRainrailRequest(
         },
       },
     }, request);
+    return;
+  }
+
+  if (request.method === 'GET' && url.pathname === '/api/v1/dashboard/status') {
+    writeJsonResponse(response, 200, localDashboardStatusResponse(state), request);
     return;
   }
 
@@ -9610,6 +9709,7 @@ function preflightMethodsForLocalPath(pathname: string, options: RainrailStartOp
   if (pathname === '/events') return ['GET', 'OPTIONS'];
   if (pathname === '/api/state') return ['GET', 'OPTIONS'];
   if (pathname === '/api/v1/overview') return ['GET', 'OPTIONS'];
+  if (pathname === '/api/v1/dashboard/status') return ['GET', 'OPTIONS'];
   if (pathname === '/api/v1/events') return ['GET', 'OPTIONS'];
   if (/^\/api\/v1\/events\/[^/]+$/u.test(pathname)) return ['GET', 'OPTIONS'];
   if (/^\/api\/v1\/workflow-runs\/[^/]+$/u.test(pathname)) return ['GET', 'OPTIONS'];

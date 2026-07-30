@@ -2535,6 +2535,26 @@ describe('Rainrail CLI built-in commands', () => {
           },
         });
 
+        const status = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/status`, { headers: readAuth });
+        expect(status.status).toBe(200);
+        await expect(status.json()).resolves.toMatchObject({
+          data: {
+            status: 'degraded',
+            runtime: 'node',
+            store: { status: 'missing' },
+            overview: {
+              status: 'ok',
+              lastAttemptAt: expect.any(String),
+              lastSuccessAt: expect.any(String),
+              lastDurationMs: expect.any(Number),
+              lastHttpStatus: 200,
+              lastError: null,
+              links: { self: '/api/v1/overview' },
+            },
+            links: { overview: '/api/v1/overview' },
+          },
+        });
+
         for (const route of [
           '/api/v1/events',
           '/api/v1/workflow-runs',
@@ -3288,6 +3308,25 @@ describe('Rainrail CLI built-in commands', () => {
               agentTasks: 3,
               commandResults: 3,
               eventHandlerRetries: 2,
+            },
+          },
+        });
+
+        const status = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/status?demo=1`);
+        expect(status.status).toBe(200);
+        await expect(status.json()).resolves.toMatchObject({
+          data: {
+            status: 'ok',
+            runtime: 'node',
+            store: { status: 'configured' },
+            overview: {
+              status: 'ok',
+              lastAttemptAt: '2026-07-09T05:00:00.000Z',
+              lastSuccessAt: '2026-07-09T05:00:00.000Z',
+              lastDurationMs: 0,
+              lastHttpStatus: 200,
+              lastError: null,
+              links: { self: '/api/v1/overview' },
             },
           },
         });

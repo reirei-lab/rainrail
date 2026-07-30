@@ -39,6 +39,7 @@ describe('operational API v1 design note', () => {
       '`GET /api/v1/sources`',
       '`GET /api/v1/queue`',
       '`GET /api/v1/settings`',
+      '`GET /api/v1/dashboard/status`',
       '`GET /api/v1/dashboard/cards`',
       '`GET /api/v1/dashboard/layout`',
     ]) {
@@ -57,6 +58,9 @@ describe('operational API v1 design note', () => {
       '`ETag`',
       '`X-Request-ID`',
       '`Last-Event-ID`',
+      '`lastDurationMs`',
+      '`lastSuccessAt`',
+      '`lastError`',
       '`notificationHint`',
       '`SSE_BEARER_TOKEN`',
       'future optimization',

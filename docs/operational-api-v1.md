@@ -32,6 +32,7 @@ v1 resource は operational workflow を観察・操作する単位に合わせ�
 | Sources | `GET /api/v1/sources` | configured source、health、last delivery、auth status summary。 | `read-only` |
 | Queue | `GET /api/v1/queue` | assignable Project issues、claimed item、stale claim warning。 | `read-only` |
 | Settings | `GET /api/v1/settings` | operator-visible runtime/source settings metadata。secret value は返さない。 | `read-only` |
+| Dashboard status | `GET /api/v1/dashboard/status` | local dashboard が軽量に読める API health と直近 overview 実行状態。 | `read-only` |
 | Dashboard card catalog | `GET /api/v1/dashboard/cards` | Core/plugin dashboard card definition と availability を返す。 | `read-only` |
 | Dashboard layout | `GET /api/v1/dashboard/layout` | 保存済み user layout、未保存時は `core.defaultLayout` を返す。 | `read-only` |
 | Save dashboard card config | `PATCH /api/v1/dashboard/layout/items/:itemId/config` | 対象 layout item の `config` だけを更新する。 | `operator` |
@@ -122,6 +123,38 @@ compact row fields stay stable for list rendering; detail record fields may grow
 versioned tests.
 
 ## Dashboard cards and layout
+
+`GET /api/v1/dashboard/status` は dashboard shell が overview 本体とは独立して
+軽量に読める status contract を返す。endpoint 自体は `GET /api/v1/overview` を実行せず、
+server state に保持された直近 overview attempt の `lastDurationMs`、`lastSuccessAt`、
+`lastHttpStatus`、dashboard-safe な `lastError` summary だけを返す。raw stack trace、private path、
+token、secret、raw provider payload は返さない。未実行時は `overview.status: "unknown"` とし、
+operational store 未設定時は `store.status: "missing"`、top-level `status: "degraded"`、
+`lastError.code: "operational_store_not_configured"` を返す。overview が最後に失敗した場合は
+`overview.status: "error"` とし、error summary は stable error code から作る短い文に限定する。
+
+```json
+{
+  "data": {
+    "status": "ok",
+    "runtime": "node",
+    "store": { "status": "configured" },
+    "overview": {
+      "status": "ok",
+      "lastAttemptAt": "2026-07-09T05:00:00.000Z",
+      "lastSuccessAt": "2026-07-09T05:00:00.000Z",
+      "lastDurationMs": 4,
+      "lastHttpStatus": 200,
+      "lastError": null,
+      "links": { "self": "/api/v1/overview" }
+    },
+    "links": { "overview": "/api/v1/overview" }
+  }
+}
+```
+
+Local demo mode は seed data と同じく deterministic な status response を返し、demo の初期
+`lastAttemptAt` / `lastSuccessAt` は固定時刻、`lastDurationMs` は `0` とする。
 
 `GET /api/v1/dashboard/cards` は `DashboardCardRegistry` の catalog projection を返す。
 各 row は `definition` と `availability` を持ち、unavailable な plugin card や capability 不足の
