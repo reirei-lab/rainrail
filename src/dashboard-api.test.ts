@@ -2336,6 +2336,151 @@ describe('Rainrail dashboard API', () => {
     operationalStore.close();
   });
 
+  it('serves a lightweight dashboard status contract without running overview on status reads', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-02T00:00:00.000Z'),
+    });
+    operationalStore.recordAgentTask({
+      id: 'agent_task_status_api',
+      title: 'local dashboard status API',
+      agentSessionId: 'agent:main:rainrail-376',
+      branchName: 'agent/reirei-lab-rainrail-376-local-dashboard-status-api-contract',
+      status: 'running',
+    });
+    const overviewSpy = vi.spyOn(operationalStore, 'snapshot');
+    const app = createTestApp({
+      dashboardAuth: { readOnlyToken: 'read-token' },
+      operationalStore,
+      runtime: 'fetch-test',
+    });
+    const headers = { authorization: 'Bearer read-token' };
+
+    const initial = await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/status', { headers }));
+    expect(initial.status).toBe(200);
+    await expect(initial.json()).resolves.toEqual({
+      data: {
+        status: 'degraded',
+        runtime: 'fetch-test',
+        store: { status: 'configured' },
+        overview: {
+          status: 'unknown',
+          lastAttemptAt: null,
+          lastSuccessAt: null,
+          lastDurationMs: null,
+          lastHttpStatus: null,
+          lastError: null,
+          links: { self: '/api/v1/overview' },
+        },
+        links: { overview: '/api/v1/overview' },
+      },
+    });
+    expect(overviewSpy).not.toHaveBeenCalled();
+
+    const overview = await app.fetch(new Request('https://rainrail.local/api/v1/overview', { headers }));
+    expect(overview.status).toBe(200);
+    expect(overviewSpy).toHaveBeenCalledTimes(1);
+
+    const afterOverview = await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/status', { headers }));
+    expect(afterOverview.status).toBe(200);
+    const afterOverviewBody = await afterOverview.json() as {
+      data: {
+        status: string;
+        runtime: string;
+        store: { status: string };
+        overview: {
+          status: string;
+          lastAttemptAt: string | null;
+          lastSuccessAt: string | null;
+          lastDurationMs: number | null;
+          lastHttpStatus: number | null;
+          lastError: unknown;
+        };
+      };
+    };
+    expect(afterOverviewBody).toMatchObject({
+      data: {
+        status: 'ok',
+        runtime: 'fetch-test',
+        store: { status: 'configured' },
+        overview: {
+          status: 'ok',
+          lastAttemptAt: expect.any(String),
+          lastSuccessAt: expect.any(String),
+          lastDurationMs: expect.any(Number),
+          lastHttpStatus: 200,
+          lastError: null,
+        },
+      },
+    });
+    expect(afterOverviewBody.data.overview.lastDurationMs).toBeGreaterThanOrEqual(0);
+    expect(overviewSpy).toHaveBeenCalledTimes(1);
+
+    const methodMismatch = await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/status', {
+      method: 'POST',
+      headers,
+    }));
+    expect(methodMismatch.status).toBe(405);
+    expect(methodMismatch.headers.get('allow')).toBe('GET, OPTIONS');
+
+    const preflight = await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/status', {
+      method: 'OPTIONS',
+    }));
+    expect(preflight.status).toBe(204);
+
+    operationalStore.close();
+  });
+
+  it('keeps dashboard status dashboard-safe when the operational store is unavailable', async () => {
+    const app = createTestApp({
+      dashboardAuth: { readOnlyToken: 'read-token' },
+      runtime: 'fetch-test',
+    });
+
+    const response = await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/status', {
+      headers: { authorization: 'Bearer read-token' },
+    }));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      data: {
+        status: 'degraded',
+        runtime: 'fetch-test',
+        store: { status: 'missing' },
+        overview: {
+          status: 'error',
+          lastAttemptAt: null,
+          lastSuccessAt: null,
+          lastDurationMs: null,
+          lastHttpStatus: null,
+          lastError: {
+            code: 'operational_store_not_configured',
+            summary: 'Operational store is not configured.',
+          },
+          links: { self: '/api/v1/overview' },
+        },
+        links: { overview: '/api/v1/overview' },
+      },
+    });
+  });
+
+  it('protects dashboard status with read-only dashboard auth', async () => {
+    const app = createTestApp({
+      dashboardAuth: { readOnlyToken: 'read-token' },
+    });
+
+    const missingAuth = await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/status'));
+    expect(missingAuth.status).toBe(401);
+    await expect(missingAuth.json()).resolves.toEqual({ error: 'missing_bearer_token' });
+
+    const invalidAuth = await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/status', {
+      headers: { authorization: 'Bearer wrong-token' },
+    }));
+    expect(invalidAuth.status).toBe(403);
+    await expect(invalidAuth.json()).resolves.toEqual({ error: 'invalid_bearer_token' });
+  });
+
   it('protects operational dashboard API with the event bearer token', async () => {
     const operationalStore = new RainrailOperationalStore({
       databasePath: ':memory:',

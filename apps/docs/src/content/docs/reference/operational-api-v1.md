@@ -8,9 +8,9 @@ without exposing internal store shapes or unsafe provider payloads.
 
 ## Resources
 
-The API groups overview, events, workflow runs, agent tasks, sources, queue, and
-settings into compact list rows and detailed records. Mutating actions use
-explicit scope checks and confirmation rules.
+The API groups overview, events, workflow runs, agent tasks, sources, queue,
+settings, and lightweight dashboard status into compact list rows and detailed
+records. Mutating actions use explicit scope checks and confirmation rules.
 
 ## Safety rule
 

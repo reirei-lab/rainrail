@@ -112,7 +112,9 @@ HTTP entrypoint の公開入口は Fetch adapter の `createRainrailHttpApp` と
 Dashboard command API を組み込む caller 向けには、scoped token の `RainrailDashboardScope`、
 `RainrailDashboardAuthOptions`、handler 入力の `RainrailCommandRequest`、
 `RainrailCommandActionType`、`RainrailCommandTargetType`、および handler 型の
-`RainrailCommandHandler` を public contract として公開する。
+`RainrailCommandHandler` を public contract として公開する。軽量 dashboard status の
+public response 型は `RainrailDashboardStatus` と `RainrailDashboardStatusResponse` で、
+直近 overview attempt の duration / success / safe error summary だけを公開する。
 
 `createRainrailHttpApp` は provider 固有の ingress route を直接持たない。HTTP webhook、
 manual publish UI、Worker tail などの外部入力は `RainrailIntakeAdapter` として登録し、

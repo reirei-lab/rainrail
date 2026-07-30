@@ -234,6 +234,35 @@ export type RainrailCommandTargetType = 'agent_task' | 'agent_tasks' | 'dashboar
 
 export type RainrailCommandHandler = (command: RainrailCommandRequest) => unknown | Promise<unknown>;
 
+export type RainrailDashboardStatus = 'ok' | 'degraded' | 'error';
+
+export interface RainrailDashboardStatusResponse {
+  data: {
+    status: RainrailDashboardStatus;
+    runtime: string;
+    store: {
+      status: 'configured' | 'missing';
+    };
+    overview: {
+      status: 'ok' | 'unknown' | 'error';
+      lastAttemptAt: string | null;
+      lastSuccessAt: string | null;
+      lastDurationMs: number | null;
+      lastHttpStatus: number | null;
+      lastError: {
+        code: string;
+        summary: string;
+      } | null;
+      links: {
+        self: '/api/v1/overview';
+      };
+    };
+    links: {
+      overview: '/api/v1/overview';
+    };
+  };
+}
+
 export interface RainrailBridgeRoomFetchTarget {
   fetch(request: Request): Response | Promise<Response>;
 }
@@ -264,11 +293,12 @@ const INTERNAL_ROOM_ORIGIN = 'https://rainrail-room.local';
 export function createRainrailHttpApp(options: RainrailHttpAppOptions): RainrailHttpApp {
   assertUniqueDashboardTokenScopes(options);
   const intakeRegistry = createRainrailIntakeRegistry(options.intakeAdapters);
+  const statusState = createDashboardStatusState();
 
   return {
     async fetch(request): Promise<Response> {
       try {
-        return withCors(await routeRainrailHttpRequest(request, options, intakeRegistry));
+        return withCors(await routeRainrailHttpRequest(request, options, intakeRegistry, statusState));
       } catch {
         return jsonResponse({ error: 'internal_server_error' }, { status: 500 });
       }
@@ -313,6 +343,7 @@ async function routeRainrailHttpRequest(
   request: Request,
   options: RainrailHttpAppOptions,
   intakeRegistry: RainrailIntakeRegistry,
+  statusState: DashboardStatusState,
 ): Promise<Response> {
   const url = new URL(request.url);
 
@@ -362,7 +393,16 @@ async function routeRainrailHttpRequest(
     const auth = verifyDashboardReadRequest(request, options);
     if (auth !== undefined) return auth;
 
-    return dashboardV1OverviewResponse(options);
+    return trackDashboardOverviewStatus(statusState, () => dashboardV1OverviewResponse(options));
+  }
+
+  if (url.pathname === '/api/v1/dashboard/status') {
+    if (request.method !== 'GET') return methodNotAllowedResponse(['GET', 'OPTIONS']);
+
+    const auth = verifyDashboardScopedRequest(request, options, 'read-only');
+    if (!auth.ok) return auth.response;
+
+    return dashboardV1StatusResponse(options, statusState);
   }
 
   if (url.pathname === '/api/v1/events') {
@@ -650,6 +690,164 @@ function verifyDashboardReadRequest(request: Request, options: RainrailHttpAppOp
 
   const auth = verifyDashboardScopedRequest(request, options, 'read-only');
   return auth.ok ? undefined : auth.response;
+}
+
+interface DashboardOverviewStatusState {
+  status: 'ok' | 'unknown' | 'error';
+  lastAttemptAt: string | null;
+  lastSuccessAt: string | null;
+  lastDurationMs: number | null;
+  lastHttpStatus: number | null;
+  lastError: {
+    code: string;
+    summary: string;
+  } | null;
+}
+
+interface DashboardStatusState {
+  overview: DashboardOverviewStatusState;
+}
+
+function createDashboardStatusState(): DashboardStatusState {
+  return {
+    overview: {
+      status: 'unknown',
+      lastAttemptAt: null,
+      lastSuccessAt: null,
+      lastDurationMs: null,
+      lastHttpStatus: null,
+      lastError: null,
+    },
+  };
+}
+
+async function trackDashboardOverviewStatus(
+  state: DashboardStatusState,
+  fetchOverview: () => Promise<Response>,
+): Promise<Response> {
+  const startedAtMs = Date.now();
+  const attemptedAt = new Date(startedAtMs).toISOString();
+
+  try {
+    const response = await fetchOverview();
+    const durationMs = Math.max(0, Date.now() - startedAtMs);
+    await recordDashboardOverviewResponse(state, response, attemptedAt, durationMs);
+    return response;
+  } catch (error) {
+    state.overview = {
+      status: 'error',
+      lastAttemptAt: attemptedAt,
+      lastSuccessAt: state.overview.lastSuccessAt,
+      lastDurationMs: Math.max(0, Date.now() - startedAtMs),
+      lastHttpStatus: 500,
+      lastError: {
+        code: 'internal_server_error',
+        summary: dashboardStatusErrorSummary('internal_server_error'),
+      },
+    };
+    throw error;
+  }
+}
+
+async function recordDashboardOverviewResponse(
+  state: DashboardStatusState,
+  response: Response,
+  attemptedAt: string,
+  durationMs: number,
+): Promise<void> {
+  if (response.ok) {
+    state.overview = {
+      status: 'ok',
+      lastAttemptAt: attemptedAt,
+      lastSuccessAt: attemptedAt,
+      lastDurationMs: durationMs,
+      lastHttpStatus: response.status,
+      lastError: null,
+    };
+    return;
+  }
+
+  const code = await dashboardStatusErrorCode(response);
+  state.overview = {
+    status: 'error',
+    lastAttemptAt: attemptedAt,
+    lastSuccessAt: state.overview.lastSuccessAt,
+    lastDurationMs: durationMs,
+    lastHttpStatus: response.status,
+    lastError: {
+      code,
+      summary: dashboardStatusErrorSummary(code),
+    },
+  };
+}
+
+async function dashboardStatusErrorCode(response: Response): Promise<string> {
+  try {
+    const body = await response.clone().json() as { error?: unknown };
+    return typeof body.error === 'string' && body.error.length > 0 ? body.error : 'overview_request_failed';
+  } catch {
+    return 'overview_request_failed';
+  }
+}
+
+function dashboardStatusErrorSummary(code: string): string {
+  switch (code) {
+    case 'operational_store_not_configured':
+      return 'Operational store is not configured.';
+    case 'events_auth_not_configured':
+      return 'Dashboard auth is not configured.';
+    case 'missing_bearer_token':
+      return 'Dashboard bearer token is missing.';
+    case 'invalid_bearer_token':
+      return 'Dashboard bearer token is invalid.';
+    case 'internal_server_error':
+      return 'Overview request failed with an internal server error.';
+    default:
+      return 'Overview request failed.';
+  }
+}
+
+function dashboardV1StatusResponse(
+  options: RainrailHttpAppOptions,
+  state: DashboardStatusState,
+): Response {
+  const storeStatus = options.operationalStore === undefined ? 'missing' : 'configured';
+  const overview = options.operationalStore === undefined && state.overview.lastAttemptAt === null
+    ? {
+        status: 'error' as const,
+        lastAttemptAt: null,
+        lastSuccessAt: null,
+        lastDurationMs: null,
+        lastHttpStatus: null,
+        lastError: {
+          code: 'operational_store_not_configured',
+          summary: dashboardStatusErrorSummary('operational_store_not_configured'),
+        },
+      }
+    : state.overview;
+
+  return jsonResponse({
+    data: {
+      status: dashboardStatusFromParts(storeStatus, overview.status),
+      runtime: options.runtime ?? 'fetch',
+      store: { status: storeStatus },
+      overview: {
+        ...overview,
+        links: { self: '/api/v1/overview' },
+      },
+      links: { overview: '/api/v1/overview' },
+    },
+  } satisfies RainrailDashboardStatusResponse);
+}
+
+function dashboardStatusFromParts(
+  storeStatus: 'configured' | 'missing',
+  overviewStatus: DashboardOverviewStatusState['status'],
+): RainrailDashboardStatus {
+  if (storeStatus === 'missing') return 'degraded';
+  if (overviewStatus === 'ok') return 'ok';
+  if (overviewStatus === 'error') return 'error';
+  return 'degraded';
 }
 
 function dashboardStateResponse(url: URL, options: RainrailHttpAppOptions): Response {

@@ -6498,6 +6498,7 @@ const localCoreRoutePaths = new Set([
   '/api/v1/sources',
   '/api/v1/queue',
   '/api/v1/settings',
+  '/api/v1/dashboard/status',
   '/api/v1/dashboard/cards',
   '/api/v1/dashboard/layout',
 ]);
@@ -6841,8 +6842,20 @@ type LocalRainrailServerState = {
   events: LocalRainrailEvent[];
   sseClients: Set<ServerResponse>;
   eventStore?: LocalRainrailEventStore;
+  dashboardStatus: LocalDashboardStatusState;
   dashboardLayout: LocalDashboardLayoutItem[];
   dashboardLayoutUpdatedAt?: string;
+};
+
+type LocalDashboardStatusState = {
+  overview: {
+    status: 'ok' | 'unknown' | 'error';
+    lastAttemptAt: string | null;
+    lastSuccessAt: string | null;
+    lastDurationMs: number | null;
+    lastHttpStatus: number | null;
+    lastError: { code: string; summary: string } | null;
+  };
 };
 
 type LocalRainrailEventStore = {
@@ -6879,6 +6892,32 @@ type LocalDashboardCommand = {
   readonly confirmationRequired: boolean;
 };
 
+function createLocalDashboardStatusState(options: Pick<RainrailStartOptions, 'demoMode'>): LocalDashboardStatusState {
+  if (options.demoMode === true) {
+    return {
+      overview: {
+        status: 'ok',
+        lastAttemptAt: '2026-07-09T05:00:00.000Z',
+        lastSuccessAt: '2026-07-09T05:00:00.000Z',
+        lastDurationMs: 0,
+        lastHttpStatus: 200,
+        lastError: null,
+      },
+    };
+  }
+
+  return {
+    overview: {
+      status: 'unknown',
+      lastAttemptAt: null,
+      lastSuccessAt: null,
+      lastDurationMs: null,
+      lastHttpStatus: null,
+      lastError: null,
+    },
+  };
+}
+
 async function startLocalRainrailServer(options: RainrailStartOptions): Promise<RainrailStartedServer> {
   const eventStore = createLocalRainrailEventStore(options.operationalStoreConfig);
   const restoredEvents = eventStore?.listEvents() ?? [];
@@ -6887,6 +6926,7 @@ async function startLocalRainrailServer(options: RainrailStartOptions): Promise<
     nextEventId: eventStore?.nextEventId?.() ?? nextLocalEventId(restoredEvents),
     events: [...restoredEvents],
     sseClients: new Set(),
+    dashboardStatus: createLocalDashboardStatusState(options),
     dashboardLayout: localCloneDashboardLayout(restoredDashboardLayout?.items ?? localDefaultDashboardLayout),
     ...(restoredDashboardLayout === undefined ? {} : { dashboardLayoutUpdatedAt: restoredDashboardLayout.updatedAt }),
     ...(eventStore === undefined ? {} : { eventStore }),
@@ -7652,6 +7692,103 @@ function nextLocalEventId(events: readonly { readonly id: string }[]): number {
   }, 1);
 }
 
+function recordLocalDashboardOverviewSuccess(
+  state: LocalRainrailServerState,
+  startedAtMs: number,
+  options: Pick<RainrailStartOptions, 'demoMode'>,
+): void {
+  const timestamp = options.demoMode === true ? '2026-07-09T05:00:00.000Z' : new Date(startedAtMs).toISOString();
+  state.dashboardStatus.overview = {
+    status: 'ok',
+    lastAttemptAt: timestamp,
+    lastSuccessAt: timestamp,
+    lastDurationMs: options.demoMode === true ? 0 : Math.max(0, Date.now() - startedAtMs),
+    lastHttpStatus: 200,
+    lastError: null,
+  };
+}
+
+function recordLocalDashboardOverviewFailure(
+  state: LocalRainrailServerState,
+  startedAtMs: number,
+  options: Pick<RainrailStartOptions, 'demoMode'>,
+): void {
+  const timestamp = options.demoMode === true ? '2026-07-09T05:00:00.000Z' : new Date(startedAtMs).toISOString();
+  state.dashboardStatus.overview = {
+    status: 'error',
+    lastAttemptAt: timestamp,
+    lastSuccessAt: state.dashboardStatus.overview.lastSuccessAt,
+    lastDurationMs: options.demoMode === true ? 0 : Math.max(0, Date.now() - startedAtMs),
+    lastHttpStatus: 500,
+    lastError: {
+      code: 'internal_server_error',
+      summary: localDashboardStatusErrorSummary('internal_server_error'),
+    },
+  };
+}
+
+function localDashboardStatusResponse(state: LocalRainrailServerState): {
+  data: {
+    status: 'ok' | 'degraded' | 'error';
+    runtime: string;
+    store: { status: 'configured' | 'missing' };
+    overview: LocalDashboardStatusState['overview'] & { links: { self: '/api/v1/overview' } };
+    links: { overview: '/api/v1/overview' };
+  };
+} {
+  const storeStatus = state.eventStore === undefined ? 'missing' : 'configured';
+  const overview = storeStatus === 'missing'
+    ? localMissingStoreOverviewStatus()
+    : state.dashboardStatus.overview;
+  return {
+    data: {
+      status: localDashboardStatusFromParts(storeStatus, overview.status),
+      runtime: 'node',
+      store: { status: storeStatus },
+      overview: {
+        ...overview,
+        links: { self: '/api/v1/overview' },
+      },
+      links: { overview: '/api/v1/overview' },
+    },
+  };
+}
+
+function localDashboardStatusFromParts(
+  storeStatus: 'configured' | 'missing',
+  overviewStatus: LocalDashboardStatusState['overview']['status'],
+): 'ok' | 'degraded' | 'error' {
+  if (storeStatus === 'missing') return 'degraded';
+  if (overviewStatus === 'ok') return 'ok';
+  if (overviewStatus === 'error') return 'error';
+  return 'degraded';
+}
+
+function localMissingStoreOverviewStatus(): LocalDashboardStatusState['overview'] {
+  return {
+    status: 'error',
+    lastAttemptAt: null,
+    lastSuccessAt: null,
+    lastDurationMs: null,
+    lastHttpStatus: null,
+    lastError: {
+      code: 'operational_store_not_configured',
+      summary: localDashboardStatusErrorSummary('operational_store_not_configured'),
+    },
+  };
+}
+
+function localDashboardStatusErrorSummary(code: string): string {
+  switch (code) {
+    case 'operational_store_not_configured':
+      return 'Operational store is not configured.';
+    case 'internal_server_error':
+      return 'Overview request failed with an internal server error.';
+    default:
+      return 'Overview request failed.';
+  }
+}
+
 async function handleLocalRainrailRequest(
   request: IncomingMessage,
   response: ServerResponse,
@@ -7736,31 +7873,40 @@ async function handleLocalRainrailRequest(
   }
 
   if (request.method === 'GET' && url.pathname === '/api/v1/overview') {
+    const overviewStartedAt = Date.now();
     if (state.eventStore?.counts !== undefined) {
-      const activityEvents = state.eventStore.listActivityEvents?.() ?? [];
-      const staleProjectClaims = state.eventStore.staleProjectClaimWarnings?.() ?? [];
-      writeJsonResponse(response, 200, {
-        data: {
-          runtime: 'node',
-          workspace: options.root,
-          counts: state.eventStore.counts(),
-          warnings: { staleProjectClaims },
-          recentActivity: activityEvents
-            .filter(isLocalWorkflowRunActivity)
-            .slice(0, 5)
-            .map(localActivityToWorkflowRunRow),
-          links: {
-            events: '/api/v1/events',
-            workflowRuns: '/api/v1/workflow-runs',
-            agentTasks: '/api/v1/agent-tasks',
-            sources: '/api/v1/sources',
-            queue: '/api/v1/queue',
-            settings: '/api/v1/settings',
+      try {
+        const activityEvents = state.eventStore.listActivityEvents?.() ?? [];
+        const staleProjectClaims = state.eventStore.staleProjectClaimWarnings?.() ?? [];
+        const body = {
+          data: {
+            runtime: 'node',
+            workspace: options.root,
+            counts: state.eventStore.counts(),
+            warnings: { staleProjectClaims },
+            recentActivity: activityEvents
+              .filter(isLocalWorkflowRunActivity)
+              .slice(0, 5)
+              .map(localActivityToWorkflowRunRow),
+            links: {
+              events: '/api/v1/events',
+              workflowRuns: '/api/v1/workflow-runs',
+              agentTasks: '/api/v1/agent-tasks',
+              sources: '/api/v1/sources',
+              queue: '/api/v1/queue',
+              settings: '/api/v1/settings',
+            },
           },
-        },
-      }, request);
+        };
+        recordLocalDashboardOverviewSuccess(state, overviewStartedAt, options);
+        writeJsonResponse(response, 200, body, request);
+      } catch (error) {
+        recordLocalDashboardOverviewFailure(state, overviewStartedAt, options);
+        throw error;
+      }
       return;
     }
+    recordLocalDashboardOverviewSuccess(state, overviewStartedAt, options);
     writeJsonResponse(response, 200, {
       data: {
         runtime: 'node',
@@ -7778,6 +7924,11 @@ async function handleLocalRainrailRequest(
         },
       },
     }, request);
+    return;
+  }
+
+  if (request.method === 'GET' && url.pathname === '/api/v1/dashboard/status') {
+    writeJsonResponse(response, 200, localDashboardStatusResponse(state), request);
     return;
   }
 
@@ -9610,6 +9761,7 @@ function preflightMethodsForLocalPath(pathname: string, options: RainrailStartOp
   if (pathname === '/events') return ['GET', 'OPTIONS'];
   if (pathname === '/api/state') return ['GET', 'OPTIONS'];
   if (pathname === '/api/v1/overview') return ['GET', 'OPTIONS'];
+  if (pathname === '/api/v1/dashboard/status') return ['GET', 'OPTIONS'];
   if (pathname === '/api/v1/events') return ['GET', 'OPTIONS'];
   if (/^\/api\/v1\/events\/[^/]+$/u.test(pathname)) return ['GET', 'OPTIONS'];
   if (/^\/api\/v1\/workflow-runs\/[^/]+$/u.test(pathname)) return ['GET', 'OPTIONS'];

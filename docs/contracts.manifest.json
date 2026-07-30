@@ -429,6 +429,8 @@
         "verifyRainrailEventsBearerToken",
         "RainrailDashboardScope",
         "RainrailDashboardAuthOptions",
+        "RainrailDashboardStatus",
+        "RainrailDashboardStatusResponse",
         "RainrailCommandRequest",
         "RainrailCommandActionType",
         "RainrailCommandTargetType",
@@ -463,6 +465,8 @@
         "createRainrailIntakeRegistry": "value",
         "RainrailDashboardScope": "type",
         "RainrailDashboardAuthOptions": "type",
+        "RainrailDashboardStatus": "type",
+        "RainrailDashboardStatusResponse": "type",
         "RainrailCommandRequest": "type",
         "RainrailCommandActionType": "type",
         "RainrailCommandTargetType": "type",
@@ -477,12 +481,14 @@
         "src/operational-store.ts",
         "src/events-auth.ts",
         "src/event-delivery/sse.ts",
+        "packages/cli/src/index.ts",
         "apps/www/src/lib/dashboard-client.ts"
       ],
       "docs": ["docs/operational-api-v1.md"],
       "tests": [
         "scripts/validate-operational-api-v1.test.mjs",
         "scripts/validate-dashboard-shell.test.mjs",
+        "packages/cli/src/commands.test.ts",
         "src/dashboard-api.test.ts",
         "src/sse.test.ts",
         "src/events-auth.test.ts"

@@ -135,6 +135,7 @@ describe('local dashboard start documentation', () => {
     expect(localDashboardDocs).toContain('local operational dashboard');
     expect(localDashboardDocs).toContain('Cloudflare Pages product/docs site');
     expect(localDashboardDocs).toContain('same origin');
+    expect(localDashboardDocs).toContain('/api/v1/dashboard/status');
     expect(localDashboardDocs).toContain('/api/v1/dashboard/cards');
     expect(localDashboardDocs).toContain('/api/v1/dashboard/layout');
     expect(localDashboardDocs).toContain('PATCH /api/v1/dashboard/layout/items/:itemId/config');

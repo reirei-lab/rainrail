@@ -886,6 +886,67 @@ describe('Rainrail Node server', () => {
     }
   });
 
+  it('serves the shared dashboard status contract through Node HTTP', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+      now: () => new Date('2026-07-09T00:00:00.000Z'),
+    });
+    operationalStore.recordActivityEvent({
+      category: 'workflow',
+      targetType: 'event',
+      targetId: 'event-node-status',
+      actionType: 'workflow_dispatched',
+      outcome: 'success',
+      summary: 'node status workflow dispatched',
+    });
+    const { server } = createRainrailNodeServer({
+      githubWebhookSecret: 'secret',
+      publishToken: 'test-publish-token',
+      operationalStore,
+      runtime: 'node-status-test',
+      dashboardAuth: {
+        readOnlyToken: 'read-token',
+      },
+    });
+
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const address = server.address();
+    if (address === null || typeof address === 'string') {
+      throw new Error('expected TCP server address');
+    }
+
+    try {
+      const headers = { authorization: 'Bearer read-token' };
+      const overview = await fetch(`http://127.0.0.1:${address.port}/api/v1/overview`, { headers });
+      expect(overview.status).toBe(200);
+
+      const status = await fetch(`http://127.0.0.1:${address.port}/api/v1/dashboard/status`, { headers });
+      expect(status.status).toBe(200);
+      await expect(status.json()).resolves.toMatchObject({
+        data: {
+          status: 'ok',
+          runtime: 'node-status-test',
+          store: { status: 'configured' },
+          overview: {
+            status: 'ok',
+            lastAttemptAt: expect.any(String),
+            lastSuccessAt: expect.any(String),
+            lastDurationMs: expect.any(Number),
+            lastHttpStatus: 200,
+            lastError: null,
+            links: { self: '/api/v1/overview' },
+          },
+          links: { overview: '/api/v1/overview' },
+        },
+      });
+    } finally {
+      await closeServer(server);
+      operationalStore.close();
+    }
+  });
+
   it('forwards Node dashboard layout item config update bodies into the shared HTTP app', async () => {
     const operationalStore = new RainrailOperationalStore({
       databasePath: ':memory:',
