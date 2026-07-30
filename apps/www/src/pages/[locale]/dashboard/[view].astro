@@ -76,26 +76,6 @@ const showEventInbox = route.id === 'events';
     <div class="dashboard-state" data-state="error">{content.shell.states.unavailable}</div>
     <div class="dashboard-state" data-state="auth-missing">{content.shell.states.authMissing}</div>
 
-    <section class="dashboard-layout-tools" aria-label={content.app.cardLayout.title}>
-      <div>
-        <h2>{content.app.cardLayout.title}</h2>
-        <p>{content.app.cardLayout.description}</p>
-      </div>
-      <div class="dashboard-card-picker" aria-label={content.app.cardLayout.pickerTitle}>
-        <input data-card-picker-search type="search" autocomplete="off" placeholder={content.app.cardLayout.searchPlaceholder} aria-label={content.app.cardLayout.searchLabel} />
-        <select data-card-picker-category aria-label={content.app.cardLayout.categoryLabel}>
-          <option value="">{content.app.cardLayout.allCategories}</option>
-        </select>
-        <select data-card-picker-provider aria-label={content.app.cardLayout.providerLabel}>
-          <option value="">{content.app.cardLayout.allProviders}</option>
-        </select>
-        <div class="dashboard-card-picker-list" data-card-picker-list></div>
-      </div>
-    </section>
-
-    <section class="dashboard-layout-grid" data-dashboard-layout-grid aria-label={content.app.cardLayout.gridLabel}></section>
-    <div class="dashboard-layout-status" data-dashboard-layout-status aria-live="polite"></div>
-
     <section class="dashboard-overview-card-panel" data-overview-card-panel aria-label={content.app.overviewCards.title} hidden={route.id !== 'overview'}>
       <div class="dashboard-overview-card-panel-heading">
         <div>
@@ -165,15 +145,6 @@ const showEventInbox = route.id === 'events';
       </section>
     )}
 
-    <section class="dashboard-card-settings" aria-label={content.app.cardSettings.title}>
-      <label>
-        {content.app.cardSettings.card}
-        <select data-card-settings-select></select>
-      </label>
-      <div class="dashboard-card-settings-form" data-card-settings-form></div>
-      <button type="button" class="dashboard-action" data-card-settings-save data-action-permission="operator" disabled>{content.app.cardSettings.save}</button>
-      <span class="dashboard-command-status" data-card-settings-status aria-live="polite"></span>
-    </section>
   </div>
 
   <script>

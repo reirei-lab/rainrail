@@ -382,6 +382,14 @@ describe('dashboard operational views', () => {
   });
 
   it('renders a card picker and editable dashboard layout grid', () => {
+    expect(localizedDashboardPage).toContain('data-dashboard-layout-disclosure');
+    expect(localizedDashboardPage).toContain('data-dashboard-layout-toggle');
+    expect(localizedDashboardPage).not.toContain('<details class="dashboard-layout-disclosure" data-dashboard-layout-disclosure open>');
+    expect(localizedDashboardRoutePage).not.toContain('data-dashboard-layout-disclosure');
+    expect(localizedDashboardRoutePage).not.toContain('data-card-picker-search');
+    expect(localizedDashboardRoutePage).not.toContain('data-dashboard-layout-grid');
+    expect(localizedDashboardRoutePage).not.toContain('data-card-settings-select');
+
     for (const marker of [
       'data-card-picker-search',
       'data-card-picker-category',

@@ -74,6 +74,32 @@ test('keeps the legacy workflow-runs route as a routed Runs alias', async ({ pag
   await expect(page.locator('[data-dashboard-detail]')).toContainText('evt_demo_cloudflare_tail_001');
 });
 
+test('keeps dashboard layout editing collapsed and scoped to Overview', async ({ page }) => {
+  await page.goto(`${dashboardBaseUrl}/en/dashboard?demo=1`);
+
+  await expect(page.locator('[data-overview-card-board]')).toBeVisible();
+  await expect(page.locator('[data-dashboard-stats]')).toBeVisible();
+  await expect(page.locator('[data-dashboard-layout-disclosure]')).toBeVisible();
+  await expect(page.locator('[data-dashboard-layout-grid]')).toBeHidden();
+  await expect(page.locator('[data-card-picker-list]')).toBeHidden();
+  await expect(page.locator('[data-card-settings-select]')).toBeHidden();
+
+  await page.locator('[data-dashboard-layout-toggle]').click();
+
+  await expect(page.locator('[data-dashboard-layout-grid]')).toBeVisible();
+  await expect(page.locator('[data-card-picker-list]')).not.toBeEmpty();
+  await expect(page.locator('[data-card-settings-select]')).toBeVisible();
+
+  await page.goto(`${dashboardBaseUrl}/en/dashboard/events?demo=1`);
+
+  await expect(page.locator('[data-dashboard-tab="events"]')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('[data-dashboard-layout-disclosure]')).toHaveCount(0);
+  await expect(page.locator('[data-card-picker-search]')).toHaveCount(0);
+  await expect(page.locator('[data-dashboard-layout-grid]')).toHaveCount(0);
+  await expect(page.locator('[data-card-settings-select]')).toHaveCount(0);
+  await expect(page.locator('[data-dashboard-list] button').first()).toBeVisible();
+});
+
 type ScenarioExpectation = {
   rows: readonly string[];
   excludedRows?: readonly string[];
@@ -214,8 +240,16 @@ test('captures dashboard demo screenshots from the scenario manifest', async ({ 
           await expect(page.locator('[data-dashboard-detail]')).toContainText(detailText);
         }
       } else {
-        await expect(page.locator('[data-dashboard-layout-grid]')).toBeVisible();
-        await expect(page.locator('[data-card-picker-list]')).not.toBeEmpty();
+        await expect(page.locator('[data-dashboard-layout-disclosure]')).toBeVisible();
+        if (scenario.id === 'dashboard-cards-mobile-layout') {
+          await page.locator('[data-dashboard-layout-toggle]').click();
+          await expect(page.locator('[data-dashboard-layout-grid]')).toBeVisible();
+          await expect(page.locator('[data-card-picker-list]')).not.toBeEmpty();
+        } else {
+          await expect(page.locator('[data-overview-card-board]')).toBeVisible();
+          await expect(page.locator('[data-dashboard-stats]')).toBeVisible();
+          await expect(page.locator('[data-dashboard-layout-grid]')).toBeHidden();
+        }
       }
 
       const screenshotFileName = `${scenario.id}-${viewport}.png`;
@@ -256,6 +290,11 @@ test('matches dashboard route visual baselines from the scenario manifest', asyn
       await expect(page.locator('[data-demo-indicator]')).toBeVisible();
       await expect(page.locator(`[data-dashboard-tab="${scenario.tab}"]`)).toHaveAttribute('aria-pressed', 'true');
       await expect(page.locator('[data-status-text]')).toContainText(/Live operational state|運用状態/i);
+
+      if (scenario.id === 'dashboard-cards-mobile-layout') {
+        await page.locator('[data-dashboard-layout-toggle]').click();
+        await expect(page.locator('[data-dashboard-layout-grid]')).toBeVisible();
+      }
 
       await expect(page).toHaveScreenshot(`${scenario.id}-${viewport}.png`, {
         maxDiffPixelRatio: 0.04,

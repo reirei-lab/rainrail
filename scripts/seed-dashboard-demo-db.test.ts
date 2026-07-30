@@ -466,12 +466,12 @@ describe('dashboard demo SQLite seed script', () => {
           .toEqual([
             expect.objectContaining({
               id: 'dashboard-cards-default-layout',
-              captureHints: expect.arrayContaining(['default core card layout']),
+              captureHints: expect.arrayContaining(['collapsed dashboard layout customize control']),
             }),
             expect.objectContaining({
               id: 'dashboard-cards-mobile-layout',
               viewport: 'mobile',
-              captureHints: expect.arrayContaining(['dashboard cards remain readable on narrow screens']),
+              captureHints: expect.arrayContaining(['expanded mobile single-column layout tools']),
             }),
           ]);
       } finally {
