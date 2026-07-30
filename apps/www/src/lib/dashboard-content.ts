@@ -256,11 +256,16 @@ export type DashboardAppCopy = {
       degraded: string;
       error: string;
       status: string;
+      unknownAuthScope: string;
       overview: string;
       duration: string;
       lastSuccess: string;
       authScope: string;
       store: string;
+      justNow: string;
+      minutesAgo: string;
+      hoursAgo: string;
+      daysAgo: string;
     };
     cards: Record<'apiStatus' | 'health' | 'counts' | 'recentActivity' | 'warnings', { title: string; description: string }>;
   };
@@ -495,11 +500,16 @@ const englishApp: DashboardAppCopy = {
       degraded: 'Degraded',
       error: 'Error',
       status: 'Status',
+      unknownAuthScope: 'unknown',
       overview: 'Overview',
       duration: 'Duration',
       lastSuccess: 'Last success',
       authScope: 'Auth scope',
       store: 'Store',
+      justNow: 'just now',
+      minutesAgo: '{value}m ago',
+      hoursAgo: '{value}h ago',
+      daysAgo: '{value}d ago',
     },
     cards: {
       apiStatus: { title: 'API status', description: 'Independent operational API, auth, and overview health signals.' },
@@ -720,11 +730,16 @@ const japaneseApp: DashboardAppCopy = {
       degraded: '縮退',
       error: 'エラー',
       status: '状態',
+      unknownAuthScope: '不明',
       overview: '概要',
       duration: '所要時間',
       lastSuccess: '最終成功',
       authScope: '認証スコープ',
       store: 'ストア',
+      justNow: 'たった今',
+      minutesAgo: '{value}分前',
+      hoursAgo: '{value}時間前',
+      daysAgo: '{value}日前',
     },
     cards: {
       apiStatus: { title: 'API 状態', description: '運用 API、認証、overview health を独立して確認する診断情報。' },

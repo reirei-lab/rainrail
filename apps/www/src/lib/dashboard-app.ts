@@ -150,6 +150,7 @@ if (root !== null) {
 
   if (storedToken === '' && authRequired) {
     setState('auth-missing', copy.status.authMissing);
+    renderOverviewCards();
   } else {
     client = createDashboardClient(storedToken, storedApiBaseUrl);
     void refreshStatus();
@@ -173,6 +174,7 @@ if (root !== null) {
         stopPolling();
         resetDashboardData();
         setState('auth-missing', copy.status.authMissing);
+        renderOverviewCards();
       } else {
         client = createDashboardClient('', apiBaseUrl);
         resetDashboardData();
@@ -206,6 +208,7 @@ if (root !== null) {
       stopPolling();
       resetDashboardData();
       setState('auth-missing', copy.status.authMissing);
+      renderOverviewCards();
     } else {
       client = createDashboardClient('', apiBaseUrl);
       resetDashboardData();
@@ -341,19 +344,22 @@ if (root !== null) {
       renderOverviewCards();
     } finally {
       clearRefreshInFlight(activeClient, activeRefreshId);
+      if (client === activeClient) {
+        void refreshStatus({ force: true, quiet: true });
+      }
       if (refreshAfterCurrent && client === activeClient) {
         void refresh({ quiet: true });
       }
     }
   }
 
-  async function refreshStatus(options: { quiet?: boolean } = {}): Promise<void> {
+  async function refreshStatus(options: { quiet?: boolean; force?: boolean } = {}): Promise<void> {
     if (client === undefined) {
       latestApiStatus = undefined;
       renderOverviewCards();
       return;
     }
-    if (options.quiet && statusRefreshInFlightClient === client) return;
+    if (!options.force && options.quiet && statusRefreshInFlightClient === client) return;
 
     const activeClient = client;
     const activeRefreshId = ++statusRefreshSequence;
@@ -603,11 +609,17 @@ if (root !== null) {
       authMissing: copy.status.authMissing,
       authRejected: copy.status.authRejected,
       unavailable: copy.status.unavailable,
+      notAvailable: copy.placeholders.notAvailable,
+      unknownAuthScope: statusCopy.unknownAuthScope,
       overview: statusCopy.overview,
       duration: statusCopy.duration,
       lastSuccess: statusCopy.lastSuccess,
       authScope: statusCopy.authScope,
       store: statusCopy.store,
+      justNow: statusCopy.justNow,
+      minutesAgo: statusCopy.minutesAgo,
+      hoursAgo: statusCopy.hoursAgo,
+      daysAgo: statusCopy.daysAgo,
     }, {
       dashboardState: appRoot.dataset.state,
       currentStatusMessage: statusText?.textContent ?? undefined,

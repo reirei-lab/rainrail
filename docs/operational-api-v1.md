@@ -128,7 +128,8 @@ versioned tests.
 軽量に読める status contract を返す。endpoint 自体は `GET /api/v1/overview` を実行せず、
 server state に保持された直近 overview attempt の `lastDurationMs`、`lastSuccessAt`、
 `lastHttpStatus`、dashboard-safe な `lastError` summary だけを返す。raw stack trace、private path、
-token、secret、raw provider payload は返さない。未実行時は `overview.status: "unknown"` とし、
+token、secret、raw provider payload は返さない。認証情報は token 値ではなく現在受け入れた
+dashboard scope のみを `auth.scope` として返す。未実行時は `overview.status: "unknown"` とし、
 operational store 未設定時は `store.status: "missing"`、top-level `status: "degraded"`、
 `lastError.code: "operational_store_not_configured"` を返す。overview が最後に失敗した場合は
 `overview.status: "error"` とし、error summary は stable error code から作る短い文に限定する。
@@ -139,6 +140,7 @@ operational store 未設定時は `store.status: "missing"`、top-level `status:
     "status": "ok",
     "runtime": "node",
     "store": { "status": "configured" },
+    "auth": { "scope": "read-only" },
     "overview": {
       "status": "ok",
       "lastAttemptAt": "2026-07-09T05:00:00.000Z",

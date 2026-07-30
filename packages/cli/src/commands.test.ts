@@ -2525,6 +2525,7 @@ describe('Rainrail CLI built-in commands', () => {
             status: 'degraded',
             runtime: 'node',
             store: { status: 'missing' },
+            auth: { scope: 'read-only' },
             overview: {
               status: 'error',
               lastAttemptAt: null,
@@ -2563,6 +2564,7 @@ describe('Rainrail CLI built-in commands', () => {
             status: 'degraded',
             runtime: 'node',
             store: { status: 'missing' },
+            auth: { scope: 'read-only' },
             overview: {
               status: 'error',
               lastError: {
@@ -2572,6 +2574,14 @@ describe('Rainrail CLI built-in commands', () => {
               links: { self: '/api/v1/overview' },
             },
             links: { overview: '/api/v1/overview' },
+          },
+        });
+
+        const operatorStatus = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/status`, { headers: operatorAuth });
+        expect(operatorStatus.status).toBe(200);
+        await expect(operatorStatus.json()).resolves.toMatchObject({
+          data: {
+            auth: { scope: 'operator' },
           },
         });
 
@@ -3285,6 +3295,7 @@ describe('Rainrail CLI built-in commands', () => {
             status: 'error',
             runtime: 'node',
             store: { status: 'configured' },
+            auth: { scope: 'read-only' },
             overview: {
               status: 'error',
               lastAttemptAt: expect.any(String),

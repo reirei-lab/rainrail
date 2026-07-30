@@ -2364,6 +2364,7 @@ describe('Rainrail dashboard API', () => {
         status: 'degraded',
         runtime: 'fetch-test',
         store: { status: 'configured' },
+        auth: { scope: 'read-only' },
         overview: {
           status: 'unknown',
           lastAttemptAt: null,
@@ -2389,6 +2390,7 @@ describe('Rainrail dashboard API', () => {
         status: string;
         runtime: string;
         store: { status: string };
+        auth: { scope: string };
         overview: {
           status: string;
           lastAttemptAt: string | null;
@@ -2404,6 +2406,7 @@ describe('Rainrail dashboard API', () => {
         status: 'ok',
         runtime: 'fetch-test',
         store: { status: 'configured' },
+        auth: { scope: 'read-only' },
         overview: {
           status: 'ok',
           lastAttemptAt: expect.any(String),
@@ -2448,6 +2451,7 @@ describe('Rainrail dashboard API', () => {
         status: 'degraded',
         runtime: 'fetch-test',
         store: { status: 'missing' },
+        auth: { scope: 'read-only' },
         overview: {
           status: 'error',
           lastAttemptAt: null,
@@ -2479,6 +2483,37 @@ describe('Rainrail dashboard API', () => {
     }));
     expect(invalidAuth.status).toBe(403);
     await expect(invalidAuth.json()).resolves.toEqual({ error: 'invalid_bearer_token' });
+  });
+
+  it('reports the accepted dashboard auth scope on status reads', async () => {
+    const app = createTestApp({
+      dashboardAuth: {
+        readOnlyToken: 'read-token',
+        operatorToken: 'operator-token',
+        adminToken: 'admin-token',
+      },
+      runtime: 'fetch-test',
+    });
+
+    const operatorStatus = await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/status', {
+      headers: { authorization: 'Bearer operator-token' },
+    }));
+    expect(operatorStatus.status).toBe(200);
+    await expect(operatorStatus.json()).resolves.toMatchObject({
+      data: {
+        auth: { scope: 'operator' },
+      },
+    });
+
+    const adminStatus = await app.fetch(new Request('https://rainrail.local/api/v1/dashboard/status', {
+      headers: { authorization: 'Bearer admin-token' },
+    }));
+    expect(adminStatus.status).toBe(200);
+    await expect(adminStatus.json()).resolves.toMatchObject({
+      data: {
+        auth: { scope: 'admin' },
+      },
+    });
   });
 
   it('protects operational dashboard API with the event bearer token', async () => {

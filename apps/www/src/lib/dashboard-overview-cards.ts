@@ -53,11 +53,17 @@ export interface OverviewApiStatusLabels {
   authMissing: string;
   authRejected: string;
   unavailable: string;
+  notAvailable: string;
+  unknownAuthScope: string;
   overview: string;
   duration: string;
   lastSuccess: string;
   authScope: string;
   store: string;
+  justNow: string;
+  minutesAgo: string;
+  hoursAgo: string;
+  daysAgo: string;
 }
 
 export interface OverviewApiStatusSummary {
@@ -223,10 +229,10 @@ export function overviewApiStatusSummary(
       tone: isAuthMissing ? 'auth-missing' : isAuthRejected ? 'auth-rejected' : 'unavailable',
       metrics: {
         overview: labels.unavailable,
-        duration: 'n/a',
-        lastSuccess: 'n/a',
-        authScope: isAuthMissing ? labels.authMissing : 'n/a',
-        store: 'n/a',
+        duration: labels.notAvailable,
+        lastSuccess: labels.notAvailable,
+        authScope: isAuthMissing ? labels.authMissing : labels.notAvailable,
+        store: labels.notAvailable,
       },
       note: isAuthMissing ? labels.authMissing : options.currentStatusMessage ?? labels.unavailable,
     };
@@ -239,9 +245,9 @@ export function overviewApiStatusSummary(
     tone: data.status,
     metrics: {
       overview: data.overview.status,
-      duration: formatDuration(data.overview.lastDurationMs),
-      lastSuccess: formatRelativeTime(data.overview.lastSuccessAt, options.nowMs ?? Date.now()),
-      authScope: data.auth?.scope ?? 'read-only',
+      duration: formatDuration(data.overview.lastDurationMs, labels),
+      lastSuccess: formatRelativeTime(data.overview.lastSuccessAt, options.nowMs ?? Date.now(), labels),
+      authScope: data.auth?.scope ?? labels.unknownAuthScope,
       store: data.store.status,
     },
     note: lastError === null ? `${labels.overview}: ${data.overview.status}` : `${lastError.code}: ${lastError.summary}`,
@@ -254,22 +260,26 @@ function apiStatusLabel(status: DashboardApiStatus, labels: OverviewApiStatusLab
   return labels.error;
 }
 
-function formatDuration(value: number | null): string {
-  if (value === null) return 'n/a';
+function formatDuration(value: number | null, labels: OverviewApiStatusLabels): string {
+  if (value === null) return labels.notAvailable;
   return `${Math.max(0, Math.round(value))} ms`;
 }
 
-function formatRelativeTime(value: string | null, nowMs: number): string {
-  if (value === null) return 'n/a';
+function formatRelativeTime(value: string | null, nowMs: number, labels: OverviewApiStatusLabels): string {
+  if (value === null) return labels.notAvailable;
   const timestamp = Date.parse(value);
-  if (!Number.isFinite(timestamp)) return 'n/a';
+  if (!Number.isFinite(timestamp)) return labels.notAvailable;
   const diffMs = Math.max(0, nowMs - timestamp);
   const minutes = Math.floor(diffMs / 60000);
-  if (minutes < 1) return 'just now';
-  if (minutes < 60) return `${minutes}m ago`;
+  if (minutes < 1) return labels.justNow;
+  if (minutes < 60) return formatRelativeTimeUnit(labels.minutesAgo, minutes);
   const hours = Math.floor(minutes / 60);
-  if (hours < 48) return `${hours}h ago`;
-  return `${Math.floor(hours / 24)}d ago`;
+  if (hours < 48) return formatRelativeTimeUnit(labels.hoursAgo, hours);
+  return formatRelativeTimeUnit(labels.daysAgo, Math.floor(hours / 24));
+}
+
+function formatRelativeTimeUnit(template: string, value: number): string {
+  return template.replace('{value}', String(value));
 }
 
 function isOverviewCardId(value: unknown, registryIds: Set<OverviewCardId>): value is OverviewCardId {

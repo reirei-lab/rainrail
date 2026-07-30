@@ -7727,11 +7727,12 @@ function recordLocalDashboardOverviewFailure(
   };
 }
 
-function localDashboardStatusResponse(state: LocalRainrailServerState): {
+function localDashboardStatusResponse(state: LocalRainrailServerState, scope?: LocalDashboardScope): {
   data: {
     status: 'ok' | 'degraded' | 'error';
     runtime: string;
     store: { status: 'configured' | 'missing' };
+    auth?: { scope: LocalDashboardScope };
     overview: LocalDashboardStatusState['overview'] & { links: { self: '/api/v1/overview' } };
     links: { overview: '/api/v1/overview' };
   };
@@ -7745,6 +7746,7 @@ function localDashboardStatusResponse(state: LocalRainrailServerState): {
       status: localDashboardStatusFromParts(storeStatus, overview.status),
       runtime: 'node',
       store: { status: storeStatus },
+      ...(scope === undefined ? {} : { auth: { scope } }),
       overview: {
         ...overview,
         links: { self: '/api/v1/overview' },
@@ -7928,7 +7930,7 @@ async function handleLocalRainrailRequest(
   }
 
   if (request.method === 'GET' && url.pathname === '/api/v1/dashboard/status') {
-    writeJsonResponse(response, 200, localDashboardStatusResponse(state), request);
+    writeJsonResponse(response, 200, localDashboardStatusResponse(state, localDashboardScopeForRequest(request, options)), request);
     return;
   }
 
@@ -9433,6 +9435,16 @@ function getLocalServerAuthError(
     return { status: 403, body: { error: 'insufficient_scope', requiredScope } };
   }
   return undefined;
+}
+
+function localDashboardScopeForRequest(
+  request: IncomingMessage,
+  options: RainrailStartOptions,
+): LocalDashboardScope | undefined {
+  const authorization = request.headers.authorization;
+  const prefix = 'Bearer ';
+  if (typeof authorization !== 'string' || !authorization.startsWith(prefix)) return undefined;
+  return localDashboardPrincipalForToken(authorization.slice(prefix.length), options)?.scope;
 }
 
 function isLocalDashboardDemoPath(pathname: string): boolean {

@@ -170,11 +170,17 @@ describe('dashboard overview cards', () => {
       authMissing: 'Bearer token required',
       authRejected: 'Token rejected by operational API',
       unavailable: 'Operational API unavailable',
+      notAvailable: 'n/a',
+      unknownAuthScope: 'unknown',
       overview: 'Overview',
       duration: 'Duration',
       lastSuccess: 'Last success',
       authScope: 'Auth scope',
       store: 'Store',
+      justNow: 'just now',
+      minutesAgo: '{value}m ago',
+      hoursAgo: '{value}h ago',
+      daysAgo: '{value}d ago',
     };
 
     expect(overviewApiStatusSummary({
@@ -216,11 +222,17 @@ describe('dashboard overview cards', () => {
       authMissing: 'Bearer token required',
       authRejected: 'Token rejected by operational API',
       unavailable: 'Operational API unavailable',
+      notAvailable: 'n/a',
+      unknownAuthScope: 'unknown',
       overview: 'Overview',
       duration: 'Duration',
       lastSuccess: 'Last success',
       authScope: 'Auth scope',
       store: 'Store',
+      justNow: 'just now',
+      minutesAgo: '{value}m ago',
+      hoursAgo: '{value}h ago',
+      daysAgo: '{value}d ago',
     };
 
     expect(overviewApiStatusSummary(undefined, labels, { dashboardState: 'auth-missing' }).status).toBe('Bearer token required');
@@ -228,5 +240,51 @@ describe('dashboard overview cards', () => {
       dashboardState: 'error',
       currentStatusMessage: 'Token rejected by operational API',
     }).tone).toBe('auth-rejected');
+  });
+
+  it('localizes relative last success labels and avoids guessing missing auth scope', () => {
+    const labels = {
+      connected: '接続中',
+      degraded: '縮退',
+      error: 'エラー',
+      authMissing: 'Bearer トークンが必要です',
+      authRejected: '運用 API がトークンを拒否しました',
+      unavailable: '運用 API を利用できません',
+      notAvailable: '該当なし',
+      unknownAuthScope: '不明',
+      overview: '概要',
+      duration: '所要時間',
+      lastSuccess: '最終成功',
+      authScope: '認証スコープ',
+      store: 'ストア',
+      justNow: 'たった今',
+      minutesAgo: '{value}分前',
+      hoursAgo: '{value}時間前',
+      daysAgo: '{value}日前',
+    };
+
+    expect(overviewApiStatusSummary({
+      data: {
+        status: 'ok',
+        runtime: 'node',
+        store: { status: 'configured' },
+        overview: {
+          status: 'ok',
+          lastAttemptAt: '2026-07-09T05:00:00.000Z',
+          lastSuccessAt: '2026-07-09T04:58:00.000Z',
+          lastDurationMs: null,
+          lastHttpStatus: 200,
+          lastError: null,
+          links: { self: '/api/v1/overview' },
+        },
+        links: { overview: '/api/v1/overview' },
+      },
+    }, labels, { nowMs: Date.parse('2026-07-09T05:05:00.000Z') })).toMatchObject({
+      metrics: {
+        duration: '該当なし',
+        lastSuccess: '7分前',
+        authScope: '不明',
+      },
+    });
   });
 });

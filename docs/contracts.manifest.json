@@ -482,7 +482,9 @@
         "src/events-auth.ts",
         "src/event-delivery/sse.ts",
         "packages/cli/src/index.ts",
-        "apps/www/src/lib/dashboard-client.ts"
+        "apps/www/src/lib/dashboard-client.ts",
+        "apps/www/src/lib/dashboard-app.ts",
+        "apps/www/src/lib/dashboard-overview-cards.ts"
       ],
       "docs": ["docs/operational-api-v1.md"],
       "tests": [
