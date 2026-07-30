@@ -483,6 +483,66 @@ test('keeps the API Status Tile loading while status refresh is pending after ov
   expect(statusRequests).toBeGreaterThan(0);
 });
 
+test('redraws the API Status Tile when retrying after a status refresh failure', async ({ page }) => {
+  let statusRequests = 0;
+  let releaseSecondStatus: (() => void) | undefined;
+  let resolveSecondStatusStarted: (() => void) | undefined;
+  const secondStatusStarted = new Promise<void>((resolve) => {
+    resolveSecondStatusStarted = resolve;
+  });
+
+  await page.route('**/api/v1/dashboard/status**', async (route) => {
+    statusRequests += 1;
+    if (statusRequests === 1) {
+      await route.fulfill({
+        status: 503,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'operational_store_unavailable' }),
+      });
+      return;
+    }
+
+    resolveSecondStatusStarted?.();
+    await new Promise<void>((resolve) => {
+      releaseSecondStatus = resolve;
+    });
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        data: {
+          status: 'ok',
+          runtime: 'node',
+          store: { status: 'configured' },
+          overview: {
+            status: 'ok',
+            lastAttemptAt: new Date().toISOString(),
+            lastSuccessAt: new Date().toISOString(),
+            lastDurationMs: 15,
+            lastHttpStatus: 200,
+            lastError: null,
+            links: { self: '/api/v1/overview' },
+          },
+          auth: { scope: 'read-only' },
+          links: { overview: '/api/v1/overview' },
+        },
+      }),
+    });
+  });
+
+  await page.goto(`${dashboardBaseUrl}/en/dashboard?demo=1`);
+
+  const apiStatusTile = page.locator('[data-overview-card-id="apiStatus"]');
+  await expect(apiStatusTile).toContainText('Operational API unavailable');
+
+  await secondStatusStarted;
+  await expect(apiStatusTile).toContainText('Loading');
+  await expect(apiStatusTile).not.toContainText('Operational API unavailable');
+
+  releaseSecondStatus?.();
+  await expect(apiStatusTile).toContainText('Connected');
+});
+
 test('redraws the API Status Tile after clearing an auth-required dashboard token', async ({ page }) => {
   await page.route('**/api/v1/dashboard/status**', async (route) => {
     await route.fulfill({

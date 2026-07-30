@@ -369,6 +369,7 @@ if (root !== null) {
     const activeRefreshId = ++statusRefreshSequence;
     statusRefreshInFlightClient = activeClient;
     latestApiStatusState = 'pending';
+    renderOverviewCards();
 
     try {
       const nextStatus = await activeClient.status();
