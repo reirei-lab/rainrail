@@ -10,6 +10,7 @@ import {
   type DashboardQueueItem,
   type DashboardSetting,
   type DashboardSource,
+  type DashboardStatus,
   type DashboardWorkflowRun,
 } from './dashboard-client';
 import { fallbackDashboardAppCopy, type DashboardAppCopy } from './dashboard-content';
@@ -17,6 +18,7 @@ import { fetchDashboardDataForTab, type DashboardData, type DashboardTab } from 
 import {
   OVERVIEW_CARD_STORAGE_KEY,
   moveOverviewCard,
+  overviewApiStatusSummary,
   overviewCountLabel,
   overviewCardRegistry,
   overviewHealthStatusLabel,
@@ -109,11 +111,16 @@ if (root !== null) {
   );
   let selectedTab: DashboardTab = initialDashboardState.tab;
   let latestData: DashboardData | undefined;
+  let latestApiStatus: DashboardStatus | undefined;
+  let latestApiStatusState: 'pending' | 'failed' = 'pending';
   let lastUpdatedAt = 0;
   let staleTimer: number | undefined;
   const polling = createDashboardPollingController(window);
+  const statusPolling = createDashboardPollingController(window);
   let refreshInFlightClient: RainrailDashboardApiClient | undefined;
+  let statusRefreshInFlightClient: RainrailDashboardApiClient | undefined;
   let refreshSequence = 0;
+  let statusRefreshSequence = 0;
   let detailRequestSequence = 0;
   let selectedDetailRowId: string | undefined;
   let selectedAgentTaskId: string | undefined;
@@ -146,8 +153,11 @@ if (root !== null) {
 
   if (storedToken === '' && authRequired) {
     setState('auth-missing', copy.status.authMissing);
+    renderOverviewCards();
   } else {
     client = createDashboardClient(storedToken, storedApiBaseUrl);
+    setState('loading', copy.status.loading);
+    void refreshStatus();
     void refresh();
     startPolling(client);
   }
@@ -168,9 +178,12 @@ if (root !== null) {
         stopPolling();
         resetDashboardData();
         setState('auth-missing', copy.status.authMissing);
+        renderOverviewCards();
       } else {
         client = createDashboardClient('', apiBaseUrl);
         resetDashboardData();
+        setState('loading', copy.status.loading);
+        void refreshStatus();
         void refresh();
         startPolling(client);
       }
@@ -186,6 +199,8 @@ if (root !== null) {
     if (apiBaseUrlInput !== null) apiBaseUrlInput.value = apiBaseUrl;
     client = createDashboardClient(token, apiBaseUrl);
     resetDashboardData();
+    setState('loading', copy.status.loading);
+    void refreshStatus();
     void refresh();
     startPolling(client);
   });
@@ -199,15 +214,19 @@ if (root !== null) {
       stopPolling();
       resetDashboardData();
       setState('auth-missing', copy.status.authMissing);
+      renderOverviewCards();
     } else {
       client = createDashboardClient('', apiBaseUrl);
       resetDashboardData();
+      setState('loading', copy.status.loading);
+      void refreshStatus();
       void refresh();
       startPolling(client);
     }
   });
 
   refreshButton?.addEventListener('click', () => {
+    void refreshStatus();
     void refresh();
   });
 
@@ -332,10 +351,43 @@ if (root !== null) {
       setState('error', message);
       renderOverviewCards();
     } finally {
+      const refreshIsCurrent = isCurrentRefresh(activeClient, activeRefreshId);
       clearRefreshInFlight(activeClient, activeRefreshId);
-      if (refreshAfterCurrent && client === activeClient) {
+      if (refreshIsCurrent && client === activeClient) {
+        void refreshStatus({ force: true, quiet: true });
+      }
+      if (refreshIsCurrent && refreshAfterCurrent && client === activeClient) {
         void refresh({ quiet: true });
       }
+    }
+  }
+
+  async function refreshStatus(options: { quiet?: boolean; force?: boolean } = {}): Promise<void> {
+    if (client === undefined) {
+      latestApiStatus = undefined;
+      renderOverviewCards();
+      return;
+    }
+    if (!options.force && options.quiet && statusRefreshInFlightClient === client) return;
+
+    const activeClient = client;
+    const activeRefreshId = ++statusRefreshSequence;
+    statusRefreshInFlightClient = activeClient;
+    latestApiStatusState = 'pending';
+    renderOverviewCards();
+
+    try {
+      const nextStatus = await activeClient.status();
+      if (!isCurrentStatusRefresh(activeClient, activeRefreshId)) return;
+      latestApiStatus = nextStatus;
+      renderOverviewCards();
+    } catch {
+      if (!isCurrentStatusRefresh(activeClient, activeRefreshId)) return;
+      latestApiStatus = undefined;
+      latestApiStatusState = 'failed';
+      renderOverviewCards();
+    } finally {
+      clearStatusRefreshInFlight(activeClient, activeRefreshId);
     }
   }
 
@@ -470,18 +522,15 @@ if (root !== null) {
     renderOverviewCardControls();
     if (overviewCardBoard === null || selectedTab !== 'overview') return;
 
-    if (latestData === undefined) {
-      overviewCardBoard.replaceChildren();
-      return;
-    }
-
-    const visibleCards = overviewCardLayout.filter((item) => item.visible);
+    const visibleCards = overviewCardLayout.filter((item) =>
+      item.visible && (!dashboardIsWaitingForAuthData() || item.id === 'apiStatus' || item.id === 'health')
+    );
     if (visibleCards.length === 0) {
       overviewCardBoard.textContent = copy.overviewCards.empty;
       return;
     }
 
-    overviewCardBoard.replaceChildren(...visibleCards.map((item) => overviewCardArticle(item, latestData!.overview)));
+    overviewCardBoard.replaceChildren(...visibleCards.map((item) => overviewCardArticle(item, latestData?.overview)));
   }
 
   function applyDashboardLayoutEditorVisibility(): void {
@@ -540,7 +589,7 @@ if (root !== null) {
     renderOverviewCards();
   }
 
-  function overviewCardArticle(item: OverviewCardLayoutItem, overview: DashboardOverview): HTMLElement {
+  function overviewCardArticle(item: OverviewCardLayoutItem, overview: DashboardOverview | undefined): HTMLElement {
     const article = document.createElement('article');
     article.className = 'dashboard-overview-card';
     article.dataset.overviewCardId = item.id;
@@ -564,11 +613,59 @@ if (root !== null) {
     return article;
   }
 
-  function overviewCardBody(id: OverviewCardId, overview: DashboardOverview): HTMLElement[] {
+  function overviewCardBody(id: OverviewCardId, overview: DashboardOverview | undefined): HTMLElement[] {
+    if (id === 'apiStatus') return overviewApiStatusCardBody();
     if (id === 'health') return overviewHealthCardBody();
+    if (overview === undefined) return [overviewNote(appRoot.dataset.state === 'error' ? copy.status.unavailable : copy.status.loading)];
     if (id === 'counts') return overviewCountsCardBody(overview);
     if (id === 'recentActivity') return overviewRecentActivityCardBody(overview);
     return overviewWarningsCardBody(overview);
+  }
+
+  function overviewApiStatusCardBody(): HTMLElement[] {
+    const statusCopy = copy.overviewCards.apiStatus;
+    const summary = overviewApiStatusSummary(latestApiStatus, {
+      connected: statusCopy.connected,
+      degraded: statusCopy.degraded,
+      error: statusCopy.error,
+      authMissing: copy.status.authMissing,
+      authRejected: copy.status.authRejected,
+      unavailable: copy.status.unavailable,
+      notAvailable: copy.placeholders.notAvailable,
+      unknownAuthScope: statusCopy.unknownAuthScope,
+      overview: statusCopy.overview,
+      duration: statusCopy.duration,
+      lastSuccess: statusCopy.lastSuccess,
+      authScope: statusCopy.authScope,
+      store: statusCopy.store,
+      overviewStatuses: statusCopy.overviewStatuses,
+      storeStatuses: statusCopy.storeStatuses,
+      authScopes: statusCopy.authScopes,
+      errorSummaries: statusCopy.errorSummaries,
+      justNow: statusCopy.justNow,
+      minutesAgo: statusCopy.minutesAgo,
+      hoursAgo: statusCopy.hoursAgo,
+      daysAgo: statusCopy.daysAgo,
+    }, {
+      dashboardState: appRoot.dataset.state,
+      currentStatusMessage: statusText?.textContent ?? undefined,
+      statusPending: latestApiStatus === undefined && latestApiStatusState === 'pending',
+    });
+    const metrics = document.createElement('div');
+    metrics.className = 'dashboard-overview-card-metrics';
+    metrics.dataset.apiStatusTone = summary.tone;
+    metrics.append(
+      overviewMetric(statusCopy.overview, summary.metrics.overview),
+      overviewMetric(statusCopy.duration, summary.metrics.duration),
+      overviewMetric(statusCopy.lastSuccess, summary.metrics.lastSuccess),
+      overviewMetric(statusCopy.authScope, summary.metrics.authScope),
+      overviewMetric(statusCopy.store, summary.metrics.store),
+    );
+    return [
+      overviewMetric(statusCopy.status, summary.status),
+      metrics,
+      overviewNote(summary.note),
+    ];
   }
 
   function overviewHealthCardBody(): HTMLElement[] {
@@ -586,6 +683,13 @@ if (root !== null) {
       overviewMetric(copy.overviewCards.lastRefresh, lastUpdatedAt === 0 ? copy.placeholders.notAvailable : new Date(lastUpdatedAt).toLocaleString()),
       overviewNote(copy.overviewCards.todoHealth),
     ];
+  }
+
+  function dashboardIsWaitingForAuthData(): boolean {
+    if (latestData !== undefined) return false;
+    const state = appRoot.dataset.state;
+    if (state === 'auth-missing') return true;
+    return state === 'error' && statusText?.textContent === copy.status.authRejected;
   }
 
   function overviewCountsCardBody(overview: DashboardOverview): HTMLElement[] {
@@ -709,12 +813,15 @@ if (root !== null) {
 
   function resetDashboardData(): void {
     latestData = undefined;
+    latestApiStatus = undefined;
+    latestApiStatusState = 'pending';
     lastUpdatedAt = 0;
     if (staleTimer !== undefined) {
       window.clearTimeout(staleTimer);
       staleTimer = undefined;
     }
     refreshInFlightClient = undefined;
+    statusRefreshInFlightClient = undefined;
     clearSelectedDetail();
     if (staleIndicator !== null) staleIndicator.hidden = true;
     renderEmptyStats();
@@ -755,10 +862,12 @@ if (root !== null) {
 
   function startPolling(nextClient: RainrailDashboardApiClient): void {
     polling.start(nextClient, () => refresh({ quiet: true }));
+    statusPolling.start(nextClient, () => refreshStatus({ quiet: true }));
   }
 
   function stopPolling(): void {
     polling.stop();
+    statusPolling.stop();
   }
 
   function setOperatorActionsEnabled(enabled: boolean): void {
@@ -782,9 +891,20 @@ if (root !== null) {
     return refreshSequence === activeRefreshId;
   }
 
+  function isCurrentStatusRefresh(activeClient: RainrailDashboardApiClient, activeRefreshId: number): boolean {
+    if (client !== activeClient) return false;
+    return statusRefreshSequence === activeRefreshId;
+  }
+
   function clearRefreshInFlight(activeClient: RainrailDashboardApiClient, activeRefreshId: number): void {
     if (refreshInFlightClient === activeClient && refreshSequence === activeRefreshId) {
       refreshInFlightClient = undefined;
+    }
+  }
+
+  function clearStatusRefreshInFlight(activeClient: RainrailDashboardApiClient, activeRefreshId: number): void {
+    if (statusRefreshInFlightClient === activeClient && statusRefreshSequence === activeRefreshId) {
+      statusRefreshInFlightClient = undefined;
     }
   }
 

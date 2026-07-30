@@ -243,6 +243,9 @@ export interface RainrailDashboardStatusResponse {
     store: {
       status: 'configured' | 'missing';
     };
+    auth: {
+      scope: RainrailDashboardScope;
+    };
     overview: {
       status: 'ok' | 'unknown' | 'error';
       lastAttemptAt: string | null;
@@ -402,7 +405,7 @@ async function routeRainrailHttpRequest(
     const auth = verifyDashboardScopedRequest(request, options, 'read-only');
     if (!auth.ok) return auth.response;
 
-    return dashboardV1StatusResponse(options, statusState);
+    return dashboardV1StatusResponse(options, statusState, auth.principal.scope);
   }
 
   if (url.pathname === '/api/v1/events') {
@@ -810,6 +813,7 @@ function dashboardStatusErrorSummary(code: string): string {
 function dashboardV1StatusResponse(
   options: RainrailHttpAppOptions,
   state: DashboardStatusState,
+  scope: RainrailDashboardScope,
 ): Response {
   const storeStatus = options.operationalStore === undefined ? 'missing' : 'configured';
   const overview = options.operationalStore === undefined && state.overview.lastAttemptAt === null
@@ -831,6 +835,7 @@ function dashboardV1StatusResponse(
       status: dashboardStatusFromParts(storeStatus, overview.status),
       runtime: options.runtime ?? 'fetch',
       store: { status: storeStatus },
+      auth: { scope },
       overview: {
         ...overview,
         links: { self: '/api/v1/overview' },

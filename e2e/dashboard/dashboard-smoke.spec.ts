@@ -310,6 +310,7 @@ test('matches dashboard route visual baselines from the scenario manifest', asyn
         maxDiffPixelRatio: 0.04,
         mask: [
           page.locator('[data-status-text]'),
+          page.locator('[data-overview-card-id="apiStatus"]'),
           page.locator('[data-overview-card-id="health"]'),
         ],
       });
@@ -351,6 +352,7 @@ test('persists Overview custom card visibility and ordering across reloads', asy
 
   const board = page.locator('[data-overview-card-board]');
   const controls = page.locator('[data-overview-card-controls]');
+  await expect(board.locator('[data-overview-card-id="apiStatus"]')).toBeVisible();
   await expect(board.locator('[data-overview-card-id="health"]')).toBeVisible();
   await expect(board.locator('[data-overview-card-id="counts"]')).toBeVisible();
 
@@ -358,17 +360,343 @@ test('persists Overview custom card visibility and ordering across reloads', asy
   await overviewCardControl(controls, 'Warnings').getByRole('button', { name: 'Move up' }).click();
 
   await expect(board.locator('[data-overview-card-id="counts"]')).toHaveCount(0);
-  await expect(board.locator('[data-overview-card-id]').first()).toHaveAttribute('data-overview-card-id', 'health');
-  await expect(board.locator('[data-overview-card-id]').nth(1)).toHaveAttribute('data-overview-card-id', 'warnings');
+  await expect(board.locator('[data-overview-card-id]').first()).toHaveAttribute('data-overview-card-id', 'apiStatus');
+  await expect(board.locator('[data-overview-card-id]').nth(1)).toHaveAttribute('data-overview-card-id', 'health');
+  await expect(board.locator('[data-overview-card-id]').nth(2)).toHaveAttribute('data-overview-card-id', 'warnings');
 
   await page.reload();
 
   await expect(page.locator('[data-demo-indicator]')).toBeVisible();
   await expect(board.locator('[data-overview-card-id="counts"]')).toHaveCount(0);
-  await expect(board.locator('[data-overview-card-id]').first()).toHaveAttribute('data-overview-card-id', 'health');
-  await expect(board.locator('[data-overview-card-id]').nth(1)).toHaveAttribute('data-overview-card-id', 'warnings');
+  await expect(board.locator('[data-overview-card-id]').first()).toHaveAttribute('data-overview-card-id', 'apiStatus');
+  await expect(board.locator('[data-overview-card-id]').nth(1)).toHaveAttribute('data-overview-card-id', 'health');
+  await expect(board.locator('[data-overview-card-id]').nth(2)).toHaveAttribute('data-overview-card-id', 'warnings');
   await expect.poll(async () => page.evaluate(() => window.localStorage.getItem('rainrail-dashboard-overview-card-layout')))
     .toContain('"id":"warnings"');
+});
+
+test('updates the API Status Tile while overview is slow and unavailable', async ({ page }) => {
+  const lastSuccessAt = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+  let overviewCompleted = false;
+  let overviewRequests = 0;
+  let statusRequests = 0;
+
+  await page.route('**/api/v1/dashboard/status**', async (route) => {
+    statusRequests += 1;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        data: {
+          status: overviewCompleted ? 'degraded' : 'ok',
+          runtime: 'node',
+          store: { status: 'configured' },
+          overview: overviewCompleted ? {
+            status: 'error',
+            lastAttemptAt: new Date().toISOString(),
+            lastSuccessAt,
+            lastDurationMs: 1200,
+            lastHttpStatus: 503,
+            lastError: {
+              code: 'operational_store_unavailable',
+              summary: 'Operational store unavailable',
+            },
+            links: { self: '/api/v1/overview' },
+          } : {
+            status: 'unknown',
+            lastAttemptAt: null,
+            lastSuccessAt: null,
+            lastDurationMs: null,
+            lastHttpStatus: null,
+            lastError: null,
+            links: { self: '/api/v1/overview' },
+          },
+          auth: { scope: 'read-only' },
+          links: { overview: '/api/v1/overview' },
+        },
+      }),
+    });
+  });
+  await page.route('**/api/v1/overview**', async (route) => {
+    overviewRequests += 1;
+    await new Promise((resolve) => setTimeout(resolve, 750));
+    await route.fulfill({
+      status: 503,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: 'operational_store_unavailable' }),
+    });
+    overviewCompleted = true;
+  });
+
+  await page.goto(`${dashboardBaseUrl}/en/dashboard?demo=1`);
+
+  const apiStatusTile = page.locator('[data-overview-card-id="apiStatus"]');
+  await expect(apiStatusTile).toBeVisible();
+  await expect(apiStatusTile).toContainText('Degraded');
+  await expect(apiStatusTile).toContainText('Error');
+  await expect(apiStatusTile).toContainText('1200 ms');
+  await expect(apiStatusTile).toContainText('5m ago');
+  await expect(apiStatusTile).toContainText('Read-only');
+  await expect(apiStatusTile).toContainText('Configured');
+  await expect(apiStatusTile).toContainText('operational_store_unavailable');
+  await expect(page.locator('[data-status-text]')).toContainText(/Operational API unavailable/i);
+  await expect(page.locator('[data-overview-card-id="counts"]')).not.toContainText('Loading operational state');
+  expect(statusRequests).toBeGreaterThanOrEqual(2);
+  expect(overviewRequests).toBeGreaterThan(0);
+});
+
+test('keeps the API Status Tile loading while status refresh is pending after overview succeeds', async ({ page }) => {
+  let statusRequests = 0;
+  await page.route('**/api/v1/dashboard/status**', async (route) => {
+    statusRequests += 1;
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        data: {
+          status: 'ok',
+          runtime: 'node',
+          store: { status: 'configured' },
+          overview: {
+            status: 'ok',
+            lastAttemptAt: new Date().toISOString(),
+            lastSuccessAt: new Date().toISOString(),
+            lastDurationMs: 15,
+            lastHttpStatus: 200,
+            lastError: null,
+            links: { self: '/api/v1/overview' },
+          },
+          auth: { scope: 'read-only' },
+          links: { overview: '/api/v1/overview' },
+        },
+      }),
+    });
+  });
+
+  await page.goto(`${dashboardBaseUrl}/en/dashboard?demo=1`);
+
+  const apiStatusTile = page.locator('[data-overview-card-id="apiStatus"]');
+  await expect(page.locator('[data-status-text]')).toContainText(/Live operational state/i);
+  await expect(apiStatusTile).toContainText('Loading', { timeout: 1000 });
+  await expect(apiStatusTile).not.toContainText('Operational API unavailable');
+  expect(statusRequests).toBeGreaterThan(0);
+});
+
+test('shows the API Status Tile loading while a saved-token dashboard connects', async ({ page }) => {
+  let releaseStatus: (() => void) | undefined;
+  await page.addInitScript(() => {
+    window.sessionStorage.setItem('rainrail-dashboard-token', 'operator-token');
+  });
+  await page.route('**/api/v1/dashboard/status**', async (route) => {
+    await new Promise<void>((resolve) => {
+      releaseStatus = resolve;
+    });
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        data: {
+          status: 'ok',
+          runtime: 'node',
+          store: { status: 'configured' },
+          overview: {
+            status: 'ok',
+            lastAttemptAt: new Date().toISOString(),
+            lastSuccessAt: new Date().toISOString(),
+            lastDurationMs: 15,
+            lastHttpStatus: 200,
+            lastError: null,
+            links: { self: '/api/v1/overview' },
+          },
+          auth: { scope: 'operator' },
+          links: { overview: '/api/v1/overview' },
+        },
+      }),
+    });
+  });
+  await page.route('**/api/v1/overview**', async (route) => {
+    await new Promise<void>(() => {});
+  });
+
+  await page.goto(`${dashboardBaseUrl}/en/dashboard`);
+
+  const apiStatusTile = page.locator('[data-overview-card-id="apiStatus"]');
+  await expect(apiStatusTile).toContainText('Loading');
+  await expect(apiStatusTile).not.toContainText('Bearer token required');
+
+  releaseStatus?.();
+  await expect(apiStatusTile).toContainText('Connected');
+});
+
+test('redraws the API Status Tile when retrying after a status refresh failure', async ({ page }) => {
+  let statusRequests = 0;
+  let releaseSecondStatus: (() => void) | undefined;
+  let resolveSecondStatusStarted: (() => void) | undefined;
+  const secondStatusStarted = new Promise<void>((resolve) => {
+    resolveSecondStatusStarted = resolve;
+  });
+
+  await page.route('**/api/v1/dashboard/status**', async (route) => {
+    statusRequests += 1;
+    if (statusRequests === 1) {
+      await route.fulfill({
+        status: 503,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'operational_store_unavailable' }),
+      });
+      return;
+    }
+
+    resolveSecondStatusStarted?.();
+    await new Promise<void>((resolve) => {
+      releaseSecondStatus = resolve;
+    });
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        data: {
+          status: 'ok',
+          runtime: 'node',
+          store: { status: 'configured' },
+          overview: {
+            status: 'ok',
+            lastAttemptAt: new Date().toISOString(),
+            lastSuccessAt: new Date().toISOString(),
+            lastDurationMs: 15,
+            lastHttpStatus: 200,
+            lastError: null,
+            links: { self: '/api/v1/overview' },
+          },
+          auth: { scope: 'read-only' },
+          links: { overview: '/api/v1/overview' },
+        },
+      }),
+    });
+  });
+
+  await page.goto(`${dashboardBaseUrl}/en/dashboard?demo=1`);
+
+  const apiStatusTile = page.locator('[data-overview-card-id="apiStatus"]');
+  await expect(apiStatusTile).toContainText('Operational API unavailable');
+
+  await secondStatusStarted;
+  await expect(apiStatusTile).toContainText('Loading');
+  await expect(apiStatusTile).not.toContainText('Operational API unavailable');
+
+  releaseSecondStatus?.();
+  await expect(apiStatusTile).toContainText('Connected');
+});
+
+test('does not refresh API Status Tile diagnostics from a discarded overview refresh', async ({ page }) => {
+  await page.goto(`${dashboardBaseUrl}/en/dashboard?demo=1`);
+  await expect(page.locator('[data-status-text]')).toContainText(/Live operational state/i);
+
+  let statusRequests = 0;
+  let overviewRequests = 0;
+  let releaseOldOverview: (() => void) | undefined;
+  let resolveOldOverviewStarted: (() => void) | undefined;
+  const oldOverviewStarted = new Promise<void>((resolve) => {
+    resolveOldOverviewStarted = resolve;
+  });
+
+  await page.route('**/api/v1/dashboard/status**', async (route) => {
+    statusRequests += 1;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        data: {
+          status: 'ok',
+          runtime: 'node',
+          store: { status: 'configured' },
+          overview: {
+            status: 'ok',
+            lastAttemptAt: new Date().toISOString(),
+            lastSuccessAt: new Date().toISOString(),
+            lastDurationMs: 15,
+            lastHttpStatus: 200,
+            lastError: null,
+            links: { self: '/api/v1/overview' },
+          },
+          auth: { scope: 'read-only' },
+          links: { overview: '/api/v1/overview' },
+        },
+      }),
+    });
+  });
+  await page.route('**/api/v1/overview**', async (route) => {
+    overviewRequests += 1;
+    if (overviewRequests === 1) {
+      resolveOldOverviewStarted?.();
+      await new Promise<void>((resolve) => {
+        releaseOldOverview = resolve;
+      });
+      await route.fulfill({
+        status: 503,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'operational_store_unavailable' }),
+      });
+      return;
+    }
+
+    await route.continue();
+  });
+
+  await page.locator('[data-refresh]').click();
+  await oldOverviewStarted;
+  await page.locator('[data-refresh]').click();
+  await expect(page.locator('[data-status-text]')).toContainText(/Live operational state/i);
+  await expect.poll(() => statusRequests).toBeGreaterThan(0);
+
+  const statusRequestsBeforeDiscardedRefreshSettles = statusRequests;
+  releaseOldOverview?.();
+  await page.waitForTimeout(300);
+
+  expect(statusRequests).toBe(statusRequestsBeforeDiscardedRefreshSettles);
+});
+
+test('redraws the API Status Tile after clearing an auth-required dashboard token', async ({ page }) => {
+  await page.route('**/api/v1/dashboard/status**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        data: {
+          status: 'ok',
+          runtime: 'node',
+          store: { status: 'configured' },
+          overview: {
+            status: 'ok',
+            lastAttemptAt: new Date().toISOString(),
+            lastSuccessAt: new Date().toISOString(),
+            lastDurationMs: 8,
+            lastHttpStatus: 200,
+            lastError: null,
+            links: { self: '/api/v1/overview' },
+          },
+          auth: { scope: 'operator' },
+          links: { overview: '/api/v1/overview' },
+        },
+      }),
+    });
+  });
+
+  await page.goto(`${dashboardBaseUrl}/en/dashboard`);
+  await page.locator('[data-token-input]').fill('operator-token');
+  await page.locator('[data-token-save]').click();
+
+  const apiStatusTile = page.locator('[data-overview-card-id="apiStatus"]');
+  await expect(apiStatusTile).toContainText('Operator');
+
+  await page.locator('[data-token-clear]').click();
+
+  await expect(page.locator('[data-status-text]')).toContainText('Bearer token required');
+  await expect(apiStatusTile).toContainText('Bearer token required');
+  await expect(page.locator('[data-overview-card-id="counts"]')).toHaveCount(0);
+  await expect(page.locator('[data-overview-card-id="recentActivity"]')).toHaveCount(0);
+  await expect(page.locator('[data-overview-card-id="warnings"]')).toHaveCount(0);
 });
 
 test('sends scoped task operator commands with confirmation and error feedback', async ({ page }) => {

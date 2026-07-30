@@ -482,13 +482,16 @@
         "src/events-auth.ts",
         "src/event-delivery/sse.ts",
         "packages/cli/src/index.ts",
-        "apps/www/src/lib/dashboard-client.ts"
+        "apps/www/src/lib/dashboard-client.ts",
+        "apps/www/src/lib/dashboard-app.ts",
+        "apps/www/src/lib/dashboard-overview-cards.ts"
       ],
       "docs": ["docs/operational-api-v1.md"],
       "tests": [
         "scripts/validate-operational-api-v1.test.mjs",
         "scripts/validate-dashboard-shell.test.mjs",
         "packages/cli/src/commands.test.ts",
+        "e2e/dashboard/dashboard-smoke.spec.ts",
         "src/dashboard-api.test.ts",
         "src/sse.test.ts",
         "src/events-auth.test.ts"
@@ -507,6 +510,7 @@
         "apps/www/src/lib/dashboard-controllers.ts",
         "apps/www/src/lib/dashboard-session.ts",
         "apps/www/src/lib/dashboard-app.ts",
+        "apps/www/src/lib/dashboard-overview-cards.ts",
         "apps/www/src/lib/dashboard-content.ts",
         "scripts/dashboard-demo-vrt-scenarios.mjs",
         "scripts/dashboard-demo-server-harness.mjs"

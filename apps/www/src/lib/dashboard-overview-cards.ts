@@ -1,8 +1,8 @@
-import type { DashboardOverview } from './dashboard-client';
+import type { DashboardApiStatus, DashboardOverview, DashboardStatus } from './dashboard-client';
 
 export const OVERVIEW_CARD_STORAGE_KEY = 'rainrail-dashboard-overview-card-layout';
 
-export type OverviewCardId = 'health' | 'counts' | 'recentActivity' | 'warnings';
+export type OverviewCardId = 'apiStatus' | 'health' | 'counts' | 'recentActivity' | 'warnings';
 
 export interface OverviewCardDefinition {
   id: OverviewCardId;
@@ -46,7 +46,59 @@ export interface OverviewWarningSummary {
   detail: string;
 }
 
+export interface OverviewApiStatusLabels {
+  connected: string;
+  degraded: string;
+  error: string;
+  authMissing: string;
+  authRejected: string;
+  unavailable: string;
+  notAvailable: string;
+  unknownAuthScope: string;
+  overview: string;
+  duration: string;
+  lastSuccess: string;
+  authScope: string;
+  store: string;
+  overviewStatuses: {
+    ok: string;
+    unknown: string;
+    loading: string;
+    slow: string;
+    error: string;
+  };
+  storeStatuses: {
+    configured: string;
+    missing: string;
+    unavailable: string;
+  };
+  authScopes: Record<string, string>;
+  errorSummaries?: Record<string, string>;
+  justNow: string;
+  minutesAgo: string;
+  hoursAgo: string;
+  daysAgo: string;
+}
+
+export interface OverviewApiStatusSummary {
+  status: string;
+  tone: DashboardApiStatus | 'auth-missing' | 'auth-rejected' | 'loading' | 'unavailable';
+  metrics: {
+    overview: string;
+    duration: string;
+    lastSuccess: string;
+    authScope: string;
+    store: string;
+  };
+  note: string;
+}
+
 export const overviewCardRegistry: readonly OverviewCardDefinition[] = [
+  {
+    id: 'apiStatus',
+    title: 'API status',
+    description: 'Independent operational API, auth, and overview health signals.',
+  },
   {
     id: 'health',
     title: 'Health',
@@ -171,6 +223,86 @@ export function overviewWarningSummary(
     value: String(count),
     detail: `${labels.warningCount} ${count}`,
   };
+}
+
+export function overviewApiStatusSummary(
+  status: DashboardStatus | undefined,
+  labels: OverviewApiStatusLabels,
+  options: {
+    nowMs?: number;
+    dashboardState?: string;
+    currentStatusMessage?: string;
+    statusPending?: boolean;
+  } = {},
+): OverviewApiStatusSummary {
+  if (status === undefined) {
+    const dashboardState = options.dashboardState;
+    const isAuthMissing = dashboardState === 'auth-missing';
+    const isAuthRejected = dashboardState === 'error' && options.currentStatusMessage === labels.authRejected;
+    const isPending = !isAuthMissing && !isAuthRejected && options.statusPending === true;
+    return {
+      status: isAuthMissing ? labels.authMissing : isAuthRejected ? labels.authRejected : isPending ? labels.overviewStatuses.loading : labels.unavailable,
+      tone: isAuthMissing ? 'auth-missing' : isAuthRejected ? 'auth-rejected' : isPending ? 'loading' : 'unavailable',
+      metrics: {
+        overview: isPending ? labels.overviewStatuses.loading : labels.unavailable,
+        duration: labels.notAvailable,
+        lastSuccess: labels.notAvailable,
+        authScope: isAuthMissing ? labels.authMissing : labels.notAvailable,
+        store: labels.notAvailable,
+      },
+      note: isAuthMissing ? labels.authMissing : isPending ? labels.overviewStatuses.loading : options.currentStatusMessage ?? labels.unavailable,
+    };
+  }
+
+  const data = status.data;
+  const lastError = data.overview.lastError;
+  return {
+    status: apiStatusLabel(data.status, labels),
+    tone: data.status,
+    metrics: {
+      overview: labels.overviewStatuses[data.overview.status],
+      duration: formatDuration(data.overview.lastDurationMs, labels),
+      lastSuccess: formatRelativeTime(data.overview.lastSuccessAt, options.nowMs ?? Date.now(), labels),
+      authScope: formatAuthScope(data.auth?.scope, labels),
+      store: labels.storeStatuses[data.store.status],
+    },
+    note: lastError === null
+      ? `${labels.overview}: ${labels.overviewStatuses[data.overview.status]}`
+      : `${lastError.code}: ${labels.errorSummaries?.[lastError.code] ?? lastError.summary}`,
+  };
+}
+
+function formatAuthScope(value: string | undefined, labels: OverviewApiStatusLabels): string {
+  if (value === undefined) return labels.unknownAuthScope;
+  return labels.authScopes[value] ?? value;
+}
+
+function apiStatusLabel(status: DashboardApiStatus, labels: OverviewApiStatusLabels): string {
+  if (status === 'ok') return labels.connected;
+  if (status === 'degraded') return labels.degraded;
+  return labels.error;
+}
+
+function formatDuration(value: number | null, labels: OverviewApiStatusLabels): string {
+  if (value === null) return labels.notAvailable;
+  return `${Math.max(0, Math.round(value))} ms`;
+}
+
+function formatRelativeTime(value: string | null, nowMs: number, labels: OverviewApiStatusLabels): string {
+  if (value === null) return labels.notAvailable;
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return labels.notAvailable;
+  const diffMs = Math.max(0, nowMs - timestamp);
+  const minutes = Math.floor(diffMs / 60000);
+  if (minutes < 1) return labels.justNow;
+  if (minutes < 60) return formatRelativeTimeUnit(labels.minutesAgo, minutes);
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return formatRelativeTimeUnit(labels.hoursAgo, hours);
+  return formatRelativeTimeUnit(labels.daysAgo, Math.floor(hours / 24));
+}
+
+function formatRelativeTimeUnit(template: string, value: number): string {
+  return template.replace('{value}', String(value));
 }
 
 function isOverviewCardId(value: unknown, registryIds: Set<OverviewCardId>): value is OverviewCardId {
