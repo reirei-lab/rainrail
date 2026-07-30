@@ -133,6 +133,11 @@ dashboard scope のみを `auth.scope` として返す。未実行時は `overvi
 operational store 未設定時は `store.status: "missing"`、top-level `status: "degraded"`、
 `lastError.code: "operational_store_not_configured"` を返す。overview が最後に失敗した場合は
 `overview.status: "error"` とし、error summary は stable error code から作る短い文に限定する。
+This route contract is what the API Status Tile renders. Operators should use
+the tile first when overview が遅い、失敗する、または未取得に戻るとき, because the
+status response can identify whether the latest overview attempt failed,
+whether the operational store is missing, and which safe `auth.scope` was
+accepted without waiting for the full overview projection.
 
 ```json
 {
@@ -158,7 +163,10 @@ operational store 未設定時は `store.status: "missing"`、top-level `status:
 Local demo mode は seed data と同じく deterministic な status response を返し、demo の初期
 `lastAttemptAt` / `lastSuccessAt` は固定時刻、`lastDurationMs` は `0` とする。
 Dashboard shell はこの endpoint を `GET /api/v1/overview` とは別に polling し、overview が
-完了または失敗した直後に API Status Tile の診断情報を取り直す。
+完了または失敗した直後に API Status Tile の診断情報を取り直す。In other words, the
+API Status Tile polls overview 本体とは独立して polling and treats `/api/v1/dashboard/status`
+as the source of truth for API health, auth scope, store state, last overview
+duration, last HTTP status, and stable error code.
 
 `GET /api/v1/dashboard/cards` は `DashboardCardRegistry` の catalog projection を返す。
 各 row は `definition` と `availability` を持ち、unavailable な plugin card や capability 不足の

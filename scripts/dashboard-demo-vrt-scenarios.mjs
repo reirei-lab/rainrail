@@ -23,6 +23,7 @@ export const dashboardDemoVrtScenarios = Object.freeze([
     captureHints: [
       'default landing state',
       'demo badge',
+      'API Status Tile shows demo status API health independently from overview data',
       'counts for events, workflow runs, agent tasks, retries, and command audit rows',
     ],
   },

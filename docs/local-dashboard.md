@@ -58,6 +58,7 @@ Health: http://127.0.0.1:8787/healthz
 Dashboard: http://127.0.0.1:8787/dashboard
 Dashboard routes: /en/dashboard/events, /en/dashboard/runs, /en/dashboard/tasks, /en/dashboard/sources, /en/dashboard/queue, /en/dashboard/settings
 Dashboard API: http://127.0.0.1:8787/api/v1/overview
+Dashboard status API: http://127.0.0.1:8787/api/v1/dashboard/status
 Dashboard Auth: configured scopes: read-only, operator
 Event Stream: http://127.0.0.1:8787/events
 ```
@@ -66,6 +67,14 @@ Open `http://127.0.0.1:8787/dashboard` in a browser and paste the configured
 dashboard token into the dashboard auth field. API requests use
 `Authorization: Bearer <token>` behind the same origin, so the local dashboard
 does not need a separate API base URL.
+`GET /api/v1/overview` is the main operational summary. `GET
+/api/v1/dashboard/status` is the lightweight route contract for the API Status
+Tile: it reports API health, store configuration, the accepted auth scope, and
+the latest overview attempt without rerunning overview.
+When overview が遅い、失敗する、または未取得に戻るとき, check the API Status Tile
+first. It shows 直近 overview attempt の duration、HTTP status、error code、store 設定状態、認証 scope,
+which separates "the overview projection is slow or failing" from "the
+dashboard API/auth/store is unavailable."
 The printed dashboard route list is the canonical local smoke set for the URL
 split: overview stays at `/en/dashboard`, while Event Inbox, Runs, Agent Tasks,
 Sources, Queue, and Settings are directly reachable at their own URLs. The
@@ -93,6 +102,7 @@ operational store. The CLI prints both normal and explicit demo URLs:
 Dashboard demo: http://127.0.0.1:8787/dashboard?demo=1
 Dashboard demo routes: /en/dashboard/events?demo=1, /en/dashboard/runs?demo=1, /en/dashboard/tasks?demo=1, /en/dashboard/sources?demo=1, /en/dashboard/queue?demo=1, /en/dashboard/settings?demo=1
 Dashboard demo API: http://127.0.0.1:8787/api/v1/overview?demo=1
+Dashboard demo status API: http://127.0.0.1:8787/api/v1/dashboard/status?demo=1
 ```
 
 Open the `?demo=1` dashboard URL. In demo mode, the dashboard API carries
@@ -123,9 +133,13 @@ pnpm demo:dashboard:smoke
 The smoke test rebuilds the deterministic SQLite DB, exercises every dashboard
 API resource, and checks the VRT scenario manifest in
 `scripts/dashboard-demo-vrt-scenarios.mjs`. The manifest pins the dashboard tab
-states to capture later with Playwright: overview, retrying events, failed
-workflow runs, running task actions, source delivery status, blocked stale
-claims, settings, default dashboard card layout, and the mobile card layout.
+states to capture later with Playwright: overview with the API Status Tile,
+retrying events, failed workflow runs, running task actions, source delivery
+status, blocked stale claims, settings, default dashboard card layout, and the
+mobile card layout. The overview scenario checks that the API Status Tile reads
+the deterministic demo `/api/v1/dashboard/status?demo=1` contract independently
+from the overview data so auth/store/status regressions do not hide behind the
+larger overview summary.
 Custom saved dashboard card layouts and plugin-card failure isolation are
 smoke-only checks today; they are covered by API and sandbox assertions until a
 browser runner can perform pre-capture setup steps.

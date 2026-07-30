@@ -3679,7 +3679,9 @@ function formatStartOutput(options: RainrailStartOptions): string {
     ...(options.demoMode ? [`Dashboard demo: ${baseUrl}/dashboard?demo=1`] : []),
     ...(options.demoMode ? [`Dashboard demo routes: ${dashboardDemoRoutes.join(', ')}`] : []),
     `Dashboard API: ${baseUrl}/api/v1/overview`,
+    `Dashboard status API: ${baseUrl}/api/v1/dashboard/status`,
     ...(options.demoMode ? [`Dashboard demo API: ${baseUrl}/api/v1/overview?demo=1`] : []),
+    ...(options.demoMode ? [`Dashboard demo status API: ${baseUrl}/api/v1/dashboard/status?demo=1`] : []),
     ...dashboardAuthRows,
     `Event Stream: ${baseUrl}/events`,
     ...(localIntakeRows.length === 0 ? [] : [
