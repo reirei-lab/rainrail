@@ -60,7 +60,9 @@ describe('operational API v1 design note', () => {
       '`Last-Event-ID`',
       '`lastDurationMs`',
       '`lastSuccessAt`',
+      '`lastHttpStatus`',
       '`lastError`',
+      '`auth.scope`',
       '`notificationHint`',
       '`SSE_BEARER_TOKEN`',
       'future optimization',
@@ -82,6 +84,10 @@ describe('operational API v1 design note', () => {
       '`size.max`',
       'provider / plugin filter',
       'resize guard',
+      'API Status Tile',
+      'overview が遅い、失敗する、または未取得に戻るとき',
+      'overview 本体とは独立して polling',
+      'route contract',
     ]) {
       expect(apiSpec).toContain(contractTerm);
     }

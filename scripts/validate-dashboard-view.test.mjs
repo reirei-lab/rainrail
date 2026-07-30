@@ -532,9 +532,13 @@ describe('dashboard operational views', () => {
 
     for (const marker of [
       'Health',
+      'API status',
+      'API 状態',
       'Counts',
       'Recent activity',
       'Warnings',
+      'Independent operational API, auth, and overview health signals.',
+      '運用 API、認証、overview health を独立して確認する診断情報。',
       'TODO: expose component health in the overview API.',
       'TODO: overview API でコンポーネント別 health を公開する。',
     ]) {
