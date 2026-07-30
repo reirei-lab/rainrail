@@ -509,7 +509,9 @@ if (root !== null) {
     renderOverviewCardControls();
     if (overviewCardBoard === null || selectedTab !== 'overview') return;
 
-    const visibleCards = overviewCardLayout.filter((item) => item.visible);
+    const visibleCards = overviewCardLayout.filter((item) =>
+      item.visible && (!dashboardIsWaitingForAuthData() || item.id === 'apiStatus' || item.id === 'health')
+    );
     if (visibleCards.length === 0) {
       overviewCardBoard.textContent = copy.overviewCards.empty;
       return;
@@ -616,6 +618,8 @@ if (root !== null) {
       lastSuccess: statusCopy.lastSuccess,
       authScope: statusCopy.authScope,
       store: statusCopy.store,
+      overviewStatuses: statusCopy.overviewStatuses,
+      storeStatuses: statusCopy.storeStatuses,
       justNow: statusCopy.justNow,
       minutesAgo: statusCopy.minutesAgo,
       hoursAgo: statusCopy.hoursAgo,
@@ -656,6 +660,13 @@ if (root !== null) {
       overviewMetric(copy.overviewCards.lastRefresh, lastUpdatedAt === 0 ? copy.placeholders.notAvailable : new Date(lastUpdatedAt).toLocaleString()),
       overviewNote(copy.overviewCards.todoHealth),
     ];
+  }
+
+  function dashboardIsWaitingForAuthData(): boolean {
+    if (latestData !== undefined) return false;
+    const state = appRoot.dataset.state;
+    if (state === 'auth-missing') return true;
+    return state === 'error' && statusText?.textContent === copy.status.authRejected;
   }
 
   function overviewCountsCardBody(overview: DashboardOverview): HTMLElement[] {

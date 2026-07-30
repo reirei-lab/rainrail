@@ -114,7 +114,8 @@ Dashboard command API を組み込む caller 向けには、scoped token の `Ra
 `RainrailCommandActionType`、`RainrailCommandTargetType`、および handler 型の
 `RainrailCommandHandler` を public contract として公開する。軽量 dashboard status の
 public response 型は `RainrailDashboardStatus` と `RainrailDashboardStatusResponse` で、
-直近 overview attempt の duration / success / safe error summary だけを公開する。
+直近 overview attempt の duration / success / safe error summary と、token 値を含まない
+dashboard-safe な `auth.scope` だけを公開する。
 
 `createRainrailHttpApp` は provider 固有の ingress route を直接持たない。HTTP webhook、
 manual publish UI、Worker tail などの外部入力は `RainrailIntakeAdapter` として登録し、

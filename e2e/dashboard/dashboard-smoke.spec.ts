@@ -384,10 +384,11 @@ test('updates the API Status Tile while overview is slow and unavailable', async
   const apiStatusTile = page.locator('[data-overview-card-id="apiStatus"]');
   await expect(apiStatusTile).toBeVisible();
   await expect(apiStatusTile).toContainText('Degraded');
-  await expect(apiStatusTile).toContainText('error');
+  await expect(apiStatusTile).toContainText('Error');
   await expect(apiStatusTile).toContainText('1200 ms');
   await expect(apiStatusTile).toContainText('5m ago');
   await expect(apiStatusTile).toContainText('read-only');
+  await expect(apiStatusTile).toContainText('Configured');
   await expect(apiStatusTile).toContainText('operational_store_unavailable');
   await expect(page.locator('[data-status-text]')).toContainText(/Operational API unavailable/i);
   expect(statusRequests).toBeGreaterThanOrEqual(2);
@@ -431,6 +432,9 @@ test('redraws the API Status Tile after clearing an auth-required dashboard toke
 
   await expect(page.locator('[data-status-text]')).toContainText('Bearer token required');
   await expect(apiStatusTile).toContainText('Bearer token required');
+  await expect(page.locator('[data-overview-card-id="counts"]')).toHaveCount(0);
+  await expect(page.locator('[data-overview-card-id="recentActivity"]')).toHaveCount(0);
+  await expect(page.locator('[data-overview-card-id="warnings"]')).toHaveCount(0);
 });
 
 test('sends scoped task operator commands with confirmation and error feedback', async ({ page }) => {

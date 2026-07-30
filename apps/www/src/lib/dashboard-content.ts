@@ -262,6 +262,18 @@ export type DashboardAppCopy = {
       lastSuccess: string;
       authScope: string;
       store: string;
+      overviewStatuses: {
+        ok: string;
+        unknown: string;
+        loading: string;
+        slow: string;
+        error: string;
+      };
+      storeStatuses: {
+        configured: string;
+        missing: string;
+        unavailable: string;
+      };
       justNow: string;
       minutesAgo: string;
       hoursAgo: string;
@@ -506,6 +518,18 @@ const englishApp: DashboardAppCopy = {
       lastSuccess: 'Last success',
       authScope: 'Auth scope',
       store: 'Store',
+      overviewStatuses: {
+        ok: 'OK',
+        unknown: 'Unknown',
+        loading: 'Loading',
+        slow: 'Slow',
+        error: 'Error',
+      },
+      storeStatuses: {
+        configured: 'Configured',
+        missing: 'Missing',
+        unavailable: 'Unavailable',
+      },
       justNow: 'just now',
       minutesAgo: '{value}m ago',
       hoursAgo: '{value}h ago',
@@ -736,6 +760,18 @@ const japaneseApp: DashboardAppCopy = {
       lastSuccess: '最終成功',
       authScope: '認証スコープ',
       store: 'ストア',
+      overviewStatuses: {
+        ok: '正常',
+        unknown: '不明',
+        loading: '読み込み中',
+        slow: '低速',
+        error: 'エラー',
+      },
+      storeStatuses: {
+        configured: '設定済み',
+        missing: '未設定',
+        unavailable: '利用不可',
+      },
       justNow: 'たった今',
       minutesAgo: '{value}分前',
       hoursAgo: '{value}時間前',

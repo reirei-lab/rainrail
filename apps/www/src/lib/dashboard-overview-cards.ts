@@ -60,6 +60,18 @@ export interface OverviewApiStatusLabels {
   lastSuccess: string;
   authScope: string;
   store: string;
+  overviewStatuses: {
+    ok: string;
+    unknown: string;
+    loading: string;
+    slow: string;
+    error: string;
+  };
+  storeStatuses: {
+    configured: string;
+    missing: string;
+    unavailable: string;
+  };
   justNow: string;
   minutesAgo: string;
   hoursAgo: string;
@@ -244,11 +256,11 @@ export function overviewApiStatusSummary(
     status: apiStatusLabel(data.status, labels),
     tone: data.status,
     metrics: {
-      overview: data.overview.status,
+      overview: labels.overviewStatuses[data.overview.status],
       duration: formatDuration(data.overview.lastDurationMs, labels),
       lastSuccess: formatRelativeTime(data.overview.lastSuccessAt, options.nowMs ?? Date.now(), labels),
       authScope: data.auth?.scope ?? labels.unknownAuthScope,
-      store: data.store.status,
+      store: labels.storeStatuses[data.store.status],
     },
     note: lastError === null ? `${labels.overview}: ${data.overview.status}` : `${lastError.code}: ${lastError.summary}`,
   };
