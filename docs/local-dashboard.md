@@ -197,8 +197,9 @@ layout API:
 
 - `GET /api/v1/dashboard/cards` returns Core and plugin card definitions with
   availability.
-- `GET /api/v1/dashboard/status` returns lightweight API health and the last
-  observed overview duration/success/error summary without rerunning overview.
+- `GET /api/v1/dashboard/status` returns lightweight API health, the accepted
+  token's safe `auth.scope`, and the last observed overview
+  duration/success/error summary without rerunning overview.
 - `GET /api/v1/dashboard/layout` returns the default Core layout until an
   operator saves a user layout.
 - `PUT /api/v1/dashboard/layout` saves a full user layout and requires an

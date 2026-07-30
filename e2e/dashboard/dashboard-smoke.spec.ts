@@ -391,6 +391,7 @@ test('updates the API Status Tile while overview is slow and unavailable', async
   await expect(apiStatusTile).toContainText('Configured');
   await expect(apiStatusTile).toContainText('operational_store_unavailable');
   await expect(page.locator('[data-status-text]')).toContainText(/Operational API unavailable/i);
+  await expect(page.locator('[data-overview-card-id="counts"]')).not.toContainText('Loading operational state');
   expect(statusRequests).toBeGreaterThanOrEqual(2);
   expect(overviewRequests).toBeGreaterThan(0);
 });

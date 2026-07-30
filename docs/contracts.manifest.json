@@ -510,6 +510,7 @@
         "apps/www/src/lib/dashboard-controllers.ts",
         "apps/www/src/lib/dashboard-session.ts",
         "apps/www/src/lib/dashboard-app.ts",
+        "apps/www/src/lib/dashboard-overview-cards.ts",
         "apps/www/src/lib/dashboard-content.ts",
         "scripts/dashboard-demo-vrt-scenarios.mjs",
         "scripts/dashboard-demo-server-harness.mjs"

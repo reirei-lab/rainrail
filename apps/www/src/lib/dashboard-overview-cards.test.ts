@@ -323,6 +323,7 @@ describe('dashboard overview cards', () => {
         overview: '正常',
         store: '設定済み',
       },
+      note: '概要: 正常',
     });
   });
 });

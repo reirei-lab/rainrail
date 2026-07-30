@@ -596,7 +596,7 @@ if (root !== null) {
   function overviewCardBody(id: OverviewCardId, overview: DashboardOverview | undefined): HTMLElement[] {
     if (id === 'apiStatus') return overviewApiStatusCardBody();
     if (id === 'health') return overviewHealthCardBody();
-    if (overview === undefined) return [overviewNote(copy.status.loading)];
+    if (overview === undefined) return [overviewNote(appRoot.dataset.state === 'error' ? copy.status.unavailable : copy.status.loading)];
     if (id === 'counts') return overviewCountsCardBody(overview);
     if (id === 'recentActivity') return overviewRecentActivityCardBody(overview);
     return overviewWarningsCardBody(overview);

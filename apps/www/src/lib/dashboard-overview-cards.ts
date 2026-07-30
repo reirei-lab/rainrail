@@ -262,7 +262,7 @@ export function overviewApiStatusSummary(
       authScope: data.auth?.scope ?? labels.unknownAuthScope,
       store: labels.storeStatuses[data.store.status],
     },
-    note: lastError === null ? `${labels.overview}: ${data.overview.status}` : `${lastError.code}: ${lastError.summary}`,
+    note: lastError === null ? `${labels.overview}: ${labels.overviewStatuses[data.overview.status]}` : `${lastError.code}: ${lastError.summary}`,
   };
 }
 
