@@ -34,6 +34,7 @@ describe('local dashboard start documentation', () => {
       'rainrail start --demo',
       'Dashboard demo: http://127.0.0.1:8787/dashboard?demo=1',
       'Dashboard demo API: http://127.0.0.1:8787/api/v1/overview?demo=1',
+      'Dashboard demo status API: http://127.0.0.1:8787/api/v1/dashboard/status?demo=1',
       'Demo mode',
       'デモモード',
       'minimal demo config',
@@ -41,6 +42,10 @@ describe('local dashboard start documentation', () => {
       'Dashboard: http://127.0.0.1:8787/dashboard',
       'Dashboard routes: /en/dashboard/events, /en/dashboard/runs, /en/dashboard/tasks, /en/dashboard/sources, /en/dashboard/queue, /en/dashboard/settings',
       'Dashboard API: http://127.0.0.1:8787/api/v1/overview',
+      'Dashboard status API: http://127.0.0.1:8787/api/v1/dashboard/status',
+      'API Status Tile',
+      'overview が遅い、失敗する、または未取得に戻るとき',
+      '直近 overview attempt の duration、HTTP status、error code、store 設定状態、認証 scope',
       'dashboardAuth.readOnlyToken',
       'dashboardAuth.operatorToken',
       'dashboardAuth.adminToken',
@@ -150,8 +155,10 @@ describe('local dashboard start documentation', () => {
     expect(cliCommandsTest).toContain('Dashboard: http://127.0.0.1:8787/dashboard');
     expect(cliCommandsTest).toContain('Dashboard routes: /en/dashboard/events');
     expect(cliCommandsTest).toContain('Dashboard API: http://127.0.0.1:8787/api/v1/overview');
+    expect(cliCommandsTest).toContain('Dashboard status API: http://127.0.0.1:8787/api/v1/dashboard/status');
     expect(cliCommandsTest).toContain('Dashboard demo: http://127.0.0.1:8787/dashboard?demo=1');
     expect(cliCommandsTest).toContain('Dashboard demo routes: /en/dashboard/events?demo=1');
+    expect(cliCommandsTest).toContain('Dashboard demo status API: http://127.0.0.1:8787/api/v1/dashboard/status?demo=1');
     expect(cliCommandsTest).toContain('serves seeded SQLite dashboard demo mode without an operator token');
     expect(cliCommandsTest).toContain('missing_bearer_token');
     expect(cliCommandsTest).toContain('invalid_bearer_token');
