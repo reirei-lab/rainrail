@@ -445,6 +445,44 @@ test('updates the API Status Tile while overview is slow and unavailable', async
   expect(overviewRequests).toBeGreaterThan(0);
 });
 
+test('keeps the API Status Tile loading while status refresh is pending after overview succeeds', async ({ page }) => {
+  let statusRequests = 0;
+  await page.route('**/api/v1/dashboard/status**', async (route) => {
+    statusRequests += 1;
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        data: {
+          status: 'ok',
+          runtime: 'node',
+          store: { status: 'configured' },
+          overview: {
+            status: 'ok',
+            lastAttemptAt: new Date().toISOString(),
+            lastSuccessAt: new Date().toISOString(),
+            lastDurationMs: 15,
+            lastHttpStatus: 200,
+            lastError: null,
+            links: { self: '/api/v1/overview' },
+          },
+          auth: { scope: 'read-only' },
+          links: { overview: '/api/v1/overview' },
+        },
+      }),
+    });
+  });
+
+  await page.goto(`${dashboardBaseUrl}/en/dashboard?demo=1`);
+
+  const apiStatusTile = page.locator('[data-overview-card-id="apiStatus"]');
+  await expect(page.locator('[data-status-text]')).toContainText(/Live operational state/i);
+  await expect(apiStatusTile).toContainText('Loading', { timeout: 1000 });
+  await expect(apiStatusTile).not.toContainText('Operational API unavailable');
+  expect(statusRequests).toBeGreaterThan(0);
+});
+
 test('redraws the API Status Tile after clearing an auth-required dashboard token', async ({ page }) => {
   await page.route('**/api/v1/dashboard/status**', async (route) => {
     await route.fulfill({

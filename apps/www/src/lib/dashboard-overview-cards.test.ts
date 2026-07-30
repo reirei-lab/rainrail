@@ -189,6 +189,9 @@ describe('dashboard overview cards', () => {
         missing: 'Missing',
         unavailable: 'Unavailable',
       },
+      errorSummaries: {
+        operational_store_unavailable: 'Operational store unavailable',
+      },
       justNow: 'just now',
       minutesAgo: '{value}m ago',
       hoursAgo: '{value}h ago',
@@ -264,6 +267,21 @@ describe('dashboard overview cards', () => {
       dashboardState: 'error',
       currentStatusMessage: 'Token rejected by operational API',
     }).tone).toBe('auth-rejected');
+    expect(overviewApiStatusSummary(undefined, labels, {
+      dashboardState: 'ready',
+      statusPending: true,
+    })).toMatchObject({
+      status: 'Loading',
+      tone: 'loading',
+      metrics: {
+        overview: 'Loading',
+        duration: 'n/a',
+        lastSuccess: 'n/a',
+        authScope: 'n/a',
+        store: 'n/a',
+      },
+      note: 'Loading',
+    });
   });
 
   it('localizes relative last success labels and avoids guessing missing auth scope', () => {
@@ -292,6 +310,9 @@ describe('dashboard overview cards', () => {
         configured: '設定済み',
         missing: '未設定',
         unavailable: '利用不可',
+      },
+      errorSummaries: {
+        operational_store_not_configured: '運用ストアが設定されていません。',
       },
       justNow: 'たった今',
       minutesAgo: '{value}分前',
@@ -324,6 +345,26 @@ describe('dashboard overview cards', () => {
         store: '設定済み',
       },
       note: '概要: 正常',
+    });
+
+    expect(overviewApiStatusSummary({
+      data: {
+        status: 'degraded',
+        runtime: 'node',
+        store: { status: 'missing' },
+        overview: {
+          status: 'error',
+          lastAttemptAt: '2026-07-09T05:00:00.000Z',
+          lastSuccessAt: null,
+          lastDurationMs: null,
+          lastHttpStatus: 503,
+          lastError: { code: 'operational_store_not_configured', summary: 'Operational store is not configured.' },
+          links: { self: '/api/v1/overview' },
+        },
+        links: { overview: '/api/v1/overview' },
+      },
+    }, labels, { nowMs: Date.parse('2026-07-09T05:05:00.000Z') })).toMatchObject({
+      note: 'operational_store_not_configured: 運用ストアが設定されていません。',
     });
   });
 });

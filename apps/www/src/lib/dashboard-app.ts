@@ -112,6 +112,7 @@ if (root !== null) {
   let selectedTab: DashboardTab = initialDashboardState.tab;
   let latestData: DashboardData | undefined;
   let latestApiStatus: DashboardStatus | undefined;
+  let latestApiStatusState: 'pending' | 'failed' = 'pending';
   let lastUpdatedAt = 0;
   let staleTimer: number | undefined;
   const polling = createDashboardPollingController(window);
@@ -367,6 +368,7 @@ if (root !== null) {
     const activeClient = client;
     const activeRefreshId = ++statusRefreshSequence;
     statusRefreshInFlightClient = activeClient;
+    latestApiStatusState = 'pending';
 
     try {
       const nextStatus = await activeClient.status();
@@ -376,6 +378,7 @@ if (root !== null) {
     } catch {
       if (!isCurrentStatusRefresh(activeClient, activeRefreshId)) return;
       latestApiStatus = undefined;
+      latestApiStatusState = 'failed';
       renderOverviewCards();
     } finally {
       clearStatusRefreshInFlight(activeClient, activeRefreshId);
@@ -631,6 +634,7 @@ if (root !== null) {
       store: statusCopy.store,
       overviewStatuses: statusCopy.overviewStatuses,
       storeStatuses: statusCopy.storeStatuses,
+      errorSummaries: statusCopy.errorSummaries,
       justNow: statusCopy.justNow,
       minutesAgo: statusCopy.minutesAgo,
       hoursAgo: statusCopy.hoursAgo,
@@ -638,6 +642,7 @@ if (root !== null) {
     }, {
       dashboardState: appRoot.dataset.state,
       currentStatusMessage: statusText?.textContent ?? undefined,
+      statusPending: latestApiStatus === undefined && latestApiStatusState === 'pending',
     });
     const metrics = document.createElement('div');
     metrics.className = 'dashboard-overview-card-metrics';
@@ -802,6 +807,7 @@ if (root !== null) {
   function resetDashboardData(): void {
     latestData = undefined;
     latestApiStatus = undefined;
+    latestApiStatusState = 'pending';
     lastUpdatedAt = 0;
     if (staleTimer !== undefined) {
       window.clearTimeout(staleTimer);

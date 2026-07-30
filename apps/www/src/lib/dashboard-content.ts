@@ -274,6 +274,7 @@ export type DashboardAppCopy = {
         missing: string;
         unavailable: string;
       };
+      errorSummaries: Record<string, string>;
       justNow: string;
       minutesAgo: string;
       hoursAgo: string;
@@ -531,6 +532,11 @@ const englishApp: DashboardAppCopy = {
         missing: 'Missing',
         unavailable: 'Unavailable',
       },
+      errorSummaries: {
+        operational_store_not_configured: 'Operational store is not configured.',
+        operational_store_unavailable: 'Operational store unavailable',
+        internal_server_error: 'Internal server error',
+      },
       justNow: 'just now',
       minutesAgo: '{value}m ago',
       hoursAgo: '{value}h ago',
@@ -773,6 +779,11 @@ const japaneseApp: DashboardAppCopy = {
         configured: '設定済み',
         missing: '未設定',
         unavailable: '利用不可',
+      },
+      errorSummaries: {
+        operational_store_not_configured: '運用ストアが設定されていません。',
+        operational_store_unavailable: '運用ストアを利用できません。',
+        internal_server_error: '内部サーバーエラー',
       },
       justNow: 'たった今',
       minutesAgo: '{value}分前',

@@ -72,6 +72,7 @@ export interface OverviewApiStatusLabels {
     missing: string;
     unavailable: string;
   };
+  errorSummaries?: Record<string, string>;
   justNow: string;
   minutesAgo: string;
   hoursAgo: string;
@@ -80,7 +81,7 @@ export interface OverviewApiStatusLabels {
 
 export interface OverviewApiStatusSummary {
   status: string;
-  tone: DashboardApiStatus | 'auth-missing' | 'auth-rejected' | 'unavailable';
+  tone: DashboardApiStatus | 'auth-missing' | 'auth-rejected' | 'loading' | 'unavailable';
   metrics: {
     overview: string;
     duration: string;
@@ -230,23 +231,25 @@ export function overviewApiStatusSummary(
     nowMs?: number;
     dashboardState?: string;
     currentStatusMessage?: string;
+    statusPending?: boolean;
   } = {},
 ): OverviewApiStatusSummary {
   if (status === undefined) {
     const dashboardState = options.dashboardState;
     const isAuthMissing = dashboardState === 'auth-missing';
     const isAuthRejected = dashboardState === 'error' && options.currentStatusMessage === labels.authRejected;
+    const isPending = !isAuthMissing && !isAuthRejected && options.statusPending === true;
     return {
-      status: isAuthMissing ? labels.authMissing : isAuthRejected ? labels.authRejected : labels.unavailable,
-      tone: isAuthMissing ? 'auth-missing' : isAuthRejected ? 'auth-rejected' : 'unavailable',
+      status: isAuthMissing ? labels.authMissing : isAuthRejected ? labels.authRejected : isPending ? labels.overviewStatuses.loading : labels.unavailable,
+      tone: isAuthMissing ? 'auth-missing' : isAuthRejected ? 'auth-rejected' : isPending ? 'loading' : 'unavailable',
       metrics: {
-        overview: labels.unavailable,
+        overview: isPending ? labels.overviewStatuses.loading : labels.unavailable,
         duration: labels.notAvailable,
         lastSuccess: labels.notAvailable,
         authScope: isAuthMissing ? labels.authMissing : labels.notAvailable,
         store: labels.notAvailable,
       },
-      note: isAuthMissing ? labels.authMissing : options.currentStatusMessage ?? labels.unavailable,
+      note: isAuthMissing ? labels.authMissing : isPending ? labels.overviewStatuses.loading : options.currentStatusMessage ?? labels.unavailable,
     };
   }
 
@@ -262,7 +265,9 @@ export function overviewApiStatusSummary(
       authScope: data.auth?.scope ?? labels.unknownAuthScope,
       store: labels.storeStatuses[data.store.status],
     },
-    note: lastError === null ? `${labels.overview}: ${labels.overviewStatuses[data.overview.status]}` : `${lastError.code}: ${lastError.summary}`,
+    note: lastError === null
+      ? `${labels.overview}: ${labels.overviewStatuses[data.overview.status]}`
+      : `${lastError.code}: ${labels.errorSummaries?.[lastError.code] ?? lastError.summary}`,
   };
 }
 
