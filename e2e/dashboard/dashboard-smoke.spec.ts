@@ -1,7 +1,7 @@
 import { mkdir, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { expect, test, type Locator } from '@playwright/test';
+import { expect, test, type Locator, type Page, type Route } from '@playwright/test';
 
 import { startDashboardDemoServerHarness } from '../../scripts/dashboard-demo-server-harness.mjs';
 import { dashboardDemoVrtScenarios } from '../../scripts/dashboard-demo-vrt-scenarios.mjs';
@@ -293,39 +293,46 @@ test('matches dashboard route visual baselines from the scenario manifest', asyn
       await page.setViewportSize(viewport === 'mobile'
         ? { width: 390, height: 844 }
         : { width: 1440, height: 1000 });
+      const cleanupStatusRoute = scenario.id === 'overview-api-status-tile-default'
+        ? await routeDashboardStatusForApiStatusVrt(page)
+        : undefined;
 
-      const url = new URL(scenario.url, dashboardBaseUrl);
-      await page.goto(url.href);
+      try {
+        const url = new URL(scenario.url, dashboardBaseUrl);
+        await page.goto(url.href);
 
-      await expect(page.getByRole('heading', { level: 1, name: /Rainrail (Operations|運用)/i })).toBeVisible();
-      await expect(page.locator('[data-demo-indicator]')).toBeVisible();
-      await expect(page.locator(`[data-dashboard-tab="${scenario.tab}"]`)).toHaveAttribute('aria-pressed', 'true');
-      await expect(page.locator('[data-status-text]')).toContainText(/Live operational state|運用状態/i);
+        await expect(page.getByRole('heading', { level: 1, name: /Rainrail (Operations|運用)/i })).toBeVisible();
+        await expect(page.locator('[data-demo-indicator]')).toBeVisible();
+        await expect(page.locator(`[data-dashboard-tab="${scenario.tab}"]`)).toHaveAttribute('aria-pressed', 'true');
+        await expect(page.locator('[data-status-text]')).toContainText(/Live operational state|運用状態/i);
 
-      if (scenario.id === 'dashboard-cards-mobile-layout') {
-        await page.locator('[data-dashboard-layout-toggle]').click();
-        await expect(page.locator('[data-dashboard-layout-grid]')).toBeVisible();
+        if (scenario.id === 'dashboard-cards-mobile-layout') {
+          await page.locator('[data-dashboard-layout-toggle]').click();
+          await expect(page.locator('[data-dashboard-layout-grid]')).toBeVisible();
+        }
+        if (scenario.id === 'overview-api-status-tile-default') {
+          const apiStatusTile = page.locator('[data-overview-card-id="apiStatus"]');
+          await expect(apiStatusTile).toContainText('接続中');
+          await expect(apiStatusTile).toContainText('正常');
+          await expect(apiStatusTile).toContainText('0 ms');
+          await expect(apiStatusTile).toContainText('たった今');
+          await expect(apiStatusTile).toContainText('不明');
+          await expect(apiStatusTile).toContainText('設定済み');
+        }
+
+        await expect(page).toHaveScreenshot(`${scenario.id}-${viewport}.png`, {
+          maxDiffPixelRatio: 0.04,
+          mask: [
+            page.locator('[data-status-text]'),
+            ...(scenario.id !== 'overview-api-status-tile-default'
+              ? [page.locator('[data-overview-card-id="apiStatus"]')]
+              : []),
+            page.locator('[data-overview-card-id="health"]'),
+          ],
+        });
+      } finally {
+        await cleanupStatusRoute?.();
       }
-      if (scenario.id === 'overview-api-status-tile-default') {
-        const apiStatusTile = page.locator('[data-overview-card-id="apiStatus"]');
-        await expect(apiStatusTile).toContainText('接続中');
-        await expect(apiStatusTile).toContainText('正常');
-        await expect(apiStatusTile).toContainText('0 ms');
-        await expect(apiStatusTile).toContainText('たった今');
-        await expect(apiStatusTile).toContainText('不明');
-        await expect(apiStatusTile).toContainText('設定済み');
-      }
-
-      await expect(page).toHaveScreenshot(`${scenario.id}-${viewport}.png`, {
-        maxDiffPixelRatio: 0.04,
-        mask: [
-          page.locator('[data-status-text]'),
-          ...(scenario.id !== 'overview-api-status-tile-default'
-            ? [page.locator('[data-overview-card-id="apiStatus"]')]
-            : []),
-          page.locator('[data-overview-card-id="health"]'),
-        ],
-      });
     });
   }
 });
@@ -956,4 +963,32 @@ async function expectActiveHitTarget(locator: Locator): Promise<void> {
     return target === element || element.contains(target);
   });
   expect(isActiveHitTarget).toBe(true);
+}
+
+async function routeDashboardStatusForApiStatusVrt(page: Page): Promise<() => Promise<void>> {
+  const handler = async (route: Route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        data: {
+          status: 'ok',
+          runtime: 'node',
+          store: { status: 'configured' },
+          overview: {
+            status: 'ok',
+            lastAttemptAt: '2026-07-09T05:00:00.000Z',
+            lastSuccessAt: '2026-07-09T05:00:00.000Z',
+            lastDurationMs: 0,
+            lastHttpStatus: 200,
+            lastError: null,
+            links: { self: '/api/v1/overview' },
+          },
+          links: { overview: '/api/v1/overview' },
+        },
+      }),
+    });
+  };
+  await page.route('**/api/v1/dashboard/status**', handler);
+  return () => page.unroute('**/api/v1/dashboard/status**', handler);
 }

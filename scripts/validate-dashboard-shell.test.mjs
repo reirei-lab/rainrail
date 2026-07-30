@@ -236,6 +236,8 @@ describe('dashboard app shell', () => {
     expect(dashboardDemoVrtScenarios).toContain("id: 'overview-api-status-tile-default'");
     expect(dashboardDemoVrtScenarios).toContain('deterministic API Status Tile default response');
     expect(dashboardSmokeSpec).toContain("await page.clock.setFixedTime(new Date('2026-07-09T05:00:30.000Z'))");
+    expect(dashboardSmokeSpec).toContain('routeDashboardStatusForApiStatusVrt');
+    expect(dashboardSmokeSpec).toContain("lastDurationMs: 0");
     expect(dashboardSmokeSpec).toContain("scenario.id !== 'overview-api-status-tile-default'");
     expect(dashboardSmokeSpec).toContain("page.locator('[data-overview-card-id=\"apiStatus\"]')");
   });
