@@ -100,6 +100,16 @@ test('keeps dashboard layout editing collapsed and scoped to Overview', async ({
   await expect(page.locator('[data-dashboard-list] button').first()).toBeVisible();
 });
 
+test('hides dashboard layout editing for legacy non-Overview tab deep links', async ({ page }) => {
+  await page.goto(`${dashboardBaseUrl}/en/dashboard?demo=1&tab=events`);
+
+  await expect(page.locator('[data-dashboard-tab="events"]')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('[data-dashboard-layout-disclosure]')).toBeHidden();
+  await expect(page.locator('[data-dashboard-layout-grid]')).toBeHidden();
+  await expect(page.locator('[data-card-picker-search]')).toBeHidden();
+  await expect(page.locator('[data-dashboard-list] button').first()).toBeVisible();
+});
+
 type ScenarioExpectation = {
   rows: readonly string[];
   excludedRows?: readonly string[];

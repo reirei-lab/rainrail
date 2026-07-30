@@ -403,8 +403,10 @@ describe('dashboard operational views', () => {
 
     for (const marker of [
       'renderDashboardLayout()',
+      'applyDashboardLayoutEditorVisibility()',
       'applyDashboardLayoutVisibility()',
       'dashboardCoreCardElements',
+      'dashboardLayoutDisclosure.hidden = hidden',
       'dashboardCoreCardIsVisible',
       'dashboardCoreCardLayoutIds',
       'ensureVisibleDashboardTab',

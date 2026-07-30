@@ -92,6 +92,7 @@ if (root !== null) {
   const cardPickerCategory = root.querySelector<HTMLSelectElement>('[data-card-picker-category]');
   const cardPickerProvider = root.querySelector<HTMLSelectElement>('[data-card-picker-provider]');
   const cardPickerList = root.querySelector<HTMLElement>('[data-card-picker-list]');
+  const dashboardLayoutDisclosure = root.querySelector<HTMLDetailsElement>('[data-dashboard-layout-disclosure]');
   const dashboardLayoutGrid = root.querySelector<HTMLElement>('[data-dashboard-layout-grid]');
   const dashboardLayoutStatus = root.querySelector<HTMLElement>('[data-dashboard-layout-status]');
   const overviewCardPanel = root.querySelector<HTMLElement>('[data-overview-card-panel]');
@@ -129,6 +130,7 @@ if (root !== null) {
   const demoAuthBypass = demoMode && isLoopbackDashboardHost(window.location.hostname);
   const authRequired = !demoAuthBypass && appRoot.dataset.authRequired !== 'false';
   const operatorEnabled = isOperatorModeEnabled();
+  applyDashboardLayoutEditorVisibility();
   if (tokenInput !== null) tokenInput.value = storedToken;
   if (apiBaseUrlInput !== null) apiBaseUrlInput.value = storedApiBaseUrl;
   if (eventSourceFilter !== null && initialDashboardState.eventFilters.sourceType !== undefined) {
@@ -234,6 +236,7 @@ if (root !== null) {
       if (isDashboardTab(tab)) {
         selectedTab = tab;
         preserveDashboardRouteQuery(button);
+        applyDashboardLayoutEditorVisibility();
         renderOverviewCards();
         renderCurrentList();
       }
@@ -340,6 +343,7 @@ if (root !== null) {
     ensureVisibleDashboardTab();
     updateTabButtons();
     if (list === null || detail === null) return;
+    applyDashboardLayoutEditorVisibility();
     renderOverviewCards();
 
     if (latestData === undefined) {
@@ -478,6 +482,13 @@ if (root !== null) {
     }
 
     overviewCardBoard.replaceChildren(...visibleCards.map((item) => overviewCardArticle(item, latestData!.overview)));
+  }
+
+  function applyDashboardLayoutEditorVisibility(): void {
+    if (dashboardLayoutDisclosure === null) return;
+    const hidden = selectedTab !== 'overview';
+    dashboardLayoutDisclosure.hidden = hidden;
+    if (hidden) dashboardLayoutDisclosure.open = false;
   }
 
   function renderOverviewCardControls(): void {
