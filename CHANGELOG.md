@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.9.0](https://github.com/reirei-lab/rainrail/compare/release/0.8.0...release/0.9.0) (2026-07-31)
+
+
+### Features
+
+* add local dashboard status API contract ([#380](https://github.com/reirei-lab/rainrail/issues/380)) ([0c6d660](https://github.com/reirei-lab/rainrail/commit/0c6d660efa90725cbe369ffe6e63e43d4fcd8971))
+* add overview API status tile ([#382](https://github.com/reirei-lab/rainrail/issues/382)) ([f151f5a](https://github.com/reirei-lab/rainrail/commit/f151f5af4f41f022e6c802aaa590fc8c9624e8db))
+* collapse dashboard layout editor ([#384](https://github.com/reirei-lab/rainrail/issues/384)) ([011f43d](https://github.com/reirei-lab/rainrail/commit/011f43d3ac07a3a1b43bb59e58d90767de3bcb0d))
+
 ## [0.8.0](https://github.com/reirei-lab/rainrail/compare/release/0.7.1...release/0.8.0) (2026-07-24)
 
 
