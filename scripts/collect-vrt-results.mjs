@@ -8,9 +8,16 @@ import { pathToFileURL } from 'node:url';
  *   title: string;
  *   status?: 'missing-baseline' | 'missing-diff';
  *   before?: string;
- *   after: string;
+ *   after?: string;
  *   diff?: string;
  * }} VrtSummaryCase
+ *
+ * @typedef {{
+ *   key: string;
+ *   idHint: string;
+ *   status?: 'missing-baseline';
+ *   actualPath?: string;
+ * }} VrtCandidate
  *
  * @typedef {{
  *   changed: boolean;
@@ -27,7 +34,7 @@ export async function collectVrtResults(input) {
   const resultsDir = resolve(input.resultsDir);
   const outputDir = resolve(input.outputDir);
   const summaryPath = join(outputDir, 'summary.json');
-  const actualFiles = await actualFilesForCollection({
+  const candidates = await candidatesForCollection({
     resultsDir,
     ...(input.reportPath === undefined ? {} : { reportPath: resolve(input.reportPath) }),
   });
@@ -37,12 +44,22 @@ export async function collectVrtResults(input) {
 
   /** @type {VrtSummaryCase[]} */
   const cases = [];
-  for (const actual of actualFiles) {
+  for (const candidate of candidates) {
+    const id = uniqueCaseId(cases, slugify(candidate.idHint));
+    if (candidate.actualPath === undefined) {
+      cases.push({
+        id,
+        title: titleFromId(id),
+        status: candidate.status ?? 'missing-baseline',
+      });
+      continue;
+    }
+
+    const actual = candidate.actualPath;
     const base = actual.slice(0, -'-actual.png'.length);
     const expected = `${base}-expected.png`;
     const diff = `${base}-diff.png`;
 
-    const id = uniqueCaseId(cases, slugify(basename(base)));
     const caseDir = join(outputDir, id);
     const hasExpected = await fileExists(expected);
     const hasDiff = await fileExists(diff);
@@ -89,28 +106,37 @@ export async function collectVrtResults(input) {
 
 /**
  * @param {{ resultsDir: string; reportPath?: string }} input
- * @returns {Promise<string[]>}
+ * @returns {Promise<VrtCandidate[]>}
  */
-async function actualFilesForCollection(input) {
+async function candidatesForCollection(input) {
   if (input.reportPath !== undefined) {
     if (!(await fileExists(input.reportPath))) {
       throw new Error(`Playwright JSON report was not found: ${input.reportPath}`);
     }
-    return unexpectedActualFilesFromReport(input.reportPath);
+    return unexpectedCandidatesFromReport(input.reportPath);
   }
 
-  return (await findFiles(input.resultsDir))
+  const actualFiles = (await findFiles(input.resultsDir))
     .filter((file) => basename(file).endsWith('-actual.png'))
     .sort();
+  return actualFiles.map((actualPath) => {
+    const base = actualPath.slice(0, -'-actual.png'.length);
+    return {
+      key: actualPath,
+      idHint: basename(base),
+      actualPath,
+    };
+  });
 }
 
 /**
  * @param {string} reportPath
- * @returns {Promise<string[]>}
+ * @returns {Promise<VrtCandidate[]>}
  */
-async function unexpectedActualFilesFromReport(reportPath) {
+async function unexpectedCandidatesFromReport(reportPath) {
   const report = JSON.parse(await readFile(reportPath, 'utf8'));
-  const filesBySnapshot = new Map();
+  /** @type {Map<string, VrtCandidate>} */
+  const candidatesBySnapshot = new Map();
 
   for (const entry of collectReportTestEntries(report)) {
     if (!isRecord(entry.test) || entry.test.status !== 'unexpected' || !Array.isArray(entry.test.results)) {
@@ -118,24 +144,42 @@ async function unexpectedActualFilesFromReport(reportPath) {
     }
 
     for (const result of entry.test.results) {
-      if (!isRecord(result) || !Array.isArray(result.attachments)) {
+      if (!isRecord(result)) {
         continue;
       }
 
-      for (const attachment of result.attachments) {
+      let actualAttachmentCount = 0;
+      const attachments = Array.isArray(result.attachments) ? result.attachments : [];
+      for (const attachment of attachments) {
         if (!isRecord(attachment) || typeof attachment.path !== 'string') {
           continue;
         }
 
         const attachmentPath = resolveAttachmentPath(reportPath, attachment.path);
         if (basename(attachmentPath).endsWith('-actual.png') && await fileExists(attachmentPath)) {
-          filesBySnapshot.set(snapshotKey(entry.identity, attachment, attachmentPath), attachmentPath);
+          actualAttachmentCount += 1;
+          const key = snapshotKey(entry.identity, attachment, attachmentPath);
+          candidatesBySnapshot.set(key, {
+            key,
+            idHint: basename(attachmentPath.slice(0, -'-actual.png'.length)),
+            actualPath: attachmentPath,
+          });
         }
+      }
+
+      if (actualAttachmentCount === 0 && hasMissingBaselineError(result)) {
+        const idHint = missingBaselineIdHint(result) ?? entry.identity.at(-1) ?? 'missing-baseline';
+        const key = [...entry.identity, idHint, 'missing-baseline'].join('\u0000');
+        candidatesBySnapshot.set(key, {
+          key,
+          idHint,
+          status: 'missing-baseline',
+        });
       }
     }
   }
 
-  return [...filesBySnapshot.values()];
+  return [...candidatesBySnapshot.values()];
 }
 
 /**
@@ -152,6 +196,48 @@ function snapshotKey(testIdentity, attachment, actualPath) {
     ...testIdentity,
     attachmentName.replace(/-actual$/u, '').replace(/-actual\.png$/u, ''),
   ].join('\u0000');
+}
+
+/**
+ * @param {Record<string, unknown>} result
+ * @returns {boolean}
+ */
+function hasMissingBaselineError(result) {
+  return errorMessages(result).some((message) => /snapshot(?:\s+file)?(?: doesn't| does not| to be) exist|snapshot.*missing|is missing in snapshots/u.test(message));
+}
+
+/**
+ * @param {Record<string, unknown>} result
+ * @returns {string | undefined}
+ */
+function missingBaselineIdHint(result) {
+  for (const message of errorMessages(result)) {
+    const matches = [...message.matchAll(/([A-Za-z0-9_.-]+)\.png\b/gu)];
+    const snapshotName = matches.at(-1)?.[1];
+    if (snapshotName !== undefined) {
+      return snapshotName.replace(/-(actual|expected|diff)$/u, '');
+    }
+  }
+  return undefined;
+}
+
+/**
+ * @param {unknown} value
+ * @returns {string[]}
+ */
+function errorMessages(value) {
+  if (typeof value === 'string') {
+    return [value];
+  }
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => errorMessages(entry));
+  }
+  if (!isRecord(value)) {
+    return [];
+  }
+
+  return ['message', 'error', 'errors']
+    .flatMap((key) => errorMessages(value[key]));
 }
 
 /**

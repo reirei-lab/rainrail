@@ -18,10 +18,11 @@ describe('pull request CI workflow', () => {
     expect(workflow).not.toContain('issues:');
   });
 
-  it('uses read permissions by default and scopes VRT comment write permission to a separate trusted job', () => {
+  it('uses read-only GitHub token permissions for the VRT comment job', () => {
     expect(workflow).toMatch(/^permissions:\n {2}contents: read$/m);
     expect(workflow).not.toMatch(/^ {2}issues: write$/m);
-    expect(workflow).toMatch(/^ {2}dashboard-vrt-comment:[\s\S]*?^ {4}permissions:\n {6}contents: read\n {6}pull-requests: write$/m);
+    expect(workflow).toMatch(/^ {2}dashboard-vrt-comment:[\s\S]*?^ {4}permissions:\n {6}contents: read$/m);
+    expect(workflow).not.toMatch(/^ {6}pull-requests: write$/m);
     expect(workflow).not.toContain('deployments: write');
     expect(workflow.match(/persist-credentials: false/g)).toHaveLength(4);
   });

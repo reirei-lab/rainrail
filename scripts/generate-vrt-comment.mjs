@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url';
  *   title: string;
  *   status?: 'missing-baseline' | 'missing-diff';
  *   before?: string;
- *   after: string;
+ *   after?: string;
  *   diff?: string;
  * }} VrtSummaryCase
  *

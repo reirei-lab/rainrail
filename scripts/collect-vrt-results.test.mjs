@@ -94,6 +94,56 @@ describe('collectVrtResults', () => {
     expect(readFileSync(join(outputDir, 'new-card-desktop', 'after.png'), 'utf8')).toBe('new-card');
   });
 
+  it('reports missing baselines from the Playwright report even when no actual attachment exists', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rainrail-vrt-'));
+    const resultsDir = join(root, 'test-results', 'dashboard');
+    const outputDir = join(root, 'vrt-results');
+    const reportPath = join(resultsDir, 'playwright-report.json');
+    mkdirSync(resultsDir, { recursive: true });
+    writeFileSync(reportPath, JSON.stringify({
+      suites: [
+        {
+          title: 'dashboard-smoke.spec.ts',
+          specs: [
+            {
+              title: 'visual baselines',
+              tests: [
+                {
+                  title: 'new card desktop',
+                  status: 'unexpected',
+                  results: [
+                    {
+                      status: 'failed',
+                      error: {
+                        message: `Error: A snapshot doesn't exist at ${join(resultsDir, 'dashboard-smoke.spec.ts-snapshots', 'new-card-desktop.png')}.`,
+                      },
+                      attachments: [],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    }));
+
+    const summary = await collectVrtResults({ resultsDir, outputDir, reportPath });
+
+    expect(summary).toEqual({
+      changed: true,
+      totalChanged: 1,
+      cases: [
+        {
+          id: 'new-card-desktop',
+          title: 'New Card Desktop',
+          status: 'missing-baseline',
+        },
+      ],
+    });
+    expect(JSON.parse(readFileSync(join(outputDir, 'summary.json'), 'utf8'))).toEqual(summary);
+  });
+
   it('ignores screenshot mismatches from retry attempts that finish flaky', async () => {
     const root = await mkdtemp(join(tmpdir(), 'rainrail-vrt-'));
     const resultsDir = join(root, 'test-results', 'dashboard');
