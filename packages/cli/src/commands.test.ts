@@ -1283,8 +1283,40 @@ describe('Rainrail CLI built-in commands', () => {
       });
       expect(result.stdout).toContain('Bind Host: 0.0.0.0');
       expect(result.stdout).toContain('URL Host: dashboard.local');
+      expect(result.stdout).toContain('Access URLs: http://dashboard.local:9001');
+      expect(result.stdout).toContain('Public bind note: 0.0.0.0 accepts connections on all interfaces, but browsers should use an allowed LAN/Tailscale/localhost name.');
+      expect(result.stdout).toContain('Dashboard Auth: required; configured scopes: read-only, operator');
       expect(result.stdout).toContain('Dashboard: http://dashboard.local:9001/dashboard');
       expect(result.stdout).not.toContain('http://0.0.0.0:9001');
+    });
+  });
+
+  it('falls back to localhost guidance for public rainrail start without configured allowed hosts', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'public-server-without-allowed-hosts');
+      let startOptions: RainrailStartOptions | undefined;
+
+      const result = runRainrailCli(['start', '--host', '0.0.0.0', '--port', '9002'], {
+        cwd: projectRoot,
+        serverStarter: (options) => {
+          startOptions = options;
+          return { stop: () => undefined };
+        },
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+      expect(startOptions).toMatchObject({
+        host: '0.0.0.0',
+        port: 9002,
+        allowedHosts: [],
+      });
+      expect(result.stdout).toContain('Bind Host: 0.0.0.0');
+      expect(result.stdout).toContain('URL Host: 127.0.0.1');
+      expect(result.stdout).toContain('Access URLs: http://127.0.0.1:9002 (local fallback)');
+      expect(result.stdout).toContain('Remote access note: add the LAN IP, Tailscale hostname, or DNS name to server.allowedHosts before using it from another machine.');
+      expect(result.stdout).toContain('Dashboard Auth: required; configured scopes: read-only, operator');
+      expect(result.stdout).not.toContain('http://0.0.0.0:9002');
     });
   });
 
@@ -1378,6 +1410,37 @@ describe('Rainrail CLI built-in commands', () => {
         databasePath: join(projectRoot, '.tmp', 'dashboard-demo.sqlite'),
         eventLimit: 250,
       });
+    });
+  });
+
+  it('makes demo mode auth wording explicit for public rainrail start URLs', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'public-dashboard-demo-options');
+      let startOptions: RainrailStartOptions | undefined;
+
+      const result = runRainrailCli(['start', '--demo', '--host', '0.0.0.0', '--port', '9003'], {
+        cwd: projectRoot,
+        env: {
+          RAINRAIL_ALLOWED_HOSTS: 'rainrail-demo.tailnet.test',
+        },
+        serverStarter: (options) => {
+          startOptions = options;
+          return { stop: () => undefined };
+        },
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+      expect(startOptions).toMatchObject({
+        host: '0.0.0.0',
+        port: 9003,
+        allowedHosts: ['rainrail-demo.tailnet.test'],
+      });
+      expect(result.stdout).toContain('Access URLs: http://rainrail-demo.tailnet.test:9003');
+      expect(result.stdout).toContain('Dashboard demo: http://rainrail-demo.tailnet.test:9003/dashboard?demo=1');
+      expect(result.stdout).toContain('Dashboard demo note: public bind still requires dashboard auth for API/events; demo=1 is not a remote auth bypass.');
+      expect(result.stdout).toContain('Dashboard Auth: required; configured scopes: read-only, operator');
+      expect(result.stdout).not.toContain('http://0.0.0.0:9003');
     });
   });
 
@@ -8629,6 +8692,7 @@ describe('Rainrail CLI built-in commands', () => {
         server: {
           host: '127.0.0.1',
           port: 8787,
+          allowedHosts: [],
         },
         dashboardAuth: {},
         sourceBundles: [],

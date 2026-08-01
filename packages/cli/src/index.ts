@@ -3651,6 +3651,8 @@ function parseStartConfigPort(value: unknown, label: string): number | { readonl
 function formatStartOutput(options: RainrailStartOptions): string {
   const displayHost = displayUrlHostForBind(options.host, options.allowedHosts);
   const baseUrl = `http://${formatUrlHost(displayHost)}:${options.port}`;
+  const publicBind = isPublicBindHost(options.host);
+  const accessUrlRows = formatPublicBindAccessUrlRows(options, displayHost);
   const localIntakeRows = options.sources.map((source) =>
     `  ${source.name} (${source.sourceType}): ${baseUrl}${source.endpoint}`
   );
@@ -3658,6 +3660,7 @@ function formatStartOutput(options: RainrailStartOptions): string {
     options.dashboardAuth,
     options.configPath,
     options.generatedDashboardAuthScopes ?? [],
+    { authRequired: publicBind },
   );
   const dashboardRoutes = [
     '/en/dashboard/events',
@@ -3675,6 +3678,7 @@ function formatStartOutput(options: RainrailStartOptions): string {
     `Bind Host: ${options.host}`,
     `URL Host: ${displayHost}`,
     `Port: ${options.port}`,
+    ...accessUrlRows,
     `Health: ${baseUrl}/healthz`,
     `Dashboard: ${baseUrl}/dashboard`,
     `Dashboard routes: ${dashboardRoutes.join(', ')}`,
@@ -3684,6 +3688,9 @@ function formatStartOutput(options: RainrailStartOptions): string {
     `Dashboard status API: ${baseUrl}/api/v1/dashboard/status`,
     ...(options.demoMode ? [`Dashboard demo API: ${baseUrl}/api/v1/overview?demo=1`] : []),
     ...(options.demoMode ? [`Dashboard demo status API: ${baseUrl}/api/v1/dashboard/status?demo=1`] : []),
+    ...(options.demoMode && publicBind ? [
+      'Dashboard demo note: public bind still requires dashboard auth for API/events; demo=1 is not a remote auth bypass.',
+    ] : []),
     ...dashboardAuthRows,
     `Event Stream: ${baseUrl}/events`,
     ...(localIntakeRows.length === 0 ? [] : [
@@ -3699,6 +3706,7 @@ function formatDashboardAuthRows(
   auth: RainrailDashboardAuth,
   configPath: string,
   generatedScopes: readonly DashboardAuthScope[] = [],
+  options: { readonly authRequired?: boolean } = {},
 ): readonly string[] {
   const scopes = [
     auth.readOnlyToken === undefined ? undefined : 'read-only',
@@ -3711,7 +3719,7 @@ function formatDashboardAuthRows(
       ...(generatedScopes === undefined || generatedScopes.length === 0
         ? []
         : [`Dashboard Auth: generated scopes: ${generatedScopes.join(', ')}`]),
-      `Dashboard Auth: configured scopes: ${scopes.join(', ')}`,
+      `Dashboard Auth: ${options.authRequired === true ? 'required; ' : ''}configured scopes: ${scopes.join(', ')}`,
     ];
   }
 
@@ -3719,6 +3727,23 @@ function formatDashboardAuthRows(
     'Dashboard Auth: not configured',
     `Run \`${formatDashboardAuthOnlySetupCommand({ config: configPath })}\` to generate local dashboardAuth tokens.`,
     `Or set dashboardAuth.readOnlyToken, dashboardAuth.operatorToken, or dashboardAuth.adminToken in ${configPath}.`,
+  ];
+}
+
+function formatPublicBindAccessUrlRows(options: RainrailStartOptions, displayHost: string): readonly string[] {
+  if (!isPublicBindHost(options.host)) {
+    return [];
+  }
+  const accessUrls = options.allowedHosts.length === 0
+    ? [`http://${formatUrlHost(displayHost)}:${options.port} (local fallback)`]
+    : options.allowedHosts.map((host) => `http://${formatUrlHost(host)}:${options.port}`);
+
+  return [
+    `Access URLs: ${accessUrls.join(', ')}`,
+    `Public bind note: ${options.host} accepts connections on all interfaces, but browsers should use an allowed LAN/Tailscale/localhost name.`,
+    ...(options.allowedHosts.length === 0 ? [
+      'Remote access note: add the LAN IP, Tailscale hostname, or DNS name to server.allowedHosts before using it from another machine.',
+    ] : []),
   ];
 }
 
@@ -3737,10 +3762,14 @@ function formatDashboardAuthOnlySetupCommand(
 }
 
 function displayUrlHostForBind(bindHost: string, allowedHosts: readonly string[]): string {
-  if (bindHost === '0.0.0.0' || bindHost === '::' || bindHost === '[::]') {
+  if (isPublicBindHost(bindHost)) {
     return allowedHosts[0] ?? (bindHost === '0.0.0.0' ? '127.0.0.1' : '::1');
   }
   return bindHost;
+}
+
+function isPublicBindHost(host: string): boolean {
+  return host === '0.0.0.0' || host === '::' || host === '[::]';
 }
 
 function formatUrlHost(host: string): string {
@@ -6468,6 +6497,7 @@ function formatRainrailConfig(projectName: string): string {
     server: {
       host: '127.0.0.1',
       port: 8787,
+      allowedHosts: [],
     },
     dashboardAuth: {},
     sourceBundles: [],

@@ -42,6 +42,14 @@ describe('local dashboard start documentation', () => {
       'Bind Host: 127.0.0.1',
       'URL Host: 127.0.0.1',
       'server.allowedHosts',
+      '"host": "0.0.0.0"',
+      '"allowedHosts": ["192.168.10.113", "rainrail.local"]',
+      '"readOnlyToken": "${RAINRAIL_DASHBOARD_READ_ONLY_TOKEN}"',
+      '"operatorToken": "${RAINRAIL_DASHBOARD_OPERATOR_TOKEN}"',
+      'Use `rainrail setup --dashboard-auth-only --yes` only when you want Rainrail to',
+      'write local concrete tokens into the selected config file',
+      'The repository demo launcher intentionally stays on',
+      '`127.0.0.1` because it is for local fixture inspection',
       'Dashboard: http://dashboard.local:8787/dashboard',
       '## Open from LAN or Tailscale',
       '`server.allowedHosts` must include the exact LAN IP',
@@ -169,6 +177,7 @@ describe('local dashboard start documentation', () => {
     expect(cliCommandsTest).toContain('Bind Host: 127.0.0.1');
     expect(cliCommandsTest).toContain('URL Host: 127.0.0.1');
     expect(cliCommandsTest).toContain('URL Host: dashboard.local');
+    expect(cliCommandsTest).toContain('allowedHosts: []');
     expect(cliCommandsTest).toContain('Dashboard: http://127.0.0.1:8787/dashboard');
     expect(cliCommandsTest).toContain('Dashboard: http://dashboard.local:9001/dashboard');
     expect(cliCommandsTest).toContain('Dashboard routes: /en/dashboard/events');

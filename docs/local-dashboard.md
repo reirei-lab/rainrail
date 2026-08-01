@@ -111,57 +111,63 @@ screenshots, and avoid forwarding the local dashboard directly to the public
 Internet. This local dashboard is separate from the Cloudflare Pages
 product/docs site and the Cloudflare Worker operational surface.
 
-1. Configure Rainrail to listen on all interfaces and allow only the names or
-   addresses that operators will actually open:
+For a LAN or Tailscale machine that should be reachable from another browser,
+keep the bind host separate from the browser hosts and keep dashboard tokens in
+environment-owned secrets. Configure Rainrail to listen on all interfaces and
+allow only the names or addresses that operators will actually open:
 
-   ```json
-   {
-     "server": {
-       "host": "0.0.0.0",
-       "port": 8787,
-       "allowedHosts": [
-         "192.168.10.113",
-         "rainrail-dev.local",
-         "100.101.102.103",
-         "rainrail-dev.tailnet-name.ts.net"
-       ]
-     },
-     "dashboardAuth": {
-       "readOnlyToken": "${RAINRAIL_DASHBOARD_READ_ONLY_TOKEN}",
-       "operatorToken": "${RAINRAIL_DASHBOARD_OPERATOR_TOKEN}"
-     }
-   }
-   ```
+```json
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8787,
+    "allowedHosts": ["192.168.10.113", "rainrail.local"]
+  },
+  "dashboardAuth": {
+    "readOnlyToken": "${RAINRAIL_DASHBOARD_READ_ONLY_TOKEN}",
+    "operatorToken": "${RAINRAIL_DASHBOARD_OPERATOR_TOKEN}"
+  }
+}
+```
 
-   `server.allowedHosts` must include the exact LAN IP, Tailscale IP, MagicDNS
-   name, or hostname that appears in the browser URL. It is a Host header
-   allowlist, not a list of network interfaces.
+`server.allowedHosts` must include the exact LAN IP, Tailscale IP, MagicDNS
+name, or hostname that appears in the browser URL. It is a Host header
+allowlist, not a list of network interfaces. For Tailscale, add the tailnet IP
+or MagicDNS name that the browser will use, such as `100.101.102.103` or
+`rainrail-dev.tailnet-name.ts.net`.
 
-2. Start Rainrail:
+Start Rainrail:
 
-   ```sh
-   rainrail start
-   ```
+```sh
+rainrail start
+```
 
-   `0.0.0.0` is never the browser URL. It only tells Rainrail which interfaces
-   to bind. Use the actual machine address from another device instead:
+`0.0.0.0` is never the browser URL. It only tells Rainrail which interfaces to
+bind. Use the actual machine address from another device instead:
 
-   ```text
-   http://192.168.10.113:8787/dashboard
-   http://rainrail-dev.local:8787/dashboard
-   http://100.101.102.103:8787/dashboard
-   http://rainrail-dev.tailnet-name.ts.net:8787/dashboard
-   ```
+```text
+http://192.168.10.113:8787/dashboard
+http://rainrail.local:8787/dashboard
+http://100.101.102.103:8787/dashboard
+http://rainrail-dev.tailnet-name.ts.net:8787/dashboard
+```
 
-3. Paste a configured dashboard token into the dashboard auth field. Use
-   `dashboardAuth.readOnlyToken` for viewing and `dashboardAuth.operatorToken`
-   when you need local operator commands.
+Paste a configured dashboard token into the dashboard auth field. Use
+`dashboardAuth.readOnlyToken` for viewing and `dashboardAuth.operatorToken`
+when you need local operator commands.
 
-4. If the page does not load from another machine, allow inbound connections to
-   the chosen port in the OS or network firewall. Common places to check are
-   macOS Firewall application prompts, Windows Defender Firewall inbound rules,
-   Linux firewall rules such as `ufw` / `firewalld` / `iptables`, router client
-   isolation, and Tailscale ACLs.
+Do not write real token values into example configs, docs, screenshots, issue
+comments, or copied terminal output. Use `rainrail setup --dashboard-auth-only --yes` only when you want Rainrail to
+write local concrete tokens into the selected config file. If
+`dashboardAuth.readOnlyToken` and
+`dashboardAuth.operatorToken` already point at environment references, setup and
+startup preserve those references instead of printing or replacing the backing
+secret values.
+
+If the page does not load from another machine, allow inbound connections to
+the chosen port in the OS or network firewall. Check macOS Firewall prompts,
+Windows Defender Firewall inbound rules, Linux firewall rules such as `ufw` /
+`firewalld` / `iptables`, router client isolation, and Tailscale ACLs.
 
 If auth works on `127.0.0.1` but fails from LAN or Tailscale, compare the
 browser URL with `server.allowedHosts`. A request can be rejected before token
@@ -197,7 +203,11 @@ minimal demo config under `.tmp/dashboard-demo/`, runs
 `node scripts/seed-dashboard-demo-db.mjs`, then starts `rainrail start --demo`
 with `RAINRAIL_DASHBOARD_DEMO=1`. The default demo DB path is
 `.tmp/dashboard-demo.sqlite`, and `rainrail start --demo` reads it as a SQLite
-operational store. The CLI prints both normal and explicit demo URLs:
+operational store. The repository demo launcher intentionally stays on
+`127.0.0.1` because it is for local fixture inspection, not a shared LAN
+dashboard. Use normal `rainrail start` with the public bind config above when
+another machine needs access. The CLI prints both normal and explicit demo
+URLs:
 
 ```text
 Dashboard demo: http://127.0.0.1:8787/dashboard?demo=1
