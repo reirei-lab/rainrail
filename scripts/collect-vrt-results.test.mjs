@@ -56,6 +56,44 @@ describe('collectVrtResults', () => {
     });
   });
 
+  it('fails instead of writing a no-diff summary when an explicit Playwright report is missing', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rainrail-vrt-'));
+    const resultsDir = join(root, 'test-results', 'dashboard');
+    const outputDir = join(root, 'vrt-results');
+    mkdirSync(resultsDir, { recursive: true });
+
+    await expect(collectVrtResults({
+      resultsDir,
+      outputDir,
+      reportPath: join(resultsDir, 'missing-report.json'),
+    })).rejects.toThrow(/Playwright JSON report was not found/);
+  });
+
+  it('reports missing baselines as changed VRT cases instead of dropping them', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rainrail-vrt-'));
+    const resultsDir = join(root, 'test-results', 'dashboard');
+    const failureDir = join(resultsDir, 'dashboard-smoke-matches-dashboard-route-visual-baselines');
+    const outputDir = join(root, 'vrt-results');
+    mkdirSync(failureDir, { recursive: true });
+    writeFileSync(join(failureDir, 'new-card-desktop-actual.png'), 'new-card');
+
+    const summary = await collectVrtResults({ resultsDir, outputDir });
+
+    expect(summary).toEqual({
+      changed: true,
+      totalChanged: 1,
+      cases: [
+        {
+          id: 'new-card-desktop',
+          title: 'New Card Desktop',
+          status: 'missing-baseline',
+          after: 'vrt-results/new-card-desktop/after.png',
+        },
+      ],
+    });
+    expect(readFileSync(join(outputDir, 'new-card-desktop', 'after.png'), 'utf8')).toBe('new-card');
+  });
+
   it('ignores screenshot mismatches from retry attempts that finish flaky', async () => {
     const root = await mkdtemp(join(tmpdir(), 'rainrail-vrt-'));
     const resultsDir = join(root, 'test-results', 'dashboard');
@@ -109,5 +147,55 @@ describe('collectVrtResults', () => {
     expect(summary.cases).toHaveLength(1);
     expect(summary.cases[0]?.id).toBe('failed-case-desktop');
     expect(readFileSync(join(outputDir, 'failed-case-desktop', 'after.png'), 'utf8')).toBe('failed-case-desktop-after');
+  });
+
+  it('deduplicates the same unexpected screenshot across failed retry attempts', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rainrail-vrt-'));
+    const resultsDir = join(root, 'test-results', 'dashboard');
+    const outputDir = join(root, 'vrt-results');
+    const firstAttemptDir = join(resultsDir, 'attempt-1');
+    const retryDir = join(resultsDir, 'attempt-2');
+    const reportPath = join(resultsDir, 'playwright-report.json');
+    for (const dir of [firstAttemptDir, retryDir]) {
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'persistent-case-desktop-expected.png'), `${dir}-before`);
+      writeFileSync(join(dir, 'persistent-case-desktop-actual.png'), `${dir}-after`);
+      writeFileSync(join(dir, 'persistent-case-desktop-diff.png'), `${dir}-diff`);
+    }
+    writeFileSync(reportPath, JSON.stringify({
+      suites: [
+        {
+          specs: [
+            {
+              tests: [
+                {
+                  status: 'unexpected',
+                  results: [
+                    {
+                      status: 'failed',
+                      attachments: [
+                        { name: 'persistent-case-desktop-actual', path: join(firstAttemptDir, 'persistent-case-desktop-actual.png') },
+                      ],
+                    },
+                    {
+                      status: 'failed',
+                      attachments: [
+                        { name: 'persistent-case-desktop-actual', path: join(retryDir, 'persistent-case-desktop-actual.png') },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    }));
+
+    const summary = await collectVrtResults({ resultsDir, outputDir, reportPath });
+
+    expect(summary.cases).toHaveLength(1);
+    expect(summary.cases[0]?.id).toBe('persistent-case-desktop');
+    expect(readFileSync(join(outputDir, 'persistent-case-desktop', 'after.png'), 'utf8')).toBe(`${retryDir}-after`);
   });
 });

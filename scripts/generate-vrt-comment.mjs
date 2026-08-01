@@ -5,9 +5,10 @@ import { pathToFileURL } from 'node:url';
  * @typedef {{
  *   id: string;
  *   title: string;
- *   before: string;
+ *   status?: 'missing-baseline' | 'missing-diff';
+ *   before?: string;
  *   after: string;
- *   diff: string;
+ *   diff?: string;
  * }} VrtSummaryCase
  *
  * @typedef {{
@@ -51,7 +52,7 @@ export function generateVrtComment(summary, options = {}) {
       '',
       '| before | after | diff |',
       '| --- | --- | --- |',
-      `| ![](${markdownPath(caseItem.before)}) | ![](${markdownPath(caseItem.after)}) | ![](${markdownPath(caseItem.diff)}) |`,
+      `| ${imageCell(caseItem.before, 'baseline 未作成')} | ${imageCell(caseItem.after, 'after 未生成')} | ${imageCell(caseItem.diff, 'diff 未生成')} |`,
       '',
     );
   }
@@ -72,6 +73,15 @@ export async function writeVrtComment(input) {
   const summary = JSON.parse(await readFile(input.summaryPath, 'utf8'));
   const options = input.maxCases === undefined ? {} : { maxCases: input.maxCases };
   await writeFile(input.outputPath, generateVrtComment(summary, options));
+}
+
+/**
+ * @param {string | undefined} path
+ * @param {string} fallback
+ * @returns {string}
+ */
+function imageCell(path, fallback) {
+  return path === undefined ? fallback : `![](${markdownPath(path)})`;
 }
 
 /**

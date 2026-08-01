@@ -6,9 +6,10 @@ import { pathToFileURL } from 'node:url';
  * @typedef {{
  *   id: string;
  *   title: string;
- *   before: string;
+ *   status?: 'missing-baseline' | 'missing-diff';
+ *   before?: string;
  *   after: string;
- *   diff: string;
+ *   diff?: string;
  * }} VrtSummaryCase
  *
  * @typedef {{
@@ -34,30 +35,46 @@ export async function collectVrtResults(input) {
   await rm(outputDir, { recursive: true, force: true });
   await mkdir(outputDir, { recursive: true });
 
+  /** @type {VrtSummaryCase[]} */
   const cases = [];
   for (const actual of actualFiles) {
     const base = actual.slice(0, -'-actual.png'.length);
     const expected = `${base}-expected.png`;
     const diff = `${base}-diff.png`;
 
-    if (!(await fileExists(expected)) || !(await fileExists(diff))) {
-      continue;
-    }
-
     const id = uniqueCaseId(cases, slugify(basename(base)));
     const caseDir = join(outputDir, id);
+    const hasExpected = await fileExists(expected);
+    const hasDiff = await fileExists(diff);
     await mkdir(caseDir, { recursive: true });
-    await copyFile(expected, join(caseDir, 'before.png'));
     await copyFile(actual, join(caseDir, 'after.png'));
-    await copyFile(diff, join(caseDir, 'diff.png'));
+    if (hasExpected) {
+      await copyFile(expected, join(caseDir, 'before.png'));
+    }
+    if (hasDiff) {
+      await copyFile(diff, join(caseDir, 'diff.png'));
+    }
 
-    cases.push({
+    /** @type {VrtSummaryCase} */
+    const caseItem = {
       id,
       title: titleFromId(id),
-      before: posixPath(relative(dirname(outputDir), join(caseDir, 'before.png'))),
       after: posixPath(relative(dirname(outputDir), join(caseDir, 'after.png'))),
-      diff: posixPath(relative(dirname(outputDir), join(caseDir, 'diff.png'))),
-    });
+    };
+
+    if (hasExpected) {
+      caseItem.before = posixPath(relative(dirname(outputDir), join(caseDir, 'before.png')));
+    } else {
+      caseItem.status = 'missing-baseline';
+    }
+
+    if (hasDiff) {
+      caseItem.diff = posixPath(relative(dirname(outputDir), join(caseDir, 'diff.png')));
+    } else if (hasExpected) {
+      caseItem.status = 'missing-diff';
+    }
+
+    cases.push(caseItem);
   }
 
   const summary = {
@@ -76,9 +93,10 @@ export async function collectVrtResults(input) {
  */
 async function actualFilesForCollection(input) {
   if (input.reportPath !== undefined) {
-    return await fileExists(input.reportPath)
-      ? unexpectedActualFilesFromReport(input.reportPath)
-      : [];
+    if (!(await fileExists(input.reportPath))) {
+      throw new Error(`Playwright JSON report was not found: ${input.reportPath}`);
+    }
+    return unexpectedActualFilesFromReport(input.reportPath);
   }
 
   return (await findFiles(input.resultsDir))
@@ -92,7 +110,7 @@ async function actualFilesForCollection(input) {
  */
 async function unexpectedActualFilesFromReport(reportPath) {
   const report = JSON.parse(await readFile(reportPath, 'utf8'));
-  const files = new Set();
+  const filesBySnapshot = new Map();
 
   for (const test of collectReportTests(report)) {
     if (!isRecord(test) || test.status !== 'unexpected' || !Array.isArray(test.results)) {
@@ -111,13 +129,21 @@ async function unexpectedActualFilesFromReport(reportPath) {
 
         const attachmentPath = resolveAttachmentPath(reportPath, attachment.path);
         if (basename(attachmentPath).endsWith('-actual.png') && await fileExists(attachmentPath)) {
-          files.add(attachmentPath);
+          filesBySnapshot.set(snapshotKey(attachmentPath), attachmentPath);
         }
       }
     }
   }
 
-  return [...files].sort();
+  return [...filesBySnapshot.values()].sort();
+}
+
+/**
+ * @param {string} actualPath
+ * @returns {string}
+ */
+function snapshotKey(actualPath) {
+  return slugify(basename(actualPath).slice(0, -'-actual.png'.length));
 }
 
 /**

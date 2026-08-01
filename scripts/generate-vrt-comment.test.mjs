@@ -51,6 +51,27 @@ describe('generateVrtComment', () => {
     ].join('\n'));
   });
 
+  it('renders missing baseline cases without pretending all three images exist', () => {
+    const markdown = generateVrtComment({
+      changed: true,
+      totalChanged: 1,
+      cases: [
+        {
+          id: 'new-card-desktop',
+          title: 'New Card Desktop',
+          status: 'missing-baseline',
+          after: 'vrt-results/new-card-desktop/after.png',
+        },
+      ],
+    });
+
+    expect(markdown).toContain('### New Card Desktop');
+    expect(markdown).toContain('baseline 未作成');
+    expect(markdown).toContain('![](./vrt-results/new-card-desktop/after.png)');
+    expect(markdown).toContain('diff 未生成');
+    expect(markdown).not.toContain('undefined');
+  });
+
   it('writes a comment from a summary file', async () => {
     const root = await mkdtemp(join(tmpdir(), 'rainrail-vrt-comment-'));
     const summaryPath = join(root, 'vrt-results', 'summary.json');
