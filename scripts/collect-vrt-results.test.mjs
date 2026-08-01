@@ -144,6 +144,58 @@ describe('collectVrtResults', () => {
     expect(JSON.parse(readFileSync(join(outputDir, 'summary.json'), 'utf8'))).toEqual(summary);
   });
 
+  it('uses the expected attachment as the before image for reported screenshot mismatches', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rainrail-vrt-'));
+    const resultsDir = join(root, 'test-results', 'dashboard');
+    const failureDir = join(resultsDir, 'dashboard-smoke-matches-dashboard-route-visual-baselines');
+    const snapshotDir = join(root, 'e2e', 'dashboard', 'dashboard-smoke.spec.ts-snapshots');
+    const outputDir = join(root, 'vrt-results');
+    const reportPath = join(resultsDir, 'playwright-report.json');
+    mkdirSync(failureDir, { recursive: true });
+    mkdirSync(snapshotDir, { recursive: true });
+    writeFileSync(join(snapshotDir, 'reported-card-desktop-dashboard-chromium.png'), 'baseline');
+    writeFileSync(join(failureDir, 'reported-card-desktop-dashboard-chromium-actual.png'), 'after');
+    writeFileSync(join(failureDir, 'reported-card-desktop-dashboard-chromium-diff.png'), 'diff');
+    writeFileSync(reportPath, JSON.stringify({
+      suites: [
+        {
+          specs: [
+            {
+              tests: [
+                {
+                  status: 'unexpected',
+                  results: [
+                    {
+                      status: 'failed',
+                      attachments: [
+                        { name: 'reported-card-desktop-dashboard-chromium-expected', path: join(snapshotDir, 'reported-card-desktop-dashboard-chromium.png') },
+                        { name: 'reported-card-desktop-dashboard-chromium-actual', path: join(failureDir, 'reported-card-desktop-dashboard-chromium-actual.png') },
+                        { name: 'reported-card-desktop-dashboard-chromium-diff', path: join(failureDir, 'reported-card-desktop-dashboard-chromium-diff.png') },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    }));
+
+    const summary = await collectVrtResults({ resultsDir, outputDir, reportPath });
+
+    expect(summary.cases).toEqual([
+      {
+        id: 'reported-card-desktop-dashboard-chromium',
+        title: 'Reported Card Desktop Dashboard Chromium',
+        before: 'vrt-results/reported-card-desktop-dashboard-chromium/before.png',
+        after: 'vrt-results/reported-card-desktop-dashboard-chromium/after.png',
+        diff: 'vrt-results/reported-card-desktop-dashboard-chromium/diff.png',
+      },
+    ]);
+    expect(readFileSync(join(outputDir, 'reported-card-desktop-dashboard-chromium', 'before.png'), 'utf8')).toBe('baseline');
+  });
+
   it('ignores screenshot mismatches from retry attempts that finish flaky', async () => {
     const root = await mkdtemp(join(tmpdir(), 'rainrail-vrt-'));
     const resultsDir = join(root, 'test-results', 'dashboard');
@@ -247,6 +299,58 @@ describe('collectVrtResults', () => {
     expect(summary.cases).toHaveLength(1);
     expect(summary.cases[0]?.id).toBe('persistent-case-desktop');
     expect(readFileSync(join(outputDir, 'persistent-case-desktop', 'after.png'), 'utf8')).toBe(`${retryDir}-after`);
+  });
+
+  it('uses only the final failed retry result so recovered snapshots are not reported', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rainrail-vrt-'));
+    const resultsDir = join(root, 'test-results', 'dashboard');
+    const outputDir = join(root, 'vrt-results');
+    const firstAttemptDir = join(resultsDir, 'attempt-1');
+    const retryDir = join(resultsDir, 'attempt-2');
+    const reportPath = join(resultsDir, 'playwright-report.json');
+    for (const dir of [firstAttemptDir, retryDir]) {
+      mkdirSync(dir, { recursive: true });
+    }
+    for (const id of ['recovered-case-desktop', 'final-case-desktop']) {
+      const dir = id.startsWith('recovered') ? firstAttemptDir : retryDir;
+      writeFileSync(join(dir, `${id}-expected.png`), `${id}-before`);
+      writeFileSync(join(dir, `${id}-actual.png`), `${id}-after`);
+      writeFileSync(join(dir, `${id}-diff.png`), `${id}-diff`);
+    }
+    writeFileSync(reportPath, JSON.stringify({
+      suites: [
+        {
+          specs: [
+            {
+              tests: [
+                {
+                  status: 'unexpected',
+                  results: [
+                    {
+                      status: 'failed',
+                      attachments: [
+                        { name: 'recovered-case-desktop-actual', path: join(firstAttemptDir, 'recovered-case-desktop-actual.png') },
+                      ],
+                    },
+                    {
+                      status: 'failed',
+                      attachments: [
+                        { name: 'final-case-desktop-actual', path: join(retryDir, 'final-case-desktop-actual.png') },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    }));
+
+    const summary = await collectVrtResults({ resultsDir, outputDir, reportPath });
+
+    expect(summary.cases).toHaveLength(1);
+    expect(summary.cases[0]?.id).toBe('final-case-desktop');
   });
 
   it('keeps same-named screenshots from different tests as separate VRT cases', async () => {

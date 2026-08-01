@@ -1,4 +1,4 @@
-import { access, copyFile, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { access, copyFile, lstat, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -17,6 +17,8 @@ import { pathToFileURL } from 'node:url';
  *   idHint: string;
  *   status?: 'missing-baseline';
  *   actualPath?: string;
+ *   expectedPath?: string;
+ *   diffPath?: string;
  * }} VrtCandidate
  *
  * @typedef {{
@@ -27,15 +29,17 @@ import { pathToFileURL } from 'node:url';
  */
 
 /**
- * @param {{ resultsDir: string; outputDir: string; reportPath?: string }} input
+ * @param {{ resultsDir: string; outputDir: string; reportPath?: string; artifactRoot?: string }} input
  * @returns {Promise<VrtSummary>}
  */
 export async function collectVrtResults(input) {
   const resultsDir = resolve(input.resultsDir);
   const outputDir = resolve(input.outputDir);
+  const artifactRoot = input.artifactRoot === undefined ? undefined : resolve(input.artifactRoot);
   const summaryPath = join(outputDir, 'summary.json');
   const candidates = await candidatesForCollection({
     resultsDir,
+    ...(artifactRoot === undefined ? {} : { artifactRoot }),
     ...(input.reportPath === undefined ? {} : { reportPath: resolve(input.reportPath) }),
   });
 
@@ -57,19 +61,19 @@ export async function collectVrtResults(input) {
 
     const actual = candidate.actualPath;
     const base = actual.slice(0, -'-actual.png'.length);
-    const expected = `${base}-expected.png`;
-    const diff = `${base}-diff.png`;
+    const expected = candidate.expectedPath ?? `${base}-expected.png`;
+    const diff = candidate.diffPath ?? `${base}-diff.png`;
 
     const caseDir = join(outputDir, id);
     const hasExpected = await fileExists(expected);
     const hasDiff = await fileExists(diff);
     await mkdir(caseDir, { recursive: true });
-    await copyFile(actual, join(caseDir, 'after.png'));
+    await copyRegularFile(actual, join(caseDir, 'after.png'));
     if (hasExpected) {
-      await copyFile(expected, join(caseDir, 'before.png'));
+      await copyRegularFile(expected, join(caseDir, 'before.png'));
     }
     if (hasDiff) {
-      await copyFile(diff, join(caseDir, 'diff.png'));
+      await copyRegularFile(diff, join(caseDir, 'diff.png'));
     }
 
     /** @type {VrtSummaryCase} */
@@ -105,7 +109,7 @@ export async function collectVrtResults(input) {
 }
 
 /**
- * @param {{ resultsDir: string; reportPath?: string }} input
+ * @param {{ resultsDir: string; reportPath?: string; artifactRoot?: string }} input
  * @returns {Promise<VrtCandidate[]>}
  */
 async function candidatesForCollection(input) {
@@ -113,7 +117,7 @@ async function candidatesForCollection(input) {
     if (!(await fileExists(input.reportPath))) {
       throw new Error(`Playwright JSON report was not found: ${input.reportPath}`);
     }
-    return unexpectedCandidatesFromReport(input.reportPath);
+    return unexpectedCandidatesFromReport(input.reportPath, input.artifactRoot);
   }
 
   const actualFiles = (await findFiles(input.resultsDir))
@@ -131,9 +135,10 @@ async function candidatesForCollection(input) {
 
 /**
  * @param {string} reportPath
+ * @param {string | undefined} artifactRoot
  * @returns {Promise<VrtCandidate[]>}
  */
-async function unexpectedCandidatesFromReport(reportPath) {
+async function unexpectedCandidatesFromReport(reportPath, artifactRoot) {
   const report = JSON.parse(await readFile(reportPath, 'utf8'));
   /** @type {Map<string, VrtCandidate>} */
   const candidatesBySnapshot = new Map();
@@ -143,39 +148,63 @@ async function unexpectedCandidatesFromReport(reportPath) {
       continue;
     }
 
-    for (const result of entry.test.results) {
-      if (!isRecord(result)) {
+    const result = entry.test.results.findLast(isRecord);
+    if (result === undefined) {
+      continue;
+    }
+
+    let actualAttachmentCount = 0;
+    const attachments = Array.isArray(result.attachments) ? result.attachments : [];
+    /** @type {Map<string, VrtCandidate>} */
+    const resultCandidates = new Map();
+    for (const attachment of attachments) {
+      if (!isRecord(attachment) || typeof attachment.path !== 'string') {
         continue;
       }
 
-      let actualAttachmentCount = 0;
-      const attachments = Array.isArray(result.attachments) ? result.attachments : [];
-      for (const attachment of attachments) {
-        if (!isRecord(attachment) || typeof attachment.path !== 'string') {
-          continue;
-        }
-
-        const attachmentPath = resolveAttachmentPath(reportPath, attachment.path);
-        if (basename(attachmentPath).endsWith('-actual.png') && await fileExists(attachmentPath)) {
-          actualAttachmentCount += 1;
-          const key = snapshotKey(entry.identity, attachment, attachmentPath);
-          candidatesBySnapshot.set(key, {
-            key,
-            idHint: basename(attachmentPath.slice(0, -'-actual.png'.length)),
-            actualPath: attachmentPath,
-          });
-        }
+      const attachmentPath = resolveAttachmentPath(reportPath, attachment.path, artifactRoot);
+      if (artifactRoot !== undefined && !isWithinRoot(artifactRoot, attachmentPath)) {
+        continue;
+      }
+      if (!(await fileExists(attachmentPath))) {
+        continue;
       }
 
-      if (actualAttachmentCount === 0 && hasMissingBaselineError(result)) {
-        const idHint = missingBaselineIdHint(result) ?? entry.identity.at(-1) ?? 'missing-baseline';
-        const key = [...entry.identity, idHint, 'missing-baseline'].join('\u0000');
-        candidatesBySnapshot.set(key, {
-          key,
-          idHint,
-          status: 'missing-baseline',
-        });
+      const kind = attachmentKind(attachment, attachmentPath);
+      if (kind === undefined) {
+        continue;
       }
+
+      const key = snapshotKey(entry.identity, attachment, attachmentPath);
+      const candidate = resultCandidates.get(key) ?? {
+        key,
+        idHint: snapshotIdHint(attachment, attachmentPath),
+      };
+      if (kind === 'actual') {
+        actualAttachmentCount += 1;
+        candidate.actualPath = attachmentPath;
+      } else if (kind === 'expected') {
+        candidate.expectedPath = attachmentPath;
+      } else {
+        candidate.diffPath = attachmentPath;
+      }
+      resultCandidates.set(key, candidate);
+    }
+
+    for (const [key, candidate] of resultCandidates) {
+      if (candidate.actualPath !== undefined) {
+        candidatesBySnapshot.set(key, candidate);
+      }
+    }
+
+    if (actualAttachmentCount === 0 && hasMissingBaselineError(result)) {
+      const idHint = missingBaselineIdHint(result) ?? entry.identity.at(-1) ?? 'missing-baseline';
+      const key = [...entry.identity, idHint, 'missing-baseline'].join('\u0000');
+      candidatesBySnapshot.set(key, {
+        key,
+        idHint,
+        status: 'missing-baseline',
+      });
     }
   }
 
@@ -189,13 +218,44 @@ async function unexpectedCandidatesFromReport(reportPath) {
  * @returns {string}
  */
 function snapshotKey(testIdentity, attachment, actualPath) {
-  const attachmentName = typeof attachment.name === 'string'
-    ? attachment.name
-    : basename(actualPath);
   return [
     ...testIdentity,
-    attachmentName.replace(/-actual$/u, '').replace(/-actual\.png$/u, ''),
+    snapshotIdHint(attachment, actualPath),
   ].join('\u0000');
+}
+
+/**
+ * @param {Record<string, unknown>} attachment
+ * @param {string} attachmentPath
+ * @returns {string}
+ */
+function snapshotIdHint(attachment, attachmentPath) {
+  const attachmentName = typeof attachment.name === 'string' && !['actual', 'expected', 'diff'].includes(attachment.name.toLowerCase())
+    ? attachment.name
+    : basename(attachmentPath);
+  return attachmentName
+    .replace(/\.png$/u, '')
+    .replace(/-(actual|expected|diff)$/u, '');
+}
+
+/**
+ * @param {Record<string, unknown>} attachment
+ * @param {string} attachmentPath
+ * @returns {'actual' | 'expected' | 'diff' | undefined}
+ */
+function attachmentKind(attachment, attachmentPath) {
+  const attachmentName = typeof attachment.name === 'string' ? attachment.name.toLowerCase() : '';
+  const filename = basename(attachmentPath).toLowerCase();
+  if (attachmentName.includes('actual') || filename.endsWith('-actual.png')) {
+    return 'actual';
+  }
+  if (attachmentName.includes('expected') || filename.endsWith('-expected.png')) {
+    return 'expected';
+  }
+  if (attachmentName.includes('diff') || filename.endsWith('-diff.png')) {
+    return 'diff';
+  }
+  return undefined;
 }
 
 /**
@@ -295,12 +355,37 @@ function testTitleSegments(test) {
 /**
  * @param {string} reportPath
  * @param {string} attachmentPath
+ * @param {string | undefined} artifactRoot
  * @returns {string}
  */
-function resolveAttachmentPath(reportPath, attachmentPath) {
-  return isAbsolute(attachmentPath)
-    ? attachmentPath
-    : resolve(dirname(reportPath), attachmentPath);
+function resolveAttachmentPath(reportPath, attachmentPath, artifactRoot) {
+  if (artifactRoot !== undefined) {
+    const artifactRelativePath = artifactRelativeAttachmentPath(attachmentPath);
+    if (artifactRelativePath !== undefined) {
+      return resolve(artifactRoot, artifactRelativePath);
+    }
+  }
+
+  if (!isAbsolute(attachmentPath)) {
+    return resolve(dirname(reportPath), attachmentPath);
+  }
+
+  return attachmentPath;
+}
+
+/**
+ * @param {string} attachmentPath
+ * @returns {string | undefined}
+ */
+function artifactRelativeAttachmentPath(attachmentPath) {
+  const normalized = `/${posixPath(attachmentPath)}`;
+  for (const segment of ['/test-results/', '/e2e/']) {
+    const index = normalized.indexOf(segment);
+    if (index !== -1) {
+      return normalized.slice(index + 1);
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -342,6 +427,29 @@ async function fileExists(path) {
   } catch {
     return false;
   }
+}
+
+/**
+ * @param {string} root
+ * @param {string} path
+ * @returns {boolean}
+ */
+function isWithinRoot(root, path) {
+  const relativePath = relative(root, path);
+  return relativePath === '' || (!relativePath.startsWith('..') && !isAbsolute(relativePath));
+}
+
+/**
+ * @param {string} source
+ * @param {string} destination
+ * @returns {Promise<void>}
+ */
+async function copyRegularFile(source, destination) {
+  const stat = await lstat(source);
+  if (!stat.isFile()) {
+    throw new Error(`VRT artifact is not a regular file: ${source}`);
+  }
+  await copyFile(source, destination);
 }
 
 /**
@@ -394,7 +502,7 @@ function posixPath(path) {
 
 /**
  * @param {string[]} argv
- * @returns {{ resultsDir: string; outputDir: string; reportPath?: string }}
+ * @returns {{ resultsDir: string; outputDir: string; reportPath?: string; artifactRoot?: string }}
  */
 function parseArgs(argv) {
   const args = new Map();
@@ -402,10 +510,12 @@ function parseArgs(argv) {
     args.set(argv[index], argv[index + 1]);
   }
   const reportPath = args.get('--report');
+  const artifactRoot = args.get('--artifact-root');
   return {
     resultsDir: args.get('--results-dir') ?? 'test-results/dashboard',
     outputDir: args.get('--output-dir') ?? 'vrt-results',
     ...(reportPath === undefined ? {} : { reportPath }),
+    ...(artifactRoot === undefined ? {} : { artifactRoot }),
   };
 }
 

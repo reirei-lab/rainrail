@@ -5,6 +5,10 @@ const workflow = readFileSync(
   new URL('../.github/workflows/pr-ci.yml', import.meta.url),
   'utf8',
 );
+const dashboardVrtCommentWorkflow = readFileSync(
+  new URL('../.github/workflows/dashboard-vrt-comment.yml', import.meta.url),
+  'utf8',
+);
 const localDashboardDocs = readFileSync(
   new URL('../docs/local-dashboard.md', import.meta.url),
   'utf8',
@@ -21,10 +25,13 @@ describe('pull request CI workflow', () => {
   it('uses read-only GitHub token permissions for the VRT comment job', () => {
     expect(workflow).toMatch(/^permissions:\n {2}contents: read$/m);
     expect(workflow).not.toMatch(/^ {2}issues: write$/m);
-    expect(workflow).toMatch(/^ {2}dashboard-vrt-comment:[\s\S]*?^ {4}permissions:\n {6}contents: read$/m);
+    expect(workflow).not.toContain('dashboard-vrt-comment:');
     expect(workflow).not.toMatch(/^ {6}pull-requests: write$/m);
+    expect(workflow).not.toContain('CML_COMMENT_TOKEN');
+    expect(workflow).not.toContain('REPO_TOKEN:');
+    expect(workflow).not.toContain('cml comment update');
     expect(workflow).not.toContain('deployments: write');
-    expect(workflow.match(/persist-credentials: false/g)).toHaveLength(4);
+    expect(workflow.match(/persist-credentials: false/g)).toHaveLength(3);
   });
 
   it('uses self-hosted only for trusted pull requests with pnpm cached by lockfile', () => {
@@ -51,8 +58,6 @@ describe('pull request CI workflow', () => {
     expect(workflow).toMatch(/^ {2}dashboard-e2e:\n {4}name: Dashboard E2E\n {4}needs: validate\n {4}runs-on: ubuntu-24\.04$/m);
     expect(workflow).toMatch(/^ {6}- name: Install Playwright browser\n {8}run: pnpm exec playwright install --with-deps chromium$/m);
     expect(workflow).toMatch(/^ {6}- name: Run dashboard E2E\n {8}run: pnpm e2e:dashboard$/m);
-    expect(workflow).toMatch(/^ {6}- name: Collect dashboard VRT results\n {8}id: collect-vrt-results\n {8}if: \$\{\{ always\(\) \}\}\n {8}run: node scripts\/collect-vrt-results\.mjs --results-dir test-results\/dashboard --report test-results\/dashboard\/playwright-report\.json --output-dir vrt-results$/m);
-    expect(workflow).toMatch(/^ {6}- name: Generate dashboard VRT comment\n {8}if: \$\{\{ always\(\) && steps\.collect-vrt-results\.outcome == 'success' \}\}\n {8}run: node scripts\/generate-vrt-comment\.mjs --summary vrt-results\/summary\.json --output vrt-comment\.md --max-cases 10$/m);
     expect(workflow).toMatch(/^ {6}- name: Upload dashboard E2E artifacts\n {8}if: \$\{\{ always\(\) \}\}\n {8}uses: actions\/upload-artifact@v7/m);
     expect(workflow).toContain('name: dashboard-e2e-artifacts');
     expect(workflow).toContain('playwright-report/dashboard/');
@@ -60,23 +65,27 @@ describe('pull request CI workflow', () => {
     expect(workflow).toContain('test-results/dashboard/playwright-report.json');
     expect(workflow).toContain('test-results/dashboard/screenshots/');
     expect(workflow).toContain('test-results/dashboard/screenshots/dashboard-demo-screenshot-manifest.json');
-    expect(workflow).toContain('vrt-results/');
-    expect(workflow).toContain('vrt-comment.md');
+    expect(workflow).toContain('e2e/dashboard/dashboard-smoke.spec.ts-snapshots/');
+    expect(workflow).not.toContain('vrt-results/');
+    expect(workflow).not.toContain('vrt-comment.md');
     expect(workflow).toContain('retention-days: 7');
   });
 
-  it('publishes dashboard VRT comments with CML only for trusted same-repository pull requests', () => {
-    expect(workflow).toMatch(/^ {2}dashboard-vrt-comment:\n {4}name: Dashboard VRT PR comment\n {4}needs: dashboard-e2e\n {4}if: >-\n {6}always\(\) &&\n {6}github\.event\.pull_request\.head\.repo\.full_name == github\.repository &&\n {6}contains\(fromJSON\('\["OWNER", "MEMBER", "COLLABORATOR"\]'\), github\.event\.pull_request\.author_association\)\n {4}runs-on: ubuntu-24\.04$/m);
-    expect(workflow).toMatch(/^ {6}- name: Check out repository metadata\n {8}uses: actions\/checkout@v7\n {8}with:\n {10}fetch-depth: 1\n {10}persist-credentials: false$/m);
-    expect(workflow).toMatch(/^ {6}- name: Download dashboard VRT artifacts\n {8}uses: actions\/download-artifact@v7\n {8}continue-on-error: true\n {8}with:\n {10}name: dashboard-e2e-artifacts\n {10}path: \.$/m);
-    expect(workflow).toMatch(/^ {6}- name: Check dashboard VRT comment artifact\n {8}id: vrt-comment\n {8}run: \|/m);
-    expect(workflow).toMatch(/^ {6}- name: Check CML token availability\n {8}id: cml-token\n {8}env:\n {10}CML_COMMENT_TOKEN_CONFIGURED: \$\{\{ secrets\.CML_COMMENT_TOKEN != '' \}\}\n {8}run: \|/m);
-    expect(workflow).toMatch(/^ {6}- name: Set up CML\n {8}if: \$\{\{ steps\.vrt-comment\.outputs\.available == 'true' && steps\.cml-token\.outputs\.available == 'true' \}\}\n {8}uses: iterative\/setup-cml@v2$/m);
-    expect(workflow).toMatch(/^ {6}- name: Publish dashboard VRT PR comment\n {8}if: \$\{\{ steps\.vrt-comment\.outputs\.available == 'true' && steps\.cml-token\.outputs\.available == 'true' \}\}\n {8}run: cml comment update --watermark-title="Rainrail dashboard VRT" vrt-comment\.md\n {8}env:\n {10}REPO_TOKEN: \$\{\{ secrets\.CML_COMMENT_TOKEN \}\}$/m);
-    expect(workflow).toContain('Skipping dashboard VRT PR comment because CML_COMMENT_TOKEN is not configured.');
-    expect(workflow).toContain('Skipping dashboard VRT PR comment because vrt-comment.md was not generated.');
-    expect(workflow).not.toContain('CML_COMMENT_TOKEN: ${{ secrets.CML_COMMENT_TOKEN }}');
-    expect(workflow).not.toContain('REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}');
+  it('publishes dashboard VRT comments from trusted workflow_run tooling', () => {
+    expect(dashboardVrtCommentWorkflow).toMatch(/^on:\n {2}workflow_run:\n {4}workflows:\n {6}- Pull Request CI\n {4}types:\n {6}- completed$/m);
+    expect(dashboardVrtCommentWorkflow).toMatch(/^permissions:\n {2}actions: read\n {2}contents: read\n {2}pull-requests: read$/m);
+    expect(dashboardVrtCommentWorkflow).toContain("github.event.workflow_run.event == 'pull_request'");
+    expect(dashboardVrtCommentWorkflow).toContain('github.event.workflow_run.pull_requests[0].head.repo.full_name == github.repository');
+    expect(dashboardVrtCommentWorkflow).toMatch(/^ {6}- name: Check out trusted tooling\n {8}uses: actions\/checkout@v7\n {8}with:\n {10}fetch-depth: 1\n {10}persist-credentials: false$/m);
+    expect(dashboardVrtCommentWorkflow).toContain('gh run download "${{ github.event.workflow_run.id }}" --repo "$GITHUB_REPOSITORY" --name dashboard-e2e-artifacts --dir dashboard-vrt-artifacts');
+    expect(dashboardVrtCommentWorkflow).toContain('node scripts/collect-vrt-results.mjs --results-dir dashboard-vrt-artifacts/test-results/dashboard --report dashboard-vrt-artifacts/test-results/dashboard/playwright-report.json --artifact-root dashboard-vrt-artifacts --output-dir vrt-results');
+    expect(dashboardVrtCommentWorkflow).toContain('node scripts/generate-vrt-comment.mjs --summary vrt-results/summary.json --output vrt-comment.md --max-cases 10');
+    expect(dashboardVrtCommentWorkflow).toMatch(/^ {6}- name: Remove downloaded PR artifact before CML publish\n {8}if: \$\{\{ steps\.vrt-artifact\.outputs\.available == 'true' \}\}\n {8}run: rm -rf dashboard-vrt-artifacts$/m);
+    expect(dashboardVrtCommentWorkflow).toMatch(/^ {6}- name: Publish dashboard VRT PR comment\n {8}if: \$\{\{ steps\.vrt-artifact\.outputs\.available == 'true' && steps\.cml-token\.outputs\.available == 'true' \}\}\n {8}run: >-\n {10}cml comment update --repo="\$GITHUB_REPOSITORY" --target="pr\/\$\{\{ github\.event\.workflow_run\.pull_requests\[0\]\.number \}\}" --watermark-title="Rainrail dashboard VRT" vrt-comment\.md\n {8}env:\n {10}REPO_TOKEN: \$\{\{ secrets\.CML_COMMENT_TOKEN \}\}$/m);
+    expect(dashboardVrtCommentWorkflow).toContain('Skipping dashboard VRT PR comment because CML_COMMENT_TOKEN is not configured.');
+    expect(dashboardVrtCommentWorkflow).toContain('Skipping dashboard VRT PR comment because dashboard-e2e-artifacts was not uploaded.');
+    expect(dashboardVrtCommentWorkflow).not.toContain('pull-requests: write');
+    expect(dashboardVrtCommentWorkflow).not.toContain('REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}');
   });
 
   it('documents the PAT secret required for dashboard VRT comments', () => {

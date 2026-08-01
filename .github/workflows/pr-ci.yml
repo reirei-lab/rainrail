@@ -146,15 +146,6 @@ jobs:
       - name: Run dashboard E2E
         run: pnpm e2e:dashboard
 
-      - name: Collect dashboard VRT results
-        id: collect-vrt-results
-        if: ${{ always() }}
-        run: node scripts/collect-vrt-results.mjs --results-dir test-results/dashboard --report test-results/dashboard/playwright-report.json --output-dir vrt-results
-
-      - name: Generate dashboard VRT comment
-        if: ${{ always() && steps.collect-vrt-results.outcome == 'success' }}
-        run: node scripts/generate-vrt-comment.mjs --summary vrt-results/summary.json --output vrt-comment.md --max-cases 10
-
       - name: Upload dashboard E2E artifacts
         if: ${{ always() }}
         uses: actions/upload-artifact@v7
@@ -166,61 +157,6 @@ jobs:
             test-results/dashboard/playwright-report.json
             test-results/dashboard/screenshots/
             test-results/dashboard/screenshots/dashboard-demo-screenshot-manifest.json
-            vrt-results/
-            vrt-comment.md
+            e2e/dashboard/dashboard-smoke.spec.ts-snapshots/
           if-no-files-found: ignore
           retention-days: 7
-
-  dashboard-vrt-comment:
-    name: Dashboard VRT PR comment
-    needs: dashboard-e2e
-    if: >-
-      always() &&
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.pull_request.author_association)
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-    steps:
-      - name: Check out repository metadata
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 1
-          persist-credentials: false
-
-      - name: Download dashboard VRT artifacts
-        uses: actions/download-artifact@v7
-        continue-on-error: true
-        with:
-          name: dashboard-e2e-artifacts
-          path: .
-
-      - name: Check dashboard VRT comment artifact
-        id: vrt-comment
-        run: |
-          if [ -f vrt-comment.md ]; then
-            echo "available=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "available=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::Skipping dashboard VRT PR comment because vrt-comment.md was not generated."
-          fi
-
-      - name: Check CML token availability
-        id: cml-token
-        env:
-          CML_COMMENT_TOKEN_CONFIGURED: ${{ secrets.CML_COMMENT_TOKEN != '' }}
-        run: |
-          echo "available=${CML_COMMENT_TOKEN_CONFIGURED}" >> "$GITHUB_OUTPUT"
-          if [ "${CML_COMMENT_TOKEN_CONFIGURED}" != "true" ]; then
-            echo "::notice::Skipping dashboard VRT PR comment because CML_COMMENT_TOKEN is not configured."
-          fi
-
-      - name: Set up CML
-        if: ${{ steps.vrt-comment.outputs.available == 'true' && steps.cml-token.outputs.available == 'true' }}
-        uses: iterative/setup-cml@v2
-
-      - name: Publish dashboard VRT PR comment
-        if: ${{ steps.vrt-comment.outputs.available == 'true' && steps.cml-token.outputs.available == 'true' }}
-        run: cml comment update --watermark-title="Rainrail dashboard VRT" vrt-comment.md
-        env:
-          REPO_TOKEN: ${{ secrets.CML_COMMENT_TOKEN }}

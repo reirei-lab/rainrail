@@ -1,0 +1,72 @@
+name: Dashboard VRT Comment
+
+on:
+  workflow_run:
+    workflows:
+      - Pull Request CI
+    types:
+      - completed
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: read
+
+jobs:
+  publish-dashboard-vrt-comment:
+    name: Publish dashboard VRT PR comment
+    if: >-
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.pull_requests[0].head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out trusted tooling
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Check CML token availability
+        id: cml-token
+        env:
+          CML_COMMENT_TOKEN_CONFIGURED: ${{ secrets.CML_COMMENT_TOKEN != '' }}
+        run: |
+          echo "available=${CML_COMMENT_TOKEN_CONFIGURED}" >> "$GITHUB_OUTPUT"
+          if [ "${CML_COMMENT_TOKEN_CONFIGURED}" != "true" ]; then
+            echo "::notice::Skipping dashboard VRT PR comment because CML_COMMENT_TOKEN is not configured."
+          fi
+
+      - name: Download dashboard VRT artifacts
+        id: vrt-artifact
+        run: |
+          if gh run download "${{ github.event.workflow_run.id }}" --repo "$GITHUB_REPOSITORY" --name dashboard-e2e-artifacts --dir dashboard-vrt-artifacts; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Skipping dashboard VRT PR comment because dashboard-e2e-artifacts was not uploaded."
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Collect dashboard VRT results
+        if: ${{ steps.vrt-artifact.outputs.available == 'true' }}
+        run: node scripts/collect-vrt-results.mjs --results-dir dashboard-vrt-artifacts/test-results/dashboard --report dashboard-vrt-artifacts/test-results/dashboard/playwright-report.json --artifact-root dashboard-vrt-artifacts --output-dir vrt-results
+
+      - name: Generate dashboard VRT comment
+        if: ${{ steps.vrt-artifact.outputs.available == 'true' }}
+        run: node scripts/generate-vrt-comment.mjs --summary vrt-results/summary.json --output vrt-comment.md --max-cases 10
+
+      - name: Remove downloaded PR artifact before CML publish
+        if: ${{ steps.vrt-artifact.outputs.available == 'true' }}
+        run: rm -rf dashboard-vrt-artifacts
+
+      - name: Set up CML
+        if: ${{ steps.vrt-artifact.outputs.available == 'true' && steps.cml-token.outputs.available == 'true' }}
+        uses: iterative/setup-cml@v2
+
+      - name: Publish dashboard VRT PR comment
+        if: ${{ steps.vrt-artifact.outputs.available == 'true' && steps.cml-token.outputs.available == 'true' }}
+        run: >-
+          cml comment update --repo="$GITHUB_REPOSITORY" --target="pr/${{ github.event.workflow_run.pull_requests[0].number }}" --watermark-title="Rainrail dashboard VRT" vrt-comment.md
+        env:
+          REPO_TOKEN: ${{ secrets.CML_COMMENT_TOKEN }}
