@@ -83,10 +83,17 @@ describe('pull request CI workflow', () => {
     expect(dashboardVrtCommentWorkflow).toContain('if [ "$current_head_sha" = "${{ github.event.workflow_run.head_sha }}" ]; then');
     expect(dashboardVrtCommentWorkflow).toContain('Skipping dashboard VRT PR comment because workflow_run head SHA is not the current PR head.');
     expect(dashboardVrtCommentWorkflow).toContain('gh run download "${{ github.event.workflow_run.id }}" --repo "$GITHUB_REPOSITORY" --name dashboard-e2e-artifacts --dir dashboard-vrt-artifacts');
+    expect(dashboardVrtCommentWorkflow).toContain('echo "comment_available=true" >> "$GITHUB_OUTPUT"');
+    expect(dashboardVrtCommentWorkflow).toContain('VRT は実行されませんでした、または結果 artifact を取得できませんでした。');
     expect(dashboardVrtCommentWorkflow).toContain('node scripts/collect-vrt-results.mjs --results-dir dashboard-vrt-artifacts/test-results/dashboard --report dashboard-vrt-artifacts/test-results/dashboard/playwright-report.json --artifact-root dashboard-vrt-artifacts --output-dir dashboard-vrt-comment/vrt-results');
     expect(dashboardVrtCommentWorkflow).toContain('node scripts/generate-vrt-comment.mjs --summary dashboard-vrt-comment/vrt-results/summary.json --output dashboard-vrt-comment/vrt-comment.md --max-cases 10');
     expect(dashboardVrtCommentWorkflow).toMatch(/^ {6}- name: Remove downloaded PR artifact before CML publish\n {8}if: \$\{\{ steps\.latest-pr-head\.outputs\.current == 'true' && steps\.vrt-artifact\.outputs\.available == 'true' \}\}\n {8}run: rm -rf dashboard-vrt-artifacts$/m);
-    expect(dashboardVrtCommentWorkflow).toMatch(/^ {6}- name: Publish dashboard VRT PR comment\n {8}if: \$\{\{ steps\.latest-pr-head\.outputs\.current == 'true' && steps\.vrt-artifact\.outputs\.available == 'true' && steps\.cml-token\.outputs\.available == 'true' \}\}\n {8}run: >-\n {10}cml comment update --repo="\$GITHUB_REPOSITORY" --target="pr\/\$\{\{ github\.event\.workflow_run\.pull_requests\[0\]\.number \}\}" --watermark-title="Rainrail dashboard VRT" dashboard-vrt-comment\/vrt-comment\.md\n {8}env:\n {10}REPO_TOKEN: \$\{\{ secrets\.CML_COMMENT_TOKEN \}\}$/m);
+    expect(dashboardVrtCommentWorkflow).toMatch(/^ {6}- name: Publish dashboard VRT PR comment\n {8}if: \$\{\{ steps\.latest-pr-head\.outputs\.current == 'true' && steps\.vrt-artifact\.outputs\.comment_available == 'true' && steps\.cml-token\.outputs\.available == 'true' \}\}\n {8}run: \|/m);
+    expect(dashboardVrtCommentWorkflow).toContain('pre_publish_head_sha="$(gh api "repos/$GITHUB_REPOSITORY/pulls/${{ github.event.workflow_run.pull_requests[0].number }}" --jq \'.head.sha\')"');
+    expect(dashboardVrtCommentWorkflow).toContain('if [ "$pre_publish_head_sha" != "${{ github.event.workflow_run.head_sha }}" ]; then');
+    expect(dashboardVrtCommentWorkflow).toContain('Skipping dashboard VRT PR comment because PR head changed before CML publish.');
+    expect(dashboardVrtCommentWorkflow).toContain('cml comment update --repo="$GITHUB_REPOSITORY" --target="pr/${{ github.event.workflow_run.pull_requests[0].number }}" --watermark-title="Rainrail dashboard VRT" dashboard-vrt-comment/vrt-comment.md');
+    expect(dashboardVrtCommentWorkflow).toMatch(/^ {10}GH_TOKEN: \$\{\{ github\.token \}\}\n {10}REPO_TOKEN: \$\{\{ secrets\.CML_COMMENT_TOKEN \}\}$/m);
     expect(dashboardVrtCommentWorkflow).toContain('Skipping dashboard VRT PR comment because CML_COMMENT_TOKEN is not configured.');
     expect(dashboardVrtCommentWorkflow).toContain('Skipping dashboard VRT PR comment because dashboard-e2e-artifacts was not uploaded.');
     expect(dashboardVrtCommentWorkflow).not.toContain('pull-requests: write');

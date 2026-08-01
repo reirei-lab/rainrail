@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url';
  * @typedef {{
  *   id: string;
  *   title: string;
- *   status?: 'missing-baseline' | 'missing-diff' | 'screenshot-timeout';
+ *   status?: 'missing-baseline' | 'missing-diff' | 'screenshot-timeout' | 'vrt-test-failed';
  *   before?: string;
  *   after?: string;
  *   diff?: string;
@@ -15,7 +15,7 @@ import { pathToFileURL } from 'node:url';
  * @typedef {{
  *   key: string;
  *   idHint: string;
- *   status?: 'missing-baseline' | 'screenshot-timeout';
+ *   status?: 'missing-baseline' | 'screenshot-timeout' | 'vrt-test-failed';
  *   actualPath?: string;
  *   expectedPath?: string;
  *   diffPath?: string;
@@ -212,6 +212,14 @@ async function unexpectedCandidatesFromReport(reportPath, artifactRoot) {
         key,
         idHint,
         status: 'screenshot-timeout',
+      });
+    } else if (actualAttachmentCount === 0) {
+      const idHint = entry.identity.at(-1) ?? 'vrt-test-failed';
+      const key = [...entry.identity, idHint, 'vrt-test-failed'].join('\u0000');
+      candidatesBySnapshot.set(key, {
+        key,
+        idHint,
+        status: 'vrt-test-failed',
       });
     }
   }

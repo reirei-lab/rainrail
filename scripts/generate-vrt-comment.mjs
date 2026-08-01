@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url';
  * @typedef {{
  *   id: string;
  *   title: string;
- *   status?: 'missing-baseline' | 'missing-diff' | 'screenshot-timeout';
+ *   status?: 'missing-baseline' | 'missing-diff' | 'screenshot-timeout' | 'vrt-test-failed';
  *   before?: string;
  *   after?: string;
  *   diff?: string;
@@ -92,6 +92,9 @@ function imageCell(path, fallback) {
 function fallbackCell(caseItem, column) {
   if (caseItem.status === 'screenshot-timeout') {
     return 'screenshot timeout';
+  }
+  if (caseItem.status === 'vrt-test-failed') {
+    return 'VRT setup/assertion failed';
   }
   if (column === 'before') {
     return 'baseline 未作成';

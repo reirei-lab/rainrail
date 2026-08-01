@@ -194,6 +194,56 @@ describe('collectVrtResults', () => {
     expect(JSON.parse(readFileSync(join(outputDir, 'summary.json'), 'utf8'))).toEqual(summary);
   });
 
+  it('reports VRT setup assertion failures without actual attachments instead of writing a no-diff summary', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rainrail-vrt-'));
+    const resultsDir = join(root, 'test-results', 'dashboard');
+    const outputDir = join(root, 'vrt-results');
+    const reportPath = join(resultsDir, 'playwright-report.json');
+    mkdirSync(resultsDir, { recursive: true });
+    writeFileSync(reportPath, JSON.stringify({
+      suites: [
+        {
+          title: 'dashboard-smoke.spec.ts',
+          specs: [
+            {
+              title: 'visual baselines',
+              tests: [
+                {
+                  title: 'overview route visual baseline',
+                  status: 'unexpected',
+                  results: [
+                    {
+                      status: 'failed',
+                      error: {
+                        message: 'Error: Timed out 5000ms waiting for expect(locator).toBeVisible()',
+                      },
+                      attachments: [],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    }));
+
+    const summary = await collectVrtResults({ resultsDir, outputDir, reportPath });
+
+    expect(summary).toEqual({
+      changed: true,
+      totalChanged: 1,
+      cases: [
+        {
+          id: 'overview-route-visual-baseline',
+          title: 'Overview Route Visual Baseline',
+          status: 'vrt-test-failed',
+        },
+      ],
+    });
+    expect(JSON.parse(readFileSync(join(outputDir, 'summary.json'), 'utf8'))).toEqual(summary);
+  });
+
   it('uses the expected attachment as the before image for reported screenshot mismatches', async () => {
     const root = await mkdtemp(join(tmpdir(), 'rainrail-vrt-'));
     const resultsDir = join(root, 'test-results', 'dashboard');

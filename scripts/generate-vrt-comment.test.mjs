@@ -91,6 +91,25 @@ describe('generateVrtComment', () => {
     expect(markdown).not.toContain('undefined');
   });
 
+  it('renders VRT test setup failures without pretending image artifacts exist', () => {
+    const markdown = generateVrtComment({
+      changed: true,
+      totalChanged: 1,
+      cases: [
+        {
+          id: 'overview-route-visual-baseline',
+          title: 'Overview Route Visual Baseline',
+          status: 'vrt-test-failed',
+        },
+      ],
+    });
+
+    expect(markdown).toContain('### Overview Route Visual Baseline');
+    expect(markdown).toContain('VRT setup/assertion failed');
+    expect(markdown).not.toContain('visual regression は検出されませんでした。');
+    expect(markdown).not.toContain('undefined');
+  });
+
   it('writes a comment from a summary file', async () => {
     const root = await mkdtemp(join(tmpdir(), 'rainrail-vrt-comment-'));
     const summaryPath = join(root, 'vrt-results', 'summary.json');
