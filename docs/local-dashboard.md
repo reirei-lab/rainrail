@@ -111,10 +111,10 @@ screenshots, and avoid forwarding the local dashboard directly to the public
 Internet. This local dashboard is separate from the Cloudflare Pages
 product/docs site and the Cloudflare Worker operational surface.
 
-For a LAN or Tailscale machine that should be reachable from another browser,
-keep the bind host separate from the browser hosts and keep dashboard tokens in
+For a LAN machine that should be reachable from another browser, keep the bind
+host separate from the browser hosts and keep dashboard tokens in
 environment-owned secrets. Configure Rainrail to listen on all interfaces and
-allow only the names or addresses that operators will actually open:
+allow only the LAN names or addresses that operators will actually open:
 
 ```json
 {
@@ -132,9 +132,41 @@ allow only the names or addresses that operators will actually open:
 
 `server.allowedHosts` must include the exact LAN IP, Tailscale IP, MagicDNS
 name, or hostname that appears in the browser URL. It is a Host header
-allowlist, not a list of network interfaces. For Tailscale, add the tailnet IP
-or MagicDNS name that the browser will use, such as `100.101.102.103` or
-`rainrail-dev.tailnet-name.ts.net`.
+allowlist, not a list of network interfaces.
+
+For a Tailscale-only dashboard, bind to the machine's Tailscale IP instead of
+`0.0.0.0` so the LAN interface is not opened by this process:
+
+```json
+{
+  "server": {
+    "host": "100.101.102.103",
+    "port": 8787,
+    "allowedHosts": ["100.101.102.103", "rainrail-dev.tailnet-name.ts.net"]
+  },
+  "dashboardAuth": {
+    "readOnlyToken": "${RAINRAIL_DASHBOARD_READ_ONLY_TOKEN}",
+    "operatorToken": "${RAINRAIL_DASHBOARD_OPERATOR_TOKEN}"
+  }
+}
+```
+
+If the same server should be reachable from both LAN and Tailscale, use
+`server.host: "0.0.0.0"` and include every browser-visible LAN and Tailscale
+host in `server.allowedHosts`; then use the OS or network firewall to close any
+network interface that should not accept dashboard traffic.
+
+Before starting Rainrail with the environment-reference examples above, set the
+referenced tokens to non-empty values in the shell or service manager:
+
+```sh
+export RAINRAIL_DASHBOARD_READ_ONLY_TOKEN='replace-with-read-only-token'
+export RAINRAIL_DASHBOARD_OPERATOR_TOKEN='replace-with-operator-token'
+```
+
+Alternatively, omit the environment references and run
+`rainrail setup --dashboard-auth-only --yes` when you want Rainrail to write
+local concrete tokens into the selected config file.
 
 Start Rainrail:
 
@@ -157,12 +189,10 @@ Paste a configured dashboard token into the dashboard auth field. Use
 when you need local operator commands.
 
 Do not write real token values into example configs, docs, screenshots, issue
-comments, or copied terminal output. Use `rainrail setup --dashboard-auth-only --yes` only when you want Rainrail to
-write local concrete tokens into the selected config file. If
-`dashboardAuth.readOnlyToken` and
-`dashboardAuth.operatorToken` already point at environment references, setup and
-startup preserve those references instead of printing or replacing the backing
-secret values.
+comments, or copied terminal output. If `dashboardAuth.readOnlyToken` and
+`dashboardAuth.operatorToken` point at environment references, setup and startup
+preserve those references instead of printing or replacing the backing secret
+values.
 
 If the page does not load from another machine, allow inbound connections to
 the chosen port in the OS or network firewall. Check macOS Firewall prompts,
