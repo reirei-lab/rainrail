@@ -412,6 +412,27 @@ describe('Rainrail Node server', () => {
       ]);
       expect(rejected).toContain('400 Bad Request');
       expect(rejected).toContain('invalid_host_header');
+
+      const missingHost = await nodeHttpTextRequest(address.port, [
+        'GET /api/v1/overview HTTP/1.0',
+        'Authorization: Bearer read-token',
+        'Connection: close',
+        '',
+        '',
+      ]);
+      expect(missingHost).toContain('400 Bad Request');
+      expect(missingHost).toContain('invalid_host_header');
+
+      const invalidPort = await nodeHttpTextRequest(address.port, [
+        'GET /api/v1/overview HTTP/1.1',
+        'Host: dashboard.local:99999',
+        'Authorization: Bearer read-token',
+        'Connection: close',
+        '',
+        '',
+      ]);
+      expect(invalidPort).toContain('400 Bad Request');
+      expect(invalidPort).toContain('invalid_host_header');
     } finally {
       await closeServer(server);
       operationalStore.close();

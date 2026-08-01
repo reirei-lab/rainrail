@@ -247,7 +247,8 @@ function isDashboardBodyRoute(pathname: string, method: string): boolean {
 
 function isAllowedHostHeader(host: string | undefined, allowedHosts: readonly string[] | undefined): boolean {
   if (allowedHosts === undefined || allowedHosts.length === 0) return true;
-  const hostName = hostHeaderName(host ?? '127.0.0.1');
+  if (host === undefined) return false;
+  const hostName = hostHeaderName(host);
   if (hostName === undefined) return false;
   return new Set([
     'localhost',
@@ -258,12 +259,20 @@ function isAllowedHostHeader(host: string | undefined, allowedHosts: readonly st
 }
 
 function hostHeaderName(host: string): string | undefined {
-  const bracketed = /^\[([0-9A-Fa-f:.]+)\](?::[0-9]{1,5})?$/u.exec(host);
+  const bracketed = /^\[([0-9A-Fa-f:.]+)\](?::([0-9]{1,5}))?$/u.exec(host);
   if (bracketed?.[1] !== undefined) {
+    if (!isValidHostPort(bracketed[2])) return undefined;
     return bracketed[1].toLowerCase();
   }
-  const named = /^([A-Za-z0-9._-]+)(?::[0-9]{1,5})?$/u.exec(host);
+  const named = /^([A-Za-z0-9._-]+)(?::([0-9]{1,5}))?$/u.exec(host);
+  if (!isValidHostPort(named?.[2])) return undefined;
   return named?.[1]?.toLowerCase();
+}
+
+function isValidHostPort(port: string | undefined): boolean {
+  if (port === undefined) return true;
+  const value = Number(port);
+  return Number.isInteger(value) && value >= 1 && value <= 65535;
 }
 
 function normalizeHostName(host: string): string {
