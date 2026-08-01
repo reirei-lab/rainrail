@@ -3523,7 +3523,7 @@ function selectStartOperationalStoreConfig(
   }
   if (
     demoMode &&
-    (configOperationalStore === undefined || isDefaultInitOperationalStoreConfig(configOperationalStore))
+    (configOperationalStore === undefined || isDemoReplaceableOperationalStoreConfig(configOperationalStore))
   ) {
     return {
       kind: 'sqlite',
@@ -3534,10 +3534,20 @@ function selectStartOperationalStoreConfig(
   return configOperationalStore;
 }
 
+function isDemoReplaceableOperationalStoreConfig(config: RainrailStartOperationalStoreConfig): boolean {
+  return isDefaultInitOperationalStoreConfig(config) || isDefaultSetupOperationalStoreConfig(config);
+}
+
 function isDefaultInitOperationalStoreConfig(config: RainrailStartOperationalStoreConfig): boolean {
   return config.kind === 'sqlite' &&
     config.databasePath === localDefaultOperationalStorePath &&
     config.eventLimit === localDefaultOperationalStoreEventLimit;
+}
+
+function isDefaultSetupOperationalStoreConfig(config: RainrailStartOperationalStoreConfig): boolean {
+  return config.kind === defaultLocalOperationalStoreConfig.kind &&
+    config.databasePath === defaultLocalOperationalStoreConfig.databasePath &&
+    config.eventLimit === defaultLocalOperationalStoreConfig.eventLimit;
 }
 
 function mergeDashboardAuth(configAuth: RainrailDashboardAuth, eventsBearerToken: string | undefined): RainrailDashboardAuth {
@@ -5477,11 +5487,12 @@ function ensureDefaultOperationalStoreGitIgnore(
 ): void {
   const gitIgnorePath = join(projectRoot, '.gitignore');
   const entry = defaultLocalOperationalStoreConfig.databasePath;
-  if (!fileSystem.existsSync(gitIgnorePath)) {
+  const gitIgnoreStat = lstatPath(gitIgnorePath, fileSystem);
+  if (gitIgnoreStat === undefined) {
     fileSystem.writeFileSync(gitIgnorePath, `${entry}\n`);
     return;
   }
-  if (!isRegularFile(gitIgnorePath, fileSystem)) {
+  if (!gitIgnoreStat.isFile() || gitIgnoreStat.isSymbolicLink()) {
     throw new Error(`Git ignore path is not a regular file: ${gitIgnorePath}`);
   }
 

@@ -1483,6 +1483,41 @@ describe('Rainrail CLI built-in commands', () => {
     });
   });
 
+  it('resolves setup-repaired JSON operational store to the seeded SQLite dashboard DB in demo mode', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'dashboard-demo-setup-json-options');
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        operationalStore: {
+          kind: 'json',
+          databasePath: '.rainrail/operational.json',
+          eventLimit: 250,
+        },
+        sourceBundles: [],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+      let startOptions: RainrailStartOptions | undefined;
+
+      const result = runRainrailCli(['start', '--demo'], {
+        cwd: projectRoot,
+        serverStarter: (options) => {
+          startOptions = options;
+          return { stop: () => undefined };
+        },
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+      expect(startOptions?.demoMode).toBe(true);
+      expect(startOptions?.operationalStoreConfig).toEqual({
+        kind: 'sqlite',
+        databasePath: join(projectRoot, '.tmp', 'dashboard-demo.sqlite'),
+        eventLimit: 250,
+      });
+    });
+  });
+
   it('makes demo mode auth wording explicit for public rainrail start URLs', async () => {
     await withTempDirectory(async (directory) => {
       const projectRoot = await initRainrailProject(directory, 'public-dashboard-demo-options');
@@ -7799,6 +7834,45 @@ describe('Rainrail CLI built-in commands', () => {
         operatorToken: 'existing-operator-token',
       });
       expect(config.operationalStore).toBeUndefined();
+    });
+  });
+
+  it('does not treat a broken default store gitignore symlink as missing during setup', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'broken-operational-store-gitignore-symlink');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      const gitignorePath = join(projectRoot, '.gitignore');
+      const brokenTarget = join(projectRoot, 'missing-gitignore-target');
+      await rm(gitignorePath, { force: true });
+      await symlink(brokenTarget, gitignorePath, 'file');
+      await writeFile(configPath, `${JSON.stringify({
+        project: { name: 'broken-operational-store-gitignore-symlink' },
+        dashboardAuth: {
+          readOnlyToken: 'existing-read-token',
+          operatorToken: 'existing-operator-token',
+        },
+        sourceBundles: [],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+
+      const result = runRainrailCli(['setup', '--dashboard-auth-only', '--rotate', '--yes'], {
+        cwd: projectRoot,
+      });
+      const config = JSON.parse(await readFile(configPath, 'utf8')) as {
+        dashboardAuth?: { readOnlyToken?: string; operatorToken?: string };
+        operationalStore?: unknown;
+      };
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('Git ignore path is not a regular file');
+      expect(config.dashboardAuth).toEqual({
+        readOnlyToken: 'existing-read-token',
+        operatorToken: 'existing-operator-token',
+      });
+      expect(config.operationalStore).toBeUndefined();
+      await expect(stat(brokenTarget)).rejects.toMatchObject({ code: 'ENOENT' });
     });
   });
 
