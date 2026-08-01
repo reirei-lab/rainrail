@@ -351,6 +351,11 @@ const rainrailLockFileName = 'rainrail.lock';
 const rainrailGitignoreFileName = '.gitignore';
 const rainrailDirectoryName = '.rainrail';
 const rainrailPluginDirectoryName = 'plugins';
+const defaultLocalOperationalStoreConfig = {
+  kind: 'json',
+  databasePath: '.rainrail/operational.json',
+  eventLimit: 250,
+} as const;
 const safeProjectNamePattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 const semverVersionPattern =
   /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/u;
@@ -3518,7 +3523,7 @@ function selectStartOperationalStoreConfig(
   }
   if (
     demoMode &&
-    (configOperationalStore === undefined || isDefaultInitOperationalStoreConfig(configOperationalStore))
+    (configOperationalStore === undefined || isDemoReplaceableOperationalStoreConfig(configOperationalStore))
   ) {
     return {
       kind: 'sqlite',
@@ -3529,10 +3534,20 @@ function selectStartOperationalStoreConfig(
   return configOperationalStore;
 }
 
+function isDemoReplaceableOperationalStoreConfig(config: RainrailStartOperationalStoreConfig): boolean {
+  return isDefaultInitOperationalStoreConfig(config) || isDefaultSetupOperationalStoreConfig(config);
+}
+
 function isDefaultInitOperationalStoreConfig(config: RainrailStartOperationalStoreConfig): boolean {
   return config.kind === 'sqlite' &&
     config.databasePath === localDefaultOperationalStorePath &&
     config.eventLimit === localDefaultOperationalStoreEventLimit;
+}
+
+function isDefaultSetupOperationalStoreConfig(config: RainrailStartOperationalStoreConfig): boolean {
+  return config.kind === defaultLocalOperationalStoreConfig.kind &&
+    config.databasePath === defaultLocalOperationalStoreConfig.databasePath &&
+    config.eventLimit === defaultLocalOperationalStoreConfig.eventLimit;
 }
 
 function mergeDashboardAuth(configAuth: RainrailDashboardAuth, eventsBearerToken: string | undefined): RainrailDashboardAuth {
@@ -5235,22 +5250,25 @@ function runSetupCommand(
   const invocation = createRainrailCommandInvocation(environment.currentBinPath ?? process.argv[1]);
   const steps: SetupStepResult[] = [];
   let dashboardAuthResult: LocalDashboardAuthSetupResult;
+  let operationalStoreResult: LocalOperationalStoreSetupResult;
   try {
     if (!setupArguments.dashboardAuthOnly) {
       validateRainrailProjectForSetup(project, fileSystem);
     }
+    ensureLocalOperationalStorePreflight(project.configPath, fileSystem);
     dashboardAuthResult = ensureLocalDashboardAuth(
       project.configPath,
       fileSystem,
       environment.env ?? process.env,
       { rotate: setupArguments.rotateDashboardAuth },
     );
+    operationalStoreResult = ensureLocalOperationalStore(project.configPath, fileSystem);
   } catch (error) {
     return formatSetupError(options, error);
   }
 
   if (setupArguments.dashboardAuthOnly) {
-    return formatSetupResult(true, plugins, steps, options, undefined, dashboardAuthResult);
+    return formatSetupResult(true, plugins, steps, options, undefined, dashboardAuthResult, operationalStoreResult);
   }
 
   for (const plugin of plugins) {
@@ -5266,7 +5284,7 @@ function runSetupCommand(
     );
     steps.push(installStep);
     if (installResult.exitCode !== 0) {
-      return formatSetupResult(false, plugins, steps, options, installStep, dashboardAuthResult);
+      return formatSetupResult(false, plugins, steps, options, installStep, dashboardAuthResult, operationalStoreResult);
     }
 
     const setupArgs = [
@@ -5303,11 +5321,11 @@ function runSetupCommand(
     );
     steps.push(setupStep);
     if (pluginSetupResult.exitCode !== 0) {
-      return formatSetupResult(false, plugins, steps, options, setupStep, dashboardAuthResult);
+      return formatSetupResult(false, plugins, steps, options, setupStep, dashboardAuthResult, operationalStoreResult);
     }
   }
 
-  return formatSetupResult(true, plugins, steps, options, undefined, dashboardAuthResult);
+  return formatSetupResult(true, plugins, steps, options, undefined, dashboardAuthResult, operationalStoreResult);
 }
 
 function parseSetupCommandArguments(args: readonly string[]): {
@@ -5356,6 +5374,11 @@ function parseSetupCommandArguments(args: readonly string[]): {
 type LocalDashboardAuthSetupResult = {
   readonly created: readonly (keyof RainrailDashboardAuth)[];
   readonly rotated: readonly (keyof RainrailDashboardAuth)[];
+  readonly configPath: string;
+};
+
+type LocalOperationalStoreSetupResult = {
+  readonly configured: boolean;
   readonly configPath: string;
 };
 
@@ -5415,6 +5438,71 @@ function ensureLocalDashboardAuth(
     fileSystem.writeFileSync(configPath, formatConfigWithLocalDashboardAuth(raw, generatedDashboardAuth));
   }
   return { created, rotated, configPath };
+}
+
+function ensureLocalOperationalStore(
+  configPath: string,
+  fileSystem: RainrailCliFileSystem,
+): LocalOperationalStoreSetupResult {
+  const raw = fileSystem.readFileSync(configPath, 'utf8');
+  if (hasOperationalStoreProperty(raw)) {
+    return { configured: false, configPath };
+  }
+
+  ensureDefaultOperationalStoreGitIgnore(dirname(configPath), fileSystem);
+  fileSystem.writeFileSync(configPath, formatConfigWithDefaultOperationalStore(raw));
+  return { configured: true, configPath };
+}
+
+function ensureLocalOperationalStorePreflight(
+  configPath: string,
+  fileSystem: RainrailCliFileSystem,
+): void {
+  const raw = fileSystem.readFileSync(configPath, 'utf8');
+  if (hasOperationalStoreProperty(raw)) {
+    return;
+  }
+  ensureDefaultOperationalStoreGitIgnore(dirname(configPath), fileSystem);
+}
+
+function formatConfigWithDefaultOperationalStore(raw: string): string {
+  try {
+    const rawValue = JSON.parse(raw) as unknown;
+    if (isRecord(rawValue)) {
+      return `${JSON.stringify({
+        ...rawValue,
+        operationalStore: defaultLocalOperationalStoreConfig,
+      }, null, 2)}\n`;
+    }
+  } catch {
+    // Fall through to the lexical top-level insertion used for env-fragment configs.
+  }
+
+  return insertTopLevelOperationalStore(raw, defaultLocalOperationalStoreConfig);
+}
+
+function ensureDefaultOperationalStoreGitIgnore(
+  projectRoot: string,
+  fileSystem: RainrailCliFileSystem,
+): void {
+  const gitIgnorePath = join(projectRoot, '.gitignore');
+  const entry = defaultLocalOperationalStoreConfig.databasePath;
+  const gitIgnoreStat = lstatPath(gitIgnorePath, fileSystem);
+  if (gitIgnoreStat === undefined) {
+    fileSystem.writeFileSync(gitIgnorePath, `${entry}\n`);
+    return;
+  }
+  if (!gitIgnoreStat.isFile() || gitIgnoreStat.isSymbolicLink()) {
+    throw new Error(`Git ignore path is not a regular file: ${gitIgnorePath}`);
+  }
+
+  const existing = fileSystem.readFileSync(gitIgnorePath, 'utf8');
+  const lines = existing.split(/\r?\n/u);
+  if (lines.includes(entry)) {
+    return;
+  }
+  const separator = existing.length === 0 || existing.endsWith('\n') ? '' : '\n';
+  fileSystem.writeFileSync(gitIgnorePath, `${existing}${separator}${entry}\n`);
 }
 
 function parseExpandedDashboardAuthObject(raw: string, env: Record<string, string | undefined>): Record<string, unknown> {
@@ -5497,6 +5585,14 @@ function formatConfigWithLocalDashboardAuth(
 }
 
 function insertTopLevelDashboardAuth(raw: string, dashboardAuth: Record<string, unknown>): string {
+  return insertTopLevelProperty(raw, 'dashboardAuth', dashboardAuth);
+}
+
+function insertTopLevelOperationalStore(raw: string, operationalStore: Record<string, unknown>): string {
+  return insertTopLevelProperty(raw, 'operationalStore', operationalStore);
+}
+
+function insertTopLevelProperty(raw: string, name: string, value: Record<string, unknown>): string {
   const objectStart = raw.indexOf('{');
   if (objectStart < 0) {
     throw new Error('config must be an object');
@@ -5510,7 +5606,7 @@ function insertTopLevelDashboardAuth(raw: string, dashboardAuth: Record<string, 
   const body = raw.slice(objectStart + 1, objectEnd);
   const hasExistingProperties = body.trim().length > 0;
   const rest = newline.length === 0 ? afterStart : afterStart.slice(newline.length);
-  const property = `"dashboardAuth": ${JSON.stringify(dashboardAuth, null, 2).replaceAll('\n', `${newline}  `)}`;
+  const property = `"${name}": ${JSON.stringify(value, null, 2).replaceAll('\n', `${newline}  `)}`;
   if (!hasExistingProperties) {
     return `${raw.slice(0, objectStart + 1)}${newline}  ${property}${newline}${raw.slice(objectEnd)}`;
   }
@@ -5576,6 +5672,10 @@ function findRuntimeProvidersObjectStart(raw: string): number | undefined {
 
 function hasDashboardAuthProperty(raw: string): boolean {
   return findTopLevelPropertyValueStart(raw, 'dashboardAuth') !== undefined;
+}
+
+function hasOperationalStoreProperty(raw: string): boolean {
+  return findTopLevelPropertyValueStart(raw, 'operationalStore') !== undefined;
 }
 
 function hasRuntimeProvidersProperty(raw: string): boolean {
@@ -5965,6 +6065,7 @@ function formatSetupResult(
   options: SharedOptions,
   failedStep?: SetupStepResult,
   dashboardAuthResult?: LocalDashboardAuthSetupResult,
+  operationalStoreResult?: LocalOperationalStoreSetupResult,
 ): RainrailCliResult {
   if (options.json) {
     const jsonResult: SetupJsonResult = {
@@ -5983,7 +6084,10 @@ function formatSetupResult(
   const dashboardAuthOutput = dashboardAuthResult === undefined
     ? ''
     : formatDashboardAuthSetupOutput(dashboardAuthResult);
-  const stdout = `${dashboardAuthOutput}${steps.map((step) => step.stdout).join('')}`;
+  const operationalStoreOutput = operationalStoreResult === undefined
+    ? ''
+    : formatOperationalStoreSetupOutput(operationalStoreResult);
+  const stdout = `${dashboardAuthOutput}${operationalStoreOutput}${steps.map((step) => step.stdout).join('')}`;
   const stderr = steps.map((step) => step.stderr).join('');
   if (failedStep !== undefined) {
     return {
@@ -6008,6 +6112,12 @@ function formatDashboardAuthSetupOutput(result: LocalDashboardAuthSetupResult): 
     ? ''
     : `Generated ${formatDashboardAuthKeyList(result.created)} in ${basename(result.configPath)}.\n`;
   return `${rotatedOutput}${createdOutput}`;
+}
+
+function formatOperationalStoreSetupOutput(result: LocalOperationalStoreSetupResult): string {
+  return result.configured
+    ? `Configured operationalStore ${defaultLocalOperationalStoreConfig.kind} store in ${basename(result.configPath)}.\n`
+    : '';
 }
 
 function dashboardAuthKeyToScope(key: keyof RainrailDashboardAuth): DashboardAuthScope {
@@ -7135,38 +7245,93 @@ function createMemoryLocalRainrailEventStore(eventLimit: number): LocalRainrailE
 
 function createJsonLocalRainrailEventStore(databasePath: string, eventLimit: number): LocalRainrailEventStore {
   const initialData = readLocalRainrailEventStoreJson(databasePath);
-  let events = initialData.events.slice(-eventLimit);
+  let operationalEvents = new Map(initialData.operationalEvents.map((event) => [event.id, event]));
+  let sequences = { ...initialData.sequences };
+  const activityEvents = { ...initialData.activityEvents };
+  const agentTasks = { ...initialData.agentTasks };
+  const commandResults = { ...initialData.commandResults };
+  const eventHandlerRetries = { ...initialData.eventHandlerRetries };
+  let events = localRainrailEventsFromOperationalEvents(operationalEvents.values()).slice(-eventLimit);
   let dashboardLayout = initialData.dashboardLayout?.items;
   let dashboardLayoutUpdatedAt = initialData.dashboardLayout?.updatedAt;
   const writeStore = (
-    nextEvents = events,
+    nextOperationalEvents = operationalEvents,
+    nextSequences = sequences,
     nextDashboardLayout = dashboardLayout,
     nextDashboardLayoutUpdatedAt = dashboardLayoutUpdatedAt,
   ): void => {
     mkdirSync(dirname(databasePath), { recursive: true });
     writeFileSync(databasePath, `${JSON.stringify({
-      events: nextEvents,
+      events: Object.fromEntries(nextOperationalEvents),
+      activityEvents,
+      agentTasks,
+      commandResults,
+      eventHandlerRetries,
       ...(nextDashboardLayout === undefined || nextDashboardLayoutUpdatedAt === undefined
         ? {}
-        : { dashboardLayout: nextDashboardLayout, dashboardLayoutUpdatedAt: nextDashboardLayoutUpdatedAt }),
+        : { dashboardLayout: { id: 'user.dashboardLayout', items: nextDashboardLayout, updatedAt: nextDashboardLayoutUpdatedAt } }),
+      sequences: nextSequences,
     }, null, 2)}\n`, { mode: 0o600 });
   };
   return {
     eventLimit,
     listEvents: () => [...events],
+    listOperationalEvents: () => sortLocalOperationalEventsNewest(operationalEvents.values()),
+    getOperationalEvent: (id) => operationalEvents.get(id),
+    listActivityEvents() {
+      return localJsonOperationalActivityEvents(activityEvents).slice(0, eventLimit);
+    },
+    listAgentTasks() {
+      return localJsonOperationalAgentTasks(agentTasks);
+    },
+    listEventHandlerRetries() {
+      return localJsonOperationalEventHandlerRetries(eventHandlerRetries);
+    },
     getDashboardLayout: () => dashboardLayout === undefined || dashboardLayoutUpdatedAt === undefined
       ? undefined
       : { items: localCloneDashboardLayout(dashboardLayout), updatedAt: dashboardLayoutUpdatedAt },
     saveDashboardLayout(items) {
       const nextDashboardLayoutUpdatedAt = new Date().toISOString();
       const nextDashboardLayout = localCloneDashboardLayout(items);
-      writeStore(events, nextDashboardLayout, nextDashboardLayoutUpdatedAt);
+      writeStore(operationalEvents, sequences, nextDashboardLayout, nextDashboardLayoutUpdatedAt);
       dashboardLayoutUpdatedAt = nextDashboardLayoutUpdatedAt;
       dashboardLayout = nextDashboardLayout;
       return { items: localCloneDashboardLayout(dashboardLayout), updatedAt: dashboardLayoutUpdatedAt };
     },
+    recordOperationalEvent(envelope) {
+      const event = localOperationalEventFromEnvelope(envelope);
+      operationalEvents.set(event.id, event);
+      events = localRainrailEventsFromOperationalEvents(operationalEvents.values()).slice(-eventLimit);
+      writeStore();
+      return event;
+    },
+    reserveLocalEventId() {
+      const nextValue = (sequences.local_event ?? 0) + 1;
+      sequences = { ...sequences, local_event: nextValue };
+      writeStore();
+      return `local-event-${String(nextValue).padStart(6, '0')}`;
+    },
+    nextEventId() {
+      return (sequences.local_event ?? 0) + 1;
+    },
+    staleProjectClaimWarnings() {
+      return localStaleProjectClaimWarnings(localJsonOperationalAgentTasks(agentTasks));
+    },
+    counts() {
+      return {
+        events: operationalEvents.size,
+        activityEvents: Object.keys(activityEvents).length,
+        agentTasks: Object.keys(agentTasks).length,
+        commandResults: Object.keys(commandResults).length,
+        eventHandlerRetries: Object.keys(eventHandlerRetries).length,
+      };
+    },
     replaceEvents(nextEvents) {
       events = [...nextEvents].slice(-eventLimit);
+      operationalEvents = new Map(events.map((event) => [
+        event.id,
+        localOperationalEventFromLocalEvent(event),
+      ]));
       writeStore();
     },
     close() {
@@ -7177,26 +7342,180 @@ function createJsonLocalRainrailEventStore(databasePath: string, eventLimit: num
 
 function readLocalRainrailEventStoreJson(databasePath: string): {
   readonly events: readonly LocalRainrailEvent[];
+  readonly operationalEvents: readonly LocalOperationalEvent[];
   readonly dashboardLayout?: LocalDashboardLayoutSnapshot;
+  readonly sequences: Record<string, number>;
+  readonly activityEvents: Record<string, unknown>;
+  readonly agentTasks: Record<string, unknown>;
+  readonly commandResults: Record<string, unknown>;
+  readonly eventHandlerRetries: Record<string, unknown>;
 } {
   if (!existsSync(databasePath)) {
-    return { events: [] };
+    return {
+      events: [],
+      operationalEvents: [],
+      sequences: {},
+      activityEvents: {},
+      agentTasks: {},
+      commandResults: {},
+      eventHandlerRetries: {},
+    };
   }
   const parsed = JSON.parse(readFileSync(databasePath, 'utf8')) as unknown;
-  if (!isRecord(parsed) || !Array.isArray(parsed.events)) {
+  if (!isRecord(parsed)) {
     throw new Error(
       'JSON operational store is not compatible with rainrail start local event storage. '
         + 'Use kind "sqlite", kind "memory", or choose a separate JSON databasePath.',
     );
   }
-  const dashboardLayoutUpdatedAt = typeof parsed.dashboardLayoutUpdatedAt === 'string'
+  const operationalEvents = parseLocalJsonOperationalEvents(parsed.events);
+  const legacyEvents = Array.isArray(parsed.events) ? parsed.events.filter(isLocalRainrailEvent) : [];
+  const dashboardLayout = parseLocalJsonDashboardLayout(parsed);
+  const sequences = parseLocalJsonOperationalSequences(parsed.sequences);
+  return {
+    events: legacyEvents.length > 0 ? legacyEvents : localRainrailEventsFromOperationalEvents(operationalEvents),
+    operationalEvents: operationalEvents.length > 0
+      ? operationalEvents
+      : legacyEvents.map(localOperationalEventFromLocalEvent),
+    ...(dashboardLayout === undefined ? {} : { dashboardLayout }),
+    sequences: sequences.local_event === undefined
+      ? { ...sequences, local_event: nextLocalEventId(legacyEvents.length > 0 ? legacyEvents : localRainrailEventsFromOperationalEvents(operationalEvents)) - 1 }
+      : sequences,
+    activityEvents: parseLocalJsonSharedRecordMap(parsed.activityEvents),
+    agentTasks: parseLocalJsonSharedRecordMap(parsed.agentTasks),
+    commandResults: parseLocalJsonSharedRecordMap(parsed.commandResults),
+    eventHandlerRetries: parseLocalJsonSharedRecordMap(parsed.eventHandlerRetries),
+  };
+}
+
+function parseLocalJsonOperationalEvents(value: unknown): LocalOperationalEvent[] {
+  if (!isRecord(value)) {
+    return [];
+  }
+  return Object.values(value)
+    .filter(isLocalOperationalEvent)
+    .sort(compareLocalOperationalEventsOldest);
+}
+
+function parseLocalJsonSharedRecordMap(value: unknown): Record<string, unknown> {
+  return isRecord(value) ? { ...value } : {};
+}
+
+function localJsonOperationalActivityEvents(records: Record<string, unknown>): LocalOperationalActivityEvent[] {
+  return Object.values(records)
+    .filter(isLocalOperationalActivityEvent)
+    .sort((left, right) => compareLocalStringDesc(left.createdAt, right.createdAt) || compareLocalStringDesc(left.id, right.id));
+}
+
+function localJsonOperationalAgentTasks(records: Record<string, unknown>): LocalOperationalAgentTask[] {
+  return Object.values(records)
+    .filter(isLocalOperationalAgentTask)
+    .sort((left, right) => compareLocalStringDesc(left.updatedAt, right.updatedAt) || compareLocalStringDesc(left.id, right.id));
+}
+
+function localJsonOperationalEventHandlerRetries(records: Record<string, unknown>): LocalOperationalEventHandlerRetry[] {
+  return Object.values(records)
+    .filter(isLocalOperationalEventHandlerRetry)
+    .sort((left, right) => left.nextRetryAt.localeCompare(right.nextRetryAt) || left.handlerName.localeCompare(right.handlerName));
+}
+
+function parseLocalJsonDashboardLayout(parsed: Record<string, unknown>): LocalDashboardLayoutSnapshot | undefined {
+  if (isRecord(parsed.dashboardLayout)) {
+    const updatedAt = typeof parsed.dashboardLayout.updatedAt === 'string'
+      ? parsed.dashboardLayout.updatedAt
+      : undefined;
+    return Array.isArray(parsed.dashboardLayout.items) && updatedAt !== undefined
+      ? { items: parseLocalDashboardLayoutItems(parsed.dashboardLayout.items), updatedAt }
+      : undefined;
+  }
+  const legacyUpdatedAt = typeof parsed.dashboardLayoutUpdatedAt === 'string'
     ? parsed.dashboardLayoutUpdatedAt
     : undefined;
+  return Array.isArray(parsed.dashboardLayout) && legacyUpdatedAt !== undefined
+    ? { items: parseLocalDashboardLayoutItems(parsed.dashboardLayout), updatedAt: legacyUpdatedAt }
+    : undefined;
+}
+
+function parseLocalJsonOperationalSequences(value: unknown): Record<string, number> {
+  if (!isRecord(value)) {
+    return {};
+  }
+  return Object.fromEntries(
+    Object.entries(value).filter((entry): entry is [string, number] => {
+      const [, sequence] = entry;
+      return typeof sequence === 'number' && Number.isInteger(sequence) && sequence >= 0;
+    }),
+  );
+}
+
+function localRainrailEventsFromOperationalEvents(events: Iterable<LocalOperationalEvent>): LocalRainrailEvent[] {
+  return sortLocalOperationalEventsOldest(events)
+    .map(localRainrailEventFromOperationalEvent)
+    .filter((event): event is LocalRainrailEvent => event !== undefined);
+}
+
+function sortLocalOperationalEventsOldest(events: Iterable<LocalOperationalEvent>): LocalOperationalEvent[] {
+  return [...events].sort(compareLocalOperationalEventsOldest);
+}
+
+function sortLocalOperationalEventsNewest(events: Iterable<LocalOperationalEvent>): LocalOperationalEvent[] {
+  return [...events].sort((left, right) => compareLocalOperationalEventsOldest(right, left));
+}
+
+function compareLocalOperationalEventsOldest(left: LocalOperationalEvent, right: LocalOperationalEvent): number {
+  return left.receivedAt.localeCompare(right.receivedAt) || left.id.localeCompare(right.id);
+}
+
+function compareLocalStringDesc(left: string, right: string): number {
+  return right.localeCompare(left);
+}
+
+function localRainrailEventFromOperationalEvent(event: LocalOperationalEvent): LocalRainrailEvent | undefined {
+  const payload = event.envelope.payload;
+  const localEvent = isRecord(payload) && isRecord(payload.localEvent) ? payload.localEvent : undefined;
+  const status = typeof localEvent?.status === 'string' ? localEvent.status : 'received';
+  const summary = typeof localEvent?.summary === 'string' ? localEvent.summary : `${event.source.name} event received`;
+  const workflowRunCount = typeof localEvent?.workflowRunCount === 'number' ? localEvent.workflowRunCount : 0;
+  const handlerRetryCount = typeof localEvent?.handlerRetryCount === 'number' ? localEvent.handlerRetryCount : 0;
+  const rawPayloadReference = typeof event.envelope.rawPayload.reference === 'string'
+    ? event.envelope.rawPayload.reference
+    : `local://events/${event.id}`;
+  const links = event.envelope.links;
   return {
-    events: parsed.events.filter(isLocalRainrailEvent),
-    ...(Array.isArray(parsed.dashboardLayout) && dashboardLayoutUpdatedAt !== undefined
-      ? { dashboardLayout: { items: parseLocalDashboardLayoutItems(parsed.dashboardLayout), updatedAt: dashboardLayoutUpdatedAt } }
-      : {}),
+    id: event.id,
+    type: 'event',
+    name: event.name,
+    status,
+    summary,
+    deliveryId: event.delivery.id,
+    rawPayloadReference,
+    workflowRunCount,
+    handlerRetryCount,
+    subject: event.subject,
+    occurredAt: event.occurredAt,
+    receivedAt: event.delivery.receivedAt,
+    source: event.source,
+    links: links !== undefined && typeof links.self === 'string'
+      ? { self: links.self }
+      : { self: `/api/v1/events/${encodeURIComponent(event.id)}` },
+  };
+}
+
+function localOperationalEventFromLocalEvent(event: LocalRainrailEvent): LocalOperationalEvent {
+  const envelope = localOperationalEnvelopeFromLocalEvent(event);
+  return localOperationalEventFromEnvelope(envelope);
+}
+
+function localOperationalEventFromEnvelope(envelope: LocalOperationalEvent['envelope']): LocalOperationalEvent {
+  return {
+    id: envelope.id,
+    name: envelope.name,
+    source: envelope.source,
+    delivery: envelope.delivery,
+    subject: envelope.subject,
+    occurredAt: envelope.occurredAt,
+    receivedAt: envelope.delivery.receivedAt,
+    envelope,
   };
 }
 
@@ -8950,6 +9269,91 @@ function isLocalRainrailEvent(value: unknown): value is LocalRainrailEvent {
     && typeof value.source.name === 'string'
     && isRecord(value.links)
     && typeof value.links.self === 'string';
+}
+
+function isLocalOperationalEvent(value: unknown): value is LocalOperationalEvent {
+  return isRecord(value)
+    && typeof value.id === 'string'
+    && typeof value.name === 'string'
+    && isRecord(value.source)
+    && typeof value.source.type === 'string'
+    && typeof value.source.name === 'string'
+    && (typeof value.source.repository === 'string' || value.source.repository === undefined)
+    && isRecord(value.delivery)
+    && typeof value.delivery.id === 'string'
+    && typeof value.delivery.receivedAt === 'string'
+    && isRecord(value.subject)
+    && typeof value.subject.type === 'string'
+    && typeof value.subject.id === 'string'
+    && (typeof value.subject.url === 'string' || value.subject.url === undefined)
+    && typeof value.occurredAt === 'string'
+    && typeof value.receivedAt === 'string'
+    && isRecord(value.envelope)
+    && value.envelope.id === value.id
+    && value.envelope.schemaVersion === 'rainrail.event.v1'
+    && typeof value.envelope.name === 'string'
+    && isRecord(value.envelope.source)
+    && isRecord(value.envelope.delivery)
+    && isRecord(value.envelope.subject)
+    && typeof value.envelope.occurredAt === 'string'
+    && isRecord(value.envelope.rawPayload)
+    && typeof value.envelope.rawPayload.kind === 'string'
+    && typeof value.envelope.rawPayload.reference === 'string'
+    && (value.envelope.links === undefined || isStringRecord(value.envelope.links));
+}
+
+function isLocalOperationalActivityEvent(value: unknown): value is LocalOperationalActivityEvent {
+  return isRecord(value)
+    && typeof value.id === 'string'
+    && (typeof value.sourceEventId === 'string' || value.sourceEventId === undefined)
+    && (typeof value.sourceEventName === 'string' || value.sourceEventName === undefined)
+    && typeof value.category === 'string'
+    && typeof value.targetType === 'string'
+    && (typeof value.targetId === 'string' || value.targetId === undefined)
+    && (typeof value.targetUrl === 'string' || value.targetUrl === undefined)
+    && typeof value.actionType === 'string'
+    && typeof value.outcome === 'string'
+    && typeof value.summary === 'string'
+    && (isRecord(value.metadata) || value.metadata === undefined)
+    && typeof value.createdAt === 'string';
+}
+
+function isLocalOperationalAgentTask(value: unknown): value is LocalOperationalAgentTask {
+  return isRecord(value)
+    && typeof value.id === 'string'
+    && typeof value.title === 'string'
+    && (typeof value.agentSessionId === 'string' || value.agentSessionId === undefined)
+    && typeof value.branchName === 'string'
+    && typeof value.status === 'string'
+    && (typeof value.logPath === 'string' || value.logPath === undefined)
+    && (typeof value.stderrLogPath === 'string' || value.stderrLogPath === undefined)
+    && (typeof value.pid === 'number' || value.pid === undefined)
+    && (typeof value.result === 'string' || value.result === undefined)
+    && typeof value.startedAt === 'string'
+    && (typeof value.completedAt === 'string' || value.completedAt === undefined)
+    && typeof value.updatedAt === 'string'
+    && isRecord(value.runtime)
+    && typeof value.runtime.status === 'string'
+    && (typeof value.runtime.pid === 'number' || value.runtime.pid === undefined)
+    && typeof value.runtime.startedAt === 'string'
+    && (typeof value.runtime.completedAt === 'string' || value.runtime.completedAt === undefined);
+}
+
+function isLocalOperationalEventHandlerRetry(value: unknown): value is LocalOperationalEventHandlerRetry {
+  return isRecord(value)
+    && typeof value.eventId === 'string'
+    && typeof value.handlerName === 'string'
+    && typeof value.attempts === 'number'
+    && Number.isInteger(value.attempts)
+    && value.attempts >= 0
+    && typeof value.nextRetryAt === 'string'
+    && typeof value.lastError === 'string'
+    && typeof value.updatedAt === 'string'
+    && (typeof value.claimedUntilAt === 'string' || value.claimedUntilAt === undefined);
+}
+
+function isStringRecord(value: unknown): value is Record<string, string> {
+  return isRecord(value) && Object.values(value).every((entry) => typeof entry === 'string');
 }
 
 type LocalSourceRow = {

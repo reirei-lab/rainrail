@@ -173,6 +173,76 @@ function manualDispatchPayload(conversationId: string, text = 'hello'): Record<s
   };
 }
 
+function localOperationalJsonEvent(id: string, receivedAt: string): Record<string, unknown> {
+  return {
+    id,
+    name: 'github.issue',
+    source: { type: 'github', name: 'github-shared', repository: 'reirei-lab/rainrail' },
+    delivery: { id: `delivery-${id}`, receivedAt },
+    subject: { type: 'issue', id, url: `https://github.com/reirei-lab/rainrail/issues/${id}` },
+    occurredAt: receivedAt,
+    receivedAt,
+    envelope: {
+      id,
+      schemaVersion: 'rainrail.event.v1',
+      name: 'github.issue',
+      source: { type: 'github', name: 'github-shared', repository: 'reirei-lab/rainrail' },
+      delivery: { id: `delivery-${id}`, receivedAt },
+      subject: { type: 'issue', id, url: `https://github.com/reirei-lab/rainrail/issues/${id}` },
+      occurredAt: receivedAt,
+      payload: { localEvent: { status: 'received', summary: `${id} received`, workflowRunCount: 0, handlerRetryCount: 0 } },
+      rawPayload: { kind: 'external-reference', reference: `local://events/${id}` },
+      links: { self: `/api/v1/events/${id}` },
+    },
+  };
+}
+
+function localOperationalJsonActivityEvent(id: string, sourceEventId: string, createdAt: string): Record<string, unknown> {
+  return {
+    id,
+    sourceEventId,
+    sourceEventName: 'github.issue',
+    category: 'workflow',
+    targetType: 'event',
+    targetId: sourceEventId,
+    actionType: 'workflow_dispatched',
+    outcome: 'success',
+    summary: `${id} dispatched`,
+    createdAt,
+  };
+}
+
+function localOperationalJsonAgentTask(id: string, updatedAt: string): Record<string, unknown> {
+  return {
+    id,
+    title: `${id} task`,
+    branchName: `agent/${id}`,
+    status: 'running',
+    issue: { repository: 'reirei-lab/rainrail', number: 405 },
+    startedAt: updatedAt,
+    updatedAt,
+    runtime: {
+      status: 'running',
+      startedAt: updatedAt,
+    },
+  };
+}
+
+function localOperationalJsonEventHandlerRetry(
+  eventId: string,
+  handlerName: string,
+  nextRetryAt: string,
+): Record<string, unknown> {
+  return {
+    eventId,
+    handlerName,
+    attempts: 1,
+    nextRetryAt,
+    lastError: 'transient failure',
+    updatedAt: nextRetryAt,
+  };
+}
+
 describe('Rainrail CLI built-in commands', () => {
   it('defines the command table without provider or runtime specific handlers', () => {
     expect(BUILT_IN_COMMANDS.map((command) => command.name)).toEqual([
@@ -1404,6 +1474,41 @@ describe('Rainrail CLI built-in commands', () => {
       expect(result.stdout).toContain('Dashboard demo routes: /en/dashboard/events?demo=1, /en/dashboard/runs?demo=1, /en/dashboard/tasks?demo=1, /en/dashboard/sources?demo=1, /en/dashboard/queue?demo=1, /en/dashboard/settings?demo=1');
       expect(result.stdout).toContain('Dashboard demo API: http://127.0.0.1:8787/api/v1/overview?demo=1');
       expect(result.stdout).toContain('Dashboard demo status API: http://127.0.0.1:8787/api/v1/dashboard/status?demo=1');
+      expect(startOptions?.demoMode).toBe(true);
+      expect(startOptions?.operationalStoreConfig).toEqual({
+        kind: 'sqlite',
+        databasePath: join(projectRoot, '.tmp', 'dashboard-demo.sqlite'),
+        eventLimit: 250,
+      });
+    });
+  });
+
+  it('resolves setup-repaired JSON operational store to the seeded SQLite dashboard DB in demo mode', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'dashboard-demo-setup-json-options');
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        operationalStore: {
+          kind: 'json',
+          databasePath: '.rainrail/operational.json',
+          eventLimit: 250,
+        },
+        sourceBundles: [],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+      let startOptions: RainrailStartOptions | undefined;
+
+      const result = runRainrailCli(['start', '--demo'], {
+        cwd: projectRoot,
+        serverStarter: (options) => {
+          startOptions = options;
+          return { stop: () => undefined };
+        },
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
       expect(startOptions?.demoMode).toBe(true);
       expect(startOptions?.operationalStoreConfig).toEqual({
         kind: 'sqlite',
@@ -3975,7 +4080,7 @@ describe('Rainrail CLI built-in commands', () => {
     });
   });
 
-  it('rejects incompatible JSON operational store files in local start', async () => {
+  it('persists local start JSON operational store files in the shared object format', async () => {
     await withTempDirectory(async (directory) => {
       const projectRoot = await initRainrailProject(directory, 'json-operational-start');
       const port = await getFreePort();
@@ -3983,16 +4088,170 @@ describe('Rainrail CLI built-in commands', () => {
       await mkdir(join(projectRoot, 'var'), { recursive: true });
       await writeFile(databasePath, `${JSON.stringify({
         events: {
-          existing: {
-            id: 'existing',
-          },
+          'shared-event-000001': localOperationalJsonEvent('shared-event-000001', '2026-07-25T00:00:00.000Z'),
         },
-        activityEvents: {},
+        activityEvents: {
+          'activity-existing': localOperationalJsonActivityEvent(
+            'activity-existing',
+            'shared-event-000001',
+            '2026-07-25T00:01:00.000Z',
+          ),
+        },
+        agentTasks: {
+          'agent-task-existing': localOperationalJsonAgentTask('agent-task-existing', '2026-07-25T00:02:00.000Z'),
+        },
+        commandResults: {
+          'command-result-existing': { id: 'command-result-existing', exitCode: 0 },
+        },
+        eventHandlerRetries: {
+          'shared-event-000001:handler': localOperationalJsonEventHandlerRetry(
+            'shared-event-000001',
+            'handler',
+            '2026-07-25T00:03:00.000Z',
+          ),
+        },
+        sequences: {
+          local_event: 0,
+        },
       }, null, 2)}\n`);
       await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
         server: {
           host: '127.0.0.1',
           port,
+        },
+        operationalStore: {
+          kind: 'json',
+          databasePath,
+          eventLimit: 10,
+        },
+        dashboardAuth: {
+          readOnlyToken: 'read-token',
+          operatorToken: 'operator-token',
+        },
+        sourceBundles: [{
+          type: 'eep-bridge',
+          name: 'local',
+          sources: [{
+            type: 'github-webhook',
+            name: 'github-local',
+            sourceType: 'github',
+            provider: 'github',
+            webhookSecret: 'secret',
+            endpoint: '/webhooks/github',
+          }],
+        }],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+
+      const result = await runRainrailCliAsync(['start'], { cwd: projectRoot });
+      try {
+        expect(result.exitCode).toBe(0);
+        const readAuth = { Authorization: 'Bearer read-token' };
+        const overview = await fetch(`http://127.0.0.1:${port}/api/v1/overview`, { headers: readAuth });
+        await expect(overview.json()).resolves.toMatchObject({
+          data: {
+            counts: {
+              events: 1,
+              activityEvents: 1,
+              agentTasks: 1,
+              commandResults: 1,
+              eventHandlerRetries: 1,
+            },
+            recentActivity: [{ id: 'activity-existing', summary: 'activity-existing dispatched' }],
+          },
+        });
+
+        const workflows = await fetch(`http://127.0.0.1:${port}/api/v1/workflow-runs`, { headers: readAuth });
+        await expect(workflows.json()).resolves.toMatchObject({
+          data: [{ id: 'activity-existing', summary: 'activity-existing dispatched' }],
+        });
+
+        const tasks = await fetch(`http://127.0.0.1:${port}/api/v1/agent-tasks`, { headers: readAuth });
+        await expect(tasks.json()).resolves.toMatchObject({
+          data: [{ id: 'agent-task-existing', title: 'agent-task-existing task' }],
+        });
+
+        const detail = await fetch(`http://127.0.0.1:${port}/api/v1/events/shared-event-000001`, { headers: readAuth });
+        await expect(detail.json()).resolves.toMatchObject({
+          data: {
+            compact: {
+              id: 'shared-event-000001',
+              workflowRunCount: 1,
+              handlerRetryCount: 1,
+            },
+          },
+        });
+
+        const body = JSON.stringify({ action: 'opened' });
+        const accepted = await fetch(`http://127.0.0.1:${port}/webhooks/github`, {
+          method: 'POST',
+          headers: githubWebhookHeaders('secret', body, { delivery: 'delivery-json-object', event: 'issues' }),
+          body,
+        });
+        expect(accepted.status).toBe(202);
+      } finally {
+        await closeTestServer(result);
+      }
+
+      const persisted = JSON.parse(await readFile(databasePath, 'utf8')) as {
+        events?: unknown;
+        activityEvents?: unknown;
+        agentTasks?: unknown;
+        commandResults?: unknown;
+        eventHandlerRetries?: unknown;
+        sequences?: unknown;
+      };
+      expect(Array.isArray(persisted.events)).toBe(false);
+      expect(persisted.events).toMatchObject({
+        'shared-event-000001': {
+          id: 'shared-event-000001',
+          name: 'github.issue',
+        },
+        'local-event-000001': {
+          id: 'local-event-000001',
+          envelope: { payload: { localEvent: { status: 'received' } } },
+        },
+      });
+      expect(persisted.activityEvents).toMatchObject({
+        'activity-existing': { id: 'activity-existing', sourceEventId: 'shared-event-000001', category: 'workflow' },
+      });
+      expect(persisted.agentTasks).toMatchObject({
+        'agent-task-existing': { id: 'agent-task-existing', status: 'running' },
+      });
+      expect(persisted.commandResults).toMatchObject({
+        'command-result-existing': { id: 'command-result-existing', exitCode: 0 },
+      });
+      expect(persisted.eventHandlerRetries).toMatchObject({
+        'shared-event-000001:handler': { eventId: 'shared-event-000001', handlerName: 'handler', attempts: 1 },
+      });
+      expect(persisted.sequences).toMatchObject({ local_event: 1 });
+    });
+  });
+
+  it('lists JSON operational events newest first in local start APIs', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'json-operational-event-order');
+      const port = await getFreePort();
+      const databasePath = join(projectRoot, 'var', 'rainrail-operational.json');
+      await mkdir(join(projectRoot, 'var'), { recursive: true });
+      await writeFile(databasePath, `${JSON.stringify({
+        events: {
+          'shared-event-old': localOperationalJsonEvent('shared-event-old', '2026-07-25T00:00:00.000Z'),
+          'shared-event-new': localOperationalJsonEvent('shared-event-new', '2026-07-25T00:10:00.000Z'),
+        },
+        activityEvents: {},
+        agentTasks: {},
+        commandResults: {},
+        eventHandlerRetries: {},
+        sequences: { local_event: 0 },
+      }, null, 2)}\n`);
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        server: { host: '127.0.0.1', port },
+        dashboardAuth: {
+          readOnlyToken: 'read-token',
+          operatorToken: 'operator-token',
         },
         operationalStore: {
           kind: 'json',
@@ -4006,10 +4265,17 @@ describe('Rainrail CLI built-in commands', () => {
       }, null, 2)}\n`);
 
       const result = await runRainrailCliAsync(['start'], { cwd: projectRoot });
-
-      expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain('JSON operational store is not compatible with rainrail start local event storage');
-      await expect(readFile(databasePath, 'utf8')).resolves.toContain('"activityEvents"');
+      try {
+        expect(result.exitCode).toBe(0);
+        const response = await fetch(`http://127.0.0.1:${port}/api/v1/events`, {
+          headers: { Authorization: 'Bearer read-token' },
+        });
+        expect(response.status).toBe(200);
+        const payload = await response.json() as { data?: Array<{ id?: string }> };
+        expect(payload.data?.map((event) => event.id)).toEqual(['shared-event-new', 'shared-event-old']);
+      } finally {
+        await closeTestServer(result);
+      }
     });
   });
 
@@ -7443,6 +7709,173 @@ describe('Rainrail CLI built-in commands', () => {
     });
   });
 
+  it('adds the default local operational store when setup repairs an existing workspace config', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'legacy-operational-store-setup');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      await writeFile(configPath, `${JSON.stringify({
+        project: { name: 'legacy-operational-store-setup' },
+        dashboardAuth: {
+          readOnlyToken: 'existing-read-token',
+          operatorToken: 'existing-operator-token',
+        },
+        sourceBundles: [],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+
+      const result = runRainrailCli(['setup', '--dashboard-auth-only', '--yes'], {
+        cwd: projectRoot,
+      });
+      let startOptions: RainrailStartOptions | undefined;
+      const startResult = runRainrailCli(['start'], {
+        cwd: projectRoot,
+        serverStarter: (options) => {
+          startOptions = options;
+          return { stop: () => undefined };
+        },
+      });
+      const config = JSON.parse(await readFile(configPath, 'utf8')) as {
+        dashboardAuth?: { readOnlyToken?: string; operatorToken?: string };
+        operationalStore?: { kind?: string; databasePath?: string; eventLimit?: number };
+      };
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+      expect(result.stdout).toBe('Configured operationalStore json store in rainrail.config.json.\n');
+      expect(startResult.exitCode).toBe(0);
+      expect(startOptions?.operationalStoreConfig).toEqual({
+        kind: 'json',
+        databasePath: join(projectRoot, '.rainrail', 'operational.json'),
+        eventLimit: 250,
+      });
+      expect(config.dashboardAuth).toEqual({
+        readOnlyToken: 'existing-read-token',
+        operatorToken: 'existing-operator-token',
+      });
+      expect(config.operationalStore).toEqual({
+        kind: 'json',
+        databasePath: '.rainrail/operational.json',
+        eventLimit: 250,
+      });
+      await expect(readFile(join(projectRoot, '.gitignore'), 'utf8')).resolves.toContain(
+        '.rainrail/operational.json',
+      );
+    });
+  });
+
+  it('does not replace an explicitly configured operational store during setup', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'explicit-operational-store-setup');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      const explicitOperationalStore = {
+        kind: 'json',
+        databasePath: '${RAINRAIL_OPERATIONAL_DB}',
+        eventLimit: 42,
+      };
+      await writeFile(configPath, `${JSON.stringify({
+        project: { name: 'explicit-operational-store-setup' },
+        dashboardAuth: {
+          readOnlyToken: 'existing-read-token',
+          operatorToken: 'existing-operator-token',
+        },
+        operationalStore: explicitOperationalStore,
+        sourceBundles: [],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+
+      const result = runRainrailCli(['setup', '--dashboard-auth-only', '--yes'], {
+        cwd: projectRoot,
+      });
+      const config = JSON.parse(await readFile(configPath, 'utf8')) as {
+        operationalStore?: unknown;
+      };
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+      expect(result.stdout).toBe('');
+      expect(config.operationalStore).toEqual(explicitOperationalStore);
+    });
+  });
+
+  it('does not write operationalStore when setup cannot update the default store gitignore', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'blocked-operational-store-gitignore');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      await rm(join(projectRoot, '.gitignore'), { force: true });
+      await mkdir(join(projectRoot, '.gitignore'), { recursive: true });
+      await writeFile(configPath, `${JSON.stringify({
+        project: { name: 'blocked-operational-store-gitignore' },
+        dashboardAuth: {
+          readOnlyToken: 'existing-read-token',
+          operatorToken: 'existing-operator-token',
+        },
+        sourceBundles: [],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+
+      const result = runRainrailCli(['setup', '--dashboard-auth-only', '--rotate', '--yes'], {
+        cwd: projectRoot,
+      });
+      const config = JSON.parse(await readFile(configPath, 'utf8')) as {
+        dashboardAuth?: { readOnlyToken?: string; operatorToken?: string };
+        operationalStore?: unknown;
+      };
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('Git ignore path is not a regular file');
+      expect(config.dashboardAuth).toEqual({
+        readOnlyToken: 'existing-read-token',
+        operatorToken: 'existing-operator-token',
+      });
+      expect(config.operationalStore).toBeUndefined();
+    });
+  });
+
+  it('does not treat a broken default store gitignore symlink as missing during setup', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'broken-operational-store-gitignore-symlink');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      const gitignorePath = join(projectRoot, '.gitignore');
+      const brokenTarget = join(projectRoot, 'missing-gitignore-target');
+      await rm(gitignorePath, { force: true });
+      await symlink(brokenTarget, gitignorePath, 'file');
+      await writeFile(configPath, `${JSON.stringify({
+        project: { name: 'broken-operational-store-gitignore-symlink' },
+        dashboardAuth: {
+          readOnlyToken: 'existing-read-token',
+          operatorToken: 'existing-operator-token',
+        },
+        sourceBundles: [],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+
+      const result = runRainrailCli(['setup', '--dashboard-auth-only', '--rotate', '--yes'], {
+        cwd: projectRoot,
+      });
+      const config = JSON.parse(await readFile(configPath, 'utf8')) as {
+        dashboardAuth?: { readOnlyToken?: string; operatorToken?: string };
+        operationalStore?: unknown;
+      };
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('Git ignore path is not a regular file');
+      expect(config.dashboardAuth).toEqual({
+        readOnlyToken: 'existing-read-token',
+        operatorToken: 'existing-operator-token',
+      });
+      expect(config.operationalStore).toBeUndefined();
+      await expect(stat(brokenTarget)).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+  });
+
   it('generates only dashboard auth tokens with setup --dashboard-auth-only --yes', async () => {
     await withTempDirectory(async (directory) => {
       const projectRoot = await initRainrailProject(directory, 'dashboard-auth-only-setup');
@@ -7463,7 +7896,9 @@ describe('Rainrail CLI built-in commands', () => {
 
       expect(result.exitCode).toBe(0);
       expect(result.stderr).toBe('');
-      expect(result.stdout).toBe('Generated dashboardAuth.readOnlyToken and dashboardAuth.operatorToken in rainrail.config.json.\n');
+      expect(result.stdout).toBe(
+        'Generated dashboardAuth.readOnlyToken and dashboardAuth.operatorToken in rainrail.config.json.\n',
+      );
       expect(config.dashboardAuth?.readOnlyToken).toMatch(/^rr_local_read-only_[A-Za-z0-9_-]+$/u);
       expect(config.dashboardAuth?.operatorToken).toMatch(/^rr_local_operator_[A-Za-z0-9_-]+$/u);
       expect(lockfile).toContain('"plugins": []');
@@ -7490,7 +7925,10 @@ describe('Rainrail CLI built-in commands', () => {
 
       expect(result.exitCode).toBe(0);
       expect(result.stderr).toBe('');
-      expect(result.stdout).toBe('Generated dashboardAuth.readOnlyToken and dashboardAuth.operatorToken in custom.rainrail.json.\n');
+      expect(result.stdout).toBe(
+        'Generated dashboardAuth.readOnlyToken and dashboardAuth.operatorToken in custom.rainrail.json.\n' +
+          'Configured operationalStore json store in custom.rainrail.json.\n',
+      );
       expect(config.dashboardAuth?.readOnlyToken).toMatch(/^rr_local_read-only_[A-Za-z0-9_-]+$/u);
       expect(config.dashboardAuth?.operatorToken).toMatch(/^rr_local_operator_[A-Za-z0-9_-]+$/u);
       await expect(stat(join(directory, 'rainrail.lock'))).rejects.toThrow();
@@ -7526,7 +7964,8 @@ describe('Rainrail CLI built-in commands', () => {
       expect(result.exitCode).toBe(0);
       expect(result.stderr).toBe('');
       expect(result.stdout).toBe(
-        'Rotated dashboardAuth.readOnlyToken, dashboardAuth.operatorToken, and dashboardAuth.adminToken in rainrail.config.json.\n',
+        'Rotated dashboardAuth.readOnlyToken, dashboardAuth.operatorToken, and dashboardAuth.adminToken in rainrail.config.json.\n' +
+          'Configured operationalStore json store in rainrail.config.json.\n',
       );
       expect(config.dashboardAuth?.readOnlyToken).toMatch(/^rr_local_read-only_[A-Za-z0-9_-]+$/u);
       expect(config.dashboardAuth?.operatorToken).toMatch(/^rr_local_operator_[A-Za-z0-9_-]+$/u);
@@ -7571,7 +8010,8 @@ describe('Rainrail CLI built-in commands', () => {
       expect(result.exitCode).toBe(0);
       expect(result.stderr).toBe('');
       expect(result.stdout).toBe(
-        'Rotated dashboardAuth.operatorToken in rainrail.config.json.\n',
+        'Rotated dashboardAuth.operatorToken in rainrail.config.json.\n' +
+          'Configured operationalStore json store in rainrail.config.json.\n',
       );
       expect(config.dashboardAuth?.readOnlyToken).toBe('${DASHBOARD_READ_TOKEN}');
       expect(config.dashboardAuth?.operatorToken).toMatch(/^rr_local_operator_[A-Za-z0-9_-]+$/u);
@@ -7615,7 +8055,8 @@ describe('Rainrail CLI built-in commands', () => {
       expect(result.exitCode).toBe(0);
       expect(result.stderr).toBe('');
       expect(result.stdout).toBe(
-        'Rotated dashboardAuth.readOnlyToken and dashboardAuth.operatorToken in rainrail.config.json.\n',
+        'Rotated dashboardAuth.readOnlyToken and dashboardAuth.operatorToken in rainrail.config.json.\n' +
+          'Configured operationalStore json store in rainrail.config.json.\n',
       );
       expect(rawConfig).toContain('"sources": ${RAINRAIL_SOURCES}');
       expect(rawConfig.match(/"readOnlyToken"/gu)).toHaveLength(1);

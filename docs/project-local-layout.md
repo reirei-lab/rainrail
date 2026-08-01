@@ -98,6 +98,17 @@ generated once, then preserved on later setup runs. The generated token values
 are written only to the config file; text output reports the fields that were
 created without printing the secrets.
 
+The core CLI also repairs legacy project configs that do not have a top-level
+`operationalStore`. When missing, setup adds a Node 20 compatible local JSON
+store with `kind: "json"`, `databasePath: ".rainrail/operational.json"`, and
+`eventLimit: 250`. This default file uses the same object format as
+`JsonFileOperationalStore` so `rainrail start` and the shared Node server helper
+can read the same local state. Because the file contains local operational
+state, setup first verifies and updates the config directory's `.gitignore`
+with `.rainrail/operational.json`; if that ignore update cannot be completed,
+setup fails before changing `rainrail.config.json`. Existing explicit
+`operationalStore` config is preserved unchanged.
+
 1. Install the plugin with the project-local equivalent of
    `rainrail plugins add <canonicalAlias>`.
 2. Run the plugin setup command through the canonical equivalent of
@@ -153,18 +164,17 @@ For example, a successful `rainrail --json --yes setup github` returns
 `["rainrail", "plugins", "add", "github"]`, followed by a `setup` step whose
 command is `["rainrail", "plugin", "github", "setup", "--yes", "--json"]`.
 When target selectors are present, recorded step commands include them, for
-example `["rainrail", "--config", "/abs/rainrail.config.json", "plugins",
-"add", "github"]`.
+example `["rainrail", "--config", "/abs/rainrail.config.json", "plugins", "add", "github"]`.
 
 Preview mode (`rainrail --json setup [officialPluginName...]`) returns
 `completed: false`, an empty `steps` array, the selected canonical aliases in
 `plugins`, and a `nextAction` command string. When the preview was limited to
 selected plugins, `nextAction` includes those canonical aliases, for example
 `rainrail setup github --yes`. When target selectors were provided,
-`nextAction` also includes them, for example `rainrail --config
-/abs/rainrail.config.json --profile ci setup github --yes`. `nextAction` is a
-shell-oriented command string: arguments that contain whitespace or other
-unsafe shell characters are single-quoted.
+`nextAction` also includes them, for example
+`rainrail --config /abs/rainrail.config.json --profile ci setup github --yes`.
+`nextAction` is a shell-oriented command string: arguments that contain
+whitespace or other unsafe shell characters are single-quoted.
 
 Setup-specific validation errors in JSON mode also return a JSON object with
 `completed: false`, empty `plugins` and `steps`, and an `error` string. Shared
