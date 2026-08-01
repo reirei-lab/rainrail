@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.10.0](https://github.com/reirei-lab/rainrail/compare/release/0.9.0...release/0.10.0) (2026-08-01)
+
+
+### Features
+
+* clarify rainrail start public URLs ([#400](https://github.com/reirei-lab/rainrail/issues/400)) ([1e57598](https://github.com/reirei-lab/rainrail/commit/1e5759878887120173976d24d8d3b761772315d8))
+* repair missing operational store during setup ([#408](https://github.com/reirei-lab/rainrail/issues/408)) ([aeb7c50](https://github.com/reirei-lab/rainrail/commit/aeb7c50df98fa1f1f2db8b03057f1ff62d9d24be))
+* VRT差分をPRコメントに画像つきで表示する ([#388](https://github.com/reirei-lab/rainrail/issues/388)) ([f5dadd9](https://github.com/reirei-lab/rainrail/commit/f5dadd9194d3ababd991f08ca164f1fed13e0a61))
+
+
+### Bug Fixes
+
+* enforce node server host allowlist ([#398](https://github.com/reirei-lab/rainrail/issues/398)) ([74e2023](https://github.com/reirei-lab/rainrail/commit/74e2023a232c6a01d9675b9572a48160fdbc559e))
+* init config に SQLite operational store を追加 ([#409](https://github.com/reirei-lab/rainrail/issues/409)) ([6136857](https://github.com/reirei-lab/rainrail/commit/613685777e3e2c3fd5d9a314fdd9993f53ab0e76))
+* separate dashboard bind and display hosts ([#396](https://github.com/reirei-lab/rainrail/issues/396)) ([bd502c0](https://github.com/reirei-lab/rainrail/commit/bd502c08a998c9ccf2912f74bc91dd0906888b2b))
+
 ## [0.9.0](https://github.com/reirei-lab/rainrail/compare/release/0.8.0...release/0.9.0) (2026-07-31)
 
 
