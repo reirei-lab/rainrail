@@ -3235,12 +3235,13 @@ describe('Rainrail CLI built-in commands', () => {
       withSqliteDatabase(databasePath, (database) => {
         database.prepare(`
           INSERT INTO operational_events (
-            id, name, source_json, delivery_json, subject_json, occurred_at, received_at,
+            id, name, source_type, source_json, delivery_json, subject_json, occurred_at, received_at,
             payload_json, raw_payload_reference_json, links_json
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
           'github-webhook:delivery-existing:github.issue',
           'github.issue',
+          'github',
           JSON.stringify({ type: 'github', name: 'github-webhook', repository: 'reirei-lab/rainrail' }),
           JSON.stringify({ id: 'delivery-existing', receivedAt: '2026-07-09T00:00:00.000Z' }),
           JSON.stringify({ type: 'issue', id: '271', url: 'https://github.com/reirei-lab/rainrail/issues/271' }),
@@ -3801,6 +3802,81 @@ describe('Rainrail CLI built-in commands', () => {
     });
   });
 
+  it('persists local events into SQLite operational tables created by the core store', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'sqlite-operational-core-schema');
+      const port = await getFreePort();
+      const databasePath = join(projectRoot, 'var', 'rainrail-operational.sqlite');
+      await mkdir(join(projectRoot, 'var'), { recursive: true });
+      withSqliteDatabase(databasePath, (database) => {
+        database.exec(`
+          CREATE TABLE operational_events (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            source_type TEXT NOT NULL,
+            source_json TEXT NOT NULL,
+            delivery_json TEXT NOT NULL,
+            subject_json TEXT NOT NULL,
+            occurred_at TEXT NOT NULL,
+            received_at TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            raw_payload_reference_json TEXT NOT NULL,
+            links_json TEXT
+          );
+        `);
+      });
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        server: {
+          host: '127.0.0.1',
+          port,
+        },
+        operationalStore: {
+          kind: 'sqlite',
+          databasePath,
+          eventLimit: 10,
+        },
+        sourceBundles: [
+          {
+            type: 'eep-bridge',
+            name: 'local',
+            sources: [
+              {
+                type: 'github-webhook',
+                name: 'github-local',
+                sourceType: 'github',
+                provider: 'github',
+                webhookSecret: 'secret',
+                endpoint: '/webhooks/github',
+              },
+            ],
+          },
+        ],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+
+      const result = await runRainrailCliAsync(['start'], { cwd: projectRoot });
+      try {
+        expect(result.exitCode).toBe(0);
+        const body = JSON.stringify({ action: 'opened' });
+        const accepted = await fetch(`http://127.0.0.1:${port}/webhooks/github`, {
+          method: 'POST',
+          headers: githubWebhookHeaders('secret', body, { delivery: 'delivery-core-schema', event: 'issues' }),
+          body,
+        });
+        expect(accepted.status).toBe(202);
+      } finally {
+        await closeTestServer(result);
+      }
+
+      withSqliteDatabase(databasePath, (database) => {
+        expect(database.prepare('SELECT source_type FROM operational_events WHERE id = ?').get('local-event-000001'))
+          .toEqual({ source_type: 'github' });
+      });
+    });
+  });
+
   it('reserves local event ids across shared SQLite start processes', async () => {
     await withTempDirectory(async (directory) => {
       const projectRoot = await initRainrailProject(directory, 'sqlite-operational-shared-id');
@@ -3915,13 +3991,14 @@ describe('Rainrail CLI built-in commands', () => {
       withSqliteDatabase(databasePath, (database) => {
         const insertEvent = database.prepare(`
           INSERT INTO operational_events (
-            id, name, source_json, delivery_json, subject_json, occurred_at, received_at,
+            id, name, source_type, source_json, delivery_json, subject_json, occurred_at, received_at,
             payload_json, raw_payload_reference_json, links_json
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
         insertEvent.run(
           'local-event-000009',
           'github.issue',
+          'github',
           JSON.stringify({ type: 'github', name: 'github-local' }),
           JSON.stringify({ id: 'delivery-old-local', receivedAt: '2026-07-09T00:00:00.000Z' }),
           JSON.stringify({ type: 'issue', id: 'local-event-000009' }),
@@ -3934,6 +4011,7 @@ describe('Rainrail CLI built-in commands', () => {
         insertEvent.run(
           'github-webhook:delivery-latest:github.issue',
           'github.issue',
+          'github',
           JSON.stringify({ type: 'github', name: 'github-webhook' }),
           JSON.stringify({ id: 'delivery-latest', receivedAt: '2026-07-09T00:10:00.000Z' }),
           JSON.stringify({ type: 'issue', id: 'latest' }),
@@ -9063,6 +9141,11 @@ describe('Rainrail CLI built-in commands', () => {
           allowedHosts: [],
         },
         dashboardAuth: {},
+        operationalStore: {
+          kind: 'sqlite',
+          databasePath: 'var/rainrail-operational.sqlite',
+          eventLimit: 250,
+        },
         sourceBundles: [],
         sources: [],
         taskProviders: {},
@@ -9074,6 +9157,15 @@ describe('Rainrail CLI built-in commands', () => {
           project: { name: 'my-agent-ops' },
           plugins: [],
         }, null, 2)}\n`,
+      );
+      await expect(readFile(join(projectRoot, '.gitignore'), 'utf8')).resolves.toBe(
+        [
+          '# Rainrail local operational store',
+          '/var/rainrail-operational.sqlite',
+          '/var/rainrail-operational.sqlite-wal',
+          '/var/rainrail-operational.sqlite-shm',
+          '',
+        ].join('\n'),
       );
       await expect(readFile(join(projectRoot, '.rainrail', 'plugins', '.gitkeep'), 'utf8')).resolves.toBe('');
       await expect(stat(join(projectRoot, 'my-agent-ops'))).rejects.toThrow();
@@ -9133,8 +9225,28 @@ describe('Rainrail CLI built-in commands', () => {
       expect(directories.has(join(projectRoot, '.rainrail', 'plugins'))).toBe(true);
       expect(files.get(join(projectRoot, 'rainrail.config.json'))).toContain('"name": "virtual-cwd"');
       expect(files.get(join(projectRoot, 'rainrail.lock'))).toContain('"plugins": []');
+      expect(files.get(join(projectRoot, '.gitignore'))).toContain('/var/rainrail-operational.sqlite');
       expect(files.get(join(projectRoot, '.rainrail', 'plugins', '.gitkeep'))).toBe('');
       await expect(stat(join(projectRoot, 'my-agent-ops'))).rejects.toThrow();
+    });
+  });
+
+  it('adds operational store entries to an existing gitignore during init', async () => {
+    await withTempDirectory(async (directory) => {
+      await writeFile(join(directory, '.gitignore'), 'node_modules/\n');
+
+      expect(runRainrailCli(['init', '--yes'], { cwd: directory }).exitCode).toBe(0);
+
+      await expect(readFile(join(directory, '.gitignore'), 'utf8')).resolves.toBe(
+        [
+          'node_modules/',
+          '# Rainrail local operational store',
+          '/var/rainrail-operational.sqlite',
+          '/var/rainrail-operational.sqlite-wal',
+          '/var/rainrail-operational.sqlite-shm',
+          '',
+        ].join('\n'),
+      );
     });
   });
 

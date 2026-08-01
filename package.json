@@ -4,6 +4,9 @@
   "private": true,
   "description": "Agent-ready development event routing and workflow orchestration suite.",
   "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
   "packageManager": "pnpm@10.12.1",
   "scripts": {
     "build": "pnpm run build:scripts && pnpm --filter www build && pnpm docs:build && pnpm --filter @rainrail/cli build",
