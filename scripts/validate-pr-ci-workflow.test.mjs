@@ -73,7 +73,7 @@ describe('pull request CI workflow', () => {
 
   it('publishes dashboard VRT comments from trusted workflow_run tooling', () => {
     expect(dashboardVrtCommentWorkflow).toMatch(/^on:\n {2}workflow_run:\n {4}workflows:\n {6}- Pull Request CI\n {4}types:\n {6}- completed$/m);
-    expect(dashboardVrtCommentWorkflow).toMatch(/^concurrency:\n {2}group: dashboard-vrt-comment-\$\{\{ github\.event\.workflow_run\.pull_requests\[0\]\.number \|\| github\.event\.workflow_run\.id \}\}\n {2}cancel-in-progress: true$/m);
+    expect(dashboardVrtCommentWorkflow).toMatch(/^concurrency:\n {2}group: dashboard-vrt-comment-\$\{\{ github\.event\.workflow_run\.id \}\}\n {2}cancel-in-progress: true$/m);
     expect(dashboardVrtCommentWorkflow).toMatch(/^permissions:\n {2}actions: read\n {2}contents: read\n {2}pull-requests: read$/m);
     expect(dashboardVrtCommentWorkflow).toContain("github.event.workflow_run.event == 'pull_request'");
     expect(dashboardVrtCommentWorkflow).toContain('github.event.workflow_run.pull_requests[0].head.repo.full_name == github.repository');
