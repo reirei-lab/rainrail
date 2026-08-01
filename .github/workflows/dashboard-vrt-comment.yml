@@ -101,12 +101,12 @@ jobs:
             echo "available=false" >> "$GITHUB_OUTPUT"
             echo "comment_available=true" >> "$GITHUB_OUTPUT"
             cat > dashboard-vrt-comment/vrt-comment.md <<'EOF'
-## VRT 差分
+          ## VRT 差分
 
-VRT は実行されませんでした、または結果 artifact を取得できませんでした。
+          VRT は実行されませんでした、または結果 artifact を取得できませんでした。
 
-現在の Pull Request CI で `dashboard-e2e-artifacts` が生成されていないため、before/after/diff 画像はありません。
-EOF
+          現在の Pull Request CI で `dashboard-e2e-artifacts` が生成されていないため、before/after/diff 画像はありません。
+          EOF
             echo "::notice::Skipping dashboard VRT PR comment because dashboard-e2e-artifacts was not uploaded."
           fi
         env:
