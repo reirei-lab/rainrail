@@ -13,7 +13,7 @@ import {
   type RainrailHttpAppOptions,
 } from './http-app.js';
 import { jsonResponse, readRequestBody, writeFetchResponse } from './http-utils.js';
-import type { RainrailIntakeAdapter } from './intake-adapter.js';
+import { isCoreRoutePath, type RainrailIntakeAdapter } from './intake-adapter.js';
 import {
   JsonFileOperationalStore,
   RainrailOperationalStore,
@@ -92,7 +92,10 @@ export function createRainrailNodeServer(options: RainrailNodeServerOptions): Ra
       });
 
       try {
-        if (!isAllowedHostHeader(request.headers.host, options.allowedHosts)) {
+        if (
+          shouldApplyHostAllowlist(request.url)
+          && !isAllowedHostHeader(request.headers.host, options.allowedHosts)
+        ) {
           await writeFetchResponse(
             response,
             jsonResponse({ error: 'invalid_host_header' }, { status: 400 }),
@@ -244,6 +247,18 @@ function isDashboardBodyRoute(pathname: string, method: string): boolean {
   return isDashboardCommandRoute(pathname, method)
     || (method.toUpperCase() === 'PUT' && pathname === '/api/v1/dashboard/layout')
     || (method.toUpperCase() === 'PATCH' && /^\/api\/v1\/dashboard\/layout\/items\/[^/]+\/config$/.test(pathname));
+}
+
+function shouldApplyHostAllowlist(requestUrl: string | undefined): boolean {
+  return isCoreRoutePath(pathnameForRequestUrl(requestUrl));
+}
+
+function pathnameForRequestUrl(requestUrl: string | undefined): string {
+  try {
+    return new URL(requestUrl ?? '/', 'http://rainrail.local').pathname;
+  } catch {
+    return '/';
+  }
 }
 
 function isAllowedHostHeader(host: string | undefined, allowedHosts: readonly string[] | undefined): boolean {

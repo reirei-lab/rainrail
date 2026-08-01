@@ -402,6 +402,28 @@ describe('Rainrail Node server', () => {
       ]);
       expect(accepted).toContain('200 OK');
 
+      const webhookPayload = JSON.stringify({
+        action: 'opened',
+        repository: { full_name: 'reirei-lab/rainrail' },
+        issue: {
+          number: 391,
+          html_url: 'https://github.com/reirei-lab/rainrail/issues/391',
+        },
+      });
+      const webhook = await nodeHttpTextRequest(address.port, [
+        'POST /webhooks/github HTTP/1.1',
+        'Host: webhooks.example',
+        'Content-Type: application/json',
+        `Content-Length: ${Buffer.byteLength(webhookPayload)}`,
+        'X-GitHub-Event: issues',
+        'X-GitHub-Delivery: delivery-host-allowlist-intake',
+        `X-Hub-Signature-256: ${await createGitHubWebhookSignature('secret', webhookPayload)}`,
+        'Connection: close',
+        '',
+        webhookPayload,
+      ]);
+      expect(webhook).toContain('202 Accepted');
+
       const rejected = await nodeHttpTextRequest(address.port, [
         'GET /api/v1/overview HTTP/1.1',
         `Host: attacker.example:${address.port}`,
