@@ -350,6 +350,11 @@ const rainrailConfigFileName = 'rainrail.config.json';
 const rainrailLockFileName = 'rainrail.lock';
 const rainrailDirectoryName = '.rainrail';
 const rainrailPluginDirectoryName = 'plugins';
+const defaultLocalOperationalStoreConfig = {
+  kind: 'json',
+  databasePath: '.rainrail/operational.json',
+  eventLimit: 250,
+} as const;
 const safeProjectNamePattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 const semverVersionPattern =
   /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/u;
@@ -5412,28 +5417,47 @@ function ensureLocalOperationalStore(
   }
 
   fileSystem.writeFileSync(configPath, formatConfigWithDefaultOperationalStore(raw));
+  ensureDefaultOperationalStoreGitIgnore(dirname(configPath), fileSystem);
   return { configured: true, configPath };
 }
 
 function formatConfigWithDefaultOperationalStore(raw: string): string {
-  const operationalStore = {
-    kind: 'sqlite',
-    databasePath: 'var/rainrail-operational.sqlite',
-    eventLimit: 250,
-  };
   try {
     const rawValue = JSON.parse(raw) as unknown;
     if (isRecord(rawValue)) {
       return `${JSON.stringify({
         ...rawValue,
-        operationalStore,
+        operationalStore: defaultLocalOperationalStoreConfig,
       }, null, 2)}\n`;
     }
   } catch {
     // Fall through to the lexical top-level insertion used for env-fragment configs.
   }
 
-  return insertTopLevelOperationalStore(raw, operationalStore);
+  return insertTopLevelOperationalStore(raw, defaultLocalOperationalStoreConfig);
+}
+
+function ensureDefaultOperationalStoreGitIgnore(
+  projectRoot: string,
+  fileSystem: RainrailCliFileSystem,
+): void {
+  const gitIgnorePath = join(projectRoot, '.gitignore');
+  const entry = defaultLocalOperationalStoreConfig.databasePath;
+  if (!fileSystem.existsSync(gitIgnorePath)) {
+    fileSystem.writeFileSync(gitIgnorePath, `${entry}\n`);
+    return;
+  }
+  if (!isRegularFile(gitIgnorePath, fileSystem)) {
+    throw new Error(`Git ignore path is not a regular file: ${gitIgnorePath}`);
+  }
+
+  const existing = fileSystem.readFileSync(gitIgnorePath, 'utf8');
+  const lines = existing.split(/\r?\n/u);
+  if (lines.includes(entry)) {
+    return;
+  }
+  const separator = existing.length === 0 || existing.endsWith('\n') ? '' : '\n';
+  fileSystem.writeFileSync(gitIgnorePath, `${existing}${separator}${entry}\n`);
 }
 
 function parseExpandedDashboardAuthObject(raw: string, env: Record<string, string | undefined>): Record<string, unknown> {
@@ -6047,7 +6071,7 @@ function formatDashboardAuthSetupOutput(result: LocalDashboardAuthSetupResult): 
 
 function formatOperationalStoreSetupOutput(result: LocalOperationalStoreSetupResult): string {
   return result.configured
-    ? `Configured operationalStore sqlite store in ${basename(result.configPath)}.\n`
+    ? `Configured operationalStore ${defaultLocalOperationalStoreConfig.kind} store in ${basename(result.configPath)}.\n`
     : '';
 }
 
