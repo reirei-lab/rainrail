@@ -5213,6 +5213,7 @@ function runSetupCommand(
   const invocation = createRainrailCommandInvocation(environment.currentBinPath ?? process.argv[1]);
   const steps: SetupStepResult[] = [];
   let dashboardAuthResult: LocalDashboardAuthSetupResult;
+  let operationalStoreResult: LocalOperationalStoreSetupResult;
   try {
     if (!setupArguments.dashboardAuthOnly) {
       validateRainrailProjectForSetup(project, fileSystem);
@@ -5223,12 +5224,13 @@ function runSetupCommand(
       environment.env ?? process.env,
       { rotate: setupArguments.rotateDashboardAuth },
     );
+    operationalStoreResult = ensureLocalOperationalStore(project.configPath, fileSystem);
   } catch (error) {
     return formatSetupError(options, error);
   }
 
   if (setupArguments.dashboardAuthOnly) {
-    return formatSetupResult(true, plugins, steps, options, undefined, dashboardAuthResult);
+    return formatSetupResult(true, plugins, steps, options, undefined, dashboardAuthResult, operationalStoreResult);
   }
 
   for (const plugin of plugins) {
@@ -5244,7 +5246,7 @@ function runSetupCommand(
     );
     steps.push(installStep);
     if (installResult.exitCode !== 0) {
-      return formatSetupResult(false, plugins, steps, options, installStep, dashboardAuthResult);
+      return formatSetupResult(false, plugins, steps, options, installStep, dashboardAuthResult, operationalStoreResult);
     }
 
     const setupArgs = [
@@ -5281,11 +5283,11 @@ function runSetupCommand(
     );
     steps.push(setupStep);
     if (pluginSetupResult.exitCode !== 0) {
-      return formatSetupResult(false, plugins, steps, options, setupStep, dashboardAuthResult);
+      return formatSetupResult(false, plugins, steps, options, setupStep, dashboardAuthResult, operationalStoreResult);
     }
   }
 
-  return formatSetupResult(true, plugins, steps, options, undefined, dashboardAuthResult);
+  return formatSetupResult(true, plugins, steps, options, undefined, dashboardAuthResult, operationalStoreResult);
 }
 
 function parseSetupCommandArguments(args: readonly string[]): {
@@ -5334,6 +5336,11 @@ function parseSetupCommandArguments(args: readonly string[]): {
 type LocalDashboardAuthSetupResult = {
   readonly created: readonly (keyof RainrailDashboardAuth)[];
   readonly rotated: readonly (keyof RainrailDashboardAuth)[];
+  readonly configPath: string;
+};
+
+type LocalOperationalStoreSetupResult = {
+  readonly configured: boolean;
   readonly configPath: string;
 };
 
@@ -5393,6 +5400,40 @@ function ensureLocalDashboardAuth(
     fileSystem.writeFileSync(configPath, formatConfigWithLocalDashboardAuth(raw, generatedDashboardAuth));
   }
   return { created, rotated, configPath };
+}
+
+function ensureLocalOperationalStore(
+  configPath: string,
+  fileSystem: RainrailCliFileSystem,
+): LocalOperationalStoreSetupResult {
+  const raw = fileSystem.readFileSync(configPath, 'utf8');
+  if (hasOperationalStoreProperty(raw)) {
+    return { configured: false, configPath };
+  }
+
+  fileSystem.writeFileSync(configPath, formatConfigWithDefaultOperationalStore(raw));
+  return { configured: true, configPath };
+}
+
+function formatConfigWithDefaultOperationalStore(raw: string): string {
+  const operationalStore = {
+    kind: 'sqlite',
+    databasePath: 'var/rainrail-operational.sqlite',
+    eventLimit: 250,
+  };
+  try {
+    const rawValue = JSON.parse(raw) as unknown;
+    if (isRecord(rawValue)) {
+      return `${JSON.stringify({
+        ...rawValue,
+        operationalStore,
+      }, null, 2)}\n`;
+    }
+  } catch {
+    // Fall through to the lexical top-level insertion used for env-fragment configs.
+  }
+
+  return insertTopLevelOperationalStore(raw, operationalStore);
 }
 
 function parseExpandedDashboardAuthObject(raw: string, env: Record<string, string | undefined>): Record<string, unknown> {
@@ -5475,6 +5516,14 @@ function formatConfigWithLocalDashboardAuth(
 }
 
 function insertTopLevelDashboardAuth(raw: string, dashboardAuth: Record<string, unknown>): string {
+  return insertTopLevelProperty(raw, 'dashboardAuth', dashboardAuth);
+}
+
+function insertTopLevelOperationalStore(raw: string, operationalStore: Record<string, unknown>): string {
+  return insertTopLevelProperty(raw, 'operationalStore', operationalStore);
+}
+
+function insertTopLevelProperty(raw: string, name: string, value: Record<string, unknown>): string {
   const objectStart = raw.indexOf('{');
   if (objectStart < 0) {
     throw new Error('config must be an object');
@@ -5488,7 +5537,7 @@ function insertTopLevelDashboardAuth(raw: string, dashboardAuth: Record<string, 
   const body = raw.slice(objectStart + 1, objectEnd);
   const hasExistingProperties = body.trim().length > 0;
   const rest = newline.length === 0 ? afterStart : afterStart.slice(newline.length);
-  const property = `"dashboardAuth": ${JSON.stringify(dashboardAuth, null, 2).replaceAll('\n', `${newline}  `)}`;
+  const property = `"${name}": ${JSON.stringify(value, null, 2).replaceAll('\n', `${newline}  `)}`;
   if (!hasExistingProperties) {
     return `${raw.slice(0, objectStart + 1)}${newline}  ${property}${newline}${raw.slice(objectEnd)}`;
   }
@@ -5554,6 +5603,10 @@ function findRuntimeProvidersObjectStart(raw: string): number | undefined {
 
 function hasDashboardAuthProperty(raw: string): boolean {
   return findTopLevelPropertyValueStart(raw, 'dashboardAuth') !== undefined;
+}
+
+function hasOperationalStoreProperty(raw: string): boolean {
+  return findTopLevelPropertyValueStart(raw, 'operationalStore') !== undefined;
 }
 
 function hasRuntimeProvidersProperty(raw: string): boolean {
@@ -5943,6 +5996,7 @@ function formatSetupResult(
   options: SharedOptions,
   failedStep?: SetupStepResult,
   dashboardAuthResult?: LocalDashboardAuthSetupResult,
+  operationalStoreResult?: LocalOperationalStoreSetupResult,
 ): RainrailCliResult {
   if (options.json) {
     const jsonResult: SetupJsonResult = {
@@ -5961,7 +6015,10 @@ function formatSetupResult(
   const dashboardAuthOutput = dashboardAuthResult === undefined
     ? ''
     : formatDashboardAuthSetupOutput(dashboardAuthResult);
-  const stdout = `${dashboardAuthOutput}${steps.map((step) => step.stdout).join('')}`;
+  const operationalStoreOutput = operationalStoreResult === undefined
+    ? ''
+    : formatOperationalStoreSetupOutput(operationalStoreResult);
+  const stdout = `${dashboardAuthOutput}${operationalStoreOutput}${steps.map((step) => step.stdout).join('')}`;
   const stderr = steps.map((step) => step.stderr).join('');
   if (failedStep !== undefined) {
     return {
@@ -5986,6 +6043,12 @@ function formatDashboardAuthSetupOutput(result: LocalDashboardAuthSetupResult): 
     ? ''
     : `Generated ${formatDashboardAuthKeyList(result.created)} in ${basename(result.configPath)}.\n`;
   return `${rotatedOutput}${createdOutput}`;
+}
+
+function formatOperationalStoreSetupOutput(result: LocalOperationalStoreSetupResult): string {
+  return result.configured
+    ? `Configured operationalStore sqlite store in ${basename(result.configPath)}.\n`
+    : '';
 }
 
 function dashboardAuthKeyToScope(key: keyof RainrailDashboardAuth): DashboardAuthScope {

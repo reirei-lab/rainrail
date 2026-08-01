@@ -7334,6 +7334,7 @@ describe('Rainrail CLI built-in commands', () => {
         exitCode: 0,
         stdout:
           'Generated dashboardAuth.readOnlyToken and dashboardAuth.operatorToken in rainrail.config.json.\n' +
+          'Configured operationalStore sqlite store in rainrail.config.json.\n' +
           'Added official plugin github@0.1.0\n' +
           'Official plugin github setup completed. No bundled setup actions are registered yet.\n',
         stderr: '',
@@ -7365,6 +7366,81 @@ describe('Rainrail CLI built-in commands', () => {
     });
   });
 
+  it('adds the default local operational store when setup repairs an existing workspace config', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'legacy-operational-store-setup');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      await writeFile(configPath, `${JSON.stringify({
+        project: { name: 'legacy-operational-store-setup' },
+        dashboardAuth: {
+          readOnlyToken: 'existing-read-token',
+          operatorToken: 'existing-operator-token',
+        },
+        sourceBundles: [],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+
+      const result = runRainrailCli(['setup', '--dashboard-auth-only', '--yes'], {
+        cwd: projectRoot,
+      });
+      const config = JSON.parse(await readFile(configPath, 'utf8')) as {
+        dashboardAuth?: { readOnlyToken?: string; operatorToken?: string };
+        operationalStore?: { kind?: string; databasePath?: string; eventLimit?: number };
+      };
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+      expect(result.stdout).toBe('Configured operationalStore sqlite store in rainrail.config.json.\n');
+      expect(config.dashboardAuth).toEqual({
+        readOnlyToken: 'existing-read-token',
+        operatorToken: 'existing-operator-token',
+      });
+      expect(config.operationalStore).toEqual({
+        kind: 'sqlite',
+        databasePath: 'var/rainrail-operational.sqlite',
+        eventLimit: 250,
+      });
+    });
+  });
+
+  it('does not replace an explicitly configured operational store during setup', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'explicit-operational-store-setup');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      const explicitOperationalStore = {
+        kind: 'json',
+        databasePath: '${RAINRAIL_OPERATIONAL_DB}',
+        eventLimit: 42,
+      };
+      await writeFile(configPath, `${JSON.stringify({
+        project: { name: 'explicit-operational-store-setup' },
+        dashboardAuth: {
+          readOnlyToken: 'existing-read-token',
+          operatorToken: 'existing-operator-token',
+        },
+        operationalStore: explicitOperationalStore,
+        sourceBundles: [],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+
+      const result = runRainrailCli(['setup', '--dashboard-auth-only', '--yes'], {
+        cwd: projectRoot,
+      });
+      const config = JSON.parse(await readFile(configPath, 'utf8')) as {
+        operationalStore?: unknown;
+      };
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+      expect(result.stdout).toBe('');
+      expect(config.operationalStore).toEqual(explicitOperationalStore);
+    });
+  });
+
   it('generates only dashboard auth tokens with setup --dashboard-auth-only --yes', async () => {
     await withTempDirectory(async (directory) => {
       const projectRoot = await initRainrailProject(directory, 'dashboard-auth-only-setup');
@@ -7385,7 +7461,10 @@ describe('Rainrail CLI built-in commands', () => {
 
       expect(result.exitCode).toBe(0);
       expect(result.stderr).toBe('');
-      expect(result.stdout).toBe('Generated dashboardAuth.readOnlyToken and dashboardAuth.operatorToken in rainrail.config.json.\n');
+      expect(result.stdout).toBe(
+        'Generated dashboardAuth.readOnlyToken and dashboardAuth.operatorToken in rainrail.config.json.\n' +
+          'Configured operationalStore sqlite store in rainrail.config.json.\n',
+      );
       expect(config.dashboardAuth?.readOnlyToken).toMatch(/^rr_local_read-only_[A-Za-z0-9_-]+$/u);
       expect(config.dashboardAuth?.operatorToken).toMatch(/^rr_local_operator_[A-Za-z0-9_-]+$/u);
       expect(lockfile).toContain('"plugins": []');
@@ -7412,7 +7491,10 @@ describe('Rainrail CLI built-in commands', () => {
 
       expect(result.exitCode).toBe(0);
       expect(result.stderr).toBe('');
-      expect(result.stdout).toBe('Generated dashboardAuth.readOnlyToken and dashboardAuth.operatorToken in custom.rainrail.json.\n');
+      expect(result.stdout).toBe(
+        'Generated dashboardAuth.readOnlyToken and dashboardAuth.operatorToken in custom.rainrail.json.\n' +
+          'Configured operationalStore sqlite store in custom.rainrail.json.\n',
+      );
       expect(config.dashboardAuth?.readOnlyToken).toMatch(/^rr_local_read-only_[A-Za-z0-9_-]+$/u);
       expect(config.dashboardAuth?.operatorToken).toMatch(/^rr_local_operator_[A-Za-z0-9_-]+$/u);
       await expect(stat(join(directory, 'rainrail.lock'))).rejects.toThrow();
@@ -7448,7 +7530,8 @@ describe('Rainrail CLI built-in commands', () => {
       expect(result.exitCode).toBe(0);
       expect(result.stderr).toBe('');
       expect(result.stdout).toBe(
-        'Rotated dashboardAuth.readOnlyToken, dashboardAuth.operatorToken, and dashboardAuth.adminToken in rainrail.config.json.\n',
+        'Rotated dashboardAuth.readOnlyToken, dashboardAuth.operatorToken, and dashboardAuth.adminToken in rainrail.config.json.\n' +
+          'Configured operationalStore sqlite store in rainrail.config.json.\n',
       );
       expect(config.dashboardAuth?.readOnlyToken).toMatch(/^rr_local_read-only_[A-Za-z0-9_-]+$/u);
       expect(config.dashboardAuth?.operatorToken).toMatch(/^rr_local_operator_[A-Za-z0-9_-]+$/u);
@@ -7493,7 +7576,8 @@ describe('Rainrail CLI built-in commands', () => {
       expect(result.exitCode).toBe(0);
       expect(result.stderr).toBe('');
       expect(result.stdout).toBe(
-        'Rotated dashboardAuth.operatorToken in rainrail.config.json.\n',
+        'Rotated dashboardAuth.operatorToken in rainrail.config.json.\n' +
+          'Configured operationalStore sqlite store in rainrail.config.json.\n',
       );
       expect(config.dashboardAuth?.readOnlyToken).toBe('${DASHBOARD_READ_TOKEN}');
       expect(config.dashboardAuth?.operatorToken).toMatch(/^rr_local_operator_[A-Za-z0-9_-]+$/u);
@@ -7537,7 +7621,8 @@ describe('Rainrail CLI built-in commands', () => {
       expect(result.exitCode).toBe(0);
       expect(result.stderr).toBe('');
       expect(result.stdout).toBe(
-        'Rotated dashboardAuth.readOnlyToken and dashboardAuth.operatorToken in rainrail.config.json.\n',
+        'Rotated dashboardAuth.readOnlyToken and dashboardAuth.operatorToken in rainrail.config.json.\n' +
+          'Configured operationalStore sqlite store in rainrail.config.json.\n',
       );
       expect(rawConfig).toContain('"sources": ${RAINRAIL_SOURCES}');
       expect(rawConfig.match(/"readOnlyToken"/gu)).toHaveLength(1);
