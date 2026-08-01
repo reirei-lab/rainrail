@@ -7208,6 +7208,15 @@ function createJsonLocalRainrailEventStore(databasePath: string, eventLimit: num
     listEvents: () => [...events],
     listOperationalEvents: () => sortLocalOperationalEventsNewest(operationalEvents.values()),
     getOperationalEvent: (id) => operationalEvents.get(id),
+    listActivityEvents() {
+      return localJsonOperationalActivityEvents(activityEvents).slice(0, eventLimit);
+    },
+    listAgentTasks() {
+      return localJsonOperationalAgentTasks(agentTasks);
+    },
+    listEventHandlerRetries() {
+      return localJsonOperationalEventHandlerRetries(eventHandlerRetries);
+    },
     getDashboardLayout: () => dashboardLayout === undefined || dashboardLayoutUpdatedAt === undefined
       ? undefined
       : { items: localCloneDashboardLayout(dashboardLayout), updatedAt: dashboardLayoutUpdatedAt },
@@ -7234,6 +7243,18 @@ function createJsonLocalRainrailEventStore(databasePath: string, eventLimit: num
     },
     nextEventId() {
       return (sequences.local_event ?? 0) + 1;
+    },
+    staleProjectClaimWarnings() {
+      return localStaleProjectClaimWarnings(localJsonOperationalAgentTasks(agentTasks));
+    },
+    counts() {
+      return {
+        events: operationalEvents.size,
+        activityEvents: Object.keys(activityEvents).length,
+        agentTasks: Object.keys(agentTasks).length,
+        commandResults: Object.keys(commandResults).length,
+        eventHandlerRetries: Object.keys(eventHandlerRetries).length,
+      };
     },
     replaceEvents(nextEvents) {
       events = [...nextEvents].slice(-eventLimit);
@@ -7310,6 +7331,24 @@ function parseLocalJsonSharedRecordMap(value: unknown): Record<string, unknown> 
   return isRecord(value) ? { ...value } : {};
 }
 
+function localJsonOperationalActivityEvents(records: Record<string, unknown>): LocalOperationalActivityEvent[] {
+  return Object.values(records)
+    .filter(isLocalOperationalActivityEvent)
+    .sort((left, right) => compareLocalStringDesc(left.createdAt, right.createdAt) || compareLocalStringDesc(left.id, right.id));
+}
+
+function localJsonOperationalAgentTasks(records: Record<string, unknown>): LocalOperationalAgentTask[] {
+  return Object.values(records)
+    .filter(isLocalOperationalAgentTask)
+    .sort((left, right) => compareLocalStringDesc(left.updatedAt, right.updatedAt) || compareLocalStringDesc(left.id, right.id));
+}
+
+function localJsonOperationalEventHandlerRetries(records: Record<string, unknown>): LocalOperationalEventHandlerRetry[] {
+  return Object.values(records)
+    .filter(isLocalOperationalEventHandlerRetry)
+    .sort((left, right) => left.nextRetryAt.localeCompare(right.nextRetryAt) || left.handlerName.localeCompare(right.handlerName));
+}
+
 function parseLocalJsonDashboardLayout(parsed: Record<string, unknown>): LocalDashboardLayoutSnapshot | undefined {
   if (isRecord(parsed.dashboardLayout)) {
     const updatedAt = typeof parsed.dashboardLayout.updatedAt === 'string'
@@ -7355,6 +7394,10 @@ function sortLocalOperationalEventsNewest(events: Iterable<LocalOperationalEvent
 
 function compareLocalOperationalEventsOldest(left: LocalOperationalEvent, right: LocalOperationalEvent): number {
   return left.receivedAt.localeCompare(right.receivedAt) || left.id.localeCompare(right.id);
+}
+
+function compareLocalStringDesc(left: string, right: string): number {
+  return right.localeCompare(left);
 }
 
 function localRainrailEventFromOperationalEvent(event: LocalOperationalEvent): LocalRainrailEvent | undefined {
@@ -9163,6 +9206,56 @@ function isLocalOperationalEvent(value: unknown): value is LocalOperationalEvent
     && typeof value.envelope.rawPayload.kind === 'string'
     && typeof value.envelope.rawPayload.reference === 'string'
     && (value.envelope.links === undefined || isStringRecord(value.envelope.links));
+}
+
+function isLocalOperationalActivityEvent(value: unknown): value is LocalOperationalActivityEvent {
+  return isRecord(value)
+    && typeof value.id === 'string'
+    && (typeof value.sourceEventId === 'string' || value.sourceEventId === undefined)
+    && (typeof value.sourceEventName === 'string' || value.sourceEventName === undefined)
+    && typeof value.category === 'string'
+    && typeof value.targetType === 'string'
+    && (typeof value.targetId === 'string' || value.targetId === undefined)
+    && (typeof value.targetUrl === 'string' || value.targetUrl === undefined)
+    && typeof value.actionType === 'string'
+    && typeof value.outcome === 'string'
+    && typeof value.summary === 'string'
+    && (isRecord(value.metadata) || value.metadata === undefined)
+    && typeof value.createdAt === 'string';
+}
+
+function isLocalOperationalAgentTask(value: unknown): value is LocalOperationalAgentTask {
+  return isRecord(value)
+    && typeof value.id === 'string'
+    && typeof value.title === 'string'
+    && (typeof value.agentSessionId === 'string' || value.agentSessionId === undefined)
+    && typeof value.branchName === 'string'
+    && typeof value.status === 'string'
+    && (typeof value.logPath === 'string' || value.logPath === undefined)
+    && (typeof value.stderrLogPath === 'string' || value.stderrLogPath === undefined)
+    && (typeof value.pid === 'number' || value.pid === undefined)
+    && (typeof value.result === 'string' || value.result === undefined)
+    && typeof value.startedAt === 'string'
+    && (typeof value.completedAt === 'string' || value.completedAt === undefined)
+    && typeof value.updatedAt === 'string'
+    && isRecord(value.runtime)
+    && typeof value.runtime.status === 'string'
+    && (typeof value.runtime.pid === 'number' || value.runtime.pid === undefined)
+    && typeof value.runtime.startedAt === 'string'
+    && (typeof value.runtime.completedAt === 'string' || value.runtime.completedAt === undefined);
+}
+
+function isLocalOperationalEventHandlerRetry(value: unknown): value is LocalOperationalEventHandlerRetry {
+  return isRecord(value)
+    && typeof value.eventId === 'string'
+    && typeof value.handlerName === 'string'
+    && typeof value.attempts === 'number'
+    && Number.isInteger(value.attempts)
+    && value.attempts >= 0
+    && typeof value.nextRetryAt === 'string'
+    && typeof value.lastError === 'string'
+    && typeof value.updatedAt === 'string'
+    && (typeof value.claimedUntilAt === 'string' || value.claimedUntilAt === undefined);
 }
 
 function isStringRecord(value: unknown): value is Record<string, string> {

@@ -197,6 +197,52 @@ function localOperationalJsonEvent(id: string, receivedAt: string): Record<strin
   };
 }
 
+function localOperationalJsonActivityEvent(id: string, sourceEventId: string, createdAt: string): Record<string, unknown> {
+  return {
+    id,
+    sourceEventId,
+    sourceEventName: 'github.issue',
+    category: 'workflow',
+    targetType: 'event',
+    targetId: sourceEventId,
+    actionType: 'workflow_dispatched',
+    outcome: 'success',
+    summary: `${id} dispatched`,
+    createdAt,
+  };
+}
+
+function localOperationalJsonAgentTask(id: string, updatedAt: string): Record<string, unknown> {
+  return {
+    id,
+    title: `${id} task`,
+    branchName: `agent/${id}`,
+    status: 'running',
+    issue: { repository: 'reirei-lab/rainrail', number: 405 },
+    startedAt: updatedAt,
+    updatedAt,
+    runtime: {
+      status: 'running',
+      startedAt: updatedAt,
+    },
+  };
+}
+
+function localOperationalJsonEventHandlerRetry(
+  eventId: string,
+  handlerName: string,
+  nextRetryAt: string,
+): Record<string, unknown> {
+  return {
+    eventId,
+    handlerName,
+    attempts: 1,
+    nextRetryAt,
+    lastError: 'transient failure',
+    updatedAt: nextRetryAt,
+  };
+}
+
 describe('Rainrail CLI built-in commands', () => {
   it('defines the command table without provider or runtime specific handlers', () => {
     expect(BUILT_IN_COMMANDS.map((command) => command.name)).toEqual([
@@ -3932,16 +3978,24 @@ describe('Rainrail CLI built-in commands', () => {
           'shared-event-000001': localOperationalJsonEvent('shared-event-000001', '2026-07-25T00:00:00.000Z'),
         },
         activityEvents: {
-          'activity-existing': { id: 'activity-existing', sourceEventId: 'shared-event-000001', kind: 'workflow.started' },
+          'activity-existing': localOperationalJsonActivityEvent(
+            'activity-existing',
+            'shared-event-000001',
+            '2026-07-25T00:01:00.000Z',
+          ),
         },
         agentTasks: {
-          'agent-task-existing': { id: 'agent-task-existing', status: 'todo', title: 'existing task' },
+          'agent-task-existing': localOperationalJsonAgentTask('agent-task-existing', '2026-07-25T00:02:00.000Z'),
         },
         commandResults: {
           'command-result-existing': { id: 'command-result-existing', exitCode: 0 },
         },
         eventHandlerRetries: {
-          'shared-event-000001:handler': { eventId: 'shared-event-000001', handlerName: 'handler', attempt: 1 },
+          'shared-event-000001:handler': localOperationalJsonEventHandlerRetry(
+            'shared-event-000001',
+            'handler',
+            '2026-07-25T00:03:00.000Z',
+          ),
         },
         sequences: {
           local_event: 0,
@@ -3956,6 +4010,10 @@ describe('Rainrail CLI built-in commands', () => {
           kind: 'json',
           databasePath,
           eventLimit: 10,
+        },
+        dashboardAuth: {
+          readOnlyToken: 'read-token',
+          operatorToken: 'operator-token',
         },
         sourceBundles: [{
           type: 'eep-bridge',
@@ -3977,6 +4035,42 @@ describe('Rainrail CLI built-in commands', () => {
       const result = await runRainrailCliAsync(['start'], { cwd: projectRoot });
       try {
         expect(result.exitCode).toBe(0);
+        const readAuth = { Authorization: 'Bearer read-token' };
+        const overview = await fetch(`http://127.0.0.1:${port}/api/v1/overview`, { headers: readAuth });
+        await expect(overview.json()).resolves.toMatchObject({
+          data: {
+            counts: {
+              events: 1,
+              activityEvents: 1,
+              agentTasks: 1,
+              commandResults: 1,
+              eventHandlerRetries: 1,
+            },
+            recentActivity: [{ id: 'activity-existing', summary: 'activity-existing dispatched' }],
+          },
+        });
+
+        const workflows = await fetch(`http://127.0.0.1:${port}/api/v1/workflow-runs`, { headers: readAuth });
+        await expect(workflows.json()).resolves.toMatchObject({
+          data: [{ id: 'activity-existing', summary: 'activity-existing dispatched' }],
+        });
+
+        const tasks = await fetch(`http://127.0.0.1:${port}/api/v1/agent-tasks`, { headers: readAuth });
+        await expect(tasks.json()).resolves.toMatchObject({
+          data: [{ id: 'agent-task-existing', title: 'agent-task-existing task' }],
+        });
+
+        const detail = await fetch(`http://127.0.0.1:${port}/api/v1/events/shared-event-000001`, { headers: readAuth });
+        await expect(detail.json()).resolves.toMatchObject({
+          data: {
+            compact: {
+              id: 'shared-event-000001',
+              workflowRunCount: 1,
+              handlerRetryCount: 1,
+            },
+          },
+        });
+
         const body = JSON.stringify({ action: 'opened' });
         const accepted = await fetch(`http://127.0.0.1:${port}/webhooks/github`, {
           method: 'POST',
@@ -4008,16 +4102,16 @@ describe('Rainrail CLI built-in commands', () => {
         },
       });
       expect(persisted.activityEvents).toMatchObject({
-        'activity-existing': { id: 'activity-existing', sourceEventId: 'shared-event-000001' },
+        'activity-existing': { id: 'activity-existing', sourceEventId: 'shared-event-000001', category: 'workflow' },
       });
       expect(persisted.agentTasks).toMatchObject({
-        'agent-task-existing': { id: 'agent-task-existing', status: 'todo' },
+        'agent-task-existing': { id: 'agent-task-existing', status: 'running' },
       });
       expect(persisted.commandResults).toMatchObject({
         'command-result-existing': { id: 'command-result-existing', exitCode: 0 },
       });
       expect(persisted.eventHandlerRetries).toMatchObject({
-        'shared-event-000001:handler': { eventId: 'shared-event-000001', handlerName: 'handler', attempt: 1 },
+        'shared-event-000001:handler': { eventId: 'shared-event-000001', handlerName: 'handler', attempts: 1 },
       });
       expect(persisted.sequences).toMatchObject({ local_event: 1 });
     });
