@@ -142,6 +142,14 @@ jobs:
       - name: Run dashboard E2E
         run: pnpm e2e:dashboard
 
+      - name: Collect dashboard VRT results
+        if: ${{ always() }}
+        run: node scripts/collect-vrt-results.mjs --results-dir test-results/dashboard --output-dir vrt-results
+
+      - name: Generate dashboard VRT comment
+        if: ${{ always() }}
+        run: node scripts/generate-vrt-comment.mjs --summary vrt-results/summary.json --output vrt-comment.md --max-cases 10
+
       - name: Upload dashboard E2E artifacts
         if: ${{ always() }}
         uses: actions/upload-artifact@v7
@@ -152,5 +160,33 @@ jobs:
             test-results/dashboard/
             test-results/dashboard/screenshots/
             test-results/dashboard/screenshots/dashboard-demo-screenshot-manifest.json
+            vrt-results/
+            vrt-comment.md
           if-no-files-found: ignore
           retention-days: 7
+
+  dashboard-vrt-comment:
+    name: Dashboard VRT PR comment
+    needs: dashboard-e2e
+    if: >-
+      always() &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.pull_request.author_association)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Download dashboard VRT artifacts
+        uses: actions/download-artifact@v7
+        with:
+          name: dashboard-e2e-artifacts
+          path: .
+
+      - name: Set up CML
+        uses: iterative/setup-cml@v2
+
+      - name: Publish dashboard VRT PR comment
+        run: cml comment update --watermark-title="Rainrail dashboard VRT" vrt-comment.md
+        env:
+          REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -13,10 +13,10 @@ describe('pull request CI workflow', () => {
     expect(workflow).not.toContain('issues:');
   });
 
-  it('uses only read permissions for pull request validation', () => {
+  it('uses read permissions by default and scopes VRT comment write permission to a separate trusted job', () => {
     expect(workflow).toMatch(/^permissions:\n {2}contents: read$/m);
     expect(workflow).not.toMatch(/^ {2}issues: write$/m);
-    expect(workflow).not.toMatch(/^ {2}pull-requests: write$/m);
+    expect(workflow).toMatch(/^ {2}dashboard-vrt-comment:[\s\S]*?^ {4}permissions:\n {6}contents: read\n {6}pull-requests: write$/m);
     expect(workflow).not.toContain('deployments: write');
     expect(workflow.match(/persist-credentials: false/g)).toHaveLength(3);
   });
@@ -45,13 +45,24 @@ describe('pull request CI workflow', () => {
     expect(workflow).toMatch(/^ {2}dashboard-e2e:\n {4}name: Dashboard E2E\n {4}needs: validate\n {4}runs-on: ubuntu-24\.04$/m);
     expect(workflow).toMatch(/^ {6}- name: Install Playwright browser\n {8}run: pnpm exec playwright install --with-deps chromium$/m);
     expect(workflow).toMatch(/^ {6}- name: Run dashboard E2E\n {8}run: pnpm e2e:dashboard$/m);
+    expect(workflow).toMatch(/^ {6}- name: Collect dashboard VRT results\n {8}if: \$\{\{ always\(\) \}\}\n {8}run: node scripts\/collect-vrt-results\.mjs --results-dir test-results\/dashboard --output-dir vrt-results$/m);
+    expect(workflow).toMatch(/^ {6}- name: Generate dashboard VRT comment\n {8}if: \$\{\{ always\(\) \}\}\n {8}run: node scripts\/generate-vrt-comment\.mjs --summary vrt-results\/summary\.json --output vrt-comment\.md --max-cases 10$/m);
     expect(workflow).toMatch(/^ {6}- name: Upload dashboard E2E artifacts\n {8}if: \$\{\{ always\(\) \}\}\n {8}uses: actions\/upload-artifact@v7/m);
     expect(workflow).toContain('name: dashboard-e2e-artifacts');
     expect(workflow).toContain('playwright-report/dashboard/');
     expect(workflow).toContain('test-results/dashboard/');
     expect(workflow).toContain('test-results/dashboard/screenshots/');
     expect(workflow).toContain('test-results/dashboard/screenshots/dashboard-demo-screenshot-manifest.json');
+    expect(workflow).toContain('vrt-results/');
+    expect(workflow).toContain('vrt-comment.md');
     expect(workflow).toContain('retention-days: 7');
+  });
+
+  it('publishes dashboard VRT comments with CML only for trusted same-repository pull requests', () => {
+    expect(workflow).toMatch(/^ {2}dashboard-vrt-comment:\n {4}name: Dashboard VRT PR comment\n {4}needs: dashboard-e2e\n {4}if: >-\n {6}always\(\) &&\n {6}github\.event\.pull_request\.head\.repo\.full_name == github\.repository &&\n {6}contains\(fromJSON\('\["OWNER", "MEMBER", "COLLABORATOR"\]'\), github\.event\.pull_request\.author_association\)\n {4}runs-on: ubuntu-24\.04$/m);
+    expect(workflow).toMatch(/^ {6}- name: Download dashboard VRT artifacts\n {8}uses: actions\/download-artifact@v7\n {8}with:\n {10}name: dashboard-e2e-artifacts\n {10}path: \.$/m);
+    expect(workflow).toContain('uses: iterative/setup-cml@v2');
+    expect(workflow).toMatch(/^ {6}- name: Publish dashboard VRT PR comment\n {8}run: cml comment update --watermark-title="Rainrail dashboard VRT" vrt-comment\.md\n {8}env:\n {10}REPO_TOKEN: \$\{\{ secrets\.GITHUB_TOKEN \}\}$/m);
   });
 
   it('uploads the product site build artifact for trusted preview deploys without secrets', () => {
