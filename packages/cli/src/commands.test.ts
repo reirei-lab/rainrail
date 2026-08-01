@@ -8629,6 +8629,7 @@ describe('Rainrail CLI built-in commands', () => {
         server: {
           host: '127.0.0.1',
           port: 8787,
+          allowedHosts: [],
         },
         dashboardAuth: {},
         sourceBundles: [],
