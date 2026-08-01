@@ -1,4 +1,5 @@
 import http, { type IncomingMessage, type ServerResponse } from 'node:http';
+import { isIP } from 'node:net';
 import { Readable } from 'node:stream';
 
 import { RainrailBridgeRoom, type RainrailBridgeRoomState } from './bridge-room.js';
@@ -12,7 +13,7 @@ import {
   type RainrailHttpAppOptions,
 } from './http-app.js';
 import { jsonResponse, readRequestBody, writeFetchResponse } from './http-utils.js';
-import type { RainrailIntakeAdapter } from './intake-adapter.js';
+import { isCoreRoutePath, type RainrailIntakeAdapter } from './intake-adapter.js';
 import {
   JsonFileOperationalStore,
   RainrailOperationalStore,
@@ -23,6 +24,7 @@ import type { RainrailOperationalStoreConfig } from './config.js';
 export interface RainrailNodeServerOptions extends Omit<RainrailHttpAppOptions, 'room'> {
   githubWebhookSecret: string;
   githubSourceName?: string;
+  allowedHosts?: readonly string[];
   maxWebhookBodyBytes?: number;
   intakeAdapters?: readonly RainrailIntakeAdapter[];
   operationalStoreConfig?: RainrailOperationalStoreConfig;
@@ -90,6 +92,18 @@ export function createRainrailNodeServer(options: RainrailNodeServerOptions): Ra
       });
 
       try {
+        if (
+          shouldApplyHostAllowlist(request.url)
+          && !isAllowedHostHeader(request.headers.host, options.allowedHosts)
+        ) {
+          await writeFetchResponse(
+            response,
+            jsonResponse({ error: 'invalid_host_header' }, { status: 400 }),
+            { signal: abortController.signal },
+          );
+          return;
+        }
+
         await writeFetchResponse(
           response,
           await app.fetch(await toFetchRequest(request, options, appOptions, abortController.signal)),
@@ -233,6 +247,55 @@ function isDashboardBodyRoute(pathname: string, method: string): boolean {
   return isDashboardCommandRoute(pathname, method)
     || (method.toUpperCase() === 'PUT' && pathname === '/api/v1/dashboard/layout')
     || (method.toUpperCase() === 'PATCH' && /^\/api\/v1\/dashboard\/layout\/items\/[^/]+\/config$/.test(pathname));
+}
+
+function shouldApplyHostAllowlist(requestUrl: string | undefined): boolean {
+  return isCoreRoutePath(pathnameForRequestUrl(requestUrl));
+}
+
+function pathnameForRequestUrl(requestUrl: string | undefined): string {
+  try {
+    return new URL(requestUrl ?? '/', 'http://rainrail.local').pathname;
+  } catch {
+    return '/';
+  }
+}
+
+function isAllowedHostHeader(host: string | undefined, allowedHosts: readonly string[] | undefined): boolean {
+  if (allowedHosts === undefined || allowedHosts.length === 0) return true;
+  if (host === undefined) return false;
+  const hostName = hostHeaderName(host);
+  if (hostName === undefined) return false;
+  return new Set([
+    'localhost',
+    '127.0.0.1',
+    '::1',
+    ...allowedHosts.map(normalizeHostName),
+  ]).has(hostName);
+}
+
+function hostHeaderName(host: string): string | undefined {
+  const bracketed = /^\[([0-9A-Fa-f:.]+)\](?::([0-9]{1,5}))?$/u.exec(host);
+  if (bracketed?.[1] !== undefined) {
+    if (isIP(bracketed[1]) !== 6) return undefined;
+    if (!isValidHostPort(bracketed[2])) return undefined;
+    return bracketed[1].toLowerCase();
+  }
+  const named = /^([A-Za-z0-9._-]+)(?::([0-9]{1,5}))?$/u.exec(host);
+  if (!isValidHostPort(named?.[2])) return undefined;
+  return named?.[1]?.toLowerCase();
+}
+
+function isValidHostPort(port: string | undefined): boolean {
+  if (port === undefined) return true;
+  const value = Number(port);
+  return Number.isInteger(value) && value >= 1 && value <= 65535;
+}
+
+function normalizeHostName(host: string): string {
+  return host.startsWith('[') && host.endsWith(']')
+    ? host.slice(1, -1).toLowerCase()
+    : host.toLowerCase();
 }
 
 function isStatusCodeError(error: unknown): error is { statusCode: number } {
