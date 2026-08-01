@@ -301,7 +301,7 @@ describe('product site concepts, guides, and examples', () => {
       expect(readme).toContain(command);
     }
 
-    expect(readme).toContain('Node.js 20 or newer');
+    expect(readme).toContain('Node.js 22.5 or newer');
     expect(readme).toContain('adds a separate `codex-app-server` runtime provider entry');
     expect(readme).toContain('replace, or proxy the OpenClaw plugin');
     expect(siteContent).not.toContain('less install.sh');

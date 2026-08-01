@@ -23,6 +23,10 @@ the project; generated plugin state is not global.
   must remain present, plugin names must be unique official canonical aliases,
   plugin versions must be valid semantic versions, and non-contract plugin entry
   fields are discarded before any manifest repair or rewrite.
+- `.gitignore`: ignores the default SQLite operational store files
+  `var/rainrail-operational.sqlite`, `var/rainrail-operational.sqlite-wal`, and
+  `var/rainrail-operational.sqlite-shm` so local dashboard event payloads,
+  command results, and agent task records do not become accidental Git input.
 - `.rainrail/plugins/`: the project-local plugin installation directory.
 
 ## Re-run behavior

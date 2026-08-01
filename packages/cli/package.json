@@ -4,6 +4,9 @@
   "private": true,
   "description": "Rainrail command-line interface.",
   "type": "module",
+  "engines": {
+    "node": ">=22.5"
+  },
   "bin": {
     "rainrail": "./dist/bin/rainrail.js"
   },
