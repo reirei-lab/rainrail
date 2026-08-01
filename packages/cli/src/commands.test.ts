@@ -7643,7 +7643,6 @@ describe('Rainrail CLI built-in commands', () => {
         exitCode: 0,
         stdout:
           'Generated dashboardAuth.readOnlyToken and dashboardAuth.operatorToken in rainrail.config.json.\n' +
-          'Configured operationalStore json store in rainrail.config.json.\n' +
           'Added official plugin github@0.1.0\n' +
           'Official plugin github setup completed. No bundled setup actions are registered yet.\n',
         stderr: '',
@@ -7771,6 +7770,7 @@ describe('Rainrail CLI built-in commands', () => {
     await withTempDirectory(async (directory) => {
       const projectRoot = await initRainrailProject(directory, 'blocked-operational-store-gitignore');
       const configPath = join(projectRoot, 'rainrail.config.json');
+      await rm(join(projectRoot, '.gitignore'), { force: true });
       await mkdir(join(projectRoot, '.gitignore'), { recursive: true });
       await writeFile(configPath, `${JSON.stringify({
         project: { name: 'blocked-operational-store-gitignore' },
@@ -7823,8 +7823,7 @@ describe('Rainrail CLI built-in commands', () => {
       expect(result.exitCode).toBe(0);
       expect(result.stderr).toBe('');
       expect(result.stdout).toBe(
-        'Generated dashboardAuth.readOnlyToken and dashboardAuth.operatorToken in rainrail.config.json.\n' +
-          'Configured operationalStore json store in rainrail.config.json.\n',
+        'Generated dashboardAuth.readOnlyToken and dashboardAuth.operatorToken in rainrail.config.json.\n',
       );
       expect(config.dashboardAuth?.readOnlyToken).toMatch(/^rr_local_read-only_[A-Za-z0-9_-]+$/u);
       expect(config.dashboardAuth?.operatorToken).toMatch(/^rr_local_operator_[A-Za-z0-9_-]+$/u);
