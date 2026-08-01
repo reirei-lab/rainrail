@@ -8,6 +8,10 @@ on:
       - reopened
       - ready_for_review
 
+concurrency:
+  group: pr-ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -144,7 +148,7 @@ jobs:
 
       - name: Collect dashboard VRT results
         if: ${{ always() }}
-        run: node scripts/collect-vrt-results.mjs --results-dir test-results/dashboard --output-dir vrt-results
+        run: node scripts/collect-vrt-results.mjs --results-dir test-results/dashboard --report test-results/dashboard/playwright-report.json --output-dir vrt-results
 
       - name: Generate dashboard VRT comment
         if: ${{ always() }}
@@ -158,6 +162,7 @@ jobs:
           path: |
             playwright-report/dashboard/
             test-results/dashboard/
+            test-results/dashboard/playwright-report.json
             test-results/dashboard/screenshots/
             test-results/dashboard/screenshots/dashboard-demo-screenshot-manifest.json
             vrt-results/
@@ -176,6 +181,8 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
+    env:
+      CML_COMMENT_TOKEN: ${{ secrets.CML_COMMENT_TOKEN }}
     steps:
       - name: Download dashboard VRT artifacts
         uses: actions/download-artifact@v7
@@ -184,9 +191,15 @@ jobs:
           path: .
 
       - name: Set up CML
+        if: ${{ env.CML_COMMENT_TOKEN != '' }}
         uses: iterative/setup-cml@v2
 
       - name: Publish dashboard VRT PR comment
+        if: ${{ env.CML_COMMENT_TOKEN != '' }}
         run: cml comment update --watermark-title="Rainrail dashboard VRT" vrt-comment.md
         env:
-          REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO_TOKEN: ${{ env.CML_COMMENT_TOKEN }}
+
+      - name: Skip dashboard VRT PR comment
+        if: ${{ env.CML_COMMENT_TOKEN == '' }}
+        run: echo "::notice::Skipping dashboard VRT PR comment because CML_COMMENT_TOKEN is not configured."

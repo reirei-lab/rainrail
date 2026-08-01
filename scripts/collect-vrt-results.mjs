@@ -1,5 +1,5 @@
-import { access, copyFile, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
-import { basename, dirname, join, relative, resolve } from 'node:path';
+import { access, copyFile, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 /**
@@ -19,16 +19,17 @@ import { pathToFileURL } from 'node:url';
  */
 
 /**
- * @param {{ resultsDir: string; outputDir: string }} input
+ * @param {{ resultsDir: string; outputDir: string; reportPath?: string }} input
  * @returns {Promise<VrtSummary>}
  */
 export async function collectVrtResults(input) {
   const resultsDir = resolve(input.resultsDir);
   const outputDir = resolve(input.outputDir);
   const summaryPath = join(outputDir, 'summary.json');
-  const actualFiles = (await findFiles(resultsDir))
-    .filter((file) => basename(file).endsWith('-actual.png'))
-    .sort();
+  const actualFiles = await actualFilesForCollection({
+    resultsDir,
+    ...(input.reportPath === undefined ? {} : { reportPath: resolve(input.reportPath) }),
+  });
 
   await rm(outputDir, { recursive: true, force: true });
   await mkdir(outputDir, { recursive: true });
@@ -67,6 +68,92 @@ export async function collectVrtResults(input) {
 
   await writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`);
   return summary;
+}
+
+/**
+ * @param {{ resultsDir: string; reportPath?: string }} input
+ * @returns {Promise<string[]>}
+ */
+async function actualFilesForCollection(input) {
+  if (input.reportPath !== undefined) {
+    return await fileExists(input.reportPath)
+      ? unexpectedActualFilesFromReport(input.reportPath)
+      : [];
+  }
+
+  return (await findFiles(input.resultsDir))
+    .filter((file) => basename(file).endsWith('-actual.png'))
+    .sort();
+}
+
+/**
+ * @param {string} reportPath
+ * @returns {Promise<string[]>}
+ */
+async function unexpectedActualFilesFromReport(reportPath) {
+  const report = JSON.parse(await readFile(reportPath, 'utf8'));
+  const files = new Set();
+
+  for (const test of collectReportTests(report)) {
+    if (!isRecord(test) || test.status !== 'unexpected' || !Array.isArray(test.results)) {
+      continue;
+    }
+
+    for (const result of test.results) {
+      if (!isRecord(result) || !Array.isArray(result.attachments)) {
+        continue;
+      }
+
+      for (const attachment of result.attachments) {
+        if (!isRecord(attachment) || typeof attachment.path !== 'string') {
+          continue;
+        }
+
+        const attachmentPath = resolveAttachmentPath(reportPath, attachment.path);
+        if (basename(attachmentPath).endsWith('-actual.png') && await fileExists(attachmentPath)) {
+          files.add(attachmentPath);
+        }
+      }
+    }
+  }
+
+  return [...files].sort();
+}
+
+/**
+ * @param {unknown} node
+ * @returns {unknown[]}
+ */
+function collectReportTests(node) {
+  if (!isRecord(node)) {
+    return [];
+  }
+
+  const ownTests = Array.isArray(node.tests) ? node.tests : [];
+  const childNodes = ['suites', 'specs'].flatMap((key) => Array.isArray(node[key]) ? node[key] : []);
+  return [
+    ...ownTests,
+    ...childNodes.flatMap((child) => collectReportTests(child)),
+  ];
+}
+
+/**
+ * @param {string} reportPath
+ * @param {string} attachmentPath
+ * @returns {string}
+ */
+function resolveAttachmentPath(reportPath, attachmentPath) {
+  return isAbsolute(attachmentPath)
+    ? attachmentPath
+    : resolve(dirname(reportPath), attachmentPath);
+}
+
+/**
+ * @param {unknown} value
+ * @returns {value is Record<string, unknown>}
+ */
+function isRecord(value) {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 /**
@@ -152,16 +239,18 @@ function posixPath(path) {
 
 /**
  * @param {string[]} argv
- * @returns {{ resultsDir: string; outputDir: string }}
+ * @returns {{ resultsDir: string; outputDir: string; reportPath?: string }}
  */
 function parseArgs(argv) {
   const args = new Map();
   for (let index = 0; index < argv.length; index += 2) {
     args.set(argv[index], argv[index + 1]);
   }
+  const reportPath = args.get('--report');
   return {
     resultsDir: args.get('--results-dir') ?? 'test-results/dashboard',
     outputDir: args.get('--output-dir') ?? 'vrt-results',
+    ...(reportPath === undefined ? {} : { reportPath }),
   };
 }
 

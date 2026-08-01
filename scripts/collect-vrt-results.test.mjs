@@ -55,4 +55,59 @@ describe('collectVrtResults', () => {
       cases: [],
     });
   });
+
+  it('ignores screenshot mismatches from retry attempts that finish flaky', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rainrail-vrt-'));
+    const resultsDir = join(root, 'test-results', 'dashboard');
+    const failureDir = join(resultsDir, 'dashboard-smoke-matches-dashboard-route-visual-baselines');
+    const outputDir = join(root, 'vrt-results');
+    const reportPath = join(resultsDir, 'playwright-report.json');
+    mkdirSync(failureDir, { recursive: true });
+    for (const id of ['flaky-case-desktop', 'failed-case-desktop']) {
+      writeFileSync(join(failureDir, `${id}-expected.png`), `${id}-before`);
+      writeFileSync(join(failureDir, `${id}-actual.png`), `${id}-after`);
+      writeFileSync(join(failureDir, `${id}-diff.png`), `${id}-diff`);
+    }
+    writeFileSync(reportPath, JSON.stringify({
+      suites: [
+        {
+          specs: [
+            {
+              tests: [
+                {
+                  status: 'flaky',
+                  results: [
+                    {
+                      status: 'failed',
+                      attachments: [
+                        { name: 'flaky-case-desktop-actual', path: join(failureDir, 'flaky-case-desktop-actual.png') },
+                      ],
+                    },
+                    { status: 'passed', attachments: [] },
+                  ],
+                },
+                {
+                  status: 'unexpected',
+                  results: [
+                    {
+                      status: 'failed',
+                      attachments: [
+                        { name: 'failed-case-desktop-actual', path: join(failureDir, 'failed-case-desktop-actual.png') },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    }));
+
+    const summary = await collectVrtResults({ resultsDir, outputDir, reportPath });
+
+    expect(summary.cases).toHaveLength(1);
+    expect(summary.cases[0]?.id).toBe('failed-case-desktop');
+    expect(readFileSync(join(outputDir, 'failed-case-desktop', 'after.png'), 'utf8')).toBe('failed-case-desktop-after');
+  });
 });

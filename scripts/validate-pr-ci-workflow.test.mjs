@@ -9,6 +9,7 @@ const workflow = readFileSync(
 describe('pull request CI workflow', () => {
   it('runs on pull request changes without using pull_request_target', () => {
     expect(workflow).toMatch(/^on:\n {2}pull_request:\n {4}types:\n {6}- opened\n {6}- synchronize\n {6}- reopened\n {6}- ready_for_review/m);
+    expect(workflow).toMatch(/^concurrency:\n {2}group: pr-ci-\$\{\{ github\.event\.pull_request\.number \}\}\n {2}cancel-in-progress: true$/m);
     expect(workflow).not.toContain('pull_request_target');
     expect(workflow).not.toContain('issues:');
   });
@@ -45,12 +46,13 @@ describe('pull request CI workflow', () => {
     expect(workflow).toMatch(/^ {2}dashboard-e2e:\n {4}name: Dashboard E2E\n {4}needs: validate\n {4}runs-on: ubuntu-24\.04$/m);
     expect(workflow).toMatch(/^ {6}- name: Install Playwright browser\n {8}run: pnpm exec playwright install --with-deps chromium$/m);
     expect(workflow).toMatch(/^ {6}- name: Run dashboard E2E\n {8}run: pnpm e2e:dashboard$/m);
-    expect(workflow).toMatch(/^ {6}- name: Collect dashboard VRT results\n {8}if: \$\{\{ always\(\) \}\}\n {8}run: node scripts\/collect-vrt-results\.mjs --results-dir test-results\/dashboard --output-dir vrt-results$/m);
+    expect(workflow).toMatch(/^ {6}- name: Collect dashboard VRT results\n {8}if: \$\{\{ always\(\) \}\}\n {8}run: node scripts\/collect-vrt-results\.mjs --results-dir test-results\/dashboard --report test-results\/dashboard\/playwright-report\.json --output-dir vrt-results$/m);
     expect(workflow).toMatch(/^ {6}- name: Generate dashboard VRT comment\n {8}if: \$\{\{ always\(\) \}\}\n {8}run: node scripts\/generate-vrt-comment\.mjs --summary vrt-results\/summary\.json --output vrt-comment\.md --max-cases 10$/m);
     expect(workflow).toMatch(/^ {6}- name: Upload dashboard E2E artifacts\n {8}if: \$\{\{ always\(\) \}\}\n {8}uses: actions\/upload-artifact@v7/m);
     expect(workflow).toContain('name: dashboard-e2e-artifacts');
     expect(workflow).toContain('playwright-report/dashboard/');
     expect(workflow).toContain('test-results/dashboard/');
+    expect(workflow).toContain('test-results/dashboard/playwright-report.json');
     expect(workflow).toContain('test-results/dashboard/screenshots/');
     expect(workflow).toContain('test-results/dashboard/screenshots/dashboard-demo-screenshot-manifest.json');
     expect(workflow).toContain('vrt-results/');
@@ -60,9 +62,12 @@ describe('pull request CI workflow', () => {
 
   it('publishes dashboard VRT comments with CML only for trusted same-repository pull requests', () => {
     expect(workflow).toMatch(/^ {2}dashboard-vrt-comment:\n {4}name: Dashboard VRT PR comment\n {4}needs: dashboard-e2e\n {4}if: >-\n {6}always\(\) &&\n {6}github\.event\.pull_request\.head\.repo\.full_name == github\.repository &&\n {6}contains\(fromJSON\('\["OWNER", "MEMBER", "COLLABORATOR"\]'\), github\.event\.pull_request\.author_association\)\n {4}runs-on: ubuntu-24\.04$/m);
+    expect(workflow).toMatch(/^ {4}env:\n {6}CML_COMMENT_TOKEN: \$\{\{ secrets\.CML_COMMENT_TOKEN \}\}$/m);
     expect(workflow).toMatch(/^ {6}- name: Download dashboard VRT artifacts\n {8}uses: actions\/download-artifact@v7\n {8}with:\n {10}name: dashboard-e2e-artifacts\n {10}path: \.$/m);
-    expect(workflow).toContain('uses: iterative/setup-cml@v2');
-    expect(workflow).toMatch(/^ {6}- name: Publish dashboard VRT PR comment\n {8}run: cml comment update --watermark-title="Rainrail dashboard VRT" vrt-comment\.md\n {8}env:\n {10}REPO_TOKEN: \$\{\{ secrets\.GITHUB_TOKEN \}\}$/m);
+    expect(workflow).toMatch(/^ {6}- name: Set up CML\n {8}if: \$\{\{ env\.CML_COMMENT_TOKEN != '' \}\}\n {8}uses: iterative\/setup-cml@v2$/m);
+    expect(workflow).toMatch(/^ {6}- name: Publish dashboard VRT PR comment\n {8}if: \$\{\{ env\.CML_COMMENT_TOKEN != '' \}\}\n {8}run: cml comment update --watermark-title="Rainrail dashboard VRT" vrt-comment\.md\n {8}env:\n {10}REPO_TOKEN: \$\{\{ env\.CML_COMMENT_TOKEN \}\}$/m);
+    expect(workflow).toContain('Skipping dashboard VRT PR comment because CML_COMMENT_TOKEN is not configured.');
+    expect(workflow).not.toContain('REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}');
   });
 
   it('uploads the product site build artifact for trusted preview deploys without secrets', () => {
