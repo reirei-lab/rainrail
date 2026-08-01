@@ -5,7 +5,7 @@
   "description": "Agent-ready development event routing and workflow orchestration suite.",
   "type": "module",
   "engines": {
-    "node": ">=22.5"
+    "node": ">=22.13"
   },
   "packageManager": "pnpm@10.12.1",
   "scripts": {
