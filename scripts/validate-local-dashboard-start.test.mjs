@@ -39,6 +39,10 @@ describe('local dashboard start documentation', () => {
       'デモモード',
       'minimal demo config',
       'bound outside localhost',
+      'Bind Host: 127.0.0.1',
+      'URL Host: 127.0.0.1',
+      'server.allowedHosts',
+      'Dashboard: http://dashboard.local:8787/dashboard',
       'Dashboard: http://127.0.0.1:8787/dashboard',
       'Dashboard routes: /en/dashboard/events, /en/dashboard/runs, /en/dashboard/tasks, /en/dashboard/sources, /en/dashboard/queue, /en/dashboard/settings',
       'Dashboard API: http://127.0.0.1:8787/api/v1/overview',
@@ -152,7 +156,11 @@ describe('local dashboard start documentation', () => {
   });
 
   it('maps the guide to the implementation tests that protect the documented flow', () => {
+    expect(cliCommandsTest).toContain('Bind Host: 127.0.0.1');
+    expect(cliCommandsTest).toContain('URL Host: 127.0.0.1');
+    expect(cliCommandsTest).toContain('URL Host: dashboard.local');
     expect(cliCommandsTest).toContain('Dashboard: http://127.0.0.1:8787/dashboard');
+    expect(cliCommandsTest).toContain('Dashboard: http://dashboard.local:9001/dashboard');
     expect(cliCommandsTest).toContain('Dashboard routes: /en/dashboard/events');
     expect(cliCommandsTest).toContain('Dashboard API: http://127.0.0.1:8787/api/v1/overview');
     expect(cliCommandsTest).toContain('Dashboard status API: http://127.0.0.1:8787/api/v1/dashboard/status');
