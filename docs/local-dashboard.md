@@ -54,6 +54,8 @@ secret in the system that owns it.
 host and port, expect:
 
 ```text
+Bind Host: 127.0.0.1
+URL Host: 127.0.0.1
 Health: http://127.0.0.1:8787/healthz
 Dashboard: http://127.0.0.1:8787/dashboard
 Dashboard routes: /en/dashboard/events, /en/dashboard/runs, /en/dashboard/tasks, /en/dashboard/sources, /en/dashboard/queue, /en/dashboard/settings
@@ -67,6 +69,40 @@ Open `http://127.0.0.1:8787/dashboard` in a browser and paste the configured
 dashboard token into the dashboard auth field. API requests use
 `Authorization: Bearer <token>` behind the same origin, so the local dashboard
 does not need a separate API base URL.
+
+## Server bind contract
+
+`rainrail start` resolves its bind host and port in this order:
+
+1. CLI flags: `--host` / `--port`
+2. Environment: `RAINRAIL_HOST` / `RAINRAIL_PORT`
+3. Config: `rainrail.config.json.server.host` / `server.port`
+4. Defaults: `127.0.0.1:8787`
+
+Use `server.host: "0.0.0.0"` when the dashboard must listen on public network
+interfaces. That value is a bind host only; Rainrail does not print
+`http://0.0.0.0:...` as an access URL. Startup output separates `Bind Host`
+from `URL Host`, and uses the first `server.allowedHosts` entry for URLs when a
+wildcard bind host is configured. Without `server.allowedHosts`, wildcard bind
+output falls back to a local access URL such as `http://127.0.0.1:8787`.
+
+`server.allowedHosts` is the Host header allowlist for dashboard/API requests
+through public bind or tunnels. Add the DNS name or IP address users actually
+open in the browser, for example:
+
+```json
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8787,
+    "allowedHosts": ["dashboard.local"]
+  }
+}
+```
+
+With that config, Rainrail binds to `0.0.0.0` and prints
+`Dashboard: http://dashboard.local:8787/dashboard`.
+
 `GET /api/v1/overview` is the main operational summary. `GET
 /api/v1/dashboard/status` is the lightweight route contract for the API Status
 Tile: it reports API health, store configuration, the accepted auth scope, and
