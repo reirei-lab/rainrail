@@ -1205,7 +1205,8 @@ describe('Rainrail CLI built-in commands', () => {
         configPath: join(projectRoot, 'rainrail.config.json'),
       });
       expect(result.stdout).toContain('Rainrail local harness server starting');
-      expect(result.stdout).toContain('Host: 127.0.0.1');
+      expect(result.stdout).toContain('Bind Host: 127.0.0.1');
+      expect(result.stdout).toContain('URL Host: 127.0.0.1');
       expect(result.stdout).toContain('Port: 8787');
       expect(result.stdout).toContain(`Config: ${join(projectRoot, 'rainrail.config.json')}`);
       expect(result.stdout).toContain('Health: http://127.0.0.1:8787/healthz');
@@ -1249,13 +1250,14 @@ describe('Rainrail CLI built-in commands', () => {
     });
   });
 
-  it('uses rainrail.config.json server host and port for rainrail start', async () => {
+  it('uses rainrail.config.json server host, port, and allowed hosts for rainrail start', async () => {
     await withTempDirectory(async (directory) => {
       const projectRoot = await initRainrailProject(directory, 'configured-server');
       await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
         server: {
-          host: 'localhost',
+          host: '0.0.0.0',
           port: 9001,
+          allowedHosts: ['dashboard.local'],
         },
         sourceBundles: [],
         sources: [],
@@ -1275,9 +1277,14 @@ describe('Rainrail CLI built-in commands', () => {
       expect(result.exitCode).toBe(0);
       expect(result.stderr).toBe('');
       expect(startOptions).toMatchObject({
-        host: 'localhost',
+        host: '0.0.0.0',
         port: 9001,
+        allowedHosts: ['dashboard.local'],
       });
+      expect(result.stdout).toContain('Bind Host: 0.0.0.0');
+      expect(result.stdout).toContain('URL Host: dashboard.local');
+      expect(result.stdout).toContain('Dashboard: http://dashboard.local:9001/dashboard');
+      expect(result.stdout).not.toContain('http://0.0.0.0:9001');
     });
   });
 
@@ -4324,6 +4331,24 @@ describe('Rainrail CLI built-in commands', () => {
         await once(socket, 'end');
 
         expect(response).toContain('200 OK');
+
+        const rejectedSocket = net.createConnection({ host: '127.0.0.1', port });
+        rejectedSocket.write([
+          'GET /api/v1/overview HTTP/1.1',
+          `Host: attacker.example:${port}`,
+          'Authorization: Bearer events-token',
+          'Connection: close',
+          '',
+          '',
+        ].join('\r\n'));
+        let rejectedResponse = '';
+        rejectedSocket.setEncoding('utf8');
+        rejectedSocket.on('data', (chunk) => {
+          rejectedResponse += chunk;
+        });
+        await once(rejectedSocket, 'end');
+
+        expect(rejectedResponse).toContain('400 Bad Request');
       } finally {
         await closeTestServer(result);
       }

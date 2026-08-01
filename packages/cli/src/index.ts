@@ -3649,7 +3649,8 @@ function parseStartConfigPort(value: unknown, label: string): number | { readonl
 }
 
 function formatStartOutput(options: RainrailStartOptions): string {
-  const baseUrl = `http://${formatUrlHost(options.host)}:${options.port}`;
+  const displayHost = displayUrlHostForBind(options.host, options.allowedHosts);
+  const baseUrl = `http://${formatUrlHost(displayHost)}:${options.port}`;
   const localIntakeRows = options.sources.map((source) =>
     `  ${source.name} (${source.sourceType}): ${baseUrl}${source.endpoint}`
   );
@@ -3671,7 +3672,8 @@ function formatStartOutput(options: RainrailStartOptions): string {
     'Rainrail local harness server starting',
     `Workspace: ${options.root}`,
     `Config: ${options.configPath}`,
-    `Host: ${options.host}`,
+    `Bind Host: ${options.host}`,
+    `URL Host: ${displayHost}`,
     `Port: ${options.port}`,
     `Health: ${baseUrl}/healthz`,
     `Dashboard: ${baseUrl}/dashboard`,
@@ -3732,6 +3734,13 @@ function formatDashboardAuthOnlySetupCommand(
     ...(rotate ? ['--rotate'] : []),
     '--yes',
   ].map(shellQuoteArgument).join(' ');
+}
+
+function displayUrlHostForBind(bindHost: string, allowedHosts: readonly string[]): string {
+  if (bindHost === '0.0.0.0' || bindHost === '::' || bindHost === '[::]') {
+    return allowedHosts[0] ?? (bindHost === '0.0.0.0' ? '127.0.0.1' : '::1');
+  }
+  return bindHost;
 }
 
 function formatUrlHost(host: string): string {
