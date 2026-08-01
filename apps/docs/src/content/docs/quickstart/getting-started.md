@@ -8,7 +8,7 @@ working on the Rainrail source repository.
 
 ## 1. Install the CLI
 
-Rainrail's installer requires Node.js 20 or newer.
+Rainrail's installer requires Node.js 22.13 or newer.
 
 ```sh
 curl -fsSL https://rainrail.dev/install.sh | bash -s -- --add-to-shell --yes

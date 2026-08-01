@@ -48,6 +48,8 @@ describe('install.sh', () => {
     expect(script).toContain('release_tag="release/${version}"');
     expect(script).toContain('download_release_asset "${release_tag}" "rainrail-cli-v${version}.tgz" "${tarball}"');
     expect(script).toContain('download "https://github.com/${repo}/releases/download/${encoded_release_tag}/${asset_name}" "${output}"');
+    expect(script).toContain('major > 22 || (major === 22 && minor >= 13)');
+    expect(script).toContain('Rainrail requires Node.js 22.13 or newer.');
   });
 
   it('installs a release tarball into a user-local Rainrail prefix', async () => {

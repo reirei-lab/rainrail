@@ -24,7 +24,7 @@ Operational state の public contract は `OperationalStore`、`JsonFileOperatio
 `prioritizeEventHandlerRetriesForProcessing`、`processDueEventHandlerRetries`、
 `reconcileOperationalAgentTasks`、`CodexActivityTask`、`SummarizeCodexActivityOptions`、
 `CodexActivitySummary`、`summarizeCodexActivity` である。
-`SqliteOperationalStore` は local Node runtime 向けの `node:sqlite` adapter で、
+`SqliteOperationalStore` は Node.js 22.13+ の local Node runtime 向けの `node:sqlite` adapter で、
 `RainrailOperationalStore` はこの SQLite-backed adapter の互換 export である。
 `RainrailOperationalStoreOptions` は `databasePath`、`eventLimit`、任意の clock を受け取る。
 `JsonFileOperationalStore` と `JsonFileOperationalStoreOptions` は古い JSON file-backed adapter として

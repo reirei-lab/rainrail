@@ -18,7 +18,7 @@ durable contracts and operational decisions that implementation work depends on.
 
 ## Getting Started
 
-Rainrail's installer requires Node.js 20 or newer. Install the CLI from the
+Rainrail's installer requires Node.js 22.13 or newer. Install the CLI from the
 public installer, reload your shell, and check the built-in help:
 
     curl -fsSL https://rainrail.dev/install.sh | bash -s -- --add-to-shell --yes

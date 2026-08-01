@@ -10,8 +10,10 @@ the project; generated plugin state is not global.
   It is valid JSON so the existing `loadConfig()` / `parseConfigJson()` path can
   read a newly scaffolded project without a TypeScript config loader. The
   scaffold includes an empty top-level `dashboardAuth` object for local
-  dashboard bearer tokens. It also includes `server.host`, `server.port`, and
-  an empty `server.allowedHosts` array so the localhost default is explicit
+  dashboard bearer tokens and a SQLite `operationalStore` at
+  `var/rainrail-operational.sqlite` with `eventLimit: 250`, so local dashboard
+  state is persisted by default. It also includes `server.host`, `server.port`,
+  and an empty `server.allowedHosts` array so the localhost default is explicit
   while the Host allowlist slot is visible for later public bind configuration.
 - `rainrail.lock`: a deterministic lockfile with `lockfileVersion: 1`, the
   project name, and a `plugins` array. Installed official plugins are recorded
@@ -21,6 +23,10 @@ the project; generated plugin state is not global.
   must remain present, plugin names must be unique official canonical aliases,
   plugin versions must be valid semantic versions, and non-contract plugin entry
   fields are discarded before any manifest repair or rewrite.
+- `.gitignore`: ignores the default SQLite operational store files
+  `var/rainrail-operational.sqlite`, `var/rainrail-operational.sqlite-wal`, and
+  `var/rainrail-operational.sqlite-shm` so local dashboard event payloads,
+  command results, and agent task records do not become accidental Git input.
 - `.rainrail/plugins/`: the project-local plugin installation directory.
 
 ## Re-run behavior

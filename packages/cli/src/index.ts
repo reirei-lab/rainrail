@@ -348,6 +348,7 @@ const updateCheckCacheTtlMs = 24 * 60 * 60 * 1000;
 const updateNoticeTimeoutMs = 150;
 const rainrailConfigFileName = 'rainrail.config.json';
 const rainrailLockFileName = 'rainrail.lock';
+const rainrailGitignoreFileName = '.gitignore';
 const rainrailDirectoryName = '.rainrail';
 const rainrailPluginDirectoryName = 'plugins';
 const safeProjectNamePattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
@@ -2686,6 +2687,7 @@ const localDefaultMaxRequestBodyBytes = 25 * 1024 * 1024;
 const localGitHubWebhookSourceNameMaxLength = 53;
 const localEventHistoryLimit = 50;
 const localDefaultOperationalStoreEventLimit = 250;
+const localDefaultOperationalStorePath = 'var/rainrail-operational.sqlite';
 const localDefaultDemoOperationalStorePath = '.tmp/dashboard-demo.sqlite';
 const localEmptyCollectionRows: readonly { readonly id: string }[] = [];
 
@@ -3422,13 +3424,7 @@ function validateStartOptionInputs(
   }
   const demoMode = args.demoMode || env.RAINRAIL_DASHBOARD_DEMO === '1';
   normalizeStartOperationalStoreConfigPath(
-    envOperationalStore.config ?? config.operationalStore ?? (demoMode
-      ? {
-        kind: 'sqlite',
-        databasePath: localDefaultDemoOperationalStorePath,
-        eventLimit: localDefaultOperationalStoreEventLimit,
-      }
-      : undefined),
+    selectStartOperationalStoreConfig(envOperationalStore.config, config.operationalStore, demoMode),
     project.root,
   );
   return undefined;
@@ -3484,15 +3480,13 @@ function resolveStartOptions(
     return { error: envOperationalStore.error };
   }
   const demoMode = args.demoMode || env.RAINRAIL_DASHBOARD_DEMO === '1';
-  const configuredOperationalStore = envOperationalStore.config ?? config.operationalStore;
+  const configuredOperationalStore = selectStartOperationalStoreConfig(
+    envOperationalStore.config,
+    config.operationalStore,
+    demoMode,
+  );
   const operationalStoreConfig = normalizeStartOperationalStoreConfigPath(
-    configuredOperationalStore ?? (demoMode
-      ? {
-        kind: 'sqlite',
-        databasePath: localDefaultDemoOperationalStorePath,
-        eventLimit: localDefaultOperationalStoreEventLimit,
-      }
-      : undefined),
+    configuredOperationalStore,
     project.root,
   );
 
@@ -3512,6 +3506,33 @@ function resolveStartOptions(
       ...(operationalStoreConfig === undefined ? {} : { operationalStoreConfig }),
     },
   };
+}
+
+function selectStartOperationalStoreConfig(
+  envOperationalStore: RainrailStartOperationalStoreConfig | undefined,
+  configOperationalStore: RainrailStartOperationalStoreConfig | undefined,
+  demoMode: boolean,
+): RainrailStartOperationalStoreConfig | undefined {
+  if (envOperationalStore !== undefined) {
+    return envOperationalStore;
+  }
+  if (
+    demoMode &&
+    (configOperationalStore === undefined || isDefaultInitOperationalStoreConfig(configOperationalStore))
+  ) {
+    return {
+      kind: 'sqlite',
+      databasePath: localDefaultDemoOperationalStorePath,
+      eventLimit: localDefaultOperationalStoreEventLimit,
+    };
+  }
+  return configOperationalStore;
+}
+
+function isDefaultInitOperationalStoreConfig(config: RainrailStartOperationalStoreConfig): boolean {
+  return config.kind === 'sqlite' &&
+    config.databasePath === localDefaultOperationalStorePath &&
+    config.eventLimit === localDefaultOperationalStoreEventLimit;
 }
 
 function mergeDashboardAuth(configAuth: RainrailDashboardAuth, eventsBearerToken: string | undefined): RainrailDashboardAuth {
@@ -5113,6 +5134,7 @@ function initializeRainrailWorkspace(
     formatRainrailLock(projectName),
     fileSystem,
   );
+  ensureRainrailOperationalStoreGitignore(projectRoot, fileSystem);
   writeGeneratedFile(
     join(pluginDirectory, '.gitkeep'),
     '',
@@ -6491,6 +6513,38 @@ function writeGeneratedFile(
   fileSystem.writeFileSync(path, content, { flag: 'wx' });
 }
 
+const rainrailOperationalStoreGitignoreEntries = [
+  '# Rainrail local operational store',
+  '/var/rainrail-operational.sqlite',
+  '/var/rainrail-operational.sqlite-wal',
+  '/var/rainrail-operational.sqlite-shm',
+] as const;
+
+function ensureRainrailOperationalStoreGitignore(
+  projectRoot: string,
+  fileSystem: RainrailCliFileSystem,
+): void {
+  const gitignorePath = join(projectRoot, rainrailGitignoreFileName);
+  const content = `${rainrailOperationalStoreGitignoreEntries.join('\n')}\n`;
+  const pathStat = lstatPath(gitignorePath, fileSystem);
+  if (pathStat === undefined) {
+    fileSystem.writeFileSync(gitignorePath, content, { flag: 'wx' });
+    return;
+  }
+  if (!pathStat.isFile() || pathStat.isSymbolicLink()) {
+    throw new Error(`Generated gitignore path is not a regular file: ${gitignorePath}`);
+  }
+
+  const existing = fileSystem.readFileSync(gitignorePath, 'utf8');
+  const existingLines = new Set(existing.split(/\r?\n/u));
+  const missing = rainrailOperationalStoreGitignoreEntries.filter((entry) => !existingLines.has(entry));
+  if (missing.length === 0) {
+    return;
+  }
+  const separator = existing.length === 0 || existing.endsWith('\n') ? '' : '\n';
+  fileSystem.writeFileSync(gitignorePath, `${existing}${separator}${missing.join('\n')}\n`, { flag: 'w' });
+}
+
 function formatRainrailConfig(projectName: string): string {
   return `${JSON.stringify({
     project: { name: projectName },
@@ -6500,6 +6554,11 @@ function formatRainrailConfig(projectName: string): string {
       allowedHosts: [],
     },
     dashboardAuth: {},
+    operationalStore: {
+      kind: 'sqlite',
+      databasePath: localDefaultOperationalStorePath,
+      eventLimit: localDefaultOperationalStoreEventLimit,
+    },
     sourceBundles: [],
     sources: [],
     taskProviders: {},
@@ -7163,6 +7222,7 @@ function createSqliteLocalRainrailEventStore(databasePath: string, eventLimit: n
     CREATE TABLE IF NOT EXISTS operational_events (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
+      source_type TEXT NOT NULL,
       source_json TEXT NOT NULL,
       delivery_json TEXT NOT NULL,
       subject_json TEXT NOT NULL,
@@ -7260,6 +7320,8 @@ function createSqliteLocalRainrailEventStore(databasePath: string, eventLimit: n
       reference: 'rainrail://redacted/raw-payload',
     }).replaceAll("'", "''")}'`,
   );
+  sqliteAddColumnIfMissing(database, 'operational_events', 'source_type', `TEXT NOT NULL DEFAULT 'unknown'`);
+  sqliteBackfillOperationalEventSourceTypes(database);
   protectSqliteDatabaseFiles(databasePath);
   const selectEvents = database.prepare(
     `SELECT * FROM (
@@ -7282,9 +7344,9 @@ function createSqliteLocalRainrailEventStore(databasePath: string, eventLimit: n
   `);
   const insertEvent = database.prepare(
     `INSERT INTO operational_events (
-      id, name, source_json, delivery_json, subject_json, occurred_at, received_at,
+      id, name, source_type, source_json, delivery_json, subject_json, occurred_at, received_at,
       payload_json, raw_payload_reference_json, links_json
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO NOTHING`,
   );
   sqliteSeedSequenceValue(
@@ -7324,6 +7386,7 @@ function createSqliteLocalRainrailEventStore(databasePath: string, eventLimit: n
       insertEvent.run(
         event.id,
         event.name,
+        event.source.type,
         JSON.stringify(event.source),
         JSON.stringify(event.delivery),
         JSON.stringify(event.subject),
@@ -7379,6 +7442,7 @@ function createSqliteLocalRainrailEventStore(databasePath: string, eventLimit: n
           insertEvent.run(
             event.id,
             event.name,
+            event.source.type,
             JSON.stringify(event.source),
             JSON.stringify({ id: event.deliveryId, receivedAt: event.receivedAt }),
             JSON.stringify(event.subject),
@@ -7604,6 +7668,25 @@ function sqliteAddColumnIfMissing(
   const rows = database.prepare(`PRAGMA table_info(${tableName})`).all();
   if (rows.some((row) => rowValue(row, 'name') === columnName)) return;
   database.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
+}
+
+function sqliteBackfillOperationalEventSourceTypes(
+  database: {
+    prepare(sql: string): {
+      all(...values: Array<string | number | null>): unknown[];
+      run(...values: Array<string | number | null>): void;
+    };
+  },
+): void {
+  const rows = database.prepare('SELECT id, source_json FROM operational_events WHERE source_type = ?').all('unknown');
+  if (rows.length === 0) return;
+
+  const update = database.prepare('UPDATE operational_events SET source_type = ? WHERE id = ?');
+  for (const row of rows) {
+    const source = jsonRowValue<{ type?: unknown }>(row, 'source_json');
+    const sourceType = typeof source?.type === 'string' && source.type.length > 0 ? source.type : 'unknown';
+    update.run(sourceType, requiredStringRowValue(row, 'id'));
+  }
 }
 
 function sqliteSeedSequenceValue(

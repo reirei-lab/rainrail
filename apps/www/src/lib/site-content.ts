@@ -505,7 +505,7 @@ const english = {
       {
         heading: 'CLI quick start',
         body:
-          'Install the Rainrail CLI with Node.js 20 or newer available on your machine.',
+          'Install the Rainrail CLI with Node.js 22.13 or newer available on your machine.',
         code:
           'curl -fsSL https://rainrail.dev/install.sh | bash -s -- --add-to-shell --yes\nexec $SHELL\nrainrail help',
       },
@@ -952,7 +952,7 @@ const japanese = {
       {
         heading: 'CLI quick start',
         body:
-          'Node.js 20 以降が使える環境で Rainrail CLI を install します。',
+          'Node.js 22.13 以降が使える環境で Rainrail CLI を install します。',
         code:
           'curl -fsSL https://rainrail.dev/install.sh | bash -s -- --add-to-shell --yes\nexec $SHELL\nrainrail help',
       },
