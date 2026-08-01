@@ -5223,6 +5223,7 @@ function runSetupCommand(
     if (!setupArguments.dashboardAuthOnly) {
       validateRainrailProjectForSetup(project, fileSystem);
     }
+    ensureLocalOperationalStorePreflight(project.configPath, fileSystem);
     dashboardAuthResult = ensureLocalDashboardAuth(
       project.configPath,
       fileSystem,
@@ -5419,6 +5420,17 @@ function ensureLocalOperationalStore(
   ensureDefaultOperationalStoreGitIgnore(dirname(configPath), fileSystem);
   fileSystem.writeFileSync(configPath, formatConfigWithDefaultOperationalStore(raw));
   return { configured: true, configPath };
+}
+
+function ensureLocalOperationalStorePreflight(
+  configPath: string,
+  fileSystem: RainrailCliFileSystem,
+): void {
+  const raw = fileSystem.readFileSync(configPath, 'utf8');
+  if (hasOperationalStoreProperty(raw)) {
+    return;
+  }
+  ensureDefaultOperationalStoreGitIgnore(dirname(configPath), fileSystem);
 }
 
 function formatConfigWithDefaultOperationalStore(raw: string): string {
@@ -7165,6 +7177,10 @@ function createJsonLocalRainrailEventStore(databasePath: string, eventLimit: num
   const initialData = readLocalRainrailEventStoreJson(databasePath);
   let operationalEvents = new Map(initialData.operationalEvents.map((event) => [event.id, event]));
   let sequences = { ...initialData.sequences };
+  const activityEvents = { ...initialData.activityEvents };
+  const agentTasks = { ...initialData.agentTasks };
+  const commandResults = { ...initialData.commandResults };
+  const eventHandlerRetries = { ...initialData.eventHandlerRetries };
   let events = localRainrailEventsFromOperationalEvents(operationalEvents.values()).slice(-eventLimit);
   let dashboardLayout = initialData.dashboardLayout?.items;
   let dashboardLayoutUpdatedAt = initialData.dashboardLayout?.updatedAt;
@@ -7177,10 +7193,10 @@ function createJsonLocalRainrailEventStore(databasePath: string, eventLimit: num
     mkdirSync(dirname(databasePath), { recursive: true });
     writeFileSync(databasePath, `${JSON.stringify({
       events: Object.fromEntries(nextOperationalEvents),
-      activityEvents: {},
-      agentTasks: {},
-      commandResults: {},
-      eventHandlerRetries: {},
+      activityEvents,
+      agentTasks,
+      commandResults,
+      eventHandlerRetries,
       ...(nextDashboardLayout === undefined || nextDashboardLayoutUpdatedAt === undefined
         ? {}
         : { dashboardLayout: { id: 'user.dashboardLayout', items: nextDashboardLayout, updatedAt: nextDashboardLayoutUpdatedAt } }),
@@ -7190,7 +7206,7 @@ function createJsonLocalRainrailEventStore(databasePath: string, eventLimit: num
   return {
     eventLimit,
     listEvents: () => [...events],
-    listOperationalEvents: () => [...operationalEvents.values()],
+    listOperationalEvents: () => sortLocalOperationalEventsNewest(operationalEvents.values()),
     getOperationalEvent: (id) => operationalEvents.get(id),
     getDashboardLayout: () => dashboardLayout === undefined || dashboardLayoutUpdatedAt === undefined
       ? undefined
@@ -7238,9 +7254,21 @@ function readLocalRainrailEventStoreJson(databasePath: string): {
   readonly operationalEvents: readonly LocalOperationalEvent[];
   readonly dashboardLayout?: LocalDashboardLayoutSnapshot;
   readonly sequences: Record<string, number>;
+  readonly activityEvents: Record<string, unknown>;
+  readonly agentTasks: Record<string, unknown>;
+  readonly commandResults: Record<string, unknown>;
+  readonly eventHandlerRetries: Record<string, unknown>;
 } {
   if (!existsSync(databasePath)) {
-    return { events: [], operationalEvents: [], sequences: {} };
+    return {
+      events: [],
+      operationalEvents: [],
+      sequences: {},
+      activityEvents: {},
+      agentTasks: {},
+      commandResults: {},
+      eventHandlerRetries: {},
+    };
   }
   const parsed = JSON.parse(readFileSync(databasePath, 'utf8')) as unknown;
   if (!isRecord(parsed)) {
@@ -7262,6 +7290,10 @@ function readLocalRainrailEventStoreJson(databasePath: string): {
     sequences: sequences.local_event === undefined
       ? { ...sequences, local_event: nextLocalEventId(legacyEvents.length > 0 ? legacyEvents : localRainrailEventsFromOperationalEvents(operationalEvents)) - 1 }
       : sequences,
+    activityEvents: parseLocalJsonSharedRecordMap(parsed.activityEvents),
+    agentTasks: parseLocalJsonSharedRecordMap(parsed.agentTasks),
+    commandResults: parseLocalJsonSharedRecordMap(parsed.commandResults),
+    eventHandlerRetries: parseLocalJsonSharedRecordMap(parsed.eventHandlerRetries),
   };
 }
 
@@ -7271,7 +7303,11 @@ function parseLocalJsonOperationalEvents(value: unknown): LocalOperationalEvent[
   }
   return Object.values(value)
     .filter(isLocalOperationalEvent)
-    .sort((left, right) => left.receivedAt.localeCompare(right.receivedAt) || left.id.localeCompare(right.id));
+    .sort(compareLocalOperationalEventsOldest);
+}
+
+function parseLocalJsonSharedRecordMap(value: unknown): Record<string, unknown> {
+  return isRecord(value) ? { ...value } : {};
 }
 
 function parseLocalJsonDashboardLayout(parsed: Record<string, unknown>): LocalDashboardLayoutSnapshot | undefined {
@@ -7304,9 +7340,21 @@ function parseLocalJsonOperationalSequences(value: unknown): Record<string, numb
 }
 
 function localRainrailEventsFromOperationalEvents(events: Iterable<LocalOperationalEvent>): LocalRainrailEvent[] {
-  return [...events]
+  return sortLocalOperationalEventsOldest(events)
     .map(localRainrailEventFromOperationalEvent)
     .filter((event): event is LocalRainrailEvent => event !== undefined);
+}
+
+function sortLocalOperationalEventsOldest(events: Iterable<LocalOperationalEvent>): LocalOperationalEvent[] {
+  return [...events].sort(compareLocalOperationalEventsOldest);
+}
+
+function sortLocalOperationalEventsNewest(events: Iterable<LocalOperationalEvent>): LocalOperationalEvent[] {
+  return [...events].sort((left, right) => compareLocalOperationalEventsOldest(right, left));
+}
+
+function compareLocalOperationalEventsOldest(left: LocalOperationalEvent, right: LocalOperationalEvent): number {
+  return left.receivedAt.localeCompare(right.receivedAt) || left.id.localeCompare(right.id);
 }
 
 function localRainrailEventFromOperationalEvent(event: LocalOperationalEvent): LocalRainrailEvent | undefined {

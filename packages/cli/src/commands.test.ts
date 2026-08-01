@@ -173,6 +173,30 @@ function manualDispatchPayload(conversationId: string, text = 'hello'): Record<s
   };
 }
 
+function localOperationalJsonEvent(id: string, receivedAt: string): Record<string, unknown> {
+  return {
+    id,
+    name: 'github.issue',
+    source: { type: 'github', name: 'github-shared', repository: 'reirei-lab/rainrail' },
+    delivery: { id: `delivery-${id}`, receivedAt },
+    subject: { type: 'issue', id, url: `https://github.com/reirei-lab/rainrail/issues/${id}` },
+    occurredAt: receivedAt,
+    receivedAt,
+    envelope: {
+      id,
+      schemaVersion: 'rainrail.event.v1',
+      name: 'github.issue',
+      source: { type: 'github', name: 'github-shared', repository: 'reirei-lab/rainrail' },
+      delivery: { id: `delivery-${id}`, receivedAt },
+      subject: { type: 'issue', id, url: `https://github.com/reirei-lab/rainrail/issues/${id}` },
+      occurredAt: receivedAt,
+      payload: { localEvent: { status: 'received', summary: `${id} received`, workflowRunCount: 0, handlerRetryCount: 0 } },
+      rawPayload: { kind: 'external-reference', reference: `local://events/${id}` },
+      links: { self: `/api/v1/events/${id}` },
+    },
+  };
+}
+
 describe('Rainrail CLI built-in commands', () => {
   it('defines the command table without provider or runtime specific handlers', () => {
     expect(BUILT_IN_COMMANDS.map((command) => command.name)).toEqual([
@@ -3905,32 +3929,20 @@ describe('Rainrail CLI built-in commands', () => {
       await mkdir(join(projectRoot, 'var'), { recursive: true });
       await writeFile(databasePath, `${JSON.stringify({
         events: {
-          'shared-event-000001': {
-            id: 'shared-event-000001',
-            name: 'github.issue',
-            source: { type: 'github', name: 'github-shared', repository: 'reirei-lab/rainrail' },
-            delivery: { id: 'delivery-shared', receivedAt: '2026-07-25T00:00:00.000Z' },
-            subject: { type: 'issue', id: '405', url: 'https://github.com/reirei-lab/rainrail/issues/405' },
-            occurredAt: '2026-07-25T00:00:00.000Z',
-            receivedAt: '2026-07-25T00:00:00.000Z',
-            envelope: {
-              id: 'shared-event-000001',
-              schemaVersion: 'rainrail.event.v1',
-              name: 'github.issue',
-              source: { type: 'github', name: 'github-shared', repository: 'reirei-lab/rainrail' },
-              delivery: { id: 'delivery-shared', receivedAt: '2026-07-25T00:00:00.000Z' },
-              subject: { type: 'issue', id: '405', url: 'https://github.com/reirei-lab/rainrail/issues/405' },
-              occurredAt: '2026-07-25T00:00:00.000Z',
-              payload: { action: 'opened' },
-              rawPayload: { kind: 'external-reference', reference: 'local://events/shared-event-000001' },
-              links: { self: '/api/v1/events/shared-event-000001' },
-            },
-          },
+          'shared-event-000001': localOperationalJsonEvent('shared-event-000001', '2026-07-25T00:00:00.000Z'),
         },
-        activityEvents: {},
-        agentTasks: {},
-        commandResults: {},
-        eventHandlerRetries: {},
+        activityEvents: {
+          'activity-existing': { id: 'activity-existing', sourceEventId: 'shared-event-000001', kind: 'workflow.started' },
+        },
+        agentTasks: {
+          'agent-task-existing': { id: 'agent-task-existing', status: 'todo', title: 'existing task' },
+        },
+        commandResults: {
+          'command-result-existing': { id: 'command-result-existing', exitCode: 0 },
+        },
+        eventHandlerRetries: {
+          'shared-event-000001:handler': { eventId: 'shared-event-000001', handlerName: 'handler', attempt: 1 },
+        },
         sequences: {
           local_event: 0,
         },
@@ -3979,6 +3991,9 @@ describe('Rainrail CLI built-in commands', () => {
       const persisted = JSON.parse(await readFile(databasePath, 'utf8')) as {
         events?: unknown;
         activityEvents?: unknown;
+        agentTasks?: unknown;
+        commandResults?: unknown;
+        eventHandlerRetries?: unknown;
         sequences?: unknown;
       };
       expect(Array.isArray(persisted.events)).toBe(false);
@@ -3992,8 +4007,68 @@ describe('Rainrail CLI built-in commands', () => {
           envelope: { payload: { localEvent: { status: 'received' } } },
         },
       });
-      expect(persisted.activityEvents).toEqual({});
+      expect(persisted.activityEvents).toMatchObject({
+        'activity-existing': { id: 'activity-existing', sourceEventId: 'shared-event-000001' },
+      });
+      expect(persisted.agentTasks).toMatchObject({
+        'agent-task-existing': { id: 'agent-task-existing', status: 'todo' },
+      });
+      expect(persisted.commandResults).toMatchObject({
+        'command-result-existing': { id: 'command-result-existing', exitCode: 0 },
+      });
+      expect(persisted.eventHandlerRetries).toMatchObject({
+        'shared-event-000001:handler': { eventId: 'shared-event-000001', handlerName: 'handler', attempt: 1 },
+      });
       expect(persisted.sequences).toMatchObject({ local_event: 1 });
+    });
+  });
+
+  it('lists JSON operational events newest first in local start APIs', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'json-operational-event-order');
+      const port = await getFreePort();
+      const databasePath = join(projectRoot, 'var', 'rainrail-operational.json');
+      await mkdir(join(projectRoot, 'var'), { recursive: true });
+      await writeFile(databasePath, `${JSON.stringify({
+        events: {
+          'shared-event-old': localOperationalJsonEvent('shared-event-old', '2026-07-25T00:00:00.000Z'),
+          'shared-event-new': localOperationalJsonEvent('shared-event-new', '2026-07-25T00:10:00.000Z'),
+        },
+        activityEvents: {},
+        agentTasks: {},
+        commandResults: {},
+        eventHandlerRetries: {},
+        sequences: { local_event: 0 },
+      }, null, 2)}\n`);
+      await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
+        server: { host: '127.0.0.1', port },
+        dashboardAuth: {
+          readOnlyToken: 'read-token',
+          operatorToken: 'operator-token',
+        },
+        operationalStore: {
+          kind: 'json',
+          databasePath,
+          eventLimit: 10,
+        },
+        sourceBundles: [],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+
+      const result = await runRainrailCliAsync(['start'], { cwd: projectRoot });
+      try {
+        expect(result.exitCode).toBe(0);
+        const response = await fetch(`http://127.0.0.1:${port}/api/v1/events`, {
+          headers: { Authorization: 'Bearer read-token' },
+        });
+        expect(response.status).toBe(200);
+        const payload = await response.json() as { data?: Array<{ id?: string }> };
+        expect(payload.data?.map((event) => event.id)).toEqual(['shared-event-new', 'shared-event-old']);
+      } finally {
+        await closeTestServer(result);
+      }
     });
   });
 
@@ -7537,15 +7612,20 @@ describe('Rainrail CLI built-in commands', () => {
         runtimeProviders: {},
       }, null, 2)}\n`);
 
-      const result = runRainrailCli(['setup', '--dashboard-auth-only', '--yes'], {
+      const result = runRainrailCli(['setup', '--dashboard-auth-only', '--rotate', '--yes'], {
         cwd: projectRoot,
       });
       const config = JSON.parse(await readFile(configPath, 'utf8')) as {
+        dashboardAuth?: { readOnlyToken?: string; operatorToken?: string };
         operationalStore?: unknown;
       };
 
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain('Git ignore path is not a regular file');
+      expect(config.dashboardAuth).toEqual({
+        readOnlyToken: 'existing-read-token',
+        operatorToken: 'existing-operator-token',
+      });
       expect(config.operationalStore).toBeUndefined();
     });
   });
