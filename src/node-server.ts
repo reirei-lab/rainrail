@@ -1,4 +1,5 @@
 import http, { type IncomingMessage, type ServerResponse } from 'node:http';
+import { isIP } from 'node:net';
 import { Readable } from 'node:stream';
 
 import { RainrailBridgeRoom, type RainrailBridgeRoomState } from './bridge-room.js';
@@ -261,6 +262,7 @@ function isAllowedHostHeader(host: string | undefined, allowedHosts: readonly st
 function hostHeaderName(host: string): string | undefined {
   const bracketed = /^\[([0-9A-Fa-f:.]+)\](?::([0-9]{1,5}))?$/u.exec(host);
   if (bracketed?.[1] !== undefined) {
+    if (isIP(bracketed[1]) !== 6) return undefined;
     if (!isValidHostPort(bracketed[2])) return undefined;
     return bracketed[1].toLowerCase();
   }

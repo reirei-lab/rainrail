@@ -433,6 +433,17 @@ describe('Rainrail Node server', () => {
       ]);
       expect(invalidPort).toContain('400 Bad Request');
       expect(invalidPort).toContain('invalid_host_header');
+
+      const bracketedIpv4 = await nodeHttpTextRequest(address.port, [
+        'GET /api/v1/overview HTTP/1.1',
+        'Host: [127.0.0.1]',
+        'Authorization: Bearer read-token',
+        'Connection: close',
+        '',
+        '',
+      ]);
+      expect(bracketedIpv4).toContain('400 Bad Request');
+      expect(bracketedIpv4).toContain('invalid_host_header');
     } finally {
       await closeServer(server);
       operationalStore.close();
