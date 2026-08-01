@@ -6,6 +6,7 @@ on:
       - Pull Request CI
     types:
       - completed
+  push:
 
 permissions:
   actions: read
@@ -17,6 +18,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  validate-workflow-on-push:
+    name: Validate workflow on push
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Confirm workflow parses
+        run: echo "Dashboard VRT comment workflow parsed for branch push."
+
   publish-dashboard-vrt-comment:
     name: Publish dashboard VRT PR comment
     if: github.event_name == 'workflow_run'

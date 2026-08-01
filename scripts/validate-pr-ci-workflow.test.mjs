@@ -72,9 +72,11 @@ describe('pull request CI workflow', () => {
   });
 
   it('publishes dashboard VRT comments from trusted workflow_run tooling', () => {
-    expect(dashboardVrtCommentWorkflow).toMatch(/^on:\n {2}workflow_run:\n {4}workflows:\n {6}- Pull Request CI\n {4}types:\n {6}- completed$/m);
+    expect(dashboardVrtCommentWorkflow).toMatch(/^on:\n {2}workflow_run:\n {4}workflows:\n {6}- Pull Request CI\n {4}types:\n {6}- completed\n {2}push:$/m);
     expect(dashboardVrtCommentWorkflow).toMatch(/^concurrency:\n {2}group: dashboard-vrt-comment-\$\{\{ github\.run_id \}\}\n {2}cancel-in-progress: true$/m);
     expect(dashboardVrtCommentWorkflow).toMatch(/^permissions:\n {2}actions: read\n {2}contents: read\n {2}pull-requests: read$/m);
+    expect(dashboardVrtCommentWorkflow).toMatch(/^ {2}validate-workflow-on-push:\n {4}name: Validate workflow on push\n {4}if: github\.event_name == 'push'\n {4}runs-on: ubuntu-24\.04/m);
+    expect(dashboardVrtCommentWorkflow).toContain('Dashboard VRT comment workflow parsed for branch push.');
     expect(dashboardVrtCommentWorkflow).not.toContain('${{ github.event.workflow_run.pull_requests[0]');
     expect(dashboardVrtCommentWorkflow).toMatch(/^ {4}if: github\.event_name == 'workflow_run'$/m);
     expect(dashboardVrtCommentWorkflow).toMatch(/^ {6}- name: Read workflow_run PR metadata\n {8}id: workflow-run-pr\n {8}run: \|/m);
