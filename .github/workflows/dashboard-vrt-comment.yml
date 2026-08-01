@@ -13,28 +13,51 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: dashboard-vrt-comment-${{ github.event.workflow_run.id }}
+  group: dashboard-vrt-comment-${{ github.run_id }}
   cancel-in-progress: true
 
 jobs:
   publish-dashboard-vrt-comment:
     name: Publish dashboard VRT PR comment
-    if: >-
-      github.event.workflow_run.event == 'pull_request' &&
-      github.event.workflow_run.pull_requests[0].head.repo.full_name == github.repository
+    if: github.event_name == 'workflow_run'
     runs-on: ubuntu-24.04
     steps:
+      - name: Read workflow_run PR metadata
+        id: workflow-run-pr
+        run: |
+          event_type="$(jq -r '.workflow_run.event // ""' "$GITHUB_EVENT_PATH")"
+          pr_number="$(jq -r '.workflow_run.pull_requests[0].number // ""' "$GITHUB_EVENT_PATH")"
+          pr_head_repo="$(jq -r '.workflow_run.pull_requests[0].head.repo.full_name // ""' "$GITHUB_EVENT_PATH")"
+          head_sha="$(jq -r '.workflow_run.head_sha // ""' "$GITHUB_EVENT_PATH")"
+          run_id="$(jq -r '.workflow_run.id // ""' "$GITHUB_EVENT_PATH")"
+
+          eligible=false
+          if [ "$event_type" = "pull_request" ] && [ "$pr_head_repo" = "$GITHUB_REPOSITORY" ] && [ -n "$pr_number" ] && [ -n "$head_sha" ] && [ -n "$run_id" ]; then
+            eligible=true
+          else
+            echo "::notice::Skipping dashboard VRT PR comment because workflow_run is not an in-repository pull request."
+          fi
+
+          {
+            echo "eligible=${eligible}"
+            echo "pr_number=${pr_number}"
+            echo "head_sha=${head_sha}"
+            echo "run_id=${run_id}"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Check out trusted tooling
+        if: ${{ steps.workflow-run-pr.outputs.eligible == 'true' }}
         uses: actions/checkout@v7
         with:
           fetch-depth: 1
           persist-credentials: false
 
       - name: Verify workflow run is the latest PR head
+        if: ${{ steps.workflow-run-pr.outputs.eligible == 'true' }}
         id: latest-pr-head
         run: |
-          current_head_sha="$(gh api "repos/$GITHUB_REPOSITORY/pulls/${{ github.event.workflow_run.pull_requests[0].number }}" --jq '.head.sha')"
-          if [ "$current_head_sha" = "${{ github.event.workflow_run.head_sha }}" ]; then
+          current_head_sha="$(gh api "repos/$GITHUB_REPOSITORY/pulls/${PR_NUMBER}" --jq '.head.sha')"
+          if [ "$current_head_sha" = "${WORKFLOW_RUN_HEAD_SHA}" ]; then
             echo "current=true" >> "$GITHUB_OUTPUT"
           else
             echo "current=false" >> "$GITHUB_OUTPUT"
@@ -42,6 +65,8 @@ jobs:
           fi
         env:
           GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.workflow-run-pr.outputs.pr_number }}
+          WORKFLOW_RUN_HEAD_SHA: ${{ steps.workflow-run-pr.outputs.head_sha }}
 
       - name: Check CML token availability
         if: ${{ steps.latest-pr-head.outputs.current == 'true' }}
@@ -60,7 +85,7 @@ jobs:
         run: |
           rm -rf dashboard-vrt-artifacts dashboard-vrt-comment
           mkdir -p dashboard-vrt-comment
-          if gh run download "${{ github.event.workflow_run.id }}" --repo "$GITHUB_REPOSITORY" --name dashboard-e2e-artifacts --dir dashboard-vrt-artifacts; then
+          if gh run download "${WORKFLOW_RUN_ID}" --repo "$GITHUB_REPOSITORY" --name dashboard-e2e-artifacts --dir dashboard-vrt-artifacts; then
             echo "available=true" >> "$GITHUB_OUTPUT"
             echo "comment_available=true" >> "$GITHUB_OUTPUT"
           else
@@ -77,6 +102,7 @@ EOF
           fi
         env:
           GH_TOKEN: ${{ github.token }}
+          WORKFLOW_RUN_ID: ${{ steps.workflow-run-pr.outputs.run_id }}
 
       - name: Collect dashboard VRT results
         if: ${{ steps.latest-pr-head.outputs.current == 'true' && steps.vrt-artifact.outputs.available == 'true' }}
@@ -97,12 +123,14 @@ EOF
       - name: Publish dashboard VRT PR comment
         if: ${{ steps.latest-pr-head.outputs.current == 'true' && steps.vrt-artifact.outputs.comment_available == 'true' && steps.cml-token.outputs.available == 'true' }}
         run: |
-          pre_publish_head_sha="$(gh api "repos/$GITHUB_REPOSITORY/pulls/${{ github.event.workflow_run.pull_requests[0].number }}" --jq '.head.sha')"
-          if [ "$pre_publish_head_sha" != "${{ github.event.workflow_run.head_sha }}" ]; then
+          pre_publish_head_sha="$(gh api "repos/$GITHUB_REPOSITORY/pulls/${PR_NUMBER}" --jq '.head.sha')"
+          if [ "$pre_publish_head_sha" != "${WORKFLOW_RUN_HEAD_SHA}" ]; then
             echo "::notice::Skipping dashboard VRT PR comment because PR head changed before CML publish."
             exit 0
           fi
-          cml comment update --repo="$GITHUB_REPOSITORY" --target="pr/${{ github.event.workflow_run.pull_requests[0].number }}" --watermark-title="Rainrail dashboard VRT" dashboard-vrt-comment/vrt-comment.md
+          cml comment update --repo="$GITHUB_REPOSITORY" --target="pr/${PR_NUMBER}" --watermark-title="Rainrail dashboard VRT" dashboard-vrt-comment/vrt-comment.md
         env:
           GH_TOKEN: ${{ github.token }}
           REPO_TOKEN: ${{ secrets.CML_COMMENT_TOKEN }}
+          PR_NUMBER: ${{ steps.workflow-run-pr.outputs.pr_number }}
+          WORKFLOW_RUN_HEAD_SHA: ${{ steps.workflow-run-pr.outputs.head_sha }}
