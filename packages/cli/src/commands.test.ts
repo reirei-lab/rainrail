@@ -3897,7 +3897,7 @@ describe('Rainrail CLI built-in commands', () => {
     });
   });
 
-  it('rejects incompatible JSON operational store files in local start', async () => {
+  it('persists local start JSON operational store files in the shared object format', async () => {
     await withTempDirectory(async (directory) => {
       const projectRoot = await initRainrailProject(directory, 'json-operational-start');
       const port = await getFreePort();
@@ -3905,11 +3905,35 @@ describe('Rainrail CLI built-in commands', () => {
       await mkdir(join(projectRoot, 'var'), { recursive: true });
       await writeFile(databasePath, `${JSON.stringify({
         events: {
-          existing: {
-            id: 'existing',
+          'shared-event-000001': {
+            id: 'shared-event-000001',
+            name: 'github.issue',
+            source: { type: 'github', name: 'github-shared', repository: 'reirei-lab/rainrail' },
+            delivery: { id: 'delivery-shared', receivedAt: '2026-07-25T00:00:00.000Z' },
+            subject: { type: 'issue', id: '405', url: 'https://github.com/reirei-lab/rainrail/issues/405' },
+            occurredAt: '2026-07-25T00:00:00.000Z',
+            receivedAt: '2026-07-25T00:00:00.000Z',
+            envelope: {
+              id: 'shared-event-000001',
+              schemaVersion: 'rainrail.event.v1',
+              name: 'github.issue',
+              source: { type: 'github', name: 'github-shared', repository: 'reirei-lab/rainrail' },
+              delivery: { id: 'delivery-shared', receivedAt: '2026-07-25T00:00:00.000Z' },
+              subject: { type: 'issue', id: '405', url: 'https://github.com/reirei-lab/rainrail/issues/405' },
+              occurredAt: '2026-07-25T00:00:00.000Z',
+              payload: { action: 'opened' },
+              rawPayload: { kind: 'external-reference', reference: 'local://events/shared-event-000001' },
+              links: { self: '/api/v1/events/shared-event-000001' },
+            },
           },
         },
         activityEvents: {},
+        agentTasks: {},
+        commandResults: {},
+        eventHandlerRetries: {},
+        sequences: {
+          local_event: 0,
+        },
       }, null, 2)}\n`);
       await writeFile(join(projectRoot, 'rainrail.config.json'), `${JSON.stringify({
         server: {
@@ -3921,17 +3945,55 @@ describe('Rainrail CLI built-in commands', () => {
           databasePath,
           eventLimit: 10,
         },
-        sourceBundles: [],
+        sourceBundles: [{
+          type: 'eep-bridge',
+          name: 'local',
+          sources: [{
+            type: 'github-webhook',
+            name: 'github-local',
+            sourceType: 'github',
+            provider: 'github',
+            webhookSecret: 'secret',
+            endpoint: '/webhooks/github',
+          }],
+        }],
         sources: [],
         taskProviders: {},
         runtimeProviders: {},
       }, null, 2)}\n`);
 
       const result = await runRainrailCliAsync(['start'], { cwd: projectRoot });
+      try {
+        expect(result.exitCode).toBe(0);
+        const body = JSON.stringify({ action: 'opened' });
+        const accepted = await fetch(`http://127.0.0.1:${port}/webhooks/github`, {
+          method: 'POST',
+          headers: githubWebhookHeaders('secret', body, { delivery: 'delivery-json-object', event: 'issues' }),
+          body,
+        });
+        expect(accepted.status).toBe(202);
+      } finally {
+        await closeTestServer(result);
+      }
 
-      expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain('JSON operational store is not compatible with rainrail start local event storage');
-      await expect(readFile(databasePath, 'utf8')).resolves.toContain('"activityEvents"');
+      const persisted = JSON.parse(await readFile(databasePath, 'utf8')) as {
+        events?: unknown;
+        activityEvents?: unknown;
+        sequences?: unknown;
+      };
+      expect(Array.isArray(persisted.events)).toBe(false);
+      expect(persisted.events).toMatchObject({
+        'shared-event-000001': {
+          id: 'shared-event-000001',
+          name: 'github.issue',
+        },
+        'local-event-000001': {
+          id: 'local-event-000001',
+          envelope: { payload: { localEvent: { status: 'received' } } },
+        },
+      });
+      expect(persisted.activityEvents).toEqual({});
+      expect(persisted.sequences).toMatchObject({ local_event: 1 });
     });
   });
 
@@ -7455,6 +7517,36 @@ describe('Rainrail CLI built-in commands', () => {
       expect(result.stderr).toBe('');
       expect(result.stdout).toBe('');
       expect(config.operationalStore).toEqual(explicitOperationalStore);
+    });
+  });
+
+  it('does not write operationalStore when setup cannot update the default store gitignore', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = await initRainrailProject(directory, 'blocked-operational-store-gitignore');
+      const configPath = join(projectRoot, 'rainrail.config.json');
+      await mkdir(join(projectRoot, '.gitignore'), { recursive: true });
+      await writeFile(configPath, `${JSON.stringify({
+        project: { name: 'blocked-operational-store-gitignore' },
+        dashboardAuth: {
+          readOnlyToken: 'existing-read-token',
+          operatorToken: 'existing-operator-token',
+        },
+        sourceBundles: [],
+        sources: [],
+        taskProviders: {},
+        runtimeProviders: {},
+      }, null, 2)}\n`);
+
+      const result = runRainrailCli(['setup', '--dashboard-auth-only', '--yes'], {
+        cwd: projectRoot,
+      });
+      const config = JSON.parse(await readFile(configPath, 'utf8')) as {
+        operationalStore?: unknown;
+      };
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('Git ignore path is not a regular file');
+      expect(config.operationalStore).toBeUndefined();
     });
   });
 

@@ -5416,8 +5416,8 @@ function ensureLocalOperationalStore(
     return { configured: false, configPath };
   }
 
-  fileSystem.writeFileSync(configPath, formatConfigWithDefaultOperationalStore(raw));
   ensureDefaultOperationalStoreGitIgnore(dirname(configPath), fileSystem);
+  fileSystem.writeFileSync(configPath, formatConfigWithDefaultOperationalStore(raw));
   return { configured: true, configPath };
 }
 
@@ -7163,38 +7163,68 @@ function createMemoryLocalRainrailEventStore(eventLimit: number): LocalRainrailE
 
 function createJsonLocalRainrailEventStore(databasePath: string, eventLimit: number): LocalRainrailEventStore {
   const initialData = readLocalRainrailEventStoreJson(databasePath);
-  let events = initialData.events.slice(-eventLimit);
+  let operationalEvents = new Map(initialData.operationalEvents.map((event) => [event.id, event]));
+  let sequences = { ...initialData.sequences };
+  let events = localRainrailEventsFromOperationalEvents(operationalEvents.values()).slice(-eventLimit);
   let dashboardLayout = initialData.dashboardLayout?.items;
   let dashboardLayoutUpdatedAt = initialData.dashboardLayout?.updatedAt;
   const writeStore = (
-    nextEvents = events,
+    nextOperationalEvents = operationalEvents,
+    nextSequences = sequences,
     nextDashboardLayout = dashboardLayout,
     nextDashboardLayoutUpdatedAt = dashboardLayoutUpdatedAt,
   ): void => {
     mkdirSync(dirname(databasePath), { recursive: true });
     writeFileSync(databasePath, `${JSON.stringify({
-      events: nextEvents,
+      events: Object.fromEntries(nextOperationalEvents),
+      activityEvents: {},
+      agentTasks: {},
+      commandResults: {},
+      eventHandlerRetries: {},
       ...(nextDashboardLayout === undefined || nextDashboardLayoutUpdatedAt === undefined
         ? {}
-        : { dashboardLayout: nextDashboardLayout, dashboardLayoutUpdatedAt: nextDashboardLayoutUpdatedAt }),
+        : { dashboardLayout: { id: 'user.dashboardLayout', items: nextDashboardLayout, updatedAt: nextDashboardLayoutUpdatedAt } }),
+      sequences: nextSequences,
     }, null, 2)}\n`, { mode: 0o600 });
   };
   return {
     eventLimit,
     listEvents: () => [...events],
+    listOperationalEvents: () => [...operationalEvents.values()],
+    getOperationalEvent: (id) => operationalEvents.get(id),
     getDashboardLayout: () => dashboardLayout === undefined || dashboardLayoutUpdatedAt === undefined
       ? undefined
       : { items: localCloneDashboardLayout(dashboardLayout), updatedAt: dashboardLayoutUpdatedAt },
     saveDashboardLayout(items) {
       const nextDashboardLayoutUpdatedAt = new Date().toISOString();
       const nextDashboardLayout = localCloneDashboardLayout(items);
-      writeStore(events, nextDashboardLayout, nextDashboardLayoutUpdatedAt);
+      writeStore(operationalEvents, sequences, nextDashboardLayout, nextDashboardLayoutUpdatedAt);
       dashboardLayoutUpdatedAt = nextDashboardLayoutUpdatedAt;
       dashboardLayout = nextDashboardLayout;
       return { items: localCloneDashboardLayout(dashboardLayout), updatedAt: dashboardLayoutUpdatedAt };
     },
+    recordOperationalEvent(envelope) {
+      const event = localOperationalEventFromEnvelope(envelope);
+      operationalEvents.set(event.id, event);
+      events = localRainrailEventsFromOperationalEvents(operationalEvents.values()).slice(-eventLimit);
+      writeStore();
+      return event;
+    },
+    reserveLocalEventId() {
+      const nextValue = (sequences.local_event ?? 0) + 1;
+      sequences = { ...sequences, local_event: nextValue };
+      writeStore();
+      return `local-event-${String(nextValue).padStart(6, '0')}`;
+    },
+    nextEventId() {
+      return (sequences.local_event ?? 0) + 1;
+    },
     replaceEvents(nextEvents) {
       events = [...nextEvents].slice(-eventLimit);
+      operationalEvents = new Map(events.map((event) => [
+        event.id,
+        localOperationalEventFromLocalEvent(event),
+      ]));
       writeStore();
     },
     close() {
@@ -7205,26 +7235,126 @@ function createJsonLocalRainrailEventStore(databasePath: string, eventLimit: num
 
 function readLocalRainrailEventStoreJson(databasePath: string): {
   readonly events: readonly LocalRainrailEvent[];
+  readonly operationalEvents: readonly LocalOperationalEvent[];
   readonly dashboardLayout?: LocalDashboardLayoutSnapshot;
+  readonly sequences: Record<string, number>;
 } {
   if (!existsSync(databasePath)) {
-    return { events: [] };
+    return { events: [], operationalEvents: [], sequences: {} };
   }
   const parsed = JSON.parse(readFileSync(databasePath, 'utf8')) as unknown;
-  if (!isRecord(parsed) || !Array.isArray(parsed.events)) {
+  if (!isRecord(parsed)) {
     throw new Error(
       'JSON operational store is not compatible with rainrail start local event storage. '
         + 'Use kind "sqlite", kind "memory", or choose a separate JSON databasePath.',
     );
   }
-  const dashboardLayoutUpdatedAt = typeof parsed.dashboardLayoutUpdatedAt === 'string'
+  const operationalEvents = parseLocalJsonOperationalEvents(parsed.events);
+  const legacyEvents = Array.isArray(parsed.events) ? parsed.events.filter(isLocalRainrailEvent) : [];
+  const dashboardLayout = parseLocalJsonDashboardLayout(parsed);
+  const sequences = parseLocalJsonOperationalSequences(parsed.sequences);
+  return {
+    events: legacyEvents.length > 0 ? legacyEvents : localRainrailEventsFromOperationalEvents(operationalEvents),
+    operationalEvents: operationalEvents.length > 0
+      ? operationalEvents
+      : legacyEvents.map(localOperationalEventFromLocalEvent),
+    ...(dashboardLayout === undefined ? {} : { dashboardLayout }),
+    sequences: sequences.local_event === undefined
+      ? { ...sequences, local_event: nextLocalEventId(legacyEvents.length > 0 ? legacyEvents : localRainrailEventsFromOperationalEvents(operationalEvents)) - 1 }
+      : sequences,
+  };
+}
+
+function parseLocalJsonOperationalEvents(value: unknown): LocalOperationalEvent[] {
+  if (!isRecord(value)) {
+    return [];
+  }
+  return Object.values(value)
+    .filter(isLocalOperationalEvent)
+    .sort((left, right) => left.receivedAt.localeCompare(right.receivedAt) || left.id.localeCompare(right.id));
+}
+
+function parseLocalJsonDashboardLayout(parsed: Record<string, unknown>): LocalDashboardLayoutSnapshot | undefined {
+  if (isRecord(parsed.dashboardLayout)) {
+    const updatedAt = typeof parsed.dashboardLayout.updatedAt === 'string'
+      ? parsed.dashboardLayout.updatedAt
+      : undefined;
+    return Array.isArray(parsed.dashboardLayout.items) && updatedAt !== undefined
+      ? { items: parseLocalDashboardLayoutItems(parsed.dashboardLayout.items), updatedAt }
+      : undefined;
+  }
+  const legacyUpdatedAt = typeof parsed.dashboardLayoutUpdatedAt === 'string'
     ? parsed.dashboardLayoutUpdatedAt
     : undefined;
+  return Array.isArray(parsed.dashboardLayout) && legacyUpdatedAt !== undefined
+    ? { items: parseLocalDashboardLayoutItems(parsed.dashboardLayout), updatedAt: legacyUpdatedAt }
+    : undefined;
+}
+
+function parseLocalJsonOperationalSequences(value: unknown): Record<string, number> {
+  if (!isRecord(value)) {
+    return {};
+  }
+  return Object.fromEntries(
+    Object.entries(value).filter((entry): entry is [string, number] => {
+      const [, sequence] = entry;
+      return typeof sequence === 'number' && Number.isInteger(sequence) && sequence >= 0;
+    }),
+  );
+}
+
+function localRainrailEventsFromOperationalEvents(events: Iterable<LocalOperationalEvent>): LocalRainrailEvent[] {
+  return [...events]
+    .map(localRainrailEventFromOperationalEvent)
+    .filter((event): event is LocalRainrailEvent => event !== undefined);
+}
+
+function localRainrailEventFromOperationalEvent(event: LocalOperationalEvent): LocalRainrailEvent | undefined {
+  const payload = event.envelope.payload;
+  const localEvent = isRecord(payload) && isRecord(payload.localEvent) ? payload.localEvent : undefined;
+  const status = typeof localEvent?.status === 'string' ? localEvent.status : 'received';
+  const summary = typeof localEvent?.summary === 'string' ? localEvent.summary : `${event.source.name} event received`;
+  const workflowRunCount = typeof localEvent?.workflowRunCount === 'number' ? localEvent.workflowRunCount : 0;
+  const handlerRetryCount = typeof localEvent?.handlerRetryCount === 'number' ? localEvent.handlerRetryCount : 0;
+  const rawPayloadReference = typeof event.envelope.rawPayload.reference === 'string'
+    ? event.envelope.rawPayload.reference
+    : `local://events/${event.id}`;
+  const links = event.envelope.links;
   return {
-    events: parsed.events.filter(isLocalRainrailEvent),
-    ...(Array.isArray(parsed.dashboardLayout) && dashboardLayoutUpdatedAt !== undefined
-      ? { dashboardLayout: { items: parseLocalDashboardLayoutItems(parsed.dashboardLayout), updatedAt: dashboardLayoutUpdatedAt } }
-      : {}),
+    id: event.id,
+    type: 'event',
+    name: event.name,
+    status,
+    summary,
+    deliveryId: event.delivery.id,
+    rawPayloadReference,
+    workflowRunCount,
+    handlerRetryCount,
+    subject: event.subject,
+    occurredAt: event.occurredAt,
+    receivedAt: event.delivery.receivedAt,
+    source: event.source,
+    links: links !== undefined && typeof links.self === 'string'
+      ? { self: links.self }
+      : { self: `/api/v1/events/${encodeURIComponent(event.id)}` },
+  };
+}
+
+function localOperationalEventFromLocalEvent(event: LocalRainrailEvent): LocalOperationalEvent {
+  const envelope = localOperationalEnvelopeFromLocalEvent(event);
+  return localOperationalEventFromEnvelope(envelope);
+}
+
+function localOperationalEventFromEnvelope(envelope: LocalOperationalEvent['envelope']): LocalOperationalEvent {
+  return {
+    id: envelope.id,
+    name: envelope.name,
+    source: envelope.source,
+    delivery: envelope.delivery,
+    subject: envelope.subject,
+    occurredAt: envelope.occurredAt,
+    receivedAt: envelope.delivery.receivedAt,
+    envelope,
   };
 }
 
@@ -8954,6 +9084,41 @@ function isLocalRainrailEvent(value: unknown): value is LocalRainrailEvent {
     && typeof value.source.name === 'string'
     && isRecord(value.links)
     && typeof value.links.self === 'string';
+}
+
+function isLocalOperationalEvent(value: unknown): value is LocalOperationalEvent {
+  return isRecord(value)
+    && typeof value.id === 'string'
+    && typeof value.name === 'string'
+    && isRecord(value.source)
+    && typeof value.source.type === 'string'
+    && typeof value.source.name === 'string'
+    && (typeof value.source.repository === 'string' || value.source.repository === undefined)
+    && isRecord(value.delivery)
+    && typeof value.delivery.id === 'string'
+    && typeof value.delivery.receivedAt === 'string'
+    && isRecord(value.subject)
+    && typeof value.subject.type === 'string'
+    && typeof value.subject.id === 'string'
+    && (typeof value.subject.url === 'string' || value.subject.url === undefined)
+    && typeof value.occurredAt === 'string'
+    && typeof value.receivedAt === 'string'
+    && isRecord(value.envelope)
+    && value.envelope.id === value.id
+    && value.envelope.schemaVersion === 'rainrail.event.v1'
+    && typeof value.envelope.name === 'string'
+    && isRecord(value.envelope.source)
+    && isRecord(value.envelope.delivery)
+    && isRecord(value.envelope.subject)
+    && typeof value.envelope.occurredAt === 'string'
+    && isRecord(value.envelope.rawPayload)
+    && typeof value.envelope.rawPayload.kind === 'string'
+    && typeof value.envelope.rawPayload.reference === 'string'
+    && (value.envelope.links === undefined || isStringRecord(value.envelope.links));
+}
+
+function isStringRecord(value: unknown): value is Record<string, string> {
+  return isRecord(value) && Object.values(value).every((entry) => typeof entry === 'string');
 }
 
 type LocalSourceRow = {
