@@ -504,6 +504,7 @@
       "title": "Local dashboard startup flow",
       "sources": [
         "packages/cli/src/index.ts",
+        "src/node-server.ts",
         "src/http-app.ts",
         "apps/www/src/pages/[locale]/dashboard.astro",
         "apps/www/src/lib/dashboard-client.ts",
@@ -528,6 +529,7 @@
         "e2e/dashboard/dashboard-smoke.spec.ts",
         "scripts/dashboard-demo-server-harness.test.mjs",
         "packages/cli/src/commands.test.ts",
+        "src/node-server.test.ts",
         "src/dashboard-api.test.ts"
       ],
       "publicExports": [],

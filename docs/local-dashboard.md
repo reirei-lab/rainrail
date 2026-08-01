@@ -583,6 +583,9 @@ The documented flow is protected by focused regression coverage:
 - `packages/cli/src/commands.test.ts` covers `rainrail start` endpoint output,
   packaged dashboard serving, same-origin `/api/v1/*` routes, and auth failure
   guidance.
+- `src/node-server.test.ts` covers the public bind smoke path: `0.0.0.0`
+  listening, allowed Host headers, bearer-authenticated dashboard API access,
+  and rejection for hosts outside `server.allowedHosts`.
 - `scripts/validate-dashboard-shell.test.mjs` covers same-origin dashboard
   client behavior and Pages API URL injection.
 - `src/dashboard-api.test.ts` covers shared HTTP app read-only, operator, and
