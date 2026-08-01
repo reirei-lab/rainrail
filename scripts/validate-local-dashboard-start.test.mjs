@@ -18,6 +18,10 @@ const dashboardShellTest = readFileSync(
   new URL('./validate-dashboard-shell.test.mjs', import.meta.url),
   'utf8',
 );
+const nodeServerTest = readFileSync(
+  new URL('../src/node-server.test.ts', import.meta.url),
+  'utf8',
+);
 
 describe('local dashboard start documentation', () => {
   it('documents the setup/start/open flow for a new local operator', () => {
@@ -184,17 +188,25 @@ describe('local dashboard start documentation', () => {
     expect(cliCommandsTest).toContain('URL Host: 127.0.0.1');
     expect(cliCommandsTest).toContain('URL Host: dashboard.local');
     expect(cliCommandsTest).toContain('allowedHosts: []');
+    expect(cliCommandsTest).toContain('Access URLs: http://dashboard.local:9001');
+    expect(cliCommandsTest).toContain('Public bind note: 0.0.0.0 accepts connections on all interfaces');
     expect(cliCommandsTest).toContain('Dashboard: http://127.0.0.1:8787/dashboard');
     expect(cliCommandsTest).toContain('Dashboard: http://dashboard.local:9001/dashboard');
     expect(cliCommandsTest).toContain('Dashboard routes: /en/dashboard/events');
     expect(cliCommandsTest).toContain('Dashboard API: http://127.0.0.1:8787/api/v1/overview');
     expect(cliCommandsTest).toContain('Dashboard status API: http://127.0.0.1:8787/api/v1/dashboard/status');
+    expect(cliCommandsTest).toContain('Dashboard Auth: required; configured scopes: read-only, operator');
     expect(cliCommandsTest).toContain('Dashboard demo: http://127.0.0.1:8787/dashboard?demo=1');
     expect(cliCommandsTest).toContain('Dashboard demo routes: /en/dashboard/events?demo=1');
     expect(cliCommandsTest).toContain('Dashboard demo status API: http://127.0.0.1:8787/api/v1/dashboard/status?demo=1');
     expect(cliCommandsTest).toContain('serves seeded SQLite dashboard demo mode without an operator token');
     expect(cliCommandsTest).toContain('missing_bearer_token');
     expect(cliCommandsTest).toContain('invalid_bearer_token');
+    expect(nodeServerTest).toContain('smokes public dashboard bind access through allowed Host headers and bearer auth');
+    expect(nodeServerTest).toContain("server.listen(0, '0.0.0.0')");
+    expect(nodeServerTest).toContain('Host: dashboard.local:');
+    expect(nodeServerTest).toContain('Authorization: Bearer read-token');
+    expect(nodeServerTest).toContain('invalid_host_header');
     expect(dashboardShellTest).toContain('defaults the dashboard API client to same-origin');
 
     expect(contractsManifest.contracts).toEqual(
@@ -203,6 +215,7 @@ describe('local dashboard start documentation', () => {
           id: 'local-dashboard-start',
           sources: expect.arrayContaining([
             'packages/cli/src/index.ts',
+            'src/node-server.ts',
             'src/http-app.ts',
             'apps/www/src/pages/[locale]/dashboard.astro',
             'apps/www/src/lib/dashboard-client.ts',
@@ -224,15 +237,10 @@ describe('local dashboard start documentation', () => {
             'scripts/dashboard-demo-server-harness.test.mjs',
             'packages/cli/src/commands.test.ts',
             'src/dashboard-api.test.ts',
+            'src/node-server.test.ts',
           ]),
         }),
       ]),
     );
-
-    const localDashboardContract = contractsManifest.contracts.find(
-      /** @param {{ id?: string }} contract */
-      (contract) => contract.id === 'local-dashboard-start',
-    );
-    expect(localDashboardContract.sources).not.toContain('src/node-server.ts');
   });
 });

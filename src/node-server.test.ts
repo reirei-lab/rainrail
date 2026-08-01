@@ -472,6 +472,67 @@ describe('Rainrail Node server', () => {
     }
   });
 
+  it('smokes public dashboard bind access through allowed Host headers and bearer auth', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+    });
+    const { server } = createRainrailNodeServer({
+      githubWebhookSecret: 'secret',
+      publishToken: 'test-publish-token',
+      dashboardAuth: {
+        readOnlyToken: 'read-token',
+        operatorToken: 'operator-token',
+      },
+      operationalStore,
+      allowedHosts: ['dashboard.local'],
+    });
+
+    server.listen(0, '0.0.0.0');
+    await once(server, 'listening');
+    const address = server.address();
+    if (address === null || typeof address === 'string') {
+      throw new Error('expected TCP server address');
+    }
+
+    try {
+      const allowed = await nodeHttpTextRequest(address.port, [
+        'GET /api/v1/dashboard/status HTTP/1.1',
+        `Host: dashboard.local:${address.port}`,
+        'Authorization: Bearer read-token',
+        'Connection: close',
+        '',
+        '',
+      ]);
+      expect(allowed).toContain('200 OK');
+      expect(allowed).toContain('"scope":"read-only"');
+
+      const missingAuth = await nodeHttpTextRequest(address.port, [
+        'GET /api/v1/dashboard/status HTTP/1.1',
+        `Host: dashboard.local:${address.port}`,
+        'Connection: close',
+        '',
+        '',
+      ]);
+      expect(missingAuth).toContain('401 Unauthorized');
+      expect(missingAuth).toContain('missing_bearer_token');
+
+      const outsideAllowlist = await nodeHttpTextRequest(address.port, [
+        'GET /api/v1/dashboard/status HTTP/1.1',
+        `Host: attacker.example:${address.port}`,
+        'Authorization: Bearer read-token',
+        'Connection: close',
+        '',
+        '',
+      ]);
+      expect(outsideAllowlist).toContain('400 Bad Request');
+      expect(outsideAllowlist).toContain('invalid_host_header');
+    } finally {
+      await closeServer(server);
+      operationalStore.close();
+    }
+  });
+
   it('streams manual intake bodies so adapter auth runs before body limits', async () => {
     const { server } = createRainrailNodeServer({
       githubWebhookSecret: 'secret',
