@@ -3225,6 +3225,79 @@ describe('Rainrail CLI built-in commands', () => {
     });
   });
 
+  it('serves configured dashboard status from the default init SQLite operational store', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectRoot = join(directory, 'init-sqlite-status');
+      await mkdir(projectRoot);
+      const port = await getFreePort();
+
+      const init = runRainrailCli(['init', '--yes'], { cwd: projectRoot });
+      const config = JSON.parse(await readFile(join(projectRoot, 'rainrail.config.json'), 'utf8')) as {
+        operationalStore?: { kind?: string; databasePath?: string; eventLimit?: number };
+      };
+
+      expect(init.exitCode).toBe(0);
+      expect(init.stderr).toBe('');
+      expect(config.operationalStore).toEqual({
+        kind: 'sqlite',
+        databasePath: 'var/rainrail-operational.sqlite',
+        eventLimit: 250,
+      });
+
+      let startOptions: RainrailStartOptions | undefined;
+      const capturedStart = runRainrailCli(['start', '--port', String(port)], {
+        cwd: projectRoot,
+        serverStarter: (options) => {
+          startOptions = options;
+          return { stop: () => undefined };
+        },
+      });
+
+      expect(capturedStart.exitCode).toBe(0);
+      expect(capturedStart.stderr).toBe('');
+      expect(startOptions?.operationalStoreConfig).toEqual({
+        kind: 'sqlite',
+        databasePath: join(projectRoot, 'var', 'rainrail-operational.sqlite'),
+        eventLimit: 250,
+      });
+
+      const server = await runRainrailCliAsync(['start', '--port', String(port)], { cwd: projectRoot });
+      try {
+        expect(server.exitCode).toBe(0);
+        const readAuth = await readDashboardAuthHeaders(projectRoot);
+        const status = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/status`, { headers: readAuth });
+
+        expect(status.status).toBe(200);
+        await expect(status.json()).resolves.toMatchObject({
+          data: {
+            status: 'degraded',
+            store: { status: 'configured' },
+            overview: {
+              status: 'unknown',
+              lastError: null,
+            },
+          },
+        });
+        const overview = await fetch(`http://127.0.0.1:${port}/api/v1/overview`, { headers: readAuth });
+        expect(overview.status).toBe(200);
+        const afterOverviewStatus = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/status`, { headers: readAuth });
+        await expect(afterOverviewStatus.json()).resolves.toMatchObject({
+          data: {
+            status: 'ok',
+            store: { status: 'configured' },
+            overview: {
+              status: 'ok',
+              lastError: null,
+            },
+          },
+        });
+        await expectSqliteOperationalFilesProtected(join(projectRoot, 'var', 'rainrail-operational.sqlite'));
+      } finally {
+        await closeTestServer(server);
+      }
+    });
+  });
+
   it('reads shared SQLite operational rows without overwriting existing event metadata', async () => {
     await withTempDirectory(async (directory) => {
       const projectRoot = await initRainrailProject(directory, 'sqlite-operational-shared-start');
