@@ -2686,6 +2686,7 @@ const localDefaultMaxRequestBodyBytes = 25 * 1024 * 1024;
 const localGitHubWebhookSourceNameMaxLength = 53;
 const localEventHistoryLimit = 50;
 const localDefaultOperationalStoreEventLimit = 250;
+const localDefaultOperationalStorePath = 'var/rainrail-operational.sqlite';
 const localDefaultDemoOperationalStorePath = '.tmp/dashboard-demo.sqlite';
 const localEmptyCollectionRows: readonly { readonly id: string }[] = [];
 
@@ -3422,13 +3423,7 @@ function validateStartOptionInputs(
   }
   const demoMode = args.demoMode || env.RAINRAIL_DASHBOARD_DEMO === '1';
   normalizeStartOperationalStoreConfigPath(
-    envOperationalStore.config ?? config.operationalStore ?? (demoMode
-      ? {
-        kind: 'sqlite',
-        databasePath: localDefaultDemoOperationalStorePath,
-        eventLimit: localDefaultOperationalStoreEventLimit,
-      }
-      : undefined),
+    selectStartOperationalStoreConfig(envOperationalStore.config, config.operationalStore, demoMode),
     project.root,
   );
   return undefined;
@@ -3484,15 +3479,13 @@ function resolveStartOptions(
     return { error: envOperationalStore.error };
   }
   const demoMode = args.demoMode || env.RAINRAIL_DASHBOARD_DEMO === '1';
-  const configuredOperationalStore = envOperationalStore.config ?? config.operationalStore;
+  const configuredOperationalStore = selectStartOperationalStoreConfig(
+    envOperationalStore.config,
+    config.operationalStore,
+    demoMode,
+  );
   const operationalStoreConfig = normalizeStartOperationalStoreConfigPath(
-    configuredOperationalStore ?? (demoMode
-      ? {
-        kind: 'sqlite',
-        databasePath: localDefaultDemoOperationalStorePath,
-        eventLimit: localDefaultOperationalStoreEventLimit,
-      }
-      : undefined),
+    configuredOperationalStore,
     project.root,
   );
 
@@ -3512,6 +3505,33 @@ function resolveStartOptions(
       ...(operationalStoreConfig === undefined ? {} : { operationalStoreConfig }),
     },
   };
+}
+
+function selectStartOperationalStoreConfig(
+  envOperationalStore: RainrailStartOperationalStoreConfig | undefined,
+  configOperationalStore: RainrailStartOperationalStoreConfig | undefined,
+  demoMode: boolean,
+): RainrailStartOperationalStoreConfig | undefined {
+  if (envOperationalStore !== undefined) {
+    return envOperationalStore;
+  }
+  if (
+    demoMode &&
+    (configOperationalStore === undefined || isDefaultInitOperationalStoreConfig(configOperationalStore))
+  ) {
+    return {
+      kind: 'sqlite',
+      databasePath: localDefaultDemoOperationalStorePath,
+      eventLimit: localDefaultOperationalStoreEventLimit,
+    };
+  }
+  return configOperationalStore;
+}
+
+function isDefaultInitOperationalStoreConfig(config: RainrailStartOperationalStoreConfig): boolean {
+  return config.kind === 'sqlite' &&
+    config.databasePath === localDefaultOperationalStorePath &&
+    config.eventLimit === localDefaultOperationalStoreEventLimit;
 }
 
 function mergeDashboardAuth(configAuth: RainrailDashboardAuth, eventsBearerToken: string | undefined): RainrailDashboardAuth {
@@ -6500,6 +6520,11 @@ function formatRainrailConfig(projectName: string): string {
       allowedHosts: [],
     },
     dashboardAuth: {},
+    operationalStore: {
+      kind: 'sqlite',
+      databasePath: localDefaultOperationalStorePath,
+      eventLimit: localDefaultOperationalStoreEventLimit,
+    },
     sourceBundles: [],
     sources: [],
     taskProviders: {},

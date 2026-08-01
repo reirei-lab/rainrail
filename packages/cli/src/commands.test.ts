@@ -8695,6 +8695,11 @@ describe('Rainrail CLI built-in commands', () => {
           allowedHosts: [],
         },
         dashboardAuth: {},
+        operationalStore: {
+          kind: 'sqlite',
+          databasePath: 'var/rainrail-operational.sqlite',
+          eventLimit: 250,
+        },
         sourceBundles: [],
         sources: [],
         taskProviders: {},
