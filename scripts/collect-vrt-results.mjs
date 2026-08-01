@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url';
  * @typedef {{
  *   id: string;
  *   title: string;
- *   status?: 'missing-baseline' | 'missing-diff';
+ *   status?: 'missing-baseline' | 'missing-diff' | 'screenshot-timeout';
  *   before?: string;
  *   after?: string;
  *   diff?: string;
@@ -15,7 +15,7 @@ import { pathToFileURL } from 'node:url';
  * @typedef {{
  *   key: string;
  *   idHint: string;
- *   status?: 'missing-baseline';
+ *   status?: 'missing-baseline' | 'screenshot-timeout';
  *   actualPath?: string;
  *   expectedPath?: string;
  *   diffPath?: string;
@@ -205,6 +205,14 @@ async function unexpectedCandidatesFromReport(reportPath, artifactRoot) {
         idHint,
         status: 'missing-baseline',
       });
+    } else if (actualAttachmentCount === 0 && hasScreenshotComparisonError(result)) {
+      const idHint = screenshotErrorIdHint(result) ?? entry.identity.at(-1) ?? 'screenshot-timeout';
+      const key = [...entry.identity, idHint, 'screenshot-timeout'].join('\u0000');
+      candidatesBySnapshot.set(key, {
+        key,
+        idHint,
+        status: 'screenshot-timeout',
+      });
     }
   }
 
@@ -246,13 +254,13 @@ function snapshotIdHint(attachment, attachmentPath) {
 function attachmentKind(attachment, attachmentPath) {
   const attachmentName = typeof attachment.name === 'string' ? attachment.name.toLowerCase() : '';
   const filename = basename(attachmentPath).toLowerCase();
-  if (attachmentName.includes('actual') || filename.endsWith('-actual.png')) {
+  if (attachmentName === 'actual' || attachmentName.endsWith('-actual') || filename.endsWith('-actual.png')) {
     return 'actual';
   }
-  if (attachmentName.includes('expected') || filename.endsWith('-expected.png')) {
+  if (attachmentName === 'expected' || attachmentName.endsWith('-expected') || filename.endsWith('-expected.png')) {
     return 'expected';
   }
-  if (attachmentName.includes('diff') || filename.endsWith('-diff.png')) {
+  if (attachmentName === 'diff' || attachmentName.endsWith('-diff') || filename.endsWith('-diff.png')) {
     return 'diff';
   }
   return undefined;
@@ -268,9 +276,25 @@ function hasMissingBaselineError(result) {
 
 /**
  * @param {Record<string, unknown>} result
+ * @returns {boolean}
+ */
+function hasScreenshotComparisonError(result) {
+  return errorMessages(result).some((message) => /toHaveScreenshot|toMatchSnapshot|screenshot|snapshot/u.test(message) && /timed?\s*out|timeout|exceeded|failed/u.test(message));
+}
+
+/**
+ * @param {Record<string, unknown>} result
  * @returns {string | undefined}
  */
 function missingBaselineIdHint(result) {
+  return screenshotErrorIdHint(result);
+}
+
+/**
+ * @param {Record<string, unknown>} result
+ * @returns {string | undefined}
+ */
+function screenshotErrorIdHint(result) {
   for (const message of errorMessages(result)) {
     const matches = [...message.matchAll(/([A-Za-z0-9_.-]+)\.png\b/gu)];
     const snapshotName = matches.at(-1)?.[1];

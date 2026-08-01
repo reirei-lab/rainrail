@@ -72,6 +72,25 @@ describe('generateVrtComment', () => {
     expect(markdown).not.toContain('undefined');
   });
 
+  it('renders screenshot timeout cases without pretending image artifacts exist', () => {
+    const markdown = generateVrtComment({
+      changed: true,
+      totalChanged: 1,
+      cases: [
+        {
+          id: 'stable-animated-card',
+          title: 'Stable Animated Card',
+          status: 'screenshot-timeout',
+        },
+      ],
+    });
+
+    expect(markdown).toContain('### Stable Animated Card');
+    expect(markdown).toContain('screenshot timeout');
+    expect(markdown).not.toContain('baseline 未作成');
+    expect(markdown).not.toContain('undefined');
+  });
+
   it('writes a comment from a summary file', async () => {
     const root = await mkdtemp(join(tmpdir(), 'rainrail-vrt-comment-'));
     const summaryPath = join(root, 'vrt-results', 'summary.json');

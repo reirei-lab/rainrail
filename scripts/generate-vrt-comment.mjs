@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url';
  * @typedef {{
  *   id: string;
  *   title: string;
- *   status?: 'missing-baseline' | 'missing-diff';
+ *   status?: 'missing-baseline' | 'missing-diff' | 'screenshot-timeout';
  *   before?: string;
  *   after?: string;
  *   diff?: string;
@@ -52,7 +52,7 @@ export function generateVrtComment(summary, options = {}) {
       '',
       '| before | after | diff |',
       '| --- | --- | --- |',
-      `| ${imageCell(caseItem.before, 'baseline 未作成')} | ${imageCell(caseItem.after, 'after 未生成')} | ${imageCell(caseItem.diff, 'diff 未生成')} |`,
+      `| ${imageCell(caseItem.before, fallbackCell(caseItem, 'before'))} | ${imageCell(caseItem.after, fallbackCell(caseItem, 'after'))} | ${imageCell(caseItem.diff, fallbackCell(caseItem, 'diff'))} |`,
       '',
     );
   }
@@ -82,6 +82,21 @@ export async function writeVrtComment(input) {
  */
 function imageCell(path, fallback) {
   return path === undefined ? fallback : `![](${markdownPath(path)})`;
+}
+
+/**
+ * @param {VrtSummaryCase} caseItem
+ * @param {'before' | 'after' | 'diff'} column
+ * @returns {string}
+ */
+function fallbackCell(caseItem, column) {
+  if (caseItem.status === 'screenshot-timeout') {
+    return 'screenshot timeout';
+  }
+  if (column === 'before') {
+    return 'baseline 未作成';
+  }
+  return column === 'after' ? 'after 未生成' : 'diff 未生成';
 }
 
 /**

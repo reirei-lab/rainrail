@@ -144,6 +144,56 @@ describe('collectVrtResults', () => {
     expect(JSON.parse(readFileSync(join(outputDir, 'summary.json'), 'utf8'))).toEqual(summary);
   });
 
+  it('reports screenshot timeouts without actual attachments instead of writing a no-diff summary', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rainrail-vrt-'));
+    const resultsDir = join(root, 'test-results', 'dashboard');
+    const outputDir = join(root, 'vrt-results');
+    const reportPath = join(resultsDir, 'playwright-report.json');
+    mkdirSync(resultsDir, { recursive: true });
+    writeFileSync(reportPath, JSON.stringify({
+      suites: [
+        {
+          title: 'dashboard-smoke.spec.ts',
+          specs: [
+            {
+              title: 'visual baselines',
+              tests: [
+                {
+                  title: 'stable animated card',
+                  status: 'unexpected',
+                  results: [
+                    {
+                      status: 'failed',
+                      error: {
+                        message: 'Error: expect(page).toHaveScreenshot(stable-animated-card.png) failed: Timed out 5000ms waiting for screenshot comparison.',
+                      },
+                      attachments: [],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    }));
+
+    const summary = await collectVrtResults({ resultsDir, outputDir, reportPath });
+
+    expect(summary).toEqual({
+      changed: true,
+      totalChanged: 1,
+      cases: [
+        {
+          id: 'stable-animated-card',
+          title: 'Stable Animated Card',
+          status: 'screenshot-timeout',
+        },
+      ],
+    });
+    expect(JSON.parse(readFileSync(join(outputDir, 'summary.json'), 'utf8'))).toEqual(summary);
+  });
+
   it('uses the expected attachment as the before image for reported screenshot mismatches', async () => {
     const root = await mkdtemp(join(tmpdir(), 'rainrail-vrt-'));
     const resultsDir = join(root, 'test-results', 'dashboard');
@@ -194,6 +244,58 @@ describe('collectVrtResults', () => {
       },
     ]);
     expect(readFileSync(join(outputDir, 'reported-card-desktop-dashboard-chromium', 'before.png'), 'utf8')).toBe('baseline');
+  });
+
+  it('classifies attachment kinds by suffix when snapshot names contain actual', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rainrail-vrt-'));
+    const resultsDir = join(root, 'test-results', 'dashboard');
+    const failureDir = join(resultsDir, 'dashboard-smoke-matches-dashboard-route-visual-baselines');
+    const outputDir = join(root, 'vrt-results');
+    const reportPath = join(resultsDir, 'playwright-report.json');
+    mkdirSync(failureDir, { recursive: true });
+    writeFileSync(join(failureDir, 'actual-status-card-expected.png'), 'before');
+    writeFileSync(join(failureDir, 'actual-status-card-actual.png'), 'after');
+    writeFileSync(join(failureDir, 'actual-status-card-diff.png'), 'diff');
+    writeFileSync(reportPath, JSON.stringify({
+      suites: [
+        {
+          specs: [
+            {
+              tests: [
+                {
+                  status: 'unexpected',
+                  results: [
+                    {
+                      status: 'failed',
+                      attachments: [
+                        { name: 'actual-status-card-expected', path: join(failureDir, 'actual-status-card-expected.png') },
+                        { name: 'actual-status-card-actual', path: join(failureDir, 'actual-status-card-actual.png') },
+                        { name: 'actual-status-card-diff', path: join(failureDir, 'actual-status-card-diff.png') },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    }));
+
+    const summary = await collectVrtResults({ resultsDir, outputDir, reportPath });
+
+    expect(summary.cases).toEqual([
+      {
+        id: 'actual-status-card',
+        title: 'Actual Status Card',
+        before: 'vrt-results/actual-status-card/before.png',
+        after: 'vrt-results/actual-status-card/after.png',
+        diff: 'vrt-results/actual-status-card/diff.png',
+      },
+    ]);
+    expect(readFileSync(join(outputDir, 'actual-status-card', 'before.png'), 'utf8')).toBe('before');
+    expect(readFileSync(join(outputDir, 'actual-status-card', 'after.png'), 'utf8')).toBe('after');
+    expect(readFileSync(join(outputDir, 'actual-status-card', 'diff.png'), 'utf8')).toBe('diff');
   });
 
   it('ignores screenshot mismatches from retry attempts that finish flaky', async () => {
