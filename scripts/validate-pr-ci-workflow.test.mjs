@@ -5,6 +5,10 @@ const workflow = readFileSync(
   new URL('../.github/workflows/pr-ci.yml', import.meta.url),
   'utf8',
 );
+const localDashboardDocs = readFileSync(
+  new URL('../docs/local-dashboard.md', import.meta.url),
+  'utf8',
+);
 
 describe('pull request CI workflow', () => {
   it('runs on pull request changes without using pull_request_target', () => {
@@ -19,7 +23,7 @@ describe('pull request CI workflow', () => {
     expect(workflow).not.toMatch(/^ {2}issues: write$/m);
     expect(workflow).toMatch(/^ {2}dashboard-vrt-comment:[\s\S]*?^ {4}permissions:\n {6}contents: read\n {6}pull-requests: write$/m);
     expect(workflow).not.toContain('deployments: write');
-    expect(workflow.match(/persist-credentials: false/g)).toHaveLength(3);
+    expect(workflow.match(/persist-credentials: false/g)).toHaveLength(4);
   });
 
   it('uses self-hosted only for trusted pull requests with pnpm cached by lockfile', () => {
@@ -62,6 +66,7 @@ describe('pull request CI workflow', () => {
 
   it('publishes dashboard VRT comments with CML only for trusted same-repository pull requests', () => {
     expect(workflow).toMatch(/^ {2}dashboard-vrt-comment:\n {4}name: Dashboard VRT PR comment\n {4}needs: dashboard-e2e\n {4}if: >-\n {6}always\(\) &&\n {6}github\.event\.pull_request\.head\.repo\.full_name == github\.repository &&\n {6}contains\(fromJSON\('\["OWNER", "MEMBER", "COLLABORATOR"\]'\), github\.event\.pull_request\.author_association\)\n {4}runs-on: ubuntu-24\.04$/m);
+    expect(workflow).toMatch(/^ {6}- name: Check out repository metadata\n {8}uses: actions\/checkout@v7\n {8}with:\n {10}fetch-depth: 1\n {10}persist-credentials: false$/m);
     expect(workflow).toMatch(/^ {6}- name: Download dashboard VRT artifacts\n {8}uses: actions\/download-artifact@v7\n {8}continue-on-error: true\n {8}with:\n {10}name: dashboard-e2e-artifacts\n {10}path: \.$/m);
     expect(workflow).toMatch(/^ {6}- name: Check dashboard VRT comment artifact\n {8}id: vrt-comment\n {8}run: \|/m);
     expect(workflow).toMatch(/^ {6}- name: Check CML token availability\n {8}id: cml-token\n {8}env:\n {10}CML_COMMENT_TOKEN_CONFIGURED: \$\{\{ secrets\.CML_COMMENT_TOKEN != '' \}\}\n {8}run: \|/m);
@@ -71,6 +76,14 @@ describe('pull request CI workflow', () => {
     expect(workflow).toContain('Skipping dashboard VRT PR comment because vrt-comment.md was not generated.');
     expect(workflow).not.toContain('CML_COMMENT_TOKEN: ${{ secrets.CML_COMMENT_TOKEN }}');
     expect(workflow).not.toContain('REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}');
+  });
+
+  it('documents the PAT secret required for dashboard VRT comments', () => {
+    expect(localDashboardDocs).toContain('CML_COMMENT_TOKEN');
+    expect(localDashboardDocs).toContain('fine-grained GitHub PAT');
+    expect(localDashboardDocs).toContain('Pull requests: Read and write');
+    expect(localDashboardDocs).toContain('Contents: Read-only');
+    expect(localDashboardDocs).toContain('Do not store the token value in docs');
   });
 
   it('uploads the product site build artifact for trusted preview deploys without secrets', () => {

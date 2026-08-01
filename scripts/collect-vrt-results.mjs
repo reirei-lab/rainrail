@@ -112,12 +112,12 @@ async function unexpectedActualFilesFromReport(reportPath) {
   const report = JSON.parse(await readFile(reportPath, 'utf8'));
   const filesBySnapshot = new Map();
 
-  for (const test of collectReportTests(report)) {
-    if (!isRecord(test) || test.status !== 'unexpected' || !Array.isArray(test.results)) {
+  for (const entry of collectReportTestEntries(report)) {
+    if (!isRecord(entry.test) || entry.test.status !== 'unexpected' || !Array.isArray(entry.test.results)) {
       continue;
     }
 
-    for (const result of test.results) {
+    for (const result of entry.test.results) {
       if (!isRecord(result) || !Array.isArray(result.attachments)) {
         continue;
       }
@@ -129,38 +129,81 @@ async function unexpectedActualFilesFromReport(reportPath) {
 
         const attachmentPath = resolveAttachmentPath(reportPath, attachment.path);
         if (basename(attachmentPath).endsWith('-actual.png') && await fileExists(attachmentPath)) {
-          filesBySnapshot.set(snapshotKey(attachmentPath), attachmentPath);
+          filesBySnapshot.set(snapshotKey(entry.identity, attachment, attachmentPath), attachmentPath);
         }
       }
     }
   }
 
-  return [...filesBySnapshot.values()].sort();
+  return [...filesBySnapshot.values()];
 }
 
 /**
+ * @param {string[]} testIdentity
+ * @param {Record<string, unknown>} attachment
  * @param {string} actualPath
  * @returns {string}
  */
-function snapshotKey(actualPath) {
-  return slugify(basename(actualPath).slice(0, -'-actual.png'.length));
+function snapshotKey(testIdentity, attachment, actualPath) {
+  const attachmentName = typeof attachment.name === 'string'
+    ? attachment.name
+    : basename(actualPath);
+  return [
+    ...testIdentity,
+    attachmentName.replace(/-actual$/u, '').replace(/-actual\.png$/u, ''),
+  ].join('\u0000');
 }
 
 /**
  * @param {unknown} node
- * @returns {unknown[]}
+ * @param {string[]} [parents]
+ * @returns {Array<{ test: unknown; identity: string[] }>}
  */
-function collectReportTests(node) {
+function collectReportTestEntries(node, parents = []) {
   if (!isRecord(node)) {
     return [];
   }
 
-  const ownTests = Array.isArray(node.tests) ? node.tests : [];
+  const ownTitle = titleSegment(node);
+  const nextParents = ownTitle === undefined ? parents : [...parents, ownTitle];
+  const ownTests = Array.isArray(node.tests)
+    ? node.tests.map((test) => ({
+      test,
+      identity: [...nextParents, ...testTitleSegments(test)],
+    }))
+    : [];
   const childNodes = ['suites', 'specs'].flatMap((key) => Array.isArray(node[key]) ? node[key] : []);
   return [
     ...ownTests,
-    ...childNodes.flatMap((child) => collectReportTests(child)),
+    ...childNodes.flatMap((child) => collectReportTestEntries(child, nextParents)),
   ];
+}
+
+/**
+ * @param {Record<string, unknown>} node
+ * @returns {string | undefined}
+ */
+function titleSegment(node) {
+  const file = typeof node.file === 'string' ? node.file : undefined;
+  const title = typeof node.title === 'string' ? node.title : undefined;
+  if (file !== undefined && title !== undefined && file !== title) {
+    return `${file}: ${title}`;
+  }
+  return title ?? file;
+}
+
+/**
+ * @param {unknown} test
+ * @returns {string[]}
+ */
+function testTitleSegments(test) {
+  if (!isRecord(test)) {
+    return [];
+  }
+  if (typeof test.title === 'string') {
+    return [test.title];
+  }
+  return [];
 }
 
 /**

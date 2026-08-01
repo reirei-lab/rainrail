@@ -183,6 +183,12 @@ jobs:
       contents: read
       pull-requests: write
     steps:
+      - name: Check out repository metadata
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
       - name: Download dashboard VRT artifacts
         uses: actions/download-artifact@v7
         continue-on-error: true

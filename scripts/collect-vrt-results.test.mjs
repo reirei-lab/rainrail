@@ -198,4 +198,74 @@ describe('collectVrtResults', () => {
     expect(summary.cases[0]?.id).toBe('persistent-case-desktop');
     expect(readFileSync(join(outputDir, 'persistent-case-desktop', 'after.png'), 'utf8')).toBe(`${retryDir}-after`);
   });
+
+  it('keeps same-named screenshots from different tests as separate VRT cases', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rainrail-vrt-'));
+    const resultsDir = join(root, 'test-results', 'dashboard');
+    const outputDir = join(root, 'vrt-results');
+    const firstDir = join(resultsDir, 'overview-spec');
+    const secondDir = join(resultsDir, 'cards-spec');
+    const reportPath = join(resultsDir, 'playwright-report.json');
+    for (const dir of [firstDir, secondDir]) {
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'card-desktop-expected.png'), `${dir}-before`);
+      writeFileSync(join(dir, 'card-desktop-actual.png'), `${dir}-after`);
+      writeFileSync(join(dir, 'card-desktop-diff.png'), `${dir}-diff`);
+    }
+    writeFileSync(reportPath, JSON.stringify({
+      suites: [
+        {
+          title: 'overview.spec.ts',
+          specs: [
+            {
+              title: 'overview cards',
+              tests: [
+                {
+                  title: 'renders overview card',
+                  status: 'unexpected',
+                  results: [
+                    {
+                      status: 'failed',
+                      attachments: [
+                        { name: 'card-desktop-actual', path: join(firstDir, 'card-desktop-actual.png') },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+        {
+          title: 'cards.spec.ts',
+          specs: [
+            {
+              title: 'dashboard cards',
+              tests: [
+                {
+                  title: 'renders dashboard card',
+                  status: 'unexpected',
+                  results: [
+                    {
+                      status: 'failed',
+                      attachments: [
+                        { name: 'card-desktop-actual', path: join(secondDir, 'card-desktop-actual.png') },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    }));
+
+    const summary = await collectVrtResults({ resultsDir, outputDir, reportPath });
+
+    expect(summary.cases).toHaveLength(2);
+    expect(summary.cases.map((caseItem) => caseItem.id)).toEqual(['card-desktop', 'card-desktop-2']);
+    expect(readFileSync(join(outputDir, 'card-desktop', 'after.png'), 'utf8')).toBe(`${firstDir}-after`);
+    expect(readFileSync(join(outputDir, 'card-desktop-2', 'after.png'), 'utf8')).toBe(`${secondDir}-after`);
+  });
 });

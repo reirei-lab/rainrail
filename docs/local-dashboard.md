@@ -179,6 +179,15 @@ The E2E run also captures every entry in
 `dashboard-demo-screenshot-manifest.json` mapping scenario IDs, viewport
 variants, URLs, and capture hints to each PNG. Pull Request CI uploads those
 files in the `dashboard-e2e-artifacts` artifact.
+For trusted same-repository pull requests, PR CI can also post a dashboard VRT
+comment with before/after/diff images. Configure repository secret
+`CML_COMMENT_TOKEN` with a fine-grained GitHub PAT scoped only to this
+repository. The token is used only as CML's `REPO_TOKEN` for updating the VRT PR
+comment and should have `Pull requests: Read and write` plus
+`Contents: Read-only`; do not grant issue, deployment, or workflow write
+permissions for this job. If the secret is missing, the comment job emits a
+notice and skips posting instead of failing the PR. Do not store the token value in docs
+or in workflow logs, screenshots, issue comments, or copied terminal output.
 
 Keep these captures as inspection artifacts until the paths and rendering are
 stable across the self-hosted and GitHub-hosted runners. Move to strict visual
