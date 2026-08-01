@@ -103,6 +103,35 @@ open in the browser, for example:
 With that config, Rainrail binds to `0.0.0.0` and prints
 `Dashboard: http://dashboard.local:8787/dashboard`.
 
+For a LAN or Tailscale machine that should be reachable from another browser,
+keep the bind host separate from the browser hosts and keep dashboard tokens in
+environment-owned secrets:
+
+```json
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8787,
+    "allowedHosts": ["192.168.10.113", "rainrail.local"]
+  },
+  "dashboardAuth": {
+    "readOnlyToken": "${RAINRAIL_DASHBOARD_READ_ONLY_TOKEN}",
+    "operatorToken": "${RAINRAIL_DASHBOARD_OPERATOR_TOKEN}"
+  }
+}
+```
+
+In that shape, `0.0.0.0` is only the listen address. Open the dashboard by using
+one of the `allowedHosts` values, such as
+`http://192.168.10.113:8787/dashboard` or
+`http://rainrail.local:8787/dashboard`. Do not write real token values into
+example configs, docs, screenshots, issue comments, or copied terminal output.
+Use `rainrail setup --dashboard-auth-only --yes` only when you want Rainrail to
+write local concrete tokens into the selected config file. If
+`dashboardAuth.readOnlyToken` and `dashboardAuth.operatorToken` already point at
+environment references, setup and startup preserve those references instead of
+printing or replacing the backing secret values.
+
 `GET /api/v1/overview` is the main operational summary. `GET
 /api/v1/dashboard/status` is the lightweight route contract for the API Status
 Tile: it reports API health, store configuration, the accepted auth scope, and
@@ -132,7 +161,11 @@ minimal demo config under `.tmp/dashboard-demo/`, runs
 `node scripts/seed-dashboard-demo-db.mjs`, then starts `rainrail start --demo`
 with `RAINRAIL_DASHBOARD_DEMO=1`. The default demo DB path is
 `.tmp/dashboard-demo.sqlite`, and `rainrail start --demo` reads it as a SQLite
-operational store. The CLI prints both normal and explicit demo URLs:
+operational store. The repository demo launcher intentionally stays on
+`127.0.0.1` because it is for local fixture inspection, not a shared LAN
+dashboard. Use normal `rainrail start` with the public bind config above when
+another machine needs access. The CLI prints both normal and explicit demo
+URLs:
 
 ```text
 Dashboard demo: http://127.0.0.1:8787/dashboard?demo=1

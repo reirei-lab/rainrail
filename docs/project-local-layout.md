@@ -10,7 +10,9 @@ the project; generated plugin state is not global.
   It is valid JSON so the existing `loadConfig()` / `parseConfigJson()` path can
   read a newly scaffolded project without a TypeScript config loader. The
   scaffold includes an empty top-level `dashboardAuth` object for local
-  dashboard bearer tokens.
+  dashboard bearer tokens. It also includes `server.host`, `server.port`, and
+  an empty `server.allowedHosts` array so the localhost default is explicit
+  while the Host allowlist slot is visible for later public bind configuration.
 - `rainrail.lock`: a deterministic lockfile with `lockfileVersion: 1`, the
   project name, and a `plugins` array. Installed official plugins are recorded
   as `{ name, version, resolvedSource }`; for example
