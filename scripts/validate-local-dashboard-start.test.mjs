@@ -28,6 +28,12 @@ describe('local dashboard start documentation', () => {
     for (const required of [
       '# Local dashboard startup',
       'rainrail init',
+      'default local SQLite operational store',
+      '"operationalStore": {',
+      '"kind": "sqlite"',
+      '"databasePath": "var/rainrail-operational.sqlite"',
+      '"eventLimit": 250',
+      'store configuration: configured',
       'rainrail setup --dashboard-auth-only --rotate --yes',
       'rainrail start',
       'automatically writes missing',
@@ -78,6 +84,10 @@ describe('local dashboard start documentation', () => {
       'API Status Tile',
       'overview が遅い、失敗する、または未取得に戻るとき',
       '直近 overview attempt の duration、HTTP status、error code、store 設定状態、認証 scope',
+      'operational_store_not_configured',
+      'rainrail setup --dashboard-auth-only --yes',
+      '.rainrail/operational.json',
+      'Configured operationalStore json store in rainrail.config.json.',
       'dashboardAuth.readOnlyToken',
       'dashboardAuth.operatorToken',
       'dashboardAuth.adminToken',
@@ -200,6 +210,8 @@ describe('local dashboard start documentation', () => {
     expect(cliCommandsTest).toContain('Dashboard demo routes: /en/dashboard/events?demo=1');
     expect(cliCommandsTest).toContain('Dashboard demo status API: http://127.0.0.1:8787/api/v1/dashboard/status?demo=1');
     expect(cliCommandsTest).toContain('serves seeded SQLite dashboard demo mode without an operator token');
+    expect(cliCommandsTest).toContain('serves configured dashboard status from the default init SQLite operational store');
+    expect(cliCommandsTest).toContain('adds the default local operational store when setup repairs an existing workspace config');
     expect(cliCommandsTest).toContain('missing_bearer_token');
     expect(cliCommandsTest).toContain('invalid_bearer_token');
     expect(nodeServerTest).toContain('smokes public dashboard bind access through allowed Host headers and bearer auth');

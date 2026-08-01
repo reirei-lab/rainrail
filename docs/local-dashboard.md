@@ -23,6 +23,26 @@ rainrail init
 rainrail start
 ```
 
+`rainrail init` creates the default local SQLite operational store
+configuration in `rainrail.config.json`:
+
+```json
+{
+  "operationalStore": {
+    "kind": "sqlite",
+    "databasePath": "var/rainrail-operational.sqlite",
+    "eventLimit": 250
+  }
+}
+```
+
+The database file itself is created by startup and ignored by the generated
+`.gitignore`. With this default, a new workspace can serve dashboard status,
+overview, event, workflow, task, source, queue, settings, and dashboard card
+API routes without falling back to `operational_store_not_configured`. The API
+Status Tile should report `store configuration: configured` for the normal
+quick start path.
+
 On startup, `rainrail start` writes local dashboard auth tokens to
 `rainrail.config.json` when they are missing. This automatically writes missing
 local dashboard auth tokens for new local projects:
@@ -49,6 +69,26 @@ Rotation replaces concrete `dashboardAuth.readOnlyToken`,
 references such as `${DASHBOARD_OPERATOR_TOKEN}` are preserved instead of being
 expanded into the config or command output; rotate the backing environment
 secret in the system that owns it.
+
+For an older workspace whose config predates `operationalStore`, run the setup
+repair command before starting the dashboard:
+
+```sh
+rainrail setup --dashboard-auth-only --yes
+```
+
+When `operationalStore` is missing, setup preserves existing dashboard auth and
+adds a local JSON store at `.rainrail/operational.json`:
+
+```text
+Configured operationalStore json store in rainrail.config.json.
+```
+
+If the dashboard API still returns HTTP `503` with
+`operational_store_not_configured`, confirm that `rainrail.config.json` has an
+`operationalStore` block or rerun the setup repair command from the workspace
+root. Restart `rainrail start` after the repair so the local server opens the
+new store.
 
 `rainrail start` prints the local endpoints it is serving. With the default
 host and port, expect:
