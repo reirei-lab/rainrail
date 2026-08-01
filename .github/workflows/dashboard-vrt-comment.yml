@@ -1,0 +1,108 @@
+name: Dashboard VRT Comment
+
+on:
+  workflow_run:
+    workflows:
+      - Pull Request CI
+    types:
+      - completed
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: dashboard-vrt-comment-${{ github.event.workflow_run.pull_requests[0].number || github.event.workflow_run.id }}
+  cancel-in-progress: true
+
+jobs:
+  publish-dashboard-vrt-comment:
+    name: Publish dashboard VRT PR comment
+    if: >-
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.pull_requests[0].head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out trusted tooling
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify workflow run is the latest PR head
+        id: latest-pr-head
+        run: |
+          current_head_sha="$(gh api "repos/$GITHUB_REPOSITORY/pulls/${{ github.event.workflow_run.pull_requests[0].number }}" --jq '.head.sha')"
+          if [ "$current_head_sha" = "${{ github.event.workflow_run.head_sha }}" ]; then
+            echo "current=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "current=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Skipping dashboard VRT PR comment because workflow_run head SHA is not the current PR head."
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Check CML token availability
+        if: ${{ steps.latest-pr-head.outputs.current == 'true' }}
+        id: cml-token
+        env:
+          CML_COMMENT_TOKEN_CONFIGURED: ${{ secrets.CML_COMMENT_TOKEN != '' }}
+        run: |
+          echo "available=${CML_COMMENT_TOKEN_CONFIGURED}" >> "$GITHUB_OUTPUT"
+          if [ "${CML_COMMENT_TOKEN_CONFIGURED}" != "true" ]; then
+            echo "::notice::Skipping dashboard VRT PR comment because CML_COMMENT_TOKEN is not configured."
+          fi
+
+      - name: Download dashboard VRT artifacts
+        if: ${{ steps.latest-pr-head.outputs.current == 'true' }}
+        id: vrt-artifact
+        run: |
+          rm -rf dashboard-vrt-artifacts dashboard-vrt-comment
+          mkdir -p dashboard-vrt-comment
+          if gh run download "${{ github.event.workflow_run.id }}" --repo "$GITHUB_REPOSITORY" --name dashboard-e2e-artifacts --dir dashboard-vrt-artifacts; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+            echo "comment_available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "comment_available=true" >> "$GITHUB_OUTPUT"
+            cat > dashboard-vrt-comment/vrt-comment.md <<'EOF'
+## VRT 差分
+
+VRT は実行されませんでした、または結果 artifact を取得できませんでした。
+
+現在の Pull Request CI で `dashboard-e2e-artifacts` が生成されていないため、before/after/diff 画像はありません。
+EOF
+            echo "::notice::Skipping dashboard VRT PR comment because dashboard-e2e-artifacts was not uploaded."
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Collect dashboard VRT results
+        if: ${{ steps.latest-pr-head.outputs.current == 'true' && steps.vrt-artifact.outputs.available == 'true' }}
+        run: node scripts/collect-vrt-results.mjs --results-dir dashboard-vrt-artifacts/test-results/dashboard --report dashboard-vrt-artifacts/test-results/dashboard/playwright-report.json --artifact-root dashboard-vrt-artifacts --output-dir dashboard-vrt-comment/vrt-results
+
+      - name: Generate dashboard VRT comment
+        if: ${{ steps.latest-pr-head.outputs.current == 'true' && steps.vrt-artifact.outputs.available == 'true' }}
+        run: node scripts/generate-vrt-comment.mjs --summary dashboard-vrt-comment/vrt-results/summary.json --output dashboard-vrt-comment/vrt-comment.md --max-cases 10
+
+      - name: Remove downloaded PR artifact before CML publish
+        if: ${{ steps.latest-pr-head.outputs.current == 'true' && steps.vrt-artifact.outputs.available == 'true' }}
+        run: rm -rf dashboard-vrt-artifacts
+
+      - name: Set up CML
+        if: ${{ steps.latest-pr-head.outputs.current == 'true' && steps.vrt-artifact.outputs.comment_available == 'true' && steps.cml-token.outputs.available == 'true' }}
+        uses: iterative/setup-cml@v2
+
+      - name: Publish dashboard VRT PR comment
+        if: ${{ steps.latest-pr-head.outputs.current == 'true' && steps.vrt-artifact.outputs.comment_available == 'true' && steps.cml-token.outputs.available == 'true' }}
+        run: |
+          pre_publish_head_sha="$(gh api "repos/$GITHUB_REPOSITORY/pulls/${{ github.event.workflow_run.pull_requests[0].number }}" --jq '.head.sha')"
+          if [ "$pre_publish_head_sha" != "${{ github.event.workflow_run.head_sha }}" ]; then
+            echo "::notice::Skipping dashboard VRT PR comment because PR head changed before CML publish."
+            exit 0
+          fi
+          cml comment update --repo="$GITHUB_REPOSITORY" --target="pr/${{ github.event.workflow_run.pull_requests[0].number }}" --watermark-title="Rainrail dashboard VRT" dashboard-vrt-comment/vrt-comment.md
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO_TOKEN: ${{ secrets.CML_COMMENT_TOKEN }}

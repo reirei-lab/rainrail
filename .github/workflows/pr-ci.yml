@@ -8,6 +8,10 @@ on:
       - reopened
       - ready_for_review
 
+concurrency:
+  group: pr-ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -150,7 +154,9 @@ jobs:
           path: |
             playwright-report/dashboard/
             test-results/dashboard/
+            test-results/dashboard/playwright-report.json
             test-results/dashboard/screenshots/
             test-results/dashboard/screenshots/dashboard-demo-screenshot-manifest.json
+            e2e/dashboard/dashboard-smoke.spec.ts-snapshots/
           if-no-files-found: ignore
           retention-days: 7

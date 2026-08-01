@@ -1,0 +1,136 @@
+import { readFile, writeFile } from 'node:fs/promises';
+import { pathToFileURL } from 'node:url';
+
+/**
+ * @typedef {{
+ *   id: string;
+ *   title: string;
+ *   status?: 'missing-baseline' | 'missing-diff' | 'screenshot-timeout' | 'vrt-test-failed';
+ *   before?: string;
+ *   after?: string;
+ *   diff?: string;
+ * }} VrtSummaryCase
+ *
+ * @typedef {{
+ *   changed: boolean;
+ *   totalChanged: number;
+ *   cases: VrtSummaryCase[];
+ * }} VrtSummary
+ */
+
+/**
+ * @param {VrtSummary} summary
+ * @param {{ maxCases?: number }} [options]
+ * @returns {string}
+ */
+export function generateVrtComment(summary, options = {}) {
+  const maxCases = options.maxCases ?? 10;
+
+  if (!summary.changed || summary.totalChanged === 0) {
+    return [
+      '## VRT 差分',
+      '',
+      'visual regression は検出されませんでした。',
+      '',
+      '全結果は GitHub Actions artifact を参照してください。',
+      '',
+    ].join('\n');
+  }
+
+  const cases = summary.cases.slice(0, maxCases);
+  const hiddenCount = Math.max(0, summary.totalChanged - cases.length);
+  const lines = [
+    '## VRT 差分',
+    '',
+    `${summary.totalChanged}件の visual regression を検出しました。`,
+    '',
+  ];
+
+  for (const caseItem of cases) {
+    lines.push(
+      `### ${caseItem.title}`,
+      '',
+      '| before | after | diff |',
+      '| --- | --- | --- |',
+      `| ${imageCell(caseItem.before, fallbackCell(caseItem, 'before'))} | ${imageCell(caseItem.after, fallbackCell(caseItem, 'after'))} | ${imageCell(caseItem.diff, fallbackCell(caseItem, 'diff'))} |`,
+      '',
+    );
+  }
+
+  if (hiddenCount > 0) {
+    lines.push(`ほか ${hiddenCount} 件は GitHub Actions artifact を参照してください。`, '');
+  }
+
+  lines.push('全結果は GitHub Actions artifact を参照してください。', '');
+  return lines.join('\n');
+}
+
+/**
+ * @param {{ summaryPath: string; outputPath: string; maxCases?: number }} input
+ * @returns {Promise<void>}
+ */
+export async function writeVrtComment(input) {
+  const summary = JSON.parse(await readFile(input.summaryPath, 'utf8'));
+  const options = input.maxCases === undefined ? {} : { maxCases: input.maxCases };
+  await writeFile(input.outputPath, generateVrtComment(summary, options));
+}
+
+/**
+ * @param {string | undefined} path
+ * @param {string} fallback
+ * @returns {string}
+ */
+function imageCell(path, fallback) {
+  return path === undefined ? fallback : `![](${markdownPath(path)})`;
+}
+
+/**
+ * @param {VrtSummaryCase} caseItem
+ * @param {'before' | 'after' | 'diff'} column
+ * @returns {string}
+ */
+function fallbackCell(caseItem, column) {
+  if (caseItem.status === 'screenshot-timeout') {
+    return 'screenshot timeout';
+  }
+  if (caseItem.status === 'vrt-test-failed') {
+    return 'VRT setup/assertion failed';
+  }
+  if (column === 'before') {
+    return 'baseline 未作成';
+  }
+  return column === 'after' ? 'after 未生成' : 'diff 未生成';
+}
+
+/**
+ * @param {string} path
+ * @returns {string}
+ */
+function markdownPath(path) {
+  return path.startsWith('.') ? path : `./${path}`;
+}
+
+/**
+ * @param {string[]} argv
+ * @returns {{ summaryPath: string; outputPath: string; maxCases: number }}
+ */
+function parseArgs(argv) {
+  const args = new Map();
+  for (let index = 0; index < argv.length; index += 2) {
+    args.set(argv[index], argv[index + 1]);
+  }
+
+  const maxCases = Number.parseInt(args.get('--max-cases') ?? '10', 10);
+  return {
+    summaryPath: args.get('--summary') ?? 'vrt-results/summary.json',
+    outputPath: args.get('--output') ?? 'vrt-comment.md',
+    maxCases: Number.isFinite(maxCases) && maxCases > 0 ? maxCases : 10,
+  };
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  writeVrtComment(parseArgs(process.argv.slice(2))).catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
+}
