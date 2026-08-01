@@ -1,5 +1,6 @@
 import { once } from 'node:events';
 import { mkdir, readFile, rm } from 'node:fs/promises';
+import net from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -367,6 +368,53 @@ describe('Rainrail Node server', () => {
       await expect(response.json()).resolves.toEqual({ error: 'request_body_too_large' });
     } finally {
       await closeServer(server);
+    }
+  });
+
+  it('rejects Node dashboard requests with Host headers outside the allowlist', async () => {
+    const operationalStore = new RainrailOperationalStore({
+      databasePath: ':memory:',
+      eventLimit: 10,
+    });
+    const { server } = createRainrailNodeServer({
+      githubWebhookSecret: 'secret',
+      publishToken: 'test-publish-token',
+      dashboardAuth: { readOnlyToken: 'read-token' },
+      operationalStore,
+      allowedHosts: ['dashboard.local'],
+    });
+
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const address = server.address();
+    if (address === null || typeof address === 'string') {
+      throw new Error('expected TCP server address');
+    }
+
+    try {
+      const accepted = await nodeHttpTextRequest(address.port, [
+        'GET /api/v1/overview HTTP/1.1',
+        `Host: dashboard.local:${address.port}`,
+        'Authorization: Bearer read-token',
+        'Connection: close',
+        '',
+        '',
+      ]);
+      expect(accepted).toContain('200 OK');
+
+      const rejected = await nodeHttpTextRequest(address.port, [
+        'GET /api/v1/overview HTTP/1.1',
+        `Host: attacker.example:${address.port}`,
+        'Authorization: Bearer read-token',
+        'Connection: close',
+        '',
+        '',
+      ]);
+      expect(rejected).toContain('400 Bad Request');
+      expect(rejected).toContain('invalid_host_header');
+    } finally {
+      await closeServer(server);
+      operationalStore.close();
     }
   });
 
@@ -1207,4 +1255,16 @@ async function closeServer(server: { listening: boolean; closeAllConnections?: (
   if (!server.listening) return;
   server.closeAllConnections?.();
   await new Promise<void>((resolve) => server.close(resolve));
+}
+
+async function nodeHttpTextRequest(port: number, lines: readonly string[]): Promise<string> {
+  const socket = net.createConnection({ host: '127.0.0.1', port });
+  socket.write(lines.join('\r\n'));
+  let response = '';
+  socket.setEncoding('utf8');
+  socket.on('data', (chunk) => {
+    response += chunk;
+  });
+  await once(socket, 'end');
+  return response;
 }

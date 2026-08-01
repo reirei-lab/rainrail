@@ -23,6 +23,7 @@ import type { RainrailOperationalStoreConfig } from './config.js';
 export interface RainrailNodeServerOptions extends Omit<RainrailHttpAppOptions, 'room'> {
   githubWebhookSecret: string;
   githubSourceName?: string;
+  allowedHosts?: readonly string[];
   maxWebhookBodyBytes?: number;
   intakeAdapters?: readonly RainrailIntakeAdapter[];
   operationalStoreConfig?: RainrailOperationalStoreConfig;
@@ -90,6 +91,15 @@ export function createRainrailNodeServer(options: RainrailNodeServerOptions): Ra
       });
 
       try {
+        if (!isAllowedHostHeader(request.headers.host, options.allowedHosts)) {
+          await writeFetchResponse(
+            response,
+            jsonResponse({ error: 'invalid_host_header' }, { status: 400 }),
+            { signal: abortController.signal },
+          );
+          return;
+        }
+
         await writeFetchResponse(
           response,
           await app.fetch(await toFetchRequest(request, options, appOptions, abortController.signal)),
@@ -233,6 +243,33 @@ function isDashboardBodyRoute(pathname: string, method: string): boolean {
   return isDashboardCommandRoute(pathname, method)
     || (method.toUpperCase() === 'PUT' && pathname === '/api/v1/dashboard/layout')
     || (method.toUpperCase() === 'PATCH' && /^\/api\/v1\/dashboard\/layout\/items\/[^/]+\/config$/.test(pathname));
+}
+
+function isAllowedHostHeader(host: string | undefined, allowedHosts: readonly string[] | undefined): boolean {
+  if (allowedHosts === undefined || allowedHosts.length === 0) return true;
+  const hostName = hostHeaderName(host ?? '127.0.0.1');
+  if (hostName === undefined) return false;
+  return new Set([
+    'localhost',
+    '127.0.0.1',
+    '::1',
+    ...allowedHosts.map(normalizeHostName),
+  ]).has(hostName);
+}
+
+function hostHeaderName(host: string): string | undefined {
+  const bracketed = /^\[([0-9A-Fa-f:.]+)\](?::[0-9]{1,5})?$/u.exec(host);
+  if (bracketed?.[1] !== undefined) {
+    return bracketed[1].toLowerCase();
+  }
+  const named = /^([A-Za-z0-9._-]+)(?::[0-9]{1,5})?$/u.exec(host);
+  return named?.[1]?.toLowerCase();
+}
+
+function normalizeHostName(host: string): string {
+  return host.startsWith('[') && host.endsWith(']')
+    ? host.slice(1, -1).toLowerCase()
+    : host.toLowerCase();
 }
 
 function isStatusCodeError(error: unknown): error is { statusCode: number } {
