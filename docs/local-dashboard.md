@@ -103,6 +103,71 @@ open in the browser, for example:
 With that config, Rainrail binds to `0.0.0.0` and prints
 `Dashboard: http://dashboard.local:8787/dashboard`.
 
+## Open from LAN or Tailscale
+
+Use a public bind only on a trusted development network or tailnet. Keep
+`dashboardAuth` configured, do not paste token values into shared logs or
+screenshots, and avoid forwarding the local dashboard directly to the public
+Internet. This local dashboard is separate from the Cloudflare Pages
+product/docs site and the Cloudflare Worker operational surface.
+
+1. Configure Rainrail to listen on all interfaces and allow only the names or
+   addresses that operators will actually open:
+
+   ```json
+   {
+     "server": {
+       "host": "0.0.0.0",
+       "port": 8787,
+       "allowedHosts": [
+         "192.168.10.113",
+         "rainrail-dev.local",
+         "100.101.102.103",
+         "rainrail-dev.tailnet-name.ts.net"
+       ]
+     },
+     "dashboardAuth": {
+       "readOnlyToken": "${RAINRAIL_DASHBOARD_READ_ONLY_TOKEN}",
+       "operatorToken": "${RAINRAIL_DASHBOARD_OPERATOR_TOKEN}"
+     }
+   }
+   ```
+
+   `server.allowedHosts` must include the exact LAN IP, Tailscale IP, MagicDNS
+   name, or hostname that appears in the browser URL. It is a Host header
+   allowlist, not a list of network interfaces.
+
+2. Start Rainrail:
+
+   ```sh
+   rainrail start
+   ```
+
+   `0.0.0.0` is never the browser URL. It only tells Rainrail which interfaces
+   to bind. Use the actual machine address from another device instead:
+
+   ```text
+   http://192.168.10.113:8787/dashboard
+   http://rainrail-dev.local:8787/dashboard
+   http://100.101.102.103:8787/dashboard
+   http://rainrail-dev.tailnet-name.ts.net:8787/dashboard
+   ```
+
+3. Paste a configured dashboard token into the dashboard auth field. Use
+   `dashboardAuth.readOnlyToken` for viewing and `dashboardAuth.operatorToken`
+   when you need local operator commands.
+
+4. If the page does not load from another machine, allow inbound connections to
+   the chosen port in the OS or network firewall. Common places to check are
+   macOS Firewall application prompts, Windows Defender Firewall inbound rules,
+   Linux firewall rules such as `ufw` / `firewalld` / `iptables`, router client
+   isolation, and Tailscale ACLs.
+
+If auth works on `127.0.0.1` but fails from LAN or Tailscale, compare the
+browser URL with `server.allowedHosts`. A request can be rejected before token
+validation when its Host header is outside the `server.allowedHosts`
+allowlist.
+
 `GET /api/v1/overview` is the main operational summary. `GET
 /api/v1/dashboard/status` is the lightweight route contract for the API Status
 Tile: it reports API health, store configuration, the accepted auth scope, and
