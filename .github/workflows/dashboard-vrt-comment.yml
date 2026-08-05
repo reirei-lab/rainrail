@@ -127,7 +127,7 @@ jobs:
 
       - name: Set up CML
         if: ${{ steps.latest-pr-head.outputs.current == 'true' && steps.vrt-artifact.outputs.comment_available == 'true' && steps.cml-token.outputs.available == 'true' }}
-        uses: iterative/setup-cml@v2
+        uses: iterative/setup-cml@v3
 
       - name: Publish dashboard VRT PR comment
         if: ${{ steps.latest-pr-head.outputs.current == 'true' && steps.vrt-artifact.outputs.comment_available == 'true' && steps.cml-token.outputs.available == 'true' }}
